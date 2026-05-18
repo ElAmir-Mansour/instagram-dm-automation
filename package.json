@@ -1,0 +1,44 @@
+{
+  "name": "instagram-dm-automation",
+  "version": "1.0.0",
+  "description": "Free, open-source Instagram Comment-to-DM automation using Meta Graph API. A self-hosted alternative to ManyChat.",
+  "main": "src/index.ts",
+  "scripts": {
+    "start:dev": "node --env-file=.env --loader ts-node/esm src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "instagram",
+    "automation",
+    "dm",
+    "direct-message",
+    "comment-to-dm",
+    "meta-api",
+    "instagram-graph-api",
+    "manychat-alternative",
+    "webhook"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ElAmir-Mansour/instagram-dm-automation.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "axios": "^1.16.1",
+    "body-parser": "^2.2.2",
+    "express": "^5.2.1",
+    "pg": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.8.0",
+    "@types/pg": "^8.20.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
+  },
+  "type": "module"
+}

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - Instagram DM Automation</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.7; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; }
+        h1 { color: #000; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        h2 { color: #222; margin-top: 30px; }
+        a { color: #0070f3; }
+    </style>
+</head>
+<body>
+    <h1>Privacy Policy</h1>
+    <p><strong>Last Updated:</strong> May 18, 2026</p>
+    <p>This Instagram DM Automation service ("we", "us", or "our") operates as an open-source comment-to-DM automation tool. This privacy policy explains our practices regarding the collection, use, and disclosure of data.</p>
+    
+    <h2>1. Data We Collect</h2>
+    <p>We receive the following data via Meta Webhooks when a user comments on an Instagram post:</p>
+    <ul>
+        <li><strong>Username</strong> — The public Instagram username of the commenter.</li>
+        <li><strong>Comment text</strong> — The text content of the comment.</li>
+        <li><strong>Comment ID</strong> — A unique identifier for the comment.</li>
+        <li><strong>Post ID</strong> — The identifier of the post that was commented on.</li>
+    </ul>
+    
+    <h2>2. How We Use the Data</h2>
+    <p>The data is used solely to:</p>
+    <ul>
+        <li>Determine if a comment matches a configured trigger keyword.</li>
+        <li>Send an automated Direct Message to the commenter (if a keyword matches).</li>
+        <li>Prevent duplicate messages by tracking recent interactions.</li>
+    </ul>
+    <p>We do <strong>not</strong> sell, share, or transfer this data to any third parties.</p>
+    
+    <h2>3. Data Storage & Retention</h2>
+    <p>Interaction logs (username, comment ID, post ID, and delivery status) are stored in a secure PostgreSQL database. These logs are used for duplicate prevention (24-hour window) and diagnostic purposes.</p>
+    
+    <h2>4. Data Deletion</h2>
+    <p>Users may request deletion of their data at any time. See our <a href="/data-deletion">Data Deletion Instructions</a> for details.</p>
+    
+    <h2>5. Third-Party Services</h2>
+    <p>This application uses:</p>
+    <ul>
+        <li><strong>Meta Graph API</strong> — To receive comment notifications and send messages. Subject to <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener">Meta's Privacy Policy</a>.</li>
+        <li><strong>Supabase</strong> — For database hosting. Subject to <a href="https://supabase.com/privacy" target="_blank" rel="noopener">Supabase's Privacy Policy</a>.</li>
+        <li><strong>Vercel</strong> — For application hosting. Subject to <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener">Vercel's Privacy Policy</a>.</li>
+    </ul>
+    
+    <h2>6. Contact</h2>
+    <p>If you have any questions about this Privacy Policy, please open an issue on our GitHub repository or contact the administrator of the Instagram account that triggered the automation.</p>
+</body>
+</html>
