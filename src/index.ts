@@ -102,9 +102,6 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         return;
     }
 
-    // Always respond 200 quickly — process in background
-    res.sendStatus(200);
-
     try {
         for (const entry of body.entry) {
             const pageId = entry.id;
@@ -217,6 +214,9 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         }
     } catch (err) {
         console.error('❌ Pipeline Error:', err);
+    } finally {
+        // Send 200 OK to Meta after processing is complete so Vercel doesn't kill the function early
+        res.sendStatus(200);
     }
 });
 
