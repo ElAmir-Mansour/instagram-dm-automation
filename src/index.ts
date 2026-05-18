@@ -20,11 +20,11 @@ const PORT = process.env.PORT || 3000;
 
 // Extend express Request type to include rawBody for signature verification
 declare global {
-  namespace Express {
-    interface Request {
-      rawBody: Buffer;
+    namespace Express {
+        interface Request {
+            rawBody: Buffer;
+        }
     }
-  }
 }
 
 // Need raw body buffer for HMAC signature verification
@@ -156,24 +156,7 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                 }
                 console.log(`🎯 Matched campaign: keyword="${matchedCampaign.trigger_keyword}"`);
 
-                // 5. Spam / Duplicate prevention (24-hour window)
-                const recentInteractions = await pool.query(
-                    `SELECT id FROM interactions
-                     WHERE sender_username = $1 AND post_id = $2
-                     AND timestamp > NOW() - INTERVAL '24 hours'`,
-                    [senderUsername, postId]
-                );
 
-                if (recentInteractions.rows.length > 0) {
-                    console.log(`⏭️  Already messaged @${senderUsername} for this post in the last 24h.`);
-                    continue;
-                }
-
-                // 6. Check rate limit
-                if (!rateLimiter.canSend()) {
-                    console.warn(`⚠️  Rate limit reached (${rateLimiter.getCount()}/${rateLimiter.limit} per hour). Skipping.`);
-                    continue;
-                }
 
                 // 7. Log interaction as PENDING
                 const interactionLog = await pool.query(
@@ -188,7 +171,6 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     // Send DM (Private Reply)
                     console.log('📩 Sending private DM...');
                     await sendPrivateReply(commentId, matchedCampaign.dm_template, creator.page_access_token);
-                    rateLimiter.record();
 
                     // Optional: Send Public Reply
                     if (matchedCampaign.public_reply_template) {
