@@ -1,63 +1,71 @@
+import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 
 /**
- * Dashboard Authentication Middleware
+ * Dashboard Authentication Middleware (Stateless)
  * 
- * Protects /api/* routes with a simple password-based session system.
- * The dashboard password is set via DASHBOARD_PASSWORD in .env.
+ * Uses HMAC-signed tokens instead of in-memory sessions so that
+ * any Vercel serverless instance can independently verify the token
+ * without needing shared state.
  * 
- * Auth flow:
- * 1. User logs in via POST /api/auth/login with the password
- * 2. Server returns a session token (stored in-memory)
- * 3. All subsequent API calls include the token in Authorization header
+ * Token format: <timestamp>.<hmac_signature>
+ * - timestamp: when the token was created (unix ms)
+ * - hmac_signature: HMAC-SHA256 of the timestamp, signed with DASHBOARD_PASSWORD
  */
 
-// In-memory session store (sufficient for single-instance Vercel)
-const activeSessions = new Map<string, { createdAt: number }>();
 const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
-/** Generate a random session token */
-function generateToken(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let result = '';
-    for (let i = 0; i < 64; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+/** Get the signing secret (derived from dashboard password + app secret for extra entropy) */
+function getSecret(): string {
+    return (process.env.DASHBOARD_PASSWORD || 'admin') + ':' + (process.env.META_APP_SECRET || 'salt');
 }
 
-/** Clean up expired sessions */
-function cleanExpired(): void {
-    const now = Date.now();
-    for (const [token, session] of activeSessions) {
-        if (now - session.createdAt > SESSION_TTL) {
-            activeSessions.delete(token);
-        }
-    }
-}
-
-/** Create a new session and return the token */
+/** Create a stateless signed token */
 export function createSession(): string {
-    cleanExpired();
-    const token = generateToken();
-    activeSessions.set(token, { createdAt: Date.now() });
-    return token;
+    const timestamp = Date.now().toString();
+    const signature = crypto
+        .createHmac('sha256', getSecret())
+        .update(timestamp)
+        .digest('hex');
+    return `${timestamp}.${signature}`;
 }
 
-/** Auth middleware — checks for valid session token */
+/** Verify a stateless signed token */
+function verifyToken(token: string): boolean {
+    const parts = token.split('.');
+    if (parts.length !== 2) return false;
+
+    const [timestamp, signature] = parts;
+    const ts = parseInt(timestamp, 10);
+    if (isNaN(ts)) return false;
+
+    // Check expiry
+    if (Date.now() - ts > SESSION_TTL) return false;
+
+    // Verify signature
+    const expectedSignature = crypto
+        .createHmac('sha256', getSecret())
+        .update(timestamp)
+        .digest('hex');
+
+    return crypto.timingSafeEqual(
+        Buffer.from(signature, 'hex'),
+        Buffer.from(expectedSignature, 'hex')
+    );
+}
+
+/** Auth middleware — verifies the stateless token */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
     const authHeader = req.headers.authorization;
     const token = authHeader?.replace('Bearer ', '');
 
-    if (!token || !activeSessions.has(token)) {
+    if (!token) {
         res.status(401).json({ error: 'Unauthorized — please login first.' });
         return;
     }
 
-    const session = activeSessions.get(token)!;
-    if (Date.now() - session.createdAt > SESSION_TTL) {
-        activeSessions.delete(token);
-        res.status(401).json({ error: 'Session expired — please login again.' });
+    if (!verifyToken(token)) {
+        res.status(401).json({ error: 'Session expired or invalid — please login again.' });
         return;
     }
 
