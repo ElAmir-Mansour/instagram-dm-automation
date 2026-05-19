@@ -8,6 +8,7 @@ import { validateEnv } from './config/env.js';
 import { verifyMetaSignature } from './utils/signature.js';
 import { rateLimiter } from './utils/rateLimiter.js';
 import { sendPrivateReply, sendPublicReply } from './services/instagram.js';
+import apiRouter from './routes/api.js';
 
 // ─── Startup ────────────────────────────────────────────────────────────────
 validateEnv();
@@ -31,6 +32,12 @@ declare global {
 app.use(bodyParser.json({
     verify: (req: any, _res, buf) => { req.rawBody = buf; }
 }));
+
+// ─── Dashboard Static Files ─────────────────────────────────────────────────
+app.use('/dashboard', express.static(path.join(__dirname, '../dashboard')));
+
+// ─── API Routes ─────────────────────────────────────────────────────────────
+app.use('/api', apiRouter);
 
 // ─── Static Pages ───────────────────────────────────────────────────────────
 

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoReply Pro — Instagram DM Automation Dashboard</title>
+    <meta name="description" content="Control your Instagram Comment-to-DM automation with a premium dashboard. Create campaigns, view analytics, and manage your bot.">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="/dashboard/css/styles.css">
+</head>
+<body>
+
+    <!-- ─── Login Screen ─────────────────────────────────────────────────── -->
+    <div id="login-screen" class="login-screen">
+        <div class="login-container">
+            <div class="login-glow"></div>
+            <div class="login-card glass-card">
+                <div class="login-logo">
+                    <div class="logo-icon">
+                        <i data-lucide="zap" class="logo-zap"></i>
+                    </div>
+                    <h1 class="login-title">AutoReply Pro</h1>
+                    <p class="login-subtitle">Instagram DM Automation Dashboard</p>
+                </div>
+                <form id="login-form" class="login-form">
+                    <div class="input-group">
+                        <i data-lucide="lock" class="input-icon"></i>
+                        <input type="password" id="login-password" placeholder="Enter dashboard password" autocomplete="current-password" required>
+                    </div>
+                    <button type="submit" id="login-btn" class="btn btn-primary btn-full">
+                        <span>Sign In</span>
+                        <i data-lucide="arrow-right"></i>
+                    </button>
+                    <p id="login-error" class="login-error hidden"></p>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- ─── Main App ─────────────────────────────────────────────────────── -->
+    <div id="app" class="app hidden">
+        
+        <!-- Sidebar -->
+        <nav id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <div class="logo-icon-sm">
+                        <i data-lucide="zap"></i>
+                    </div>
+                    <span class="sidebar-brand">AutoReply Pro</span>
+                </div>
+            </div>
+
+            <div class="sidebar-nav">
+                <a href="#" class="nav-item active" data-page="overview">
+                    <i data-lucide="layout-dashboard"></i>
+                    <span>Overview</span>
+                </a>
+                <a href="#" class="nav-item" data-page="campaigns">
+                    <i data-lucide="megaphone"></i>
+                    <span>Campaigns</span>
+                </a>
+                <a href="#" class="nav-item" data-page="analytics">
+                    <i data-lucide="bar-chart-3"></i>
+                    <span>Analytics</span>
+                </a>
+                <a href="#" class="nav-item" data-page="activity">
+                    <i data-lucide="scroll-text"></i>
+                    <span>Activity Log</span>
+                </a>
+                <a href="#" class="nav-item" data-page="settings">
+                    <i data-lucide="settings"></i>
+                    <span>Settings</span>
+                </a>
+            </div>
+
+            <div class="sidebar-footer">
+                <button id="logout-btn" class="nav-item nav-logout">
+                    <i data-lucide="log-out"></i>
+                    <span>Logout</span>
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main id="main-content" class="main-content">
+            
+            <!-- Page Header -->
+            <header class="page-header">
+                <div class="header-left">
+                    <button id="mobile-menu-btn" class="mobile-menu-btn">
+                        <i data-lucide="menu"></i>
+                    </button>
+                    <div>
+                        <h1 id="page-title" class="page-title">Overview</h1>
+                        <p id="page-subtitle" class="page-subtitle">Welcome back. Here's how your automation is performing.</p>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <div id="status-indicator" class="status-badge status-online">
+                        <span class="status-dot"></span>
+                        <span>System Online</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Page Container -->
+            <div id="page-container" class="page-container">
+                <!-- Pages are dynamically injected here -->
+            </div>
+        </main>
+    </div>
+
+    <!-- ─── Toast Notification ───────────────────────────────────────────── -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- ─── Modal Container ──────────────────────────────────────────────── -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div id="modal-content" class="modal-content glass-card">
+            <!-- Modal content injected dynamically -->
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/dashboard/js/api.js"></script>
+    <script src="/dashboard/js/components.js"></script>
+    <script src="/dashboard/js/pages/overview.js"></script>
+    <script src="/dashboard/js/pages/campaigns.js"></script>
+    <script src="/dashboard/js/pages/analytics.js"></script>
+    <script src="/dashboard/js/pages/activity.js"></script>
+    <script src="/dashboard/js/pages/settings.js"></script>
+    <script src="/dashboard/js/app.js"></script>
+</body>
+</html>

@@ -2,9 +2,13 @@
   "name": "msg-response-auto",
   "version": 2,
   "builds": [
+    { "src": "dashboard/**", "use": "@vercel/static" },
+    { "src": "public/**", "use": "@vercel/static" },
     { "src": "src/index.ts", "use": "@vercel/node" }
   ],
   "routes": [
+    { "src": "/dashboard/(.*)", "dest": "dashboard/$1" },
+    { "src": "/dashboard", "dest": "dashboard/index.html" },
     { "src": "/(.*)", "dest": "src/index.ts" }
   ]
 }
