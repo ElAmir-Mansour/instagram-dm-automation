@@ -36,6 +36,9 @@ app.use(bodyParser.json({
 // ─── Dashboard Static Files ─────────────────────────────────────────────────
 app.use('/dashboard', express.static(path.join(__dirname, '../dashboard')));
 
+// ─── Local Documentation (gitignored, not deployed) ─────────────────────────
+app.use('/docs', express.static(path.join(__dirname, '../docs')));
+
 // ─── API Routes ─────────────────────────────────────────────────────────────
 app.use('/api', apiRouter);
 

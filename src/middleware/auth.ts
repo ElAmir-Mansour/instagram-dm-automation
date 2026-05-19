@@ -35,7 +35,8 @@ function verifyToken(token: string): boolean {
     const parts = token.split('.');
     if (parts.length !== 2) return false;
 
-    const [timestamp, signature] = parts;
+    const timestamp = parts[0]!;
+    const signature = parts[1]!;
     const ts = parseInt(timestamp, 10);
     if (isNaN(ts)) return false;
 
@@ -48,10 +49,14 @@ function verifyToken(token: string): boolean {
         .update(timestamp)
         .digest('hex');
 
-    return crypto.timingSafeEqual(
-        Buffer.from(signature, 'hex'),
-        Buffer.from(expectedSignature, 'hex')
-    );
+    try {
+        return crypto.timingSafeEqual(
+            Buffer.from(signature, 'hex'),
+            Buffer.from(expectedSignature, 'hex')
+        );
+    } catch {
+        return false;
+    }
 }
 
 /** Auth middleware — verifies the stateless token */
