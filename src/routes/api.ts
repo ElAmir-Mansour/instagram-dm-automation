@@ -2,6 +2,9 @@ import { Router } from 'express';
 import { pool } from '../config/db.js';
 import { createSession, requireAuth } from '../middleware/auth.js';
 import axios from 'axios';
+import { sendDirectMessage } from '../services/instagram.js';
+import { generateAiResponse } from '../services/ai.js';
+
 
 const router = Router();
 
@@ -363,6 +366,242 @@ router.get('/creators', async (_req, res) => {
     } catch (err) {
         console.error('Creators Error:', err);
         res.status(500).json({ error: 'Failed to fetch creators.' });
+    }
+});
+
+// ─── Direct Message Inbox & Chat ─────────────────────────────────────────────
+
+router.get('/conversations', async (req, res) => {
+    try {
+        const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+        const page = parseInt(req.query.page as string) || 1;
+        const offset = (page - 1) * limit;
+
+        const result = await pool.query(
+            `SELECT c.*, 
+                    (SELECT text FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_text,
+                    (SELECT direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_direction
+             FROM conversations c
+             ORDER BY c.last_message_at DESC
+             LIMIT $1 OFFSET $2`,
+            [limit, offset]
+        );
+
+        const countRes = await pool.query('SELECT COUNT(*)::int as total FROM conversations');
+
+        res.json({
+            data: result.rows,
+            pagination: {
+                page,
+                limit,
+                total: countRes.rows[0].total,
+                totalPages: Math.ceil(countRes.rows[0].total / limit)
+            }
+        });
+    } catch (err) {
+        console.error('Fetch Conversations Error:', err);
+        res.status(500).json({ error: 'Failed to fetch conversations.' });
+    }
+});
+
+router.get('/conversations/:id/messages', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const messages = await pool.query(
+            'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT 100',
+            [id]
+        );
+        res.json(messages.rows);
+    } catch (err) {
+        console.error('Fetch Messages Error:', err);
+        res.status(500).json({ error: 'Failed to fetch message history.' });
+    }
+});
+
+router.post('/conversations/:id/messages', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { text } = req.body;
+
+        if (!text) {
+            res.status(400).json({ error: 'Message text is required.' });
+            return;
+        }
+
+        // Fetch conversation and creator credentials
+        const convRes = await pool.query(
+            `SELECT c.*, cr.page_access_token 
+             FROM conversations c
+             JOIN creators cr ON cr.id = c.creator_id
+             WHERE c.id = $1`,
+            [id]
+        );
+
+        if (convRes.rows.length === 0) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        const conv = convRes.rows[0];
+
+        // Send message to Instagram
+        console.log(`✉️ Manual response to ${conv.instagram_user_id}: "${text}"`);
+        const metaPayload = { text };
+        await sendDirectMessage(conv.instagram_user_id, metaPayload, conv.page_access_token);
+
+        // Save message to database & pause the bot to avoid fighting the user
+        await pool.query(
+            `INSERT INTO messages (conversation_id, direction, message_type, text, raw_payload)
+             VALUES ($1, 'outbound', 'text', $2, $3)`,
+            [id, text, JSON.stringify(metaPayload)]
+        );
+
+        await pool.query(
+            'UPDATE conversations SET last_message_at = NOW(), is_bot_active = false WHERE id = $1',
+            [id]
+        );
+
+        res.json({ success: true, message: 'Message sent manually. Bot is paused for this thread.' });
+    } catch (err: any) {
+        console.error('Manual Send Error:', err);
+        res.status(500).json({ error: err.message || 'Failed to send message.' });
+    }
+});
+
+router.put('/conversations/:id/toggle-bot', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { is_bot_active } = req.body;
+
+        if (typeof is_bot_active !== 'boolean') {
+            res.status(400).json({ error: 'is_bot_active must be a boolean.' });
+            return;
+        }
+
+        const result = await pool.query(
+            'UPDATE conversations SET is_bot_active = $1 WHERE id = $2 RETURNING *',
+            [is_bot_active, id]
+        );
+
+        if (result.rows.length === 0) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Toggle Bot Error:', err);
+        res.status(500).json({ error: 'Failed to toggle bot.' });
+    }
+});
+
+// ─── AI Agent Settings ───────────────────────────────────────────────────────
+
+router.get('/settings/ai', async (_req, res) => {
+    try {
+        const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
+        if (creatorRes.rows.length === 0) {
+            res.status(400).json({ error: 'No active creator found.' });
+            return;
+        }
+        const creatorId = creatorRes.rows[0].id;
+
+        const agentRes = await pool.query('SELECT * FROM ai_agents WHERE creator_id = $1', [creatorId]);
+        if (agentRes.rows.length === 0) {
+            res.json({
+                system_prompt: 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.',
+                knowledge_base: '',
+                model: 'gemini-2.5-flash',
+                temperature: 0.7,
+                is_active: true
+            });
+            return;
+        }
+
+        res.json(agentRes.rows[0]);
+    } catch (err) {
+        console.error('Get AI Settings Error:', err);
+        res.status(500).json({ error: 'Failed to fetch AI settings.' });
+    }
+});
+
+router.post('/settings/ai', async (req, res) => {
+    try {
+        const { system_prompt, knowledge_base, model, temperature, is_active } = req.body;
+
+        if (!system_prompt) {
+            res.status(400).json({ error: 'System prompt is required.' });
+            return;
+        }
+
+        const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
+        if (creatorRes.rows.length === 0) {
+            res.status(400).json({ error: 'No active creator found.' });
+            return;
+        }
+        const creatorId = creatorRes.rows[0].id;
+
+        const result = await pool.query(
+            `INSERT INTO ai_agents (creator_id, system_prompt, knowledge_base, model, temperature, is_active)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (creator_id) 
+             DO UPDATE SET 
+                system_prompt = EXCLUDED.system_prompt,
+                knowledge_base = EXCLUDED.knowledge_base,
+                model = EXCLUDED.model,
+                temperature = EXCLUDED.temperature,
+                is_active = EXCLUDED.is_active
+             RETURNING *`,
+            [
+                creatorId,
+                system_prompt,
+                knowledge_base || '',
+                model || 'gemini-2.5-flash',
+                parseFloat(temperature) || 0.7,
+                is_active !== false
+            ]
+        );
+
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Update AI Settings Error:', err);
+        res.status(500).json({ error: 'Failed to update AI settings.' });
+    }
+});
+
+router.post('/settings/ai/test', async (req, res) => {
+    try {
+        const { system_prompt, knowledge_base, user_message } = req.body;
+
+        if (!user_message) {
+            res.status(400).json({ error: 'user_message is required.' });
+            return;
+        }
+
+        const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
+        if (creatorRes.rows.length === 0) {
+            res.status(400).json({ error: 'No active creator found.' });
+            return;
+        }
+        const creatorId = creatorRes.rows[0].id;
+
+        const mockConvId = '00000000-0000-0000-0000-000000000000';
+
+        await pool.query(
+            `INSERT INTO ai_agents (creator_id, system_prompt, knowledge_base, model, temperature, is_active)
+             VALUES ($1, $2, $3, 'gemini-2.5-flash', 0.7, true)
+             ON CONFLICT (creator_id) 
+             DO UPDATE SET 
+                system_prompt = EXCLUDED.system_prompt,
+                knowledge_base = EXCLUDED.knowledge_base`,
+            [creatorId, system_prompt, knowledge_base || '']
+        );
+
+        const aiRes = await generateAiResponse(mockConvId, user_message, creatorId);
+        res.json(aiRes);
+    } catch (err: any) {
+        console.error('AI Test Error:', err);
+        res.status(500).json({ error: err.message || 'Simulation call failed.' });
     }
 });
 

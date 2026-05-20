@@ -54,3 +54,29 @@ export async function sendPublicReply(commentId: string, message: string, access
         );
     }
 }
+
+/**
+ * Sends a standard Direct Message (DM) to an Instagram User ID (IGSID).
+ * Supports text, quick replies, and templates (carousels).
+ * 
+ * @see https://developers.facebook.com/docs/messenger-platform/instagram/reference/send-api
+ */
+export async function sendDirectMessage(recipientId: string, messagePayload: any, accessToken: string) {
+    const url = `https://graph.facebook.com/${API_VERSION}/me/messages`;
+
+    try {
+        const response = await axios.post(url, {
+            recipient: { id: recipientId },
+            message: messagePayload
+        }, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        return response.data;
+    } catch (error: any) {
+        const metaError = error.response?.data?.error;
+        throw new Error(
+            `DM Send Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
+        );
+    }
+}
+
