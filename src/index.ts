@@ -106,18 +106,24 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
     }
     console.log('✅ Signature validated.');
 
-    // 2. Ensure it's an Instagram event
+    // 2. Accept both 'instagram' and 'page' object types
+    // Page-level subscriptions (/{page-id}/subscribed_apps) send object:'page'
+    // App-level subscriptions (/{app-id}/subscriptions) send object:'instagram'
     const body = req.body;
-    if (body.object !== 'instagram') {
-        console.log('⏭️  Not an Instagram event:', body.object);
+    console.log('📦 Webhook object type:', body.object);
+    console.log('📦 Raw body preview:', JSON.stringify(body).substring(0, 300));
+
+    const isInstagramEvent = body.object === 'instagram' || body.object === 'page';
+    if (!isInstagramEvent) {
+        console.log('⏭️  Unrecognized event object type:', body.object);
         res.sendStatus(200);
         return;
     }
 
     try {
         for (const entry of body.entry) {
-            const pageId = entry.id;
-            console.log(`\n── Processing entry for Page ID: ${pageId}`);
+            const entryId = entry.id;
+            console.log(`\n── Processing entry ID: ${entryId} (object: ${body.object})`);
 
             // ─── A. Process Instagram Direct Messages & Postbacks ─────────────────────
             if (entry.messaging && Array.isArray(entry.messaging)) {
@@ -164,7 +170,26 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                         continue;
                     }
 
-                    console.log(`📨 Incoming DM from IGSID ${senderId}: "${text}" (payload: ${payload})`);
+                    console.log(`📨 Incoming DM from IGSID ${senderId} → recipient ${recipientId}: "${text}" (payload: ${payload})`);
+
+                    // Look up creator by recipientId (IG Business ID) OR entryId (FB Page ID)
+                    // recipientId from message events = Instagram Business Account ID (most reliable)
+                    // entryId = could be IG ID (app-level sub) or FB Page ID (page-level sub)
+                    const creatorLookup = await pool.query(
+                        `SELECT id, is_bot_active, page_access_token FROM creators 
+                         WHERE is_active = true 
+                           AND (instagram_page_id = $1 OR instagram_page_id = $2 OR facebook_page_id = $2)
+                         LIMIT 1`,
+                        [recipientId, entryId]
+                    );
+
+                    if (creatorLookup.rows.length === 0) {
+                        console.log(`⚠️  No creator found for recipientId=${recipientId} or entryId=${entryId}. Skipping.`);
+                        continue;
+                    }
+
+                    const creator = creatorLookup.rows[0];
+                    console.log(`✅ Creator found: ${creator.id}`);
 
                     // 1. Fetch or create conversation thread
                     let conversationId = '';
@@ -172,17 +197,17 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     
                     const dbConversation = await pool.query(
                         `SELECT id, is_bot_active FROM conversations 
-                         WHERE creator_id = (SELECT id FROM creators WHERE instagram_page_id = $1) 
+                         WHERE creator_id = $1 
                            AND instagram_user_id = $2`,
-                        [pageId, senderId]
+                        [creator.id, senderId]
                     );
 
                     if (dbConversation.rows.length === 0) {
                         const newConv = await pool.query(
                             `INSERT INTO conversations (creator_id, instagram_user_id, status)
-                             VALUES ((SELECT id FROM creators WHERE instagram_page_id = $1), $2, 'active')
+                             VALUES ($1, $2, 'active')
                              RETURNING id, is_bot_active`,
-                            [pageId, senderId]
+                            [creator.id, senderId]
                         );
                         conversationId = newConv.rows[0].id;
                         isBotActive = newConv.rows[0].is_bot_active;
@@ -213,82 +238,74 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     // 3. Call AI Agent to reply if Bot is active
                     if (isBotActive) {
                         try {
-                            const creatorRes = await pool.query(
-                                'SELECT id, page_access_token FROM creators WHERE instagram_page_id = $1 AND is_active = true',
-                                [pageId]
-                            );
+                            // Query Gemini
+                            console.log('🤖 Invoking Gemini to construct response...');
+                            const aiRes = await generateAiResponse(conversationId, text || payload, creator.id);
+                            console.log('🤖 Gemini Response Type:', aiRes.message_type);
 
-                            if (creatorRes.rows.length > 0) {
-                                const creator = creatorRes.rows[0];
-                                
-                                // Query Gemini
-                                console.log('🤖 Invoking Gemini to construct response...');
-                                const aiRes = await generateAiResponse(conversationId, text || payload, creator.id);
-                                console.log('🤖 Gemini Response Type:', aiRes.message_type);
-
-                                // Format Meta payload
-                                let metaMessagePayload: any = {};
-                                if (aiRes.message_type === 'text') {
-                                    metaMessagePayload = { text: aiRes.text };
-                                } else if (aiRes.message_type === 'quick_reply') {
-                                    metaMessagePayload = {
-                                        text: aiRes.text,
-                                        quick_replies: aiRes.quick_replies?.map((qr: any) => ({
-                                            content_type: 'text',
-                                            title: qr.title,
-                                            payload: qr.payload
-                                        }))
-                                    };
-                                } else if (aiRes.message_type === 'carousel') {
-                                    metaMessagePayload = {
-                                        attachment: {
-                                            type: 'template',
-                                            payload: {
-                                                template_type: 'generic',
-                                                elements: aiRes.carousel_elements?.map((el: any) => {
-                                                    const cleanElement: any = {
-                                                        title: el.title
-                                                    };
-                                                    if (el.subtitle) cleanElement.subtitle = el.subtitle;
-                                                    if (el.image_url) cleanElement.image_url = el.image_url;
-                                                    if (el.buttons && el.buttons.length > 0) {
-                                                        cleanElement.buttons = el.buttons.map((btn: any) => {
-                                                            const cleanBtn: any = {
-                                                                type: btn.type,
-                                                                title: btn.title
-                                                            };
-                                                            if (btn.type === 'web_url') {
-                                                                cleanBtn.url = btn.url;
-                                                            } else {
-                                                                cleanBtn.payload = btn.payload;
-                                                            }
-                                                            return cleanBtn;
-                                                        });
-                                                    }
-                                                    return cleanElement;
-                                                })
-                                            }
+                            // Format Meta payload
+                            let metaMessagePayload: any = {};
+                            if (aiRes.message_type === 'text') {
+                                metaMessagePayload = { text: aiRes.text };
+                            } else if (aiRes.message_type === 'quick_reply') {
+                                metaMessagePayload = {
+                                    text: aiRes.text,
+                                    quick_replies: aiRes.quick_replies?.map((qr: any) => ({
+                                        content_type: 'text',
+                                        title: qr.title,
+                                        payload: qr.payload
+                                    }))
+                                };
+                            } else if (aiRes.message_type === 'carousel') {
+                                metaMessagePayload = {
+                                    attachment: {
+                                        type: 'template',
+                                        payload: {
+                                            template_type: 'generic',
+                                            elements: aiRes.carousel_elements?.map((el: any) => {
+                                                const cleanElement: any = {
+                                                    title: el.title
+                                                };
+                                                if (el.subtitle) cleanElement.subtitle = el.subtitle;
+                                                if (el.image_url) cleanElement.image_url = el.image_url;
+                                                if (el.buttons && el.buttons.length > 0) {
+                                                    cleanElement.buttons = el.buttons.map((btn: any) => {
+                                                        const cleanBtn: any = {
+                                                            type: btn.type,
+                                                            title: btn.title
+                                                        };
+                                                        if (btn.type === 'web_url') {
+                                                            cleanBtn.url = btn.url;
+                                                        } else {
+                                                            cleanBtn.payload = btn.payload;
+                                                        }
+                                                        return cleanBtn;
+                                                    });
+                                                }
+                                                return cleanElement;
+                                            })
                                         }
-                                    };
-                                }
-
-                                // Send DM using Meta Send API
-                                console.log(`📩 Sending Meta response of type: ${aiRes.message_type}`);
-                                await sendDirectMessage(senderId, metaMessagePayload, creator.page_access_token);
-
-                                // Log outbound message
-                                await pool.query(
-                                    `INSERT INTO messages (conversation_id, direction, message_type, text, raw_payload)
-                                     VALUES ($1, 'outbound', $2, $3, $4)`,
-                                    [conversationId, aiRes.message_type, aiRes.text || '[Structured Template]', JSON.stringify(metaMessagePayload)]
-                                );
+                                    }
+                                };
                             }
+
+                            // Send DM using Meta Send API
+                            console.log(`📩 Sending Meta response of type: ${aiRes.message_type}`);
+                            await sendDirectMessage(senderId, metaMessagePayload, creator.page_access_token);
+
+                            // Log outbound message
+                            await pool.query(
+                                `INSERT INTO messages (conversation_id, direction, message_type, text, raw_payload)
+                                 VALUES ($1, 'outbound', $2, $3, $4)`,
+                                [conversationId, aiRes.message_type, aiRes.text || '[Structured Template]', JSON.stringify(metaMessagePayload)]
+                            );
                         } catch (aiError: any) {
                             console.error('❌ AI Pipeline / Send Error:', aiError.message);
                         }
                     } else {
                         console.log('⏭️  AI Bot is paused for this conversation thread. Manual reply required.');
                     }
+
                 }
             }
 
