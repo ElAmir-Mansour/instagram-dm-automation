@@ -326,23 +326,26 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
 
                     console.log(`💬 Comment: "${text}" by @${senderUsername} (ID: ${senderId})`);
 
-                    // Ignore comments made by the page itself
-                    if (senderId === pageId) {
-                        console.log('⏭️  Ignoring self-comment from page owner.');
-                        continue;
-                    }
-
                     // 3. Fetch Creator config
                     const creatorRes = await pool.query(
-                        'SELECT * FROM creators WHERE instagram_page_id = $1 AND is_active = true',
-                        [pageId]
+                        `SELECT * FROM creators 
+                         WHERE is_active = true 
+                           AND (instagram_page_id = $1 OR facebook_page_id = $1)
+                         LIMIT 1`,
+                        [entryId]
                     );
 
                     if (creatorRes.rows.length === 0) {
-                        console.log('⚠️  No active creator found for this Page ID.');
+                        console.log(`⚠️  No active creator found for entryId=${entryId}.`);
                         continue;
                     }
                     const creator = creatorRes.rows[0];
+
+                    // Ignore comments made by the page itself
+                    if (senderId === creator.instagram_page_id) {
+                        console.log('⏭️  Ignoring self-comment from page owner.');
+                        continue;
+                    }
 
                     // 4. Fetch campaigns & match keyword
                     const campaignRes = await pool.query(
