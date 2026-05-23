@@ -402,8 +402,10 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     // Dispatch Messages
                     try {
                         // Send Private DM reply
+                        // Facebook needs /{pageId}/messages, Instagram uses /me/messages
+                        const fbPageId = isFacebookComment ? creator.facebook_page_id : undefined;
                         console.log('📩 Sending private DM...');
-                        await sendPrivateReply(commentId, matchedCampaign.dm_template, creator.page_access_token);
+                        await sendPrivateReply(commentId, matchedCampaign.dm_template, creator.page_access_token, fbPageId);
 
                         // Optional: Send Public Reply
                         if (matchedCampaign.public_reply_template) {

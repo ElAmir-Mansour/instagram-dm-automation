@@ -4,20 +4,28 @@ const API_VERSION = 'v21.0';
 
 /**
  * Sends a Direct Message to a user as a Private Reply to their comment.
- * 
- * This uses Meta's Private Reply API — the DM is linked to the original comment.
- * Limit: 1 private reply per comment, must be sent within 7 days of the comment.
- * 
+ *
+ * - Instagram: uses /me/messages  (token resolves to the IG-linked page)
+ * - Facebook:  uses /{pageId}/messages  (required for FB Page tokens per 2025 Meta docs)
+ *
+ * Limit: 1 private reply per comment, must be sent within 7 days.
  * @see https://developers.facebook.com/docs/messenger-platform/instagram/features/private-replies
  */
-export async function sendPrivateReply(commentId: string, message: string, accessToken: string) {
-    const url = `https://graph.facebook.com/${API_VERSION}/me/messages`;
+export async function sendPrivateReply(
+    commentId: string,
+    message: string,
+    accessToken: string,
+    pageId?: string            // Pass Facebook Page ID for FB comments; omit for Instagram
+) {
+    // Facebook requires /{page-id}/messages; Instagram works with /me/messages
+    const endpoint = pageId ? pageId : 'me';
+    const url = `https://graph.facebook.com/${API_VERSION}/${endpoint}/messages`;
 
     try {
         const response = await axios.post(url, {
             recipient: { comment_id: commentId },
             message: { text: message },
-            messaging_type: 'RESPONSE'   // Required by Facebook Messenger; ignored by Instagram
+            messaging_type: 'RESPONSE'
         }, {
             headers: { Authorization: `Bearer ${accessToken}` }
         });
@@ -25,7 +33,7 @@ export async function sendPrivateReply(commentId: string, message: string, acces
     } catch (error: any) {
         const metaError = error.response?.data?.error;
         throw new Error(
-            `Private Reply Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
+            `Private Reply Failed [${endpoint}]: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
         );
     }
 }
@@ -62,8 +70,14 @@ export async function sendPublicReply(commentId: string, message: string, access
  * 
  * @see https://developers.facebook.com/docs/messenger-platform/instagram/reference/send-api
  */
-export async function sendDirectMessage(recipientId: string, messagePayload: any, accessToken: string) {
-    const url = `https://graph.facebook.com/${API_VERSION}/me/messages`;
+export async function sendDirectMessage(
+    recipientId: string,
+    messagePayload: any,
+    accessToken: string,
+    pageId?: string            // Pass Facebook Page ID for FB DMs; omit for Instagram
+) {
+    const endpoint = pageId ? pageId : 'me';
+    const url = `https://graph.facebook.com/${API_VERSION}/${endpoint}/messages`;
 
     try {
         const response = await axios.post(url, {
