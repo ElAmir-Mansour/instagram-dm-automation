@@ -54,7 +54,8 @@ const SettingsPage = {
                 <div class="settings-section">
                     <h2 class="settings-title">Account Info</h2>
                     <div class="settings-card glass-card">
-                        <div class="token-info" style="margin-bottom:8px;">Page ID: <span>${tokenStatus.pageId || '—'}</span></div>
+                        <div class="token-info" style="margin-bottom:8px;">Instagram Page ID: <span>${tokenStatus.instagramPageId || tokenStatus.pageId || '—'}</span></div>
+                        <div class="token-info" style="margin-bottom:8px;">Facebook Page ID: <span>${tokenStatus.facebookPageId || '—'}</span></div>
                         <div class="token-info" style="margin-bottom:8px;">Status: <span>${tokenStatus.isActive ? '🟢 Active' : '🔴 Inactive'}</span></div>
                         <div class="token-info">Webhook URL: <span>https://msg-response-auto.vercel.app/webhook</span></div>
                     </div>

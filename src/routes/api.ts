@@ -265,7 +265,7 @@ router.get('/interactions', async (req, res) => {
 router.get('/settings/token/status', async (_req, res) => {
     try {
         const creatorRes = await pool.query(
-            'SELECT id, instagram_page_id, is_active, page_access_token FROM creators LIMIT 1'
+            'SELECT id, instagram_page_id, facebook_page_id, is_active, page_access_token FROM creators LIMIT 1'
         );
 
         if (creatorRes.rows.length === 0) {
@@ -288,13 +288,17 @@ router.get('/settings/token/status', async (_req, res) => {
                 type: data.type,
                 expiresAt: data.expires_at ? new Date(data.expires_at * 1000).toISOString() : null,
                 scopes: data.scopes || [],
-                pageId: creator.instagram_page_id,
+                instagramPageId: creator.instagram_page_id,
+                facebookPageId: creator.facebook_page_id,
+                pageId: creator.instagram_page_id,   // backwards compat
                 isActive: creator.is_active,
             });
         } catch {
             res.json({
                 status: 'invalid',
                 message: 'Token validation failed — token may be expired or revoked.',
+                instagramPageId: creator.instagram_page_id,
+                facebookPageId: creator.facebook_page_id,
                 pageId: creator.instagram_page_id,
                 isActive: creator.is_active,
             });

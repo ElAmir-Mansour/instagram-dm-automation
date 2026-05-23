@@ -38,7 +38,7 @@ const OverviewPage = {
                             <div class="stat-icon warning"><i data-lucide="users"></i></div>
                         </div>
                         <div class="stat-value" id="stat-users">0</div>
-                        <div class="stat-change">Unique Instagram users</div>
+                        <div class="stat-change">Unique users reached</div>
                     </div>
                     <div class="stat-card glass-card">
                         <div class="stat-header">

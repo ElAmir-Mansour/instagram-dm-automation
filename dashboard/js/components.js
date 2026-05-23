@@ -48,3 +48,9 @@ const UI = {
         return '<div class="loader"><div class="spinner"></div></div>';
     }
 };
+
+// ─── Backwards-compat alias ──────────────────────────────────────────────────
+// inbox.js and ai_settings.js use Components.showToast() — map it to UI.toast()
+const Components = {
+    showToast: (msg, type = 'success') => UI.toast(msg, type)
+};
