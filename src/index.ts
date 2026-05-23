@@ -393,40 +393,53 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
 
                     // Log interaction as PENDING
                     const interactionLog = await pool.query(
-                        `INSERT INTO interactions (campaign_id, comment_id, sender_username, post_id, status)
-                         VALUES ($1, $2, $3, $4, 'PENDING') RETURNING id`,
-                        [matchedCampaign.id, commentId, senderUsername, postId]
+                        `INSERT INTO interactions (campaign_id, comment_id, sender_username, post_id, status, platform)
+                         VALUES ($1, $2, $3, $4, 'PENDING', $5) RETURNING id`,
+                        [matchedCampaign.id, commentId, senderUsername, postId, isFacebookComment ? 'facebook' : 'instagram']
                     );
                     const interactionId = interactionLog.rows[0]?.id;
 
                     // Dispatch Messages
                     try {
-                        // Send Private DM reply
-                        // Facebook needs /{pageId}/messages, Instagram uses /me/messages
+                        // ── Step 1: Send Private DM (the core action) ──────────────────
                         const fbPageId = isFacebookComment ? creator.facebook_page_id : undefined;
                         console.log('📩 Sending private DM...');
                         await sendPrivateReply(commentId, matchedCampaign.dm_template, creator.page_access_token, fbPageId);
 
-                        // Optional: Send Public Reply
-                        if (matchedCampaign.public_reply_template) {
-                            console.log('💬 Sending public reply...');
-                            // Instagram: /{commentId}/replies  |  Facebook: /{commentId}/comments
-                            await sendPublicReply(commentId, matchedCampaign.public_reply_template, creator.page_access_token, isFacebookComment);
-                        }
-
+                        // Mark SENT immediately — DM is what matters
                         await pool.query(
                             'UPDATE interactions SET status = $1 WHERE id = $2',
                             ['SENT', interactionId]
                         );
-                        console.log(`✅ Successfully processed comment from @${senderUsername}`);
+                        console.log(`✅ Private DM sent to @${senderUsername}`);
 
-                    } catch (dispatchError: any) {
-                        console.error('❌ Dispatch Error:', dispatchError.message);
+                    } catch (dmError: any) {
+                        // Private DM failed → FAILED
+                        console.error('❌ Private DM Error:', dmError.message);
                         await pool.query(
                             'UPDATE interactions SET status = $1, error_log = $2 WHERE id = $3',
-                            ['FAILED', dispatchError.message, interactionId]
+                            ['FAILED', dmError.message, interactionId]
                         );
+                        continue; // skip public reply
                     }
+
+                    // ── Step 2: Public Reply (best-effort, won't affect SENT status) ──
+                    if (matchedCampaign.public_reply_template) {
+                        try {
+                            console.log('💬 Sending public reply...');
+                            // Instagram: /{commentId}/replies  |  Facebook: /{commentId}/comments
+                            await sendPublicReply(commentId, matchedCampaign.public_reply_template, creator.page_access_token, isFacebookComment);
+                            console.log('✅ Public reply sent.');
+                        } catch (publicErr: any) {
+                            // Public reply failed but DM already succeeded — log but keep SENT
+                            console.warn('⚠️  Public reply failed (non-critical):', publicErr.message);
+                            await pool.query(
+                                'UPDATE interactions SET error_log = $1 WHERE id = $2',
+                                [`Public reply failed: ${publicErr.message}`, interactionId]
+                            );
+                        }
+                    }
+
                 }
             }
         }

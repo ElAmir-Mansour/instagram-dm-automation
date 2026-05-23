@@ -41,16 +41,25 @@ const ActivityPage = {
                                 <th>Username</th><th>Keyword</th><th>Post ID</th><th>Status</th><th>Error</th><th>Time</th>
                             </tr></thead>
                             <tbody>
-                                ${result.data.map(i => `
-                                    <tr>
-                                        <td><a href="https://instagram.com/${i.sender_username}" target="_blank" class="username-link">@${i.sender_username}</a></td>
-                                        <td style="color:var(--accent);font-weight:500;">${i.trigger_keyword || '—'}</td>
-                                        <td style="font-size:11px;color:var(--text-muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;">${i.post_id || '—'}</td>
-                                        <td><span class="status-pill ${i.status.toLowerCase()}">${i.status}</span></td>
-                                        <td style="max-width:200px;font-size:11px;color:var(--danger);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${i.error_log || ''}">${i.error_log || '—'}</td>
-                                        <td style="white-space:nowrap;">${UI.formatDate(i.timestamp)}</td>
-                                    </tr>
-                                `).join('')}
+                                ${result.data.map(i => {
+                                    const isFb = i.platform === 'facebook';
+                                    const platformBadge = isFb
+                                        ? `<span style="font-size:10px;background:#1877F2;color:#fff;padding:2px 6px;border-radius:4px;margin-left:6px;">FB</span>`
+                                        : `<span style="font-size:10px;background:#E1306C;color:#fff;padding:2px 6px;border-radius:4px;margin-left:6px;">IG</span>`;
+                                    const userCell = isFb
+                                        ? `<span class="username-link">@${i.sender_username}</span>${platformBadge}`
+                                        : `<a href="https://instagram.com/${i.sender_username}" target="_blank" class="username-link">@${i.sender_username}</a>${platformBadge}`;
+                                    return `
+                                     <tr>
+                                         <td>${userCell}</td>
+                                         <td style="color:var(--accent);font-weight:500;">${i.trigger_keyword || '—'}</td>
+                                         <td style="font-size:11px;color:var(--text-muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;">${i.post_id || '—'}</td>
+                                         <td><span class="status-pill ${i.status.toLowerCase()}">${i.status}</span></td>
+                                         <td style="max-width:200px;font-size:11px;color:var(--danger);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${i.error_log || ''}">${i.error_log || '—'}</td>
+                                         <td style="white-space:nowrap;">${UI.formatDate(i.timestamp)}</td>
+                                     </tr>
+                                 `;
+                                }).join('')}
                                 ${result.data.length === 0 ? '<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text-muted);">No interactions found.</td></tr>' : ''}
                             </tbody>
                         </table>
