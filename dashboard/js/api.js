@@ -42,6 +42,7 @@ const API = {
     getStats: () => API.request('/stats'),
     getHourlyStats: (days = 7) => API.request(`/stats/hourly?days=${days}`),
     getDailyStats: (days = 30) => API.request(`/stats/daily?days=${days}`),
+    getCampaignStats: () => API.request('/stats/campaigns'),
 
     // Campaigns
     getCampaigns: () => API.request('/campaigns'),
@@ -53,6 +54,12 @@ const API = {
     getInteractions: (params = {}) => {
         const query = new URLSearchParams(params).toString();
         return API.request(`/interactions?${query}`);
+    },
+    exportInteractions: (params = {}) => {
+        const exportParams = { ...params };
+        if (API.token) exportParams.token = API.token;
+        const query = new URLSearchParams(exportParams).toString();
+        window.location.href = `${API.baseUrl}/interactions/export?${query}`;
     },
 
     // Settings

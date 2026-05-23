@@ -13,7 +13,36 @@ const SettingsPage = {
             const expiresAt = tokenStatus.expiresAt ? new Date(tokenStatus.expiresAt) : null;
             const daysLeft = expiresAt ? Math.ceil((expiresAt - Date.now()) / (1000 * 60 * 60 * 24)) : null;
 
+            const requiredScopes = [
+                { name: 'pages_manage_engagement', desc: 'Facebook comment replies and auto-likes' },
+                { name: 'pages_messaging', desc: 'Facebook Messenger message replies' },
+                { name: 'instagram_manage_comments', desc: 'Instagram comment parsing and public replies' },
+                { name: 'instagram_manage_messages', desc: 'Instagram DM automation' }
+            ];
+
+            const missingScopes = isValid && Array.isArray(tokenStatus.scopes)
+                ? requiredScopes.filter(scope => !tokenStatus.scopes.includes(scope.name))
+                : [];
+
             container.innerHTML = `
+                ${missingScopes.length > 0 ? `
+                    <div class="settings-card glass-card" style="border-left: 4px solid var(--warning); margin-bottom: 24px; background: rgba(245,158,11,0.02);">
+                        <div style="display:flex; gap:16px; align-items:flex-start;">
+                            <div class="stat-icon warning" style="flex-shrink:0; background:var(--warning-bg); color:var(--warning); width:40px; height:40px; border-radius:10px; display:flex; align-items:center; justify-content:center;">
+                                <i data-lucide="alert-triangle" style="width:20px; height:20px;"></i>
+                            </div>
+                            <div>
+                                <h3 style="font-size:14px; font-weight:700; color:var(--warning); margin-bottom:6px;">Missing Recommended Meta Permissions</h3>
+                                <p style="font-size:13px; color:var(--text-secondary); margin-bottom:12px; line-height: 1.5;">
+                                    The following permissions are missing from your current access token. Some automated reply features may fail:
+                                </p>
+                                <ul style="font-size:12px; color:var(--text-muted); padding-left:20px; line-height:1.7; margin:0;">
+                                    ${missingScopes.map(s => `<li><strong style="color:var(--text-secondary);">${s.name}</strong>: Required for ${s.desc}.</li>`).join('')}
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                ` : ''}
                 <div class="settings-section">
                     <h2 class="settings-title">Access Token</h2>
                     <div class="settings-card glass-card">

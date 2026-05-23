@@ -62,7 +62,12 @@ function verifyToken(token: string): boolean {
 /** Auth middleware — verifies the stateless token */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
     const authHeader = req.headers.authorization;
-    const token = authHeader?.replace('Bearer ', '');
+    let token = authHeader?.replace('Bearer ', '');
+
+    // Allow token in query params (for file downloads like CSV export)
+    if (!token && req.query.token) {
+        token = req.query.token as string;
+    }
 
     if (!token) {
         res.status(401).json({ error: 'Unauthorized — please login first.' });

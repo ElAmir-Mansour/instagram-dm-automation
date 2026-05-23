@@ -30,7 +30,7 @@ router.use(requireAuth);
 
 router.get('/stats', async (_req, res) => {
     try {
-        const [total, sent, failed, campaigns, creators, today, uniqueUsers] = await Promise.all([
+        const [total, sent, failed, campaigns, creators, today, uniqueUsers, instagram, facebook] = await Promise.all([
             pool.query('SELECT COUNT(*)::int as count FROM interactions'),
             pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE status = 'SENT'"),
             pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE status = 'FAILED'"),
@@ -38,6 +38,8 @@ router.get('/stats', async (_req, res) => {
             pool.query('SELECT COUNT(*)::int as count FROM creators WHERE is_active = true'),
             pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE timestamp > NOW() - INTERVAL '24 hours'"),
             pool.query('SELECT COUNT(DISTINCT sender_username)::int as count FROM interactions'),
+            pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE platform = 'instagram'"),
+            pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE platform = 'facebook'"),
         ]);
 
         const totalCount = total.rows[0].count;
@@ -52,6 +54,8 @@ router.get('/stats', async (_req, res) => {
             activeCreators: creators.rows[0].count,
             todayActivity: today.rows[0].count,
             uniqueUsersReached: uniqueUsers.rows[0].count,
+            instagramCount: instagram.rows[0].count,
+            facebookCount: facebook.rows[0].count,
         });
     } catch (err) {
         console.error('Stats Error:', err);
@@ -208,6 +212,106 @@ router.delete('/campaigns/:id', async (req, res) => {
     }
 });
 
+// ─── Campaigns Stats Leaderboard ─────────────────────────────────────────────
+
+router.get('/stats/campaigns', async (_req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                c.id,
+                c.trigger_keyword,
+                COUNT(i.id)::int as total_triggers,
+                COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent_count,
+                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count
+            FROM campaigns c
+            LEFT JOIN interactions i ON i.campaign_id = c.id
+            GROUP BY c.id, c.trigger_keyword
+            ORDER BY total_triggers DESC
+            LIMIT 5
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Campaign Stats Error:', err);
+        res.status(500).json({ error: 'Failed to fetch campaign stats.' });
+    }
+});
+
+// ─── Export Interactions (CSV Exporter) ──────────────────────────────────────
+
+router.get('/interactions/export', async (req, res) => {
+    try {
+        const platform = req.query.platform as string;
+        const campaign_id = req.query.campaign_id as string;
+        const status = req.query.status as string;
+        const search = req.query.search as string;
+
+        let whereClause = '';
+        const params: any[] = [];
+        const conditions: string[] = [];
+
+        if (status && ['SENT', 'FAILED', 'PENDING'].includes(status)) {
+            params.push(status);
+            conditions.push(`i.status = $${params.length}`);
+        }
+
+        if (search) {
+            params.push(`%${search}%`);
+            conditions.push(`i.sender_username ILIKE $${params.length}`);
+        }
+
+        if (platform && ['instagram', 'facebook'].includes(platform)) {
+            params.push(platform);
+            conditions.push(`i.platform = $${params.length}`);
+        }
+
+        if (campaign_id) {
+            params.push(campaign_id);
+            conditions.push(`i.campaign_id = $${params.length}`);
+        }
+
+        if (conditions.length > 0) {
+            whereClause = 'WHERE ' + conditions.join(' AND ');
+        }
+
+        const dataQuery = `
+            SELECT 
+                i.timestamp,
+                i.sender_username,
+                i.platform,
+                c.trigger_keyword,
+                i.post_id,
+                i.status,
+                i.error_log
+            FROM interactions i
+            LEFT JOIN campaigns c ON c.id = i.campaign_id
+            ${whereClause}
+            ORDER BY i.timestamp DESC
+        `;
+
+        const result = await pool.query(dataQuery, params);
+
+        let csv = 'Timestamp,Username,Platform,Matched Keyword,Post ID,Status,Errors\n';
+        for (const row of result.rows) {
+            const time = new Date(row.timestamp).toISOString();
+            const username = row.sender_username.replace(/"/g, '""');
+            const plat = row.platform;
+            const keyword = (row.trigger_keyword || '').replace(/"/g, '""');
+            const postId = (row.post_id || '').replace(/"/g, '""');
+            const stat = row.status;
+            const error = (row.error_log || '').replace(/"/g, '""');
+            
+            csv += `"${time}","${username}","${plat}","${keyword}","${postId}","${stat}","${error}"\n`;
+        }
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=interactions_export.csv');
+        res.status(200).send(csv);
+    } catch (err) {
+        console.error('Export Error:', err);
+        res.status(500).json({ error: 'Failed to export interactions.' });
+    }
+});
+
 // ─── Interactions (Activity Log) ────────────────────────────────────────────
 
 router.get('/interactions', async (req, res) => {
@@ -216,6 +320,8 @@ router.get('/interactions', async (req, res) => {
         const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
         const status = req.query.status as string;
         const search = req.query.search as string;
+        const platform = req.query.platform as string;
+        const campaign_id = req.query.campaign_id as string;
         const offset = (page - 1) * limit;
 
         let whereClause = '';
@@ -230,6 +336,16 @@ router.get('/interactions', async (req, res) => {
         if (search) {
             params.push(`%${search}%`);
             conditions.push(`i.sender_username ILIKE $${params.length}`);
+        }
+
+        if (platform && ['instagram', 'facebook'].includes(platform)) {
+            params.push(platform);
+            conditions.push(`i.platform = $${params.length}`);
+        }
+
+        if (campaign_id) {
+            params.push(campaign_id);
+            conditions.push(`i.campaign_id = $${params.length}`);
         }
 
         if (conditions.length > 0) {

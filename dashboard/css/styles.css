@@ -60,10 +60,13 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
     -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--border-glass);
     border-radius: var(--radius-lg);
-    transition: border-color var(--transition), box-shadow var(--transition);
+    transition: transform var(--transition), border-color var(--transition), box-shadow var(--transition);
 }
 .glass-card:hover {
-    border-color: var(--border-glass-hover);
+    transform: translateY(-2px);
+    border-color: rgba(99, 102, 241, 0.25);
+    box-shadow: 0 12px 40px -10px rgba(99, 102, 241, 0.15), 
+                0 0 1px 1px rgba(255, 255, 255, 0.05) inset;
 }
 
 /* ─── Login Screen ───────────────────────────────────────────────────────── */
@@ -231,7 +234,15 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 
 /* ─── Page Container ─────────────────────────────────────────────────────── */
-.page-container { padding: 28px 32px; flex: 1; }
+.page-container {
+    padding: 28px 32px;
+    flex: 1;
+    animation: pageFadeIn 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes pageFadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
 
 /* ─── Stats Grid ─────────────────────────────────────────────────────────── */
 .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
