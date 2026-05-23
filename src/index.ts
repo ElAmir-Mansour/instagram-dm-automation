@@ -8,7 +8,7 @@ import { validateEnv } from './config/env.js';
 import { verifyMetaSignature } from './utils/signature.js';
 import { rateLimiter } from './utils/rateLimiter.js';
 import { normalizeArabic } from './utils/arabic.js';
-import { sendPrivateReply, sendPublicReply, sendDirectMessage } from './services/instagram.js';
+import { sendPrivateReply, sendPublicReply, sendDirectMessage, likeComment } from './services/instagram.js';
 import { generateAiResponse } from './services/ai.js';
 import apiRouter from './routes/api.js';
 
@@ -385,9 +385,17 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     const normalizedCommentText = normalizeArabic(text);
 
                     const matchedCampaign = campaignRes.rows.find((c: any) => {
-                        const normalizedKeyword = normalizeArabic(c.trigger_keyword);
-                        // Check if normalized comment text contains normalized keyword
-                        const keywordMatches = normalizedCommentText.includes(normalizedKeyword);
+                        // Split keywords by comma, trim, and normalize each
+                        const triggerKeywordsList = c.trigger_keyword
+                            .split(',')
+                            .map((k: string) => normalizeArabic(k.trim()))
+                            .filter(Boolean);
+
+                        // Match if ANY of the normalized keywords are present in the normalized comment text
+                        const keywordMatches = triggerKeywordsList.some((normalizedKeyword: string) =>
+                            normalizedCommentText.includes(normalizedKeyword)
+                        );
+
                         // If post_id filter is set, it must match the current comment's post_id
                         const postIdMatches = !c.post_id || c.post_id === postId;
                         
@@ -430,6 +438,15 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                         );
                         console.log(`✅ Private DM sent to @${senderUsername}`);
 
+                        // ── Step 1.5: Auto-Like Comment (best-effort algorithmic boost) ──
+                        try {
+                            console.log('👍 Auto-liking comment...');
+                            await likeComment(commentId, creator.page_access_token);
+                            console.log('👍 Auto-liked comment.');
+                        } catch (likeErr: any) {
+                            console.warn('⚠️  Auto-liking comment failed (non-critical):', likeErr.message);
+                        }
+
                     } catch (dmError: any) {
                         // Private DM failed → FAILED
                         console.error('❌ Private DM Error:', dmError.message);
@@ -444,8 +461,15 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     if (matchedCampaign.public_reply_template) {
                         try {
                             console.log('💬 Sending public reply...');
+                            
+                            // Split public replies by | and pick a random variation
+                            const replyTemplates = matchedCampaign.public_reply_template.split('|');
+                            const chosenReply = replyTemplates[Math.floor(Math.random() * replyTemplates.length)].trim();
+                            
+                            console.log(`💬 Chosen public reply: "${chosenReply}"`);
+                            
                             // Instagram: /{commentId}/replies  |  Facebook: /{commentId}/comments
-                            await sendPublicReply(commentId, matchedCampaign.public_reply_template, creator.page_access_token, isFacebookComment);
+                            await sendPublicReply(commentId, chosenReply, creator.page_access_token, isFacebookComment);
                             console.log('✅ Public reply sent.');
                         } catch (publicErr: any) {
                             // Public reply failed but DM already succeeded — log but keep SENT

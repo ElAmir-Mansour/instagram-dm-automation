@@ -102,3 +102,29 @@ export async function sendDirectMessage(
     }
 }
 
+/**
+ * Automatically likes a comment.
+ * 
+ * - Instagram & Facebook: POST /{comment-id}/likes
+ * 
+ * @see https://developers.facebook.com/docs/instagram-api/reference/ig-comment/likes
+ */
+export async function likeComment(
+    commentId: string,
+    accessToken: string
+) {
+    const url = `https://graph.facebook.com/${API_VERSION}/${commentId}/likes`;
+
+    try {
+        const response = await axios.post(url, {}, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        return response.data;
+    } catch (error: any) {
+        const metaError = error.response?.data?.error;
+        throw new Error(
+            `Comment Auto-Like Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
+        );
+    }
+}
+

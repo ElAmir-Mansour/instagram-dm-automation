@@ -30,9 +30,13 @@ const CampaignsPage = {
                     ` : campaigns.map(c => `
                         <div class="campaign-card glass-card" data-id="${c.id}" style="${c.is_active !== false ? '' : 'opacity:0.65;'}">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-                                <div class="campaign-keyword" style="margin:0;">
-                                    <i data-lucide="hash" style="width:14px;height:14px;"></i>
-                                    ${this.escapeHtml(c.trigger_keyword)}
+                                <div style="display:flex;flex-wrap:wrap;gap:6px;max-width:70%;">
+                                    ${c.trigger_keyword.split(',').map(k => k.trim()).filter(Boolean).map(k => `
+                                        <span class="campaign-keyword" style="margin:0;padding:2px 8px;font-size:11px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:12px;display:inline-flex;align-items:center;gap:4px;">
+                                            <i data-lucide="hash" style="width:10px;height:10px;"></i>
+                                            ${this.escapeHtml(k)}
+                                        </span>
+                                    `).join('')}
                                 </div>
                                 <div style="display:flex;align-items:center;gap:8px;">
                                     <span style="font-size:11px;color:${c.is_active !== false ? 'var(--success)' : 'var(--text-muted)'};">${c.is_active !== false ? 'Active' : 'Paused'}</span>
@@ -77,9 +81,9 @@ const CampaignsPage = {
             </div>
             <form id="campaign-form" onsubmit="CampaignsPage.handleCreate(event)">
                 <div class="form-group">
-                    <label class="form-label">Trigger Keyword</label>
-                    <input class="form-input" name="trigger_keyword" placeholder="e.g. تم" required>
-                    <p class="form-hint">When a user comments this word, the bot triggers.</p>
+                    <label class="form-label">Trigger Keyword(s)</label>
+                    <input class="form-input" name="trigger_keyword" placeholder="e.g. تم, كورس, كوبون" required>
+                    <p class="form-hint">Separate multiple keywords with commas (e.g. "كورس, كوبون"). The bot triggers on any match.</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label">DM Template</label>
@@ -87,8 +91,8 @@ const CampaignsPage = {
                 </div>
                 <div class="form-group">
                     <label class="form-label">Public Reply (optional)</label>
-                    <input class="form-input" name="public_reply_template" placeholder="e.g. تم الإرسال في الخاص! 📩">
-                    <p class="form-hint">This reply is posted publicly under their comment.</p>
+                    <input class="form-input" name="public_reply_template" placeholder="e.g. تم الإرسال! 📩 | شوف الخاص! 🚀">
+                    <p class="form-hint">Separate variations with "|" to rotate replies randomly and bypass spam filters.</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Target Post ID (optional)</label>
@@ -115,8 +119,9 @@ const CampaignsPage = {
             </div>
             <form id="campaign-form" onsubmit="CampaignsPage.handleEdit(event, '${id}')">
                 <div class="form-group">
-                    <label class="form-label">Trigger Keyword</label>
-                    <input class="form-input" name="trigger_keyword" value="${this.escapeHtml(c.trigger_keyword)}" required>
+                    <label class="form-label">Trigger Keyword(s)</label>
+                    <input class="form-input" name="trigger_keyword" value="${this.escapeHtml(c.trigger_keyword)}" placeholder="e.g. تم, كورس" required>
+                    <p class="form-hint">Separate multiple keywords with commas.</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label">DM Template</label>
@@ -124,7 +129,8 @@ const CampaignsPage = {
                 </div>
                 <div class="form-group">
                     <label class="form-label">Public Reply (optional)</label>
-                    <input class="form-input" name="public_reply_template" value="${this.escapeHtml(c.public_reply_template || '')}">
+                    <input class="form-input" name="public_reply_template" value="${this.escapeHtml(c.public_reply_template || '')}" placeholder="e.g. Reply A | Reply B">
+                    <p class="form-hint">Separate variations with "|" to rotate replies randomly.</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Target Post ID (optional)</label>

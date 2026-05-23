@@ -36,6 +36,7 @@ const mockCampaigns: Campaign[] = [
     { id: '1', trigger_keyword: 'أوبال', post_id: null, is_active: true }, // active, global
     { id: '2', trigger_keyword: 'كورس', post_id: 'post_abc', is_active: true }, // active, post-specific
     { id: '3', trigger_keyword: 'تم', post_id: null, is_active: false }, // inactive campaign
+    { id: '4', trigger_keyword: 'خصم, كوبون, مجاني', post_id: null, is_active: true }, // active, multi-keyword
 ];
 
 function findCampaign(text: string, postId: string, campaigns: Campaign[]): Campaign | undefined {
@@ -44,8 +45,10 @@ function findCampaign(text: string, postId: string, campaigns: Campaign[]): Camp
     return campaigns.find((c: any) => {
         if (c.is_active === false) return false;
         
-        const normalizedKeyword = normalizeArabic(c.trigger_keyword);
-        const keywordMatches = normalizedCommentText.includes(normalizedKeyword);
+        // Split trigger keywords by comma, trim, and normalize
+        const keywords = c.trigger_keyword.split(',').map((k: string) => normalizeArabic(k.trim())).filter(Boolean);
+        const keywordMatches = keywords.some((k: string) => normalizedCommentText.includes(k));
+        
         const postIdMatches = !c.post_id || c.post_id === postId;
         
         return keywordMatches && postIdMatches;
@@ -77,5 +80,29 @@ assert(
     findCampaign('تم التسجيل', 'post_xyz', mockCampaigns) === undefined,
     'Should NOT match inactive campaign "تم" even if keyword is present'
 );
+
+// Case D: Multi-keyword matches
+assert(
+    findCampaign('هل هناك كوبون متاح؟', 'post_xyz', mockCampaigns)?.id === '4',
+    'Should match multi-keyword campaign trigger on "كوبون"'
+);
+assert(
+    findCampaign('ابي كود خصم', 'post_xyz', mockCampaigns)?.id === '4',
+    'Should match multi-keyword campaign trigger on "خصم"'
+);
+assert(
+    findCampaign('ابيه مجاني', 'post_xyz', mockCampaigns)?.id === '4',
+    'Should match multi-keyword campaign trigger on "مجاني"'
+);
+
+// ─── 3. Test Public Reply Randomization ─────────────────────────────────────
+console.log('\n--- 3. Testing Public Reply Randomization ---');
+const template = 'تم الإرسال! 📩 | شوف الخاص يا بطل! 🚀 | أرسلت لك الرابط في الخاص 📥';
+const templates = template.split('|').map(t => t.trim());
+
+assert(templates.length === 3, 'Should split templates into 3 items');
+assert(templates[0] === 'تم الإرسال! 📩', 'First template should match A');
+assert(templates[1] === 'شوف الخاص يا بطل! 🚀', 'Second template should match B');
+assert(templates[2] === 'أرسلت لك الرابط في الخاص 📥', 'Third template should match C');
 
 console.log('\n🎉 All local assertions passed successfully!');
