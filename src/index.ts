@@ -309,24 +309,49 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                 }
             }
 
-            // ─── B. Process Instagram Comment webhooks ──────────────────────────────
+            // ─── B. Process Comment webhooks (Instagram & Facebook) ─────────────────
             if (entry.changes && Array.isArray(entry.changes)) {
                 for (const change of entry.changes) {
-                    if (change.field !== 'comments') {
-                        console.log(`⏭️  Skipping non-comment field: ${change.field}`);
+
+                    // ── Normalise the event into platform-agnostic variables ──────────
+                    let commentId: string;
+                    let postId: string;
+                    let text: string;
+                    let senderUsername: string;
+                    let senderId: string;
+                    let isFacebookComment = false;
+
+                    if (change.field === 'comments') {
+                        // Instagram comment webhook: field = 'comments'
+                        const v = change.value;
+                        commentId    = v.id;
+                        postId       = v.media?.id;
+                        text         = v.text?.toLowerCase() || '';
+                        senderUsername = v.from?.username || v.from?.id;
+                        senderId     = v.from?.id;
+
+                    } else if (
+                        change.field === 'feed' &&
+                        change.value?.item === 'comment' &&
+                        change.value?.verb === 'add'
+                    ) {
+                        // Facebook Page comment webhook: field = 'feed', item = 'comment'
+                        const v = change.value;
+                        commentId    = v.comment_id;
+                        postId       = v.post_id;
+                        text         = v.message?.toLowerCase() || '';
+                        senderUsername = v.from?.name || v.from?.id;
+                        senderId     = v.from?.id;
+                        isFacebookComment = true;
+
+                    } else {
+                        console.log(`⏭️  Skipping unhandled change field: ${change.field} (item: ${change.value?.item})`);
                         continue;
                     }
 
-                    const commentData = change.value;
-                    const commentId = commentData.id;
-                    const postId = commentData.media?.id;
-                    const text = commentData.text?.toLowerCase() || '';
-                    const senderUsername = commentData.from?.username;
-                    const senderId = commentData.from?.id;
+                    console.log(`💬 [${isFacebookComment ? 'FB' : 'IG'}] Comment: "${text}" by @${senderUsername} (ID: ${senderId})`);
 
-                    console.log(`💬 Comment: "${text}" by @${senderUsername} (ID: ${senderId})`);
-
-                    // 3. Fetch Creator config
+                    // Fetch Creator config — matches by IG page ID or FB page ID
                     const creatorRes = await pool.query(
                         `SELECT * FROM creators 
                          WHERE is_active = true 
@@ -341,13 +366,16 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     }
                     const creator = creatorRes.rows[0];
 
-                    // Ignore comments made by the page itself
-                    if (senderId === creator.instagram_page_id) {
+                    // Ignore self-comments — use the correct page ID field per platform
+                    const pageOwnerId = isFacebookComment
+                        ? creator.facebook_page_id
+                        : creator.instagram_page_id;
+                    if (senderId === pageOwnerId) {
                         console.log('⏭️  Ignoring self-comment from page owner.');
                         continue;
                     }
 
-                    // 4. Fetch campaigns & match keyword
+                    // Fetch campaigns & match keyword
                     const campaignRes = await pool.query(
                         'SELECT * FROM campaigns WHERE creator_id = $1',
                         [creator.id]
@@ -363,7 +391,7 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     }
                     console.log(`🎯 Matched campaign: keyword="${matchedCampaign.trigger_keyword}"`);
 
-                    // 7. Log interaction as PENDING
+                    // Log interaction as PENDING
                     const interactionLog = await pool.query(
                         `INSERT INTO interactions (campaign_id, comment_id, sender_username, post_id, status)
                          VALUES ($1, $2, $3, $4, 'PENDING') RETURNING id`,
@@ -371,9 +399,9 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     );
                     const interactionId = interactionLog.rows[0]?.id;
 
-                    // 8. Dispatch Messages
+                    // Dispatch Messages
                     try {
-                        // Send DM (Private Reply)
+                        // Send Private DM reply
                         console.log('📩 Sending private DM...');
                         await sendPrivateReply(commentId, matchedCampaign.dm_template, creator.page_access_token);
 
@@ -383,7 +411,6 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                             await sendPublicReply(commentId, matchedCampaign.public_reply_template, creator.page_access_token);
                         }
 
-                        // Update status to SENT
                         await pool.query(
                             'UPDATE interactions SET status = $1 WHERE id = $2',
                             ['SENT', interactionId]

@@ -16,7 +16,8 @@ export async function sendPrivateReply(commentId: string, message: string, acces
     try {
         const response = await axios.post(url, {
             recipient: { comment_id: commentId },
-            message: { text: message }
+            message: { text: message },
+            messaging_type: 'RESPONSE'   // Required by Facebook Messenger; ignored by Instagram
         }, {
             headers: { Authorization: `Bearer ${accessToken}` }
         });
