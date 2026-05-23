@@ -410,7 +410,8 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                         // Optional: Send Public Reply
                         if (matchedCampaign.public_reply_template) {
                             console.log('💬 Sending public reply...');
-                            await sendPublicReply(commentId, matchedCampaign.public_reply_template, creator.page_access_token);
+                            // Instagram: /{commentId}/replies  |  Facebook: /{commentId}/comments
+                            await sendPublicReply(commentId, matchedCampaign.public_reply_template, creator.page_access_token, isFacebookComment);
                         }
 
                         await pool.query(

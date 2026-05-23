@@ -40,14 +40,21 @@ export async function sendPrivateReply(
 
 /**
  * Posts a public comment reply visible to everyone on the post.
- * 
- * Commonly used to reply with something like "Check your DMs! 📩"
- * so other users can see there's an active promotion.
- * 
+ *
+ * - Instagram: POST /{comment-id}/replies
+ * - Facebook:  POST /{comment-id}/comments
+ *
  * @see https://developers.facebook.com/docs/instagram-api/reference/ig-comment/replies
+ * @see https://developers.facebook.com/docs/graph-api/reference/comment#Creating
  */
-export async function sendPublicReply(commentId: string, message: string, accessToken: string) {
-    const url = `https://graph.facebook.com/${API_VERSION}/${commentId}/replies`;
+export async function sendPublicReply(
+    commentId: string,
+    message: string,
+    accessToken: string,
+    isFacebook = false         // Facebook uses /comments edge; Instagram uses /replies
+) {
+    const edge = isFacebook ? 'comments' : 'replies';
+    const url = `https://graph.facebook.com/${API_VERSION}/${commentId}/${edge}`;
 
     try {
         const response = await axios.post(url, {
