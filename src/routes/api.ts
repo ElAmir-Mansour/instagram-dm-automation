@@ -127,7 +127,7 @@ router.get('/campaigns', async (_req, res) => {
 
 router.post('/campaigns', async (req, res) => {
     try {
-        const { creator_id, trigger_keyword, dm_template, public_reply_template, post_id } = req.body;
+        const { creator_id, trigger_keyword, dm_template, public_reply_template, post_id, is_active } = req.body;
 
         if (!trigger_keyword || !dm_template) {
             res.status(400).json({ error: 'trigger_keyword and dm_template are required.' });
@@ -146,9 +146,9 @@ router.post('/campaigns', async (req, res) => {
         }
 
         const result = await pool.query(
-            `INSERT INTO campaigns (creator_id, trigger_keyword, dm_template, public_reply_template, post_id)
-             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-            [creatorId, trigger_keyword, dm_template, public_reply_template || null, post_id || null]
+            `INSERT INTO campaigns (creator_id, trigger_keyword, dm_template, public_reply_template, post_id, is_active)
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [creatorId, trigger_keyword, dm_template, public_reply_template || null, post_id || null, is_active !== false]
         );
 
         res.status(201).json(result.rows[0]);
@@ -161,16 +161,24 @@ router.post('/campaigns', async (req, res) => {
 router.put('/campaigns/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { trigger_keyword, dm_template, public_reply_template, post_id } = req.body;
+        const { trigger_keyword, dm_template, public_reply_template, post_id, is_active } = req.body;
 
         const result = await pool.query(
             `UPDATE campaigns 
              SET trigger_keyword = COALESCE($1, trigger_keyword),
                  dm_template = COALESCE($2, dm_template),
                  public_reply_template = $3,
-                 post_id = $4
-             WHERE id = $5 RETURNING *`,
-            [trigger_keyword, dm_template, public_reply_template || null, post_id || null, id]
+                 post_id = $4,
+                 is_active = COALESCE($5, is_active)
+             WHERE id = $6 RETURNING *`,
+            [
+                trigger_keyword, 
+                dm_template, 
+                public_reply_template || null, 
+                post_id || null, 
+                typeof is_active === 'boolean' ? is_active : null, 
+                id
+            ]
         );
 
         if (result.rows.length === 0) {

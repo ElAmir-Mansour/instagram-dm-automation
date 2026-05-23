@@ -81,14 +81,14 @@ const OverviewPage = {
                             </tr></thead>
                             <tbody>
                                 ${interactions.data.map(i => {
-                                    const isFb = i.platform === 'facebook';
-                                    const badge = isFb
-                                        ? `<span style="font-size:10px;background:#1877F2;color:#fff;padding:2px 5px;border-radius:4px;margin-left:4px;">FB</span>`
-                                        : `<span style="font-size:10px;background:#E1306C;color:#fff;padding:2px 5px;border-radius:4px;margin-left:4px;">IG</span>`;
-                                    const userCell = isFb
-                                        ? `<span class="username-link">@${i.sender_username}</span>${badge}`
-                                        : `<a href="https://instagram.com/${i.sender_username}" target="_blank" class="username-link">@${i.sender_username}</a>${badge}`;
-                                    return `
+                const isFb = i.platform === 'facebook';
+                const badge = isFb
+                    ? `<span style="font-size:10px;background:#1877F2;color:#fff;padding:2px 5px;border-radius:4px;margin-left:4px;">FB</span>`
+                    : `<span style="font-size:10px;background:#E1306C;color:#fff;padding:2px 5px;border-radius:4px;margin-left:4px;">IG</span>`;
+                const userCell = isFb
+                    ? `<span class="username-link">@${i.sender_username}</span>${badge}`
+                    : `<a href="https://instagram.com/${i.sender_username}" target="_blank" class="username-link">@${i.sender_username}</a>${badge}`;
+                return `
                                         <tr>
                                             <td>${userCell}</td>
                                             <td>${i.trigger_keyword || '—'}</td>
@@ -96,7 +96,7 @@ const OverviewPage = {
                                             <td>${UI.formatDate(i.timestamp)}</td>
                                         </tr>
                                     `;
-                                }).join('')}
+            }).join('')}
                                 ${interactions.data.length === 0 ? '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text-muted);">No activity yet.</td></tr>' : ''}
                             </tbody>
                         </table>

@@ -28,13 +28,23 @@ const CampaignsPage = {
                             </button>
                         </div>
                     ` : campaigns.map(c => `
-                        <div class="campaign-card glass-card" data-id="${c.id}">
-                            <div class="campaign-keyword">
-                                <i data-lucide="hash" style="width:14px;height:14px;"></i>
-                                ${this.escapeHtml(c.trigger_keyword)}
+                        <div class="campaign-card glass-card" data-id="${c.id}" style="${c.is_active !== false ? '' : 'opacity:0.65;'}">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                                <div class="campaign-keyword" style="margin:0;">
+                                    <i data-lucide="hash" style="width:14px;height:14px;"></i>
+                                    ${this.escapeHtml(c.trigger_keyword)}
+                                </div>
+                                <div style="display:flex;align-items:center;gap:8px;">
+                                    <span style="font-size:11px;color:${c.is_active !== false ? 'var(--success)' : 'var(--text-muted)'};">${c.is_active !== false ? 'Active' : 'Paused'}</span>
+                                    <label class="toggle-switch" style="transform:scale(0.8);margin:0;">
+                                        <input type="checkbox" ${c.is_active !== false ? 'checked' : ''} onchange="CampaignsPage.toggleActive('${c.id}', this.checked)">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
                             </div>
                             <div class="campaign-template">${this.escapeHtml(c.dm_template)}</div>
                             ${c.public_reply_template ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">💬 Public: "${this.escapeHtml(c.public_reply_template)}"</div>` : ''}
+                            ${c.post_id ? `<div style="font-size:11px;color:var(--accent);margin-bottom:12px;display:flex;align-items:center;gap:4px;"><i data-lucide="instagram" style="width:12px;height:12px;"></i> Post ID: ${this.escapeHtml(c.post_id)}</div>` : ''}
                             <div class="campaign-stats">
                                 <div class="campaign-stat"><span class="dot green"></span> ${c.sent_count} sent</div>
                                 <div class="campaign-stat"><span class="dot red"></span> ${c.failed_count} failed</div>
@@ -80,6 +90,11 @@ const CampaignsPage = {
                     <input class="form-input" name="public_reply_template" placeholder="e.g. تم الإرسال في الخاص! 📩">
                     <p class="form-hint">This reply is posted publicly under their comment.</p>
                 </div>
+                <div class="form-group">
+                    <label class="form-label">Target Post ID (optional)</label>
+                    <input class="form-input" name="post_id" placeholder="e.g. 17841459652725922">
+                    <p class="form-hint">If specified, this campaign will only trigger on comments under this specific post.</p>
+                </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" onclick="UI.closeModal()">Cancel</button>
                     <button type="submit" class="btn btn-primary"><i data-lucide="plus"></i> Create</button>
@@ -111,7 +126,18 @@ const CampaignsPage = {
                     <label class="form-label">Public Reply (optional)</label>
                     <input class="form-input" name="public_reply_template" value="${this.escapeHtml(c.public_reply_template || '')}">
                 </div>
-                <div class="modal-actions">
+                <div class="form-group">
+                    <label class="form-label">Target Post ID (optional)</label>
+                    <input class="form-input" name="post_id" value="${this.escapeHtml(c.post_id || '')}" placeholder="e.g. 17841459652725922">
+                </div>
+                <div class="form-group" style="display:flex;align-items:center;gap:12px;margin-top:16px;margin-bottom:8px;">
+                    <label class="toggle-switch" style="margin:0;">
+                        <input type="checkbox" name="is_active" ${c.is_active !== false ? 'checked' : ''}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label" style="font-size:13px;color:var(--text-secondary);">Campaign Active</span>
+                </div>
+                <div class="modal-actions" style="margin-top:24px;">
                     <button type="button" class="btn btn-secondary" onclick="UI.closeModal()">Cancel</button>
                     <button type="submit" class="btn btn-primary"><i data-lucide="check"></i> Save</button>
                 </div>
@@ -127,6 +153,7 @@ const CampaignsPage = {
                 trigger_keyword: form.get('trigger_keyword'),
                 dm_template: form.get('dm_template'),
                 public_reply_template: form.get('public_reply_template') || null,
+                post_id: form.get('post_id') || null,
             });
             UI.closeModal();
             UI.toast('Campaign created successfully!');
@@ -142,11 +169,24 @@ const CampaignsPage = {
                 trigger_keyword: form.get('trigger_keyword'),
                 dm_template: form.get('dm_template'),
                 public_reply_template: form.get('public_reply_template') || null,
+                post_id: form.get('post_id') || null,
+                is_active: form.get('is_active') === 'on',
             });
             UI.closeModal();
             UI.toast('Campaign updated!');
             this.render();
         } catch (err) { UI.toast(err.message, 'error'); }
+    },
+
+    async toggleActive(id, isChecked) {
+        try {
+            await API.updateCampaign(id, { is_active: isChecked });
+            UI.toast(isChecked ? 'Campaign activated.' : 'Campaign paused.');
+            this.render();
+        } catch (err) {
+            UI.toast(err.message, 'error');
+            this.render();
+        }
     },
 
     confirmDelete(id, keyword) {

@@ -5,11 +5,14 @@ A self-hosted Instagram Comment-to-DM automation platform with a premium glassmo
 ## 🚀 Features
 
 - **Comment → DM Automation** — Keyword-triggered DMs sent via the official Meta Graph API
-- **Campaign Management** — Create, edit, and delete campaigns from the dashboard
+- **Multi-Platform Support** — Fully compatible with both Instagram comments/DMs and Facebook Page comments/Messenger DMs
+- **Campaign Management** — Create, edit, delete, and **pause/resume** campaigns from the dashboard
+- **Post-Specific Targeting** — Choose to isolate a campaign to run on a single post ID or globally across all posts
+- **Fuzzy Arabic Matching** — Built-in character normalization (Hamza variants, Teh Marbuta, diacritics) to ensure high-accuracy triggers for Arabic comments
 - **Analytics Dashboard** — Real-time charts, stats, and activity logs
 - **Token Management** — Validate and update Meta tokens directly from the UI
-- **Webhook Processing** — Receives and processes Instagram webhook events
-- **Production-Ready** — Deployed on Vercel with PostgreSQL (Supabase)
+- **Webhook Processing** — Receives and processes webhook events with graceful deduplication to prevent duplicate DMs
+- **Production-Ready** — Deployed on Vercel with PostgreSQL (Supabase) and optimized indexing
 
 ## 📸 Dashboard
 

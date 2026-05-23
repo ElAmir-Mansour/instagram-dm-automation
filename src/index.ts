@@ -7,6 +7,7 @@ import { pool } from './config/db.js';
 import { validateEnv } from './config/env.js';
 import { verifyMetaSignature } from './utils/signature.js';
 import { rateLimiter } from './utils/rateLimiter.js';
+import { normalizeArabic } from './utils/arabic.js';
 import { sendPrivateReply, sendPublicReply, sendDirectMessage } from './services/instagram.js';
 import { generateAiResponse } from './services/ai.js';
 import apiRouter from './routes/api.js';
@@ -375,18 +376,26 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                         continue;
                     }
 
-                    // Fetch campaigns & match keyword
+                    // Fetch campaigns & match keyword with Arabic normalization & post_id targeting
                     const campaignRes = await pool.query(
-                        'SELECT * FROM campaigns WHERE creator_id = $1',
+                        'SELECT * FROM campaigns WHERE creator_id = $1 AND is_active = true',
                         [creator.id]
                     );
 
-                    const matchedCampaign = campaignRes.rows.find((c: any) =>
-                        text.includes(c.trigger_keyword.toLowerCase())
-                    );
+                    const normalizedCommentText = normalizeArabic(text);
+
+                    const matchedCampaign = campaignRes.rows.find((c: any) => {
+                        const normalizedKeyword = normalizeArabic(c.trigger_keyword);
+                        // Check if normalized comment text contains normalized keyword
+                        const keywordMatches = normalizedCommentText.includes(normalizedKeyword);
+                        // If post_id filter is set, it must match the current comment's post_id
+                        const postIdMatches = !c.post_id || c.post_id === postId;
+                        
+                        return keywordMatches && postIdMatches;
+                    });
 
                     if (!matchedCampaign) {
-                        console.log('⏭️  No campaign matched the comment text.');
+                        console.log('⏭️  No active campaign matched the comment text.');
                         continue;
                     }
                     console.log(`🎯 Matched campaign: keyword="${matchedCampaign.trigger_keyword}"`);
@@ -394,9 +403,17 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     // Log interaction as PENDING
                     const interactionLog = await pool.query(
                         `INSERT INTO interactions (campaign_id, comment_id, sender_username, post_id, status, platform)
-                         VALUES ($1, $2, $3, $4, 'PENDING', $5) RETURNING id`,
+                         VALUES ($1, $2, $3, $4, 'PENDING', $5)
+                         ON CONFLICT (comment_id) DO NOTHING
+                         RETURNING id`,
                         [matchedCampaign.id, commentId, senderUsername, postId, isFacebookComment ? 'facebook' : 'instagram']
                     );
+                    
+                    if (interactionLog.rows.length === 0) {
+                        console.log(`⏭️  Duplicate comment event ignored (comment_id: ${commentId})`);
+                        continue;
+                    }
+                    
                     const interactionId = interactionLog.rows[0]?.id;
 
                     // Dispatch Messages
