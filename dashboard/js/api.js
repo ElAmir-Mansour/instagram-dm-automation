@@ -73,4 +73,5 @@ const API = {
     updateScheduledPost: (id, data) => API.request(`/posts/scheduled/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteScheduledPost: (id) => API.request(`/posts/scheduled/${id}`, { method: 'DELETE' }),
     getLivePosts: () => API.request('/posts/live'),
+    uploadMedia: (data) => API.request('/upload', { method: 'POST', body: JSON.stringify(data) }),
 };

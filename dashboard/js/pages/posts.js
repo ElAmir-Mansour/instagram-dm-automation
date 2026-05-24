@@ -241,9 +241,20 @@ const PostsPage = {
                     <textarea class="form-textarea" name="caption" placeholder="Write your post caption..." required></textarea>
                 </div>
                 <div class="form-group" id="media-url-group">
-                    <label class="form-label">Media URL</label>
-                    <input class="form-input" name="media_url" placeholder="https://domain.com/path/to/media.jpg" required>
-                    <p class="form-hint">Must be a direct, publicly accessible link to your image or video (e.g. S3, Imgur, Vercel Blob) so Meta servers can fetch it.</p>
+                    <label class="form-label">Media File</label>
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <input type="file" id="post-media-file" class="form-input" style="flex:1;" onchange="PostsPage.handleFileUpload(this)">
+                            <span style="font-size:12px; color:var(--text-muted);">or</span>
+                        </div>
+                        <input class="form-input" id="post-media-url" name="media_url" placeholder="Paste direct image or video URL (https://...)" oninput="PostsPage.handleUrlInput(this.value)">
+                    </div>
+                    <div id="media-upload-progress" style="display:none; align-items:center; gap:8px; margin-top:8px; font-size:12px; color:var(--text-secondary);">
+                        <div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div>
+                        <span>Uploading and converting to public link...</span>
+                    </div>
+                    <div id="media-preview-container" style="display:none; margin-top:12px; border-radius:8px; overflow:hidden; width:100%; height:160px; border:1px solid var(--border-glass); background:var(--bg-secondary); align-items:center; justify-content:center;"></div>
+                    <p class="form-hint">Uploading automatically creates a public link. Max file size is 10MB.</p>
                 </div>
                 <div class="form-group" id="schedule-time-group">
                     <label class="form-label">Scheduled Publish Time</label>
@@ -300,8 +311,22 @@ const PostsPage = {
                     <textarea class="form-textarea" name="caption" required>${this.escapeHtml(post.caption || '')}</textarea>
                 </div>
                 <div class="form-group" id="media-url-group">
-                    <label class="form-label">Media URL</label>
-                    <input class="form-input" name="media_url" value="${this.escapeHtml(post.media_url || '')}" placeholder="https://domain.com/path/to/media.jpg" ${post.platform !== 'facebook' ? 'required' : ''}>
+                    <label class="form-label">Media File</label>
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <input type="file" id="post-media-file" class="form-input" style="flex:1;" onchange="PostsPage.handleFileUpload(this)">
+                            <span style="font-size:12px; color:var(--text-muted);">or</span>
+                        </div>
+                        <input class="form-input" id="post-media-url" name="media_url" value="${this.escapeHtml(post.media_url || '')}" placeholder="Paste direct image or video URL (https://...)" oninput="PostsPage.handleUrlInput(this.value)">
+                    </div>
+                    <div id="media-upload-progress" style="display:none; align-items:center; gap:8px; margin-top:8px; font-size:12px; color:var(--text-secondary);">
+                        <div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div>
+                        <span>Uploading and converting to public link...</span>
+                    </div>
+                    <div id="media-preview-container" style="${post.media_url ? 'display:flex;' : 'display:none;'} margin-top:12px; border-radius:8px; overflow:hidden; width:100%; height:160px; border:1px solid var(--border-glass); background:var(--bg-secondary); align-items:center; justify-content:center;">
+                        ${post.media_url ? (post.post_type === 'video' || post.post_type === 'reel' ? `<video src="${post.media_url}" style="width:100%; height:100%; object-fit:cover;" muted controls></video>` : `<img src="${post.media_url}" style="width:100%; height:100%; object-fit:cover;">`) : ''}
+                    </div>
+                    <p class="form-hint">Uploading automatically creates a public link. Max file size is 10MB.</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label">Scheduled Publish Time</label>
@@ -463,5 +488,71 @@ const PostsPage = {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
+    },
+
+    async handleFileUpload(input) {
+        const file = input.files[0];
+        if (!file) return;
+
+        const progress = document.getElementById('media-upload-progress');
+        const preview = document.getElementById('media-preview-container');
+        const urlInput = document.getElementById('post-media-url');
+
+        if (file.size > 10 * 1024 * 1024) {
+            UI.toast('File size exceeds the 10MB limit.', 'error');
+            input.value = '';
+            return;
+        }
+
+        progress.style.display = 'flex';
+        preview.style.display = 'none';
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const base64Data = e.target.result;
+            try {
+                const res = await API.uploadMedia({
+                    filename: file.name,
+                    mime_type: file.type,
+                    base64_data: base64Data
+                });
+
+                urlInput.value = res.url;
+                progress.style.display = 'none';
+                
+                // Show preview
+                preview.style.display = 'flex';
+                if (file.type.startsWith('video/')) {
+                    preview.innerHTML = `<video src="${res.url}" style="width:100%; height:100%; object-fit:cover;" muted controls></video>`;
+                } else {
+                    preview.innerHTML = `<img src="${res.url}" style="width:100%; height:100%; object-fit:cover;">`;
+                }
+                UI.toast('Media uploaded and ready!');
+            } catch (err) {
+                UI.toast('Upload failed: ' + err.message, 'error');
+                progress.style.display = 'none';
+                input.value = '';
+            }
+        };
+        reader.onerror = () => {
+            UI.toast('Failed to read file.', 'error');
+            progress.style.display = 'none';
+        };
+        reader.readAsDataURL(file);
+    },
+
+    handleUrlInput(val) {
+        const preview = document.getElementById('media-preview-container');
+        if (!val) {
+            preview.style.display = 'none';
+            return;
+        }
+        preview.style.display = 'flex';
+        const isVideo = val.match(/\.(mp4|mov|avi|wmv)/i);
+        if (isVideo) {
+            preview.innerHTML = `<video src="${val}" style="width:100%; height:100%; object-fit:cover;" muted controls></video>`;
+        } else {
+            preview.innerHTML = `<img src="${val}" style="width:100%; height:100%; object-fit:cover;" onerror="document.getElementById('media-preview-container').style.display='none'">`;
+        }
     }
 };

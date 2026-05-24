@@ -147,6 +147,29 @@ router.get('/cron/publish', async (req, res) => {
     }
 });
 
+router.get('/uploads/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query(
+            'SELECT mime_type, data FROM media_uploads WHERE id = $1',
+            [id]
+        );
+
+        if (result.rows.length === 0) {
+            res.status(404).send('Not Found');
+            return;
+        }
+
+        const row = result.rows[0];
+        res.setHeader('Content-Type', row.mime_type);
+        res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
+        res.send(row.data);
+    } catch (err) {
+        console.error('File stream error:', err);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
 // ─── All routes below require authentication ────────────────────────────────
 router.use(requireAuth);
 
@@ -864,6 +887,53 @@ router.get('/posts/live', async (_req, res) => {
     } catch (err) {
         console.error('Fetch Live Posts Error:', err);
         res.status(500).json({ error: 'Failed to fetch live posts from Meta.' });
+    }
+});
+
+router.post('/upload', async (req, res) => {
+    try {
+        const { filename, mime_type, base64_data } = req.body;
+
+        if (!filename || !mime_type || !base64_data) {
+            res.status(400).json({ error: 'filename, mime_type, and base64_data are required.' });
+            return;
+        }
+
+        // Check size limit: base64 length estimation (approx 1.37 times binary size)
+        const sizeInBytes = (base64_data.length * 3) / 4;
+        const maxSize = 10 * 1024 * 1024; // 10MB
+        if (sizeInBytes > maxSize) {
+            res.status(400).json({ error: 'File size exceeds the 10MB limit.' });
+            return;
+        }
+
+        // Clean base64 string if it contains data URI prefix
+        const base64Clean = base64_data.replace(/^data:[^;]+;base64,/, '');
+
+        // Decode base64 to binary buffer
+        const buffer = Buffer.from(base64Clean, 'base64');
+
+        // Insert into database
+        const result = await pool.query(
+            'INSERT INTO media_uploads (filename, mime_type, data) VALUES ($1, $2, $3) RETURNING id',
+            [filename, mime_type, buffer]
+        );
+
+        const newUploadId = result.rows[0].id;
+        
+        // Construct URL using req.get('host')
+        const protocol = req.headers['x-forwarded-proto'] || 'http';
+        const host = req.get('host');
+        const publicUrl = `${protocol}://${host}/api/uploads/${newUploadId}`;
+
+        res.status(201).json({
+            id: newUploadId,
+            url: publicUrl,
+            filename
+        });
+    } catch (err) {
+        console.error('Upload handling error:', err);
+        res.status(500).json({ error: 'Failed to handle file upload.' });
     }
 });
 
