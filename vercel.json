@@ -10,5 +10,11 @@
     { "src": "/dashboard/(.*)", "dest": "dashboard/$1" },
     { "src": "/dashboard", "dest": "dashboard/index.html" },
     { "src": "/(.*)", "dest": "src/index.ts" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/publish",
+      "schedule": "*/5 * * * *"
+    }
   ]
 }
