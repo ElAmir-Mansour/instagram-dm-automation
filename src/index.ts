@@ -431,7 +431,18 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                         const fbPageId = isFacebookComment ? creator.facebook_page_id : undefined;
                         console.log('📩 Sending private DM...');
                         const dmText = matchedCampaign.dm_template.replace(/{username}/g, senderUsername);
-                        await sendPrivateReply(commentId, dmText, creator.page_access_token, fbPageId);
+                        
+                        if (dmText.includes('[SPLIT]')) {
+                            const parts = dmText.split('[SPLIT]');
+                            for (const part of parts) {
+                                if (part.trim()) {
+                                    await sendPrivateReply(commentId, part.trim(), creator.page_access_token, fbPageId);
+                                    await new Promise(resolve => setTimeout(resolve, 300));
+                                }
+                            }
+                        } else {
+                            await sendPrivateReply(commentId, dmText, creator.page_access_token, fbPageId);
+                        }
 
                         // Mark SENT immediately — DM is what matters
                         await pool.query(
