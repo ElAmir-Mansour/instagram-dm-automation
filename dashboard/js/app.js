@@ -7,6 +7,7 @@ const App = {
     pages: {
         overview: { title: 'Overview', subtitle: 'Welcome back. Here\'s how your automation is performing.', render: () => OverviewPage.render() },
         campaigns: { title: 'Campaigns', subtitle: 'Manage your keyword triggers and DM templates.', render: () => CampaignsPage.render() },
+        posts: { title: 'Posts Scheduler', subtitle: 'Create, schedule, and publish posts to Instagram and Facebook.', render: () => PostsPage.render() },
         inbox: { title: 'Live DM Inbox', subtitle: 'Real-time customer conversations and AI agent controls.', render: () => InboxPage.render() },
         ai_settings: { title: 'AI Agent Settings', subtitle: 'Configure instructions, knowledge bases, and test simulations.', render: () => AiSettingsPage.render() },
         analytics: { title: 'Analytics', subtitle: 'Deep dive into your automation performance.', render: () => AnalyticsPage.render() },

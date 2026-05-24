@@ -66,4 +66,11 @@ const API = {
     getTokenStatus: () => API.request('/settings/token/status'),
     updateToken: (token) => API.request('/settings/token', { method: 'POST', body: JSON.stringify({ token }) }),
     getCreators: () => API.request('/creators'),
+
+    // Posts Scheduler
+    getScheduledPosts: () => API.request('/posts/scheduled'),
+    createScheduledPost: (data) => API.request('/posts/scheduled', { method: 'POST', body: JSON.stringify(data) }),
+    updateScheduledPost: (id, data) => API.request(`/posts/scheduled/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    deleteScheduledPost: (id) => API.request(`/posts/scheduled/${id}`, { method: 'DELETE' }),
+    getLivePosts: () => API.request('/posts/live'),
 };

@@ -96,7 +96,11 @@ const CampaignsPage = {
                 </div>
                 <div class="form-group">
                     <label class="form-label">Target Post ID (optional)</label>
-                    <input class="form-input" name="post_id" placeholder="e.g. 17841459652725922">
+                    <div style="display:flex; gap:8px;">
+                        <input class="form-input" id="campaign-post-id" name="post_id" placeholder="e.g. 17841459652725922" style="flex:1;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="CampaignsPage.openPostPicker()" style="padding:0 12px; height: 45px;"><i data-lucide="image"></i> Pick Post</button>
+                    </div>
+                    <div id="post-picker-container" class="glass-card" style="display:none; margin-top:8px; max-height:200px; overflow-y:auto; padding:8px; border-color:var(--border-glass-hover);"></div>
                     <p class="form-hint">If specified, this campaign will only trigger on comments under this specific post.</p>
                 </div>
                 <div class="modal-actions">
@@ -134,7 +138,11 @@ const CampaignsPage = {
                 </div>
                 <div class="form-group">
                     <label class="form-label">Target Post ID (optional)</label>
-                    <input class="form-input" name="post_id" value="${this.escapeHtml(c.post_id || '')}" placeholder="e.g. 17841459652725922">
+                    <div style="display:flex; gap:8px;">
+                        <input class="form-input" id="campaign-post-id" name="post_id" value="${this.escapeHtml(c.post_id || '')}" placeholder="e.g. 17841459652725922" style="flex:1;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="CampaignsPage.openPostPicker()" style="padding:0 12px; height: 45px;"><i data-lucide="image"></i> Pick Post</button>
+                    </div>
+                    <div id="post-picker-container" class="glass-card" style="display:none; margin-top:8px; max-height:200px; overflow-y:auto; padding:8px; border-color:var(--border-glass-hover);"></div>
                 </div>
                 <div class="form-group" style="display:flex;align-items:center;gap:12px;margin-top:16px;margin-bottom:8px;">
                     <label class="toggle-switch" style="margin:0;">
@@ -224,5 +232,56 @@ const CampaignsPage = {
     escapeHtml(str) {
         if (!str) return '';
         return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    },
+
+    async openPostPicker() {
+        const picker = document.getElementById('post-picker-container');
+        const btn = document.querySelector('button[onclick="CampaignsPage.openPostPicker()"]');
+
+        if (picker.style.display === 'block') {
+            picker.style.display = 'none';
+            return;
+        }
+
+        btn.disabled = true;
+        btn.innerHTML = '<div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div> Loading...';
+
+        try {
+            const livePosts = await API.getLivePosts();
+            picker.style.display = 'block';
+
+            if (livePosts.length === 0) {
+                picker.innerHTML = `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:12px;">No published posts found.</div>`;
+            } else {
+                picker.innerHTML = livePosts.map(p => `
+                    <div class="post-picker-item" onclick="CampaignsPage.selectPickedPost('${p.id}')" style="display:flex; gap:8px; padding:6px; border-radius:6px; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.03); transition:background 0.2s;">
+                        ${p.media_url ? `<img src="${p.media_url}" style="width:40px; height:40px; object-fit:cover; border-radius:4px; flex-shrink:0;">` : `<div style="width:40px;height:40px;border-radius:4px;background:var(--bg-tertiary);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><i data-lucide="${p.platform === 'facebook' ? 'facebook' : 'instagram'}" style="width:16px;height:16px;"></i></div>`}
+                        <div style="overflow:hidden;">
+                            <div style="font-size:11px; color:var(--accent); font-weight:600;">ID: ${p.id}</div>
+                            <div style="font-size:11px; color:var(--text-secondary); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${this.escapeHtml(p.caption || '(No caption)')}</div>
+                        </div>
+                    </div>
+                `).join('');
+                
+                const items = picker.querySelectorAll('.post-picker-item');
+                items.forEach(el => {
+                    el.addEventListener('mouseenter', () => el.style.background = 'var(--bg-glass-hover)');
+                    el.addEventListener('mouseleave', () => el.style.background = 'transparent');
+                });
+                lucide.createIcons({ nodes: [picker] });
+            }
+        } catch (err) {
+            picker.style.display = 'block';
+            picker.innerHTML = `<div style="font-size:12px; color:var(--danger); text-align:center; padding:12px;">Failed to load: ${err.message}</div>`;
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="image"></i> Pick Post';
+            lucide.createIcons({ nodes: [btn] });
+        }
+    },
+
+    selectPickedPost(id) {
+        document.getElementById('campaign-post-id').value = id;
+        document.getElementById('post-picker-container').style.display = 'none';
     }
 };

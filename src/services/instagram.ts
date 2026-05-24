@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_VERSION = 'v21.0';
+export const API_VERSION = 'v21.0';
 
 /**
  * Sends a Direct Message to a user as a Private Reply to their comment.
@@ -124,6 +124,124 @@ export async function likeComment(
         const metaError = error.response?.data?.error;
         throw new Error(
             `Comment Auto-Like Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
+        );
+    }
+}
+
+/**
+ * Publishes a post to a Facebook Page feed.
+ * Supports image, video, and text-only feed posts.
+ */
+export async function publishFacebookPost(
+    pageId: string,
+    type: 'image' | 'video' | 'reel' | 'story',
+    caption: string,
+    mediaUrl: string | null,
+    accessToken: string
+) {
+    let url = `https://graph.facebook.com/${API_VERSION}/${pageId}/feed`;
+    let payload: any = { message: caption };
+
+    if (type === 'image' && mediaUrl) {
+        url = `https://graph.facebook.com/${API_VERSION}/${pageId}/photos`;
+        payload = { url: mediaUrl, caption: caption };
+    } else if (type === 'video' && mediaUrl) {
+        url = `https://graph.facebook.com/${API_VERSION}/${pageId}/videos`;
+        payload = { file_url: mediaUrl, description: caption };
+    }
+
+    try {
+        const response = await axios.post(url, payload, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        return response.data; // returns { id: "post_id" }
+    } catch (error: any) {
+        const metaError = error.response?.data?.error;
+        throw new Error(
+            `Facebook Publish Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
+        );
+    }
+}
+
+/**
+ * Publishes a post to an Instagram Business account.
+ * Handles the 2-step media container lifecycle (create container, check status, publish).
+ */
+export async function publishInstagramPost(
+    instagramId: string,
+    type: 'image' | 'video' | 'reel' | 'story',
+    caption: string,
+    mediaUrl: string,
+    accessToken: string
+) {
+    const createUrl = `https://graph.facebook.com/${API_VERSION}/${instagramId}/media`;
+    let createPayload: any = {};
+
+    if (type === 'image') {
+        createPayload = { image_url: mediaUrl, caption: caption };
+    } else if (type === 'video' || type === 'reel') {
+        createPayload = { media_type: 'REELS', video_url: mediaUrl, caption: caption };
+    } else if (type === 'story') {
+        const isVideo = mediaUrl.match(/\.(mp4|mov|avi|wmv)/i);
+        if (isVideo) {
+            createPayload = { media_type: 'STORIES', video_url: mediaUrl };
+        } else {
+            createPayload = { media_type: 'STORIES', image_url: mediaUrl };
+        }
+    }
+
+    try {
+        // Step 1: Create media container
+        console.log(`[IG Publish] Step 1: Creating container for type ${type}...`);
+        const createRes = await axios.post(createUrl, createPayload, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        const containerId = createRes.data.id;
+        console.log(`[IG Publish] Container created: ${containerId}`);
+
+        // For video/reels/stories (especially video), we must poll status
+        if (type === 'video' || type === 'reel' || type === 'story') {
+            console.log(`[IG Publish] Polling status for container ${containerId}...`);
+            let status = 'IN_PROGRESS';
+            let retries = 15; // Max 15 retries * 5s = 75s
+
+            while (status === 'IN_PROGRESS' && retries > 0) {
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                const statusRes = await axios.get(
+                    `https://graph.facebook.com/${API_VERSION}/${containerId}`,
+                    {
+                        params: { fields: 'status_code', access_token: accessToken }
+                    }
+                );
+                status = statusRes.data.status_code;
+                console.log(`[IG Publish] Container status: ${status} (Retries left: ${retries})`);
+                
+                if (status === 'ERROR' || status === 'EXPIRED') {
+                    throw new Error(`Instagram media processing failed with status: ${status}`);
+                }
+                retries--;
+            }
+
+            if (status !== 'FINISHED') {
+                throw new Error('Instagram media processing timed out.');
+            }
+        }
+
+        // Step 2: Publish container
+        console.log(`[IG Publish] Step 2: Publishing container ${containerId}...`);
+        const publishUrl = `https://graph.facebook.com/${API_VERSION}/${instagramId}/media_publish`;
+        const publishRes = await axios.post(publishUrl, {
+            creation_id: containerId
+        }, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+        
+        console.log(`[IG Publish] Success! Published post ID: ${publishRes.data.id}`);
+        return publishRes.data; // returns { id: "media_id" }
+    } catch (error: any) {
+        const metaError = error.response?.data?.error;
+        throw new Error(
+            `Instagram Publish Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
         );
     }
 }

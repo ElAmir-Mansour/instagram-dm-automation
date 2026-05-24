@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { pool } from '../config/db.js';
 import { createSession, requireAuth } from '../middleware/auth.js';
 import axios from 'axios';
-import { sendDirectMessage } from '../services/instagram.js';
+import { sendDirectMessage, publishFacebookPost, publishInstagramPost, API_VERSION } from '../services/instagram.js';
 import { generateAiResponse } from '../services/ai.js';
 
 
@@ -21,6 +21,130 @@ router.post('/auth/login', (req, res) => {
 
     const token = createSession();
     res.json({ token, expiresIn: '24h' });
+});
+
+// ─── Cron: Publish Scheduled Posts ──────────────────────────────────────────
+
+router.get('/cron/publish', async (req, res) => {
+    const cronSecret = process.env.CRON_SECRET;
+    const authHeader = req.headers['authorization'];
+    const queryToken = req.query.token;
+
+    if (cronSecret && authHeader !== `Bearer ${cronSecret}` && queryToken !== cronSecret) {
+        res.status(401).json({ error: 'Unauthorized cron request.' });
+        return;
+    }
+
+    try {
+        console.log('⏰ Running Post Publisher Cron Job...');
+        
+        // Find pending posts due for publishing
+        const result = await pool.query(`
+            SELECT s.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id 
+            FROM scheduled_posts s
+            JOIN creators c ON c.id = s.creator_id
+            WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW()
+            ORDER BY s.scheduled_time ASC
+        `);
+
+        if (result.rows.length === 0) {
+            console.log('⏰ No pending scheduled posts found.');
+            res.json({ message: 'No pending posts to publish.' });
+            return;
+        }
+
+        console.log(`⏰ Found ${result.rows.length} post(s) to publish.`);
+        const publishedIds: string[] = [];
+
+        for (const post of result.rows) {
+            console.log(`⏰ Processing scheduled post ${post.id} (${post.platform} - ${post.post_type})...`);
+            
+            // Mark as publishing to prevent double-triggering
+            await pool.query('UPDATE scheduled_posts SET status = $1 WHERE id = $2', ['PUBLISHING', post.id]);
+
+            try {
+                let fbId: string | null = null;
+                let igId: string | null = null;
+
+                const token = post.page_access_token;
+
+                // 1. Publish to Facebook
+                if (post.platform === 'facebook' || post.platform === 'both') {
+                    if (!post.facebook_page_id) {
+                        throw new Error('Facebook Page ID is missing for this creator.');
+                    }
+                    console.log(`⏰ Publishing to Facebook Page ${post.facebook_page_id}...`);
+                    const fbRes = await publishFacebookPost(
+                        post.facebook_page_id,
+                        post.post_type,
+                        post.caption || '',
+                        post.media_url,
+                        token
+                    );
+                    fbId = fbRes.id || fbRes.post_id;
+                    console.log(`⏰ Published to Facebook. Post ID: ${fbId}`);
+                }
+
+                // 2. Publish to Instagram
+                if (post.platform === 'instagram' || post.platform === 'both') {
+                    if (!post.instagram_page_id) {
+                        throw new Error('Instagram Account ID is missing for this creator.');
+                    }
+                    if (!post.media_url) {
+                        throw new Error('Instagram requires a media URL to publish.');
+                    }
+                    console.log(`⏰ Publishing to Instagram Account ${post.instagram_page_id}...`);
+                    const igRes = await publishInstagramPost(
+                        post.instagram_page_id,
+                        post.post_type,
+                        post.caption || '',
+                        post.media_url,
+                        token
+                    );
+                    igId = igRes.id;
+                    console.log(`⏰ Published to Instagram. Media ID: ${igId}`);
+                }
+
+                // Format published ID string
+                let resultId = '';
+                if (fbId && igId) {
+                    resultId = `FB:${fbId} | IG:${igId}`;
+                } else if (fbId) {
+                    resultId = `FB:${fbId}`;
+                } else if (igId) {
+                    resultId = `IG:${igId}`;
+                }
+
+                await pool.query(
+                    `UPDATE scheduled_posts 
+                     SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL 
+                     WHERE id = $2`,
+                    [resultId, post.id]
+                );
+
+                publishedIds.push(post.id);
+
+            } catch (err: any) {
+                console.error(`❌ Failed to publish scheduled post ${post.id}:`, err.message);
+                await pool.query(
+                    `UPDATE scheduled_posts 
+                     SET status = 'FAILED', error_log = $1 
+                     WHERE id = $2`,
+                    [err.message, post.id]
+                );
+            }
+        }
+
+        res.json({
+            message: `Publishing sequence complete.`,
+            processed: result.rows.length,
+            published: publishedIds
+        });
+
+    } catch (err: any) {
+        console.error('❌ Scheduler Cron Error:', err);
+        res.status(500).json({ error: 'Cron publisher failed.' });
+    }
 });
 
 // ─── All routes below require authentication ────────────────────────────────
@@ -494,6 +618,252 @@ router.get('/creators', async (_req, res) => {
     } catch (err) {
         console.error('Creators Error:', err);
         res.status(500).json({ error: 'Failed to fetch creators.' });
+    }
+});
+
+// ─── Posts Scheduler CRUD ────────────────────────────────────────────────────
+
+router.get('/posts/scheduled', async (_req, res) => {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM scheduled_posts ORDER BY scheduled_time DESC'
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Fetch Scheduled Posts Error:', err);
+        res.status(500).json({ error: 'Failed to fetch scheduled posts.' });
+    }
+});
+
+router.post('/posts/scheduled', async (req, res) => {
+    try {
+        const { platform, post_type, caption, media_url, scheduled_time, publish_now } = req.body;
+
+        if (!platform || !post_type || !scheduled_time) {
+            res.status(400).json({ error: 'platform, post_type, and scheduled_time are required.' });
+            return;
+        }
+
+        // Get first active creator
+        const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
+        if (creatorRes.rows.length === 0) {
+            res.status(400).json({ error: 'No active creator account found.' });
+            return;
+        }
+        const creatorId = creatorRes.rows[0].id;
+
+        // Insert into database
+        const result = await pool.query(
+            `INSERT INTO scheduled_posts (creator_id, platform, post_type, caption, media_url, scheduled_time, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            [
+                creatorId,
+                platform,
+                post_type,
+                caption || null,
+                media_url || null,
+                new Date(scheduled_time),
+                'PENDING'
+            ]
+        );
+
+        const newPost = result.rows[0];
+
+        if (publish_now) {
+            console.log(`🚀 Immediate publishing requested for scheduled post ${newPost.id}...`);
+            
+            const fullCreatorRes = await pool.query(
+                'SELECT page_access_token, instagram_page_id, facebook_page_id FROM creators WHERE id = $1',
+                [creatorId]
+            );
+            const creator = fullCreatorRes.rows[0];
+            const token = creator.page_access_token;
+
+            try {
+                let fbId: string | null = null;
+                let igId: string | null = null;
+
+                // Mark as publishing
+                await pool.query("UPDATE scheduled_posts SET status = 'PUBLISHING' WHERE id = $1", [newPost.id]);
+
+                // Facebook
+                if (platform === 'facebook' || platform === 'both') {
+                    const fbRes = await publishFacebookPost(creator.facebook_page_id, post_type, caption || '', media_url, token);
+                    fbId = fbRes.id || fbRes.post_id;
+                }
+
+                // Instagram
+                if (platform === 'instagram' || platform === 'both') {
+                    const igRes = await publishInstagramPost(creator.instagram_page_id, post_type, caption || '', media_url, token);
+                    igId = igRes.id;
+                }
+
+                let resultId = '';
+                if (fbId && igId) {
+                    resultId = `FB:${fbId} | IG:${igId}`;
+                } else if (fbId) {
+                    resultId = `FB:${fbId}`;
+                } else if (igId) {
+                    resultId = `IG:${igId}`;
+                }
+
+                const finalRes = await pool.query(
+                    `UPDATE scheduled_posts 
+                     SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL 
+                     WHERE id = $2 RETURNING *`,
+                    [resultId, newPost.id]
+                );
+                res.status(201).json(finalRes.rows[0]);
+                return;
+            } catch (publishErr: any) {
+                console.error('❌ Immediate publish failed:', publishErr.message);
+                const finalRes = await pool.query(
+                    `UPDATE scheduled_posts 
+                     SET status = 'FAILED', error_log = $1 
+                     WHERE id = $2 RETURNING *`,
+                    [publishErr.message, newPost.id]
+                );
+                res.status(201).json(finalRes.rows[0]);
+                return;
+            }
+        }
+
+        res.status(201).json(newPost);
+    } catch (err) {
+        console.error('Create Scheduled Post Error:', err);
+        res.status(500).json({ error: 'Failed to create scheduled post.' });
+    }
+});
+
+router.put('/posts/scheduled/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { platform, post_type, caption, media_url, scheduled_time } = req.body;
+
+        const result = await pool.query(
+            `UPDATE scheduled_posts
+             SET platform = COALESCE($1, platform),
+                 post_type = COALESCE($2, post_type),
+                 caption = COALESCE($3, caption),
+                 media_url = COALESCE($4, media_url),
+                 scheduled_time = COALESCE($5, scheduled_time)::timestamp with time zone,
+                 status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
+             WHERE id = $6 RETURNING *`,
+            [platform, post_type, caption, media_url, scheduled_time, id]
+        );
+
+        if (result.rows.length === 0) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Update Scheduled Post Error:', err);
+        res.status(500).json({ error: 'Failed to update scheduled post.' });
+    }
+});
+
+router.delete('/posts/scheduled/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query(
+            'DELETE FROM scheduled_posts WHERE id = $1 RETURNING *',
+            [id]
+        );
+
+        if (result.rows.length === 0) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+        res.json({ message: 'Scheduled post deleted.', id });
+    } catch (err) {
+        console.error('Delete Scheduled Post Error:', err);
+        res.status(500).json({ error: 'Failed to delete scheduled post.' });
+    }
+});
+
+router.get('/posts/live', async (_req, res) => {
+    try {
+        const creatorRes = await pool.query(
+            'SELECT page_access_token, instagram_page_id, facebook_page_id FROM creators WHERE is_active = true LIMIT 1'
+        );
+
+        if (creatorRes.rows.length === 0) {
+            res.json([]);
+            return;
+        }
+
+        const creator = creatorRes.rows[0];
+        const token = creator.page_access_token;
+        const fbPageId = creator.facebook_page_id;
+        const igUserId = creator.instagram_page_id;
+
+        const livePosts: any[] = [];
+        const promises: Promise<any>[] = [];
+
+        // Fetch FB Page Posts
+        if (fbPageId && token) {
+            promises.push(
+                axios.get(`https://graph.facebook.com/${API_VERSION}/${fbPageId}/feed`, {
+                    params: {
+                        fields: 'id,message,created_time,full_picture,permalink_url',
+                        access_token: token,
+                        limit: 10
+                    }
+                }).then(response => {
+                    const posts = response.data?.data || [];
+                    posts.forEach((p: any) => {
+                        livePosts.push({
+                            id: p.id,
+                            platform: 'facebook',
+                            caption: p.message || '',
+                            media_url: p.full_picture || null,
+                            permalink: p.permalink_url || null,
+                            timestamp: p.created_time
+                        });
+                    });
+                }).catch(err => {
+                    console.warn('⚠️ Failed to fetch live Facebook posts:', err.message);
+                })
+            );
+        }
+
+        // Fetch IG Media Posts
+        if (igUserId && token) {
+            promises.push(
+                axios.get(`https://graph.facebook.com/${API_VERSION}/${igUserId}/media`, {
+                    params: {
+                        fields: 'id,caption,media_url,permalink,timestamp,media_type',
+                        access_token: token,
+                        limit: 10
+                    }
+                }).then(response => {
+                    const media = response.data?.data || [];
+                    media.forEach((m: any) => {
+                        livePosts.push({
+                            id: m.id,
+                            platform: 'instagram',
+                            caption: m.caption || '',
+                            media_url: m.media_url || null,
+                            permalink: m.permalink || null,
+                            timestamp: m.timestamp
+                        });
+                    });
+                }).catch(err => {
+                    console.warn('⚠️ Failed to fetch live Instagram posts:', err.message);
+                })
+            );
+        }
+
+        await Promise.all(promises);
+
+        // Sort posts descending by timestamp
+        livePosts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+        res.json(livePosts);
+    } catch (err) {
+        console.error('Fetch Live Posts Error:', err);
+        res.status(500).json({ error: 'Failed to fetch live posts from Meta.' });
     }
 });
 
