@@ -132,19 +132,15 @@ const SettingsPage = {
         btn.disabled = true;
 
         try {
-            const res = await fetch('/api/settings/token/extend', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
+            const data = await API.request('/settings/token/extend', {
+                method: 'POST'
             });
-            const data = await res.json();
-            
-            if (!res.ok) throw new Error(data.error || 'Failed to extend token');
             
             UI.toast('Token extended successfully to never expire!', 'success');
             await this.render();
         } catch (err) {
             console.error(err);
-            UI.toast(err.message, 'error');
+            UI.toast(err.message || 'Failed to extend token', 'error');
             btn.innerHTML = originalHtml;
             btn.disabled = false;
         }
