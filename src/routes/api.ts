@@ -8,6 +8,20 @@ import { generateAiResponse } from '../services/ai.js';
 
 const router = Router();
 
+router.get('/debug-db', async (req, res) => {
+    try {
+        const creators = await pool.query('SELECT id, instagram_page_id, facebook_page_id, LENGTH(page_access_token) as token_len, SUBSTRING(page_access_token FROM 1 FOR 10) as token_start FROM creators');
+        const dbUrl = process.env.DATABASE_URL || 'not set';
+        const parsedUrl = dbUrl.includes('@') ? dbUrl.split('@')[1] : dbUrl;
+        res.json({
+            db_host: parsedUrl,
+            creators: creators.rows
+        });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ─── Auth ───────────────────────────────────────────────────────────────────
 
 router.post('/auth/login', (req, res) => {
