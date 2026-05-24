@@ -55,9 +55,14 @@ const SettingsPage = {
                             ${tokenStatus.type ? `<span style="font-size:12px;color:var(--text-muted);">Type: ${tokenStatus.type}</span>` : ''}
                         </div>
                         ${expiresAt ? `
-                            <div class="token-info" style="margin-bottom:12px;">
-                                Expires: <span>${expiresAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
-                                ${daysLeft !== null ? ` (${daysLeft > 0 ? daysLeft + ' days left' : 'EXPIRED'})` : ''}
+                            <div class="token-info" style="margin-bottom:12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                                <div>
+                                    Expires: <span>${expiresAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
+                                    ${daysLeft !== null ? ` <span style="color: ${daysLeft < 7 ? 'var(--warning)' : 'inherit'}">(${daysLeft > 0 ? daysLeft + ' days left' : 'EXPIRED'})</span>` : ''}
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" onclick="SettingsPage.extendToken(event)" style="padding: 4px 10px; font-size: 11px; height: auto;">
+                                    <i data-lucide="refresh-cw" style="width:12px;height:12px;margin-right:4px;"></i> Extend to Never-Expiring
+                                </button>
                             </div>
                         ` : `
                             <div class="token-info" style="margin-bottom:12px;">
@@ -115,6 +120,33 @@ const SettingsPage = {
             this.render();
         } catch (err) {
             UI.toast(err.message, 'error');
+        }
+    },
+
+    async extendToken(e) {
+        if (!confirm('Are you sure you want to request a never-expiring token from Meta?')) return;
+        
+        const btn = e.currentTarget;
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '<span style="display:inline-block;width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin 0.75s linear infinite;margin-right:4px;vertical-align:middle;"></span> Extending...';
+        btn.disabled = true;
+
+        try {
+            const res = await fetch('/api/settings/token/extend', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json();
+            
+            if (!res.ok) throw new Error(data.error || 'Failed to extend token');
+            
+            UI.toast('Token extended successfully to never expire!', 'success');
+            await this.render();
+        } catch (err) {
+            console.error(err);
+            UI.toast(err.message, 'error');
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
         }
     }
 };

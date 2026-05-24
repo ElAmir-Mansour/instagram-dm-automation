@@ -653,6 +653,47 @@ router.post('/settings/token', async (req, res) => {
     }
 });
 
+router.post('/settings/token/extend', async (req, res) => {
+    try {
+        const appId = process.env.META_APP_ID;
+        const appSecret = process.env.META_APP_SECRET;
+
+        if (!appId || !appSecret) {
+            res.status(400).json({ error: 'META_APP_ID or META_APP_SECRET not configured in backend.' });
+            return;
+        }
+
+        const creatorRes = await pool.query('SELECT id, page_access_token FROM creators WHERE is_active = true LIMIT 1');
+        if (creatorRes.rows.length === 0) {
+            res.status(404).json({ error: 'No active creator found.' });
+            return;
+        }
+
+        const currentToken = creatorRes.rows[0].page_access_token;
+        const creatorId = creatorRes.rows[0].id;
+
+        const extendRes = await axios.get('https://graph.facebook.com/v21.0/oauth/access_token', {
+            params: {
+                grant_type: 'fb_exchange_token',
+                client_id: appId,
+                client_secret: appSecret,
+                fb_exchange_token: currentToken
+            }
+        });
+
+        if (extendRes.data && extendRes.data.access_token) {
+            const newToken = extendRes.data.access_token;
+            await pool.query('UPDATE creators SET page_access_token = $1 WHERE id = $2', [newToken, creatorId]);
+            res.json({ message: 'Token successfully extended to a never-expiring token.' });
+        } else {
+            res.status(400).json({ error: 'Failed to obtain an extended token from Meta.' });
+        }
+    } catch (err: any) {
+        console.error('Token Extend Error:', err.response?.data || err.message);
+        res.status(500).json({ error: err.response?.data?.error?.message || 'Failed to extend token.' });
+    }
+});
+
 // ─── Creators ───────────────────────────────────────────────────────────────
 
 router.get('/creators', async (_req, res) => {
