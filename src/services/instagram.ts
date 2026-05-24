@@ -199,32 +199,40 @@ export async function publishInstagramPost(
         const containerId = createRes.data.id;
         console.log(`[IG Publish] Container created: ${containerId}`);
 
-        // For video/reels/stories (especially video), we must poll status
-        if (type === 'video' || type === 'reel' || type === 'story') {
-            console.log(`[IG Publish] Polling status for container ${containerId}...`);
-            let status = 'IN_PROGRESS';
-            let retries = 15; // Max 15 retries * 5s = 75s
+        // Check and poll status for all media containers (image, video, reel, story) to make sure processing is complete
+        console.log(`[IG Publish] Polling status for container ${containerId}...`);
+        let status = 'IN_PROGRESS';
+        let retries = 15; // Max 15 retries * 5s = 75s
+        let statusDetail = '';
 
-            while (status === 'IN_PROGRESS' && retries > 0) {
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                const statusRes = await axios.get(
-                    `https://graph.facebook.com/${API_VERSION}/${containerId}`,
-                    {
-                        params: { fields: 'status_code', access_token: accessToken }
-                    }
-                );
-                status = statusRes.data.status_code;
-                console.log(`[IG Publish] Container status: ${status} (Retries left: ${retries})`);
-                
-                if (status === 'ERROR' || status === 'EXPIRED') {
-                    throw new Error(`Instagram media processing failed with status: ${status}`);
+        while (status === 'IN_PROGRESS' && retries > 0) {
+            // Check status
+            const statusRes = await axios.get(
+                `https://graph.facebook.com/${API_VERSION}/${containerId}`,
+                {
+                    params: { fields: 'status_code,status', access_token: accessToken }
                 }
-                retries--;
+            );
+            status = statusRes.data.status_code;
+            statusDetail = statusRes.data.status || '';
+            console.log(`[IG Publish] Container status: ${status} (Detail: ${statusDetail}) (Retries left: ${retries})`);
+            
+            if (status === 'ERROR' || status === 'EXPIRED') {
+                throw new Error(`Instagram media processing failed with status: ${status}. Detail: ${statusDetail}`);
             }
 
-            if (status !== 'FINISHED') {
-                throw new Error('Instagram media processing timed out.');
+            if (status === 'FINISHED') {
+                break;
             }
+
+            retries--;
+            if (retries > 0 && status === 'IN_PROGRESS') {
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+        }
+
+        if (status !== 'FINISHED') {
+            throw new Error('Instagram media processing timed out.');
         }
 
         // Step 2: Publish container
