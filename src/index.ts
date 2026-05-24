@@ -430,7 +430,8 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                         // ── Step 1: Send Private DM (the core action) ──────────────────
                         const fbPageId = isFacebookComment ? creator.facebook_page_id : undefined;
                         console.log('📩 Sending private DM...');
-                        await sendPrivateReply(commentId, matchedCampaign.dm_template, creator.page_access_token, fbPageId);
+                        const dmText = matchedCampaign.dm_template.replace(/{username}/g, senderUsername);
+                        await sendPrivateReply(commentId, dmText, creator.page_access_token, fbPageId);
 
                         // Mark SENT immediately — DM is what matters
                         await pool.query(
@@ -466,11 +467,12 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                             // Split public replies by | and pick a random variation
                             const replyTemplates = matchedCampaign.public_reply_template.split('|');
                             const chosenReply = replyTemplates[Math.floor(Math.random() * replyTemplates.length)].trim();
+                            const publicReplyText = chosenReply.replace(/{username}/g, senderUsername);
                             
-                            console.log(`💬 Chosen public reply: "${chosenReply}"`);
+                            console.log(`💬 Chosen public reply: "${publicReplyText}"`);
                             
                             // Instagram: /{commentId}/replies  |  Facebook: /{commentId}/comments
-                            await sendPublicReply(commentId, chosenReply, creator.page_access_token, isFacebookComment);
+                            await sendPublicReply(commentId, publicReplyText, creator.page_access_token, isFacebookComment);
                             console.log('✅ Public reply sent.');
                         } catch (publicErr: any) {
                             // Public reply failed but DM already succeeded — log but keep SENT
