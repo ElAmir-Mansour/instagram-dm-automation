@@ -59,7 +59,11 @@ const SettingsPage = {
                                 Expires: <span>${expiresAt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</span>
                                 ${daysLeft !== null ? ` (${daysLeft > 0 ? daysLeft + ' days left' : 'EXPIRED'})` : ''}
                             </div>
-                        ` : ''}
+                        ` : `
+                            <div class="token-info" style="margin-bottom:12px;">
+                                Expires: <span>Never (Long-Lived)</span>
+                            </div>
+                        `}
                         ${tokenStatus.scopes ? `
                             <div style="margin-bottom:16px;">
                                 <p class="form-label" style="margin-bottom:8px;">Permissions</p>
