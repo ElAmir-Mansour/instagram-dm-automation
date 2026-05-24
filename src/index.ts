@@ -53,6 +53,14 @@ app.get('/privacy', (_req, res) => {
     res.sendFile(path.join(__dirname, '../public/privacy.html'));
 });
 
+// Eid Landing Page Redirection
+app.get('/eid', (_req, res) => {
+    res.redirect('/dashboard/eid.html');
+});
+app.get('/eidia', (_req, res) => {
+    res.redirect('/dashboard/eid.html');
+});
+
 // Data Deletion Instructions (required by Meta App Review)
 app.get('/data-deletion', (_req, res) => {
     res.sendFile(path.join(__dirname, '../public/data-deletion.html'));
