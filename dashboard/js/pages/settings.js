@@ -17,7 +17,8 @@ const SettingsPage = {
                 { name: 'pages_manage_engagement', desc: 'Facebook comment replies and auto-likes' },
                 { name: 'pages_messaging', desc: 'Facebook Messenger message replies' },
                 { name: 'instagram_manage_comments', desc: 'Instagram comment parsing and public replies' },
-                { name: 'instagram_manage_messages', desc: 'Instagram DM automation' }
+                { name: 'instagram_manage_messages', desc: 'Instagram DM automation' },
+                { name: 'instagram_content_publish', desc: 'Instagram post publishing and scheduling' }
             ];
 
             const missingScopes = isValid && Array.isArray(tokenStatus.scopes)
