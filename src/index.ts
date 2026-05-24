@@ -434,10 +434,18 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                         
                         if (dmText.includes('[SPLIT]')) {
                             const parts = dmText.split('[SPLIT]');
-                            for (const part of parts) {
-                                if (part.trim()) {
-                                    await sendPrivateReply(commentId, part.trim(), creator.page_access_token, fbPageId);
-                                    await new Promise(resolve => setTimeout(resolve, 300));
+                            
+                            // First message must be a private reply to the comment to initiate the conversation
+                            console.log('📩 Sending first message via private reply...');
+                            await sendPrivateReply(commentId, parts[0].trim(), creator.page_access_token, fbPageId);
+                            
+                            // Subsequent messages can be sent as direct messages to the user ID
+                            for (let i = 1; i < parts.length; i++) {
+                                const part = parts[i].trim();
+                                if (part) {
+                                    console.log(`📩 Sending part ${i + 1} via direct message...`);
+                                    await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay to keep ordering
+                                    await sendDirectMessage(senderId, { text: part }, creator.page_access_token, fbPageId);
                                 }
                             }
                         } else {
