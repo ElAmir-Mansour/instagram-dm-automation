@@ -8,20 +8,6 @@ import { generateAiResponse } from '../services/ai.js';
 
 const router = Router();
 
-router.get('/debug-db', async (req, res) => {
-    try {
-        const creators = await pool.query('SELECT id, instagram_page_id, facebook_page_id, LENGTH(page_access_token) as token_len, SUBSTRING(page_access_token FROM 1 FOR 10) as token_start FROM creators');
-        const dbUrl = process.env.DATABASE_URL || 'not set';
-        const parsedUrl = dbUrl.includes('@') ? dbUrl.split('@')[1] : dbUrl;
-        res.json({
-            db_host: parsedUrl,
-            creators: creators.rows
-        });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 // ─── Auth ───────────────────────────────────────────────────────────────────
 
 router.post('/auth/login', (req, res) => {
@@ -596,11 +582,34 @@ router.get('/settings/token/status', async (_req, res) => {
 
 router.post('/settings/token', async (req, res) => {
     try {
-        const { token } = req.body;
+        let { token } = req.body;
 
         if (!token) {
             res.status(400).json({ error: 'Token is required.' });
             return;
+        }
+
+        // Attempt to extend the token lifetime automatically
+        const appId = process.env.META_APP_ID;
+        const appSecret = process.env.META_APP_SECRET;
+        if (appId && appSecret) {
+            try {
+                const extendRes = await axios.get('https://graph.facebook.com/v21.0/oauth/access_token', {
+                    params: {
+                        grant_type: 'fb_exchange_token',
+                        client_id: appId,
+                        client_secret: appSecret,
+                        fb_exchange_token: token
+                    }
+                });
+                if (extendRes.data && extendRes.data.access_token) {
+                    token = extendRes.data.access_token;
+                    console.log('Successfully extended token to a never-expiring token.');
+                }
+            } catch (extendErr: any) {
+                console.log('Token extension skipped or failed:', extendErr.response?.data?.error?.message || extendErr.message);
+                // Continue with the original token if extension fails
+            }
         }
 
         // Validate the new token

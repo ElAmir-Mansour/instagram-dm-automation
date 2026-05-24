@@ -199,53 +199,77 @@ export async function publishInstagramPost(
         const containerId = createRes.data.id;
         console.log(`[IG Publish] Container created: ${containerId}`);
 
-        // Check and poll status for all media containers (image, video, reel, story) to make sure processing is complete
-        console.log(`[IG Publish] Polling status for container ${containerId}...`);
-        let status = 'IN_PROGRESS';
-        let retries = 15; // Max 15 retries * 5s = 75s
-        let statusDetail = '';
+        if (type !== 'image') {
+            // Check and poll status for video, reel, story to make sure processing is complete
+            console.log(`[IG Publish] Polling status for container ${containerId}...`);
+            let status = 'IN_PROGRESS';
+            let retries = 15; // Max 15 retries * 5s = 75s
+            let statusDetail = '';
 
-        while (status === 'IN_PROGRESS' && retries > 0) {
-            // Check status
-            const statusRes = await axios.get(
-                `https://graph.facebook.com/${API_VERSION}/${containerId}`,
-                {
-                    params: { fields: 'status_code,status', access_token: accessToken }
+            while (status === 'IN_PROGRESS' && retries > 0) {
+                // Check status
+                const statusRes = await axios.get(
+                    `https://graph.facebook.com/${API_VERSION}/${containerId}`,
+                    {
+                        params: { fields: 'status_code,status', access_token: accessToken }
+                    }
+                );
+                status = statusRes.data.status_code;
+                statusDetail = statusRes.data.status || '';
+                console.log(`[IG Publish] Container status: ${status} (Detail: ${statusDetail}) (Retries left: ${retries})`);
+                
+                if (status === 'ERROR' || status === 'EXPIRED') {
+                    throw new Error(`Instagram media processing failed with status: ${status}. Detail: ${statusDetail}`);
                 }
-            );
-            status = statusRes.data.status_code;
-            statusDetail = statusRes.data.status || '';
-            console.log(`[IG Publish] Container status: ${status} (Detail: ${statusDetail}) (Retries left: ${retries})`);
-            
-            if (status === 'ERROR' || status === 'EXPIRED') {
-                throw new Error(`Instagram media processing failed with status: ${status}. Detail: ${statusDetail}`);
+
+                if (status === 'FINISHED') {
+                    break;
+                }
+
+                retries--;
+                if (retries > 0 && status === 'IN_PROGRESS') {
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                }
             }
 
-            if (status === 'FINISHED') {
-                break;
+            if (status !== 'FINISHED') {
+                throw new Error('Instagram media processing timed out.');
             }
-
-            retries--;
-            if (retries > 0 && status === 'IN_PROGRESS') {
-                await new Promise(resolve => setTimeout(resolve, 5000));
-            }
-        }
-
-        if (status !== 'FINISHED') {
-            throw new Error('Instagram media processing timed out.');
         }
 
         // Step 2: Publish container
         console.log(`[IG Publish] Step 2: Publishing container ${containerId}...`);
         const publishUrl = `https://graph.facebook.com/${API_VERSION}/${instagramId}/media_publish`;
-        const publishRes = await axios.post(publishUrl, {
-            creation_id: containerId
-        }, {
-            headers: { Authorization: `Bearer ${accessToken}` }
-        });
         
-        console.log(`[IG Publish] Success! Published post ID: ${publishRes.data.id}`);
-        return publishRes.data; // returns { id: "media_id" }
+        let publishRes;
+        let publishRetries = 3;
+        while (publishRetries > 0) {
+            try {
+                publishRes = await axios.post(publishUrl, {
+                    creation_id: containerId
+                }, {
+                    headers: { Authorization: `Bearer ${accessToken}` }
+                });
+                break; // Success
+            } catch (publishError: any) {
+                const metaError = publishError.response?.data?.error;
+                
+                // Catch Code 9007 "Media ID is not available" (race condition for images)
+                // or Code 100 which could be temporary processing error
+                if (metaError?.code === 9007 || metaError?.code === 100) {
+                    publishRetries--;
+                    if (publishRetries === 0) throw publishError;
+                    
+                    console.log(`[IG Publish] Container not ready (Code: ${metaError?.code}), retrying publish in 5 seconds...`);
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                } else {
+                    throw publishError; // Throw other errors like Auth issues immediately
+                }
+            }
+        }
+        
+        console.log(`[IG Publish] Success! Published post ID: ${publishRes?.data?.id}`);
+        return publishRes?.data; // returns { id: "media_id" }
     } catch (error: any) {
         const metaError = error.response?.data?.error;
         throw new Error(
