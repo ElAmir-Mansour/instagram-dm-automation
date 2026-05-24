@@ -33,6 +33,7 @@ declare global {
 
 // Need raw body buffer for HMAC signature verification
 app.use(bodyParser.json({
+    limit: '15mb',
     verify: (req: any, _res, buf) => { req.rawBody = buf; }
 }));
 
