@@ -140,11 +140,14 @@ export async function handleCommentChange(change: any, entryId: string): Promise
     // Log interaction as PENDING. The UNIQUE on comment_id makes this the idempotency claim:
     // no row back means another delivery of the same comment already owns it.
     const interactionLog = await pool.query(
-        `INSERT INTO interactions (campaign_id, comment_id, sender_username, post_id, status, platform)
-         VALUES ($1, $2, $3, $4, 'PENDING', $5)
+        // creator_id is written directly rather than left to be derived through `campaigns`.
+        // The dashboard filters on it, and a NULL here is indistinguishable from the webhook
+        // having stopped — the row simply vanishes from the tenant's activity log.
+        `INSERT INTO interactions (campaign_id, creator_id, comment_id, sender_username, post_id, status, platform)
+         VALUES ($1, $2, $3, $4, $5, 'PENDING', $6)
          ON CONFLICT (comment_id) DO NOTHING
          RETURNING id`,
-        [matchedCampaign.id, commentId, senderUsername, postId, isFacebookComment ? 'facebook' : 'instagram']
+        [matchedCampaign.id, creator.id, commentId, senderUsername, postId, isFacebookComment ? 'facebook' : 'instagram']
     );
 
     if (interactionLog.rows.length === 0) {

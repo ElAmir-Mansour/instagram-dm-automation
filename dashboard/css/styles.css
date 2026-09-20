@@ -1609,3 +1609,175 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
     .chat-input-area { padding: 12px 16px; }
     .chat-header { padding: 12px 16px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Multi-tenant administration — switcher, health columns, first-run setup
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* `.main-content` is a flex item, so its default `min-width: auto` makes it grow
+   to its widest child. A table wider than the viewport then pushed the whole
+   page sideways instead of scrolling inside `.table-wrapper` — and because
+   `body` is `overflow-x: hidden`, the last columns became unreachable rather
+   than merely off-screen. */
+.main-content { min-width: 0; }
+
+/* ─── Header right / tenant switcher ─────────────────────────────────────── */
+.header-right { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+.tenant-switcher {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 10px 4px 12px;
+    background: var(--bg-glass);
+    border: 1px solid var(--border-glass);
+    border-radius: 20px;
+    min-width: 0;
+}
+.tenant-switcher:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.tenant-switcher-icon { width: 15px; height: 15px; color: var(--text-muted); flex-shrink: 0; }
+.tenant-select {
+    background: transparent; border: none; outline: none;
+    color: var(--text-primary); font-size: 13px; font-weight: 600;
+    padding: 6px 4px; max-width: 200px;
+    appearance: none; cursor: pointer;
+    text-overflow: ellipsis;
+}
+/* The popup list is an OS surface: it takes the page background, not the glass. */
+.tenant-select option { background: var(--bg-tertiary); color: var(--text-primary); font-weight: 500; }
+.tenant-select:disabled { opacity: 0.5; cursor: progress; }
+
+/* ─── Login: optional account affordance ─────────────────────────────────── */
+.login-alt-link {
+    background: none; border: none;
+    font-size: 12px; color: var(--text-muted);
+    text-decoration: underline; text-underline-offset: 3px;
+    padding: 10px 4px; align-self: center;
+}
+.login-alt-link:hover { color: var(--text-secondary); }
+
+/* ─── First-run setup ────────────────────────────────────────────────────── */
+/* Nothing is connected, so every nav destination is a dead end. */
+.app.setup-mode .sidebar-nav { display: none; }
+
+.setup-screen { padding: 40px 32px; max-width: 640px; margin: 0 auto; text-align: center; }
+.setup-screen:hover { transform: none; }
+.setup-icon {
+    width: 56px; height: 56px; margin: 0 auto 20px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-lg);
+    background: rgba(99,102,241,0.15); color: var(--accent);
+}
+.setup-icon svg { width: 26px; height: 26px; }
+.setup-screen h2 { font-size: 20px; font-weight: 700; margin-bottom: 12px; }
+.setup-screen p { font-size: 14px; color: var(--text-secondary); line-height: 1.7; }
+.setup-steps {
+    text-align: left; margin: 24px auto; padding-left: 22px;
+    display: flex; flex-direction: column; gap: 10px;
+    font-size: 13px; color: var(--text-secondary); line-height: 1.6;
+    max-width: 480px;
+}
+.setup-steps code { font-size: 12px; color: var(--text-primary); word-break: break-all; }
+.setup-note { margin-top: 20px; font-size: 13px; color: var(--text-muted); }
+
+/* ─── Health pills (token status, last webhook) ──────────────────────────── */
+/* These two columns are the point of the Tenants page: "is this broken?"
+   has to be answerable at a glance, without computing a date difference. */
+.health-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 20px;
+    font-size: 12px; font-weight: 700; white-space: nowrap;
+}
+.health-pill svg { width: 13px; height: 13px; }
+.health-fresh { background: var(--success-bg); color: var(--success); }
+.health-warn  { background: var(--warning-bg); color: var(--warning); }
+.health-stale { background: var(--danger-bg);  color: var(--danger); }
+.health-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+/* ─── Tenants table ──────────────────────────────────────────────────────── */
+.tenants-table { min-width: 940px; }
+.tenants-table .col-health { width: 148px; }
+.tenant-name-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tenant-name { font-weight: 600; color: var(--text-primary); }
+.tenant-current-chip {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 10px;
+    background: rgba(99,102,241,0.15); color: var(--accent);
+}
+.tenant-paused-chip {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 10px;
+    background: var(--bg-glass-hover); color: var(--text-muted);
+}
+.tenant-page-ids {
+    display: flex; gap: 10px; flex-wrap: wrap;
+    margin-top: 4px; font-size: 11px; color: var(--text-muted);
+}
+.tenant-row-inactive td { opacity: 0.6; }
+.cell-tight { white-space: nowrap; font-size: 12px; }
+.count-ok { color: var(--success); font-weight: 600; }
+.count-bad { color: var(--danger); font-weight: 600; margin-left: 8px; }
+.count-bad.count-zero { color: var(--text-muted); font-weight: 400; }
+
+.dm-meter { display: flex; flex-direction: column; gap: 5px; min-width: 96px; }
+.dm-meter-text { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.dm-meter-track {
+    display: block; height: 5px; border-radius: 3px;
+    background: var(--bg-glass-hover); overflow: hidden;
+}
+.dm-meter-fill { display: block; height: 100%; border-radius: 3px; }
+.dm-meter-fresh { background: var(--success); }
+.dm-meter-warn  { background: var(--warning); }
+.dm-meter-stale { background: var(--danger); }
+
+/* ─── Row actions (icon-only buttons) ────────────────────────────────────── */
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: var(--radius-sm);
+    border: 1px solid var(--border-glass);
+    background: var(--bg-glass);
+    color: var(--text-secondary);
+    transition: color var(--transition), border-color var(--transition), background var(--transition);
+}
+.icon-btn svg { width: 15px; height: 15px; }
+.icon-btn:hover { color: var(--text-primary); border-color: var(--border-glass-hover); background: var(--bg-glass-hover); }
+.icon-btn-danger:hover { color: var(--danger); border-color: rgba(239,68,68,0.3); }
+.icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ─── Users table ────────────────────────────────────────────────────────── */
+.user-email { font-weight: 500; }
+.user-tenants { display: flex; flex-wrap: wrap; gap: 6px; max-width: 320px; }
+.text-muted-sm { font-size: 12px; color: var(--text-muted); }
+.role-chip {
+    display: inline-block; padding: 4px 10px; border-radius: 20px;
+    font-size: 11px; font-weight: 600;
+    background: var(--bg-glass-hover); color: var(--text-secondary);
+}
+.role-chip.role-admin { background: rgba(99,102,241,0.15); color: var(--accent); }
+
+/* ─── Touch + small screens ──────────────────────────────────────────────── */
+@media (pointer: coarse) {
+    .icon-btn { width: 44px; height: 44px; }
+    .tenant-select { min-height: 36px; }
+    .login-alt-link { min-height: 44px; }
+}
+@media (max-width: 768px) {
+    .header-right { gap: 8px; flex-shrink: 0; }
+    .tenant-switcher { padding: 4px 6px 4px 10px; }
+    .tenant-select { max-width: 104px; font-size: 12px; }
+    /* The 72px header is a fixed height that the inbox layout measures against,
+       so the title block has to compress instead of wrapping past it — with the
+       switcher beside it, a three-line subtitle overlapped the status badge. */
+    .header-left { min-width: 0; }
+    .header-left > div { min-width: 0; }
+    .page-title, .page-subtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .setup-screen { padding: 28px 18px; }
+    .setup-steps { padding-left: 18px; }
+    .row-actions { justify-content: flex-start; }
+}
+
+@media (max-width: 768px) {
+    .tenants-table { min-width: 660px; }
+    .tenants-table th:nth-child(6), .tenants-table td:nth-child(6),
+    .tenants-table th:nth-child(7), .tenants-table td:nth-child(7),
+    .tenants-table th:nth-child(8), .tenants-table td:nth-child(8) { display: none; }
+}

@@ -2,12 +2,19 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { pool } from '../config/db.js';
-import { createLegacySession, requireAuth, createDownloadToken, consumeDownloadToken } from '../middleware/auth.js';
+import {
+    createLegacySession, createSession, requireAuth, createDownloadToken, consumeDownloadToken
+} from '../middleware/auth.js';
 import axios from 'axios';
 import { sendDirectMessage, publishFacebookPost, publishInstagramPost, API_VERSION } from '../services/instagram.js';
 import { generateAiResponse } from '../services/ai.js';
-import { getActiveCreatorId, getActiveCreator, invalidateTenantCache } from '../services/tenant.js';
+import {
+    getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
+    assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache
+} from '../services/tenant.js';
+import { encryptSecret, decryptSecret, verifyPassword } from '../config/crypto.js';
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
+import adminRouter from './admin.js';
 
 
 const router = Router();
@@ -112,6 +119,22 @@ function recordLoginFailure(ip: string): void {
     }
 }
 
+/**
+ * The tenant a freshly logged-in user starts in.
+ *
+ * Their first membership, ordered so it is the same one every time. A platform_admin may hold
+ * no memberships at all — they can see every tenant — so they fall back to whichever creator
+ * is active, and switch from there via /auth/switch-tenant.
+ */
+async function initialTenantFor(userId: string, role: string): Promise<string | null> {
+    const res = await pool.query(
+        `SELECT creator_id FROM memberships WHERE user_id = $1 ORDER BY created_at, creator_id LIMIT 1`,
+        [userId]
+    );
+    if (res.rows[0]?.creator_id) return res.rows[0].creator_id;
+    return role === 'platform_admin' ? getActiveCreatorId() : null;
+}
+
 router.post('/auth/login', async (req, res) => {
     const ip = clientIp(req);
     const retryAfter = loginRetryAfter(ip);
@@ -121,8 +144,54 @@ router.post('/auth/login', async (req, res) => {
         return;
     }
 
-    const { password } = req.body;
+    const { email, password } = req.body;
     const dashboardPassword = process.env.DASHBOARD_PASSWORD;
+
+    // ── User account login ──────────────────────────────────────────────────
+    // Only when an email is actually supplied. Everything below this block is the original
+    // shared-password path, untouched: it is the operator's only way in and predates user
+    // accounts entirely, so it keeps working exactly as before.
+    if (typeof email === 'string' && email.trim()) {
+        try {
+            const userRes = await pool.query(
+                `SELECT id, password_hash, role, token_version, is_active
+                   FROM users WHERE lower(email) = lower($1)`,
+                [email.trim()]
+            );
+            const user = userRes.rows[0];
+
+            // One message for "no such user", "wrong password" and "disabled account" — the
+            // distinction is free account enumeration otherwise. The throttle counts all three.
+            const ok = user && user.is_active
+                && typeof password === 'string'
+                && await verifyPassword(password, user.password_hash);
+
+            if (!ok) {
+                recordLoginFailure(ip);
+                res.status(401).json({ error: 'Invalid email or password.' });
+                return;
+            }
+
+            loginAttempts.delete(ip);
+
+            const tenantId = await initialTenantFor(user.id, user.role);
+            const token = createSession({
+                userId: user.id,
+                role: user.role === 'platform_admin' ? 'platform_admin' : 'user',
+                tenantId,
+                tokenVersion: user.token_version,
+            });
+
+            await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
+
+            // `token` and `expiresIn` are what the dashboard reads; the rest is additive.
+            res.json({ token, expiresIn: '24h', userId: user.id, role: user.role, tenantId });
+        } catch (err) {
+            console.error('User Login Error:', err);
+            res.status(500).json({ error: 'Login failed.' });
+        }
+        return;
+    }
 
     if (!dashboardPassword) {
         console.error('❌ Login attempted while DASHBOARD_PASSWORD is unset.');
@@ -247,7 +316,9 @@ router.get('/cron/publish', async (req, res) => {
                 let fbId: string | null = null;
                 let igId: string | null = null;
 
-                const token = post.page_access_token;
+                // Read straight off the joined creator row, so it has not been through the
+                // tenant service's decryption — do it here.
+                const token = decryptSecret(post.page_access_token);
 
                 // 1. Publish to Facebook
                 if (post.platform === 'facebook' || post.platform === 'both') {
@@ -340,6 +411,14 @@ const ALLOWED_MIME_TYPES = new Set([
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * A `/:id` that is not a uuid cannot match any row, but Postgres raises 22P02 on the malformed
+ * literal before it gets that far — which surfaced as a 500 for what is really a 404.
+ */
+function isUuid(value: unknown): value is string {
+    return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
 /** Decoded bytes, not base64 characters — see the note in POST /upload. */
 const MAX_UPLOAD_BYTES = 3.2 * 1024 * 1024;
 
@@ -395,6 +474,34 @@ router.get('/uploads/:id', async (req, res) => {
 const EXPORT_DOWNLOAD_SCOPE = 'interactions-export';
 
 /**
+ * The export runs above the auth boundary, so it has no session to read a tenant from — and
+ * an unscoped export of every tenant's interactions is the largest single leak in this file.
+ *
+ * The tenant therefore travels inside the download token: `<tenantId>~<one-shot token>`, where
+ * the token is minted over the path key `interactions-export:<tenantId>`. Editing the tenant
+ * half invalidates the HMAC, so the value is self-authenticating. The dashboard treats the
+ * whole string as opaque and passes it straight back, so nothing there changes.
+ *
+ * Exported only so the pairing with parseExportDownload can be tested directly.
+ */
+export function exportScopeFor(tenantId: string): string {
+    return `${EXPORT_DOWNLOAD_SCOPE}:${tenantId}`;
+}
+
+/** Split `<tenantId>~<token>` back apart. Returns null for anything that is not that shape. */
+export function parseExportDownload(raw: unknown): { tenantId: string; token: string } | null {
+    if (typeof raw !== 'string') return null;
+    const separator = raw.indexOf('~');
+    if (separator <= 0) return null;
+
+    const tenantId = raw.slice(0, separator);
+    const token = raw.slice(separator + 1);
+    if (!UUID_PATTERN.test(tenantId) || !token) return null;
+
+    return { tenantId, token };
+}
+
+/**
  * Excel and Sheets evaluate any cell whose text begins with one of these. `sender_username`
  * is a Facebook display name, so the attacker picks it.
  */
@@ -412,7 +519,8 @@ function csvTimestamp(value: unknown): string {
 }
 
 router.get('/interactions/export', async (req, res) => {
-    if (!consumeDownloadToken(req.query.dl, EXPORT_DOWNLOAD_SCOPE)) {
+    const download = parseExportDownload(req.query.dl);
+    if (!download || !consumeDownloadToken(download.token, exportScopeFor(download.tenantId))) {
         res.status(401).json({ error: 'Download link expired or already used — start the export again.' });
         return;
     }
@@ -423,9 +531,8 @@ router.get('/interactions/export', async (req, res) => {
         const status = req.query.status as string;
         const search = req.query.search as string;
 
-        let whereClause = '';
-        const params: any[] = [];
-        const conditions: string[] = [];
+        const params: any[] = [download.tenantId];
+        const conditions: string[] = [interactionsOwnedBy(1)];
 
         if (status && ['SENT', 'FAILED', 'PENDING'].includes(status)) {
             params.push(status);
@@ -447,9 +554,7 @@ router.get('/interactions/export', async (req, res) => {
             conditions.push(`i.campaign_id = $${params.length}`);
         }
 
-        if (conditions.length > 0) {
-            whereClause = 'WHERE ' + conditions.join(' AND ');
-        }
+        const whereClause = 'WHERE ' + conditions.join(' AND ');
 
         const dataQuery = `
             SELECT
@@ -493,20 +598,128 @@ router.get('/interactions/export', async (req, res) => {
 // ─── All routes below require authentication ────────────────────────────────
 router.use(requireAuth);
 
+// ...and a session that has not been revoked. `users.token_version` is the only kill switch
+// there is for a 24h stateless token, and checking it here means it covers the admin router
+// below as well as every tenant-scoped route.
+router.use(requireLiveSession);
+
+// ─── Platform admin ─────────────────────────────────────────────────────────
+//
+// Mounted *above* resolveTenant on purpose. resolveTenant 409s when the deployment has no
+// creator at all, which is precisely the state POST /api/admin/tenants exists to fix — behind
+// it, the first-run endpoint would be unreachable on exactly the deployment that needs it.
+// The sub-router carries its own platform_admin guard.
+router.use('/admin', adminRouter);
+
+// ─── Session identity ───────────────────────────────────────────────────────
+//
+// Also above resolveTenant: a user holding no membership, or an admin on a deployment with no
+// creators yet, must still be able to ask who they are and what they can switch into. Behind
+// resolveTenant both would get a 409 and the switcher would have nothing to render.
+
+/** Who am I, and which tenants may I act as — the tenant switcher's data source. */
+router.get('/auth/me', async (req, res) => {
+    try {
+        const session = req.session!;
+        const tenants = await listTenantsForSession(session);
+
+        // A legacy shared-password session carries no tenant — resolveTenant fills one in, and
+        // this route runs before that. Resolve it the same way resolveTenant would, so what the
+        // switcher shows is what the rest of the API will actually act as. Null here is the
+        // honest first-run answer: no creator exists yet.
+        const tenantId = session.tenantId
+            ?? (session.role === 'platform_admin' ? await getActiveCreatorId() : tenants[0]?.id ?? null);
+
+        res.json({
+            userId: session.userId,
+            role: session.role,
+            tenantId,
+            tenants,
+        });
+    } catch (err) {
+        console.error('Session Identity Error:', err);
+        res.status(500).json({ error: 'Failed to read session identity.' });
+    }
+});
+
+/**
+ * Swap the acting tenant.
+ *
+ * Mints a new token rather than mutating anything server-side: the session is a stateless
+ * HMAC, so the tenant it carries can only change by issuing a different one. The old token
+ * stays valid for its remaining TTL against its own tenant, which is correct — it was already
+ * authorised for that one.
+ */
+router.post('/auth/switch-tenant', async (req, res) => {
+    try {
+        const session = req.session!;
+        const tenantId = req.body?.tenantId;
+
+        if (typeof tenantId !== 'string' || !UUID_PATTERN.test(tenantId)) {
+            res.status(400).json({ error: 'A tenantId is required.' });
+            return;
+        }
+
+        const permitted = await assertTenantAccess({
+            userId: session.userId, role: session.role, tenantId
+        });
+        if (!permitted) {
+            // 404 rather than 403, matching resolveTenant: confirming a tenant exists is
+            // itself a disclosure.
+            res.status(404).json({ error: 'Not found.' });
+            return;
+        }
+
+        const token = createSession({
+            userId: session.userId,
+            role: session.role,
+            tenantId,
+            tokenVersion: session.tokenVersion,
+        });
+        res.json({ token, expiresIn: '24h', tenantId });
+    } catch (err) {
+        console.error('Switch Tenant Error:', err);
+        res.status(500).json({ error: 'Failed to switch tenant.' });
+    }
+});
+
+// ─── Everything below acts as exactly one tenant ────────────────────────────
+// resolveTenant pins it and enforces the membership check, so no route has to remember to.
+// `getTenantId(req)` throws rather than falling back to "the first active creator" — that
+// silent fallback is the bug this whole layer exists to remove — which is why it is safe to
+// call inline inside a query.
+router.use(resolveTenant);
+
 // ─── Dashboard Stats ────────────────────────────────────────────────────────
 
-router.get('/stats', async (_req, res) => {
+router.get('/stats', async (req, res) => {
     try {
+        const tenantId = getTenantId(req);
+        const owned = interactionsOwnedBy(1);
+
+        // `activeCreators` is the one count here that is not about the tenant's own data. For a
+        // platform_admin it stays what it always was — how many creators the deployment runs.
+        // For a normal user that number is meaningless and mildly disclosive, so they get the
+        // count of tenants they can actually see, which is what the tile means to them.
+        const creatorsQuery = req.session?.role === 'platform_admin'
+            ? pool.query('SELECT COUNT(*)::int as count FROM creators WHERE is_active = true')
+            : pool.query(
+                `SELECT COUNT(*)::int as count
+                   FROM memberships m JOIN creators c ON c.id = m.creator_id
+                  WHERE m.user_id = $1 AND c.is_active = true`,
+                [req.session?.userId]
+            );
+
         const [total, sent, failed, campaigns, creators, today, uniqueUsers, instagram, facebook] = await Promise.all([
-            pool.query('SELECT COUNT(*)::int as count FROM interactions'),
-            pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE status = 'SENT'"),
-            pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE status = 'FAILED'"),
-            pool.query('SELECT COUNT(*)::int as count FROM campaigns'),
-            pool.query('SELECT COUNT(*)::int as count FROM creators WHERE is_active = true'),
-            pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE timestamp > NOW() - INTERVAL '24 hours'"),
-            pool.query('SELECT COUNT(DISTINCT sender_username)::int as count FROM interactions'),
-            pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE platform = 'instagram'"),
-            pool.query("SELECT COUNT(*)::int as count FROM interactions WHERE platform = 'facebook'"),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}`, [tenantId]),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.status = 'SENT'`, [tenantId]),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.status = 'FAILED'`, [tenantId]),
+            pool.query('SELECT COUNT(*)::int as count FROM campaigns WHERE creator_id = $1', [tenantId]),
+            creatorsQuery,
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.timestamp > NOW() - INTERVAL '24 hours'`, [tenantId]),
+            pool.query(`SELECT COUNT(DISTINCT i.sender_username)::int as count FROM interactions i WHERE ${owned}`, [tenantId]),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.platform = 'instagram'`, [tenantId]),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.platform = 'facebook'`, [tenantId]),
         ]);
 
         const totalCount = total.rows[0].count;
@@ -550,14 +763,15 @@ router.get('/stats/hourly', async (req, res) => {
         const days = clampDays(req.query.days, 7);
         const result = await pool.query(`
             SELECT
-                DATE_TRUNC('hour', timestamp) as hour,
-                COUNT(*) FILTER (WHERE status = 'SENT')::int as sent,
-                COUNT(*) FILTER (WHERE status = 'FAILED')::int as failed
-            FROM interactions
-            WHERE timestamp > NOW() - ($1::text || ' days')::interval
+                DATE_TRUNC('hour', i.timestamp) as hour,
+                COUNT(*) FILTER (WHERE i.status = 'SENT')::int as sent,
+                COUNT(*) FILTER (WHERE i.status = 'FAILED')::int as failed
+            FROM interactions i
+            WHERE ${interactionsOwnedBy(1)}
+              AND i.timestamp > NOW() - ($2::text || ' days')::interval
             GROUP BY hour
             ORDER BY hour ASC
-        `, [String(days)]);
+        `, [getTenantId(req), String(days)]);
         res.json(result.rows);
     } catch (err) {
         console.error('Hourly Stats Error:', err);
@@ -572,14 +786,15 @@ router.get('/stats/daily', async (req, res) => {
         const days = clampDays(req.query.days, 30);
         const result = await pool.query(`
             SELECT
-                DATE_TRUNC('day', timestamp)::date as day,
-                COUNT(*) FILTER (WHERE status = 'SENT')::int as sent,
-                COUNT(*) FILTER (WHERE status = 'FAILED')::int as failed
-            FROM interactions
-            WHERE timestamp > NOW() - ($1::text || ' days')::interval
+                DATE_TRUNC('day', i.timestamp)::date as day,
+                COUNT(*) FILTER (WHERE i.status = 'SENT')::int as sent,
+                COUNT(*) FILTER (WHERE i.status = 'FAILED')::int as failed
+            FROM interactions i
+            WHERE ${interactionsOwnedBy(1)}
+              AND i.timestamp > NOW() - ($2::text || ' days')::interval
             GROUP BY day
             ORDER BY day ASC
-        `, [String(days)]);
+        `, [getTenantId(req), String(days)]);
         res.json(result.rows);
     } catch (err) {
         console.error('Daily Stats Error:', err);
@@ -589,19 +804,20 @@ router.get('/stats/daily', async (req, res) => {
 
 // ─── Campaigns CRUD ─────────────────────────────────────────────────────────
 
-router.get('/campaigns', async (_req, res) => {
+router.get('/campaigns', async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT 
+            SELECT
                 c.*,
                 COUNT(i.id)::int as total_interactions,
                 COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent_count,
                 COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count
             FROM campaigns c
             LEFT JOIN interactions i ON i.campaign_id = c.id
+            WHERE c.creator_id = $1
             GROUP BY c.id
             ORDER BY c.created_at DESC
-        `);
+        `, [getTenantId(req)]);
         res.json(result.rows);
     } catch (err) {
         console.error('Campaigns Error:', err);
@@ -611,22 +827,17 @@ router.get('/campaigns', async (_req, res) => {
 
 router.post('/campaigns', async (req, res) => {
     try {
-        const { creator_id, trigger_keyword, dm_template, public_reply_template, post_id, is_active } = req.body;
+        const { trigger_keyword, dm_template, public_reply_template, post_id, is_active } = req.body;
 
         if (!trigger_keyword || !dm_template) {
             res.status(400).json({ error: 'trigger_keyword and dm_template are required.' });
             return;
         }
 
-        // If no creator_id provided, use the active creator
-        let creatorId = creator_id;
-        if (!creatorId) {
-            creatorId = await getActiveCreatorId();
-            if (!creatorId) {
-                res.status(400).json({ error: 'No active creator found. Add a creator first.' });
-                return;
-            }
-        }
+        // `creator_id` in the request body is deliberately ignored: honouring it would let any
+        // session create a campaign inside another tenant. The session decides the owner, and
+        // only the session. Use /auth/switch-tenant to write somewhere else.
+        const creatorId = getTenantId(req);
 
         const result = await pool.query(
             `INSERT INTO campaigns (creator_id, trigger_keyword, dm_template, public_reply_template, post_id, is_active)
@@ -646,6 +857,11 @@ router.put('/campaigns/:id', async (req, res) => {
         const { id } = req.params;
         const { trigger_keyword, dm_template, public_reply_template, post_id, is_active } = req.body;
 
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Campaign not found.' });
+            return;
+        }
+
         const result = await pool.query(
             `UPDATE campaigns 
              SET trigger_keyword = COALESCE($1, trigger_keyword),
@@ -653,17 +869,20 @@ router.put('/campaigns/:id', async (req, res) => {
                  public_reply_template = $3,
                  post_id = $4,
                  is_active = COALESCE($5, is_active)
-             WHERE id = $6 RETURNING *`,
+             WHERE id = $6 AND creator_id = $7 RETURNING *`,
             [
-                trigger_keyword, 
-                dm_template, 
-                public_reply_template || null, 
-                post_id || null, 
-                typeof is_active === 'boolean' ? is_active : null, 
-                id
+                trigger_keyword,
+                dm_template,
+                public_reply_template || null,
+                post_id || null,
+                typeof is_active === 'boolean' ? is_active : null,
+                id,
+                getTenantId(req)
             ]
         );
 
+        // No row means either no such campaign or one belonging to someone else. Both are 404:
+        // the difference is exactly the information an attacker is probing for.
         if (result.rows.length === 0) {
             res.status(404).json({ error: 'Campaign not found.' });
             return;
@@ -678,7 +897,18 @@ router.put('/campaigns/:id', async (req, res) => {
 router.delete('/campaigns/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await pool.query('DELETE FROM campaigns WHERE id = $1 RETURNING id', [id]);
+
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Campaign not found.' });
+            return;
+        }
+
+        // The `AND creator_id` here is the whole point: unscoped, this endpoint let any
+        // authenticated session delete any tenant's campaign by id.
+        const result = await pool.query(
+            'DELETE FROM campaigns WHERE id = $1 AND creator_id = $2 RETURNING id',
+            [id, getTenantId(req)]
+        );
 
         if (result.rows.length === 0) {
             res.status(404).json({ error: 'Campaign not found.' });
@@ -693,10 +923,10 @@ router.delete('/campaigns/:id', async (req, res) => {
 
 // ─── Campaigns Stats Leaderboard ─────────────────────────────────────────────
 
-router.get('/stats/campaigns', async (_req, res) => {
+router.get('/stats/campaigns', async (req, res) => {
     try {
         const result = await pool.query(`
-            SELECT 
+            SELECT
                 c.id,
                 c.trigger_keyword,
                 COUNT(i.id)::int as total_triggers,
@@ -704,10 +934,11 @@ router.get('/stats/campaigns', async (_req, res) => {
                 COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count
             FROM campaigns c
             LEFT JOIN interactions i ON i.campaign_id = c.id
+            WHERE c.creator_id = $1
             GROUP BY c.id, c.trigger_keyword
             ORDER BY total_triggers DESC
             LIMIT 5
-        `);
+        `, [getTenantId(req)]);
         res.json(result.rows);
     } catch (err) {
         console.error('Campaign Stats Error:', err);
@@ -719,8 +950,11 @@ router.get('/stats/campaigns', async (_req, res) => {
 // The download itself is registered above the auth boundary and carries its own one-shot
 // token; this is the authenticated half that hands that token out.
 
-router.post('/interactions/export/token', (_req, res) => {
-    res.json({ token: createDownloadToken(EXPORT_DOWNLOAD_SCOPE) });
+router.post('/interactions/export/token', (req, res) => {
+    // The tenant rides along in the token string (see parseExportDownload) because the
+    // download itself runs above the auth boundary and has no session to read.
+    const tenantId = getTenantId(req);
+    res.json({ token: `${tenantId}~${createDownloadToken(exportScopeFor(tenantId))}` });
 });
 
 // ─── Interactions (Activity Log) ────────────────────────────────────────────
@@ -735,9 +969,8 @@ router.get('/interactions', async (req, res) => {
         const campaign_id = req.query.campaign_id as string;
         const offset = (page - 1) * limit;
 
-        let whereClause = '';
-        const params: any[] = [];
-        const conditions: string[] = [];
+        const params: any[] = [getTenantId(req)];
+        const conditions: string[] = [interactionsOwnedBy(1)];
 
         if (status && ['SENT', 'FAILED', 'PENDING'].includes(status)) {
             params.push(status);
@@ -759,9 +992,7 @@ router.get('/interactions', async (req, res) => {
             conditions.push(`i.campaign_id = $${params.length}`);
         }
 
-        if (conditions.length > 0) {
-            whereClause = 'WHERE ' + conditions.join(' AND ');
-        }
+        const whereClause = 'WHERE ' + conditions.join(' AND ');
 
         const countQuery = `SELECT COUNT(*)::int as total FROM interactions i ${whereClause}`;
         const countResult = await pool.query(countQuery, params);
@@ -797,9 +1028,32 @@ router.get('/interactions', async (req, res) => {
 
 // ─── Settings: Token Management ─────────────────────────────────────────────
 
-router.get('/settings/token/status', async (_req, res) => {
+/**
+ * Record what Meta just said about a token, so the admin tenant list has something real to
+ * show. Without this, `token_status` only ever changes when a token is saved, and a token
+ * that expired last week still reads as the status it had the day it was pasted in.
+ *
+ * Best-effort: a failed write must not turn a successful status check into an error.
+ */
+async function recordTokenStatus(
+    creatorId: string, status: 'valid' | 'invalid', error: string | null
+): Promise<void> {
     try {
-        const creator = await getActiveCreator([
+        await pool.query(
+            `UPDATE creators
+                SET token_status = $1, token_last_checked_at = NOW(), token_error = $2
+              WHERE id = $3`,
+            [status, error, creatorId]
+        );
+    } catch (err) {
+        console.warn('⚠️ Could not record token status:', (err as Error).message);
+    }
+}
+
+router.get('/settings/token/status', async (req, res) => {
+    try {
+        const creatorId = getTenantId(req);
+        const creator = await getTenant(creatorId, [
             'id', 'instagram_page_id', 'facebook_page_id', 'is_active', 'page_access_token'
         ]);
 
@@ -808,6 +1062,7 @@ router.get('/settings/token/status', async (_req, res) => {
             return;
         }
 
+        // Already decrypted by getTenant — every creator read goes through one place.
         const token = creator.page_access_token;
 
         // Validate token against Meta API
@@ -817,6 +1072,11 @@ router.get('/settings/token/status', async (_req, res) => {
             });
 
             const data = debugRes.data.data;
+            await recordTokenStatus(
+                creatorId,
+                data.is_valid ? 'valid' : 'invalid',
+                data.is_valid ? null : 'Meta reported the token as not valid.'
+            );
             res.json({
                 status: data.is_valid ? 'valid' : 'invalid',
                 type: data.type,
@@ -827,7 +1087,11 @@ router.get('/settings/token/status', async (_req, res) => {
                 pageId: creator.instagram_page_id,   // backwards compat
                 isActive: creator.is_active,
             });
-        } catch {
+        } catch (metaErr: any) {
+            await recordTokenStatus(
+                creatorId, 'invalid',
+                metaErr?.response?.data?.error?.message || 'Token validation call to Meta failed.'
+            );
             res.json({
                 status: 'invalid',
                 message: 'Token validation failed — token may be expired or revoked.',
@@ -892,17 +1156,34 @@ router.post('/settings/token', async (req, res) => {
             return;
         }
 
-        // Update the token in the database. Scoped to the resolved creator: the unscoped
+        // Update the token in the database. Scoped to the session's tenant: the unscoped
         // `WHERE is_active = true` overwrote every active creator's token with this one.
-        const creatorId = await getActiveCreatorId();
-        if (!creatorId) {
-            res.status(404).json({ error: 'No active creator found to update.' });
+        //
+        // Encrypted on the way in. This is the write that migrates a legacy plaintext row —
+        // there is no separate migration step, the row converts the next time it is saved.
+        const creatorId = getTenantId(req);
+
+        // encryptSecret throws when the key is unset. Say so plainly — the generic catch below
+        // would render it as "Failed to update token", which points nowhere.
+        let encryptedToken: string;
+        try {
+            encryptedToken = encryptSecret(token);
+        } catch (keyErr) {
+            console.error('Token Encryption Error:', keyErr);
+            res.status(500).json({
+                error: 'TOKEN_ENCRYPTION_KEY is not configured. Generate one with `openssl rand -hex 32` and set it before saving a token.'
+            });
             return;
         }
 
         const result = await pool.query(
-            'UPDATE creators SET page_access_token = $1 WHERE id = $2 RETURNING instagram_page_id',
-            [token, creatorId]
+            `UPDATE creators
+                SET page_access_token = $1,
+                    token_status = 'valid',
+                    token_last_checked_at = NOW(),
+                    token_error = NULL
+              WHERE id = $2 RETURNING instagram_page_id`,
+            [encryptedToken, creatorId]
         );
 
         if (result.rows.length === 0) {
@@ -935,14 +1216,14 @@ router.post('/settings/token/extend', async (req, res) => {
             return;
         }
 
-        const creator = await getActiveCreator(['id', 'page_access_token']);
+        const creatorId = getTenantId(req);
+        const creator = await getTenant(creatorId, ['id', 'page_access_token']);
         if (!creator) {
             res.status(404).json({ error: 'No active creator found.' });
             return;
         }
 
         const currentToken = creator.page_access_token;
-        const creatorId = creator.id;
 
         const extendRes = await axios.get('https://graph.facebook.com/v21.0/oauth/access_token', {
             params: {
@@ -955,7 +1236,27 @@ router.post('/settings/token/extend', async (req, res) => {
 
         if (extendRes.data && extendRes.data.access_token) {
             const newToken = extendRes.data.access_token;
-            await pool.query('UPDATE creators SET page_access_token = $1 WHERE id = $2', [newToken, creatorId]);
+
+            // Same reason as in POST /settings/token: a missing encryption key must not be
+            // reported as "failed to extend", which sends you looking at Meta instead.
+            let encryptedToken: string;
+            try {
+                encryptedToken = encryptSecret(newToken);
+            } catch (keyErr) {
+                console.error('Token Encryption Error:', keyErr);
+                res.status(500).json({
+                    error: 'TOKEN_ENCRYPTION_KEY is not configured. Generate one with `openssl rand -hex 32` and set it before saving a token.'
+                });
+                return;
+            }
+
+            await pool.query(
+                `UPDATE creators
+                    SET page_access_token = $1, token_status = 'valid',
+                        token_last_checked_at = NOW(), token_error = NULL
+                  WHERE id = $2`,
+                [encryptedToken, creatorId]
+            );
             invalidateTenantCache();
             res.json({ message: 'Token successfully extended to a never-expiring token.' });
         } else {
@@ -969,10 +1270,17 @@ router.post('/settings/token/extend', async (req, res) => {
 
 // ─── Creators ───────────────────────────────────────────────────────────────
 
-router.get('/creators', async (_req, res) => {
+// Listed every creator in the deployment to every session. It is now the tenants this session
+// may act as — the same rows the switcher shows, in the shape the dashboard already expects.
+router.get('/creators', async (req, res) => {
     try {
+        const tenants = await listTenantsForSession(req.session!);
+        const ids = tenants.map(t => t.id);
+
         const result = await pool.query(
-            'SELECT id, instagram_page_id, is_active, created_at FROM creators ORDER BY created_at DESC'
+            `SELECT id, instagram_page_id, is_active, created_at
+               FROM creators WHERE id = ANY($1::uuid[]) ORDER BY created_at DESC`,
+            [ids]
         );
         res.json(result.rows);
     } catch (err) {
@@ -983,10 +1291,11 @@ router.get('/creators', async (_req, res) => {
 
 // ─── Posts Scheduler CRUD ────────────────────────────────────────────────────
 
-router.get('/posts/scheduled', async (_req, res) => {
+router.get('/posts/scheduled', async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT * FROM scheduled_posts ORDER BY scheduled_time DESC'
+            'SELECT * FROM scheduled_posts WHERE creator_id = $1 ORDER BY scheduled_time DESC',
+            [getTenantId(req)]
         );
         res.json(result.rows);
     } catch (err) {
@@ -1004,14 +1313,14 @@ router.post('/posts/scheduled', async (req, res) => {
             return;
         }
 
-        const creator = await getActiveCreator([
+        const creatorId = getTenantId(req);
+        const creator = await getTenant(creatorId, [
             'id', 'page_access_token', 'instagram_page_id', 'facebook_page_id'
         ]);
         if (!creator) {
             res.status(400).json({ error: 'No active creator account found.' });
             return;
         }
-        const creatorId = creator.id;
 
         // Insert into database
         const result = await pool.query(
@@ -1111,6 +1420,11 @@ router.put('/posts/scheduled/:id', async (req, res) => {
         const { id } = req.params;
         const { platform, post_type, caption, media_url, scheduled_time, cover_url } = req.body;
 
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+
         // cover_url was destructured and then dropped, so editing a reel silently kept its old
         // cover — which for a video fading up from black is the black frame 0.
         const result = await pool.query(
@@ -1122,8 +1436,8 @@ router.put('/posts/scheduled/:id', async (req, res) => {
                  scheduled_time = COALESCE($5, scheduled_time)::timestamp with time zone,
                  cover_url = COALESCE($6, cover_url),
                  status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
-             WHERE id = $7 RETURNING *`,
-            [platform, post_type, caption, media_url, scheduled_time, cover_url, id]
+             WHERE id = $7 AND creator_id = $8 RETURNING *`,
+            [platform, post_type, caption, media_url, scheduled_time, cover_url, id, getTenantId(req)]
         );
 
         if (result.rows.length === 0) {
@@ -1140,9 +1454,16 @@ router.put('/posts/scheduled/:id', async (req, res) => {
 router.delete('/posts/scheduled/:id', async (req, res) => {
     try {
         const { id } = req.params;
+
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+
+        // Unscoped, this deleted any tenant's scheduled post by id.
         const result = await pool.query(
-            'DELETE FROM scheduled_posts WHERE id = $1 RETURNING *',
-            [id]
+            'DELETE FROM scheduled_posts WHERE id = $1 AND creator_id = $2 RETURNING *',
+            [id, getTenantId(req)]
         );
 
         if (result.rows.length === 0) {
@@ -1156,9 +1477,11 @@ router.delete('/posts/scheduled/:id', async (req, res) => {
     }
 });
 
-router.get('/posts/live', async (_req, res) => {
+router.get('/posts/live', async (req, res) => {
     try {
-        const creator = await getActiveCreator(['page_access_token', 'instagram_page_id', 'facebook_page_id']);
+        const creator = await getTenant(getTenantId(req), [
+            'page_access_token', 'instagram_page_id', 'facebook_page_id'
+        ]);
 
         if (!creator) {
             res.json([]);
@@ -1276,9 +1599,11 @@ router.post('/upload', async (req, res) => {
         }
 
         // Insert into database
+        // `creator_id` arrived with v12. The row is still served unauthenticated by UUID —
+        // Meta cURLs it — so this is attribution and cleanup-on-delete, not access control.
         const result = await pool.query(
-            'INSERT INTO media_uploads (filename, mime_type, data) VALUES ($1, $2, $3) RETURNING id',
-            [filename, mime_type, buffer]
+            'INSERT INTO media_uploads (creator_id, filename, mime_type, data) VALUES ($1, $2, $3, $4) RETURNING id',
+            [getTenantId(req), filename, mime_type, buffer]
         );
 
         const newUploadId = result.rows[0].id;
@@ -1307,17 +1632,23 @@ router.get('/conversations', async (req, res) => {
         const page = parseInt(req.query.page as string) || 1;
         const offset = (page - 1) * limit;
 
+        const tenantId = getTenantId(req);
+
         const result = await pool.query(
-            `SELECT c.*, 
+            `SELECT c.*,
                     (SELECT text FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_text,
                     (SELECT direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_direction
              FROM conversations c
+             WHERE c.creator_id = $1
              ORDER BY c.last_message_at DESC
-             LIMIT $1 OFFSET $2`,
-            [limit, offset]
+             LIMIT $2 OFFSET $3`,
+            [tenantId, limit, offset]
         );
 
-        const countRes = await pool.query('SELECT COUNT(*)::int as total FROM conversations');
+        const countRes = await pool.query(
+            'SELECT COUNT(*)::int as total FROM conversations WHERE creator_id = $1',
+            [tenantId]
+        );
 
         res.json({
             data: result.rows,
@@ -1337,6 +1668,24 @@ router.get('/conversations', async (req, res) => {
 router.get('/conversations/:id/messages', async (req, res) => {
     try {
         const { id } = req.params;
+
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        // Ownership is checked on the conversation rather than filtered on the messages: this
+        // endpoint took a `conversation_id` from the URL and returned its whole history with no
+        // check at all, so any authenticated session could read any tenant's DMs by id.
+        const owner = await pool.query(
+            'SELECT 1 FROM conversations WHERE id = $1 AND creator_id = $2',
+            [id, getTenantId(req)]
+        );
+        if (owner.rows.length === 0) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
         const messages = await pool.query(
             'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT 100',
             [id]
@@ -1358,13 +1707,21 @@ router.post('/conversations/:id/messages', async (req, res) => {
             return;
         }
 
-        // Fetch conversation and creator credentials
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
+        const tenantId = getTenantId(req);
+
+        // Fetch conversation and creator credentials. Scoped to the tenant: unscoped, this
+        // sent a DM from another tenant's Instagram account, using their access token.
         const convRes = await pool.query(
-            `SELECT c.*, cr.page_access_token 
+            `SELECT c.*, cr.page_access_token
              FROM conversations c
              JOIN creators cr ON cr.id = c.creator_id
-             WHERE c.id = $1`,
-            [id]
+             WHERE c.id = $1 AND c.creator_id = $2`,
+            [id, tenantId]
         );
 
         if (convRes.rows.length === 0) {
@@ -1377,18 +1734,19 @@ router.post('/conversations/:id/messages', async (req, res) => {
         // Send message to Instagram
         console.log(`✉️ Manual response to ${conv.instagram_user_id}: "${text}"`);
         const metaPayload = { text };
-        await sendDirectMessage(conv.instagram_user_id, metaPayload, conv.page_access_token);
+        // Selected straight from `creators`, so it has not passed through the tenant service.
+        await sendDirectMessage(conv.instagram_user_id, metaPayload, decryptSecret(conv.page_access_token));
 
         // Save message to database & pause the bot to avoid fighting the user
         await pool.query(
-            `INSERT INTO messages (conversation_id, direction, message_type, text, raw_payload)
-             VALUES ($1, 'outbound', 'text', $2, $3)`,
-            [id, text, JSON.stringify(metaPayload)]
+            `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload)
+             VALUES ($1, $2, 'outbound', 'text', $3, $4)`,
+            [id, tenantId, text, JSON.stringify(metaPayload)]
         );
 
         await pool.query(
-            'UPDATE conversations SET last_message_at = NOW(), is_bot_active = false WHERE id = $1',
-            [id]
+            'UPDATE conversations SET last_message_at = NOW(), is_bot_active = false WHERE id = $1 AND creator_id = $2',
+            [id, tenantId]
         );
 
         res.json({ success: true, message: 'Message sent manually. Bot is paused for this thread.' });
@@ -1408,9 +1766,14 @@ router.put('/conversations/:id/toggle-bot', async (req, res) => {
             return;
         }
 
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Conversation not found.' });
+            return;
+        }
+
         const result = await pool.query(
-            'UPDATE conversations SET is_bot_active = $1 WHERE id = $2 RETURNING *',
-            [is_bot_active, id]
+            'UPDATE conversations SET is_bot_active = $1 WHERE id = $2 AND creator_id = $3 RETURNING *',
+            [is_bot_active, id, getTenantId(req)]
         );
 
         if (result.rows.length === 0) {
@@ -1427,13 +1790,9 @@ router.put('/conversations/:id/toggle-bot', async (req, res) => {
 
 // ─── AI Agent Settings ───────────────────────────────────────────────────────
 
-router.get('/settings/ai', async (_req, res) => {
+router.get('/settings/ai', async (req, res) => {
     try {
-        const creatorId = await getActiveCreatorId();
-        if (!creatorId) {
-            res.status(400).json({ error: 'No active creator found.' });
-            return;
-        }
+        const creatorId = getTenantId(req);
 
         const agentRes = await pool.query('SELECT * FROM ai_agents WHERE creator_id = $1', [creatorId]);
         if (agentRes.rows.length === 0) {
@@ -1463,11 +1822,7 @@ router.post('/settings/ai', async (req, res) => {
             return;
         }
 
-        const creatorId = await getActiveCreatorId();
-        if (!creatorId) {
-            res.status(400).json({ error: 'No active creator found.' });
-            return;
-        }
+        const creatorId = getTenantId(req);
 
         // `parseFloat(temperature) || 0.7` silently rewrote a deliberate 0 — the setting that
         // makes replies reproducible — into the default.
@@ -1511,11 +1866,7 @@ router.post('/settings/ai/test', async (req, res) => {
             return;
         }
 
-        const creatorId = await getActiveCreatorId();
-        if (!creatorId) {
-            res.status(400).json({ error: 'No active creator found.' });
-            return;
-        }
+        const creatorId = getTenantId(req);
 
         const mockConvId = '00000000-0000-0000-0000-000000000000';
 
@@ -1549,7 +1900,7 @@ router.post('/settings/ai/test', async (req, res) => {
 
 router.get('/settings/webhook-token', async (req, res) => {
     try {
-        const creator = await getActiveCreator(['webhook_verify_token']);
+        const creator = await getTenant(getTenantId(req), ['webhook_verify_token']);
         const dbToken: string | null = creator?.webhook_verify_token ?? null;
         const proto = req.headers['x-forwarded-proto'] || 'https';
 
@@ -1592,11 +1943,7 @@ router.post('/settings/webhook-token', async (req, res) => {
 
         // Scoped to one row on purpose: an unscoped UPDATE ... WHERE is_active
         // would overwrite every creator's token at once.
-        const creatorId = await getActiveCreatorId();
-        if (!creatorId) {
-            res.status(404).json({ error: 'No active creator account found.' });
-            return;
-        }
+        const creatorId = getTenantId(req);
 
         const { rowCount } = await pool.query(
             'UPDATE creators SET webhook_verify_token = $1 WHERE id = $2',

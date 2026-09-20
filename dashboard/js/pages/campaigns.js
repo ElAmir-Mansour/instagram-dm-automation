@@ -5,6 +5,12 @@ const CampaignsPage = {
     campaigns: [],
     pendingImport: null,
 
+    /** Tenant switch: cached campaigns and any half-finished CSV import. */
+    resetTenantState() {
+        this.campaigns = [];
+        this.pendingImport = null;
+    },
+
     async render() {
         const container = document.getElementById('page-container');
         container.innerHTML = UI.loader('Loading campaigns…');

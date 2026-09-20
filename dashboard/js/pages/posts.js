@@ -9,6 +9,15 @@ const PostsPage = {
     liveError: null,
     publishError: null,
 
+    /** Tenant switch: queue, live grid and error panels are all tenant-scoped. */
+    resetTenantState() {
+        this.posts = [];
+        this.livePosts = [];
+        this.scheduledError = null;
+        this.liveError = null;
+        this.publishError = null;
+    },
+
     /**
      * Platform → allowed post types.
      *  - `reel` is deliberately absent: `video` maps to /videos on Facebook and

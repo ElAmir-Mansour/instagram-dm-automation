@@ -26,7 +26,7 @@
             crossorigin="anonymous"></script>
 
     <!-- Styles -->
-    <link rel="stylesheet" href="/dashboard/css/styles.css?v=3.0">
+    <link rel="stylesheet" href="/dashboard/css/styles.css?v=3.1">
 </head>
 <body>
 
@@ -45,6 +45,13 @@
                     <p class="login-subtitle">Instagram DM Automation Dashboard</p>
                 </div>
                 <form id="login-form" class="login-form">
+                    <!-- Optional. Hidden by default so the shared-password path —
+                         still the operator's only way in — stays a one-field form. -->
+                    <div id="login-email-group" class="input-group hidden">
+                        <i data-lucide="mail" class="input-icon" aria-hidden="true"></i>
+                        <label class="sr-only" for="login-email">Email address</label>
+                        <input type="email" id="login-email" placeholder="you@example.com" autocomplete="username">
+                    </div>
                     <div class="input-group">
                         <i data-lucide="lock" class="input-icon" aria-hidden="true"></i>
                         <label class="sr-only" for="login-password">Dashboard password</label>
@@ -55,6 +62,8 @@
                         <i data-lucide="arrow-right" aria-hidden="true"></i>
                     </button>
                     <p id="login-error" class="login-error hidden" role="alert"></p>
+                    <button type="button" id="login-email-toggle" class="login-alt-link"
+                            data-action="app:revealEmailField">Sign in with an account</button>
                 </form>
             </div>
         </div>
@@ -108,6 +117,17 @@
                     <span>Settings</span>
                 </a>
 
+                <!-- Platform administration. Revealed by App.applyChrome() only when
+                     /auth/me reports role === 'platform_admin'. -->
+                <a href="#/tenants" class="nav-item hidden" data-page="tenants" data-admin-only>
+                    <i data-lucide="building-2" aria-hidden="true"></i>
+                    <span>Tenants</span>
+                </a>
+                <a href="#/users" class="nav-item hidden" data-page="users" data-admin-only>
+                    <i data-lucide="users" aria-hidden="true"></i>
+                    <span>Users</span>
+                </a>
+
             </div>
 
             <div class="sidebar-footer">
@@ -134,6 +154,9 @@
                     </div>
                 </div>
                 <div class="header-right">
+                    <!-- Tenant switcher. Rendered by App.renderTenantSwitcher(), and
+                         hidden entirely unless this account can reach 2+ tenants. -->
+                    <div id="tenant-switcher" class="tenant-switcher hidden"></div>
                     <!-- Driven by real API outcomes via UI.setSystemStatus(); was static markup. -->
                     <div id="status-indicator" class="status-badge status-online" role="status" aria-live="polite" aria-label="System Online">
                         <span class="status-dot" aria-hidden="true"></span>
@@ -160,17 +183,19 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/dashboard/js/api.js?v=3.0"></script>
-    <script src="/dashboard/js/components.js?v=3.0"></script>
+    <script src="/dashboard/js/api.js?v=3.1"></script>
+    <script src="/dashboard/js/components.js?v=3.1"></script>
     <script src="/dashboard/js/pages/overview.js?v=3.0"></script>
-    <script src="/dashboard/js/pages/campaigns.js?v=3.0"></script>
-    <script src="/dashboard/js/pages/posts.js?v=3.0"></script>
-    <script src="/dashboard/js/pages/inbox.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/campaigns.js?v=3.1"></script>
+    <script src="/dashboard/js/pages/posts.js?v=3.1"></script>
+    <script src="/dashboard/js/pages/inbox.js?v=3.1"></script>
     <script src="/dashboard/js/pages/ai_settings.js?v=3.0"></script>
     <script src="/dashboard/js/pages/analytics.js?v=3.0"></script>
-    <script src="/dashboard/js/pages/activity.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/activity.js?v=3.1"></script>
     <script src="/dashboard/js/pages/settings.js?v=3.0"></script>
-    <script src="/dashboard/js/app.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/tenants.js?v=3.1"></script>
+    <script src="/dashboard/js/pages/users.js?v=3.1"></script>
+    <script src="/dashboard/js/app.js?v=3.1"></script>
 
 </body>
 </html>

@@ -86,6 +86,20 @@ const InboxPage = {
         this.threads = [];
     },
 
+    /**
+     * Tenant switch: this thread list, the open thread and every rendered
+     * message id belong to the previous tenant's token. Keeping any of it is
+     * how tenant A's conversation ends up under tenant B's name.
+     */
+    resetTenantState() {
+        this.selectedConversationId = null;
+        this.chatShellThreadId = null;
+        this.renderedMessageIds = new Set();
+        this.lastMessageStamp = null;
+        this.threads = [];
+        this.searchTerm = '';
+    },
+
     startPolling() {
         this.stopPolling();
         this.pollInterval = setInterval(() => {
