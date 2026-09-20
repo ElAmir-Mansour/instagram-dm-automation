@@ -7,9 +7,14 @@
  * not quietly become a copy of the implementation.
  */
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Request, Response } from 'express';
-import { consumeDownloadToken, createDownloadToken, createSession, requireAuth } from './auth.js';
+import { consumeDownloadToken, createDownloadToken, createSession, requireAuth, verifySession } from './auth.js';
+
+/** A representative session. Every test that needs a token starts from this. */
+const SESSION = { userId: 'u-1', role: 'platform_admin' as const, tenantId: 't-1', tokenVersion: 1 };
+const newToken = () => createSession(SESSION);
 
 const PASSWORD = 'dashboard-password';
 const APP_SECRET = 'meta-app-secret';
@@ -60,53 +65,53 @@ describe('session tokens', () => {
     });
 
     it('accepts a freshly signed token', () => {
-        const result = runAuth(`Bearer ${createSession()}`);
+        const result = runAuth(`Bearer ${newToken()}`);
 
         assert.equal(result.nextCalls, 1);
         assert.equal(result.status, null);
     });
 
     it('rejects a tampered signature', () => {
-        const [timestamp, signature] = createSession().split('.') as [string, string];
+        const [body, signature] = newToken().split('.') as [string, string];
         const flipped = signature.startsWith('a') ? `b${signature.slice(1)}` : `a${signature.slice(1)}`;
 
-        const result = runAuth(`Bearer ${timestamp}.${flipped}`);
+        const result = runAuth(`Bearer ${body}.${flipped}`);
         assert.equal(result.status, 401);
         assert.equal(result.nextCalls, 0);
     });
 
-    it('rejects a signature lifted onto a different timestamp', () => {
-        const [timestamp, signature] = createSession().split('.') as [string, string];
-        const other = (Number(timestamp) - 1000).toString();
+    it('rejects a signature lifted onto a different body', () => {
+        const [body, signature] = newToken().split('.') as [string, string];
+        const other = (Number(body) - 1000).toString();
 
         assert.equal(runAuth(`Bearer ${other}.${signature}`).status, 401);
     });
 
     it('rejects a token older than the 24h TTL', () => {
-        // Expiry is checked before the signature, so an out-of-date timestamp reaches the TTL
+        // Expiry is checked before the signature, so an out-of-date body reaches the TTL
         // guard regardless of what the signature says.
-        const [timestamp, signature] = createSession().split('.') as [string, string];
-        const stale = (Number(timestamp) - 25 * 60 * 60 * 1000).toString();
+        const [body, signature] = newToken().split('.') as [string, string];
+        const stale = (Number(body) - 25 * 60 * 60 * 1000).toString();
 
         assert.equal(runAuth(`Bearer ${stale}.${signature}`).status, 401);
     });
 
     it('rejects a token signed under a different secret', () => {
-        const token = createSession();
+        const token = newToken();
         process.env.DASHBOARD_PASSWORD = 'a-different-password';
 
         assert.equal(runAuth(`Bearer ${token}`).status, 401);
     });
 
     it('rejects a token signed before META_APP_SECRET was rotated', () => {
-        const token = createSession();
+        const token = newToken();
         process.env.META_APP_SECRET = 'rotated-app-secret';
 
         assert.equal(runAuth(`Bearer ${token}`).status, 401);
     });
 
     it('requires a real Bearer prefix', () => {
-        const token = createSession();
+        const token = newToken();
 
         assert.equal(runAuth().status, 401, 'no header at all');
         assert.equal(runAuth(token).status, 401, 'bare token');
@@ -129,11 +134,11 @@ describe('session tokens', () => {
         // The old `|| 'admin'` / `|| 'salt'` fallbacks meant a deployment missing either
         // variable signed every session with a key published in this repo.
         delete process.env.DASHBOARD_PASSWORD;
-        assert.throws(() => createSession(), /DASHBOARD_PASSWORD and META_APP_SECRET/);
+        assert.throws(() => createSession(SESSION), /DASHBOARD_PASSWORD and META_APP_SECRET/);
 
         process.env.DASHBOARD_PASSWORD = PASSWORD;
         delete process.env.META_APP_SECRET;
-        assert.throws(() => createSession(), /DASHBOARD_PASSWORD and META_APP_SECRET/);
+        assert.throws(() => createSession(SESSION), /DASHBOARD_PASSWORD and META_APP_SECRET/);
     });
 });
 
@@ -203,5 +208,56 @@ describe('one-shot download tokens', () => {
             }, `token ${JSON.stringify(token)}`);
             assert.equal(accepted, false, `token ${JSON.stringify(token)}`);
         }
+    });
+});
+
+describe('session payload', () => {
+    // This suite sits outside the file's other describe blocks, so it needs its own env
+    // setup — signing throws without both secrets, by design.
+    let savedPassword: string | undefined;
+    let savedSecret: string | undefined;
+
+    beforeEach(() => {
+        savedPassword = process.env.DASHBOARD_PASSWORD;
+        savedSecret = process.env.META_APP_SECRET;
+        setEnv('DASHBOARD_PASSWORD', PASSWORD);
+        setEnv('META_APP_SECRET', APP_SECRET);
+    });
+
+    afterEach(() => {
+        setEnv('DASHBOARD_PASSWORD', savedPassword);
+        setEnv('META_APP_SECRET', savedSecret);
+    });
+
+    it('round-trips identity, role and tenant', () => {
+        const payload = verifySession(newToken());
+        assert.ok(payload);
+        assert.equal(payload.userId, 'u-1');
+        assert.equal(payload.role, 'platform_admin');
+        assert.equal(payload.tenantId, 't-1');
+        assert.equal(payload.tokenVersion, 1);
+    });
+
+    it('rejects a token whose payload was edited to escalate role', () => {
+        // The whole point of signing the payload: swapping 'user' for 'platform_admin'
+        // must not survive verification.
+        const token = createSession({ ...SESSION, role: 'user' });
+        const [body, signature] = token.split('.') as [string, string];
+        const tampered = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+        tampered.role = 'platform_admin';
+        const forged = Buffer.from(JSON.stringify(tampered)).toString('base64url');
+        assert.equal(verifySession(`${forged}.${signature}`), null);
+    });
+
+    it('rejects a token dated in the future', () => {
+        // Not forgeable, but a clock-skew bug must not mint something outliving the TTL.
+        const body = Buffer.from(JSON.stringify({ ...SESSION, iat: Date.now() + 10 * 60_000 }))
+            .toString('base64url');
+        const sig = createHmac('sha256', `${PASSWORD}:${APP_SECRET}`).update(body).digest('hex');
+        assert.equal(verifySession(`${body}.${sig}`), null);
+    });
+
+    it('returns null rather than throwing when the payload is not JSON', () => {
+        assert.equal(verifySession('not-base64-json.deadbeef'), null);
     });
 });

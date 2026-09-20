@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { pool } from '../config/db.js';
-import { createSession, requireAuth, createDownloadToken, consumeDownloadToken } from '../middleware/auth.js';
+import { createLegacySession, requireAuth, createDownloadToken, consumeDownloadToken } from '../middleware/auth.js';
 import axios from 'axios';
 import { sendDirectMessage, publishFacebookPost, publishInstagramPost, API_VERSION } from '../services/instagram.js';
 import { generateAiResponse } from '../services/ai.js';
@@ -112,7 +112,7 @@ function recordLoginFailure(ip: string): void {
     }
 }
 
-router.post('/auth/login', (req, res) => {
+router.post('/auth/login', async (req, res) => {
     const ip = clientIp(req);
     const retryAfter = loginRetryAfter(ip);
     if (retryAfter > 0) {
@@ -141,7 +141,13 @@ router.post('/auth/login', (req, res) => {
     try {
         // createSession throws when a signing secret is missing rather than falling back to a
         // published default. Keep that a JSON 500 — the dashboard only parses JSON.
-        const token = createSession();
+        //
+        // This is the pre-tenancy shared-password login. It mints a platform_admin session
+        // bound to whichever creator is active, which is exactly what every call site used to
+        // assume implicitly. Once user accounts exist this becomes one of two login paths,
+        // not the only one.
+        const tenantId = await getActiveCreatorId();
+        const token = createLegacySession(tenantId);
         res.json({ token, expiresIn: '24h' });
     } catch (err) {
         console.error('Login Error:', err);

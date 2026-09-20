@@ -35,46 +35,96 @@ function getSecret(): string {
     return `${password}:${appSecret}`;
 }
 
-/** Create a stateless signed token */
-export function createSession(): string {
-    const timestamp = Date.now().toString();
-    const signature = crypto
-        .createHmac('sha256', getSecret())
-        .update(timestamp)
-        .digest('hex');
-    return `${timestamp}.${signature}`;
+/**
+ * What a session actually asserts.
+ *
+ * The old token payload was a bare timestamp — no identity at all. Every request was
+ * "somebody who knew the one password", which is why ~13 call sites had to guess the tenant
+ * with `SELECT ... WHERE is_active = true LIMIT 1`. Carrying the identity is what lets that
+ * guess become a lookup.
+ */
+export interface SessionPayload {
+    /** User row id. `null` for a legacy DASHBOARD_PASSWORD session (see createLegacySession). */
+    userId: string | null;
+    role: 'platform_admin' | 'user';
+    /** The tenant this session is currently acting as. */
+    tenantId: string | null;
+    /** Mirrors users.token_version; bumping that column revokes every token a user holds. */
+    tokenVersion: number;
+    /** Issued-at, unix ms. */
+    iat: number;
 }
 
-/** Verify a stateless signed token */
-function verifyToken(token: string): boolean {
-    const parts = token.split('.');
-    if (parts.length !== 2) return false;
-
-    const timestamp = parts[0]!;
-    const signature = parts[1]!;
-    const ts = parseInt(timestamp, 10);
-    if (isNaN(ts)) return false;
-
-    // Check expiry
-    if (Date.now() - ts > SESSION_TTL) return false;
-
-    // Verify signature
-    const expectedSignature = crypto
-        .createHmac('sha256', getSecret())
-        .update(timestamp)
-        .digest('hex');
-
-    try {
-        return crypto.timingSafeEqual(
-            Buffer.from(signature, 'hex'),
-            Buffer.from(expectedSignature, 'hex')
-        );
-    } catch {
-        return false;
+declare global {
+    // eslint-disable-next-line @typescript-eslint/no-namespace
+    namespace Express {
+        interface Request {
+            session?: SessionPayload;
+        }
     }
 }
 
-/** Auth middleware — verifies the stateless token */
+function sign(data: string): string {
+    return crypto.createHmac('sha256', getSecret()).update(data).digest('hex');
+}
+
+/** Create a stateless signed token carrying who this is and which tenant they are acting as. */
+export function createSession(payload: Omit<SessionPayload, 'iat'>): string {
+    const body = Buffer.from(JSON.stringify({ ...payload, iat: Date.now() })).toString('base64url');
+    return `${body}.${sign(body)}`;
+}
+
+/**
+ * A session for the pre-tenancy `DASHBOARD_PASSWORD` login.
+ *
+ * Kept deliberately: this is a live system, and removing the only way in before user accounts
+ * exist would lock the operator out of their own dashboard. It resolves to platform_admin
+ * against whichever creator is active, exactly matching the old behaviour.
+ */
+export function createLegacySession(tenantId: string | null): string {
+    return createSession({ userId: null, role: 'platform_admin', tenantId, tokenVersion: 0 });
+}
+
+/** Verify a token and return its payload, or null. */
+export function verifySession(token: string): SessionPayload | null {
+    const parts = token.split('.');
+    if (parts.length !== 2) return null;
+
+    const body = parts[0]!;
+    const signature = parts[1]!;
+
+    let expected: string;
+    try {
+        expected = sign(body);
+    } catch {
+        return null; // signing secret unavailable — treat as unauthenticated, never as valid
+    }
+
+    try {
+        if (!crypto.timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex'))) {
+            return null;
+        }
+    } catch {
+        return null; // malformed hex — Buffer.from silently truncates, so length must be checked by timingSafeEqual
+    }
+
+    let payload: SessionPayload;
+    try {
+        payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    } catch {
+        return null;
+    }
+
+    if (typeof payload?.iat !== 'number') return null;
+    // Reject future-dated tokens as well as expired ones. Not forgeable, but a clock skew
+    // bug should not mint something that outlives the TTL.
+    const age = Date.now() - payload.iat;
+    if (age > SESSION_TTL || age < -60_000) return null;
+
+    return payload;
+}
+
+/** Auth middleware — verifies the token and attaches the session. */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
     const authHeader = req.headers.authorization;
 
@@ -87,11 +137,13 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
         return;
     }
 
-    if (!verifyToken(token)) {
+    const session = verifySession(token);
+    if (!session) {
         res.status(401).json({ error: 'Session expired or invalid — please login again.' });
         return;
     }
 
+    req.session = session;
     next();
 }
 

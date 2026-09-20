@@ -81,3 +81,107 @@ export async function getCreatorByPageId(...pageIds: (string | undefined)[]): Pr
 export function invalidateTenantCache(): void {
     cachedId = null;
 }
+
+// ─── Tenant context ─────────────────────────────────────────────────────────────────────
+//
+// Everything above resolves "the one active creator". Everything below resolves "the tenant
+// THIS request is acting as". The two coexist during the transition: routes migrate to
+// `getTenantId(req)` one at a time, and once none are left the functions above can go.
+
+import type { Request, Response, NextFunction } from 'express';
+
+export interface TenantSummary {
+    id: string;
+    name: string | null;
+    instagram_page_id: string | null;
+    facebook_page_id: string | null;
+    token_status: string | null;
+}
+
+/**
+ * The tenant this request is acting as. Throws rather than falling back, because a silent
+ * fallback to "the first active creator" is precisely the bug this whole layer exists to
+ * remove — it would look like it worked right up until it served the wrong customer's data.
+ */
+export function getTenantId(req: Request): string {
+    const id = req.session?.tenantId;
+    if (!id) {
+        throw new Error('No tenant in session — requireAuth and resolveTenant must run first.');
+    }
+    return id;
+}
+
+/**
+ * Confirm the session may act as the tenant it claims.
+ *
+ * A platform_admin may act as any tenant (this is what powers the tenant switcher). Everyone
+ * else must hold a membership. Verified against the database rather than trusted from the
+ * token, so revoking a membership takes effect immediately instead of at token expiry.
+ */
+export async function assertTenantAccess(
+    session: { userId: string | null; role: string; tenantId: string | null }
+): Promise<boolean> {
+    if (!session.tenantId) return false;
+    if (session.role === 'platform_admin') return true;
+    if (!session.userId) return false;
+
+    const res = await pool.query(
+        `SELECT 1 FROM memberships WHERE user_id = $1 AND creator_id = $2 LIMIT 1`,
+        [session.userId, session.tenantId]
+    );
+    return res.rows.length > 0;
+}
+
+/** Express middleware. Run after requireAuth. */
+export async function resolveTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
+    const session = req.session;
+    if (!session) {
+        res.status(401).json({ error: 'Unauthorized.' });
+        return;
+    }
+
+    // A legacy shared-password session predates the concept of choosing a tenant, so it
+    // adopts whichever creator is active — the same thing every call site used to assume.
+    if (!session.tenantId) {
+        session.tenantId = await getActiveCreatorId();
+    }
+
+    if (!session.tenantId) {
+        res.status(409).json({
+            error: 'No creator account is configured yet. Add one before using the dashboard.'
+        });
+        return;
+    }
+
+    if (!(await assertTenantAccess(session))) {
+        // Deliberately 404, not 403: confirming a tenant exists is itself a disclosure.
+        res.status(404).json({ error: 'Not found.' });
+        return;
+    }
+
+    next();
+}
+
+/** Tenants this session may act as — the tenant switcher's data source. */
+export async function listTenantsForSession(
+    session: { userId: string | null; role: string }
+): Promise<TenantSummary[]> {
+    if (session.role === 'platform_admin') {
+        const res = await pool.query(
+            `SELECT id, name, instagram_page_id, facebook_page_id, token_status
+               FROM creators WHERE is_active = true ORDER BY name NULLS LAST, created_at`
+        );
+        return res.rows;
+    }
+    if (!session.userId) return [];
+
+    const res = await pool.query(
+        `SELECT c.id, c.name, c.instagram_page_id, c.facebook_page_id, c.token_status
+           FROM creators c
+           JOIN memberships m ON m.creator_id = c.id
+          WHERE m.user_id = $1 AND c.is_active = true
+          ORDER BY c.name NULLS LAST, c.created_at`,
+        [session.userId]
+    );
+    return res.rows;
+}
