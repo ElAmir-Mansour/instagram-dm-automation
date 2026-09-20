@@ -315,6 +315,7 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
 }
 .status-pill.sent { background: var(--success-bg); color: var(--success); }
 .status-pill.failed { background: var(--danger-bg); color: var(--danger); }
+.status-pill.user_blocked_dms { background: var(--warning-bg); color: #ff8c00; } /* Orange styling to differentiate from system failure */
 .status-pill.pending { background: var(--warning-bg); color: var(--warning); }
 
 .username-link { color: var(--accent); font-weight: 500; }
