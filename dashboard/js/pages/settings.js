@@ -7,7 +7,10 @@ const SettingsPage = {
         container.innerHTML = UI.loader();
 
         try {
-            const tokenStatus = await API.getTokenStatus();
+            const [tokenStatus, webhookToken] = await Promise.all([
+                API.getTokenStatus(),
+                API.getWebhookToken().catch(() => ({ configuredInDatabase: false, configuredInEnv: false })),
+            ]);
 
             const isValid = tokenStatus.status === 'valid';
             const expiresAt = tokenStatus.expiresAt ? new Date(tokenStatus.expiresAt) : null;
@@ -91,12 +94,42 @@ const SettingsPage = {
                 </div>
 
                 <div class="settings-section">
+                    <h2 class="settings-title">Webhook Verify Token</h2>
+                    <div class="settings-card glass-card">
+                        <div class="token-status" style="margin-bottom:16px;">
+                            <span class="status-pill ${webhookToken.configuredInDatabase ? 'sent' : 'failed'}">
+                                ${webhookToken.configuredInDatabase ? 'Configured' : 'Not set'}
+                            </span>
+                            ${webhookToken.configuredInDatabase
+                                ? `<span style="font-size:12px;color:var(--text-muted);margin-left:10px;font-family:monospace;">${webhookToken.preview} (${webhookToken.length} chars)</span>`
+                                : ''}
+                        </div>
+                        <p style="font-size:12px;color:var(--text-secondary);line-height:1.6;margin-bottom:4px;">
+                            Meta checks this value every time you create a webhook subscription or change its callback URL.
+                            It is a secret you invent — it just has to match on both sides.
+                        </p>
+                        <p style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:16px;">
+                            Saving here takes effect immediately. No redeploy, and it does not depend on the
+                            <code style="font-size:11px;">META_VERIFY_TOKEN</code> environment variable
+                            ${webhookToken.configuredInEnv ? '(currently also set in the environment).' : '(currently not set in the environment).'}
+                        </p>
+                        <form id="webhook-token-form" onsubmit="SettingsPage.handleWebhookTokenUpdate(event)">
+                            <input class="form-input" name="token" type="text" autocomplete="off" spellcheck="false"
+                                   placeholder="e.g. my_webhook_secret_2026" style="font-family:monospace;font-size:12px;" required>
+                            <button type="submit" class="btn btn-primary btn-sm" style="margin-top:12px;">
+                                <i data-lucide="shield-check"></i> Save Verify Token
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="settings-section">
                     <h2 class="settings-title">Account Info</h2>
                     <div class="settings-card glass-card">
                         <div class="token-info" style="margin-bottom:8px;">Instagram Page ID: <span>${tokenStatus.instagramPageId || tokenStatus.pageId || '—'}</span></div>
                         <div class="token-info" style="margin-bottom:8px;">Facebook Page ID: <span>${tokenStatus.facebookPageId || '—'}</span></div>
                         <div class="token-info" style="margin-bottom:8px;">Status: <span>${tokenStatus.isActive ? '🟢 Active' : '🔴 Inactive'}</span></div>
-                        <div class="token-info">Webhook URL: <span>https://msg-response-auto.vercel.app/webhook</span></div>
+                        <div class="token-info">Webhook URL: <span>${webhookToken.webhookUrl || (location.origin + '/webhook')}</span></div>
                     </div>
                 </div>
             `;
@@ -105,6 +138,21 @@ const SettingsPage = {
         } catch (err) {
             container.innerHTML = `<div class="empty-state"><i data-lucide="alert-circle"></i><h3>Error</h3><p>${err.message}</p></div>`;
             lucide.createIcons({ nodes: [container] });
+        }
+    },
+
+    async handleWebhookTokenUpdate(e) {
+        e.preventDefault();
+        const form = new FormData(e.target);
+        const token = (form.get('token') || '').trim();
+        if (!token) return;
+
+        try {
+            const result = await API.updateWebhookToken(token);
+            UI.toast(result.message || 'Verify token saved.', 'success');
+            this.render();
+        } catch (err) {
+            UI.toast(err.message || 'Failed to save verify token.', 'error');
         }
     },
 
