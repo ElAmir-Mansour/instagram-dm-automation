@@ -1237,4 +1237,74 @@ router.post('/settings/ai/test', async (req, res) => {
     }
 });
 
+// ─── Webhook Verify Token ───────────────────────────────────────────────────
+// Meta re-checks this value every time a webhook subscription is created or its
+// callback URL changes. Keeping it in the database means it can be rotated from
+// the dashboard and takes effect on the next request — no redeploy, and no
+// dependency on an environment variable that can silently drift or be emptied.
+
+router.get('/settings/webhook-token', async (req, res) => {
+    try {
+        const { rows } = await pool.query(
+            'SELECT webhook_verify_token FROM creators WHERE is_active = true ORDER BY created_at LIMIT 1'
+        );
+        const dbToken: string | null = rows[0]?.webhook_verify_token ?? null;
+        const proto = req.headers['x-forwarded-proto'] || 'https';
+
+        res.json({
+            configuredInDatabase: Boolean(dbToken),
+            configuredInEnv: Boolean(process.env.META_VERIFY_TOKEN),
+            // Never return the token itself. A masked preview is enough to tell
+            // whether the saved value is the one you think it is.
+            preview: dbToken
+                ? `${dbToken.slice(0, 3)}${'•'.repeat(Math.max(dbToken.length - 5, 3))}${dbToken.slice(-2)}`
+                : null,
+            length: dbToken ? dbToken.length : 0,
+            webhookUrl: `${proto}://${req.get('host')}/webhook`,
+        });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message || 'Failed to read verify token.' });
+    }
+});
+
+router.post('/settings/webhook-token', async (req, res) => {
+    try {
+        const raw = req.body?.token;
+        if (typeof raw !== 'string') {
+            res.status(400).json({ error: 'A verify token string is required.' });
+            return;
+        }
+        const token = raw.trim();
+
+        if (token.length < 8) {
+            res.status(400).json({ error: 'Verify token must be at least 8 characters.' });
+            return;
+        }
+        if (/\s/.test(token)) {
+            res.status(400).json({ error: 'Verify token cannot contain spaces or line breaks.' });
+            return;
+        }
+
+        // Scoped to one row on purpose: an unscoped UPDATE ... WHERE is_active
+        // would overwrite every creator's token at once.
+        const { rowCount } = await pool.query(
+            `UPDATE creators SET webhook_verify_token = $1
+             WHERE id = (SELECT id FROM creators WHERE is_active = true ORDER BY created_at LIMIT 1)`,
+            [token]
+        );
+
+        if (!rowCount) {
+            res.status(404).json({ error: 'No active creator account found.' });
+            return;
+        }
+
+        res.json({
+            success: true,
+            message: 'Verify token saved. Paste the same value into Meta\u2019s webhook configuration — it works immediately, no redeploy needed.',
+        });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message || 'Failed to save verify token.' });
+    }
+});
+
 export default router;

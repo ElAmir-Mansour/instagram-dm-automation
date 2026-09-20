@@ -65,6 +65,8 @@ const API = {
     // Settings
     getTokenStatus: () => API.request('/settings/token/status'),
     updateToken: (token) => API.request('/settings/token', { method: 'POST', body: JSON.stringify({ token }) }),
+    getWebhookToken: () => API.request('/settings/webhook-token'),
+    updateWebhookToken: (token) => API.request('/settings/webhook-token', { method: 'POST', body: JSON.stringify({ token }) }),
     getCreators: () => API.request('/creators'),
 
     // Posts Scheduler
