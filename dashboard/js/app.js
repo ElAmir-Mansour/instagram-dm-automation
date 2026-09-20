@@ -345,9 +345,9 @@ const App = {
                 </p>
                 ${admin ? html`
                     <ol class="setup-steps">
-                        <li>Create the tenant with its Instagram and Facebook page IDs.</li>
-                        <li>Paste the page access token (Settings can do it later too).</li>
-                        <li>Point the Meta webhook callback at <code>${location.origin}/webhook</code> and set the verify token in Settings.</li>
+                        <li>Create the tenant with its Instagram page ID (required) and its Facebook page ID.</li>
+                        <li>Paste the page access token — the server requires it and encrypts it before storing.</li>
+                        <li>Point the Meta webhook callback at <code>${location.origin}/webhook</code>, using the verify token from the same form.</li>
                     </ol>
                     <button type="button" class="btn btn-primary" data-action="tenants:showFirstRunCreateModal">
                         <i data-lucide="plus" aria-hidden="true"></i> Create the first tenant

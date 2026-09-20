@@ -1781,3 +1781,13 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
     .tenants-table th:nth-child(7), .tenants-table td:nth-child(7),
     .tenants-table th:nth-child(8), .tenants-table td:nth-child(8) { display: none; }
 }
+
+/* Below ~560px the header cannot hold the menu button, the page title, the
+   tenant switcher and a spelled-out status badge. The badge keeps its dot and
+   its aria-label (set by UI.setSystemStatus), and the page title gets the room:
+   on a phone, "which tenant am I in and what page is this" beats a label that
+   repeats what the dot already says. */
+@media (max-width: 560px) {
+    .status-badge [data-status-label] { display: none; }
+    .status-badge { padding: 8px 10px; }
+}

@@ -62,7 +62,7 @@ const UsersPage = {
                             <th scope="col">Role</th>
                             <th scope="col">Last login</th>
                             <th scope="col">Tenants</th>
-                            <th scope="col"><span class="sr-only">Actions</span></th>
+                            <th scope="col" aria-label="Actions"></th>
                         </tr></thead>
                         <tbody>
                             ${users.map((u) => this.renderRow(u))}
@@ -99,7 +99,7 @@ const UsersPage = {
                 <td class="user-tenants">
                     ${Array.isArray(memberships) && memberships.length > 0
                         ? memberships.map((m) => html`<span class="scope-chip" dir="auto">${
-                            (typeof m === 'string' ? m : (m.tenant_name || m.name || m.tenant_id || m.tenantId || '—'))
+                            (typeof m === 'string' ? m : (m.name || m.tenant_name || m.creator_id || m.tenant_id || '—'))
                           }</span>`)
                         : html`<span class="text-muted-sm">None</span>`}
                 </td>
@@ -121,7 +121,26 @@ const UsersPage = {
 
     // ─── Actions ─────────────────────────────────────────────────────────────
 
-    showCreateModal() {
+    /**
+     * Tenant options for the two modals. Falls back to the session's own tenant
+     * list so a modal still opens if /admin/tenants is momentarily unavailable.
+     */
+    async loadTenantOptions() {
+        try {
+            const result = await API.getAdminTenants();
+            return Array.isArray(result) ? result : (result && result.tenants) || [];
+        } catch {
+            return (App.session && App.session.tenants) || [];
+        }
+    },
+
+    /**
+     * The create call also takes an optional first membership. A user with no
+     * membership can sign in and reach nothing, so granting one here is worth
+     * the extra field.
+     */
+    async showCreateModal() {
+        const tenants = await this.loadTenantOptions();
         UI.showModal(html`
             <div class="modal-header">
                 <h2 class="modal-title">New User</h2>
@@ -148,6 +167,13 @@ const UsersPage = {
                         <option value="platform_admin">Platform admin — every tenant, plus this page</option>
                     </select>
                 </div>
+                <div class="form-group">
+                    <label class="form-label" for="user-tenant">First tenant <span class="label-optional">(optional)</span></label>
+                    <select class="form-input" id="user-tenant" name="creator_id">
+                        <option value="" selected>None — grant access later</option>
+                        ${tenants.map((t) => html`<option value="${this.pick(t, 'id', 'creator_id')}">${this.pick(t, 'name') || this.pick(t, 'id')}</option>`)}
+                    </select>
+                </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
                     <button type="submit" class="btn btn-primary"><i data-lucide="user-plus" aria-hidden="true"></i> Create</button>
@@ -162,11 +188,14 @@ const UsersPage = {
         const submit = form.querySelector('button[type="submit"]');
         if (submit) submit.disabled = true;
         try {
-            await API.createAdminUser({
+            const payload = {
                 email: (data.get('email') || '').toString().trim(),
                 password: (data.get('password') || '').toString(),
                 role: (data.get('role') || 'user').toString(),
-            });
+            };
+            const creatorId = (data.get('creator_id') || '').toString();
+            if (creatorId) payload.creator_id = creatorId;
+            await API.createAdminUser(payload);
             UI.closeModal();
             UI.toast('User created.');
             this.render();
@@ -180,15 +209,7 @@ const UsersPage = {
         const u = this.users.find((x) => String(this.pick(x, 'id', 'user_id')) === String(id));
         const email = (u && this.pick(u, 'email')) || '';
 
-        // Prefer the full tenant list; fall back to the session's own tenants so
-        // the modal still works if /admin/tenants is unavailable.
-        let tenants = [];
-        try {
-            const result = await API.getAdminTenants();
-            tenants = Array.isArray(result) ? result : (result && result.tenants) || [];
-        } catch {
-            tenants = (App.session && App.session.tenants) || [];
-        }
+        const tenants = await this.loadTenantOptions();
 
         UI.showModal(html`
             <div class="modal-header">
@@ -201,18 +222,19 @@ const UsersPage = {
                 <p class="form-hint" style="margin-bottom:16px;" dir="auto">${email}</p>
                 <div class="form-group">
                     <label class="form-label" for="membership-tenant">Tenant</label>
-                    <select class="form-input" id="membership-tenant" name="tenantId" required>
+                    <select class="form-input" id="membership-tenant" name="creator_id" required>
                         ${tenants.length === 0
                             ? html`<option value="">No tenants available</option>`
-                            : tenants.map((t) => html`<option value="${this.pick(t, 'id', 'tenant_id', 'creator_id')}">${this.pick(t, 'name', 'display_name') || this.pick(t, 'id')}</option>`)}
+                            : tenants.map((t) => html`<option value="${this.pick(t, 'id', 'creator_id')}">${this.pick(t, 'name') || this.pick(t, 'id')}</option>`)}
                     </select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="membership-role">Role in this tenant</label>
                     <select class="form-input" id="membership-role" name="role">
-                        <option value="member" selected>Member</option>
-                        <option value="admin">Admin</option>
+                        <option value="owner" selected>Owner</option>
+                        <option value="member">Member</option>
                     </select>
+                    <p class="form-hint">A label only — access is the membership itself, not this value.</p>
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
@@ -228,10 +250,10 @@ const UsersPage = {
         event.preventDefault();
         const id = form.dataset.id;
         const data = new FormData(form);
-        const tenantId = (data.get('tenantId') || '').toString();
-        if (!tenantId) return;
+        const creatorId = (data.get('creator_id') || '').toString();
+        if (!creatorId) return;
         try {
-            await API.createUserMembership(id, { tenantId, role: (data.get('role') || 'member').toString() });
+            await API.createUserMembership(id, { creator_id: creatorId, role: (data.get('role') || 'owner').toString() });
             UI.closeModal();
             UI.toast('Access granted.');
             this.render();
@@ -255,11 +277,19 @@ const UsersPage = {
     },
 };
 
+/** The delegated dispatcher only catches synchronous throws, so async handlers
+ *  surface their own failures rather than dying in an unhandled rejection. */
+const reportFailure = (promise) => {
+    if (promise && typeof promise.catch === 'function') {
+        promise.catch((err) => UI.toast((err && err.message) || 'Something went wrong.', 'error'));
+    }
+};
+
 UI.registerActions('users', {
-    render: () => UsersPage.render(),
-    showCreateModal: () => UsersPage.showCreateModal(),
-    handleCreate: (el, e) => UsersPage.handleCreate(el, e),
-    showMembershipModal: (el) => UsersPage.showMembershipModal(el.dataset.id),
-    handleMembership: (el, e) => UsersPage.handleMembership(el, e),
-    revoke: (el) => UsersPage.revoke(el),
+    render: () => reportFailure(UsersPage.render()),
+    showCreateModal: () => reportFailure(UsersPage.showCreateModal()),
+    handleCreate: (el, e) => reportFailure(UsersPage.handleCreate(el, e)),
+    showMembershipModal: (el) => reportFailure(UsersPage.showMembershipModal(el.dataset.id)),
+    handleMembership: (el, e) => reportFailure(UsersPage.handleMembership(el, e)),
+    revoke: (el) => reportFailure(UsersPage.revoke(el)),
 });

@@ -12,10 +12,12 @@
  */
 const TenantsPage = {
     tenants: [],
+    dmCeiling: null,
 
     /** Cleared on tenant switch (see App.resetTenantState). */
     resetTenantState() {
         this.tenants = [];
+        this.dmCeiling = null;
     },
 
     /** First value present under any of these keys. */
@@ -40,6 +42,9 @@ const TenantsPage = {
         try {
             const result = await API.getAdminTenants();
             this.tenants = Array.isArray(result) ? result : (result && result.tenants) || [];
+            // The DM ceiling is one platform-wide number, so it rides on the
+            // envelope rather than being repeated on every row.
+            this.dmCeiling = (result && (result.dmHourlyCeiling ?? result.dm_hourly_ceiling)) ?? null;
         } catch (err) {
             // 403/404 is "not a platform admin", or the route is not deployed yet.
             // Either way this is not an error the operator can act on by retrying.
@@ -83,7 +88,7 @@ const TenantsPage = {
                             <th scope="col">Campaigns</th>
                             <th scope="col">Scheduled</th>
                             <th scope="col">Conversations</th>
-                            <th scope="col"><span class="sr-only">Actions</span></th>
+                            <th scope="col" aria-label="Actions"></th>
                         </tr></thead>
                         <tbody>
                             ${tenants.map((t) => this.renderRow(t, currentId))}
@@ -113,14 +118,15 @@ const TenantsPage = {
             { warnMs: 6 * 60 * 60 * 1000, staleMs: 24 * 60 * 60 * 1000, neverText: 'Never' }
         );
 
-        const published = this.num(t, 'posts_published_7d', 'postsPublished7d', 'published_last_7d');
-        const failed = this.num(t, 'posts_failed_7d', 'postsFailed7d', 'failed_last_7d');
+        const published = this.num(t, 'published_7d', 'posts_published_7d', 'postsPublished7d');
+        const failed = this.num(t, 'failed_7d', 'posts_failed_7d', 'postsFailed7d');
         const campaigns = this.num(t, 'campaign_count', 'campaignCount', 'campaigns');
         const scheduled = this.num(t, 'scheduled_post_count', 'scheduledPostCount', 'scheduled_posts');
         const conversations = this.num(t, 'conversation_count', 'conversationCount', 'conversations');
 
-        const dmUsed = this.num(t, 'dm_volume_hour', 'dmVolumeHour', 'dms_this_hour', 'dmsThisHour', 'dm_count_hour');
-        const dmCeiling = this.num(t, 'dm_hourly_limit', 'dmHourlyLimit', 'dm_ceiling', 'dmCeiling', 'dm_limit');
+        const dmUsed = this.num(t, 'dm_this_hour', 'dmThisHour', 'dm_volume_hour', 'dms_this_hour');
+        const dmCeiling = this.num(t, 'dm_hourly_limit', 'dmHourlyLimit', 'dm_ceiling')
+            ?? (typeof this.dmCeiling === 'number' ? this.dmCeiling : null);
 
         return html`
             <tr class="${isActive ? '' : html.raw('tenant-row-inactive')}">
@@ -231,10 +237,11 @@ const TenantsPage = {
                 <div class="form-group">
                     <label class="form-label" for="tenant-ig">Instagram page ID</label>
                     <input class="form-input" id="tenant-ig" name="instagram_page_id" inputmode="numeric"
-                           autocomplete="off" spellcheck="false" placeholder="e.g. 17841459652725922">
+                           autocomplete="off" spellcheck="false" placeholder="e.g. 17841459652725922" required>
+                    <p class="form-hint">Required — it is how an incoming webhook is matched to this tenant.</p>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="tenant-fb">Facebook page ID</label>
+                    <label class="form-label" for="tenant-fb">Facebook page ID <span class="label-optional">(optional)</span></label>
                     <input class="form-input" id="tenant-fb" name="facebook_page_id" inputmode="numeric"
                            autocomplete="off" spellcheck="false" placeholder="e.g. 102938475610293">
                 </div>
@@ -243,8 +250,15 @@ const TenantsPage = {
                     <textarea class="form-textarea" id="tenant-token" name="page_access_token"
                               autocomplete="off" spellcheck="false"
                               style="min-height:70px;font-size:12px;word-break:break-all;"
-                              placeholder="Paste the Page Access Token from the Meta Graph API Explorer…"></textarea>
-                    <p class="form-hint">Needed before anything can send. You can add it later from Settings.</p>
+                              placeholder="Paste the Page Access Token from the Meta Graph API Explorer…" required></textarea>
+                    <p class="form-hint">Required, and encrypted before it is stored — it never exists in the database as plaintext.</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="tenant-verify">Webhook verify token <span class="label-optional">(optional)</span></label>
+                    <input class="form-input" id="tenant-verify" name="webhook_verify_token" type="text"
+                           autocomplete="off" spellcheck="false" placeholder="e.g. my_webhook_secret_2026"
+                           style="font-family:monospace;font-size:12px;">
+                    <p class="form-hint">A secret you invent; it only has to match what you type into Meta. Settings can set it later.</p>
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
@@ -260,11 +274,14 @@ const TenantsPage = {
         const firstRun = form.dataset.firstRun === 'true';
         const payload = {
             name: (data.get('name') || '').toString().trim(),
-            instagram_page_id: (data.get('instagram_page_id') || '').toString().trim() || null,
-            facebook_page_id: (data.get('facebook_page_id') || '').toString().trim() || null,
-            page_access_token: (data.get('page_access_token') || '').toString().trim() || null,
+            instagram_page_id: (data.get('instagram_page_id') || '').toString().trim(),
+            page_access_token: (data.get('page_access_token') || '').toString().trim(),
         };
-        if (!payload.name) return;
+        const facebookPageId = (data.get('facebook_page_id') || '').toString().trim();
+        if (facebookPageId) payload.facebook_page_id = facebookPageId;
+        const verifyToken = (data.get('webhook_verify_token') || '').toString().trim();
+        if (verifyToken) payload.webhook_verify_token = verifyToken;
+        if (!payload.name || !payload.instagram_page_id || !payload.page_access_token) return;
 
         const submit = form.querySelector('button[type="submit"]');
         if (submit) submit.disabled = true;
@@ -355,13 +372,20 @@ const TenantsPage = {
     },
 };
 
+/** Async handlers report their own failures; the dispatcher only catches sync throws. */
+const reportTenantFailure = (promise) => {
+    if (promise && typeof promise.catch === 'function') {
+        promise.catch((err) => UI.toast((err && err.message) || 'Something went wrong.', 'error'));
+    }
+};
+
 UI.registerActions('tenants', {
-    render: () => TenantsPage.render(),
+    render: () => reportTenantFailure(TenantsPage.render()),
     showCreateModal: () => TenantsPage.showCreateModal(false),
     showFirstRunCreateModal: () => TenantsPage.showCreateModal(true),
-    handleCreate: (el, e) => TenantsPage.handleCreate(el, e),
+    handleCreate: (el, e) => reportTenantFailure(TenantsPage.handleCreate(el, e)),
     showRenameModal: (el) => TenantsPage.showRenameModal(el.dataset.id),
-    handleRename: (el, e) => TenantsPage.handleRename(el, e),
-    toggleActive: (el) => TenantsPage.toggleActive(el),
-    switchInto: (el) => TenantsPage.switchInto(el),
+    handleRename: (el, e) => reportTenantFailure(TenantsPage.handleRename(el, e)),
+    toggleActive: (el) => reportTenantFailure(TenantsPage.toggleActive(el)),
+    switchInto: (el) => reportTenantFailure(TenantsPage.switchInto(el)),
 });
