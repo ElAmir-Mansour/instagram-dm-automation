@@ -6,15 +6,25 @@ import { fileURLToPath } from 'url';
 import { pool } from './config/db.js';
 import { validateEnv } from './config/env.js';
 import { appSecrets, verifyMetaSignature } from './utils/signature.js';
-import { rateLimiter } from './utils/rateLimiter.js';
-import { normalizeArabic } from './utils/arabic.js';
-import { sendPrivateReply, sendPublicReply, sendDirectMessage, likeComment } from './services/instagram.js';
-import { generateAiResponse } from './services/ai.js';
-import apiRouter from './routes/api.js';
+import { processWebhookBody } from './webhook/router.js';
+import apiRouter, { securityHeaders } from './routes/api.js';
 
 
 // ─── Startup ────────────────────────────────────────────────────────────────
-validateEnv();
+// validateEnv() throws rather than calling process.exit(1), because on Vercel this module is
+// evaluated inside the request handler — exiting kills the invocation with no HTTP response
+// at all, so every request becomes an opaque platform error with nothing to read.
+//
+// Catching it here turns that into something diagnosable: the process stays up, the reason is
+// logged once, and every request gets a 503 that names the problem. Serving traffic with a
+// missing secret would be worse than serving none, so the guard below refuses everything.
+let startupError: Error | null = null;
+try {
+    validateEnv();
+} catch (err) {
+    startupError = err instanceof Error ? err : new Error(String(err));
+    console.error('❌ Startup validation failed — refusing all requests:', startupError.message);
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,11 +47,27 @@ app.use(bodyParser.json({
     verify: (req: any, _res, buf) => { req.rawBody = buf; }
 }));
 
+// ─── Security Headers ───────────────────────────────────────────────────────
+// Ahead of every route so the dashboard's static files are covered too, not just /api.
+app.use(securityHeaders);
+
+// Refuse everything while the environment is invalid. This sits above the routes so a missing
+// secret cannot be papered over by a route that happens not to read it.
+app.use((_req, res, next) => {
+    if (startupError) {
+        res.status(503).json({ error: 'Service misconfigured', detail: startupError.message });
+        return;
+    }
+    next();
+});
+
 // ─── Dashboard Static Files ─────────────────────────────────────────────────
 app.use('/dashboard', express.static(path.join(__dirname, '../dashboard')));
 
-// ─── Local Documentation (gitignored, not deployed) ─────────────────────────
-app.use('/docs', express.static(path.join(__dirname, '../docs')));
+// `/docs` used to be served statically from a gitignored directory. It 404s in production
+// only by accident of the deploy contents — anyone who dropped a file there would have
+// published TOKEN_GUIDE.md and friends unauthenticated. Removed rather than guarded: local
+// docs are read from the working tree, not over HTTP.
 
 // ─── API Routes ─────────────────────────────────────────────────────────────
 app.use('/api', apiRouter);
@@ -153,6 +179,16 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
     // Page-level subscriptions (/{page-id}/subscribed_apps) send object:'page'
     // App-level subscriptions (/{app-id}/subscriptions) send object:'instagram'
     const body = req.body;
+
+    // A request with a non-JSON Content-Type never reaches body-parser's JSON branch, so
+    // `req.body` is undefined and every property read below throws a TypeError — which Meta
+    // sees as a 500 and answers with a redelivery storm. A flat 400 ends it.
+    if (!body || typeof body !== 'object') {
+        console.warn('❌ Webhook body was not parsed as JSON — check the Content-Type header.');
+        res.sendStatus(400);
+        return;
+    }
+
     console.log('📦 Webhook object type:', body.object);
     console.log('📦 Raw body preview:', JSON.stringify(body).substring(0, 300));
 
@@ -163,411 +199,28 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         return;
     }
 
+    // 3. Acknowledge, then process.
+    //
+    // Meta's webhook timeout is ~20 seconds, and this pipeline awaits a Gemini round-trip
+    // (2-8s) plus however many Meta sends follow. Answering only once that finished meant a
+    // slow batch was redelivered while the first attempt was still working through it.
+    //
+    // STOPGAP: on Vercel, work that continues after the response can be killed when the
+    // invocation is frozen, so the processing is still awaited below — the early 200 buys
+    // headroom against the timeout, it does not make this fire-and-forget. The real fix is a
+    // queue (Vercel Queues, QStash): the webhook enqueues and returns, a worker processes.
+    // That same queue is the other half of the cron problem — the once-daily 00:00 UTC cron
+    // is a Hobby-plan limit that makes `scheduled_time` day-granular, and a queue with a
+    // scheduled consumer answers both.
+    res.sendStatus(200);
+
     try {
-        for (const entry of body.entry) {
-            const entryId = entry.id;
-            console.log(`\n── Processing entry ID: ${entryId} (object: ${body.object})`);
-
-            // ─── A. Process Instagram Direct Messages & Postbacks ─────────────────────
-            if (entry.messaging && Array.isArray(entry.messaging)) {
-                console.log(`📨 Found ${entry.messaging.length} messaging events to process.`);
-                for (const event of entry.messaging) {
-                    const senderId = event.sender?.id;
-                    const recipientId = event.recipient?.id;
-
-                    // Ignore echo messages (sent by the page itself)
-                    if (event.message?.is_echo) {
-                        console.log('⏭️  Ignoring echo message sent by the Page.');
-                        continue;
-                    }
-
-                    // Extract text content and payloads
-                    let text = event.message?.text || '';
-                    let payload = '';
-
-                    // If they clicked a Quick Reply
-                    if (event.message?.quick_reply) {
-                        payload = event.message.quick_reply.payload || '';
-                        console.log(`💬 User clicked Quick Reply button: text="${text}", payload="${payload}"`);
-                    }
-
-                    // If it is a Postback (e.g. from a carousel button click)
-                    if (event.postback) {
-                        text = event.postback.title || '';
-                        payload = event.postback.payload || '';
-                        console.log(`🎯 User clicked Postback button: title="${text}", payload="${payload}"`);
-                    }
-
-                    // Check for Story Mention attachment
-                    let isStoryMention = false;
-                    if (event.message?.attachments && Array.isArray(event.message.attachments)) {
-                        const storyMention = event.message.attachments.find((att: any) => att.type === 'story_mention');
-                        if (storyMention) {
-                            isStoryMention = true;
-                            console.log(`📖 Received a Story Mention from sender: ${senderId}`);
-                        }
-                    }
-
-                    if (!senderId || (!text && !payload && !isStoryMention)) {
-                        console.log('⏭️  Skipping empty message/postback event.');
-                        continue;
-                    }
-
-                    console.log(`📨 Incoming DM from IGSID ${senderId} → recipient ${recipientId}: "${text}" (payload: ${payload})`);
-
-                    // Look up creator by recipientId (IG Business ID) OR entryId (FB Page ID)
-                    // recipientId from message events = Instagram Business Account ID (most reliable)
-                    // entryId = could be IG ID (app-level sub) or FB Page ID (page-level sub)
-                    const creatorLookup = await pool.query(
-                        `SELECT id, is_bot_active, page_access_token FROM creators 
-                         WHERE is_active = true 
-                           AND (instagram_page_id = $1 OR instagram_page_id = $2 OR facebook_page_id = $2)
-                         LIMIT 1`,
-                        [recipientId, entryId]
-                    );
-
-                    if (creatorLookup.rows.length === 0) {
-                        console.log(`⚠️  No creator found for recipientId=${recipientId} or entryId=${entryId}. Skipping.`);
-                        continue;
-                    }
-
-                    const creator = creatorLookup.rows[0];
-                    console.log(`✅ Creator found: ${creator.id}`);
-
-                    // 1. Fetch or create conversation thread
-                    let conversationId = '';
-                    let isBotActive = true;
-                    
-                    const dbConversation = await pool.query(
-                        `SELECT id, is_bot_active FROM conversations 
-                         WHERE creator_id = $1 
-                           AND instagram_user_id = $2`,
-                        [creator.id, senderId]
-                    );
-
-                    if (dbConversation.rows.length === 0) {
-                        const newConv = await pool.query(
-                            `INSERT INTO conversations (creator_id, instagram_user_id, status)
-                             VALUES ($1, $2, 'active')
-                             RETURNING id, is_bot_active`,
-                            [creator.id, senderId]
-                        );
-                        conversationId = newConv.rows[0].id;
-                        isBotActive = newConv.rows[0].is_bot_active;
-                    } else {
-                        conversationId = dbConversation.rows[0].id;
-                        isBotActive = dbConversation.rows[0].is_bot_active;
-                        
-                        // Update last_message_at
-                        await pool.query(
-                            'UPDATE conversations SET last_message_at = NOW() WHERE id = $1',
-                            [conversationId]
-                        );
-                    }
-
-                    // 2. Log inbound message in the database
-                    await pool.query(
-                        `INSERT INTO messages (conversation_id, direction, message_type, text, payload, raw_payload)
-                         VALUES ($1, 'inbound', $2, $3, $4, $5)`,
-                        [
-                            conversationId, 
-                            isStoryMention ? 'story_mention' : 'text', 
-                            text || (isStoryMention ? '[Story Mention]' : ''), 
-                            payload || null, 
-                            JSON.stringify(event)
-                        ]
-                    );
-
-                    // 3. Call AI Agent to reply if Bot is active
-                    if (isBotActive) {
-                        try {
-                            // Query Gemini
-                            console.log('🤖 Invoking Gemini to construct response...');
-                            const aiRes = await generateAiResponse(conversationId, text || payload, creator.id);
-                            console.log('🤖 Gemini Response Type:', aiRes.message_type);
-
-                            // Format Meta payload
-                            let metaMessagePayload: any = {};
-                            if (aiRes.message_type === 'text') {
-                                metaMessagePayload = { text: aiRes.text };
-                            } else if (aiRes.message_type === 'quick_reply') {
-                                metaMessagePayload = {
-                                    text: aiRes.text,
-                                    quick_replies: aiRes.quick_replies?.map((qr: any) => ({
-                                        content_type: 'text',
-                                        title: qr.title,
-                                        payload: qr.payload
-                                    }))
-                                };
-                            } else if (aiRes.message_type === 'carousel') {
-                                metaMessagePayload = {
-                                    attachment: {
-                                        type: 'template',
-                                        payload: {
-                                            template_type: 'generic',
-                                            elements: aiRes.carousel_elements?.map((el: any) => {
-                                                const cleanElement: any = {
-                                                    title: el.title
-                                                };
-                                                if (el.subtitle) cleanElement.subtitle = el.subtitle;
-                                                if (el.image_url) cleanElement.image_url = el.image_url;
-                                                if (el.buttons && el.buttons.length > 0) {
-                                                    cleanElement.buttons = el.buttons.map((btn: any) => {
-                                                        const cleanBtn: any = {
-                                                            type: btn.type,
-                                                            title: btn.title
-                                                        };
-                                                        if (btn.type === 'web_url') {
-                                                            cleanBtn.url = btn.url;
-                                                        } else {
-                                                            cleanBtn.payload = btn.payload;
-                                                        }
-                                                        return cleanBtn;
-                                                    });
-                                                }
-                                                return cleanElement;
-                                            })
-                                        }
-                                    }
-                                };
-                            }
-
-                            // Send DM using Meta Send API
-                            console.log(`📩 Sending Meta response of type: ${aiRes.message_type}`);
-                            await sendDirectMessage(senderId, metaMessagePayload, creator.page_access_token);
-
-                            // Log outbound message
-                            await pool.query(
-                                `INSERT INTO messages (conversation_id, direction, message_type, text, raw_payload)
-                                 VALUES ($1, 'outbound', $2, $3, $4)`,
-                                [conversationId, aiRes.message_type, aiRes.text || '[Structured Template]', JSON.stringify(metaMessagePayload)]
-                            );
-                        } catch (aiError: any) {
-                            console.error('❌ AI Pipeline / Send Error:', aiError.message);
-                        }
-                    } else {
-                        console.log('⏭️  AI Bot is paused for this conversation thread. Manual reply required.');
-                    }
-
-                }
-            }
-
-            // ─── B. Process Comment webhooks (Instagram & Facebook) ─────────────────
-            if (entry.changes && Array.isArray(entry.changes)) {
-                for (const change of entry.changes) {
-
-                    // ── Normalise the event into platform-agnostic variables ──────────
-                    let commentId: string;
-                    let postId: string;
-                    let text: string;
-                    let senderUsername: string;
-                    let senderId: string;
-                    let isFacebookComment = false;
-
-                    if (change.field === 'comments') {
-                        // Instagram comment webhook: field = 'comments'
-                        const v = change.value;
-                        commentId    = v.id;
-                        postId       = v.media?.id;
-                        text         = v.text?.toLowerCase() || '';
-                        senderUsername = v.from?.username || v.from?.id;
-                        senderId     = v.from?.id;
-
-                    } else if (
-                        change.field === 'feed' &&
-                        change.value?.item === 'comment' &&
-                        change.value?.verb === 'add'
-                    ) {
-                        // Facebook Page comment webhook: field = 'feed', item = 'comment'
-                        const v = change.value;
-                        commentId    = v.comment_id;
-                        postId       = v.post_id;
-                        text         = v.message?.toLowerCase() || '';
-                        senderUsername = v.from?.name || v.from?.id;
-                        senderId     = v.from?.id;
-                        isFacebookComment = true;
-
-                    } else {
-                        console.log(`⏭️  Skipping unhandled change field: ${change.field} (item: ${change.value?.item})`);
-                        continue;
-                    }
-
-                    console.log(`💬 [${isFacebookComment ? 'FB' : 'IG'}] Comment: "${text}" by @${senderUsername} (ID: ${senderId})`);
-
-                    // Fetch Creator config — matches by IG page ID or FB page ID
-                    const creatorRes = await pool.query(
-                        `SELECT * FROM creators 
-                         WHERE is_active = true 
-                           AND (instagram_page_id = $1 OR facebook_page_id = $1)
-                         LIMIT 1`,
-                        [entryId]
-                    );
-
-                    if (creatorRes.rows.length === 0) {
-                        console.log(`⚠️  No active creator found for entryId=${entryId}.`);
-                        continue;
-                    }
-                    const creator = creatorRes.rows[0];
-
-                    // Ignore self-comments — use the correct page ID field per platform
-                    const pageOwnerId = isFacebookComment
-                        ? creator.facebook_page_id
-                        : creator.instagram_page_id;
-                    if (senderId === pageOwnerId) {
-                        console.log('⏭️  Ignoring self-comment from page owner.');
-                        continue;
-                    }
-
-                    // Fetch campaigns & match keyword with Arabic normalization & post_id targeting
-                    const campaignRes = await pool.query(
-                        'SELECT * FROM campaigns WHERE creator_id = $1 AND is_active = true',
-                        [creator.id]
-                    );
-
-                    const normalizedCommentText = normalizeArabic(text);
-
-                    const matchedCampaign = campaignRes.rows.find((c: any) => {
-                        // Split keywords by comma, trim, and normalize each
-                        const triggerKeywordsList = c.trigger_keyword
-                            .split(',')
-                            .map((k: string) => normalizeArabic(k.trim()))
-                            .filter(Boolean);
-
-                        // Match if ANY of the normalized keywords are present in the normalized comment text
-                        const keywordMatches = triggerKeywordsList.some((normalizedKeyword: string) =>
-                            normalizedCommentText.includes(normalizedKeyword)
-                        );
-
-                        // If post_id filter is set, it must match the current comment's post_id
-                        const postIdMatches = !c.post_id || c.post_id === postId;
-                        
-                        return keywordMatches && postIdMatches;
-                    });
-
-                    if (!matchedCampaign) {
-                        console.log('⏭️  No active campaign matched the comment text.');
-                        continue;
-                    }
-                    console.log(`🎯 Matched campaign: keyword="${matchedCampaign.trigger_keyword}"`);
-
-                    // Log interaction as PENDING
-                    const interactionLog = await pool.query(
-                        `INSERT INTO interactions (campaign_id, comment_id, sender_username, post_id, status, platform)
-                         VALUES ($1, $2, $3, $4, 'PENDING', $5)
-                         ON CONFLICT (comment_id) DO NOTHING
-                         RETURNING id`,
-                        [matchedCampaign.id, commentId, senderUsername, postId, isFacebookComment ? 'facebook' : 'instagram']
-                    );
-                    
-                    if (interactionLog.rows.length === 0) {
-                        console.log(`⏭️  Duplicate comment event ignored (comment_id: ${commentId})`);
-                        continue;
-                    }
-                    
-                    const interactionId = interactionLog.rows[0]?.id;
-
-                    // Dispatch Messages
-                    try {
-                        // ── Step 1: Send Private DM (the core action) ──────────────────
-                        const fbPageId = isFacebookComment ? creator.facebook_page_id : undefined;
-                        console.log('📩 Sending private DM...');
-                        const dmText = matchedCampaign.dm_template.replace(/{username}/g, senderUsername);
-                        
-                        if (dmText.includes('[SPLIT]')) {
-                            const parts = dmText.split('[SPLIT]');
-                            
-                            // First message must be a private reply to the comment to initiate the conversation
-                            console.log('📩 Sending first message via private reply...');
-                            await sendPrivateReply(commentId, parts[0].trim(), creator.page_access_token, fbPageId);
-                            
-                            // Subsequent messages can be sent as direct messages to the user ID
-                            for (let i = 1; i < parts.length; i++) {
-                                const part = parts[i].trim();
-                                if (part) {
-                                    console.log(`📩 Sending part ${i + 1} via direct message...`);
-                                    await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay to keep ordering
-                                    await sendDirectMessage(senderId, { text: part }, creator.page_access_token, fbPageId);
-                                }
-                            }
-                        } else {
-                            await sendPrivateReply(commentId, dmText, creator.page_access_token, fbPageId);
-                        }
-
-                        // Mark SENT immediately — DM is what matters
-                        await pool.query(
-                            'UPDATE interactions SET status = $1 WHERE id = $2',
-                            ['SENT', interactionId]
-                        );
-                        console.log(`✅ Private DM sent to @${senderUsername}`);
-
-                        // ── Step 1.5: Auto-Like Comment (best-effort algorithmic boost) ──
-                        try {
-                            console.log('👍 Auto-liking comment...');
-                            await likeComment(commentId, creator.page_access_token);
-                            console.log('👍 Auto-liked comment.');
-                        } catch (likeErr: any) {
-                            console.warn('⚠️  Auto-liking comment failed (non-critical):', likeErr.message);
-                        }
-
-                    } catch (dmError: any) {
-                        // Private DM failed → FAILED
-                        console.error('❌ Private DM Error:', dmError.message);
-                        
-                        let displayStatus = 'FAILED';
-                        let displayError = dmError.message;
-                        
-                        // Handle Meta Error 10903: User privacy settings block DMs
-                        if (displayError && displayError.includes('Code: 10903')) {
-                            displayStatus = 'USER_BLOCKED_DMS';
-                            displayError = 'User privacy settings block DMs from Pages (Code 10903).';
-                        }
-                        
-                        await pool.query(
-                            'UPDATE interactions SET status = $1, error_log = $2 WHERE id = $3',
-                            [displayStatus, displayError, interactionId]
-                        );
-                        continue; // skip public reply
-                    }
-
-                    // ── Step 2: Public Reply (best-effort, won't affect SENT status) ──
-                    if (matchedCampaign.public_reply_template) {
-                        try {
-                            console.log('💬 Sending public reply...');
-                            
-                            // Split public replies by | and pick a random variation
-                            const replyTemplates = matchedCampaign.public_reply_template.split('|');
-                            const chosenReply = replyTemplates[Math.floor(Math.random() * replyTemplates.length)].trim();
-                            const publicReplyText = chosenReply.replace(/{username}/g, senderUsername);
-                            
-                            console.log(`💬 Chosen public reply: "${publicReplyText}"`);
-                            
-                            // Instagram: /{commentId}/replies  |  Facebook: /{commentId}/comments
-                            await sendPublicReply(commentId, publicReplyText, creator.page_access_token, isFacebookComment);
-                            console.log('✅ Public reply sent.');
-                        } catch (publicErr: any) {
-                            // Public reply failed but DM already succeeded — log but keep SENT
-                            console.warn('⚠️  Public reply failed (non-critical):', publicErr.message);
-                            
-                            let errorMsg = publicErr.message;
-                            if (errorMsg.includes('Code: 200')) {
-                                errorMsg = `App missing permission. Please add 'pages_manage_engagement' in Meta Developer Console -> App Review, and regenerate your Page Access Token. (${publicErr.message})`;
-                            }
-                            
-                            await pool.query(
-                                'UPDATE interactions SET error_log = $1 WHERE id = $2',
-                                [`Public reply failed: ${errorMsg}`, interactionId]
-                            );
-                        }
-                    }
-
-                }
-            }
-        }
+        await processWebhookBody(body);
     } catch (err) {
+        // processWebhookBody isolates every entry and every event inside it, so reaching here
+        // means something outside the per-event handlers broke. The response is already sent;
+        // all that is left is to make it visible.
         console.error('❌ Pipeline Error:', err);
-    } finally {
-        // Send 200 OK to Meta after processing is complete so Vercel doesn't kill the function early
-        res.sendStatus(200);
     }
 });
 

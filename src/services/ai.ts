@@ -6,6 +6,45 @@ interface MessageRow {
     text: string;
 }
 
+/**
+ * `ai_agents.model` is dashboard-settable and gets interpolated straight into the request
+ * path, so it is checked against a list rather than trusted. An unrecognised value falls back
+ * instead of throwing: a typo in Settings should not take every DM reply down with it.
+ */
+const SUPPORTED_MODELS = new Set([
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-pro',
+    'gemini-2.0-flash',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-8b',
+    'gemini-1.5-pro'
+]);
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_TEMPERATURE = 0.7;
+
+/**
+ * Turns sent on every single call: the system prompt and the whole knowledge base are resent
+ * verbatim each time, and Arabic runs ~2-2.5x more tokens per character than English, so this
+ * window is the dominant marginal cost of the product. Trimmed from 15. The real fix is
+ * Gemini context caching (`cachedContents`), which bills the static prefix once per TTL
+ * instead of once per message — worth doing before the knowledge base grows further.
+ * @see https://ai.google.dev/gemini-api/docs/caching
+ */
+const HISTORY_WINDOW = 8;
+
+/** Gemini can sit on a request indefinitely; a serverless invocation cannot. */
+const GEMINI_TIMEOUT_MS = 30_000;
+
+function resolveModel(configured: unknown): string {
+    if (typeof configured === 'string' && SUPPORTED_MODELS.has(configured)) return configured;
+    if (configured) {
+        console.warn(`⚠️ Unrecognised Gemini model "${configured}" configured; using ${DEFAULT_MODEL}.`);
+    }
+    return DEFAULT_MODEL;
+}
+
 export interface AiResponse {
     message_type: 'text' | 'quick_reply' | 'carousel';
     text: string;
@@ -117,38 +156,66 @@ function enforceMetaConstraints(response: AiResponse): AiResponse {
 
 /**
  * Queries Gemini API using the conversation history and configuration details.
+ *
+ * **Returns `null` when the creator's AI agent exists but is switched off.** That is the
+ * "do not reply at all" signal and the caller must honour it by sending nothing — there is no
+ * fallback persona to fall back to. Every other failure (missing API key, Gemini error, empty
+ * or unparseable response) **throws**, so the caller can record a real failure instead of
+ * inventing an outbound turn.
+ *
+ * @param overrides Substitutes the stored prompt/knowledge base for this call only, without
+ *                  writing to `ai_agents`. Used by the Settings "test" endpoint.
  */
 export async function generateAiResponse(
     conversationId: string,
     userMessage: string,
-    creatorId: string
-): Promise<AiResponse> {
+    creatorId: string,
+    overrides?: { system_prompt?: string; knowledge_base?: string }
+): Promise<AiResponse | null> {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
         throw new Error('Missing GEMINI_API_KEY environment variable.');
     }
 
     // 1. Fetch AI Agent Settings
+    //    Deliberately unfiltered by is_active: the filter used to be in the WHERE clause, so a
+    //    disabled agent returned zero rows and was indistinguishable from an unconfigured one.
+    //    The `|| default` below then answered the customer anyway, with a generic persona and
+    //    an empty knowledge base — the toggle changed who replied, not whether anyone did.
     const agentRes = await pool.query(
-        'SELECT * FROM ai_agents WHERE creator_id = $1 AND is_active = true',
+        `SELECT is_active, system_prompt, knowledge_base, model, temperature
+           FROM ai_agents WHERE creator_id = $1`,
         [creatorId]
     );
+    const stored = agentRes.rows[0];
 
-    const agent = agentRes.rows[0] || {
+    // `overrides` means this is the dashboard's test sandbox, not a real customer. Testing a
+    // prompt before switching the agent on is the whole point of that box, so the disabled
+    // check deliberately does not apply to it — otherwise the toggle you are about to flip
+    // silently makes the tool that helps you decide return nothing.
+    const isSandbox = overrides !== undefined;
+
+    if (stored && stored.is_active === false && !isSandbox) {
+        console.log(`🤖 AI agent is disabled for creator ${creatorId} — not replying.`);
+        return null;
+    }
+
+    // Only reached when the creator has never configured an agent at all.
+    const agent = stored || {
         system_prompt: 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.',
         knowledge_base: '',
-        model: 'gemini-2.5-flash',
-        temperature: 0.7
+        model: DEFAULT_MODEL,
+        temperature: DEFAULT_TEMPERATURE
     };
 
-    // 2. Fetch Conversation History (last 15 messages)
+    // 2. Fetch recent conversation history
     const historyRes = await pool.query(
-        `SELECT direction, text 
-         FROM messages 
-         WHERE conversation_id = $1 
-         ORDER BY created_at DESC 
-         LIMIT 15`,
-        [conversationId]
+        `SELECT direction, text
+         FROM messages
+         WHERE conversation_id = $1
+         ORDER BY created_at DESC
+         LIMIT $2`,
+        [conversationId, HISTORY_WINDOW]
     );
 
     // Order chronological
@@ -173,10 +240,16 @@ export async function generateAiResponse(
     }
 
     // 4. Construct System Instruction
-    const systemInstructionText = `${agent.system_prompt}\n\n=== قاعدة المعرفة المتاحة لديك (Knowledge Base) ===\n${agent.knowledge_base}\n\n=== تعليمات إضافية مهمة ===\n1. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللغة العربية الفصحى أو بلهجة سهلة ومناسبة.\n2. إذا طلب المستخدم كورسات أو معلومات تواصل، استخدم خيار "quick_reply" أو "carousel" لتقديمها بشكل تفاعلي ومنظم بدلاً من مجرد سرد روابط نصية.\n3. التزم تماماً بحدود الحروف: عناوين الأزرار والـ quick replies لا تتجاوز 20 حرفاً. عناوين الكروت لا تتجاوز 80 حرفاً.`;
+    const systemPrompt = overrides?.system_prompt ?? agent.system_prompt;
+    const knowledgeBase = overrides?.knowledge_base ?? agent.knowledge_base;
+    const systemInstructionText = `${systemPrompt}\n\n=== قاعدة المعرفة المتاحة لديك (Knowledge Base) ===\n${knowledgeBase}\n\n=== تعليمات إضافية مهمة ===\n1. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللغة العربية الفصحى أو بلهجة سهلة ومناسبة.\n2. إذا طلب المستخدم كورسات أو معلومات تواصل، استخدم خيار "quick_reply" أو "carousel" لتقديمها بشكل تفاعلي ومنظم بدلاً من مجرد سرد روابط نصية.\n3. التزم تماماً بحدود الحروف: عناوين الأزرار والـ quick replies لا تتجاوز 20 حرفاً. عناوين الكروت لا تتجاوز 80 حرفاً.`;
 
-    const modelName = agent.model || 'gemini-2.5-flash';
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    const modelName = resolveModel(agent.model);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+
+    // `|| 0.7` turned a deliberate temperature of 0 — the setting you pick precisely to stop
+    // the agent improvising about prices and course contents — back into 0.7.
+    const temperature = Number.isFinite(agent.temperature) ? agent.temperature : DEFAULT_TEMPERATURE;
 
     console.log(`🤖 Querying Gemini model (${modelName})...`);
 
@@ -189,31 +262,47 @@ export async function generateAiResponse(
             generationConfig: {
                 responseMimeType: "application/json",
                 responseSchema: RESPONSE_SCHEMA,
-                temperature: agent.temperature || 0.7
+                temperature
             }
         };
 
-        const response = await axios.post(url, payload);
+        // The key goes in a header, not `?key=`. Query strings end up in proxy logs, browser
+        // referrers and error reporters far more readily than headers do — and an axios error
+        // carries `config.url`, so the old form leaked the key into anything that logged one.
+        const response = await axios.post(url, payload, {
+            headers: { 'x-goog-api-key': apiKey },
+            timeout: GEMINI_TIMEOUT_MS
+        });
         const rawJsonText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!rawJsonText) {
-            console.warn('⚠️ Empty response from Gemini API.');
-            return {
-                message_type: 'text',
-                text: 'عذراً، لم أستطع معالجة الرد حالياً. يرجى المحاولة مرة أخرى لاحقاً.'
-            };
+            // Usually a safety block: candidates come back empty with a finishReason. Worth
+            // surfacing, because it is the one failure the operator can actually act on.
+            const finishReason = response.data?.candidates?.[0]?.finishReason;
+            const blockReason = response.data?.promptFeedback?.blockReason;
+            throw new Error(
+                `Gemini returned no content (finishReason: ${finishReason || 'none'}, blockReason: ${blockReason || 'none'}).`
+            );
         }
 
         const parsedResponse: AiResponse = JSON.parse(rawJsonText);
         return enforceMetaConstraints(parsedResponse);
 
     } catch (err: any) {
-        console.error('❌ Gemini API Error:', err.response?.data || err.message);
-        
-        // Fallback response in case of API block or JSON syntax issues
-        return {
-            message_type: 'text',
-            text: 'أهلاً بك! لم أستطع معالجة طلبك كاستجابة مهيكلة، ولكن تفضل بزيارة الكورسات على الملف الشخصي: udemy.com/user/elamir-mahmoud-mansour'
-        };
+        // This used to swallow rate limits, network faults, safety blocks and JSON syntax
+        // errors alike and answer the customer with a fixed promotional message carrying a
+        // course link. That was then written to `messages` as a real outbound turn, so an
+        // unsolicited ad went out on every hiccup and then fed itself back to Gemini as
+        // history. A failure has to reach the caller as a failure.
+        //
+        // Logging the narrow field rather than the error object keeps request headers — and
+        // therefore the API key — out of the log line.
+        const metaError = err.response?.data?.error;
+        const status = err.response?.status;
+        console.error(`❌ Gemini API Error${status ? ` (HTTP ${status})` : ''}:`, metaError || err.message);
+
+        throw new Error(
+            `Gemini request failed${status ? ` [HTTP ${status}]` : ''}: ${metaError?.message || err.message}`
+        );
     }
 }

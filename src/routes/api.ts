@@ -1,46 +1,206 @@
 import { Router } from 'express';
+import type { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 import { pool } from '../config/db.js';
-import { createSession, requireAuth } from '../middleware/auth.js';
+import { createSession, requireAuth, createDownloadToken, consumeDownloadToken } from '../middleware/auth.js';
 import axios from 'axios';
 import { sendDirectMessage, publishFacebookPost, publishInstagramPost, API_VERSION } from '../services/instagram.js';
 import { generateAiResponse } from '../services/ai.js';
+import { getActiveCreatorId, getActiveCreator, invalidateTenantCache } from '../services/tenant.js';
+import { pruneRateLimitData } from '../utils/rateLimiter.js';
 
 
 const router = Router();
 
+/**
+ * Constant-time string comparison.
+ *
+ * Hashing both sides first means `timingSafeEqual` always gets two equal-length buffers —
+ * it throws on a length mismatch, and the length of the thrown-vs-returned path is itself
+ * an oracle for the secret's length.
+ */
+function secretEquals(a: string, b: string): boolean {
+    return crypto.timingSafeEqual(
+        crypto.createHash('sha256').update(a).digest(),
+        crypto.createHash('sha256').update(b).digest()
+    );
+}
+
+// ─── Security headers ───────────────────────────────────────────────────────
+// Mounted in src/index.ts. They cannot live in vercel.json: that file is still on the legacy
+// `builds` + `routes` schema, which rejects a `headers` key outright.
+
+export function securityHeaders(_req: Request, res: Response, next: NextFunction): void {
+    // `'unsafe-inline'` is here only because the dashboard renders inline onclick handlers
+    // (dashboard/js/pages/campaigns.js, activity.js). Drop it from script-src once those
+    // become delegated listeners — the rest of the policy already holds without it.
+    res.setHeader('Content-Security-Policy', [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://unpkg.com",
+        "font-src 'self' data: https://fonts.gstatic.com",
+        // Post previews are served straight off Meta's CDN, whose hostnames rotate.
+        "img-src 'self' data: blob: https:",
+        "media-src 'self' data: blob: https:",
+        "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ].join('; '));
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    next();
+}
+
 // ─── Auth ───────────────────────────────────────────────────────────────────
 
-router.post('/auth/login', (req, res) => {
-    const { password } = req.body;
-    const dashboardPassword = process.env.DASHBOARD_PASSWORD || 'admin';
+/**
+ * Login throttle.
+ *
+ * Per-instance, so it is a speed bump and not a guarantee: Vercel keeps as many warm lambdas
+ * as it likes and each one starts this Map empty, so an attacker spreading attempts across
+ * instances multiplies the limit by however many are running. A shared store is the real fix
+ * — the same one `rate_limit_counters` would be if it did not require a creator FK.
+ */
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_FREE_ATTEMPTS = 5;
+const LOGIN_MAX_DELAY_MS = 5 * 60 * 1000;
+const loginAttempts = new Map<string, { count: number; windowStart: number; last: number }>();
 
-    if (password !== dashboardPassword) {
+function clientIp(req: Request): string {
+    const forwarded = req.headers['x-forwarded-for'];
+    const first = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0];
+    return (first || req.socket.remoteAddress || 'unknown').trim();
+}
+
+/** Seconds this IP must still wait, or 0 when it may try now. */
+function loginRetryAfter(ip: string): number {
+    const record = loginAttempts.get(ip);
+    if (!record) return 0;
+
+    const now = Date.now();
+    if (now - record.windowStart > LOGIN_WINDOW_MS) {
+        loginAttempts.delete(ip);
+        return 0;
+    }
+    if (record.count <= LOGIN_FREE_ATTEMPTS) return 0;
+
+    const delay = Math.min(2 ** (record.count - LOGIN_FREE_ATTEMPTS) * 1000, LOGIN_MAX_DELAY_MS);
+    const remaining = record.last + delay - now;
+    return remaining > 0 ? Math.ceil(remaining / 1000) : 0;
+}
+
+function recordLoginFailure(ip: string): void {
+    const now = Date.now();
+    const record = loginAttempts.get(ip);
+
+    if (record && now - record.windowStart <= LOGIN_WINDOW_MS) {
+        record.count += 1;
+        record.last = now;
+    } else {
+        loginAttempts.set(ip, { count: 1, windowStart: now, last: now });
+    }
+
+    // Sweep stale entries occasionally so a spray across many IPs cannot grow the map forever.
+    if (loginAttempts.size > 1000) {
+        for (const [seen, entry] of loginAttempts) {
+            if (now - entry.windowStart > LOGIN_WINDOW_MS) loginAttempts.delete(seen);
+        }
+    }
+}
+
+router.post('/auth/login', (req, res) => {
+    const ip = clientIp(req);
+    const retryAfter = loginRetryAfter(ip);
+    if (retryAfter > 0) {
+        res.setHeader('Retry-After', String(retryAfter));
+        res.status(429).json({ error: `Too many login attempts. Try again in ${retryAfter}s.` });
+        return;
+    }
+
+    const { password } = req.body;
+    const dashboardPassword = process.env.DASHBOARD_PASSWORD;
+
+    if (!dashboardPassword) {
+        console.error('❌ Login attempted while DASHBOARD_PASSWORD is unset.');
+        res.status(500).json({ error: 'Dashboard authentication is not configured.' });
+        return;
+    }
+
+    if (typeof password !== 'string' || !secretEquals(password, dashboardPassword)) {
+        recordLoginFailure(ip);
         res.status(401).json({ error: 'Invalid password.' });
         return;
     }
 
-    const token = createSession();
-    res.json({ token, expiresIn: '24h' });
+    loginAttempts.delete(ip);
+
+    try {
+        // createSession throws when a signing secret is missing rather than falling back to a
+        // published default. Keep that a JSON 500 — the dashboard only parses JSON.
+        const token = createSession();
+        res.json({ token, expiresIn: '24h' });
+    } catch (err) {
+        console.error('Login Error:', err);
+        res.status(500).json({ error: 'Dashboard authentication is not configured.' });
+    }
 });
 
 // ─── Cron: Publish Scheduled Posts ──────────────────────────────────────────
 
 router.get('/cron/publish', async (req, res) => {
     const cronSecret = process.env.CRON_SECRET;
-    const authHeader = req.headers['authorization'];
-    const queryToken = req.query.token;
 
-    if (cronSecret && authHeader !== `Bearer ${cronSecret}` && queryToken !== cronSecret) {
+    // Fail closed. `if (cronSecret && ...)` skipped the whole guard whenever the variable was
+    // unset, which is exactly the deployment where you least want an open publish endpoint.
+    if (!cronSecret) {
+        console.error('❌ /api/cron/publish called but CRON_SECRET is not configured.');
+        res.status(500).json({ error: 'CRON_SECRET not configured.' });
+        return;
+    }
+
+    // Header only: a ?token= variant ends up in Vercel's access logs for their whole retention.
+    const authHeader = req.headers['authorization'];
+    if (typeof authHeader !== 'string' || !secretEquals(authHeader, `Bearer ${cronSecret}`)) {
         res.status(401).json({ error: 'Unauthorized cron request.' });
         return;
     }
 
     try {
         console.log('⏰ Running Post Publisher Cron Job...');
-        
+
+        // Release claims from runs that died mid-publish. Without this a lambda that timed out
+        // leaves the row in PUBLISHING forever and nothing ever picks it up again.
+        const reaped = await pool.query(`
+            UPDATE scheduled_posts
+               SET status = 'PENDING'
+             WHERE status = 'PUBLISHING'
+               AND claimed_at < NOW() - INTERVAL '15 minutes'
+               AND attempts < 5
+         RETURNING id
+        `);
+        if (reaped.rows.length > 0) {
+            console.log(`⏰ Released ${reaped.rows.length} stale claim(s) back to PENDING.`);
+        }
+
+        // Past five tries it is not a transient failure; stop retrying it every day forever.
+        await pool.query(`
+            UPDATE scheduled_posts
+               SET status = 'FAILED',
+                   error_log = 'Abandoned after 5 publish attempts — each claim went stale without completing. Check the access token and the media URL, then re-save the post to retry.'
+             WHERE status = 'PUBLISHING'
+               AND claimed_at < NOW() - INTERVAL '15 minutes'
+               AND attempts >= 5
+        `);
+
+        await pruneRateLimitData();
+
         // Find pending posts due for publishing
         const result = await pool.query(`
-            SELECT s.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id 
+            SELECT s.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id
             FROM scheduled_posts s
             JOIN creators c ON c.id = s.creator_id
             WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW()
@@ -55,12 +215,27 @@ router.get('/cron/publish', async (req, res) => {
 
         console.log(`⏰ Found ${result.rows.length} post(s) to publish.`);
         const publishedIds: string[] = [];
+        let claimed = 0;
 
         for (const post of result.rows) {
+            // Claim atomically. The old SELECT-then-UPDATE let two concurrent cron hits both
+            // read the row as PENDING and both publish it — a duplicate reel on the live
+            // account, which cannot be undone from here.
+            const claim = await pool.query(
+                `UPDATE scheduled_posts
+                    SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
+                  WHERE id = $1 AND status = 'PENDING'
+              RETURNING id`,
+                [post.id]
+            );
+
+            if ((claim.rowCount ?? 0) === 0) {
+                console.log(`⏰ Post ${post.id} was claimed by another run — skipping.`);
+                continue;
+            }
+
+            claimed++;
             console.log(`⏰ Processing scheduled post ${post.id} (${post.platform} - ${post.post_type})...`);
-            
-            // Mark as publishing to prevent double-triggering
-            await pool.query('UPDATE scheduled_posts SET status = $1 WHERE id = $2', ['PUBLISHING', post.id]);
 
             try {
                 let fbId: string | null = null;
@@ -138,7 +313,7 @@ router.get('/cron/publish', async (req, res) => {
 
         res.json({
             message: `Publishing sequence complete.`,
-            processed: result.rows.length,
+            processed: claimed,
             published: publishedIds
         });
 
@@ -148,9 +323,33 @@ router.get('/cron/publish', async (req, res) => {
     }
 });
 
+/** What /upload will store, and therefore all this route will ever claim to be serving. */
+const ALLOWED_MIME_TYPES = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'video/mp4',
+    'video/quicktime',
+]);
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Decoded bytes, not base64 characters — see the note in POST /upload. */
+const MAX_UPLOAD_BYTES = 3.2 * 1024 * 1024;
+
+// Deliberately unauthenticated: Meta cURLs this URL itself when it ingests the media, so it
+// has to be publicly fetchable. Everything below assumes the caller is hostile.
 router.get('/uploads/:id', async (req, res) => {
     try {
         const { id } = req.params;
+
+        // Postgres raises 22P02 on a malformed uuid literal, which surfaced as a 500 for what
+        // is really just a URL that cannot match anything.
+        if (!id || !UUID_PATTERN.test(id)) {
+            res.status(404).send('Not Found');
+            return;
+        }
+
         const result = await pool.query(
             'SELECT mime_type, data FROM media_uploads WHERE id = $1',
             [id]
@@ -162,12 +361,126 @@ router.get('/uploads/:id', async (req, res) => {
         }
 
         const row = result.rows[0];
-        res.setHeader('Content-Type', row.mime_type);
+
+        // Rows predating the upload allowlist can hold any string, and this origin also serves
+        // the dashboard — an echoed text/html would be same-origin script. Serve anything
+        // unrecognised as an opaque download instead.
+        const contentType = ALLOWED_MIME_TYPES.has(row.mime_type) ? row.mime_type : 'application/octet-stream';
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Disposition', 'inline');
         res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
         res.send(row.data);
     } catch (err) {
         console.error('File stream error:', err);
         res.status(500).send('Internal Server Error');
+    }
+});
+
+// ─── Export Interactions (CSV download) ──────────────────────────────────────
+//
+// Sits above the blanket `requireAuth` because the dashboard reaches it with a plain browser
+// navigation, which cannot set an Authorization header. Instead of putting the 24h session
+// token in the query string — where Vercel's access logs, the browser history and any
+// outbound Referer all keep a copy — the dashboard first POSTs to /interactions/export/token
+// and spends the 60-second token it gets back.
+
+const EXPORT_DOWNLOAD_SCOPE = 'interactions-export';
+
+/**
+ * Excel and Sheets evaluate any cell whose text begins with one of these. `sender_username`
+ * is a Facebook display name, so the attacker picks it.
+ */
+function csvCell(value: unknown): string {
+    const text = value === null || value === undefined ? '' : String(value);
+    const guarded = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+    return guarded.replace(/"/g, '""');
+}
+
+/** `new Date(null).toISOString()` throws RangeError and took the whole export down with it. */
+function csvTimestamp(value: unknown): string {
+    if (!value) return '';
+    const parsed = new Date(value as string);
+    return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
+}
+
+router.get('/interactions/export', async (req, res) => {
+    if (!consumeDownloadToken(req.query.dl, EXPORT_DOWNLOAD_SCOPE)) {
+        res.status(401).json({ error: 'Download link expired or already used — start the export again.' });
+        return;
+    }
+
+    try {
+        const platform = req.query.platform as string;
+        const campaign_id = req.query.campaign_id as string;
+        const status = req.query.status as string;
+        const search = req.query.search as string;
+
+        let whereClause = '';
+        const params: any[] = [];
+        const conditions: string[] = [];
+
+        if (status && ['SENT', 'FAILED', 'PENDING'].includes(status)) {
+            params.push(status);
+            conditions.push(`i.status = $${params.length}`);
+        }
+
+        if (search) {
+            params.push(`%${search}%`);
+            conditions.push(`i.sender_username ILIKE $${params.length}`);
+        }
+
+        if (platform && ['instagram', 'facebook'].includes(platform)) {
+            params.push(platform);
+            conditions.push(`i.platform = $${params.length}`);
+        }
+
+        if (campaign_id) {
+            params.push(campaign_id);
+            conditions.push(`i.campaign_id = $${params.length}`);
+        }
+
+        if (conditions.length > 0) {
+            whereClause = 'WHERE ' + conditions.join(' AND ');
+        }
+
+        const dataQuery = `
+            SELECT
+                i.timestamp,
+                i.sender_username,
+                i.platform,
+                c.trigger_keyword,
+                i.post_id,
+                i.status,
+                i.error_log
+            FROM interactions i
+            LEFT JOIN campaigns c ON c.id = i.campaign_id
+            ${whereClause}
+            ORDER BY i.timestamp DESC
+        `;
+
+        const result = await pool.query(dataQuery, params);
+
+        let csv = 'Timestamp,Username,Platform,Matched Keyword,Post ID,Status,Errors\n';
+        for (const row of result.rows) {
+            const time = csvTimestamp(row.timestamp);
+            const username = csvCell(row.sender_username);
+            const plat = csvCell(row.platform);
+            const keyword = csvCell(row.trigger_keyword);
+            const postId = csvCell(row.post_id);
+            const stat = csvCell(row.status);
+            const error = csvCell(row.error_log);
+
+            csv += `"${time}","${username}","${plat}","${keyword}","${postId}","${stat}","${error}"\n`;
+        }
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=interactions_export.csv');
+        res.status(200).send(csv);
+    } catch (err) {
+        console.error('Export Error:', err);
+        res.status(500).json({ error: 'Failed to export interactions.' });
     }
 });
 
@@ -213,19 +526,32 @@ router.get('/stats', async (_req, res) => {
 
 // ─── Hourly Stats (for chart) ───────────────────────────────────────────────
 
+/**
+ * The window these charts look back over, in days.
+ *
+ * `parseInt(...) || 7` kept this out of injection range, but it let anything through that
+ * parsed as a number — and `?days=99999999999` reached Postgres and failed the whole request
+ * with "interval field value out of range". Clamped, then bound as a parameter.
+ */
+function clampDays(raw: unknown, fallback: number): number {
+    const parsed = parseInt(raw as string, 10);
+    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+    return Math.min(parsed, 365);
+}
+
 router.get('/stats/hourly', async (req, res) => {
     try {
-        const days = parseInt(req.query.days as string) || 7;
+        const days = clampDays(req.query.days, 7);
         const result = await pool.query(`
-            SELECT 
+            SELECT
                 DATE_TRUNC('hour', timestamp) as hour,
                 COUNT(*) FILTER (WHERE status = 'SENT')::int as sent,
                 COUNT(*) FILTER (WHERE status = 'FAILED')::int as failed
             FROM interactions
-            WHERE timestamp > NOW() - INTERVAL '${days} days'
+            WHERE timestamp > NOW() - ($1::text || ' days')::interval
             GROUP BY hour
             ORDER BY hour ASC
-        `);
+        `, [String(days)]);
         res.json(result.rows);
     } catch (err) {
         console.error('Hourly Stats Error:', err);
@@ -237,17 +563,17 @@ router.get('/stats/hourly', async (req, res) => {
 
 router.get('/stats/daily', async (req, res) => {
     try {
-        const days = parseInt(req.query.days as string) || 30;
+        const days = clampDays(req.query.days, 30);
         const result = await pool.query(`
-            SELECT 
+            SELECT
                 DATE_TRUNC('day', timestamp)::date as day,
                 COUNT(*) FILTER (WHERE status = 'SENT')::int as sent,
                 COUNT(*) FILTER (WHERE status = 'FAILED')::int as failed
             FROM interactions
-            WHERE timestamp > NOW() - INTERVAL '${days} days'
+            WHERE timestamp > NOW() - ($1::text || ' days')::interval
             GROUP BY day
             ORDER BY day ASC
-        `);
+        `, [String(days)]);
         res.json(result.rows);
     } catch (err) {
         console.error('Daily Stats Error:', err);
@@ -286,15 +612,14 @@ router.post('/campaigns', async (req, res) => {
             return;
         }
 
-        // If no creator_id provided, use the first active creator
+        // If no creator_id provided, use the active creator
         let creatorId = creator_id;
         if (!creatorId) {
-            const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
-            if (creatorRes.rows.length === 0) {
+            creatorId = await getActiveCreatorId();
+            if (!creatorId) {
                 res.status(400).json({ error: 'No active creator found. Add a creator first.' });
                 return;
             }
-            creatorId = creatorRes.rows[0].id;
         }
 
         const result = await pool.query(
@@ -385,79 +710,11 @@ router.get('/stats/campaigns', async (_req, res) => {
 });
 
 // ─── Export Interactions (CSV Exporter) ──────────────────────────────────────
+// The download itself is registered above the auth boundary and carries its own one-shot
+// token; this is the authenticated half that hands that token out.
 
-router.get('/interactions/export', async (req, res) => {
-    try {
-        const platform = req.query.platform as string;
-        const campaign_id = req.query.campaign_id as string;
-        const status = req.query.status as string;
-        const search = req.query.search as string;
-
-        let whereClause = '';
-        const params: any[] = [];
-        const conditions: string[] = [];
-
-        if (status && ['SENT', 'FAILED', 'PENDING'].includes(status)) {
-            params.push(status);
-            conditions.push(`i.status = $${params.length}`);
-        }
-
-        if (search) {
-            params.push(`%${search}%`);
-            conditions.push(`i.sender_username ILIKE $${params.length}`);
-        }
-
-        if (platform && ['instagram', 'facebook'].includes(platform)) {
-            params.push(platform);
-            conditions.push(`i.platform = $${params.length}`);
-        }
-
-        if (campaign_id) {
-            params.push(campaign_id);
-            conditions.push(`i.campaign_id = $${params.length}`);
-        }
-
-        if (conditions.length > 0) {
-            whereClause = 'WHERE ' + conditions.join(' AND ');
-        }
-
-        const dataQuery = `
-            SELECT 
-                i.timestamp,
-                i.sender_username,
-                i.platform,
-                c.trigger_keyword,
-                i.post_id,
-                i.status,
-                i.error_log
-            FROM interactions i
-            LEFT JOIN campaigns c ON c.id = i.campaign_id
-            ${whereClause}
-            ORDER BY i.timestamp DESC
-        `;
-
-        const result = await pool.query(dataQuery, params);
-
-        let csv = 'Timestamp,Username,Platform,Matched Keyword,Post ID,Status,Errors\n';
-        for (const row of result.rows) {
-            const time = new Date(row.timestamp).toISOString();
-            const username = row.sender_username.replace(/"/g, '""');
-            const plat = row.platform;
-            const keyword = (row.trigger_keyword || '').replace(/"/g, '""');
-            const postId = (row.post_id || '').replace(/"/g, '""');
-            const stat = row.status;
-            const error = (row.error_log || '').replace(/"/g, '""');
-            
-            csv += `"${time}","${username}","${plat}","${keyword}","${postId}","${stat}","${error}"\n`;
-        }
-
-        res.setHeader('Content-Type', 'text/csv');
-        res.setHeader('Content-Disposition', 'attachment; filename=interactions_export.csv');
-        res.status(200).send(csv);
-    } catch (err) {
-        console.error('Export Error:', err);
-        res.status(500).json({ error: 'Failed to export interactions.' });
-    }
+router.post('/interactions/export/token', (_req, res) => {
+    res.json({ token: createDownloadToken(EXPORT_DOWNLOAD_SCOPE) });
 });
 
 // ─── Interactions (Activity Log) ────────────────────────────────────────────
@@ -536,16 +793,15 @@ router.get('/interactions', async (req, res) => {
 
 router.get('/settings/token/status', async (_req, res) => {
     try {
-        const creatorRes = await pool.query(
-            'SELECT id, instagram_page_id, facebook_page_id, is_active, page_access_token FROM creators LIMIT 1'
-        );
+        const creator = await getActiveCreator([
+            'id', 'instagram_page_id', 'facebook_page_id', 'is_active', 'page_access_token'
+        ]);
 
-        if (creatorRes.rows.length === 0) {
+        if (!creator) {
             res.json({ status: 'no_creator', message: 'No creator account found.' });
             return;
         }
 
-        const creator = creatorRes.rows[0];
         const token = creator.page_access_token;
 
         // Validate token against Meta API
@@ -630,16 +886,25 @@ router.post('/settings/token', async (req, res) => {
             return;
         }
 
-        // Update the token in the database
+        // Update the token in the database. Scoped to the resolved creator: the unscoped
+        // `WHERE is_active = true` overwrote every active creator's token with this one.
+        const creatorId = await getActiveCreatorId();
+        if (!creatorId) {
+            res.status(404).json({ error: 'No active creator found to update.' });
+            return;
+        }
+
         const result = await pool.query(
-            'UPDATE creators SET page_access_token = $1 WHERE is_active = true RETURNING instagram_page_id',
-            [token]
+            'UPDATE creators SET page_access_token = $1 WHERE id = $2 RETURNING instagram_page_id',
+            [token, creatorId]
         );
 
         if (result.rows.length === 0) {
             res.status(404).json({ error: 'No active creator found to update.' });
             return;
         }
+
+        invalidateTenantCache();
 
         res.json({
             message: 'Token updated successfully!',
@@ -664,14 +929,14 @@ router.post('/settings/token/extend', async (req, res) => {
             return;
         }
 
-        const creatorRes = await pool.query('SELECT id, page_access_token FROM creators WHERE is_active = true LIMIT 1');
-        if (creatorRes.rows.length === 0) {
+        const creator = await getActiveCreator(['id', 'page_access_token']);
+        if (!creator) {
             res.status(404).json({ error: 'No active creator found.' });
             return;
         }
 
-        const currentToken = creatorRes.rows[0].page_access_token;
-        const creatorId = creatorRes.rows[0].id;
+        const currentToken = creator.page_access_token;
+        const creatorId = creator.id;
 
         const extendRes = await axios.get('https://graph.facebook.com/v21.0/oauth/access_token', {
             params: {
@@ -685,6 +950,7 @@ router.post('/settings/token/extend', async (req, res) => {
         if (extendRes.data && extendRes.data.access_token) {
             const newToken = extendRes.data.access_token;
             await pool.query('UPDATE creators SET page_access_token = $1 WHERE id = $2', [newToken, creatorId]);
+            invalidateTenantCache();
             res.json({ message: 'Token successfully extended to a never-expiring token.' });
         } else {
             res.status(400).json({ error: 'Failed to obtain an extended token from Meta.' });
@@ -732,13 +998,14 @@ router.post('/posts/scheduled', async (req, res) => {
             return;
         }
 
-        // Get first active creator
-        const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
-        if (creatorRes.rows.length === 0) {
+        const creator = await getActiveCreator([
+            'id', 'page_access_token', 'instagram_page_id', 'facebook_page_id'
+        ]);
+        if (!creator) {
             res.status(400).json({ error: 'No active creator account found.' });
             return;
         }
-        const creatorId = creatorRes.rows[0].id;
+        const creatorId = creator.id;
 
         // Insert into database
         const result = await pool.query(
@@ -760,12 +1027,7 @@ router.post('/posts/scheduled', async (req, res) => {
 
         if (publish_now) {
             console.log(`🚀 Immediate publishing requested for scheduled post ${newPost.id}...`);
-            
-            const fullCreatorRes = await pool.query(
-                'SELECT page_access_token, instagram_page_id, facebook_page_id FROM creators WHERE id = $1',
-                [creatorId]
-            );
-            const creator = fullCreatorRes.rows[0];
+
             const token = creator.page_access_token;
 
             try {
@@ -775,14 +1037,22 @@ router.post('/posts/scheduled', async (req, res) => {
                 // Mark as publishing
                 await pool.query("UPDATE scheduled_posts SET status = 'PUBLISHING' WHERE id = $1", [newPost.id]);
 
-                // Facebook
+                // Facebook — the cron path already checked for a missing page id; without the
+                // same check here the literal "null" went into the Graph URL and came back as
+                // an unrelated Meta error.
                 if (platform === 'facebook' || platform === 'both') {
+                    if (!creator.facebook_page_id) {
+                        throw new Error('Facebook Page ID is missing for this creator.');
+                    }
                     const fbRes = await publishFacebookPost(creator.facebook_page_id, post_type, caption || '', media_url, token);
                     fbId = fbRes.id || fbRes.post_id;
                 }
 
                 // Instagram
                 if (platform === 'instagram' || platform === 'both') {
+                    if (!creator.instagram_page_id) {
+                        throw new Error('Instagram Account ID is missing for this creator.');
+                    }
                     const igRes = await publishInstagramPost(creator.instagram_page_id, post_type, caption || '', media_url, token, cover_url);
                     igId = igRes.id;
                 }
@@ -807,12 +1077,18 @@ router.post('/posts/scheduled', async (req, res) => {
             } catch (publishErr: any) {
                 console.error('❌ Immediate publish failed:', publishErr.message);
                 const finalRes = await pool.query(
-                    `UPDATE scheduled_posts 
-                     SET status = 'FAILED', error_log = $1 
+                    `UPDATE scheduled_posts
+                     SET status = 'FAILED', error_log = $1
                      WHERE id = $2 RETURNING *`,
                     [publishErr.message, newPost.id]
                 );
-                res.status(201).json(finalRes.rows[0]);
+                // 201 for a row we just marked FAILED read as success to every caller, so a
+                // publish that Meta rejected looked identical to one that went live.
+                res.status(502).json({
+                    ...finalRes.rows[0],
+                    status: 'FAILED',
+                    error: publishErr.message
+                });
                 return;
             }
         }
@@ -829,6 +1105,8 @@ router.put('/posts/scheduled/:id', async (req, res) => {
         const { id } = req.params;
         const { platform, post_type, caption, media_url, scheduled_time, cover_url } = req.body;
 
+        // cover_url was destructured and then dropped, so editing a reel silently kept its old
+        // cover — which for a video fading up from black is the black frame 0.
         const result = await pool.query(
             `UPDATE scheduled_posts
              SET platform = COALESCE($1, platform),
@@ -836,9 +1114,10 @@ router.put('/posts/scheduled/:id', async (req, res) => {
                  caption = COALESCE($3, caption),
                  media_url = COALESCE($4, media_url),
                  scheduled_time = COALESCE($5, scheduled_time)::timestamp with time zone,
+                 cover_url = COALESCE($6, cover_url),
                  status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
-             WHERE id = $6 RETURNING *`,
-            [platform, post_type, caption, media_url, scheduled_time, id]
+             WHERE id = $7 RETURNING *`,
+            [platform, post_type, caption, media_url, scheduled_time, cover_url, id]
         );
 
         if (result.rows.length === 0) {
@@ -873,16 +1152,13 @@ router.delete('/posts/scheduled/:id', async (req, res) => {
 
 router.get('/posts/live', async (_req, res) => {
     try {
-        const creatorRes = await pool.query(
-            'SELECT page_access_token, instagram_page_id, facebook_page_id FROM creators WHERE is_active = true LIMIT 1'
-        );
+        const creator = await getActiveCreator(['page_access_token', 'instagram_page_id', 'facebook_page_id']);
 
-        if (creatorRes.rows.length === 0) {
+        if (!creator) {
             res.json([]);
             return;
         }
 
-        const creator = creatorRes.rows[0];
         const token = creator.page_access_token;
         const fbPageId = creator.facebook_page_id;
         const igUserId = creator.instagram_page_id;
@@ -965,11 +1241,12 @@ router.post('/upload', async (req, res) => {
             return;
         }
 
-        // Check size limit: base64 length estimation (approx 1.37 times binary size)
-        const sizeInBytes = (base64_data.length * 3) / 4;
-        const maxSize = 10 * 1024 * 1024; // 10MB
-        if (sizeInBytes > maxSize) {
-            res.status(400).json({ error: 'File size exceeds the 10MB limit.' });
+        // /api/uploads/:id echoes this value back as Content-Type to anyone who asks, on the
+        // same origin the dashboard is served from. Pin it to what Meta will actually ingest.
+        if (!ALLOWED_MIME_TYPES.has(mime_type)) {
+            res.status(400).json({
+                error: `Unsupported file type "${mime_type}". Allowed: ${[...ALLOWED_MIME_TYPES].join(', ')}.`
+            });
             return;
         }
 
@@ -978,6 +1255,19 @@ router.post('/upload', async (req, res) => {
 
         // Decode base64 to binary buffer
         const buffer = Buffer.from(base64Clean, 'base64');
+
+        // Measure the decoded bytes, and measure them *after* stripping the prefix — the old
+        // check ran on the raw string and counted the data-URI header as payload.
+        //
+        // Vercel hard-caps the request body at 4.5MB and this endpoint takes base64 JSON, so
+        // ~3.3MB of file is the true ceiling: the old 10MB limit could never be reached, the
+        // platform 413'd first with nothing useful to show the user.
+        if (buffer.length > MAX_UPLOAD_BYTES) {
+            res.status(400).json({
+                error: 'File is too large. This endpoint tops out at 3.2MB because Vercel caps the whole request at 4.5MB and the file is sent as base64. For anything bigger, write it straight into media_uploads over the database connection.'
+            });
+            return;
+        }
 
         // Insert into database
         const result = await pool.query(
@@ -1133,12 +1423,11 @@ router.put('/conversations/:id/toggle-bot', async (req, res) => {
 
 router.get('/settings/ai', async (_req, res) => {
     try {
-        const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
-        if (creatorRes.rows.length === 0) {
+        const creatorId = await getActiveCreatorId();
+        if (!creatorId) {
             res.status(400).json({ error: 'No active creator found.' });
             return;
         }
-        const creatorId = creatorRes.rows[0].id;
 
         const agentRes = await pool.query('SELECT * FROM ai_agents WHERE creator_id = $1', [creatorId]);
         if (agentRes.rows.length === 0) {
@@ -1168,12 +1457,16 @@ router.post('/settings/ai', async (req, res) => {
             return;
         }
 
-        const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
-        if (creatorRes.rows.length === 0) {
+        const creatorId = await getActiveCreatorId();
+        if (!creatorId) {
             res.status(400).json({ error: 'No active creator found.' });
             return;
         }
-        const creatorId = creatorRes.rows[0].id;
+
+        // `parseFloat(temperature) || 0.7` silently rewrote a deliberate 0 — the setting that
+        // makes replies reproducible — into the default.
+        const parsedTemperature = Number.parseFloat(temperature);
+        const finalTemperature = Number.isFinite(parsedTemperature) ? parsedTemperature : 0.7;
 
         const result = await pool.query(
             `INSERT INTO ai_agents (creator_id, system_prompt, knowledge_base, model, temperature, is_active)
@@ -1191,7 +1484,7 @@ router.post('/settings/ai', async (req, res) => {
                 system_prompt,
                 knowledge_base || '',
                 model || 'gemini-2.5-flash',
-                parseFloat(temperature) || 0.7,
+                finalTemperature,
                 is_active !== false
             ]
         );
@@ -1212,26 +1505,29 @@ router.post('/settings/ai/test', async (req, res) => {
             return;
         }
 
-        const creatorRes = await pool.query('SELECT id FROM creators WHERE is_active = true LIMIT 1');
-        if (creatorRes.rows.length === 0) {
+        const creatorId = await getActiveCreatorId();
+        if (!creatorId) {
             res.status(400).json({ error: 'No active creator found.' });
             return;
         }
-        const creatorId = creatorRes.rows[0].id;
 
         const mockConvId = '00000000-0000-0000-0000-000000000000';
 
-        await pool.query(
-            `INSERT INTO ai_agents (creator_id, system_prompt, knowledge_base, model, temperature, is_active)
-             VALUES ($1, $2, $3, 'gemini-2.5-flash', 0.7, true)
-             ON CONFLICT (creator_id) 
-             DO UPDATE SET 
-                system_prompt = EXCLUDED.system_prompt,
-                knowledge_base = EXCLUDED.knowledge_base`,
-            [creatorId, system_prompt, knowledge_base || '']
-        );
+        // This used to upsert the draft prompt into the live ai_agents row and never put the
+        // old one back, so trying a throwaway idea in the tester overwrote the tuned
+        // production prompt. A test run must not write anything: pass the draft through.
+        const aiRes = await generateAiResponse(mockConvId, user_message, creatorId, {
+            system_prompt: typeof system_prompt === 'string' && system_prompt.trim() ? system_prompt : undefined,
+            knowledge_base: typeof knowledge_base === 'string' ? knowledge_base : undefined,
+        });
 
-        const aiRes = await generateAiResponse(mockConvId, user_message, creatorId);
+        // null means the agent is switched off. Say that, rather than rendering an empty reply
+        // that looks like the model returned nothing.
+        if (!aiRes) {
+            res.status(409).json({ error: 'The AI agent is turned off — enable it to run a test.' });
+            return;
+        }
+
         res.json(aiRes);
     } catch (err: any) {
         console.error('AI Test Error:', err);
@@ -1247,10 +1543,8 @@ router.post('/settings/ai/test', async (req, res) => {
 
 router.get('/settings/webhook-token', async (req, res) => {
     try {
-        const { rows } = await pool.query(
-            'SELECT webhook_verify_token FROM creators WHERE is_active = true ORDER BY created_at LIMIT 1'
-        );
-        const dbToken: string | null = rows[0]?.webhook_verify_token ?? null;
+        const creator = await getActiveCreator(['webhook_verify_token']);
+        const dbToken: string | null = creator?.webhook_verify_token ?? null;
         const proto = req.headers['x-forwarded-proto'] || 'https';
 
         res.json({
@@ -1265,7 +1559,10 @@ router.get('/settings/webhook-token', async (req, res) => {
             webhookUrl: `${proto}://${req.get('host')}/webhook`,
         });
     } catch (err: any) {
-        res.status(500).json({ error: err.message || 'Failed to read verify token.' });
+        // `err.message` here is Postgres driver text — it names tables and columns to anyone
+        // who can reach the endpoint. Keep the detail in the logs.
+        console.error('Read Verify Token Error:', err);
+        res.status(500).json({ error: 'Failed to read verify token.' });
     }
 });
 
@@ -1289,10 +1586,15 @@ router.post('/settings/webhook-token', async (req, res) => {
 
         // Scoped to one row on purpose: an unscoped UPDATE ... WHERE is_active
         // would overwrite every creator's token at once.
+        const creatorId = await getActiveCreatorId();
+        if (!creatorId) {
+            res.status(404).json({ error: 'No active creator account found.' });
+            return;
+        }
+
         const { rowCount } = await pool.query(
-            `UPDATE creators SET webhook_verify_token = $1
-             WHERE id = (SELECT id FROM creators WHERE is_active = true ORDER BY created_at LIMIT 1)`,
-            [token]
+            'UPDATE creators SET webhook_verify_token = $1 WHERE id = $2',
+            [token, creatorId]
         );
 
         if (!rowCount) {
@@ -1300,12 +1602,15 @@ router.post('/settings/webhook-token', async (req, res) => {
             return;
         }
 
+        invalidateTenantCache();
+
         res.json({
             success: true,
             message: 'Verify token saved. Paste the same value into Meta\u2019s webhook configuration — it works immediately, no redeploy needed.',
         });
     } catch (err: any) {
-        res.status(500).json({ error: err.message || 'Failed to save verify token.' });
+        console.error('Save Verify Token Error:', err);
+        res.status(500).json({ error: 'Failed to save verify token.' });
     }
 });
 

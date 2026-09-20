@@ -5,22 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AutoReply Pro — Instagram DM Automation Dashboard</title>
     <meta name="description" content="Control your Instagram Comment-to-DM automation with a premium dashboard. Create campaigns, view analytics, and manage your bot.">
-    
-    <!-- Fonts -->
+
+    <!-- Fonts — Inter for the English shell, Cairo for the Arabic content
+         (DM templates, captions, inbound DMs, the AI system prompt). Inter has
+         no Arabic glyphs, so without Cairo all Arabic fell back to whatever the
+         OS happened to pick. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Cairo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Chart.js — pinned + SRI -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
+            integrity="sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt"
+            crossorigin="anonymous"></script>
+
+    <!-- Lucide Icons — pinned + SRI. Was unpkg lucide@latest, which now resolves
+         to 1.x, where the Instagram and Facebook brand icons no longer exist. -->
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.577.0/dist/umd/lucide.min.js"
+            integrity="sha384-orgVf2eX2+m1zKAOIi09hD0W6GtVhoOUmqDK+sysYB2JTZ4vS86j4jm+X7a4Nnei"
+            crossorigin="anonymous"></script>
+
     <!-- Styles -->
-    <link rel="stylesheet" href="/dashboard/css/styles.css">
+    <link rel="stylesheet" href="/dashboard/css/styles.css?v=3.0">
 </head>
 <body>
+
+    <button type="button" class="skip-link" data-action="app:skipToContent">Skip to main content</button>
 
     <!-- ─── Login Screen ─────────────────────────────────────────────────── -->
     <div id="login-screen" class="login-screen">
@@ -29,21 +39,22 @@
             <div class="login-card glass-card">
                 <div class="login-logo">
                     <div class="logo-icon">
-                        <i data-lucide="zap" class="logo-zap"></i>
+                        <i data-lucide="zap" class="logo-zap" aria-hidden="true"></i>
                     </div>
                     <h1 class="login-title">AutoReply Pro</h1>
                     <p class="login-subtitle">Instagram DM Automation Dashboard</p>
                 </div>
                 <form id="login-form" class="login-form">
                     <div class="input-group">
-                        <i data-lucide="lock" class="input-icon"></i>
+                        <i data-lucide="lock" class="input-icon" aria-hidden="true"></i>
+                        <label class="sr-only" for="login-password">Dashboard password</label>
                         <input type="password" id="login-password" placeholder="Enter dashboard password" autocomplete="current-password" required>
                     </div>
                     <button type="submit" id="login-btn" class="btn btn-primary btn-full">
                         <span>Sign In</span>
-                        <i data-lucide="arrow-right"></i>
+                        <i data-lucide="arrow-right" aria-hidden="true"></i>
                     </button>
-                    <p id="login-error" class="login-error hidden"></p>
+                    <p id="login-error" class="login-error hidden" role="alert"></p>
                 </form>
             </div>
         </div>
@@ -51,57 +62,57 @@
 
     <!-- ─── Main App ─────────────────────────────────────────────────────── -->
     <div id="app" class="app hidden">
-        
+
         <!-- Sidebar -->
-        <nav id="sidebar" class="sidebar">
+        <nav id="sidebar" class="sidebar" aria-label="Main navigation">
             <div class="sidebar-header">
                 <div class="sidebar-logo">
                     <div class="logo-icon-sm">
-                        <i data-lucide="zap"></i>
+                        <i data-lucide="zap" aria-hidden="true"></i>
                     </div>
                     <span class="sidebar-brand">AutoReply Pro</span>
                 </div>
             </div>
 
             <div class="sidebar-nav">
-                <a href="#" class="nav-item active" data-page="overview">
-                    <i data-lucide="layout-dashboard"></i>
+                <a href="#/overview" class="nav-item active" data-page="overview">
+                    <i data-lucide="layout-dashboard" aria-hidden="true"></i>
                     <span>Overview</span>
                 </a>
-                <a href="#" class="nav-item" data-page="campaigns">
-                    <i data-lucide="megaphone"></i>
+                <a href="#/campaigns" class="nav-item" data-page="campaigns">
+                    <i data-lucide="megaphone" aria-hidden="true"></i>
                     <span>Campaigns</span>
                 </a>
-                <a href="#" class="nav-item" data-page="posts">
-                    <i data-lucide="calendar-days"></i>
+                <a href="#/posts" class="nav-item" data-page="posts">
+                    <i data-lucide="calendar-days" aria-hidden="true"></i>
                     <span>Posts Scheduler</span>
                 </a>
-                <a href="#" class="nav-item" data-page="inbox">
-                    <i data-lucide="message-square"></i>
+                <a href="#/inbox" class="nav-item" data-page="inbox">
+                    <i data-lucide="message-square" aria-hidden="true"></i>
                     <span>DM Inbox</span>
                 </a>
-                <a href="#" class="nav-item" data-page="ai_settings">
-                    <i data-lucide="bot"></i>
+                <a href="#/ai_settings" class="nav-item" data-page="ai_settings">
+                    <i data-lucide="bot" aria-hidden="true"></i>
                     <span>AI Settings</span>
                 </a>
-                <a href="#" class="nav-item" data-page="analytics">
-                    <i data-lucide="bar-chart-3"></i>
+                <a href="#/analytics" class="nav-item" data-page="analytics">
+                    <i data-lucide="bar-chart-3" aria-hidden="true"></i>
                     <span>Analytics</span>
                 </a>
-                <a href="#" class="nav-item" data-page="activity">
-                    <i data-lucide="scroll-text"></i>
+                <a href="#/activity" class="nav-item" data-page="activity">
+                    <i data-lucide="scroll-text" aria-hidden="true"></i>
                     <span>Activity Log</span>
                 </a>
-                <a href="#" class="nav-item" data-page="settings">
-                    <i data-lucide="settings"></i>
+                <a href="#/settings" class="nav-item" data-page="settings">
+                    <i data-lucide="settings" aria-hidden="true"></i>
                     <span>Settings</span>
                 </a>
 
             </div>
 
             <div class="sidebar-footer">
-                <button id="logout-btn" class="nav-item nav-logout">
-                    <i data-lucide="log-out"></i>
+                <button id="logout-btn" type="button" class="nav-item nav-logout">
+                    <i data-lucide="log-out" aria-hidden="true"></i>
                     <span>Logout</span>
                 </button>
             </div>
@@ -109,12 +120,13 @@
 
         <!-- Main Content -->
         <main id="main-content" class="main-content">
-            
+
             <!-- Page Header -->
             <header class="page-header">
                 <div class="header-left">
-                    <button id="mobile-menu-btn" class="mobile-menu-btn">
-                        <i data-lucide="menu"></i>
+                    <button id="mobile-menu-btn" type="button" class="mobile-menu-btn"
+                            aria-label="Toggle navigation menu" aria-controls="sidebar" aria-expanded="false">
+                        <i data-lucide="menu" aria-hidden="true"></i>
                     </button>
                     <div>
                         <h1 id="page-title" class="page-title">Overview</h1>
@@ -122,15 +134,16 @@
                     </div>
                 </div>
                 <div class="header-right">
-                    <div id="status-indicator" class="status-badge status-online">
-                        <span class="status-dot"></span>
-                        <span>System Online</span>
+                    <!-- Driven by real API outcomes via UI.setSystemStatus(); was static markup. -->
+                    <div id="status-indicator" class="status-badge status-online" role="status" aria-live="polite" aria-label="System Online">
+                        <span class="status-dot" aria-hidden="true"></span>
+                        <span data-status-label>System Online</span>
                     </div>
                 </div>
             </header>
 
             <!-- Page Container -->
-            <div id="page-container" class="page-container">
+            <div id="page-container" class="page-container" tabindex="-1">
                 <!-- Pages are dynamically injected here -->
             </div>
         </main>
@@ -141,23 +154,23 @@
 
     <!-- ─── Modal Container ──────────────────────────────────────────────── -->
     <div id="modal-overlay" class="modal-overlay hidden">
-        <div id="modal-content" class="modal-content glass-card">
+        <div id="modal-content" class="modal-content glass-card" role="dialog" aria-modal="true" tabindex="-1">
             <!-- Modal content injected dynamically -->
         </div>
     </div>
 
     <!-- Scripts -->
-    <script src="/dashboard/js/api.js?v=2.0"></script>
-    <script src="/dashboard/js/components.js?v=2.0"></script>
-    <script src="/dashboard/js/pages/overview.js?v=2.0"></script>
-    <script src="/dashboard/js/pages/campaigns.js?v=2.0"></script>
-    <script src="/dashboard/js/pages/posts.js?v=2.0"></script>
-    <script src="/dashboard/js/pages/inbox.js?v=2.0"></script>
-    <script src="/dashboard/js/pages/ai_settings.js?v=2.0"></script>
-    <script src="/dashboard/js/pages/analytics.js?v=2.0"></script>
-    <script src="/dashboard/js/pages/activity.js?v=2.0"></script>
-    <script src="/dashboard/js/pages/settings.js?v=2.0"></script>
-    <script src="/dashboard/js/app.js?v=2.0"></script>
+    <script src="/dashboard/js/api.js?v=3.0"></script>
+    <script src="/dashboard/js/components.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/overview.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/campaigns.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/posts.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/inbox.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/ai_settings.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/analytics.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/activity.js?v=3.0"></script>
+    <script src="/dashboard/js/pages/settings.js?v=3.0"></script>
+    <script src="/dashboard/js/app.js?v=3.0"></script>
 
 </body>
 </html>

@@ -2,189 +2,200 @@
  * Overview Page — Dashboard home with hero stats and activity chart.
  */
 const OverviewPage = {
-    chart: null,
+    charts: [],
+
+    destroy() {
+        this.charts.forEach((c) => { try { c.destroy(); } catch (e) { /* already gone */ } });
+        this.charts = [];
+    },
 
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
+        container.innerHTML = UI.loader('Loading overview…');
+        this.destroy();
 
+        let stats;
+        let interactions;
         try {
-            const [stats, interactions] = await Promise.all([
+            [stats, interactions] = await Promise.all([
                 API.getStats(),
                 API.getInteractions({ limit: 8 }),
             ]);
-
-            container.innerHTML = `
-                <div class="stats-grid">
-                    <div class="stat-card glass-card">
-                        <div class="stat-header">
-                            <span class="stat-label">Total DMs Sent</span>
-                            <div class="stat-icon accent"><i data-lucide="send"></i></div>
-                        </div>
-                        <div class="stat-value" id="stat-sent">0</div>
-                        <div class="stat-change">${stats.todayActivity} today</div>
-                    </div>
-                    <div class="stat-card glass-card">
-                        <div class="stat-header">
-                            <span class="stat-label">Success Rate</span>
-                            <div class="stat-icon success"><i data-lucide="check-circle"></i></div>
-                        </div>
-                        <div class="stat-value" id="stat-rate">0</div>
-                        <div class="stat-change">${stats.sent} sent / ${stats.failed} failed</div>
-                    </div>
-                    <div class="stat-card glass-card">
-                        <div class="stat-header">
-                            <span class="stat-label">Users Reached</span>
-                            <div class="stat-icon warning"><i data-lucide="users"></i></div>
-                        </div>
-                        <div class="stat-value" id="stat-users">0</div>
-                        <div class="stat-change">Unique users reached</div>
-                    </div>
-                    <div class="stat-card glass-card">
-                        <div class="stat-header">
-                            <span class="stat-label">Active Campaigns</span>
-                            <div class="stat-icon accent"><i data-lucide="megaphone"></i></div>
-                        </div>
-                        <div class="stat-value" id="stat-campaigns">0</div>
-                        <div class="stat-change">${stats.totalInteractions} total interactions</div>
-                    </div>
-                </div>
-
-                <div class="chart-grid">
-                    <div class="chart-card glass-card">
-                        <div class="chart-card-header">
-                            <span class="chart-card-title">DM Activity — Last 7 Days</span>
-                        </div>
-                        <div class="chart-wrapper">
-                            <canvas id="activity-chart"></canvas>
-                        </div>
-                    </div>
-                    <div class="chart-card glass-card">
-                        <div class="chart-card-header">
-                            <span class="chart-card-title">Status Breakdown</span>
-                        </div>
-                        <div class="chart-wrapper">
-                            <canvas id="status-chart"></canvas>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="table-card glass-card">
-                    <div class="table-header">
-                        <span class="table-title">Recent Activity</span>
-                        <button class="btn btn-secondary btn-sm" onclick="App.navigate('activity')">View All</button>
-                    </div>
-                    <div class="table-wrapper">
-                        <table class="data-table">
-                            <thead><tr>
-                                <th>User</th><th>Keyword</th><th>Status</th><th>Time</th>
-                            </tr></thead>
-                            <tbody>
-                                ${interactions.data.map(i => {
-                const isFb = i.platform === 'facebook';
-                const badge = isFb
-                    ? `<span style="font-size:10px;background:#1877F2;color:#fff;padding:2px 5px;border-radius:4px;margin-left:4px;">FB</span>`
-                    : `<span style="font-size:10px;background:#E1306C;color:#fff;padding:2px 5px;border-radius:4px;margin-left:4px;">IG</span>`;
-                const userCell = isFb
-                    ? `<span class="username-link">@${i.sender_username}</span>${badge}`
-                    : `<a href="https://instagram.com/${i.sender_username}" target="_blank" class="username-link">@${i.sender_username}</a>${badge}`;
-                return `
-                                        <tr>
-                                            <td>${userCell}</td>
-                                            <td>${i.trigger_keyword || '—'}</td>
-                                            <td><span class="status-pill ${i.status.toLowerCase()}">${i.status}</span></td>
-                                            <td>${UI.formatDate(i.timestamp)}</td>
-                                        </tr>
-                                    `;
-            }).join('')}
-                                ${interactions.data.length === 0 ? '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text-muted);">No activity yet.</td></tr>' : ''}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            `;
-
-            lucide.createIcons({ nodes: [container] });
-
-            // Animate counters
-            UI.animateCounter(document.getElementById('stat-sent'), stats.sent);
-            UI.animateCounter(document.getElementById('stat-rate'), stats.successRate);
-            UI.animateCounter(document.getElementById('stat-users'), stats.uniqueUsersReached);
-            UI.animateCounter(document.getElementById('stat-campaigns'), stats.activeCampaigns);
-
-            // Add % suffix to rate
-            const rateEl = document.getElementById('stat-rate');
-            setTimeout(() => { rateEl.textContent += '%'; }, 1300);
-
-            // Render charts
-            await this.renderCharts(stats);
-
         } catch (err) {
-            container.innerHTML = `<div class="empty-state"><i data-lucide="wifi-off"></i><h3>Connection Error</h3><p>${err.message}</p></div>`;
-            lucide.createIcons({ nodes: [container] });
+            UI.renderError(
+                container,
+                {
+                    icon: 'wifi-off',
+                    title: 'Could not load the dashboard',
+                    message: err.message,
+                    hint: err.isNetworkError ? 'The dashboard could not reach /api at all.' : '',
+                },
+                () => this.render()
+            );
+            return;
         }
+
+        const rows = (interactions && interactions.data) || [];
+
+        container.innerHTML = esc(html`
+            <div class="stats-grid">
+                <div class="stat-card glass-card">
+                    <div class="stat-header">
+                        <span class="stat-label">Total DMs Sent</span>
+                        <div class="stat-icon accent"><i data-lucide="send" aria-hidden="true"></i></div>
+                    </div>
+                    <div class="stat-value" id="stat-sent">0</div>
+                    <div class="stat-change">${stats.todayActivity} today</div>
+                </div>
+                <div class="stat-card glass-card">
+                    <div class="stat-header">
+                        <span class="stat-label">Success Rate</span>
+                        <div class="stat-icon success"><i data-lucide="check-circle" aria-hidden="true"></i></div>
+                    </div>
+                    <div class="stat-value" id="stat-rate">0</div>
+                    <div class="stat-change">${stats.sent} sent / ${stats.failed} failed</div>
+                </div>
+                <div class="stat-card glass-card">
+                    <div class="stat-header">
+                        <span class="stat-label">Users Reached</span>
+                        <div class="stat-icon warning"><i data-lucide="users" aria-hidden="true"></i></div>
+                    </div>
+                    <div class="stat-value" id="stat-users">0</div>
+                    <div class="stat-change">Unique users reached</div>
+                </div>
+                <div class="stat-card glass-card">
+                    <div class="stat-header">
+                        <!-- Renamed: the backing query counts every campaign row, with no
+                             WHERE is_active, so "Active Campaigns" was never true. -->
+                        <span class="stat-label">Total Campaigns</span>
+                        <div class="stat-icon accent"><i data-lucide="megaphone" aria-hidden="true"></i></div>
+                    </div>
+                    <div class="stat-value" id="stat-campaigns">0</div>
+                    <div class="stat-change">${stats.totalInteractions} total interactions</div>
+                </div>
+            </div>
+
+            <div class="chart-grid">
+                <div class="chart-card glass-card">
+                    <div class="chart-card-header">
+                        <span class="chart-card-title">DM Activity — Last 7 Days</span>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="activity-chart" aria-label="DM activity over the last 7 days" role="img"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card glass-card">
+                    <div class="chart-card-header">
+                        <span class="chart-card-title">Status Breakdown</span>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="status-chart" aria-label="Sent versus failed breakdown" role="img"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="table-card glass-card">
+                <div class="table-header">
+                    <span class="table-title">Recent Activity</span>
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="app:navigate" data-target="activity">View All</button>
+                </div>
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead><tr>
+                            <th scope="col">User</th><th scope="col">Keyword</th><th scope="col">Status</th><th scope="col">Time</th>
+                        </tr></thead>
+                        <tbody>
+                            ${rows.map((i) => html`
+                                <tr>
+                                    <td>${UI.userCell(i)}</td>
+                                    <td dir="auto">${i.trigger_keyword || '—'}</td>
+                                    <td><span class="status-pill ${String(i.status || '').toLowerCase()}">${i.status}</span></td>
+                                    <td>${UI.formatDate(i.timestamp)}</td>
+                                </tr>
+                            `)}
+                            ${rows.length === 0
+                                ? html`<tr><td colspan="4" class="table-empty-cell">No activity yet.</td></tr>`
+                                : ''}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `);
+
+        UI.icons(container);
+
+        UI.animateCounter(document.getElementById('stat-sent'), stats.sent);
+        UI.animateCounter(document.getElementById('stat-rate'), stats.successRate);
+        UI.animateCounter(document.getElementById('stat-users'), stats.uniqueUsersReached);
+        UI.animateCounter(document.getElementById('stat-campaigns'), stats.activeCampaigns);
+
+        const rateEl = document.getElementById('stat-rate');
+        setTimeout(() => { if (rateEl && rateEl.isConnected) rateEl.textContent += '%'; }, 1300);
+
+        await this.renderCharts(stats);
     },
 
     async renderCharts(stats) {
-        // Activity chart
-        try {
-            const hourly = await API.getDailyStats(7);
-            const ctx = document.getElementById('activity-chart')?.getContext('2d');
-            if (!ctx) return;
+        if (typeof Chart === 'undefined') return;
 
-            new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: hourly.map(h => new Date(h.day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })),
-                    datasets: [{
-                        label: 'Sent',
-                        data: hourly.map(h => h.sent),
-                        borderColor: '#22c55e',
-                        backgroundColor: 'rgba(34,197,94,0.1)',
-                        fill: true, tension: 0.4, pointRadius: 4, pointHoverRadius: 6,
-                    }, {
-                        label: 'Failed',
-                        data: hourly.map(h => h.failed),
-                        borderColor: '#ef4444',
-                        backgroundColor: 'rgba(239,68,68,0.05)',
-                        fill: true, tension: 0.4, pointRadius: 4, pointHoverRadius: 6,
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { labels: { color: '#94a3b8', font: { family: 'Inter' } } } },
-                    scales: {
-                        x: { ticks: { color: '#475569', font: { family: 'Inter' } }, grid: { color: 'rgba(255,255,255,0.04)' } },
-                        y: { ticks: { color: '#475569', font: { family: 'Inter' } }, grid: { color: 'rgba(255,255,255,0.04)' }, beginAtZero: true }
-                    }
-                }
-            });
+        const tickColor = '#94a3b8';
+        const gridColor = 'rgba(255,255,255,0.06)';
+
+        try {
+            const daily = await API.getDailyStats(7);
+            const ctx = document.getElementById('activity-chart');
+            if (ctx) {
+                this.charts.push(new Chart(ctx.getContext('2d'), {
+                    type: 'line',
+                    data: {
+                        labels: daily.map((h) => UI.formatDay(h.day)),
+                        datasets: [{
+                            label: 'Sent',
+                            data: daily.map((h) => h.sent),
+                            borderColor: '#22c55e',
+                            backgroundColor: 'rgba(34,197,94,0.1)',
+                            fill: true, tension: 0.4, pointRadius: 4, pointHoverRadius: 6,
+                        }, {
+                            label: 'Failed',
+                            data: daily.map((h) => h.failed),
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239,68,68,0.05)',
+                            fill: true, tension: 0.4, pointRadius: 4, pointHoverRadius: 6,
+                        }],
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        plugins: { legend: { labels: { color: tickColor, font: { family: 'Inter' } } } },
+                        scales: {
+                            x: { ticks: { color: tickColor, font: { family: 'Inter' } }, grid: { color: gridColor } },
+                            y: { ticks: { color: tickColor, font: { family: 'Inter' } }, grid: { color: gridColor }, beginAtZero: true },
+                        },
+                    },
+                }));
+            }
         } catch (e) { console.warn('Chart error:', e); }
 
-        // Status donut
         try {
-            const ctx2 = document.getElementById('status-chart')?.getContext('2d');
-            if (!ctx2) return;
-
-            new Chart(ctx2, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Sent', 'Failed'],
-                    datasets: [{
-                        data: [stats.sent, stats.failed],
-                        backgroundColor: ['#22c55e', '#ef4444'],
-                        borderWidth: 0,
-                        hoverOffset: 8,
-                    }]
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    cutout: '72%',
-                    plugins: {
-                        legend: { position: 'bottom', labels: { color: '#94a3b8', font: { family: 'Inter' }, padding: 16 } }
-                    }
-                }
-            });
+            const ctx2 = document.getElementById('status-chart');
+            if (ctx2) {
+                this.charts.push(new Chart(ctx2.getContext('2d'), {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Sent', 'Failed'],
+                        datasets: [{
+                            data: [stats.sent, stats.failed],
+                            backgroundColor: ['#22c55e', '#ef4444'],
+                            borderWidth: 0,
+                            hoverOffset: 8,
+                        }],
+                    },
+                    options: {
+                        responsive: true, maintainAspectRatio: false,
+                        cutout: '72%',
+                        plugins: { legend: { position: 'bottom', labels: { color: tickColor, font: { family: 'Inter' }, padding: 16 } } },
+                    },
+                }));
+            }
         } catch (e) { console.warn('Donut chart error:', e); }
-    }
+    },
 };
