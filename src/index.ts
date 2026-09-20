@@ -479,9 +479,19 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                     } catch (dmError: any) {
                         // Private DM failed → FAILED
                         console.error('❌ Private DM Error:', dmError.message);
+                        
+                        let displayStatus = 'FAILED';
+                        let displayError = dmError.message;
+                        
+                        // Handle Meta Error 10903: User privacy settings block DMs
+                        if (displayError && displayError.includes('Code: 10903')) {
+                            displayStatus = 'USER_BLOCKED_DMS';
+                            displayError = 'User privacy settings block DMs from Pages (Code 10903).';
+                        }
+                        
                         await pool.query(
                             'UPDATE interactions SET status = $1, error_log = $2 WHERE id = $3',
-                            ['FAILED', dmError.message, interactionId]
+                            [displayStatus, displayError, interactionId]
                         );
                         continue; // skip public reply
                     }
@@ -504,9 +514,15 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
                         } catch (publicErr: any) {
                             // Public reply failed but DM already succeeded — log but keep SENT
                             console.warn('⚠️  Public reply failed (non-critical):', publicErr.message);
+                            
+                            let errorMsg = publicErr.message;
+                            if (errorMsg.includes('Code: 200')) {
+                                errorMsg = `App missing permission. Please add 'pages_manage_engagement' in Meta Developer Console -> App Review, and regenerate your Page Access Token. (${publicErr.message})`;
+                            }
+                            
                             await pool.query(
                                 'UPDATE interactions SET error_log = $1 WHERE id = $2',
-                                [`Public reply failed: ${publicErr.message}`, interactionId]
+                                [`Public reply failed: ${errorMsg}`, interactionId]
                             );
                         }
                     }
