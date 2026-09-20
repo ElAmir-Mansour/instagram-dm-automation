@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # The dashboard has no build step and no typechecking, so a syntax error there ships
+      # silently and blanks the page at runtime. This is the only automated guard it has.
+      - name: Syntax-check dashboard JS
+        run: find dashboard -name '*.js' -print0 | xargs -0 -n1 node --check
