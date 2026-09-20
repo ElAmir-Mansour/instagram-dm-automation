@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 
 import { pool } from './config/db.js';
 import { validateEnv } from './config/env.js';
-import { verifyMetaSignature } from './utils/signature.js';
+import { appSecrets, verifyMetaSignature } from './utils/signature.js';
 import { rateLimiter } from './utils/rateLimiter.js';
 import { normalizeArabic } from './utils/arabic.js';
 import { sendPrivateReply, sendPublicReply, sendDirectMessage, likeComment } from './services/instagram.js';
@@ -110,7 +110,14 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
 
     // 1. Validate Signature (HMAC SHA-256)
     if (!verifyMetaSignature(req, req.rawBody)) {
-        console.error('❌ Invalid signature — rejecting request.');
+        // Worth being loud here: a signature failure is indistinguishable from
+        // "no events arriving" unless the log says which secrets were tried.
+        console.error(
+            `❌ Invalid signature — rejecting request. Tried ${appSecrets().length} app secret(s).` +
+            (process.env.INSTAGRAM_APP_SECRET
+                ? ''
+                : ' INSTAGRAM_APP_SECRET is not set, so Instagram Login events cannot validate.'),
+        );
         res.sendStatus(403);
         return;
     }
