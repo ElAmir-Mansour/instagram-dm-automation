@@ -172,7 +172,13 @@ export async function publishInstagramPost(
     type: 'image' | 'video' | 'reel' | 'story',
     caption: string,
     mediaUrl: string,
-    accessToken: string
+    accessToken: string,
+    /**
+     * Public URL of an image to use as the reel's cover. Instagram defaults a
+     * reel's thumbnail to frame 0 of the video, which renders as a black tile
+     * in the profile grid whenever a video fades in from black.
+     */
+    coverUrl?: string | null
 ) {
     const createUrl = `https://graph.facebook.com/${API_VERSION}/${instagramId}/media`;
     let createPayload: any = {};
@@ -181,6 +187,15 @@ export async function publishInstagramPost(
         createPayload = { image_url: mediaUrl, caption: caption };
     } else if (type === 'video' || type === 'reel') {
         createPayload = { media_type: 'REELS', video_url: mediaUrl, caption: caption };
+        if (coverUrl) {
+            // cover_url wins over thumb_offset when both are sent, so only one is set.
+            createPayload.cover_url = coverUrl;
+        } else {
+            // 1.5s in: past any fade-in, still early enough to be on the hook.
+            createPayload.thumb_offset = 1500;
+        }
+        // Without this a reel only appears in the Reels tab, not the main feed.
+        createPayload.share_to_feed = true;
     } else if (type === 'story') {
         const isVideo = mediaUrl.match(/\.(mp4|mov|avi|wmv)/i);
         if (isVideo) {
