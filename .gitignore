@@ -6,3 +6,7 @@ dist/
 docs/
 .env*.local
 .env.production
+
+# Local-only assistant notes and config — keep out of the public repo
+CLAUDE.md
+.claude/
