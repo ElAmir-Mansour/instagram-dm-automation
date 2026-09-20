@@ -99,7 +99,8 @@ router.get('/cron/publish', async (req, res) => {
                         post.post_type,
                         post.caption || '',
                         post.media_url,
-                        token
+                        token,
+                        post.cover_url
                     );
                     igId = igRes.id;
                     console.log(`⏰ Published to Instagram. Media ID: ${igId}`);
@@ -724,7 +725,7 @@ router.get('/posts/scheduled', async (_req, res) => {
 
 router.post('/posts/scheduled', async (req, res) => {
     try {
-        const { platform, post_type, caption, media_url, scheduled_time, publish_now } = req.body;
+        const { platform, post_type, caption, media_url, scheduled_time, publish_now, cover_url } = req.body;
 
         if (!platform || !post_type || !scheduled_time) {
             res.status(400).json({ error: 'platform, post_type, and scheduled_time are required.' });
@@ -741,8 +742,8 @@ router.post('/posts/scheduled', async (req, res) => {
 
         // Insert into database
         const result = await pool.query(
-            `INSERT INTO scheduled_posts (creator_id, platform, post_type, caption, media_url, scheduled_time, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            `INSERT INTO scheduled_posts (creator_id, platform, post_type, caption, media_url, scheduled_time, status, cover_url)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
             [
                 creatorId,
                 platform,
@@ -750,7 +751,8 @@ router.post('/posts/scheduled', async (req, res) => {
                 caption || null,
                 media_url || null,
                 new Date(scheduled_time),
-                'PENDING'
+                'PENDING',
+                cover_url || null
             ]
         );
 
@@ -781,7 +783,7 @@ router.post('/posts/scheduled', async (req, res) => {
 
                 // Instagram
                 if (platform === 'instagram' || platform === 'both') {
-                    const igRes = await publishInstagramPost(creator.instagram_page_id, post_type, caption || '', media_url, token);
+                    const igRes = await publishInstagramPost(creator.instagram_page_id, post_type, caption || '', media_url, token, cover_url);
                     igId = igRes.id;
                 }
 
@@ -825,7 +827,7 @@ router.post('/posts/scheduled', async (req, res) => {
 router.put('/posts/scheduled/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { platform, post_type, caption, media_url, scheduled_time } = req.body;
+        const { platform, post_type, caption, media_url, scheduled_time, cover_url } = req.body;
 
         const result = await pool.query(
             `UPDATE scheduled_posts
