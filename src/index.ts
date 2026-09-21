@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { pool } from './config/db.js';
 import { validateEnv } from './config/env.js';
 import { appSecrets, verifyMetaSignature } from './utils/signature.js';
+import { isDiagnosticProbe } from './utils/probe.js';
 import { enqueueWebhookBody, processWebhookBody } from './webhook/router.js';
 import { drainInline } from './jobs/drain.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
@@ -177,9 +178,14 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         // "no events arriving" unless the log says which secrets were tried. This is the
         // line the project's own troubleshooting docs call invisible — as a structured
         // event it can finally be alerted on.
+        // `probe` distinguishes diagnose.mjs proving this guard still holds from a real
+        // rejection. The two were byte-identical in the logs, which is a trap in an app
+        // whose documented worst failure is an invisible signature rejection. It is a
+        // label only — see src/utils/probe.ts; a forged tag changes nothing here.
         log('error', 'webhook.signature_rejected', {
             secrets_tried: appSecrets().length,
             instagram_secret_set: Boolean(process.env.INSTAGRAM_APP_SECRET),
+            probe: isDiagnosticProbe(req),
         });
         res.sendStatus(403);
         return;
