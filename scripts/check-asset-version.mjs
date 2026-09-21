@@ -28,6 +28,24 @@ import { execFileSync } from 'node:child_process';
 const INDEX = 'dashboard/index.html';
 const APP = 'dashboard/js/app.js';
 
+/**
+ * Other pages that pin the SAME shared stylesheets with their own `?v=`.
+ *
+ * This list exists because omitting it was a real bug. The public compliance pages and the
+ * standalone Eid page each load `/dashboard/css/tokens.css?v=N` with a version they maintain
+ * themselves — and all three sat at `?v=5.0` while the dashboard moved to 5.6 across five
+ * separate bumps. Nobody noticed, because this script only ever looked at the shell.
+ *
+ * The consequence is not cosmetic: a returning visitor to /privacy — which is the URL Meta
+ * links to from the app's own settings — got the cached 5.0 stylesheet, so the page rendered
+ * in the previous palette while the dashboard rendered in the current one.
+ */
+const SHARED_ASSET_PAGES = [
+    'public/privacy.html',
+    'public/data-deletion.html',
+    'dashboard/eid.html',
+];
+
 const fail = [];
 
 /** Every `?v=…` in index.html. */
@@ -58,6 +76,28 @@ if (av === null) {
 if (distinct.length > 1) {
     fail.push(`${INDEX}: asset refs disagree (${distinct.join(', ')}) — a browser would fetch a mixed bundle.`);
 }
+for (const page of SHARED_ASSET_PAGES) {
+    let html2;
+    try {
+        html2 = readFileSync(page, 'utf8');
+    } catch {
+        continue; // an optional page; its absence is not a version problem
+    }
+    const pageRefs = [...new Set(refVersions(html2))];
+    if (pageRefs.length === 0) continue;
+    if (pageRefs.length > 1) {
+        fail.push(`${page}: asset refs disagree with each other (${pageRefs.join(', ')}).`);
+        continue;
+    }
+    if (av !== null && pageRefs[0] !== av) {
+        fail.push(
+            `${page} pins shared assets at ?v=${pageRefs[0]} but ASSET_VERSION is '${av}'.\n` +
+            `      It loads the same stylesheet as the dashboard, so a returning visitor gets a ` +
+            `cached copy from a different release.`
+        );
+    }
+}
+
 if (av !== null && distinct.length === 1 && distinct[0] !== av) {
     fail.push(
         `version mismatch: ${INDEX} serves ?v=${distinct[0]} but ${APP} has ASSET_VERSION '${av}'.\n` +
@@ -99,4 +139,7 @@ if (fail.length > 0) {
     process.exit(1);
 }
 
-console.log(`✓ dashboard cache version consistent: ${refs.length} ref(s) and ASSET_VERSION all at '${av}'`);
+console.log(
+    `✓ cache version consistent: ${refs.length} ref(s) in the shell, `
+    + `${SHARED_ASSET_PAGES.length} shared-asset page(s), and ASSET_VERSION all at '${av}'`
+);
