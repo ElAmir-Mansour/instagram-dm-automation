@@ -94,6 +94,11 @@ const Motion = {
             return Promise.resolve();
         }
 
+        // `vt.ready` rejects when a transition is superseded — which rapid navigation does
+        // routinely. Nothing is wrong: `update()` still ran and `finished` still settles. But
+        // an unhandled rejection here logs a permanent AbortError that masks real errors.
+        if (vt.ready && typeof vt.ready.catch === 'function') vt.ready.catch(() => {});
+
         const clear = () => root.classList.remove('is-transitioning');
         if (vt.finished && typeof vt.finished.then === 'function') {
             vt.finished.then(clear, clear);
@@ -382,7 +387,7 @@ const Motion = {
             } else {
                 el = opts.create();
                 el.dataset.rowKey = k;
-                el.dataset.rowSig = ' '; // never equal to a real signature
+                el.dataset.rowSig = '\u0000'; // never equal to a real signature
             }
             const sig = String(opts.signature(item));
             if (el.dataset.rowSig !== sig) {

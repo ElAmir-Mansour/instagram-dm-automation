@@ -297,7 +297,7 @@ const InboxPage = {
 
         Motion.patchList(container, threads, {
             key: (x) => x.id,
-            // Everything the row displays, and nothing else. `` cannot
+            // Everything the row displays, and nothing else. `\u001f` cannot
             // appear in a username or a DM, so no two states collide.
             signature: (x) => [
                 this.threadName(x),
@@ -306,7 +306,7 @@ const InboxPage = {
                 x.is_bot_active ? '1' : '0',
                 x.last_message_direction,
                 x.id === this.selectedConversationId ? '1' : '0',
-            ].join(''),
+            ].join('\u001f'),
             create: () => {
                 const el = document.createElement('button');
                 el.type = 'button';

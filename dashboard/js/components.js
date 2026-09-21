@@ -155,8 +155,6 @@ const UI = {
         const icon = type === 'success' ? 'check-circle' : 'alert-circle';
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
-        toast.setAttribute('role', 'status');
-        toast.setAttribute('aria-live', 'polite');
         const iconEl = document.createElement('i');
         iconEl.setAttribute('data-lucide', icon);
         const span = document.createElement('span');

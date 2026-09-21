@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Privacy Policy - Instagram DM Automation</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.7; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; }
+        body {
+            /* No background was set, so a dark-mode UA (Android Chrome's Auto Dark Theme is on
+               by default) put #333 on near-black: measured 1.66:1. Pin the page light. */
+            background: #fff;
+            color-scheme: only light; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.7; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; }
         h1 { color: #000; border-bottom: 2px solid #eee; padding-bottom: 10px; }
         h2 { color: #222; margin-top: 30px; }
         a { color: #0070f3; }

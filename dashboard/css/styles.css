@@ -8,7 +8,7 @@
 
    1.  LOGICAL PROPERTIES ONLY. `margin-inline-start`, `inset-inline-end`,
        `padding-block`, `border-inline-start`, `text-align: start`. There are
-       exactly three physical exceptions in this file, each marked, where a
+       seven physical exceptions in this file, each marked, where a
        transform has to know which way the page runs.
    2.  NO LETTER-SPACING ON TEXT. Arabic is a joining script; letter-spacing
        breaks the ligatures apart. The old table headers had `letter-spacing:
@@ -652,6 +652,12 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
 }
 .label-optional { font-weight: var(--fw-regular); color: var(--text-muted); font-size: var(--fs-100); }
 .field, .field-textarea, .select {
+    /* appearance:none stripped the native arrow; the padding gutter was already reserved. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right var(--space-3) center;
+    background-size: 16px 16px;
+
     width: 100%;
     padding: var(--space-3);
     min-height: var(--tap-target);
@@ -661,7 +667,7 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
     color: var(--text-strong);
     font-size: var(--fs-200);
     line-height: var(--lh-normal);
-    outline: none;
+    outline: 2px solid transparent; /* not `none`: a transparent outline still renders in forced-colors mode, where box-shadow and border-color are discarded */
     transition: border-color var(--motion-fast) var(--ease-standard),
                 box-shadow var(--motion-fast) var(--ease-standard);
 }
@@ -681,7 +687,7 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
 
 input[type='range'] { width: 100%; accent-color: var(--accent); min-height: var(--tap-target); }
 input[type='file'].field { padding: var(--space-2); line-height: 2; }
-input[type='checkbox'] { accent-color: var(--accent); width: 18px; height: 18px; cursor: pointer; }
+input[type='checkbox'] { accent-color: var(--accent); inline-size: 24px; block-size: 24px; flex-shrink: 0; cursor: pointer; }
 
 /* Toggle switch */
 .switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
@@ -1826,3 +1832,16 @@ html[dir='rtl'] .page-btn svg { transform: scaleX(-1); }
     /* Slowed, not stopped: a frozen spinner reads as a hung request. */
     .spinner { animation-duration: 2s; }
 }
+
+html[dir='rtl'] .select { background-position: left var(--space-3) center; }
+
+/* Naming only the group left the UA's default fade on the old/new pseudo-elements, so the
+   marker ghosted: a fading bar at the old position and a rising one at the new. */
+::view-transition-old(nav-active),
+::view-transition-new(nav-active) { animation: none; }
+
+/* The stylesheet never named (root), so it ran at the browser's 250ms default while (page)
+   ran at --motion-base — chrome and content settled 50ms apart on every navigation. */
+::view-transition-group(root),
+::view-transition-old(root),
+::view-transition-new(root) { animation-duration: var(--motion-base); animation-timing-function: var(--ease-standard); }

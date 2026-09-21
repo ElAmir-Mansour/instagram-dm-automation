@@ -202,7 +202,7 @@
                         <i data-lucide="menu" aria-hidden="true"></i>
                     </button>
                     <div>
-                        <h1 id="page-title" class="page-title">نظرة عامة</h1>
+                        <h1 id="page-title" class="page-title" data-i18n="nav.overview" lang="ar">نظرة عامة</h1>
                         <p id="page-subtitle" class="page-subtitle"></p>
                     </div>
                 </div>
@@ -229,7 +229,10 @@
         </main>
     </div>
 
-    <div id="toast-container" class="toast-container"></div>
+    <!-- role/aria-live live HERE, not on the toast: a live region must exist in the
+         accessibility tree before its contents change. Populating a detached node and then
+         appending it is the pattern screen readers silently drop. -->
+    <div id="toast-container" class="toast-container" role="status" aria-live="polite" aria-atomic="false"></div>
 
     <div id="modal-overlay" class="modal-overlay hidden">
         <div id="modal-content" class="modal-content" role="dialog" aria-modal="true" tabindex="-1">
