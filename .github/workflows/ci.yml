@@ -49,3 +49,8 @@ jobs:
       # language this product is actually used in.
       - name: Check RTL icon mirroring
         run: npm run check:icons
+
+      # Token colours are one hex edit away from failing AA, and nothing else in this repo
+      # would notice. The tightest real pair currently sits at ~4.71:1 - almost no headroom.
+      - name: Check colour contrast
+        run: npm run check:contrast
