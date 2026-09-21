@@ -10,3 +10,13 @@ docs/
 # Local-only assistant notes and config — keep out of the public repo
 CLAUDE.md
 .claude/
+
+# Local scratch scripts. These were tracked in a PUBLIC repo with the production
+# database password and a live Meta token hardcoded in them. Never track them again.
+scratch/
+query_posts_temp.js
+post_scheduler_status.html
+
+# Belt and braces: .env alone did not cover .env.production, which was committed once.
+.env*
+!.env.example
