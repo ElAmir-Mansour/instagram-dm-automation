@@ -159,21 +159,21 @@
        enough from both Instagram pink and Facebook blue that a primary button
        never competes with the platform colours beside it in the same row — which
        indigo did, sitting between them on the hue wheel. */
-    --accent: #34a8a0;
-    --accent-hover: #4dc0b6;
-    --accent-soft: rgba(52, 168, 160, 0.16);
-    --accent-ring: rgba(52, 168, 160, 0.36);
-    --accent-text: #66d3c7;
+    --accent: #c9633f;
+    --accent-hover: #dd7a55;
+    --accent-soft: rgba(201, 99, 63, 0.16);
+    --accent-ring: rgba(201, 99, 63, 0.36);
+    --accent-text: #e89873;
 
     --success: #2dd4a7;
     --success-soft: rgba(45, 212, 167, 0.14);
     --success-text: #5ce3bd;
-    --danger: #f2565b;
-    --danger-soft: rgba(242, 86, 91, 0.14);
-    --danger-text: #ff8b8f;
-    --warning: #f0a92b;
-    --warning-soft: rgba(240, 169, 43, 0.14);
-    --warning-text: #ffc266;
+    --danger: #f0466b;
+    --danger-soft: rgba(240, 70, 107, 0.14);
+    --danger-text: #ff8ba6;
+    --warning: #edb424;
+    --warning-soft: rgba(237, 180, 36, 0.14);
+    --warning-text: #f8cd5e;
     --info: #55a8f5;
     --info-soft: rgba(85, 168, 245, 0.14);
     --info-text: #8fc6ff;
@@ -186,8 +186,8 @@
        What replaces it is one hue with depth — the same teal, lit from the top
        edge. It still reads as raised and clickable; it just does not announce a
        genre it is not part of. */
-    --gradient-brand: linear-gradient(160deg, #3bb3aa, #2a8f89 60%, #227a75);
-    --gradient-brand-soft: linear-gradient(160deg, rgba(52, 168, 160, 0.15), rgba(34, 122, 117, 0.05));
+    --gradient-brand: linear-gradient(160deg, #d4744c, #c05a37 60%, #a84a2c);
+    --gradient-brand-soft: linear-gradient(160deg, rgba(201, 99, 63, 0.15), rgba(168, 74, 44, 0.05));
 
     --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --elev-2: 0 8px 24px -12px rgba(0, 0, 0, 0.7);
@@ -228,19 +228,19 @@
         --text-muted: #6a6157;
         --text-on-accent: #ffffff;
 
-        --accent: #0f7f78;
-        --accent-hover: #0b6660;
-        --accent-soft: rgba(15, 127, 120, 0.1);
-        --accent-ring: rgba(15, 127, 120, 0.32);
-        --accent-text: #0b625d;
+        --accent: #a8472a;
+        --accent-hover: #8c3a20;
+        --accent-soft: rgba(168, 71, 42, 0.1);
+        --accent-ring: rgba(168, 71, 42, 0.32);
+        --accent-text: #8c3a20;
 
         --success: #0f8f6c;
         --success-soft: rgba(15, 143, 108, 0.12);
         --success-text: #0b6f53;
-        --danger: #cf2f3c;
+        --danger: #c62348;
         --danger-soft: rgba(207, 47, 60, 0.1);
         --danger-text: #b31f2c;
-        --warning: #9a6408;
+        --warning: #8a6c04;
         --warning-soft: rgba(154, 100, 8, 0.12);
         --warning-text: #7d5106;
         --info: #1a6fc4;
@@ -252,8 +252,8 @@
         --brand-facebook-soft: rgba(24, 119, 242, 0.1);
         --brand-facebook-text: #0f5bc0;
 
-        --gradient-brand: linear-gradient(160deg, #139087, #0f7f78 60%, #0b6a65);
-        --gradient-brand-soft: linear-gradient(160deg, rgba(15, 127, 120, 0.09), rgba(11, 106, 101, 0.03));
+        --gradient-brand: linear-gradient(160deg, #bc5432, #a8472a 60%, #8f3b22);
+        --gradient-brand-soft: linear-gradient(160deg, rgba(168, 71, 42, 0.09), rgba(143, 59, 34, 0.03));
 
         --elev-1: 0 1px 2px rgba(19, 24, 41, 0.08);
         --elev-2: 0 10px 26px -16px rgba(19, 24, 41, 0.34);
@@ -290,19 +290,19 @@
     --text-muted: #6a6157;
     --text-on-accent: #ffffff;
 
-    --accent: #0f7f78;
-    --accent-hover: #0b6660;
-    --accent-soft: rgba(15, 127, 120, 0.1);
-    --accent-ring: rgba(15, 127, 120, 0.32);
-    --accent-text: #0b625d;
+    --accent: #a8472a;
+    --accent-hover: #8c3a20;
+    --accent-soft: rgba(168, 71, 42, 0.1);
+    --accent-ring: rgba(168, 71, 42, 0.32);
+    --accent-text: #8c3a20;
 
     --success: #0f8f6c;
     --success-soft: rgba(15, 143, 108, 0.12);
     --success-text: #0b6f53;
-    --danger: #cf2f3c;
+    --danger: #c62348;
     --danger-soft: rgba(207, 47, 60, 0.1);
     --danger-text: #b31f2c;
-    --warning: #9a6408;
+    --warning: #8a6c04;
     --warning-soft: rgba(154, 100, 8, 0.12);
     --warning-text: #7d5106;
     --info: #1a6fc4;
@@ -314,8 +314,8 @@
     --brand-facebook-soft: rgba(24, 119, 242, 0.1);
     --brand-facebook-text: #0f5bc0;
 
-    --gradient-brand: linear-gradient(160deg, #139087, #0f7f78 60%, #0b6a65);
-    --gradient-brand-soft: linear-gradient(160deg, rgba(15, 127, 120, 0.09), rgba(11, 106, 101, 0.03));
+    --gradient-brand: linear-gradient(160deg, #bc5432, #a8472a 60%, #8f3b22);
+    --gradient-brand-soft: linear-gradient(160deg, rgba(168, 71, 42, 0.09), rgba(143, 59, 34, 0.03));
 
     --elev-1: 0 1px 2px rgba(19, 24, 41, 0.08);
     --elev-2: 0 10px 26px -16px rgba(19, 24, 41, 0.34);

@@ -65,19 +65,37 @@ of three borrowed ones.
 
 ## 3. Colour — three roles, and one of them is not ours
 
-### The primary action is teal, and that is a decision, not a preference
+### The primary action is terracotta, and the first attempt at this was wrong
 
 It was `#4f46e5`: **Tailwind's default Indigo-600**. That is the single most recognisable "an
 AI generated this" colour on the web, and it is the main reason this product looked like a
 template rather than like itself.
 
-Teal replaces it for two reasons that survive argument:
+The first replacement was teal, and **it was incoherent** — worth recording, because the
+mistake is instructive. The neutrals had just been made warm on purpose (hue 34-40). Teal
+sits at hue 176. Those are near-complementary: the accent fought the ground it sat on, which
+is exactly what "the colours look weird" means when someone says it without a hex value.
 
-1. It is the vocabulary of **signal and communication** — telecoms, messaging, transmission —
-   rather than of machine learning. That is what this product does.
-2. It is far enough from both Instagram pink and Facebook blue that a primary button never
-   competes with the platform chips beside it in the same row. **Indigo did**, sitting between
-   them on the hue wheel, which is why "Publish" used to fight the `facebook` tag next to it.
+Terracotta (hue ~15) agrees with the warm neutrals instead of arguing with them. It reads as
+earthy and deliberate rather than technological, which suits a tool for reading what people
+wrote. And it stays clear of both Instagram pink and Facebook blue, so a primary button never
+competes with the platform chip beside it in the same row — **indigo did**, sitting between
+them on the hue wheel.
+
+### The alarms had to move out of its way
+
+Terracotta lands between the two alarm colours. As shipped they were 18 and 22 degrees away
+from it, and two solid buttons that close together are genuinely hard to tell apart at a
+glance. "Delete" must never be mistakable for "Publish".
+
+So `--danger` went cooler (to hue ~347) and `--warning` yellower (to ~43) until both cleared
+**25 degrees**. That threshold is a judgement rather than a standard: it is where these three
+read as distinct in side-by-side rows in this product.
+
+`scripts/check-contrast.mjs` now enforces it. Without that, the widening would be quietly
+undone by the next colour tweak and nobody would notice, because **each colour still passes
+contrast on its own**. Saturation difference helps as well (the accent is muted at ~56 where
+the alarms are vivid at ~85) and is reported but not enforced, being the weaker signal.
 
 ### The three roles
 
@@ -151,16 +169,57 @@ purpose:
 
 ---
 
-## 7. The guards
+## 7. The component inventory, and why there is no React
+
+The interface is vanilla JS with no build step. That is a live question — a component library
+would hand over accessible modals and tables for free — so here is the actual position.
+
+**What already exists**: ~380 component classes in `styles.css` and ~40 helpers on `UI`,
+covering every role a dashboard needs:
+
+| role | what is there |
+|---|---|
+| Surfaces | `.surface`, `.card-grid`, `.stat-card`, `.table-card`, `.ops-card`, `.panel-*` |
+| Actions | `.btn` + primary/secondary/ghost/danger/sm/full, `.icon-btn`, `.segmented` |
+| Overlays | `.modal-*` with focus trap, Escape, focus restore, dirty-field guard |
+| Feedback | `.toast` (aria-live), `.alert-card`, `.inline-error`, `.error-panel`, `.warning-card` |
+| Data | `.data-table`, `.log-cards` (the table's mobile form), `.pagination`, `.filter-bar` |
+| State | `.skel-*` skeletons, `.spinner`, `.empty-state`, `.health-*` |
+| Forms | `.field`, `.form-group`, `.switch`, `.select`, `.chip-select`, invalid marking |
+| Messaging | `.message-bubble`, `.bubble-*`, `.thread-item`, `.msg-carousel`, `.typing-dots` |
+| Helpers | `formatNumber`/`formatDate`/`relativeAge` via `Intl`, `captureFocus`/`restoreFocus`, `registerActions` delegation, `html` auto-escaping |
+
+**The case against migrating**, in order of weight:
+
+1. **All four CI guards are vanilla-specific.** `check:icons` greps `data-lucide`,
+   `check:i18n` greps `t('…')` and `data-i18n`, `check:assets` exists precisely *because*
+   there is no bundler to content-hash. A rewrite invalidates every one of them, and they
+   were each added after a real failure.
+2. **The expensive part is done.** Focus management, `aria-live`, optimistic updates, RTL on
+   logical properties, the auto-escaping template — all built and tested. "Easier components"
+   would buy components that already exist.
+3. **No build step is why a deploy is 20 seconds** and why there is no build to break.
+4. 432 tests and 16 page modules is verified work a rewrite discards.
+
+**What would change the answer**: a second developer joining, or needing a library's
+accessibility work for free. Not component convenience. If it ever happens, the honest
+sequence is Preact via ESM (no bundler) before React with one.
+
+**The rule in the meantime**: add to this inventory rather than inventing a one-off. A new
+pattern that appears twice belongs in `styles.css` with a class, not copied between pages.
+
+---
+
+## 8. The guards
 
 This document describes intent. Four CI checks enforce the parts that can be:
 
 | check | stops |
 |---|---|
-| `check:contrast` | any text/surface pair falling below WCAG AA (4.5:1) in either theme |
+| `check:contrast` | any text/surface pair below WCAG AA (4.5:1) in either theme, **and** any two semantic colours drifting within 25° of hue |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
 | `check:i18n` | an English string with no Arabic translation, rendering English inside an RTL page |
-| `check:assets` | a dashboard change shipping without a cache-version bump |
+| `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
 
 The tightest real contrast pair currently measures **5.01:1**. There is little headroom, which
 is exactly why it is checked rather than asserted.
