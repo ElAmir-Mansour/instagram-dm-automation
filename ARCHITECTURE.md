@@ -13,7 +13,7 @@ on `feat/architecture`.
 
 The codebase is in far better shape than its history suggests. The hardening and tenancy
 passes did real work: the webhook is decomposed, tenant resolution is centralised, tokens are
-encrypted, migrations have a ledger, and 137 tests exist where there were none. The remaining
+encrypted, migrations have a ledger, and 281 tests exist where there were none. The remaining
 problems are almost all **architectural rather than defective** — the code does what it says,
 but the shape it is in cannot survive the next order of magnitude.
 
@@ -444,15 +444,36 @@ tenants from each other, because N tenants × 180/hr has no relationship to the 
 
 What is needed, in order:
 
-1. **A global bucket in addition to the per-creator one.** `checkSendQuota` already takes a
-   `bucket` parameter (`rateLimiter.ts:35`) and `rate_limit_counters` is keyed on
-   `(creator_id, bucket, window_start)`. A sentinel creator id for the app-wide bucket is a
-   handful of lines. **This is the cheap, obvious first step and it is not done.**
-2. **Fair queueing in the drain.** `claim` is currently `ORDER BY run_after` — strict FIFO, so
-   a tenant with 10,000 queued events starves everyone behind them. Round-robin by
-   `creator_id` fixes it. The `jobs` table has the column; the change is to one query.
+1. ~~**A global bucket in addition to the per-creator one.**~~ **DELIVERED (v14).**
+   `checkAppSendQuota` counts the app-wide pool and `checkFairSendQuota` checks both ceilings,
+   creator first, app second (`rateLimiter.ts:87-132`). Both send paths call it
+   (`webhook/comments.ts:277`, `webhook/messaging.ts:326`), and `interactions.error_log`
+   records *which* ceiling refused, so a tenant throttled by another tenant's traffic can be
+   told that rather than debugging their own account (`webhook/comments.ts:289-294`).
+
+   The sentinel-creator-id plan above was wrong and was abandoned: `rate_limit_counters` has
+   `creator_id` in its primary key, NOT NULL with a foreign key to `creators`, so an app-wide
+   row would have required either a fake creator or rebuilding a live table's primary key. A
+   separate `app_rate_limit_counters` table instead — same shape, same 48h pruning, one fewer
+   column (`migration_v14_functionality.sql:33-53`, pruned at `rateLimiter.ts:176`). The
+   default ceiling is 1,000/hr via `META_APP_HOURLY_LIMIT`, deliberately generous so that
+   turning it on could not throttle the single live account; lower it once the app's real DAU
+   is known (`rateLimiter.ts:22-36`).
+
+2. ~~**Round-robin by `creator_id`.**~~ **DELIVERED (v14) — but not as proposed here, because
+   as written it was impossible.** `jobs.creator_id` is **NULL on every row the webhook
+   writes**, by design: resolving the tenant needs a database read and the entire point of
+   enqueueing is to get off the Meta clock before doing any (`webhook/router.ts:81-84`,
+   `migration_v13_jobs.sql:32-34`). Partitioning on it would have grouped every job in the
+   table together and changed nothing.
+
+   The partition is a new `jobs.tenant_key` column holding `entry.id` — the Meta page id the
+   delivery is addressed to, which is already in the payload and needs no lookup. See ADR-6.
+   `claim` now ranks each tenant's pending jobs oldest-first and takes every tenant's oldest
+   before anyone's second (`jobs/queue.ts:100-123`).
+
 3. **Per-tenant quotas as a product feature**, with the app-wide pool as the real budget being
-   allocated.
+   allocated. Still open, and now the only one of the three that is.
 
 ### 6.2 The blocker is Meta, not code
 
@@ -499,17 +520,31 @@ that change the system's character.
 
 **Unblocks:** everything below. Nothing here changes observable behaviour.
 
+**Landed since, on `main`:** fair queueing by `tenant_key` and the app-wide rate bucket (v14,
+§6.1 and ADR-6); `done`-job retention (§9); per-campaign `match_mode` so a dangerous short
+keyword has a fix and not just a warning (`migration_v14_functionality.sql:8-31`); re-entrant
+DM handling via `messages.handled_at` / `reply_claimed_at`, which is what lets a queue retry
+actually reach the DM path (`:80-102`); passive token-death detection
+(`services/tokenHealth.ts`); the cross-tenant admin surface (ADR-8); and the live diagnostics
+and stage watcher (`scripts/diagnose.mjs`, `scripts/watch.mjs`) that RUNBOOK.md is built on.
+
 ### Stage 1 — turn on what already exists *(hours, no code)*
 
-1. Apply migration v13: `npm run migrate`.
-2. Set `RAW_PAYLOAD_RETENTION_DAYS=90`.
+1. ~~Apply migration v13.~~ **Done** — all 14 migrations are applied and unmodified, verified
+   against the ledger on 2026-09-21.
+2. Set `RAW_PAYLOAD_RETENTION_DAYS=30`. **Still unset.** Amended from 90: the published
+   `/data-deletion` page commits to 30 days, and the page is the promise. Until this is set the
+   sweep is a no-op and that promise is untrue (ADR-5, RUNBOOK.md §7).
 3. Verify `DATABASE_URL` uses Supabase's pooler port (6543), and lower `db.ts` `max` to 2-3.
+   **The pooler half is done** — production connects through the Supabase pooler on 6543,
+   confirmed 2026-09-21. The `max` half is not.
 4. Point an external scheduler at `GET /api/jobs/drain` every minute with the `CRON_SECRET`
-   bearer token.
+   bearer token. **Still not done.**
 
 **Unblocks:** genuine durability (not just opportunism); bounded job latency; the data-layer
 and privacy fixes. Step 4 is the highest value-per-effort action available anywhere in this
-document.
+document, and it remains outstanding — which is why the queue is still accurately described as
+opportunistic rather than durable.
 
 ### Stage 2 — move scheduled publishing onto the queue *(1-2 days)*
 
@@ -571,12 +606,21 @@ that accumulates rows (see §9) and one extra round-trip per event.
 
 ### ADR-2 — Postgres as the queue, not QStash/SQS/Redis
 
-**Chosen:** a `jobs` table with `FOR UPDATE SKIP LOCKED`, behind a `JobQueue` interface.
+**Chosen:** a `jobs` table with an atomic claim, behind a `JobQueue` interface.
 
 **Rationale:** the database is already here, already pooled, already backed up. At this volume
 the extra round-trip is irrelevant next to the 2-8s Gemini call it wraps. The deciding factor
 is operability: a stuck job can be inspected with the SQL editor the operator already has open
 at 2am, which is not true of a hosted queue's dead-letter console.
+
+**Amended (v14): the claim is not `FOR UPDATE SKIP LOCKED`, and cannot be.** Postgres rejects
+`FOR UPDATE` outright in the presence of a window function, so once fair queueing made the
+claim a `ROW_NUMBER() OVER (PARTITION BY tenant_key …)` the previous shape could not have run
+at all. Atomicity now comes from `AND status = 'pending'` on the `UPDATE` itself: a contending
+claimer waits on the row lock, re-evaluates its `WHERE` against the committed version, reads
+`'running'` and skips it. Same guarantee — two drains split the work and cannot both run one
+job — and the only thing lost is that a contender waits the length of one autocommit `UPDATE`
+rather than skipping ahead (`jobs/queue.ts:87-99`).
 
 **Rejected — QStash.** The right answer at 10-100× this volume, and it cannot be provisioned
 from here. `JobQueue`'s five methods map 1:1 onto publish/receive/ack/nack/visibility-timeout
@@ -585,8 +629,8 @@ precisely so this is a new file, not a refactor.
 **Rejected — in-memory queue with no table.** Solves nothing: the problem is durability across
 invocation death.
 
-**Consequence:** `jobs` rows accumulate and need their own retention. Claim contention is
-handled by `SKIP LOCKED` but is not free at very high concurrency.
+**Consequence:** `jobs` rows accumulate and need their own retention — since delivered, see
+§9. Claim contention is handled by the status guard but is not free at very high concurrency.
 
 ### ADR-3 — A `MediaStore` interface now, `BYTEA` behind it
 
@@ -642,6 +686,109 @@ inbox renders and what `ai.ts` reads back as history. Losing them changes the pr
 product; wrong for one already holding a real customer's data under a different implicit
 policy. §7 Stage 1 says to set it to 90 deliberately.
 
+**Amended:** the published `/data-deletion` page commits to deleting the verbatim Meta event
+**after 30 days**, not 90. The page is the promise, so 30 is the value to set. Note that the
+*opt-in* decision above means the promise is untrue until somebody sets it — see RUNBOOK.md §7.
+
+### ADR-6 — `tenant_key` (the Meta page id), not `creator_id`, as the fair-queueing partition
+
+**Chosen:** a new `jobs.tenant_key TEXT` holding `entry.id`, written at enqueue as
+`COALESCE(tenantKey, creatorId)` (`jobs/queue.ts:40-41`), partitioned on in the claim
+(`jobs/queue.ts:104-107`), indexed by `idx_jobs_claimable_fair (tenant_key, run_after) WHERE
+status = 'pending'` (`migration_v14_functionality.sql:71-72`).
+
+**Rejected — `creator_id`, as §6.1 originally proposed.** Not a preference: it does not work.
+`jobs.creator_id` is NULL on every row the webhook writes, because resolving the tenant costs a
+database read and enqueueing exists precisely to get off Meta's ~20s clock before doing any
+(`webhook/router.ts:81-84`). Every row would fall in one partition and the round-robin would
+degenerate to the FIFO it replaced — while looking, in the code, like it worked.
+
+**Rejected — resolve the tenant at enqueue time so `creator_id` is populated.** This is the
+version that keeps the schema clean, and it pays for it in the one place with no budget. It
+also reintroduces a failure mode the queue was built to remove: the tenant lookup is now on the
+critical path, so a slow database delays the acknowledgement rather than the work.
+
+**Rejected — `COALESCE(tenant_key, creator_id)` in the claim's `PARTITION BY`.** Costs a sort
+on every claim, because an expression cannot be satisfied by the index. Doing the COALESCE once
+at enqueue costs nothing and lets the partition and the ordering both come off the index
+(`jobs/queue.ts:36-39`).
+
+**Consequence:** the partition key is not the tenant's identity. It is a stable per-tenant
+*proxy*, and a tenant with two page ids (Instagram and Facebook) occupies two slots rather than
+one — fairer to them than to everyone else, in a direction small enough to ignore at this
+volume. Jobs with no key at all share one group, which is the conservative answer: they
+compete with each other rather than each getting a slot.
+
+### ADR-7 — Application-layer AES-256-GCM for token encryption, not Supabase Vault
+
+**Chosen:** encrypt `creators.page_access_token` in the application with AES-256-GCM, key in
+`TOKEN_ENCRYPTION_KEY`, stored as `enc:v1:<iv>:<tag>:<ciphertext>`
+(`config/crypto.ts:42-49`). Decryption is funnelled through one function
+(`services/tenant.ts:70-76`).
+
+**Rationale — the threat model decides it.** The threat is *database access*, and it is not
+hypothetical: the production connection string, with the password, was committed to a public
+repository, and `page_access_token` was plaintext beside it. A key stored in the same database
+as the data does not defend against that at all. An environment-held key lives in a different
+trust domain, so the leak that already happened would not have been enough
+(`config/crypto.ts:4-8`).
+
+**Rejected — Supabase Vault / pgsodium.** The key material is reachable from the same
+credential that reaches the ciphertext, which is the exact adversary here. pgsodium is also
+pending deprecation. Convenient, and defends against the wrong thing.
+
+**Rejected — encrypt later, once tenancy exists.** Migrating plaintext secrets after multiple
+tenants exist means rotating every tenant's Meta token simultaneously. Doing it while there is
+one account is nearly free.
+
+**Rejected — a required key with a hard migration window.** `decryptSecret` returns an
+unprefixed value unchanged (`config/crypto.ts:58-60`), so legacy plaintext keeps working and
+each token becomes encrypted the next time it is saved. The cost is that "encrypted at rest" is
+true per row rather than per table, which is why `diagnose.mjs` warns per tenant when it finds
+plaintext (`scripts/diagnose.mjs:381-385`).
+
+**Consequence:** losing `TOKEN_ENCRYPTION_KEY` is unrecoverable — every tenant must paste a
+fresh token. That is the accepted price of the key not being in the database. It is also why
+the key is deliberately *not* required at startup but *is* required to write a token, and the
+endpoints say so (`routes/admin.ts:139-147`).
+
+### ADR-8 — One cross-tenant admin surface, 404 rather than 403
+
+**Chosen:** `src/routes/admin.ts`, mounted at `/api/admin` inside `requireAuth` +
+`requireLiveSession` and gated again on `role === 'platform_admin'`
+(`routes/api.ts:742`, `routes/admin.ts:49-57`). Dashboard screens **Tenants** and **Users**,
+hidden unless the session says admin (`dashboard/js/app.js:53-54`, `:341`).
+
+**Rationale:** two things had no home. Creating a creator had no UI and no API at all — a fresh
+deployment was unusable until someone hand-wrote an `INSERT` in the Supabase SQL editor. And
+"is anything broken for anybody" is a question the per-tenant dashboard **structurally cannot
+answer**, because every other route in the app is deliberately pinned to one tenant
+(`routes/admin.ts:4-15`).
+
+**Chosen — 404, not 403, for a non-admin.** Confirming that an administrative surface exists is
+itself a disclosure (`routes/admin.ts:46-48`). `resolveTenant` does the same for a tenant the
+session may not act as (`services/tenant.ts:296-298`).
+
+**Chosen — `token_version` as the only revocation mechanism.** Sessions are stateless HMACs
+with a 24h TTL, so before this column a leaked token simply could not be taken back. Bumping it
+invalidates every session a user holds, checked against the database on each request so a
+revoked membership takes effect immediately rather than at expiry
+(`routes/admin.ts:310-344`, `services/tenant.ts:211-222`).
+
+**Rejected — a token re-check endpoint in this increment.** `GET /api/admin/tenants` *reads*
+`token_status` and `last_webhook_at` (`routes/admin.ts:71-106`); nothing re-asks Meta. Passive
+detection covers the important case — every send path calls `noteMetaFailure`, so a revoked
+token flips the row on the first real failure (`services/tokenHealth.ts:47-73`) — but a token
+that dies while the account is quiet still reads stale until someone opens the page or runs
+`diagnose.mjs`. **This is the honest gap in ADR-8** and the obvious next endpoint.
+
+**Rejected — deriving `last_webhook_at` from a dedicated column.** Derived instead from
+`GREATEST(max(interactions.timestamp), max(messages.created_at))`, which needs no writer
+changes and reports correctly for a tenant that only ever receives one of the two kinds
+(`routes/admin.ts:96-103`, rationale at `:61-70`). The limitation is stated in §5.4's terms: a comment matching no
+campaign writes no `interactions` row, so this column can look stale on a perfectly healthy
+tenant. `jobs` is the unambiguous signal.
+
 ---
 
 ## 9. Deliberately not done
@@ -656,13 +803,30 @@ Recorded so it is a decision rather than an omission.
 - **Gemini context caching.** The largest cost win available, but it changes what is sent to
   the model on every DM. It should follow a week of `ai.usage` data rather than precede it.
 - **Returning 503 on enqueue failure.** ADR-1.
-- **`jobs` row retention.** `done` rows accumulate. The sweep belongs next to
-  `pruneRawPayloads` and is a handful of lines; left out only to keep this branch's retention
-  story to one opt-in switch rather than two.
-- **Global (app-wide) rate bucket.** ~20 lines given the existing `bucket` parameter, and the
-  fix for the cross-tenant 429 problem. Left out because it changes send behaviour for the
-  live account and belongs with Stage 4's fair-queueing work, where it can be tested together.
+- ~~**`jobs` row retention.**~~ **DELIVERED (v14).** `pruneCompleted` deletes `done` rows older
+  than 7 days in batches of 5,000 (`jobs/queue.ts:223-234`, `services/retention.ts:45-48`),
+  driven by `runRetentionSweep` from the publish cron (`routes/api.ts:373`). Deliberately *not*
+  opt-in, unlike `raw_payload`: a `done` job's outcome is already recorded in `interactions` /
+  `messages`, so the row is a verbatim Meta event held for no further purpose. `failed` rows are
+  never touched — those are the ones an operator needs (`services/retention.ts:38-45`).
+  The sweep also converges rather than clearing one batch a day: up to 20 passes, because at one
+  batch per daily cron a 60,000-row backlog would have taken twelve days
+  (`services/retention.ts:50-59`).
+- ~~**Global (app-wide) rate bucket.**~~ **DELIVERED (v14).** §6.1 item 1. It did not land as
+  ~20 lines against the existing `bucket` parameter — `rate_limit_counters` could not hold an
+  app-wide row, so it needed its own table.
 - **A pipeline liveness metric.** §5.4. Needs a traffic baseline to set non-noisy thresholds.
+  Partly superseded in practice: `scripts/diagnose.mjs` compares each tenant's silence against
+  that tenant's own median inter-event gap rather than a fixed threshold
+  (`scripts/diagnose.mjs:479-510`), which is the hard half of the problem. What is still missing
+  is something that *runs on a schedule* and alerts — today it only reports when invoked.
+- **A token re-check endpoint or scheduled token check.** ADR-8. `token_status` is refreshed by
+  a page view, a save, or a real send failure; nothing asks Meta on a timer. The specific
+  exposure with a date on it is data-access expiry, which lapses while `/debug_token` still
+  reports `is_valid: true` — currently **2026-12-19**. See RUNBOOK.md §3.
+- **A dry run for `/api/cron/publish`.** There is no way to exercise the publish path without
+  publishing to the live accounts, and six posts are `PENDING`. The diagnostics report stranded
+  claims, overdue rows and failures instead, which is the best available substitute.
 - **Deleting `src/db_check2.ts`.** 15 lines of ad-hoc debug script that nothing imports and no
   route reaches, sitting in `src/` where it is compiled and deployed. Harmless, and deleting
   unrelated files is not what this branch is for — but it should go.
@@ -674,17 +838,40 @@ Recorded so it is a decision rather than an omission.
 
 ## 10. Corrections to the existing project documentation
 
-`CLAUDE.md` is unusually good and mostly current. Four entries are now stale:
+The four `CLAUDE.md` entries this section previously flagged as stale — the uncalled rate
+limiter, the fail-open cron guard, the emoji `console.log` count, and keyword matching's
+location — **have now been corrected in `CLAUDE.md` itself.** They are listed here only as the
+record of what was wrong, and should not be re-applied.
 
-1. **"`src/utils/rateLimiter.ts` is imported but never called."** No longer true — it is wired
-   into both the comment and DM paths.
-2. **"`/api/cron/publish` fails open."** No longer true — it fails closed, and the guard is now
-   shared with `/api/jobs/drain`.
-3. **"~60 emoji `console.log` calls."** It was 150. Now 5, all deliberate.
-4. **"Keyword matching is substring-based at `src/index.ts:438`."** Correct behaviour, wrong
-   location — it moved to `src/services/matching.ts` and is now tested.
+### Still stale, in the source rather than the docs
 
-And one correction to a comment in the source: `tenant.ts:306-315` states that the webhook
-writers do not set `creator_id`. They do (`comments.ts`, `messaging.ts`). The
-`creator_id IS NULL` fallback in the tenant predicates now serves only pre-backfill rows and
-can be removed once a backfill is confirmed — see §7 Stage 4.
+These are comments that no longer describe the code beside them. Each sends a reader to the
+wrong conclusion, which is the expensive kind of wrong.
+
+1. **`jobs/queue.ts:10-15`** — the module header still says "`FOR UPDATE SKIP LOCKED` inside
+   the subquery is what makes it atomic". It is not there, and `:94-99` in the same file
+   explains at length why it cannot be. The header and the body of one file disagree.
+2. **`routes/api.ts:273-274`** — the `/api/jobs/drain` doc comment repeats the same claim:
+   "the claim is atomic (`FOR UPDATE SKIP LOCKED`)". The conclusion is right, the mechanism
+   named is not.
+3. **`services/tenant.ts:304-315`** — states that the webhook writers do not set `creator_id`,
+   so every arriving row is NULL and the tenant predicates need a relationship fallback. The
+   writers do set it (`webhook/comments.ts`, `webhook/messaging.ts`). The fallback now serves
+   only pre-backfill rows and can be removed once a backfill is confirmed — see §7 Stage 4.
+4. **`config/env.ts:22`** — describes `CRON_SECRET` as "Bearer secret guarding
+   /api/cron/publish". It guards `/api/jobs/drain` too (`routes/api.ts:277`).
+
+### Still stale in configuration
+
+5. **`.env.example` declares `RAW_PAYLOAD_RETENTION_DAYS` twice** — empty at line 84 and `30`
+   at line 90, with two different recommendations in the surrounding comments (90 vs 30).
+   Whichever wins depends on the parser. The published `/data-deletion` page commits to 30, so
+   30 is the value; the duplicate and the conflicting advice should go.
+
+### A correction to this document's own prior claims
+
+6. **§6.1's fair-queueing proposal was not merely undone, it was unimplementable.** Round-robin
+   by `creator_id` could not have worked, because that column is NULL on every webhook row by
+   design. Recorded at §6.1 item 2 and ADR-6 so the next person does not re-derive it. This is
+   the failure mode worth noting about design documents: a proposal that typechecks in prose
+   can still be impossible in the schema.
