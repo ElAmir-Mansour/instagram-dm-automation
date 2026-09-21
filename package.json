@@ -9,7 +9,8 @@
     "test:watch": "node --import tsx --test --watch \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "migrate": "node --env-file=.env scripts/migrate.mjs",
-    "migrate:status": "node --env-file=.env scripts/migrate.mjs --status"
+    "migrate:status": "node --env-file=.env scripts/migrate.mjs --status",
+    "check:assets": "node scripts/check-asset-version.mjs"
   },
   "keywords": [
     "instagram",

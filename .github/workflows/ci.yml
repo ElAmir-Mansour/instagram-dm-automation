@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the cache-version bump check diffs against the PR base ref,
+          # which a depth-1 checkout does not contain.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -30,3 +34,12 @@ jobs:
       # silently and blanks the page at runtime. This is the only automated guard it has.
       - name: Syntax-check dashboard JS
         run: find dashboard -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      # The dashboard's `?v=` refs and ASSET_VERSION are its only cache-busting mechanism,
+      # and nothing else can catch them drifting apart: there is no build step, and the files
+      # are individually valid either way. Replayed against c158b7d — the merge that actually
+      # blanked /dashboard#/posts in production — this step fails.
+      - name: Check dashboard cache version
+        env:
+          BASE_REF: ${{ github.base_ref && format('origin/{0}', github.base_ref) || '' }}
+        run: npm run check:assets
