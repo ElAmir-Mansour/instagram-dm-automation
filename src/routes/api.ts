@@ -1486,7 +1486,7 @@ router.post('/settings/token', async (req, res) => {
         const appSecret = process.env.META_APP_SECRET;
         if (appId && appSecret) {
             try {
-                const extendRes = await axios.get('https://graph.facebook.com/v21.0/oauth/access_token', {
+                const extendRes = await axios.get(`https://graph.facebook.com/${API_VERSION}/oauth/access_token`, {
                     params: {
                         grant_type: 'fb_exchange_token',
                         client_id: appId,
@@ -1642,7 +1642,7 @@ router.post('/settings/token/extend', async (req, res) => {
 
         const currentToken = creator.page_access_token;
 
-        const extendRes = await axios.get('https://graph.facebook.com/v21.0/oauth/access_token', {
+        const extendRes = await axios.get(`https://graph.facebook.com/${API_VERSION}/oauth/access_token`, {
             params: {
                 grant_type: 'fb_exchange_token',
                 client_id: appId,

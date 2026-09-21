@@ -1,7 +1,59 @@
 import { metaHttp, withRetry } from './http.js';
 import { log } from '../utils/log.js';
 
-export const API_VERSION = 'v21.0';
+/** Shape of a Graph API version string. Anything else would build a URL Meta 404s. */
+const VERSION_PATTERN = /^v\d+\.\d+$/;
+
+/**
+ * The default Graph API version.
+ *
+ * Bumped v21.0 -> v26.0 on 2026-09-21. The reason to move was not that v21.0 had stopped
+ * working — it was that Meta's versioning policy does not fail loudly. Per Meta: once a
+ * version is no longer usable, calls to it are "defaulted to the next oldest, usable
+ * version". Nothing 404s. v21.0 reaches that point around 2027-01-21, at which point every
+ * URL in this file would silently start executing as v22.0 semantics, with no error to grep
+ * for and no line in any log. Doing nothing is therefore also an untested version change —
+ * just one at a time nobody chooses.
+ *
+ * What was verified before the bump, against the live token: `debug_token`, the page node,
+ * `/{page}/feed`, the IG user node and `/{ig}/media` return byte-identical response shapes
+ * on v21.0 and v26.0.
+ *
+ * What was NOT verified, and cannot be without acting on a real account: the write paths —
+ * `/{id}/media` + `/media_publish`, `/{id}/feed`, `/{id}/photos`, `/{id}/videos`,
+ * `/{id}/messages` and `/{id}/likes`. Publishing a post or sending a DM to test a version
+ * bump has a real recipient. Those remain unproven by us.
+ */
+export const DEFAULT_API_VERSION = 'v26.0';
+
+/**
+ * The Graph API version every call in this file uses.
+ *
+ * Overridable by `META_API_VERSION` specifically so a rollback is an environment change
+ * rather than a code change, review and deploy — which matters for the write paths above,
+ * since the first evidence of a problem will be a real failed publish or a real undelivered
+ * DM.
+ *
+ * An invalid value logs loudly and falls back to the default rather than throwing. Throwing
+ * at module load on Vercel turns every route into an opaque 500 (see the note in
+ * src/config/env.ts), and a typo in an optional variable should not take the app down — but
+ * it must not pass silently either, because an unusable version breaks every Meta call.
+ */
+export function resolveApiVersion(): string {
+    const override = process.env.META_API_VERSION?.trim();
+    if (!override) return DEFAULT_API_VERSION;
+    if (!VERSION_PATTERN.test(override)) {
+        log('error', 'meta.api_version_invalid', {
+            value: override,
+            using: DEFAULT_API_VERSION,
+            hint: 'META_API_VERSION must look like v26.0',
+        });
+        return DEFAULT_API_VERSION;
+    }
+    return override;
+}
+
+export const API_VERSION = resolveApiVersion();
 
 /**
  * A Meta failure, rewrapped for readability but not flattened.
