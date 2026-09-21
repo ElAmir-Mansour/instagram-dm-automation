@@ -1,7 +1,8 @@
 # AutoReply Pro — design language
 
 **Audience:** whoever changes the interface next, including me.
-**Status:** adopted 2026-09-21, replacing the palette and type pairing this project shipped with.
+**Status:** adopted 2026-09-21. Apple HIG / macOS glassmorphism, replacing a warm terracotta
+direction, which replaced a Tailwind-indigo default.
 
 ---
 
@@ -10,150 +11,112 @@
 A Saudi business owner opens this at 8pm because someone commented on a reel and they do not
 want to lose the sale. The material of the product is **what people wrote, in Arabic**.
 
-That single sentence decides almost everything below. It is worth stating because the design
-this replaced had decided something else.
+That sentence still decides the things colour cannot: that Arabic leads, that RTL is the
+default rather than a mode, and that nothing decorative earns space.
 
 ---
 
-## 1. The central decision: a desk, not a control room
+## 1. The aesthetic: a macOS window
 
-What this looked like before: near-black blue-tinted surfaces, translucent "glass" panels,
-coloured glow beneath raised cards, and an indigo-to-violet gradient on the primary button.
+Translucent surfaces over a soft canvas, depth carried by blur and diffuse shadow rather than
+by borders and hard edges, and motion that settles instead of snapping. Content scrolls softly
+behind the chrome.
 
-That is the visual language of **monitoring machines** — a NOC, a trading terminal, a status
-wall. It is a coherent aesthetic and it is the wrong one, because nobody here is watching
-machines. They are reading a message a person sent them and deciding what to say back.
+Three roles, and getting them mixed up is the main way this design breaks:
 
-So: **a desk with a lamp on it.** Paper and ink in light mode, a warm pool of light in dark
-mode. Warm neutrals, not cold slate. Crisp edges, not pillows. Elevation that says "this is
-on top of that", not "this is special".
-
-The test for any new component: *would this look at home on a desk, or on a wall of screens?*
-
----
-
-## 2. Typography — one family, because mixed script is the norm here
-
-`--font-ui` · **IBM Plex Sans Arabic** → `--font-latin` · **IBM Plex Sans** → `--font-mono` ·
-**IBM Plex Mono**
-
-**Why not Cairo + Inter**, which this shipped with and which is the default pairing every
-Arabic dashboard reaches for: both are good faces and together they are a mismatch. Cairo is
-geometric-humanist with tall, open Arabic forms; Inter is a neo-grotesque tuned for small
-screen sizes. Their x-heights and weight axes do not agree.
-
-In a Latin-first product that is a subtle flaw. Here it is structural, because **mixed script
-is the normal case, not the exception** — every campaign keyword list contains both
-(`ذكاء, ذكاء اصطناعي, agentic, ai`), every inbox thread has handles in it, every id is Latin.
-Two faces that disagree means every one of those lines sits at two slightly different optical
-weights.
-
-The three Plex members are one family designed together, so the Arabic leads and the Latin
-follows it at matching weight and proportion. The whole interface speaks in one voice instead
-of three borrowed ones.
-
-**Rules**
-- The Arabic member is the **primary**, not a fallback. It comes first in `--font-ui`.
-- Never name a face directly in a component. Use `--font-ui` / `--font-latin` / `--font-mono`.
-  The one exception is `charts.js`, because Chart.js takes a family *name* and cannot read a
-  CSS variable — it is commented there.
-- Latin runs inside Arabic text (`@handles`, ids, URLs) get `--font-latin` and their own
-  `lang`, so the browser shapes each script with the right member.
-- Ids, tokens and connection strings get `--font-mono`. Never body copy.
-
----
-
-## 3. Colour — three roles, and one of them is not ours
-
-### The primary action is terracotta, and the first attempt at this was wrong
-
-It was `#4f46e5`: **Tailwind's default Indigo-600**. That is the single most recognisable "an
-AI generated this" colour on the web, and it is the main reason this product looked like a
-template rather than like itself.
-
-The first replacement was teal, and **it was incoherent** — worth recording, because the
-mistake is instructive. The neutrals had just been made warm on purpose (hue 34-40). Teal
-sits at hue 176. Those are near-complementary: the accent fought the ground it sat on, which
-is exactly what "the colours look weird" means when someone says it without a hex value.
-
-Terracotta (hue ~15) agrees with the warm neutrals instead of arguing with them. It reads as
-earthy and deliberate rather than technological, which suits a tool for reading what people
-wrote. And it stays clear of both Instagram pink and Facebook blue, so a primary button never
-competes with the platform chip beside it in the same row — **indigo did**, sitting between
-them on the hue wheel.
-
-### The alarms had to move out of its way
-
-Terracotta lands between the two alarm colours. As shipped they were 18 and 22 degrees away
-from it, and two solid buttons that close together are genuinely hard to tell apart at a
-glance. "Delete" must never be mistakable for "Publish".
-
-So `--danger` went cooler (to hue ~347) and `--warning` yellower (to ~43) until both cleared
-**25 degrees**. That threshold is a judgement rather than a standard: it is where these three
-read as distinct in side-by-side rows in this product.
-
-`scripts/check-contrast.mjs` now enforces it. Without that, the widening would be quietly
-undone by the next colour tweak and nobody would notice, because **each colour still passes
-contrast on its own**. Saturation difference helps as well (the accent is muted at ~56 where
-the alarms are vivid at ~85) and is reported but not enforced, being the weaker signal.
-
-### The three roles
-
-| role | token | means |
+| role | token | when |
 |---|---|---|
-| **Act** | `--accent` | the one thing to do on this screen |
-| **Attention** | `--warning` | someone is waiting; nothing is broken yet |
-| **Platform** | `--brand-instagram`, `--brand-facebook` | **data, never decoration** |
+| **Glass** | `--surface-raised`, `--surface-overlay` | anything that FLOATS over content: cards, the sidebar, the top bar, modals, toasts |
+| **Solid** | `--surface-solid` | anything that must render predictably: native `<option>` popups, image and media frames |
+| **Tint** | `--surface-glass`, `--surface-glass-hover` | small inline fills: pills, chips, switch tracks, hover rows, incoming chat bubbles |
 
-The platform colours are Meta's, not ours. They exist to say *which network this row belongs
-to* and they must never be used to style a button, a heading or a surface.
+`--surface-raised` and `--surface-overlay` are **translucent**. They have no real colour until
+composited over the canvas. Anything needing an opaque background must use `--surface-solid`,
+which exists for exactly that. Getting this wrong is not subtle: pointing a no-blur component
+at a translucent token gives a see-through panel with nothing behind it.
 
-**Asked and answered: no, the product cannot just use Facebook blue.** Two reasons, and the
-second is the one that would bite first.
-
-*Policy.* A third party may not "imply an endorsement or partnership of any kind" with Meta's
-brands without written permission, and their assets may not be "modified in any way, such as
-by changing the design or color". Wearing their blue as our own is exactly that, and this app
-is heading for App Review, where Meta looks at the app and its branding.
-
-*Product, which is measurable.* This dashboard shows Facebook and Instagram **side by side**.
-An accent at Facebook blue's hue is **0 degrees** from `--brand-facebook`, so `.btn-primary`
-and `.badge-facebook` become the same colour: "Publish" reads as a platform tag, Instagram
-rows read as "the other one", and the interface takes a side between two platforms it treats
-equally. It is the indigo trap again, except indigo merely sat *between* the two platform hues
-where Facebook blue *is* one of them.
-
-There is also nothing to adopt on the system-design side: Meta publishes brand *guidelines*,
-not a component library. Unlike Polaris, Carbon or Primer there is no public Meta design
-system for third parties to build on.
-
-`check-contrast.mjs` enforces the separation, so this is a rule the build holds rather than a
-paragraph someone has to remember.
-
-### Neutrals are warm
-
-The old ramp was blue-tinted (`#08080d` → `#171722`, text `#c6cedb`). Warm graphite instead.
-Beyond the desk metaphor there is a practical reason: Arabic has more stroke contrast and more
-fine detail per line than Latin at the same size, and a warm ground is measurably kinder to it
-than a cold one.
-
-### No gradient
-
-The indigo→violet 135° gradient is gone and is not coming back. A primary action does not need
-a rainbow to look primary. `--gradient-brand` still exists, but it is now **one hue with depth**
-— the same teal, lit from the top edge.
+**Two places glass is wrong on purpose.** A native `<option>` is drawn by the OS popup and
+cannot be translucent or blurred, so a glass value there renders differently on every
+platform. And a chat bubble is a tint, not glass — blurring the messages behind every bubble
+is both wrong and expensive while scrolling.
 
 ---
 
-## 4. Form
+## 2. Typography: the system font, and no webfont at all
 
-- **Radii** `3 / 6 / 9 / 13 / 18`. Tightened from `6 / 10 / 14 / 18 / 24`, which is the default
-  soft-rounded shape of a generated dashboard; past 14px a data table starts reading as a set
-  of pills rather than a document.
-- **Elevation** is three neutral shadows. `--elev-glow` used to be tinted with the accent,
-  which said "special" about components that were merely present. Warm neutral now.
-- **No glassmorphism.** `--surface-glass` survives as a 3.5% overlay for hover states, which is
-  what it is actually for. It is not a panel treatment.
+```
+-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'SF Arabic',
+system-ui, 'Segoe UI', Roboto, 'Noto Sans Arabic', 'Geeza Pro', Tahoma, sans-serif
+```
+
+HIG's own answer to typography is *use the system font*, so this loads **nothing**. The Google
+Fonts request is gone, which removes a third-party round trip from the critical path as well
+as roughly 100KB.
+
+**Arabic coverage is functional here, not aesthetic**, so the stack is longer than the brief's.
+On Apple platforms `-apple-system` resolves to SF, which includes SF Arabic and is the
+authentic choice. Elsewhere it falls through to each platform's UI face and then to named
+Arabic faces present by default. Glyph fallback is per character, so an Arabic run always
+lands on something designed for it rather than on a Latin face with no Arabic at all.
+
+---
+
+## 3. Colour: fills and labels are different tokens
+
+`--accent` is **#0071E3** — Apple's system blue. Used for button fills, active states and the
+focus ring.
+
+**`--accent-text` is a different colour, and that is the single most important thing on this
+page.** #0071E3 as *text* on the dark glass surface measures **3.38:1** — below AA. White on
+#0071E3 measures **4.70:1** and passes. Apple ships separate "accessible" variants for exactly
+this reason, and every `-text` token here is one.
+
+The same split applies to every status colour. `--success`, `--warning` and `--danger` are
+Apple's system fills (#34C759, #FF9F0A, #FF3B30). As *text* on the tinted grounds they measure
+between **2.00:1 and 3.46:1** — three of them outright failures. Their `-text` variants are
+Apple's accessible values, stepped one further where even those fell short.
+
+Two values in the brief were changed, and only these two:
+
+- **`--text-muted` is #6E6E73 / #636366, not #86868B.** The brief's value measures 3.33:1 on
+  the canvas and 3.53:1 on glass — below AA for normal text, and it carries form hints, table
+  headers, empty states and every timestamp. #86868B survives as `--text-muted-large`, for
+  large text only.
+- **The hover tint is 0.075 / 0.11**, not a straight doubling of the fill. The brief's fill
+  alphas (0.05 light, 0.08 dark) are used exactly as given; the hover step is the one number
+  that is mine, and it was chosen so Apple's own published text colours clear AA on it.
+
+### Platform colours
+
+Instagram pink and Facebook blue are **data, never decoration** — they say which network a row
+belongs to. `--accent` is now within 4° of Facebook blue, which is fine and is checked
+structurally rather than by hue: a platform colour may be a **solid** fill only in data
+visualisation (`.platform-bar-*`). On any control it must go through `-soft` as a tint with
+`-text` as the label, which is how `.badge-facebook` and `.platform-tag.fb` already work — and
+they also carry the literal letters "FB", so a solid blue button and a faint blue tint are
+distinguishable whatever their hue.
+
+This also keeps us the right side of Meta's platform terms, which forbid a third party from
+implying "an endorsement or partnership of any kind".
+
+---
+
+## 4. Geometry, depth and motion
+
+- **Radii** `6 / 8 / 12 / 16 / 20`, pill for chips. Buttons and inputs at 8, inner panels at
+  12, outer windows and modals at 16–20. Larger than the previous 3/6/9/13/18, because the
+  radius is part of what makes a window read as a window.
+- **Depth is diffuse, never harsh.** `--elev-2` is
+  `0 4px 24px -1px rgba(0,0,0,0.06), 0 2px 6px -1px rgba(0,0,0,0.04)`; modals carry
+  `0 16px 48px rgba(0,0,0,0.14)`. Dark mode leans on a hairline border instead, because shadow
+  does almost nothing against a dark canvas.
+- **Blur** is tokenised: `--blur-glass` 20px, `--blur-elevated` 28px, `--blur-chrome` 24px,
+  each with `saturate(180%)`. No component hardcodes a blur radius.
+- **Motion** is `cubic-bezier(0.16, 1, 0.3, 1)` — a long decelerating tail, so a hover settles
+  rather than snapping. Hover shifts a background tint or opacity; it does not jump.
+- **Focus** is a soft glowing ring (`box-shadow: 0 0 0 4px var(--accent-ring)`) with the solid
+  outline kept underneath, because `box-shadow` is dropped entirely in forced-colors mode and
+  the affordance has to survive that.
 
 ---
 
@@ -237,10 +200,17 @@ This document describes intent. Four CI checks enforce the parts that can be:
 
 | check | stops |
 |---|---|
-| `check:contrast` | any text/surface pair below WCAG AA (4.5:1) in either theme, **and** any two semantic colours drifting within 25° of hue |
+| `check:contrast` | any text/surface pair below WCAG AA (4.5:1) in either theme, **compositing the full glass stack down to the opaque canvas**; any two semantic colours within 25° of hue; and any platform colour used as a solid fill outside data visualisation |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
 | `check:i18n` | an English string with no Arabic translation, rendering English inside an RTL page |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
 
-The tightest real contrast pair currently measures **5.01:1**. There is little headroom, which
-is exactly why it is checked rather than asserted.
+`check:contrast` measures **144 pairs** across both themes. The tightest is **4.67:1**. That
+number is low on purpose: glass surfaces shift the ground under text, so the margin is thin
+and this is checked rather than asserted.
+
+One thing to know about the guard itself: it used to hold a flat list of "opaque" surfaces
+plus one hardcoded glass parent, and that broke the moment the design went glassmorphic — it
+composited the hover tint over `--surface-raised`'s *raw* rgba and reported failures that were
+artefacts of its own arithmetic. It now models each surface as the stack a pixel actually
+passes through.

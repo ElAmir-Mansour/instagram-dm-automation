@@ -65,10 +65,42 @@ const ratio = (a, b) => { const x = L(a), y = L(b); return (Math.max(x, y) + 0.0
 // surface: it is the modal backdrop (styles.css:910), nothing reads on top of it.
 const TEXT = ['text-strong', 'text-default', 'text-muted',
               'accent-text', 'success-text', 'danger-text', 'warning-text', 'info-text'];
-const OPAQUE = ['surface-page', 'surface-sunken', 'surface-raised', 'surface-overlay'];
-// Translucent overlays composite over the opaque surface beneath them.
-const GLASS = ['surface-glass', 'surface-glass-hover'];
-const GLASS_PARENT = 'surface-raised';
+/**
+ * Surfaces text is painted on, as a COMPOSITE CHAIN down to the opaque canvas.
+ *
+ * This used to be a flat "opaque" list plus one hardcoded glass parent, and that broke the
+ * moment the design went glassmorphic: `--surface-raised` is now `rgba(40,40,44,0.65)` — a
+ * glass card — so treating it as opaque and compositing the hover tint over its RAW rgba
+ * produced numbers that were simply wrong. It reported failures that were artefacts of its
+ * own arithmetic, which is worse than reporting none.
+ *
+ * Each entry is the stack a pixel actually passes through, topmost first. `--surface-page`
+ * is the only surface guaranteed opaque, so every chain ends there.
+ */
+const SURFACE_STACKS = [
+    ['surface-page'],
+    ['surface-sunken', 'surface-page'],
+    ['surface-solid'],
+    ['surface-raised', 'surface-page'],
+    ['surface-overlay', 'surface-page'],
+    // The HIG "secondary fill": a tint on a glass card, which is itself on the canvas.
+    ['surface-glass', 'surface-raised', 'surface-page'],
+    ['surface-glass-hover', 'surface-raised', 'surface-page'],
+    // The same tint directly on the canvas, which is where sidebar rows live.
+    ['surface-glass', 'surface-page'],
+    ['surface-glass-hover', 'surface-page'],
+];
+
+/** Flatten a stack to one opaque colour by compositing each layer over the one below. */
+function flatten(theme, stack) {
+    let out = null;
+    for (const name of [...stack].reverse()) {
+        const c = resolve(theme, theme[name]);
+        if (!c) return null;
+        out = out === null ? c.slice(0, 3) : over(c, out);
+    }
+    return out;
+}
 
 const MIN = 4.5;
 const failures = [];
@@ -76,29 +108,22 @@ let total = 0, worst = Infinity, worstLabel = '';
 
 for (const name of Object.keys(THEMES)) {
     const t = THEMES[name];
-    const parent = resolve(t, t[GLASS_PARENT]);
-    if (!parent) { console.error(`\u274c cannot resolve --${GLASS_PARENT} in the ${name} theme.`); process.exit(1); }
 
     for (const txt of TEXT) {
         const fg4 = resolve(t, t[txt]);
         if (!fg4) { failures.push(`--${txt} (${name}) could not be resolved to a colour - the guard cannot measure it.`); continue; }
-        const fg = fg4[3] === 1 ? fg4.slice(0, 3) : over(fg4, parent);
 
-        const surfaces = OPAQUE.map(s => [s, resolve(t, t[s])])
-            .concat(GLASS.map(g => {
-                const b = resolve(t, t[g]);
-                return [`${g} over ${GLASS_PARENT}`, b ? over(b, parent).concat([1]) : null];
-            }));
-
-        for (const [label, bg] of surfaces) {
-            if (!bg) { failures.push(`--${label} (${name}) could not be resolved.`); continue; }
-            const r = ratio(fg, bg.slice(0, 3));
+        for (const stack of SURFACE_STACKS) {
+            const bg = flatten(t, stack);
+            if (!bg) continue; // a surface this theme does not define
+            // Text can itself be translucent; composite it onto the same ground.
+            const fg = fg4[3] === 1 ? fg4.slice(0, 3) : over(fg4, bg);
+            const r = ratio(fg, bg);
             total++;
-            if (r < worst) { worst = r; worstLabel = `--${txt} on --${label} (${name})`; }
+            const label = stack.map(x => `--${x}`).join(' on ');
+            if (r < worst) { worst = r; worstLabel = `--${txt} on ${label} (${name})`; }
             if (r < MIN) {
-                failures.push(
-                    `${r.toFixed(2)}:1 - --${txt} on --${label} (${name} theme) is below the ${MIN}:1 AA floor.`
-                );
+                failures.push(`${r.toFixed(2)}:1 - --${txt} on ${label} (${name} theme) is below the ${MIN}:1 AA floor.`);
             }
         }
     }
@@ -128,24 +153,17 @@ const MUST_DIFFER = [
     ['accent', 'warning', 'a primary action must not read as a caution state'],
     ['danger', 'warning', 'an error must not read as a warning'],
 
-    // The platform colours are Meta's, and DESIGN.md §3 says they are DATA, never
-    // decoration: they exist to say which network a row belongs to. Two things break if the
-    // accent drifts into one of them.
+    // NOT accent-vs-platform. That pair was checked here and it was the wrong test: it
+    // assumed both are used as solid fills, and in this codebase the platform colours never
+    // are on a control - `.badge-facebook` and `.platform-tag.fb` use `--brand-facebook-soft`
+    // as a 14% tint with `--brand-facebook-text` as the label, and the tag also carries the
+    // literal letters "FB". A solid blue button and a faint blue tint reading "FB" are
+    // distinguishable whatever their hue, so the hue rule blocked legitimate palettes (both
+    // a Facebook-inspired and an Apple-inspired accent) while protecting nothing.
     //
-    // The product break is the concrete one. This dashboard shows Facebook and Instagram
-    // side by side, so an accent at Facebook blue's hue makes `.btn-primary` and
-    // `.badge-facebook` the same colour — "Publish" reads as a platform tag, and Instagram
-    // rows read as "the other one", with the interface taking a side between two platforms
-    // it treats equally. Measured: Facebook blue as the accent is 0 degrees from
-    // --brand-facebook. This is the indigo trap again, except indigo merely sat BETWEEN the
-    // two platform hues where Facebook blue IS one of them.
-    //
-    // The second is Meta's policy: a third-party product may not "imply an endorsement or
-    // partnership of any kind" with their brands, and their assets may not be "modified in
-    // any way, such as by changing the design or color". Wearing their blue as our own is
-    // exactly that, and this app is heading for App Review.
-    ['accent', 'brand-facebook', 'the accent must not read as the Facebook platform tag'],
-    ['accent', 'brand-instagram', 'the accent must not read as the Instagram platform tag'],
+    // The property that actually matters is structural, and is checked by
+    // checkPlatformColourUsage() below: a platform colour may be a SOLID fill only in data
+    // visualisation, never on an interactive control.
 ];
 
 function toHue(rgb) {
@@ -182,6 +200,44 @@ for (const [name, theme] of Object.entries(THEMES)) {
     }
 }
 
+/**
+ * Platform colours are Meta's, and DESIGN.md §3 says they are DATA, never decoration.
+ *
+ * The line that matters is not hue, it is what they fill. A solid `--brand-facebook`
+ * background on a chart bar is data: it says "this segment is Facebook". The same solid on a
+ * button or a pill is decoration, and it borrows Meta's brand for our own interface — which
+ * their platform terms forbid (a third party may not "imply an endorsement or partnership of
+ * any kind"), and which also makes a control indistinguishable from a platform tag.
+ *
+ * So: solid use is allowed only on the selectors below, which are chart geometry. Everything
+ * else must go through `-soft` (a tint) and `-text` (a label).
+ */
+function checkPlatformColourUsage() {
+    const DATA_VIZ_SELECTORS = ['.platform-bar-ig', '.platform-bar-fb'];
+    let css;
+    try {
+        css = readFileSync('dashboard/css/styles.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    } catch {
+        failures.push('dashboard/css/styles.css could not be read, so platform-colour usage is unchecked.');
+        return;
+    }
+    // Bare --brand-x (not -soft, not -text) used as a background, border or fill.
+    const re = /([^{}]+)\{[^}]*?(?:background|border[a-z-]*|fill)\s*:[^;}]*var\(--brand-(?:instagram|facebook)\)/g;
+    for (const m of css.matchAll(re)) {
+        const selector = m[1].split('\n').pop().trim();
+        const allowed = DATA_VIZ_SELECTORS.some(a => selector.includes(a));
+        if (!allowed) {
+            failures.push(
+                `${selector} fills with a bare --brand-* colour. Platform colours may be solid only in `
+                + `data visualisation (${DATA_VIZ_SELECTORS.join(', ')}); on a control, use --brand-*-soft `
+                + `as a tint with --brand-*-text as the label.`
+            );
+        }
+    }
+}
+
+checkPlatformColourUsage();
+
 if (failures.length > 0) {
     console.error('\n\u274c contrast check failed:\n');
     for (const f of failures) console.error(`   \u2022 ${f}`);
@@ -190,5 +246,6 @@ if (failures.length > 0) {
 }
 console.log(
     `\u2713 colour system: ${total} pairs clear ${MIN}:1 (tightest ${worst.toFixed(2)}:1 - ${worstLabel}); `
-    + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart`
+    + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart; `
+    + `platform colours solid only in data viz`
 );

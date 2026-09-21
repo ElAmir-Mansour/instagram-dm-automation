@@ -10,10 +10,13 @@
        `padding-block`, `border-inline-start`, `text-align: start`. There are
        seven physical exceptions in this file, each marked, where a
        transform has to know which way the page runs.
-   2.  NO LETTER-SPACING ON TEXT. Arabic is a joining script; letter-spacing
+   2.  NO LETTER-SPACING ON ARABIC. Arabic is a joining script; letter-spacing
        breaks the ligatures apart. The old table headers had `letter-spacing:
        0.5px` and `text-transform: uppercase`, which is meaningless for Arabic
-       and mangles mixed strings.
+       and mangles mixed strings. The HIG pass added micro-label tracking, and it
+       is scoped to `html[lang='en']` plus the monospace id cells that are Latin
+       whatever the UI language - see the block at the end of this file.
+       `text-transform: uppercase` was deliberately NOT reintroduced.
    3.  ONLY INTERACTIVE SURFACES REACT. `.surface` is a static panel. Lifting
        on hover is opt-in via `.surface--interactive`; the old global
        `.glass-card:hover { transform: translateY(-2px) }` made modals and
@@ -92,8 +95,15 @@ bdi { unicode-bidi: isolate; }
 }
 
 :focus-visible {
+    /* HIG focus is a soft ring that glows, not a hard rule. `--accent-ring` is the
+       accent at ~30% alpha, so the halo reads as light around the control rather
+       than a border drawn on it. The solid 2px outline stays underneath at a
+       narrow width so the affordance survives forced-colors and high-contrast
+       modes, where box-shadow is dropped entirely. */
     outline: 2px solid var(--accent);
     outline-offset: 2px;
+    box-shadow: 0 0 0 4px var(--accent-ring);
+    transition: box-shadow var(--motion-fast) var(--ease-standard);
     border-radius: var(--radius-xs);
 }
 .field:focus-visible,
@@ -120,8 +130,8 @@ bdi { unicode-bidi: isolate; }
 /* ─── Surfaces ───────────────────────────────────────────────────────────── */
 .surface {
     background: var(--surface-glass);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
     box-shadow: var(--elev-1);
@@ -137,15 +147,18 @@ bdi { unicode-bidi: isolate; }
     border-color: var(--border-strong);
     box-shadow: var(--elev-2);
 }
-.surface--solid { background: var(--surface-raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
+/* The opt-out from glass. `--surface-raised` is translucent now, so pointing this at it
+   while also disabling the blur would give a see-through panel with nothing behind it —
+   the worst of both. `--surface-solid` exists for exactly this. */
+.surface--solid { background: var(--surface-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .surface--flush { border-radius: var(--radius-md); }
 
 /* `glass-card` is kept as a plain alias so any markup that still emits it
    keeps its background — but it no longer implies a hover transform. */
 .glass-card {
     background: var(--surface-glass);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
 }
@@ -196,7 +209,12 @@ bdi { unicode-bidi: isolate; }
 
 .sidebar {
     width: var(--sidebar-width);
-    background: var(--surface-sunken);
+    /* Chrome, not a panel: translucent so the canvas reads through it, which is
+       what makes a macOS sidebar feel attached to the window rather than stacked
+       on top of it. */
+    background: var(--surface-raised);
+    backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
     border-inline-end: 1px solid var(--border-subtle);
     display: flex; flex-direction: column;
     position: fixed;
@@ -309,8 +327,9 @@ bdi { unicode-bidi: isolate; }
     gap: var(--space-3);
     border-block-end: 1px solid var(--border-subtle);
     background: color-mix(in srgb, var(--surface-page) 86%, transparent);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    /* The top bar is chrome: content scrolls softly behind it. */
+    backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
     position: sticky;
     inset-block-start: 0;
     z-index: 10;
@@ -379,7 +398,9 @@ bdi { unicode-bidi: isolate; }
     appearance: none; cursor: pointer;
     text-overflow: ellipsis;
 }
-.chip-select select option { background: var(--surface-overlay); color: var(--text-strong); font-weight: var(--fw-regular); }
+/* A native <option> is drawn by the OS popup, which cannot be translucent or blurred —
+   a glass value here renders unpredictably per platform. Always opaque. */
+.chip-select select option { background: var(--surface-solid); color: var(--text-strong); font-weight: var(--fw-regular); }
 .chip-select select:disabled { opacity: 0.5; cursor: progress; }
 
 /* ─── Page container ─────────────────────────────────────────────────────── */
@@ -695,7 +716,9 @@ input[type='checkbox'] { accent-color: var(--accent); inline-size: 24px; block-s
 .switch-track {
     position: absolute; inset: 0;
     cursor: pointer;
-    background: var(--surface-overlay);
+    /* HIG "secondary fill" rather than a surface: an off switch is a tinted well,
+       not a floating panel, and it must not blur what is behind it. */
+    background: var(--surface-glass);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-pill);
     transition: background var(--motion-base) var(--ease-standard);
@@ -919,6 +942,10 @@ html[dir='rtl'] .switch input:checked + .switch-track::before { transform: trans
     max-height: calc(100dvh - var(--space-7));
     overflow-y: auto;
     padding: var(--space-6);
+    /* The elevated glass: a deeper blur than a card, because a modal sits further
+       from the content it covers. --elev-3 carries the depth. */
+    backdrop-filter: blur(var(--blur-elevated)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--blur-elevated)) saturate(180%);
     background: var(--surface-overlay);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
@@ -967,6 +994,8 @@ html[dir='rtl'] .switch input:checked + .switch-track::before { transform: trans
     border-radius: var(--radius-sm);
     font-size: var(--fs-200);
     background: var(--surface-overlay);
+    backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+    -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
     border: 1px solid var(--border-subtle);
     box-shadow: var(--elev-3);
     color: var(--text-strong);
@@ -1241,7 +1270,8 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     object-fit: cover; flex-shrink: 0;
 }
 .post-picker-thumb {
-    background: var(--surface-overlay);
+    /* Sits behind a thumbnail: opaque, or the image reads washed out. */
+    background: var(--surface-solid);
     display: flex; align-items: center; justify-content: center;
     color: var(--text-muted);
 }
@@ -1509,7 +1539,8 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     border-radius: var(--radius-sm);
     overflow: hidden;
     display: flex; flex-direction: column;
-    background: var(--surface-overlay);
+    /* Holds an image; opaque so the media is not tinted by what is behind it. */
+    background: var(--surface-solid);
     border: 1px solid var(--border-subtle);
 }
 .carousel-card-img { width: 100%; height: 100px; object-fit: cover; }
@@ -1583,7 +1614,9 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 }
 .bubble-user { background: var(--gradient-brand); color: #fff; border-start-end-radius: var(--radius-xs); }
 .bubble-bot {
-    background: var(--surface-overlay);
+    /* A tint, not glass: a bubble sits IN the thread, and blurring the messages
+       behind each bubble is both wrong and expensive at scroll. */
+    background: var(--surface-glass);
     border: 1px solid var(--border-subtle);
     color: var(--text-strong);
     border-start-start-radius: var(--radius-xs);
@@ -2136,4 +2169,35 @@ html[dir='rtl'] [data-lucide='external-link'],
 html[dir='rtl'] [data-lucide='indent-increase'],
 html[dir='rtl'] [data-lucide='indent-decrease'] {
     transform: scaleX(-1);
+}
+
+/* ─── Micro-label tracking, Latin only ──────────────────────────────────────────────────────
+   The brief asks for generous letter-spacing on small uppercase labels. That cannot be
+   applied globally here, and the reason is not stylistic: **Arabic is a joining script**, and
+   letter-spacing pulls the joined letters apart into disconnected glyphs. It also asks for
+   uppercase, which Arabic does not have. The header of this file records that an earlier
+   version of this dashboard shipped `letter-spacing: 0.5px; text-transform: uppercase` on
+   table headers, and that removing it was a fix.
+
+   So the tracking is applied in exactly the two places where the content is guaranteed Latin:
+
+     1. When the UI language is English — `html[lang='en']`. An Arabic UI never gets it.
+     2. On monospace id/token cells, which are Latin regardless of UI language.
+
+   The uppercase transform is deliberately NOT reintroduced anywhere. Tracking alone gives
+   the crisp, settled feel the brief is after; uppercasing Arabic-adjacent UI gains nothing
+   and loses the letterforms. */
+html[lang='en'] .text-meta,
+html[lang='en'] .stat-label,
+html[lang='en'] .form-label,
+html[lang='en'] .page-toolbar-count {
+    letter-spacing: 0.02em;
+}
+
+/* Always Latin by nature: ids, tokens, page ids, connection fragments. */
+.field-mono,
+.cell-id,
+.post-card-id,
+.job-kind {
+    letter-spacing: 0.02em;
 }
