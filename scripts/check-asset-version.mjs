@@ -163,6 +163,37 @@ for (const page of [INDEX, ...SHARED_ASSET_PAGES]) {
     }
 }
 
+// ─── The CSP is declared TWICE, and the copies can drift ────────────────────────────────────
+//
+// `src/routes/api.ts` sets a CSP for routes the Express app serves; `vercel.json` sets one for
+// the static pages, which is what /dashboard actually is. They are near-identical strings in
+// two files with no shared source, so tightening one silently leaves the other.
+//
+// That is not hypothetical: removing the font hosts from api.ts appeared to work, the deployed
+// header was unchanged, and the reason was that /dashboard never went through api.ts at all.
+// This asserts the property in both places rather than trusting either.
+const CSP_FILES = ['src/routes/api.ts', 'vercel.json'];
+
+for (const file of CSP_FILES) {
+    let src;
+    try {
+        src = readFileSync(file, 'utf8');
+    } catch {
+        fail.push(`${file} could not be read, so its CSP is unchecked.`);
+        continue;
+    }
+    // Strip // and /* */ comments: both files explain why these hosts are absent.
+    const bare = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    for (const host of FONT_HOSTS) {
+        if (bare.includes(host)) {
+            fail.push(
+                `${file} still allows ${host} in its Content-Security-Policy. Nothing downloads a `
+                + `webfont any more, and an allowance nothing needs is a hole left open.`
+            );
+        }
+    }
+}
+
 if (fail.length > 0) {
     console.error('\n❌ dashboard cache-version check failed:\n');
     for (const f of fail) console.error(`   • ${f}\n`);
