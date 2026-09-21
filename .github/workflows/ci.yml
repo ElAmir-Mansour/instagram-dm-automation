@@ -43,3 +43,9 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref && format('origin/{0}', github.base_ref) || '' }}
         run: npm run check:assets
+      # An icon whose meaning depends on reading direction points the wrong way in RTL
+      # unless it is mirrored, and one whose meaning does not becomes wrong IF mirrored.
+      # Neither shows up as an error - it renders fine and just reads backwards, in the
+      # language this product is actually used in.
+      - name: Check RTL icon mirroring
+        run: npm run check:icons

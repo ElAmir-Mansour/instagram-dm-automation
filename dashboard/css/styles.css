@@ -1134,9 +1134,6 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 }
 .alert-link:hover { text-decoration: underline; }
 .alert-link svg { width: 13px; height: 13px; }
-/* Physical exception 3/3: the "go there" chevron points along the reading
-   direction, so it flips with the document. */
-html[dir='rtl'] .alert-link svg { transform: scaleX(-1); }
 
 /* ─── Charts ─────────────────────────────────────────────────────────────── */
 .chart-grid { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-4); margin-block-end: var(--space-5); }
@@ -1431,8 +1428,6 @@ html[dir='rtl'] .alert-link svg { transform: scaleX(-1); }
 .chat-sub { font-size: var(--fs-100); color: var(--text-muted); }
 .chat-header-actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
 .chat-back { display: none; }
-/* The back chevron points the way the reader came from. */
-html[dir='rtl'] .chat-back svg { transform: scaleX(-1); }
 
 .chat-messages {
     flex: 1; overflow-y: auto;
@@ -1629,8 +1624,6 @@ html[dir='rtl'] .chat-back svg { transform: scaleX(-1); }
 .page-btn:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text-strong); }
 .page-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .page-position { font-size: var(--fs-200); color: var(--text-default); }
-/* Prev/next chevrons follow the reading direction. */
-html[dir='rtl'] .page-btn svg { transform: scaleX(-1); }
 
 /* ─── Activity cards (the mobile form of the log table) ──────────────────── */
 .log-cards { display: none; flex-direction: column; gap: var(--space-3); }
@@ -2086,3 +2079,61 @@ html[dir='rtl'] .select { background-position: left var(--space-3) center; }
 
 /* A long Meta error must not squeeze the toast's new close button out of reach. */
 .toast .modal-close { flex-shrink: 0; }
+
+/* ─── RTL icon mirroring ──────────────────────────────────────────────────────
+   Only icons whose MEANING depends on reading direction flip.
+
+   Material Design 3 is the one published design system with an actually
+   enumerated rule for this, and it is explicit in both directions: directional
+   arrows and send buttons mirror; clocks, circular refresh icons and media
+   transport controls must NOT.
+   https://m3.material.io/foundations/layout/bidirectionality-rtl
+
+   So `rotate-cw` and `refresh-cw` are deliberately absent below — they are the
+   most-used icons in this dashboard (14 uses between them) and mirroring either
+   would make a clockwise arrow read counter-clockwise, which is just wrong.
+   Same for `clock`, `calendar-clock`, `file-clock`, `check`, `search`,
+   `download` and `upload`: a magnifying glass and a vertical arrow carry no
+   reading direction. Do not add them here.
+
+   Targeting `[data-lucide]` rather than `.lucide-<name>` is deliberate:
+   lucide@0.577 copies the attribute onto the `<svg>` it generates AND it is
+   present on the `<i>` beforehand, so the flip is already correct during the
+   pre-hydration placeholder phase rather than snapping after createIcons().
+
+   This replaces three hand-written per-component rules (`.alert-link`,
+   `.chat-back`, `.page-btn`) which covered exactly arrow-left/right and
+   chevron-left/right. They were correct, but they had to be *remembered* — the
+   next directional icon added anywhere would have silently pointed the wrong
+   way. `scripts/check-rtl-icons.mjs` now fails CI if an in-use directional icon
+   is missing from this list, or if a must-not-mirror icon is added to it. */
+html[dir='rtl'] [data-lucide='arrow-left'],
+html[dir='rtl'] [data-lucide='arrow-right'],
+html[dir='rtl'] [data-lucide='arrow-left-to-line'],
+html[dir='rtl'] [data-lucide='arrow-right-to-line'],
+html[dir='rtl'] [data-lucide='move-left'],
+html[dir='rtl'] [data-lucide='move-right'],
+html[dir='rtl'] [data-lucide='chevron-left'],
+html[dir='rtl'] [data-lucide='chevron-right'],
+html[dir='rtl'] [data-lucide='chevrons-left'],
+html[dir='rtl'] [data-lucide='chevrons-right'],
+html[dir='rtl'] [data-lucide='circle-chevron-left'],
+html[dir='rtl'] [data-lucide='circle-chevron-right'],
+html[dir='rtl'] [data-lucide='square-chevron-left'],
+html[dir='rtl'] [data-lucide='square-chevron-right'],
+html[dir='rtl'] [data-lucide='corner-down-left'],
+html[dir='rtl'] [data-lucide='corner-down-right'],
+html[dir='rtl'] [data-lucide='corner-up-left'],
+html[dir='rtl'] [data-lucide='corner-up-right'],
+html[dir='rtl'] [data-lucide='send'],
+html[dir='rtl'] [data-lucide='send-horizontal'],
+html[dir='rtl'] [data-lucide='reply'],
+html[dir='rtl'] [data-lucide='reply-all'],
+html[dir='rtl'] [data-lucide='forward'],
+html[dir='rtl'] [data-lucide='log-in'],
+html[dir='rtl'] [data-lucide='log-out'],
+html[dir='rtl'] [data-lucide='external-link'],
+html[dir='rtl'] [data-lucide='indent-increase'],
+html[dir='rtl'] [data-lucide='indent-decrease'] {
+    transform: scaleX(-1);
+}
