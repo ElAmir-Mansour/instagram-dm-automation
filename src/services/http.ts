@@ -8,6 +8,7 @@
  *      permanently with no second attempt.
  */
 import axios from 'axios';
+import { log } from '../utils/log.js';
 
 export const metaHttp = axios.create({ timeout: 10_000 });
 
@@ -61,11 +62,13 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
             if (attempt === retries || !isRetryable(err)) throw err;
 
             const delay = Math.round(baseMs * 2 ** attempt * (0.5 + Math.random()));
-            console.warn(
-                `[retry] ${label} attempt ${attempt + 1}/${retries} failed ` +
-                `(${err?.response?.data?.error?.code ?? err?.code ?? err?.response?.status}); ` +
-                `retrying in ${delay}ms`
-            );
+            log('warn', 'meta.retrying', {
+                label,
+                attempt: attempt + 1,
+                retries,
+                reason: err?.response?.data?.error?.code ?? err?.code ?? err?.response?.status,
+                delay_ms: delay,
+            });
             await new Promise(r => setTimeout(r, delay));
         }
     }

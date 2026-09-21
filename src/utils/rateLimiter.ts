@@ -13,6 +13,7 @@
  *   - platform limits (Meta's ~200 automated DMs/hour) -> `checkSendQuota`
  *   - per-recipient courtesy cap (1 automated DM per user per 24h) -> `canDmRecipient`
  */
+import { queryOne, queryRows } from '../db/query.js';
 import { pool } from '../config/db.js';
 
 /** Conservative buffer under Meta's ~200/hr automation ceiling. */
@@ -35,7 +36,7 @@ export async function checkSendQuota(
     bucket: string = 'dm',
     limit: number = DEFAULT_HOURLY_LIMIT
 ): Promise<QuotaResult> {
-    const res = await pool.query(
+    const row = await queryOne<{ count: number }>(
         `INSERT INTO rate_limit_counters (creator_id, bucket, window_start, count)
          VALUES ($1, $2, date_trunc('hour', NOW()), 1)
          ON CONFLICT (creator_id, bucket, window_start)
@@ -44,18 +45,18 @@ export async function checkSendQuota(
         [creatorId, bucket]
     );
 
-    const count: number = res.rows[0]?.count ?? 0;
+    const count = row?.count ?? 0;
     return { allowed: count <= limit, count, limit };
 }
 
 /** Current count without incrementing — for dashboards and health checks. */
 export async function getSendCount(creatorId: string, bucket: string = 'dm'): Promise<number> {
-    const res = await pool.query(
+    const row = await queryOne<{ count: number }>(
         `SELECT count FROM rate_limit_counters
           WHERE creator_id = $1 AND bucket = $2 AND window_start = date_trunc('hour', NOW())`,
         [creatorId, bucket]
     );
-    return res.rows[0]?.count ?? 0;
+    return row?.count ?? 0;
 }
 
 /**
@@ -67,13 +68,13 @@ export async function getSendCount(creatorId: string, bucket: string = 'dm'): Pr
  * repeatedly DMing someone who comments the same keyword five times.
  */
 export async function canDmRecipient(creatorId: string, recipientId: string): Promise<boolean> {
-    const res = await pool.query(
-        `SELECT 1 FROM dm_send_log
+    const rows = await queryRows<{ exists: number }>(
+        `SELECT 1 AS exists FROM dm_send_log
           WHERE creator_id = $1 AND recipient_id = $2 AND sent_at > NOW() - INTERVAL '24 hours'
           LIMIT 1`,
         [creatorId, recipientId]
     );
-    return res.rows.length === 0;
+    return rows.length === 0;
 }
 
 export async function recordDmSent(creatorId: string, recipientId: string): Promise<void> {

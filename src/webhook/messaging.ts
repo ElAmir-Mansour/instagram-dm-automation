@@ -4,12 +4,14 @@
  * Previously ~180 lines inline in the webhook handler, sharing one try/catch with the comment
  * pipeline — so a duplicate-key error here aborted the comment events queued behind it.
  */
-import { pool } from '../config/db.js';
+import { queryCount, queryOne } from '../db/query.js';
+import type { ConversationRow, MessageRow } from '../db/rows.js';
 import { generateAiResponse } from '../services/ai.js';
 import { sendDirectMessage } from '../services/instagram.js';
 import { getCreatorByPageId, type Creator } from '../services/tenant.js';
 import { checkSendQuota } from '../utils/rateLimiter.js';
 import { toMetaMessage, applyDisclosure, type MetaMessagePayload } from './meta-payload.js';
+import { describeError, log, withLogContext } from '../utils/log.js';
 
 /**
  * Meta asks for a fresh disclosure "after a significant lapse of time". The policy never
@@ -39,13 +41,13 @@ function normalizeDm(event: any): NormalizedDm | null {
 
     if (event?.message?.quick_reply) {
         payload = event.message.quick_reply.payload || '';
-        console.log(`💬 User clicked Quick Reply button: text="${text}", payload="${payload}"`);
+        log('debug', 'dm.quick_reply', { payload });
     }
 
     if (event?.postback) {
         text = event.postback.title || '';
         payload = event.postback.payload || '';
-        console.log(`🎯 User clicked Postback button: title="${text}", payload="${payload}"`);
+        log('debug', 'dm.postback', { payload });
     }
 
     let isStoryMention = false;
@@ -53,12 +55,12 @@ function normalizeDm(event: any): NormalizedDm | null {
         const storyMention = event.message.attachments.find((att: any) => att.type === 'story_mention');
         if (storyMention) {
             isStoryMention = true;
-            console.log(`📖 Received a Story Mention from sender: ${senderId}`);
+            log('debug', 'dm.story_mention', { sender_id: senderId });
         }
     }
 
     if (!senderId || (!text && !payload && !isStoryMention)) {
-        console.log('⏭️  Skipping empty message/postback event.');
+        log('debug', 'dm.skipped_empty');
         return null;
     }
 
@@ -99,31 +101,41 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
 
     // Ignore echo messages (sent by the page itself)
     if (event?.message?.is_echo) {
-        console.log('⏭️  Ignoring echo message sent by the Page.');
+        log('debug', 'dm.skipped_echo');
         return;
     }
 
     const dm = normalizeDm(event);
     if (!dm) return;
 
-    console.log(
-        `📨 Incoming DM from IGSID ${dm.senderId} → recipient ${recipientId}: "${dm.text}" (payload: ${dm.payload})`
+    // The Meta message id is the idempotency key, so it is the field to correlate on: every
+    // line below belongs to this one inbound message, retries included.
+    return withLogContext({ mid: dm.metaMessageId, sender_id: dm.senderId }, () =>
+        processDm(dm, event, recipientId, entryId)
     );
+}
+
+async function processDm(
+    dm: NormalizedDm,
+    event: any,
+    recipientId: string | undefined,
+    entryId: string
+): Promise<void> {
+    log('info', 'dm.received', { is_story_mention: dm.isStoryMention, has_payload: Boolean(dm.payload) });
 
     // recipientId from message events = Instagram Business Account ID (most reliable)
     // entryId = could be IG ID (app-level sub) or FB Page ID (page-level sub)
     const creator = await getCreatorByPageId(recipientId, entryId);
     if (!creator) {
-        console.log(`⚠️  No creator found for recipientId=${recipientId} or entryId=${entryId}. Skipping.`);
+        log('warn', 'dm.no_creator', { recipient_id: recipientId, entry_id: entryId });
         return;
     }
-    console.log(`✅ Creator found: ${creator.id}`);
 
     // 1. Fetch or create the conversation thread.
     //    One statement, not SELECT-then-INSERT: two DMs a second apart raced on the
     //    unique_creator_user constraint and the loser's duplicate-key error killed the batch.
     //    The DO UPDATE also replaces the separate last_message_at write.
-    const convRes = await pool.query(
+    const conversation = await queryOne<Pick<ConversationRow, 'id' | 'is_bot_active' | 'ai_disclosed_at'>>(
         `INSERT INTO conversations (creator_id, instagram_user_id, status)
          VALUES ($1, $2, 'active')
          ON CONFLICT (creator_id, instagram_user_id)
@@ -132,7 +144,13 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
         [creator.id, dm.senderId]
     );
 
-    const conversation = convRes.rows[0];
+    if (!conversation) {
+        // An upsert with DO UPDATE always returns its row, so no row means the statement did
+        // not do what this code assumes. Previously this read `convRes.rows[0].id` and threw
+        // a TypeError three lines later, from a place that said nothing about the cause.
+        log('error', 'dm.conversation_upsert_empty', { creator_id: creator.id });
+        return;
+    }
     const conversationId: string = conversation.id;
 
     // 2. Log the inbound message — and claim it.
@@ -140,7 +158,7 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
     //    This gate has to sit before Gemini: without it every retry re-ran a paid model call,
     //    re-sent a DM to a real person, and left duplicate inbound rows poisoning the
     //    15-message history ai.ts reads back.
-    const claim = await pool.query(
+    const claim = await queryOne<Pick<MessageRow, 'id'>>(
         `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, payload, raw_payload, meta_message_id)
          VALUES ($1, $2, 'inbound', $3, $4, $5, $6, $7)
          ON CONFLICT (meta_message_id) WHERE meta_message_id IS NOT NULL DO NOTHING
@@ -156,29 +174,36 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
         ]
     );
 
-    if (claim.rows.length === 0) {
-        console.log(`⏭️  Duplicate messaging event ignored (mid: ${dm.metaMessageId})`);
+    if (!claim) {
+        // The gate that stops a Meta redelivery re-running a paid Gemini call and re-sending
+        // a DM to a real person.
+        log('info', 'dm.duplicate_ignored');
         return;
     }
 
     // 3. Call AI Agent to reply if Bot is active
     if (!conversation.is_bot_active) {
-        console.log('⏭️  AI Bot is paused for this conversation thread. Manual reply required.');
+        log('info', 'dm.bot_paused', { conversation_id: conversationId });
         return;
     }
 
     try {
-        // Query Gemini
-        console.log('🤖 Invoking Gemini to construct response...');
+        // Query Gemini. Timed, because this is both the dominant marginal cost of the product
+        // and the reason the webhook cannot finish inside Meta's timeout.
+        const startedAt = Date.now();
         const aiRes = await generateAiResponse(conversationId, dm.text || dm.payload, creator.id);
+        log('info', 'ai.replied', {
+            creator_id: creator.id,
+            duration_ms: Date.now() - startedAt,
+            message_type: aiRes?.message_type ?? null,
+        });
 
         // null means the creator's AI agent is switched off — a deliberate "say nothing",
         // not a failure. Every real failure throws, so there is nothing to paper over here.
         if (!aiRes) {
-            console.log('⏭️  AI agent is switched off for this creator — no reply sent.');
+            log('info', 'ai.agent_disabled', { creator_id: creator.id });
             return;
         }
-        console.log('🤖 Gemini Response Type:', aiRes.message_type);
 
         // Format Meta payload
         let metaMessagePayload: MetaMessagePayload = toMetaMessage(aiRes);
@@ -187,10 +212,11 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
         // its own message is still one logical reply to one person.
         const quota = await checkSendQuota(creator.id, 'dm');
         if (!quota.allowed) {
-            console.error(
-                `🛑 Hourly DM quota reached (${quota.count}/${quota.limit}) — skipping reply to ${dm.senderId}. ` +
-                'Meta throttles automated sends at roughly 200/hr; blowing through it risks the app.'
-            );
+            // Meta throttles automated sends at roughly 200/hr; blowing through it risks the
+            // app. Real customers are going unanswered, so this is alert-worthy.
+            log('error', 'dm.quota_exhausted', {
+                creator_id: creator.id, count: quota.count, limit: quota.limit, source: 'dm',
+            });
             return;
         }
 
@@ -203,7 +229,7 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
             const disclosure = applyDisclosure(metaMessagePayload);
             metaMessagePayload = disclosure.payload;
             if (disclosure.standalone) {
-                console.log('ℹ️  Sending AI disclosure as its own message (template payload has no text field).');
+                log('info', 'dm.disclosure_standalone');
                 await sendDirectMessage(
                     dm.senderId,
                     { text: disclosure.standalone },
@@ -214,16 +240,18 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
         }
 
         // Send DM using Meta Send API
-        console.log(`📩 Sending Meta response of type: ${aiRes.message_type}`);
         await sendDirectMessage(dm.senderId, metaMessagePayload, creator.page_access_token, pageId);
+        log('info', 'dm.sent', {
+            creator_id: creator.id, message_type: aiRes.message_type, disclosed: discloseNow,
+        });
 
         // Recorded only after a successful send, so a failed first reply still discloses next time.
         if (discloseNow) {
-            await pool.query('UPDATE conversations SET ai_disclosed_at = NOW() WHERE id = $1', [conversationId]);
+            await queryCount('UPDATE conversations SET ai_disclosed_at = NOW() WHERE id = $1', [conversationId]);
         }
 
         // Log outbound message
-        await pool.query(
+        await queryCount(
             `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload)
              VALUES ($1, $2, 'outbound', $3, $4, $5)`,
             [
@@ -235,6 +263,6 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
             ]
         );
     } catch (aiError: any) {
-        console.error('❌ AI Pipeline / Send Error:', aiError.message);
+        log('error', 'dm.pipeline_failed', { creator_id: creator.id, ...describeError(aiError) });
     }
 }
