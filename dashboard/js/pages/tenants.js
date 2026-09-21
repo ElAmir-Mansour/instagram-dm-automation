@@ -4,7 +4,7 @@
  * This is the operations screen: one row per tenant, and the two columns that
  * say "something is broken" — access-token status and last webhook received —
  * are the ones that read first. A tenant whose last webhook is days old is a
- * red pill saying "3d ago", not a date the reader has to subtract from today.
+ * red pill saying "قبل ٣ ي", not a date the reader has to subtract from today.
  *
  * Field names are read tolerantly (`pick()` below): the admin API is being
  * built in parallel, so a count that arrives under a different key renders as
@@ -37,7 +37,7 @@ const TenantsPage = {
 
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader('Loading tenants…');
+        container.innerHTML = UI.loader();
 
         try {
             const result = await API.getAdminTenants();
@@ -51,17 +51,13 @@ const TenantsPage = {
             if (err.status === 403 || err.status === 404) {
                 App.dropAdminAccess();
                 UI.renderError(container, {
-                    title: 'Tenant administration is not available',
-                    message: 'This account is not a platform administrator, or this deployment does not serve the admin API yet.',
+                    title: t('tenants.unavailableTitle'),
+                    message: t('tenants.unavailableBody'),
                     icon: 'shield-off',
                 });
                 return;
             }
-            UI.renderError(
-                container,
-                { title: 'Could not load tenants', message: err.message },
-                () => this.render()
-            );
+            UI.renderError(container, { title: t('tenants.loadFailed'), message: err.message }, () => this.render());
             return;
         }
 
@@ -70,30 +66,32 @@ const TenantsPage = {
 
         container.innerHTML = esc(html`
             <div class="page-toolbar">
-                <p class="page-toolbar-count">${tenants.length} tenant${tenants.length !== 1 ? 's' : ''}</p>
-                <button type="button" class="btn btn-primary btn-sm" data-action="tenants:showCreateModal">
-                    <i data-lucide="plus" aria-hidden="true"></i> New Tenant
-                </button>
+                <p class="page-toolbar-count">${t('tenants.count', { count: tenants.length })}</p>
+                <div class="toolbar-actions">
+                    <button type="button" class="btn btn-primary btn-sm" data-action="tenants:showCreateModal">
+                        <i data-lucide="plus" aria-hidden="true"></i> ${t('tenants.new')}
+                    </button>
+                </div>
             </div>
 
-            <div class="table-card glass-card">
+            <div class="table-card surface">
                 <div class="table-wrapper">
                     <table class="data-table tenants-table">
                         <thead><tr>
-                            <th scope="col">Tenant</th>
-                            <th scope="col" class="col-health">Access token</th>
-                            <th scope="col" class="col-health">Last webhook</th>
-                            <th scope="col">DMs this hour</th>
-                            <th scope="col">Posts (7d)</th>
-                            <th scope="col">Campaigns</th>
-                            <th scope="col">Scheduled</th>
-                            <th scope="col">Conversations</th>
-                            <th scope="col" aria-label="Actions"></th>
+                            <th scope="col">${t('tenants.table.tenant')}</th>
+                            <th scope="col" class="col-health">${t('tenants.table.token')}</th>
+                            <th scope="col" class="col-health">${t('tenants.table.webhook')}</th>
+                            <th scope="col">${t('tenants.table.dms')}</th>
+                            <th scope="col">${t('tenants.table.posts7d')}</th>
+                            <th scope="col">${t('tenants.table.campaigns')}</th>
+                            <th scope="col">${t('tenants.table.scheduled')}</th>
+                            <th scope="col">${t('tenants.table.conversations')}</th>
+                            <th scope="col"><span class="sr-only">${t('tenants.table.actions')}</span></th>
                         </tr></thead>
                         <tbody>
-                            ${tenants.map((t) => this.renderRow(t, currentId))}
+                            ${tenants.map((x) => this.renderRow(x, currentId))}
                             ${tenants.length === 0 ? html`
-                                <tr><td colspan="9" class="table-empty-cell">No tenants yet. Create the first one to start receiving webhooks.</td></tr>
+                                <tr><td colspan="9" class="table-empty-cell">${t('tenants.empty')}</td></tr>
                             ` : ''}
                         </tbody>
                     </table>
@@ -102,30 +100,36 @@ const TenantsPage = {
         `);
 
         UI.icons(container);
+
+        // Meter widths are data, not style: applied from data-share after the
+        // markup is escaped, so no percentage is ever interpolated into HTML.
+        container.querySelectorAll('.dm-meter-fill[data-share]').forEach((el) => {
+            el.style.inlineSize = `${Number(el.dataset.share) || 0}%`;
+        });
     },
 
-    renderRow(t, currentId) {
-        const id = this.pick(t, 'id', 'tenant_id', 'creator_id');
-        const name = this.pick(t, 'name', 'display_name') || 'Untitled tenant';
-        const isActive = this.pick(t, 'is_active', 'isActive') !== false;
+    renderRow(row, currentId) {
+        const id = this.pick(row, 'id', 'tenant_id', 'creator_id');
+        const name = this.pick(row, 'name', 'display_name') || t('tenants.untitled');
+        const isActive = this.pick(row, 'is_active', 'isActive') !== false;
         const isCurrent = id && currentId && String(id) === String(currentId);
 
-        const igId = this.pick(t, 'instagram_page_id', 'instagramPageId');
-        const fbId = this.pick(t, 'facebook_page_id', 'facebookPageId');
+        const igId = this.pick(row, 'instagram_page_id', 'instagramPageId');
+        const fbId = this.pick(row, 'facebook_page_id', 'facebookPageId');
 
         const webhook = UI.relativeAge(
-            this.pick(t, 'last_webhook_at', 'lastWebhookAt', 'last_webhook_received_at', 'lastWebhookReceivedAt', 'last_webhook'),
-            { warnMs: 6 * 60 * 60 * 1000, staleMs: 24 * 60 * 60 * 1000, neverText: 'Never' }
+            this.pick(row, 'last_webhook_at', 'lastWebhookAt', 'last_webhook_received_at', 'lastWebhookReceivedAt', 'last_webhook'),
+            { warnMs: 6 * 60 * 60 * 1000, staleMs: 24 * 60 * 60 * 1000 }
         );
 
-        const published = this.num(t, 'published_7d', 'posts_published_7d', 'postsPublished7d');
-        const failed = this.num(t, 'failed_7d', 'posts_failed_7d', 'postsFailed7d');
-        const campaigns = this.num(t, 'campaign_count', 'campaignCount', 'campaigns');
-        const scheduled = this.num(t, 'scheduled_post_count', 'scheduledPostCount', 'scheduled_posts');
-        const conversations = this.num(t, 'conversation_count', 'conversationCount', 'conversations');
+        const published = this.num(row, 'published_7d', 'posts_published_7d', 'postsPublished7d');
+        const failed = this.num(row, 'failed_7d', 'posts_failed_7d', 'postsFailed7d');
+        const campaigns = this.num(row, 'campaign_count', 'campaignCount', 'campaigns');
+        const scheduled = this.num(row, 'scheduled_post_count', 'scheduledPostCount', 'scheduled_posts');
+        const conversations = this.num(row, 'conversation_count', 'conversationCount', 'conversations');
 
-        const dmUsed = this.num(t, 'dm_this_hour', 'dmThisHour', 'dm_volume_hour', 'dms_this_hour');
-        const dmCeiling = this.num(t, 'dm_hourly_limit', 'dmHourlyLimit', 'dm_ceiling')
+        const dmUsed = this.num(row, 'dm_this_hour', 'dmThisHour', 'dm_volume_hour', 'dms_this_hour');
+        const dmCeiling = this.num(row, 'dm_hourly_limit', 'dmHourlyLimit', 'dm_ceiling')
             ?? (typeof this.dmCeiling === 'number' ? this.dmCeiling : null);
 
         return html`
@@ -133,45 +137,45 @@ const TenantsPage = {
                 <td>
                     <div class="tenant-name-cell">
                         <span class="tenant-name" dir="auto">${name}</span>
-                        ${isCurrent ? html`<span class="tenant-current-chip">Current</span>` : ''}
-                        ${isActive ? '' : html`<span class="tenant-paused-chip">Inactive</span>`}
+                        ${isCurrent ? html`<span class="chip chip-accent">${t('tenants.current')}</span>` : ''}
+                        ${isActive ? '' : html`<span class="chip">${t('tenants.inactive')}</span>`}
                     </div>
                     <div class="tenant-page-ids">
-                        <span title="Instagram page ID">IG ${igId || '—'}</span>
-                        <span title="Facebook page ID">FB ${fbId || '—'}</span>
+                        <span>IG ${UI.ltr(igId || '—')}</span>
+                        <span>FB ${UI.ltr(fbId || '—')}</span>
                     </div>
                 </td>
-                <td class="col-health">${this.tokenBadge(this.pick(t, 'token_status', 'tokenStatus'))}</td>
+                <td class="col-health">${this.tokenBadge(this.pick(row, 'token_status', 'tokenStatus'))}</td>
                 <td class="col-health">
                     <span class="health-pill health-${html.raw(webhook.level)}" title="${webhook.title}">
                         <span class="health-dot" aria-hidden="true"></span>${webhook.text}
                     </span>
                 </td>
                 <td>${this.dmMeter(dmUsed, dmCeiling)}</td>
-                <td class="cell-tight">
+                <td class="nowrap">
                     ${published === null && failed === null ? '—' : html`
-                        <span class="count-ok">${published === null ? '—' : published} sent</span>
-                        <span class="count-bad ${failed ? '' : html.raw('count-zero')}">${failed === null ? '—' : failed} failed</span>
+                        <span class="count-ok">${t('tenants.postsSent', { count: published === null ? '—' : UI.formatNumber(published) })}</span>
+                        <span class="count-bad ${failed ? '' : html.raw('count-zero')}">${t('tenants.postsFailed', { count: failed === null ? '—' : UI.formatNumber(failed) })}</span>
                     `}
                 </td>
-                <td>${campaigns === null ? '—' : campaigns}</td>
-                <td>${scheduled === null ? '—' : scheduled}</td>
-                <td>${conversations === null ? '—' : conversations}</td>
+                <td>${campaigns === null ? '—' : UI.formatNumber(campaigns)}</td>
+                <td>${scheduled === null ? '—' : UI.formatNumber(scheduled)}</td>
+                <td>${conversations === null ? '—' : UI.formatNumber(conversations)}</td>
                 <td>
                     <div class="row-actions">
                         <button type="button" class="icon-btn" data-action="tenants:switchInto" data-id="${id}"
-                                aria-label="Switch into ${name}" title="Switch into this tenant"
+                                aria-label="${t('tenants.switchInto', { name })}" title="${t('tenants.switchInto', { name })}"
                                 ${isCurrent ? html.raw('disabled') : ''}>
                             <i data-lucide="log-in" aria-hidden="true"></i>
                         </button>
                         <button type="button" class="icon-btn" data-action="tenants:showRenameModal" data-id="${id}"
-                                aria-label="Rename ${name}" title="Rename">
+                                aria-label="${t('tenants.rename', { name })}" title="${t('tenants.rename', { name })}">
                             <i data-lucide="pencil" aria-hidden="true"></i>
                         </button>
                         <button type="button" class="icon-btn ${isActive ? html.raw('icon-btn-danger') : ''}"
                                 data-action="tenants:toggleActive" data-id="${id}"
-                                aria-label="${isActive ? `Deactivate ${name}` : `Activate ${name}`}"
-                                title="${isActive ? 'Deactivate' : 'Activate'}">
+                                aria-label="${isActive ? t('tenants.deactivate', { name }) : t('tenants.activate', { name })}"
+                                title="${isActive ? t('tenants.deactivate', { name }) : t('tenants.activate', { name })}">
                             <i data-lucide="${isActive ? 'power-off' : 'power'}" aria-hidden="true"></i>
                         </button>
                     </div>
@@ -184,7 +188,7 @@ const TenantsPage = {
         const value = String(status || '').toLowerCase();
         const valid = value === 'valid' || value === 'ok' || value === 'active';
         const unknown = !value || value === 'unknown';
-        const label = unknown ? 'Unknown' : (valid ? 'Valid' : (value === 'expired' ? 'Expired' : 'Invalid'));
+        const label = unknown ? t('common.unknown') : (valid ? t('settings.valid') : t('settings.invalid'));
         const level = unknown ? 'warn' : (valid ? 'fresh' : 'stale');
         return html`
             <span class="health-pill health-${html.raw(level)}">
@@ -196,22 +200,35 @@ const TenantsPage = {
 
     dmMeter(used, ceiling) {
         if (used === null && ceiling === null) return html`—`;
-        if (ceiling === null || ceiling <= 0) return html`<span class="dm-meter-text">${used === null ? '—' : used}</span>`;
+        if (ceiling === null || ceiling <= 0) {
+            return html`<span class="dm-meter-text">${used === null ? '—' : UI.formatNumber(used)}</span>`;
+        }
         const value = used === null ? 0 : used;
         const ratio = Math.max(0, Math.min(1, value / ceiling));
         const level = ratio >= 0.9 ? 'stale' : ratio >= 0.6 ? 'warn' : 'fresh';
         return html`
             <div class="dm-meter">
-                <span class="dm-meter-text">${value} / ${ceiling}</span>
+                <span class="dm-meter-text">${UI.ltr(`${UI.formatNumber(value)} / ${UI.formatNumber(ceiling)}`)}</span>
                 <span class="dm-meter-track" role="img"
-                      aria-label="${value} of ${ceiling} DMs used this hour">
-                    <span class="dm-meter-fill dm-meter-${html.raw(level)}" style="width:${html.raw(String(Math.round(ratio * 100)))}%;"></span>
+                      aria-label="${t('tenants.dmMeter', { used: UI.formatNumber(value), ceiling: UI.formatNumber(ceiling) })}">
+                    <span class="dm-meter-fill dm-meter-${html.raw(level)}" data-share="${Math.round(ratio * 100)}"></span>
                 </span>
             </div>
         `;
     },
 
     // ─── Actions ─────────────────────────────────────────────────────────────
+
+    modalHeader(title) {
+        return html`
+            <div class="modal-header">
+                <h2 class="modal-title">${title}</h2>
+                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+        `;
+    },
 
     /**
      * `firstRun` is the setup screen's entry point: there is no session tenant
@@ -221,48 +238,45 @@ const TenantsPage = {
     showCreateModal(firstRun) {
         const isFirstRun = firstRun === true;
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">${isFirstRun ? 'Create your first tenant' : 'New Tenant'}</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
+            ${this.modalHeader(isFirstRun ? t('tenants.firstRunTitle') : t('tenants.createTitle'))}
             <form id="tenant-create-form" data-submit="tenants:handleCreate" data-first-run="${isFirstRun ? 'true' : ''}">
                 <div class="form-group">
-                    <label class="form-label" for="tenant-name">Tenant name</label>
-                    <input class="form-input" id="tenant-name" name="name" dir="auto"
-                           placeholder="e.g. Elharef Store" required>
-                    <p class="form-hint">Only a label for this dashboard — Meta never sees it.</p>
+                    <label class="form-label" for="tenant-name">${t('tenants.name')}</label>
+                    <input class="field" id="tenant-name" name="name" dir="auto"
+                           placeholder="${t('tenants.namePlaceholder')}" required>
+                    <p class="form-hint">${t('tenants.nameHint')}</p>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="tenant-ig">Instagram page ID</label>
-                    <input class="form-input" id="tenant-ig" name="instagram_page_id" inputmode="numeric"
-                           autocomplete="off" spellcheck="false" placeholder="e.g. 17841459652725922" required>
-                    <p class="form-hint">Required — it is how an incoming webhook is matched to this tenant.</p>
+                    <label class="form-label" for="tenant-ig">${t('tenants.igId')}</label>
+                    <input class="field" id="tenant-ig" name="instagram_page_id" inputmode="numeric" dir="ltr"
+                           autocomplete="off" spellcheck="false" placeholder="17841459652725922" required>
+                    <p class="form-hint">${t('tenants.igHint')}</p>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="tenant-fb">Facebook page ID <span class="label-optional">(optional)</span></label>
-                    <input class="form-input" id="tenant-fb" name="facebook_page_id" inputmode="numeric"
-                           autocomplete="off" spellcheck="false" placeholder="e.g. 102938475610293">
+                    <label class="form-label" for="tenant-fb">
+                        ${t('tenants.fbId')} <span class="label-optional">${t('common.optional')}</span>
+                    </label>
+                    <input class="field" id="tenant-fb" name="facebook_page_id" inputmode="numeric" dir="ltr"
+                           autocomplete="off" spellcheck="false" placeholder="102938475610293">
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="tenant-token">Page access token</label>
-                    <textarea class="form-textarea" id="tenant-token" name="page_access_token"
+                    <label class="form-label" for="tenant-token">${t('tenants.pageToken')}</label>
+                    <textarea class="field-textarea field-mono" id="tenant-token" name="page_access_token" dir="ltr"
                               autocomplete="off" spellcheck="false"
-                              style="min-height:70px;font-size:12px;word-break:break-all;"
-                              placeholder="Paste the Page Access Token from the Meta Graph API Explorer…" required></textarea>
-                    <p class="form-hint">Required, and encrypted before it is stored — it never exists in the database as plaintext.</p>
+                              placeholder="${t('settings.tokenPlaceholder')}" required></textarea>
+                    <p class="form-hint">${t('tenants.pageTokenHint')}</p>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="tenant-verify">Webhook verify token <span class="label-optional">(optional)</span></label>
-                    <input class="form-input" id="tenant-verify" name="webhook_verify_token" type="text"
-                           autocomplete="off" spellcheck="false" placeholder="e.g. my_webhook_secret_2026"
-                           style="font-family:monospace;font-size:12px;">
-                    <p class="form-hint">A secret you invent; it only has to match what you type into Meta. Settings can set it later.</p>
+                    <label class="form-label" for="tenant-verify">
+                        ${t('tenants.verifyToken')} <span class="label-optional">${t('common.optional')}</span>
+                    </label>
+                    <input class="field field-mono" id="tenant-verify" name="webhook_verify_token" type="text" dir="ltr"
+                           autocomplete="off" spellcheck="false" placeholder="${t('settings.webhookPlaceholder')}">
+                    <p class="form-hint">${t('tenants.verifyTokenHint')}</p>
                 </div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="plus" aria-hidden="true"></i> Create</button>
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary"><i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}</button>
                 </div>
             </form>
         `);
@@ -289,7 +303,7 @@ const TenantsPage = {
         try {
             await API.createAdminTenant(payload);
             UI.closeModal();
-            UI.toast('Tenant created.');
+            UI.toast(t('tenants.created'));
             await App.refreshSession();
             if (firstRun) {
                 App.go(App.DEFAULT_PAGE);
@@ -298,31 +312,25 @@ const TenantsPage = {
             }
         } catch (err) {
             if (submit) submit.disabled = false;
-            UI.toast(err.message || 'Could not create the tenant.', 'error');
+            UI.toast(err.message || t('tenants.createFailed'), 'error');
         }
     },
 
     showRenameModal(id) {
-        const t = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
-        if (!t) return;
-        const name = this.pick(t, 'name', 'display_name') || '';
+        const row = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
+        if (!row) return;
+        const name = this.pick(row, 'name', 'display_name') || '';
 
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">Rename Tenant</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
+            ${this.modalHeader(t('tenants.renameTitle'))}
             <form id="tenant-rename-form" data-submit="tenants:handleRename" data-id="${id}">
                 <div class="form-group">
-                    <label class="form-label" for="tenant-rename-input">Tenant name</label>
-                    <input class="form-input" id="tenant-rename-input" name="name" dir="auto"
-                           value="${name}" required>
+                    <label class="form-label" for="tenant-rename-input">${t('tenants.name')}</label>
+                    <input class="field" id="tenant-rename-input" name="name" dir="auto" value="${name}" required>
                 </div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> Save</button>
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> ${t('common.save')}</button>
                 </div>
             </form>
         `);
@@ -336,34 +344,32 @@ const TenantsPage = {
         try {
             await API.updateAdminTenant(id, { name });
             UI.closeModal();
-            UI.toast('Tenant renamed.');
+            UI.toast(t('tenants.renamed'));
             await App.refreshSession();
             this.render();
         } catch (err) {
-            UI.toast(err.message || 'Could not rename the tenant.', 'error');
+            UI.toast(err.message || t('tenants.renameFailed'), 'error');
         }
     },
 
     async toggleActive(btn) {
         const id = btn.dataset.id;
-        const t = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
-        if (!t) return;
-        const isActive = this.pick(t, 'is_active', 'isActive') !== false;
-        const name = this.pick(t, 'name', 'display_name') || 'this tenant';
+        const row = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
+        if (!row) return;
+        const isActive = this.pick(row, 'is_active', 'isActive') !== false;
+        const name = this.pick(row, 'name', 'display_name') || t('tenants.untitled');
 
-        if (isActive && !confirm(
-            `Deactivate "${name}"? Its webhooks stop being processed and its scheduled posts stop publishing.`
-        )) return;
+        if (isActive && !confirm(t('tenants.deactivateConfirm', { name }))) return;
 
         btn.disabled = true;
         try {
             await API.updateAdminTenant(id, { is_active: !isActive });
-            UI.toast(isActive ? 'Tenant deactivated.' : 'Tenant activated.');
+            UI.toast(isActive ? t('tenants.deactivated') : t('tenants.activatedToast'));
             await App.refreshSession();
             this.render();
         } catch (err) {
             btn.disabled = false;
-            UI.toast(err.message || 'Could not update the tenant.', 'error');
+            UI.toast(err.message || t('tenants.updateFailed'), 'error');
         }
     },
 
@@ -375,7 +381,7 @@ const TenantsPage = {
 /** Async handlers report their own failures; the dispatcher only catches sync throws. */
 const reportTenantFailure = (promise) => {
     if (promise && typeof promise.catch === 'function') {
-        promise.catch((err) => UI.toast((err && err.message) || 'Something went wrong.', 'error'));
+        promise.catch((err) => UI.toast((err && err.message) || t('common.error'), 'error'));
     }
 };
 

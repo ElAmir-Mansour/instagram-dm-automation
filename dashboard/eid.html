@@ -8,19 +8,21 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- One design system in this repo, not two. This page used to redefine the
+         whole variable block with values a hex digit and a pixel away from the
+         app's; it now consumes the same tokens and only maps the handful of
+         legacy names its own rules still use. -->
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=4.0">
     <style>
         :root {
-            --bg-primary: #07070c;
-            --bg-glass: rgba(255, 255, 255, 0.02);
-            --border-glass: rgba(255, 255, 255, 0.07);
-            --border-glass-hover: rgba(99, 102, 241, 0.3);
-            --accent: #6366f1;
-            --accent-hover: #818cf8;
-            --text-primary: #f8fafc;
-            --text-secondary: #94a3b8;
-            --success: #22c55e;
-            --gradient-hero: linear-gradient(135deg, #6366f1, #a855f7);
-            --radius: 16px;
+            --bg-primary: var(--surface-page);
+            --bg-glass: var(--surface-glass);
+            --border-glass: var(--border-subtle);
+            --border-glass-hover: var(--accent-ring);
+            --text-primary: var(--text-strong);
+            --text-secondary: var(--text-default);
+            --gradient-hero: var(--gradient-brand);
+            --radius: var(--radius-lg);
         }
 
         * {
@@ -30,7 +32,7 @@
         }
 
         body {
-            font-family: 'Cairo', 'Inter', -apple-system, sans-serif;
+            font-family: var(--font-ui);
             background-color: var(--bg-primary);
             color: var(--text-primary);
             min-height: 100vh;

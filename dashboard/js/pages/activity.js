@@ -1,5 +1,11 @@
 /**
- * Activity Log Page — paginated interaction history with search/filter.
+ * Activity Log — paginated interaction history with search and filters.
+ *
+ * The six-column table is the right shape on a desktop and the wrong one on a
+ * phone: at 375px it was a horizontally scrolling strip where the status —
+ * the only column anyone scans for — sat off-screen. Below 768px the same
+ * rows render as cards instead (CSS decides which of the two is displayed, so
+ * there is one data path and no resize listener).
  */
 const ActivityPage = {
     currentPage: 1,
@@ -23,7 +29,7 @@ const ActivityPage = {
 
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader('Loading activity…');
+        container.innerHTML = UI.loader();
         await this.loadData(container);
     },
 
@@ -44,86 +50,113 @@ const ActivityPage = {
                 API.getCampaigns(),
             ]);
         } catch (err) {
-            UI.renderError(
-                container,
-                { title: 'Could not load the activity log', message: err.message },
-                () => this.loadData()
-            );
+            UI.renderError(container, { title: t('activity.errorTitle'), message: err.message }, () => this.loadData());
             return;
         }
 
         const rows = result.data || [];
 
         container.innerHTML = esc(html`
-            <div class="table-card glass-card">
-                <div class="table-header" style="flex-wrap:wrap;gap:16px;">
-                    <div class="filter-bar" style="width:100%;display:flex;gap:10px;flex-wrap:wrap;justify-content:space-between;align-items:center;">
-                        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-                            <label class="sr-only" for="activity-search">Search by username</label>
-                            <input class="filter-input" id="activity-search" type="search" placeholder="🔍 Search username..."
-                                   value="${this.currentSearch}">
+            <div class="table-card surface">
+                <div class="table-header">
+                    <div class="filter-bar grow">
+                        <label class="sr-only" for="activity-search">${t('activity.searchLabel')}</label>
+                        <input class="field" id="activity-search" type="search"
+                               placeholder="${t('activity.searchPlaceholder')}" value="${this.currentSearch}" dir="auto">
 
-                            <label class="sr-only" for="activity-platform-filter">Filter by platform</label>
-                            <select class="filter-select" id="activity-platform-filter" data-change="activity:handlePlatformFilter">
-                                <option value="" ${!this.currentPlatform ? html.raw('selected') : ''}>All Platforms</option>
-                                <option value="instagram" ${this.currentPlatform === 'instagram' ? html.raw('selected') : ''}>Instagram</option>
-                                <option value="facebook" ${this.currentPlatform === 'facebook' ? html.raw('selected') : ''}>Facebook</option>
-                            </select>
+                        <label class="sr-only" for="activity-platform-filter">${t('activity.platformFilter')}</label>
+                        <select class="select" id="activity-platform-filter" data-change="activity:handlePlatformFilter">
+                            <option value="" ${!this.currentPlatform ? html.raw('selected') : ''}>${t('activity.allPlatforms')}</option>
+                            <option value="instagram" ${this.currentPlatform === 'instagram' ? html.raw('selected') : ''}>${t('common.instagram')}</option>
+                            <option value="facebook" ${this.currentPlatform === 'facebook' ? html.raw('selected') : ''}>${t('common.facebook')}</option>
+                        </select>
 
-                            <label class="sr-only" for="activity-campaign-filter">Filter by campaign</label>
-                            <select class="filter-select" id="activity-campaign-filter" data-change="activity:handleCampaignFilter">
-                                <option value="" ${!this.currentCampaignId ? html.raw('selected') : ''}>All Campaigns</option>
-                                ${(campaigns || []).map((c) => html`
-                                    <option value="${c.id}" ${this.currentCampaignId === c.id ? html.raw('selected') : ''}>Keyword: ${String(c.trigger_keyword || '').split(',')[0]}</option>
-                                `)}
-                            </select>
+                        <label class="sr-only" for="activity-campaign-filter">${t('activity.campaignFilter')}</label>
+                        <select class="select" id="activity-campaign-filter" data-change="activity:handleCampaignFilter">
+                            <option value="" ${!this.currentCampaignId ? html.raw('selected') : ''}>${t('activity.allCampaigns')}</option>
+                            ${(campaigns || []).map((c) => html`
+                                <option value="${c.id}" ${this.currentCampaignId === c.id ? html.raw('selected') : ''}>${
+                                    t('activity.campaignOption', { keyword: String(c.trigger_keyword || '').split(',')[0] })
+                                }</option>
+                            `)}
+                        </select>
 
-                            <label class="sr-only" for="activity-filter">Filter by status</label>
-                            <select class="filter-select" id="activity-filter" data-change="activity:handleFilter">
-                                <option value="" ${!this.currentStatus ? html.raw('selected') : ''}>All Status</option>
-                                <option value="SENT" ${this.currentStatus === 'SENT' ? html.raw('selected') : ''}>✅ Sent</option>
-                                <option value="FAILED" ${this.currentStatus === 'FAILED' ? html.raw('selected') : ''}>❌ Failed</option>
-                                <option value="PENDING" ${this.currentStatus === 'PENDING' ? html.raw('selected') : ''}>⏳ Pending</option>
-                            </select>
-                        </div>
+                        <label class="sr-only" for="activity-filter">${t('activity.statusFilter')}</label>
+                        <select class="select" id="activity-filter" data-change="activity:handleFilter">
+                            <option value="" ${!this.currentStatus ? html.raw('selected') : ''}>${t('activity.allStatuses')}</option>
+                            <option value="SENT" ${this.currentStatus === 'SENT' ? html.raw('selected') : ''}>${t('common.sent')}</option>
+                            <option value="FAILED" ${this.currentStatus === 'FAILED' ? html.raw('selected') : ''}>${t('common.failed')}</option>
+                            <option value="PENDING" ${this.currentStatus === 'PENDING' ? html.raw('selected') : ''}>${t('common.pending')}</option>
+                        </select>
+                    </div>
 
-                        <button type="button" class="btn btn-secondary btn-sm flex-center gap-2" data-action="activity:handleExport">
-                            <i data-lucide="download" style="width:14px;height:14px;" aria-hidden="true"></i>
-                            <span>Export CSV</span>
+                    <div class="row gap-3 row--wrap">
+                        <span class="text-meta">${t('activity.results', { count: UI.formatNumber(result.pagination.total) })}</span>
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="activity:handleExport">
+                            <i data-lucide="download" aria-hidden="true"></i>
+                            <span>${t('activity.export')}</span>
                         </button>
                     </div>
-                    <span style="font-size:12px;color:var(--text-muted);">${result.pagination.total} results</span>
                 </div>
-                <div class="table-wrapper">
+
+                <div class="table-wrapper log-table">
                     <table class="data-table">
                         <thead><tr>
-                            <th scope="col">Username</th><th scope="col">Keyword</th><th scope="col">Post ID</th>
-                            <th scope="col">Status</th><th scope="col">Error</th><th scope="col">Time</th>
+                            <th scope="col">${t('table.user')}</th>
+                            <th scope="col">${t('table.keyword')}</th>
+                            <th scope="col">${t('table.postId')}</th>
+                            <th scope="col">${t('table.status')}</th>
+                            <th scope="col">${t('table.error')}</th>
+                            <th scope="col">${t('table.time')}</th>
                         </tr></thead>
                         <tbody>
                             ${rows.map((i) => html`
                                 <tr>
                                     <td>${UI.userCell(i)}</td>
-                                    <td style="color:var(--accent);font-weight:500;" dir="auto">${i.trigger_keyword || '—'}</td>
-                                    <td class="cell-post-id">${i.post_id || '—'}</td>
-                                    <td><span class="status-pill ${String(i.status || '').toLowerCase()}">${i.status}</span></td>
-                                    <td class="cell-error" title="${i.error_log || ''}" dir="auto">${i.error_log || '—'}</td>
-                                    <td style="white-space:nowrap;">${UI.formatDate(i.timestamp)}</td>
+                                    <td dir="auto">${i.trigger_keyword || '—'}</td>
+                                    <td class="cell-id truncate">${i.post_id ? UI.ltr(i.post_id) : '—'}</td>
+                                    <td><span class="status-pill ${String(i.status || '').toLowerCase()}">${UI.statusLabel(i.status)}</span></td>
+                                    <td class="cell-error truncate" title="${i.error_log || ''}" dir="auto">${i.error_log || '—'}</td>
+                                    <td class="nowrap">${UI.formatDate(i.timestamp)}</td>
                                 </tr>
                             `)}
                             ${rows.length === 0
-                                ? html`<tr><td colspan="6" class="table-empty-cell">No interactions found.</td></tr>`
+                                ? html`<tr><td colspan="6" class="table-empty-cell">${t('activity.none')}</td></tr>`
                                 : ''}
                         </tbody>
                     </table>
                 </div>
+
+                <!-- Same rows, phone shape. CSS shows exactly one of the two. -->
+                <div class="log-cards">
+                    ${rows.map((i) => html`
+                        <article class="log-card">
+                            <div class="log-card-head">
+                                <span>${UI.userCell(i)}</span>
+                                <span class="status-pill ${String(i.status || '').toLowerCase()}">${UI.statusLabel(i.status)}</span>
+                            </div>
+                            <p class="text-meta" dir="auto">${t('table.keyword')}: ${i.trigger_keyword || '—'}</p>
+                            ${i.error_log ? html`<p class="text-meta text-danger" dir="auto">${i.error_log}</p>` : ''}
+                            <p class="text-meta">${UI.formatDate(i.timestamp)}</p>
+                        </article>
+                    `)}
+                    ${rows.length === 0 ? html`<p class="table-empty-cell">${t('activity.none')}</p>` : ''}
+                </div>
+
                 ${result.pagination.totalPages > 1 ? html`
-                    <nav class="pagination" aria-label="Activity log pages">
+                    <nav class="pagination" aria-label="${t('activity.pagesLabel')}">
                         <button type="button" class="page-btn" ${this.currentPage <= 1 ? html.raw('disabled') : ''}
-                                data-action="activity:goToPage" data-page="${this.currentPage - 1}">← Prev</button>
-                        <span style="font-size:13px;color:var(--text-secondary);">Page ${result.pagination.page} of ${result.pagination.totalPages}</span>
+                                data-action="activity:goToPage" data-page="${this.currentPage - 1}">
+                            <i data-lucide="chevron-left" aria-hidden="true"></i> ${t('activity.prev')}
+                        </button>
+                        <span class="page-position">${t('activity.pages', {
+                            page: UI.formatNumber(result.pagination.page),
+                            total: UI.formatNumber(result.pagination.totalPages),
+                        })}</span>
                         <button type="button" class="page-btn" ${this.currentPage >= result.pagination.totalPages ? html.raw('disabled') : ''}
-                                data-action="activity:goToPage" data-page="${this.currentPage + 1}">Next →</button>
+                                data-action="activity:goToPage" data-page="${this.currentPage + 1}">
+                            ${t('activity.next')} <i data-lucide="chevron-right" aria-hidden="true"></i>
+                        </button>
                     </nav>
                 ` : ''}
             </div>
@@ -164,7 +197,7 @@ const ActivityPage = {
     async handleExport(btn) {
         const original = btn.innerHTML;
         btn.disabled = true;
-        btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;margin:0;"></div><span>Preparing…</span>';
+        btn.innerHTML = UI.buttonSpinner(t('activity.exporting'));
         try {
             const params = {};
             if (this.currentStatus) params.status = this.currentStatus;
@@ -173,7 +206,7 @@ const ActivityPage = {
             if (this.currentCampaignId) params.campaign_id = this.currentCampaignId;
             await API.exportInteractions(params);
         } catch (err) {
-            UI.toast(err.message || 'Export failed.', 'error');
+            UI.toast(err.message || t('activity.exportFailed'), 'error');
         } finally {
             btn.disabled = false;
             btn.innerHTML = original;

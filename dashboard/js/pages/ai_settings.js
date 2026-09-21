@@ -1,65 +1,68 @@
 /**
- * AI Agent Settings Page — agent configuration, system prompts, knowledge base, sandbox.
+ * AI Agent Settings — configuration on one side, a live sandbox on the other.
+ *
+ * Both textareas hold Arabic prose that the model reads verbatim, so they get
+ * the loose Arabic leading and `unicode-bidi: plaintext` (via `.user-content`)
+ * rather than the tight UI line-height: a system prompt with a Latin URL in
+ * the middle of an Arabic sentence has to keep that URL where it was typed.
  */
 const AiSettingsPage = {
     render() {
         const container = document.getElementById('page-container');
         container.innerHTML = esc(html`
-            <div class="settings-grid" data-pane="config">
-                <!-- Config Panel -->
-                <div class="glass-card settings-main-panel">
-                    <div class="panel-header-badge">
+            <div class="ai-grid">
+                <section class="surface ai-panel">
+                    <div class="panel-head">
                         <i data-lucide="bot" aria-hidden="true"></i>
-                        <h3>Agent Configuration</h3>
+                        <h3>${t('ai.configTitle')}</h3>
                     </div>
                     <div id="ai-settings-error"></div>
-                    <form id="ai-settings-form" class="settings-form" data-submit="ai:saveSettings">
-                        <div class="form-toggle-row">
+                    <form id="ai-settings-form" data-submit="ai:saveSettings">
+                        <div class="toggle-block">
                             <div>
-                                <h4 class="toggle-title">Enable AI Sales Agent</h4>
-                                <p class="toggle-desc">Automatically reply to incoming Instagram direct messages using Gemini.</p>
+                                <h4>${t('ai.enableTitle')}</h4>
+                                <p>${t('ai.enableDesc')}</p>
                             </div>
-                            <label class="toggle-switch" for="ai-active-toggle">
-                                <span class="sr-only">Enable AI sales agent</span>
+                            <label class="switch" for="ai-active-toggle">
+                                <span class="sr-only">${t('ai.enableLabel')}</span>
                                 <input type="checkbox" id="ai-active-toggle" checked>
-                                <span class="toggle-slider"></span>
+                                <span class="switch-track"></span>
                             </label>
                         </div>
 
-                        <hr class="divider" />
+                        <hr class="divider">
 
                         <div class="form-group">
                             <label class="form-label" for="system-prompt-text">
-                                <span>Brand Voice &amp; Instructions (System Prompt)</span>
-                                <span class="badge badge-info-glow">Arabic Recommended</span>
+                                <span>${t('ai.systemPrompt')}</span>
+                                <span class="badge badge-info">${t('ai.arabicBadge')}</span>
                             </label>
-                            <span class="field-desc" id="system-prompt-desc">Define who the AI is, how it behaves, and guidelines for talking to prospects.</span>
-                            <textarea id="system-prompt-text" class="arabic-text" dir="auto" rows="8"
+                            <span class="field-desc" id="system-prompt-desc">${t('ai.systemPromptDesc')}</span>
+                            <textarea id="system-prompt-text" class="field-textarea user-content" dir="auto" rows="8"
                                       aria-describedby="system-prompt-desc"
-                                      placeholder="e.g. أنت مساعد ذكي للاستاذ الأمير منصور..." required></textarea>
+                                      placeholder="${t('ai.systemPromptPlaceholder')}" required></textarea>
                         </div>
 
                         <div class="form-group">
-                            <label class="form-label" for="knowledge-base-text">
-                                <span>Business Knowledge Base &amp; FAQs</span>
-                            </label>
-                            <span class="field-desc" id="knowledge-base-desc">Provide course links, product names, pricing, and answers to common questions.</span>
-                            <textarea id="knowledge-base-text" class="arabic-text" dir="auto" rows="10"
+                            <label class="form-label" for="knowledge-base-text">${t('ai.knowledge')}</label>
+                            <span class="field-desc" id="knowledge-base-desc">${t('ai.knowledgeDesc')}</span>
+                            <textarea id="knowledge-base-text" class="field-textarea user-content" dir="auto" rows="10"
                                       aria-describedby="knowledge-base-desc"
-                                      placeholder="e.g. كورسات اليوديمي المتاحة..." required></textarea>
+                                      placeholder="${t('ai.knowledgePlaceholder')}" required></textarea>
                         </div>
 
-                        <div class="settings-advanced-row">
+                        <div class="form-grid">
                             <div class="form-group">
-                                <label class="form-label" for="model-selector">Model</label>
-                                <select id="model-selector">
-                                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fastest)</option>
+                                <label class="form-label" for="model-selector">${t('ai.model')}</label>
+                                <select class="select" id="model-selector">
+                                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
                                     <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
                                 </select>
                             </div>
-
                             <div class="form-group">
-                                <label class="form-label" for="temp-slider">Temperature: <span id="temp-val">0.7</span></label>
+                                <label class="form-label" for="temp-slider" id="temp-label">
+                                    ${t('ai.temperature', { value: '0.7' })}
+                                </label>
                                 <input type="range" id="temp-slider" min="0" max="1" step="0.1" value="0.7"
                                        data-input="ai:updateTemperature">
                             </div>
@@ -67,39 +70,41 @@ const AiSettingsPage = {
 
                         <div class="form-actions">
                             <button type="submit" id="save-settings-btn" class="btn btn-primary">
-                                <span>Save Changes</span>
+                                <i data-lucide="check" aria-hidden="true"></i>
+                                <span>${t('common.saveChanges')}</span>
                             </button>
                         </div>
                     </form>
-                </div>
+                </section>
 
-                <!-- Sandbox Simulator -->
-                <div class="glass-card settings-sandbox-panel">
-                    <div class="panel-header-badge">
+                <section class="surface ai-sandbox">
+                    <div class="panel-head">
                         <i data-lucide="terminal" aria-hidden="true"></i>
-                        <h3>Agent Sandbox Simulator</h3>
+                        <h3>${t('ai.sandboxTitle')}</h3>
                     </div>
-                    <p class="section-desc">Test your system prompt and FAQs in real-time. This queries Gemini without sending any messages to Instagram.</p>
+                    <p class="panel-desc">${t('ai.sandboxDesc')}</p>
 
-                    <div class="sandbox-chat-container">
-                        <div class="sandbox-messages" id="sandbox-messages-container" role="log" aria-live="polite" aria-label="Sandbox conversation">
+                    <div class="sandbox-shell">
+                        <div class="sandbox-messages" id="sandbox-messages-container" role="log" aria-live="polite"
+                             aria-label="${t('ai.sandboxTitle')}">
                             <div class="sandbox-welcome">
                                 <div class="bot-avatar"><i data-lucide="bot" aria-hidden="true"></i></div>
-                                <h4>Test your Sales Bot here!</h4>
-                                <p dir="auto">Type an inquiry (e.g. "هل تقدم كورسات برمجة؟") to preview how the AI responds and structures quick replies or carousels.</p>
+                                <h4>${t('ai.sandboxWelcome')}</h4>
+                                <p dir="auto">${t('ai.sandboxWelcomeBody')}</p>
                             </div>
                         </div>
-                        <div class="sandbox-input-row">
+                        <div class="sandbox-composer">
                             <form id="sandbox-send-form" data-submit="ai:sendSandboxTest">
-                                <label class="sr-only" for="sandbox-user-input">Test message</label>
-                                <input type="text" id="sandbox-user-input" class="arabic-text" dir="auto" placeholder="Type a test message...">
-                                <button type="submit" id="sandbox-btn" class="btn btn-primary" aria-label="Send test message">
-                                    <i data-lucide="send" style="width:16px;height:16px;" aria-hidden="true"></i>
+                                <label class="sr-only" for="sandbox-user-input">${t('ai.sandboxLabel')}</label>
+                                <input type="text" class="field" id="sandbox-user-input" dir="auto"
+                                       placeholder="${t('ai.sandboxPlaceholder')}">
+                                <button type="submit" id="sandbox-btn" class="btn btn-primary" aria-label="${t('ai.sandboxSend')}">
+                                    <i data-lucide="send" aria-hidden="true"></i>
                                 </button>
                             </form>
                         </div>
                     </div>
-                </div>
+                </section>
             </div>
         `);
 
@@ -110,13 +115,14 @@ const AiSettingsPage = {
     async loadSettings() {
         try {
             const settings = await API.getAiSettings();
+            const temperature = settings.temperature != null ? settings.temperature : 0.7;
 
             document.getElementById('ai-active-toggle').checked = settings.is_active !== false;
             document.getElementById('system-prompt-text').value = settings.system_prompt || '';
             document.getElementById('knowledge-base-text').value = settings.knowledge_base || '';
             document.getElementById('model-selector').value = settings.model || 'gemini-2.5-flash';
-            document.getElementById('temp-slider').value = settings.temperature != null ? settings.temperature : 0.7;
-            document.getElementById('temp-val').textContent = settings.temperature != null ? settings.temperature : 0.7;
+            document.getElementById('temp-slider').value = temperature;
+            this.updateTemperature(temperature);
         } catch (err) {
             console.error('AI Settings Load Error:', err);
             // An unloaded form full of empty fields would otherwise look like
@@ -126,9 +132,9 @@ const AiSettingsPage = {
                 UI.renderError(
                     host,
                     {
-                        title: 'Could not load the saved AI settings',
+                        title: t('ai.loadErrorTitle'),
                         message: err.message,
-                        hint: 'The fields below are EMPTY, not your saved values — do not save until this loads.',
+                        hint: t('ai.loadErrorHint'),
                     },
                     () => { host.innerHTML = ''; this.loadSettings(); }
                 );
@@ -139,14 +145,16 @@ const AiSettingsPage = {
     },
 
     updateTemperature(value) {
-        document.getElementById('temp-val').textContent = value;
+        const label = document.getElementById('temp-label');
+        if (label) label.textContent = t('ai.temperature', { value: UI.formatNumber(Number(value)) });
     },
 
     async saveSettings(form, event) {
         event.preventDefault();
         const btn = document.getElementById('save-settings-btn');
+        const original = btn.innerHTML;
         btn.disabled = true;
-        btn.textContent = 'Saving...';
+        btn.innerHTML = UI.buttonSpinner(t('common.saving'));
 
         const payload = {
             is_active: document.getElementById('ai-active-toggle').checked,
@@ -158,13 +166,14 @@ const AiSettingsPage = {
 
         try {
             await API.saveAiSettings(payload);
-            UI.toast('AI Agent Settings saved successfully.', 'success');
+            UI.toast(t('ai.saved'), 'success');
         } catch (err) {
             console.error('Save Settings Error:', err);
-            UI.toast(err.message || 'Failed to save settings.', 'error');
+            UI.toast(err.message || t('ai.saveFailed'), 'error');
         } finally {
             btn.disabled = false;
-            btn.textContent = 'Save Changes';
+            btn.innerHTML = original;
+            UI.icons(btn);
         }
     },
 
@@ -191,9 +200,9 @@ const AiSettingsPage = {
         const loadingId = `loading-${Date.now()}`;
         container.insertAdjacentHTML('beforeend', esc(html`
             <div class="sandbox-msg msg-bot" id="${loadingId}">
-                <div class="bot-avatar-sm"><i data-lucide="bot" style="width:14px;height:14px;" aria-hidden="true"></i></div>
+                <div class="bot-avatar-sm"><i data-lucide="bot" aria-hidden="true"></i></div>
                 <div class="sandbox-bubble bubble-bot">
-                    <div class="typing-dots" role="status" aria-label="Waiting for the AI response">
+                    <div class="typing-dots" role="status" aria-label="${t('ai.sandboxWaiting')}">
                         <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                     </div>
                 </div>
@@ -215,7 +224,7 @@ const AiSettingsPage = {
 
             container.insertAdjacentHTML('beforeend', esc(html`
                 <div class="sandbox-msg msg-bot">
-                    <div class="bot-avatar-sm"><i data-lucide="bot" style="width:14px;height:14px;" aria-hidden="true"></i></div>
+                    <div class="bot-avatar-sm"><i data-lucide="bot" aria-hidden="true"></i></div>
                     <div class="sandbox-bubble bubble-bot">
                         <p dir="auto">${aiRes.text}</p>
                         ${this.structuredPreview(aiRes)}
@@ -231,7 +240,7 @@ const AiSettingsPage = {
             if (loader) loader.remove();
             container.insertAdjacentHTML('beforeend', esc(html`
                 <div class="sandbox-msg msg-error">
-                    <div class="sandbox-bubble bubble-error" dir="auto">${err.message || 'Error obtaining response.'}</div>
+                    <div class="sandbox-bubble bubble-error" dir="auto">${err.message || t('ai.errorReply')}</div>
                 </div>
             `));
             container.scrollTop = container.scrollHeight;
@@ -247,8 +256,8 @@ const AiSettingsPage = {
 
         if (aiRes.message_type === 'quick_reply' && Array.isArray(aiRes.quick_replies)) {
             parts.push(html`
-                <div class="sandbox-quick-replies">
-                    ${aiRes.quick_replies.map((qr) => html`<span class="sandbox-qr-pill" dir="auto">${qr && qr.title}</span>`)}
+                <div class="msg-quick-replies">
+                    ${aiRes.quick_replies.map((qr) => html`<span class="qr-pill" dir="auto">${qr && qr.title}</span>`)}
                 </div>
             `);
         }
@@ -260,12 +269,12 @@ const AiSettingsPage = {
                         const image = safeUrl(el && el.image_url);
                         const buttons = Array.isArray(el && el.buttons) ? el.buttons : [];
                         return html`
-                            <div class="sandbox-card glass-card">
-                                ${image ? html`<img src="${image}" class="sandbox-card-img" alt="${(el && el.title) || 'Carousel image'}">` : ''}
+                            <div class="sandbox-card">
+                                ${image ? html`<img src="${image}" class="sandbox-card-img" alt="${(el && el.title) || ''}">` : ''}
                                 <div class="sandbox-card-body">
                                     <h5 class="sandbox-card-title" dir="auto">${el && el.title}</h5>
                                     ${el && el.subtitle ? html`<p class="sandbox-card-subtitle" dir="auto">${el.subtitle}</p>` : ''}
-                                    <div class="sandbox-card-buttons">
+                                    <div class="stack gap-1">
                                         ${buttons.map((btn) => html`<span class="sandbox-card-btn" dir="auto">${btn && btn.title}</span>`)}
                                     </div>
                                 </div>

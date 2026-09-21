@@ -27,15 +27,15 @@ const API = {
      */
     describeHttpError(status, rawText) {
         switch (status) {
-            case 400: return 'The server rejected the request (400). Check the values you entered.';
-            case 403: return 'Not allowed (403).';
-            case 404: return 'That endpoint was not found (404).';
-            case 413: return 'The request body was too large (413). Vercel caps uploads at 4.5MB — keep files under 3.2MB.';
-            case 429: return 'Too many requests (429). Wait a moment and try again.';
-            case 500: return 'The server hit an internal error (500). Check the deployment logs.';
+            case 400: return t('http.400');
+            case 403: return t('http.403');
+            case 404: return t('http.404');
+            case 413: return t('http.413');
+            case 429: return t('http.429');
+            case 500: return t('http.500');
             case 502:
             case 503:
-            case 504: return `The server was unavailable or timed out (${status}). Publishing and uploads can exceed the serverless time limit.`;
+            case 504: return t('http.5xx', { status });
             default: break;
         }
         const snippet = String(rawText || '')
@@ -44,8 +44,8 @@ const API = {
             .trim()
             .slice(0, 160);
         return snippet
-            ? `Request failed (${status}): ${snippet}`
-            : `Request failed (${status}).`;
+            ? t('http.genericSnippet', { status, snippet })
+            : t('http.generic', { status });
     },
 
     async request(path, options = {}) {
@@ -60,7 +60,7 @@ const API = {
             });
         } catch (networkErr) {
             if (typeof UI !== 'undefined') UI.setSystemStatus('offline');
-            const err = new Error('Could not reach the server. Check your connection and try again.');
+            const err = new Error(t('http.network'));
             err.isNetworkError = true;
             err.cause = networkErr;
             throw err;
@@ -69,7 +69,7 @@ const API = {
         if (res.status === 401) {
             this.clearToken();
             if (typeof App !== 'undefined') App.showLogin();
-            const err = new Error('Session expired. Please sign in again.');
+            const err = new Error(t('http.sessionExpired'));
             err.status = 401;
             throw err;
         }
@@ -96,9 +96,10 @@ const API = {
         }
 
         if (parseFailed) {
-            const err = new Error(
-                `The server returned a non-JSON response (${res.status}). ${this.describeHttpError(res.status, rawText)}`
-            );
+            const err = new Error(t('http.nonJson', {
+                status: res.status,
+                detail: this.describeHttpError(res.status, rawText),
+            }));
             err.status = res.status;
             err.rawText = rawText;
             throw err;
@@ -173,7 +174,7 @@ const API = {
             body: JSON.stringify(params),
         });
         const dl = result && result.token;
-        if (!dl) throw new Error('The server did not return a download token for this export.');
+        if (!dl) throw new Error(t('http.noExportToken'));
         const query = new URLSearchParams({ ...params, dl }).toString();
         window.location.href = `${API.baseUrl}/interactions/export?${query}`;
     },
