@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
+    <!-- This page's colours are all dark-assuming (white gradient headline, white-alpha
+         rules, ambient glows). tokens.css flips light under prefers-color-scheme, which made
+         half the headline invisible. Pin dark until the page is properly dualised. -->
+    <meta name="color-scheme" content="dark">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>عيدية المبرمجين — 9 كورسات مجانية بالكامل 🎉</title>
@@ -14,6 +18,7 @@
          legacy names its own rules still use. -->
     <link rel="stylesheet" href="/dashboard/css/tokens.css?v=5.0">
     <style>
+        :root { color-scheme: dark; }
         :root {
             --bg-primary: var(--surface-page);
             --bg-glass: var(--surface-glass);
@@ -91,7 +96,6 @@
             font-weight: 700;
             font-size: 14px;
             margin-bottom: 16px;
-            letter-spacing: 0.5px;
         }
 
         h1 {
@@ -176,7 +180,7 @@
         }
 
         .course-desc {
-            font-size: 13px;
+            font-size: 14px;
             color: var(--text-secondary);
             line-height: 1.6;
             margin-bottom: 20px;
@@ -192,7 +196,7 @@
         }
 
         .coupon-tag {
-            font-size: 11px;
+            font-size: 12px;
             font-weight: 700;
             color: var(--success);
             background: rgba(34, 197, 94, 0.1);
@@ -276,7 +280,7 @@
                 <p class="course-desc">تعلم بناء عملائك الأذكياء وأنظمة الذكاء الاصطناعي التفاعلية باستخدام أحدث تقنيات الـ LLMs.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/agentic-ai-arabic/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/agentic-ai-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
 
@@ -287,7 +291,7 @@
                 <p class="course-desc">تعلم لغة Go الحديثة لبناء خدمات ويب وسيرفرات فائقة السرعة والأداء العالي باللغة العربية.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/golang-course-in-arabic/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/golang-course-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
 
@@ -298,7 +302,7 @@
                 <p class="course-desc">ابدأ مسيرتك في برمجة تطبيقات الآيفون والآيباد من الصفر مع تغطية شاملة للغة Swift.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/swift-programming-language-in-arabic/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/swift-programming-language-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
 
@@ -309,7 +313,7 @@
                 <p class="course-desc">البداية الأسهل والأفضل في عالم البرمجة من خلال تعلم لغة بايثون وتطبيقاتها المتنوعة.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/python-for-beginners-in-arabic-/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/python-for-beginners-in-arabic-/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
 
@@ -320,7 +324,7 @@
                 <p class="course-desc">قم بصقل مهاراتك المنطقية والتحليلية من خلال حل 25 مسألة برمجية شيقة باستخدام C#.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/problem-solving-25-problems-solved-with-c-in-arabic/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/problem-solving-25-problems-solved-with-c-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
 
@@ -331,7 +335,7 @@
                 <p class="course-desc">تعلم أساسيات لغة C# وكيفية بناء تطبيقات سطح المكتب والألعاب في 5 ساعات فقط.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/csharpin5hours/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/csharpin5hours/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
 
@@ -342,7 +346,7 @@
                 <p class="course-desc">ابنِ أساساً قوياً في البرمجة كائنية التوجه (OOP) وتعلم لغة جافا الشهيرة والمستخدمة عالمياً.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/java-for-beginners-in-arabic/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/java-for-beginners-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
 
@@ -353,7 +357,7 @@
                 <p class="course-desc">تعلم حجر الأساس الأول لبناء وهيكلة صفحات الويب والمشاريع من الصفر للمبتدئين.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/html5-full-course-with-2-projects-in-arabic/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/html5-full-course-with-2-projects-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
 
@@ -364,7 +368,7 @@
                 <p class="course-desc">تعلم أساسيات تصميم المواقع وتنسيق صفحات الويب وتعديل الألوان والخطوط باستخدام CSS3.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
-                    <a href="https://www.udemy.com/course/css3-full-course-with-project-in-arabic/?couponCode=ELAMIR-100" target="_blank" class="enroll-btn">سجل مجاناً الآن 🚀</a>
+                    <a href="https://www.udemy.com/course/css3-full-course-with-project-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
                 </div>
             </div>
         </main>

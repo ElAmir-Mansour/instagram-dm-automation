@@ -320,7 +320,7 @@ I18N.strings = {
         'overview.stat.successRate': 'نسبة النجاح',
         'overview.stat.successRateSub': '{sent} ناجحة · {failed} فاشلة',
         'overview.stat.users': 'أشخاص وصلتهم',
-        'overview.stat.campaigns': 'إجمالي الحملات',
+        'overview.stat.campaigns': 'الحملات النشطة',
         'overview.stat.campaignsSub': '{count} تفاعل إجمالاً',
 
         'overview.chart.activity': 'نشاط الرسائل — آخر 7 أيام',
@@ -890,7 +890,7 @@ I18N.strings = {
         'overview.stat.successRate': 'Success rate',
         'overview.stat.successRateSub': '{sent} sent · {failed} failed',
         'overview.stat.users': 'People reached',
-        'overview.stat.campaigns': 'Total campaigns',
+        'overview.stat.campaigns': 'Active campaigns',
         'overview.stat.campaignsSub': '{count} interactions in total',
 
         'overview.chart.activity': 'DM activity — last 7 days',

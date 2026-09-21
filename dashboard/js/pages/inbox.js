@@ -264,7 +264,7 @@ const InboxPage = {
             <span class="thread-badges">
                 ${x.is_bot_active
                     ? html`<span class="badge badge-success">${t('inbox.aiActive')}</span>`
-                    : html`<span class="badge badge-warning">${t('inbox.aiPaused')}</span>`}
+                    : html`<span class="badge badge-neutral">${t('inbox.aiPaused')}</span>`}
                 ${!x.is_bot_active && isInbound
                     ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
                     : ''}
@@ -297,7 +297,7 @@ const InboxPage = {
 
         Motion.patchList(container, threads, {
             key: (x) => x.id,
-            // Everything the row displays, and nothing else. `` cannot
+            // Everything the row displays, and nothing else. `\u001f` cannot
             // appear in a username or a DM, so no two states collide.
             signature: (x) => [
                 this.threadName(x),
@@ -306,7 +306,7 @@ const InboxPage = {
                 x.is_bot_active ? '1' : '0',
                 x.last_message_direction,
                 x.id === this.selectedConversationId ? '1' : '0',
-            ].join(''),
+            ].join('\u001f'),
             create: () => {
                 const el = document.createElement('button');
                 el.type = 'button';

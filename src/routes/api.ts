@@ -1907,10 +1907,15 @@ router.get('/conversations/:id/messages', async (req, res) => {
         }
 
         const messages = await pool.query(
-            'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT 100',
+            // DESC then reverse, not ASC: with ASC LIMIT 100 a thread froze at message 101 —
+            // the UI appends only unseen ids, so every newer DM, including the one being
+            // answered, was invisible and the 5s poll refetched the same first 100 forever.
+            'SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 100',
             [id]
         );
-        res.json(messages.rows);
+        // Reversed back to chronological: the query takes the NEWEST 100, the client renders
+        // oldest-first.
+        res.json(messages.rows.reverse());
     } catch (err) {
         log('error', 'api.messages_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch message history.' });

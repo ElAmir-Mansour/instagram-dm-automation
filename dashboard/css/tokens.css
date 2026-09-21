@@ -143,7 +143,10 @@
     --info-soft: rgba(85, 168, 245, 0.14);
     --info-text: #8fc6ff;
 
-    --gradient-brand: linear-gradient(135deg, #6366f1, #8b5cf6 55%, #a855f7);
+    /* Darkened from #6366f1/#8b5cf6/#a855f7, which measured 4.47/4.23/3.96:1 against white
+       at --fs-200/--fw-semibold — below AA across the whole of the most-clicked component in
+       the product. These measure 5.50/5.32/5.13:1. */
+    --gradient-brand: linear-gradient(135deg, #5457e0, #7c4ae3 55%, #8f45e0);
     --gradient-brand-soft: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(168, 85, 247, 0.06));
 
     --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);

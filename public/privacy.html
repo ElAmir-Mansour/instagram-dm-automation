@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Privacy Policy - Instagram DM Automation</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.7; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; }
+        body {
+            /* No background was set, so a dark-mode UA (Android Chrome's Auto Dark Theme is on
+               by default) put #333 on near-black: measured 1.66:1. Pin the page light. */
+            background: #fff;
+            color-scheme: only light; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.7; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; }
         h1 { color: #000; border-bottom: 2px solid #eee; padding-bottom: 10px; }
         h2 { color: #222; margin-top: 30px; }
         a { color: #0070f3; }
@@ -32,7 +36,10 @@
         <li>Send an automated Direct Message to the commenter (if a keyword matches).</li>
         <li>Prevent duplicate messages by tracking recent interactions.</li>
     </ul>
-    <p>We do <strong>not</strong> sell, share, or transfer this data to any third parties.</p>
+    <p>We do <strong>not</strong> sell this data, and we do not transfer it to anyone for
+    advertising or marketing. We do share it with the service providers listed in section 5,
+    who process it solely to operate this application &mdash; including Google, whose Gemini
+    API receives the content of direct messages in order to generate a reply.</p>
     
     <h2>3. Data Storage & Retention</h2>
     <p>Interaction logs (username, comment ID, post ID, and delivery status) are stored in a secure PostgreSQL database. These logs are used for duplicate prevention (24-hour window) and diagnostic purposes.</p>
@@ -46,6 +53,7 @@
         <li><strong>Meta Graph API</strong> — To receive comment notifications and send messages. Subject to <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener">Meta's Privacy Policy</a>.</li>
         <li><strong>Supabase</strong> — For database hosting. Subject to <a href="https://supabase.com/privacy" target="_blank" rel="noopener">Supabase's Privacy Policy</a>.</li>
         <li><strong>Vercel</strong> — For application hosting. Subject to <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener">Vercel's Privacy Policy</a>.</li>
+        <li><strong>Google (Gemini API)</strong> &mdash; The content of direct messages sent to the account is transmitted to Google's Gemini API to generate an automated reply. Subject to <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's Privacy Policy</a>.</li>
     </ul>
     
     <h2>6. Contact</h2>
