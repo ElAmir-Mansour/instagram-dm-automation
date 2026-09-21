@@ -237,6 +237,9 @@ I18N.strings = {
         'common.facebook': 'فيسبوك',
         'common.both': 'المنصتان معاً',
         'common.sent': 'ناجحة',
+        'common.day': 'اليوم',
+        'common.status': 'الحالة',
+        'common.count': 'العدد',
         'common.failed': 'فاشلة',
         'common.pending': 'قيد الانتظار',
         'common.nothingRecorded': 'لم يُسجَّل شيء بعد.',
@@ -334,6 +337,8 @@ I18N.strings = {
         'overview.stat.campaignsSub': '{count} تفاعل إجمالاً',
 
         'overview.chart.activity': 'نشاط الرسائل — آخر 7 أيام',
+        'overview.chart.noActivity': 'لا نشاط في هذه الفترة.',
+        'overview.chart.stripLegend': 'كل مربع يوم واحد. كثافة اللون = عدد الرسائل، والشريط الأحمر أسفله = ما فشل منها.',
         'overview.chart.status': 'توزيع الحالات',
         'overview.recent': 'آخر التفاعلات',
 
@@ -550,6 +555,7 @@ I18N.strings = {
         'analytics.users': 'أشخاص وصلتهم',
         'analytics.today': 'اليوم',
         'analytics.chart30': 'الرسائل خلال آخر 30 يوماً',
+        'analytics.noData': 'لا بيانات في هذه الفترة.',
         'analytics.chartStatus': 'الناجحة مقابل الفاشلة',
         'analytics.topCampaigns': 'أفضل الحملات أداءً',
         'analytics.platformSplit': 'التوزيع بين المنصتين',
@@ -1211,6 +1217,9 @@ I18N.strings = {
         'common.facebook': 'Facebook',
         'common.both': 'Both platforms',
         'common.sent': 'Sent',
+        'common.day': 'Day',
+        'common.status': 'Status',
+        'common.count': 'Count',
         'common.failed': 'Failed',
         'common.pending': 'Pending',
         'common.nothingRecorded': 'Nothing recorded yet.',
@@ -1291,6 +1300,8 @@ I18N.strings = {
         'overview.stat.campaignsSub': '{count} interactions in total',
 
         'overview.chart.activity': 'DM activity — last 7 days',
+        'overview.chart.noActivity': 'No activity in this period.',
+        'overview.chart.stripLegend': 'Each square is one day. Colour depth is volume; the red foot is what failed.',
         'overview.chart.status': 'Status breakdown',
         'overview.recent': 'Recent activity',
 
@@ -1494,6 +1505,7 @@ I18N.strings = {
         'analytics.users': 'People reached',
         'analytics.today': 'Today',
         'analytics.chart30': 'DMs over the last 30 days',
+        'analytics.noData': 'No data in this period.',
         'analytics.chartStatus': 'Sent vs failed',
         'analytics.topCampaigns': 'Top performing campaigns',
         'analytics.platformSplit': 'Platform distribution',

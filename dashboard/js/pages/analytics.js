@@ -9,7 +9,6 @@
  * than `#1877f2` written into the markup.
  */
 const AnalyticsPage = {
-    charts: [],
 
     /**
      * Guards the write against landing after the operator has navigated away.
@@ -24,8 +23,9 @@ const AnalyticsPage = {
 
     destroy() {
         this._seq++;
-        this.charts.forEach((c) => { try { c.destroy(); } catch (e) { /* already gone */ } });
-        this.charts = [];
+        // No chart instances to destroy any more: the charts are SVG strings written
+        // into the page, so navigating away removes them with the markup. This loop
+        // existed only because Chart.js held canvases and event listeners alive.
     },
 
     skeleton() {
@@ -53,7 +53,6 @@ const AnalyticsPage = {
         // Chart.js is fetched alongside the data rather than after it: this
         // screen is nothing but charts, so the library is on its critical path
         // and there is no reason for it to queue behind three requests.
-        const chartLib = Charts.ensure();
         try {
             [stats, daily, campaignStats] = await Promise.all([
                 API.getStats(),
@@ -68,7 +67,6 @@ const AnalyticsPage = {
         }
         if (!live()) return;
         gate.done();
-        await chartLib;
         if (!live()) return;
 
         const total = stats.totalInteractions || 0;
@@ -116,15 +114,11 @@ const AnalyticsPage = {
                      headings, same classes. -->
                 <div class="chart-card surface">
                     <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chart30')}</h2></div>
-                    <div class="chart-wrapper">
-                        <canvas id="analytics-line" role="img" aria-label="${t('analytics.chart30')}"></canvas>
-                    </div>
+                    <div id="analytics-strip"></div>
                 </div>
                 <div class="chart-card surface">
                     <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chartStatus')}</h2></div>
-                    <div class="chart-wrapper">
-                        <canvas id="analytics-donut" role="img" aria-label="${t('analytics.chartStatus')}"></canvas>
-                    </div>
+                    <div id="analytics-split"></div>
                 </div>
             </div>
 
@@ -218,34 +212,31 @@ const AnalyticsPage = {
             el.style.flexBasis = `${Number(el.dataset.share) || 0}%`;
         });
 
-        if (typeof Chart === 'undefined') return;
-        const c = Charts.palette();
+        // SVG, synchronous, no library. `this.charts` is gone with Chart.js: there
+        // are no instances to keep or destroy, which also removes the teardown that
+        // had to run on every navigation.
+        const strip = document.getElementById('analytics-strip');
+        if (strip) {
+            strip.innerHTML = esc(html`${Charts.dayStrip(daily, {
+                label: t('analytics.chart30'),
+                emptyMessage: t('analytics.noData'),
+                dayHeader: t('common.day'),
+                sentHeader: t('common.sent'),
+                failedHeader: t('common.failed'),
+            })}`);
+        }
 
-        const bars = Charts.create('analytics-line', {
-            type: 'bar',
-            data: {
-                labels: daily.map((d) => UI.formatDayShort(d.day)),
-                datasets: [{
-                    label: t('common.sent'),
-                    data: daily.map((d) => d.sent),
-                    backgroundColor: Charts.alpha(c.positive, 0.75),
-                    borderRadius: 6,
-                }, {
-                    label: t('common.failed'),
-                    data: daily.map((d) => d.failed),
-                    backgroundColor: Charts.alpha(c.negative, 0.65),
-                    borderRadius: 6,
-                }],
-            },
-            options: Charts.cartesian({ scales: { x: { stacked: true }, y: { stacked: true } } }),
-        });
-        if (bars) this.charts.push(bars);
-
-        const donut = Charts.create('analytics-donut', {
-            type: 'doughnut',
-            data: Charts.statusData(stats.sent, stats.failed),
-            options: Charts.doughnut(),
-        });
-        if (donut) this.charts.push(donut);
+        const split = document.getElementById('analytics-split');
+        if (split) {
+            split.innerHTML = esc(html`${Charts.splitBar([
+                { label: t('common.sent'), value: stats.sent || 0, token: '--success', fallback: '#34c759' },
+                { label: t('common.failed'), value: stats.failed || 0, token: '--danger', fallback: '#ff3b30' },
+            ], {
+                label: t('analytics.chartStatus'),
+                emptyMessage: t('analytics.noData'),
+                nameHeader: t('common.status'),
+                valueHeader: t('common.count'),
+            })}`);
+        }
     },
 };
