@@ -22,6 +22,7 @@ import { getJobQueue } from '../jobs/queue.js';
 import type { EnqueueInput } from '../jobs/types.js';
 import { handleMessagingEvent } from './messaging.js';
 import { handleCommentChange } from './comments.js';
+import { FINAL_ATTEMPT } from './options.js';
 
 /**
  * The id Meta gives this comment, for queue-level deduplication.
@@ -42,6 +43,33 @@ function dmDedupeKey(event: any): string | undefined {
     return typeof mid === 'string' && mid ? `dm:${mid}` : undefined;
 }
 
+/**
+ * Whether a messaging event is something the DM pipeline could act on.
+ *
+ * `entry.messaging` carries far more than inbound messages: on an active account most of it is
+ * `read` watermarks and `delivery` receipts, plus reactions, referrals and handover-protocol
+ * events. None of those reach a reply — `normalizeDm` rejects every one of them for having no
+ * text and no payload — but they were each becoming a `jobs` row first, and because they carry
+ * no `mid` they get no dedupe key either, so a redelivered batch of read receipts wrote a
+ * fresh row per receipt per delivery. Rows that are claimed, run, logged `dm.skipped_empty`
+ * and marked done, forever.
+ *
+ * Filtering here rather than in the handler keeps the queue a record of work, which is what
+ * makes "how much is pending" a number worth reading.
+ *
+ * Erring towards enqueueing: an event with a `message` or a `postback` goes through even if
+ * this function cannot see anything answerable in it, because the handler is the thing that
+ * knows, and dropping a real customer message would be far worse than one wasted job.
+ */
+function isActionableMessagingEvent(event: any): boolean {
+    // Echoes are the page's own outbound messages coming back. On an active account they are
+    // a large share of all messaging events.
+    if (event?.message?.is_echo) return false;
+    if (event?.message) return true;
+    if (event?.postback) return true;
+    return false;
+}
+
 /** Flatten one webhook body into the jobs it implies, without touching the database. */
 export function planJobs(body: any): EnqueueInput[] {
     const planned: EnqueueInput[] = [];
@@ -50,16 +78,19 @@ export function planJobs(body: any): EnqueueInput[] {
     for (const entry of entries) {
         const entryId = entry?.id;
 
+        // The fair-queueing partition. `entry.id` is the Meta page id the delivery is
+        // addressed to, which is available here without a database read — unlike the tenant's
+        // own uuid, which is why `jobs.creator_id` is NULL on every row the webhook writes.
+        const tenantKey = typeof entryId === 'string' && entryId ? entryId : undefined;
+
         if (Array.isArray(entry?.messaging)) {
             for (const event of entry.messaging) {
-                // Echoes are the page's own outbound messages coming back. Filtered here
-                // rather than in the handler so they never become rows at all — on an active
-                // account they are a large share of all messaging events.
-                if (event?.message?.is_echo) continue;
+                if (!isActionableMessagingEvent(event)) continue;
                 planned.push({
                     kind: 'dm.process',
                     payload: { event, entryId },
                     dedupeKey: dmDedupeKey(event),
+                    tenantKey,
                 });
             }
         }
@@ -70,6 +101,7 @@ export function planJobs(body: any): EnqueueInput[] {
                     kind: 'comment.process',
                     payload: { change, entryId },
                     dedupeKey: commentDedupeKey(change),
+                    tenantKey,
                 });
             }
         }
@@ -126,7 +158,10 @@ async function processEntry(entry: any, objectType: string): Promise<void> {
             log('info', 'webhook.messaging_batch', { count: entry.messaging.length });
             for (const event of entry.messaging) {
                 try {
-                    await handleMessagingEvent(event, entryId);
+                    // FINAL_ATTEMPT (the default) is correct here and not a shortcut: this is
+                    // the fallback path taken when the queue could not be written, so there is
+                    // no retry to leave work for. Every outcome has to be recorded now.
+                    await handleMessagingEvent(event, entryId, FINAL_ATTEMPT);
                 } catch (err: any) {
                     log('error', 'webhook.messaging_failed', {
                         mid: event?.message?.mid ?? null,
@@ -140,7 +175,7 @@ async function processEntry(entry: any, objectType: string): Promise<void> {
         if (Array.isArray(entry?.changes)) {
             for (const change of entry.changes) {
                 try {
-                    await handleCommentChange(change, entryId);
+                    await handleCommentChange(change, entryId, FINAL_ATTEMPT);
                 } catch (err: any) {
                     log('error', 'webhook.comment_failed', {
                         field: change?.field,

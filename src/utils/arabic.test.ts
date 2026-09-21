@@ -5,7 +5,9 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { keywordMatches, normalizeArabic } from './arabic.js';
+import {
+    isKeywordMatchMode, keywordMatches, normalizeArabic, normalizeMatchMode,
+} from './arabic.js';
 
 describe('normalizeArabic', () => {
     it('strips tatweel (kashida)', () => {
@@ -144,5 +146,37 @@ describe('keywordMatches — word mode', () => {
         assert.equal(keywordMatches('c# course', 'c++', 'word'), false);
         assert.doesNotThrow(() => keywordMatches('anything', '(', 'word'));
         assert.doesNotThrow(() => keywordMatches('anything', '[a-', 'word'));
+    });
+});
+
+describe('normalizeMatchMode', () => {
+    it("reads 'word' and passes 'substring' through", () => {
+        assert.equal(normalizeMatchMode('word'), 'word');
+        assert.equal(normalizeMatchMode('substring'), 'substring');
+    });
+
+    it('falls back to substring for anything unrecognised', () => {
+        // This runs on the webhook's critical path against a value read from a row —
+        // including a row from a query that forgot to select the column, and every campaign
+        // created before migration v14. The alternative to falling back is answering nobody.
+        for (const bad of [undefined, null, '', 'WORD', 'exact', 'regex', 0, 1, true, {}, []]) {
+            assert.equal(normalizeMatchMode(bad), 'substring', `input ${JSON.stringify(bad)}`);
+        }
+    });
+});
+
+describe('isKeywordMatchMode', () => {
+    it('accepts exactly the two supported modes', () => {
+        assert.equal(isKeywordMatchMode('substring'), true);
+        assert.equal(isKeywordMatchMode('word'), true);
+    });
+
+    it('rejects everything else, so a typo in the API is a 400 and not a silent default', () => {
+        // Deliberately stricter than normalizeMatchMode. A campaign owner who types
+        // `match_mode: "exact"` and is quietly given substring matching has been told their
+        // short keyword is safe when it is not.
+        for (const bad of [undefined, null, '', 'WORD', 'Word', 'exact', 'substring ', 0, true]) {
+            assert.equal(isKeywordMatchMode(bad), false, `input ${JSON.stringify(bad)}`);
+        }
     });
 });

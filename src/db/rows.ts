@@ -45,15 +45,24 @@ export interface CreatorRow {
 
 // ─── campaigns ──────────────────────────────────────────────────────────────────────────
 
+/** How `trigger_keyword` is tested against a comment. See src/utils/arabic.ts. */
+export type KeywordMatchMode = 'substring' | 'word';
+
 export interface CampaignRow {
     id: string;
     creator_id: string | null;
     /** Null means the campaign applies to every post. */
     post_id: string | null;
-    /** A comma-separated list, matched as substrings after Arabic normalisation. */
+    /** A comma-separated list, matched after Arabic normalisation per `match_mode`. */
     trigger_keyword: string;
     dm_template: string;
     public_reply_template: string | null;
+    /**
+     * v14. NOT NULL DEFAULT 'substring' in the database, so it is never absent on a row —
+     * but a query that does not select it still yields `undefined`, which is why every
+     * consumer goes through `normalizeMatchMode`.
+     */
+    match_mode: KeywordMatchMode;
     is_active: boolean;
     created_at: Timestamptz;
 }
@@ -107,8 +116,19 @@ export interface MessageRow {
      * it holds message bodies and Meta user ids for people who never interacted again.
      */
     raw_payload: unknown | null;
-    /** UNIQUE where not null — the DM pipeline's idempotency claim. */
+    /** UNIQUE where not null — the DM pipeline's *dedupe* claim, not its progress marker. */
     meta_message_id: string | null;
+    /**
+     * v14. When the pipeline reached a terminal outcome for this inbound message: a reply
+     * sent, the bot paused, the agent switched off, or a failure that retrying cannot fix.
+     * NULL on an inbound row means the work is unfinished and a retry may pick it up.
+     * Always NULL on outbound rows — they are the record of a reply, not a thing to answer.
+     */
+    handled_at: Timestamptz | null;
+    /** v14. Visibility timeout for the re-entrant inbound claim. */
+    reply_claimed_at: Timestamptz | null;
+    /** v14. How many times the pipeline has claimed this inbound message. */
+    reply_attempts: number;
     created_at: Timestamptz;
 }
 
@@ -136,6 +156,19 @@ export interface ScheduledPostRow {
     attempts: number;
     claimed_at: Timestamptz | null;
     created_at: Timestamptz;
+}
+
+/**
+ * The app-wide counterpart of `rate_limit_counters` (v14).
+ *
+ * Meta's app-level limit is a pool shared by every tenant, so it cannot be counted per
+ * creator — and `rate_limit_counters.creator_id` is NOT NULL with a foreign key, so there is
+ * no sentinel row to use.
+ */
+export interface AppRateLimitCounterRow {
+    bucket: string;
+    window_start: Timestamptz;
+    count: number;
 }
 
 // ─── media ──────────────────────────────────────────────────────────────────────────────

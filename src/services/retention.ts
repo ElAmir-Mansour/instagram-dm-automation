@@ -27,10 +27,36 @@
  * begins clearing.
  */
 import { queryCount } from '../db/query.js';
+import { getJobQueue } from '../jobs/queue.js';
 import { log } from '../utils/log.js';
 
 /** Floor on the configurable window. Below this, debugging a live webhook issue is hopeless. */
 export const MIN_RETENTION_DAYS = 7;
+
+/**
+ * How long a completed job is kept.
+ *
+ * Unlike `raw_payload` this is not opt-in, and the difference is deliberate: a `done` job is
+ * work that finished, its outcome is already recorded in `interactions` / `messages`, and the
+ * row itself is a verbatim Meta event held for no further purpose. A week is long enough to
+ * answer "what did the queue do on Tuesday" and short enough that the table stops growing
+ * without bound. `failed` rows are never touched — those are the ones an operator needs.
+ */
+export const DONE_JOB_RETENTION_DAYS = 7;
+
+/** Rows deleted per pass, for the same reason `PRUNE_BATCH_SIZE` exists. */
+export const JOB_PRUNE_BATCH_SIZE = 5_000;
+
+/**
+ * Passes one sweep may make before giving up until the next run.
+ *
+ * `pruneRawPayloads` clears one batch. That is correct for one statement and wrong for a
+ * sweep: the only thing that calls it is the once-daily cron, so an account with 60,000
+ * unpruned messages would take twelve days to converge — and for eleven of those the
+ * `/data-deletion` promise stays untrue. Looping a bounded number of times converges in one
+ * run for any realistic backlog while still being unable to monopolise the invocation.
+ */
+export const MAX_SWEEP_PASSES = 20;
 
 /**
  * Rows cleared per run.
@@ -115,4 +141,83 @@ export async function pruneRawPayloads(): Promise<{ cleared: number; skipped: bo
         log('error', 'retention.prune_failed', { message: (err as Error)?.message });
         return { cleared: 0, skipped: true };
     }
+}
+
+/** Delete completed jobs older than the retention window. Never throws. */
+export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
+    try {
+        const deleted = await getJobQueue().pruneCompleted(
+            DONE_JOB_RETENTION_DAYS, JOB_PRUNE_BATCH_SIZE
+        );
+        if (deleted > 0) {
+            log('info', 'retention.jobs_pruned', {
+                deleted,
+                retention_days: DONE_JOB_RETENTION_DAYS,
+                more_likely: deleted === JOB_PRUNE_BATCH_SIZE,
+            });
+        }
+        return { deleted };
+    } catch (err) {
+        log('error', 'retention.jobs_prune_failed', { message: (err as Error)?.message });
+        return { deleted: 0 };
+    }
+}
+
+export interface RetentionSweepResult {
+    rawPayloadsCleared: number;
+    jobsDeleted: number;
+    passes: number;
+    /** True when a pass came back full, so there is more behind it than this run cleared. */
+    moreRemaining: boolean;
+}
+
+/** Injected only so the loop's termination rules can be exercised without a database. */
+export interface RetentionSweepDeps {
+    pruneRaw: typeof pruneRawPayloads;
+    pruneJobs: typeof pruneCompletedJobs;
+}
+
+/**
+ * The whole retention story, in one call, converging rather than chipping.
+ *
+ * This is what the cron invokes. It keeps going while each pass comes back full, because a
+ * full batch means the backlog is larger than one batch and stopping there means waiting a
+ * whole day to make the next 5,000 rows of progress.
+ *
+ * Never throws: it runs ahead of the scheduled posts in the same cron invocation, and a
+ * retention sweep must not be able to stop a publish.
+ */
+export async function runRetentionSweep(
+    deps: RetentionSweepDeps = { pruneRaw: pruneRawPayloads, pruneJobs: pruneCompletedJobs }
+): Promise<RetentionSweepResult> {
+    const result: RetentionSweepResult = {
+        rawPayloadsCleared: 0, jobsDeleted: 0, passes: 0, moreRemaining: false,
+    };
+
+    for (let pass = 0; pass < MAX_SWEEP_PASSES; pass++) {
+        result.passes = pass + 1;
+
+        const raw = await deps.pruneRaw();
+        const jobs = await deps.pruneJobs();
+        result.rawPayloadsCleared += raw.cleared;
+        result.jobsDeleted += jobs.deleted;
+
+        const rawFull = raw.cleared === PRUNE_BATCH_SIZE;
+        const jobsFull = jobs.deleted === JOB_PRUNE_BATCH_SIZE;
+
+        // Nothing moved: either both are caught up, or retention is switched off and the job
+        // sweep found nothing. Either way another identical pass would do nothing.
+        if (!rawFull && !jobsFull) return result;
+
+        if (pass === MAX_SWEEP_PASSES - 1) {
+            result.moreRemaining = true;
+            log('warn', 'retention.sweep_incomplete', {
+                passes: result.passes,
+                raw_payloads_cleared: result.rawPayloadsCleared,
+                jobs_deleted: result.jobsDeleted,
+            });
+        }
+    }
+
+    return result;
 }

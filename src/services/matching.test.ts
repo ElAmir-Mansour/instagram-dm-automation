@@ -134,3 +134,72 @@ describe('matchCampaign', () => {
         assert.equal(matchCampaign('ابي خصم', 'p', [numeric]), null);
     });
 });
+
+/**
+ * `match_mode` (migration v14). `keywordMatches` has supported `'word'` for a while, but no
+ * campaign could reach it: the column did not exist, the API did not accept the field and this
+ * function called the matcher with no mode at all. The dashboard warned that `تم` would misfire
+ * on اهتمام and could not offer a fix.
+ *
+ * The test that matters most is the default. Every campaign that exists today has no explicit
+ * mode, and if the absence read as `'word'` the live account's campaigns would quietly stop
+ * firing on the comments they fire on now.
+ */
+describe('matchCampaign — match_mode', () => {
+    const short = (mode?: string | null): Campaign & { match_mode?: string | null } => ({
+        id: 'short', trigger_keyword: 'تم', post_id: null, is_active: true, match_mode: mode,
+    });
+
+    it("defaults to substring when the campaign has no mode", () => {
+        for (const mode of [undefined, null]) {
+            assert.equal(matchCampaign('اهتمام كبير', 'p', [short(mode)])?.id, 'short',
+                `mode ${String(mode)} must keep matching as it does today`);
+        }
+    });
+
+    it("stops the documented misfires once a campaign opts into 'word'", () => {
+        // The whole point of the feature: اهتمام, تمام and يتم all contain تم as a substring.
+        const campaign = short('word');
+        assert.equal(matchCampaign('اهتمام كبير', 'p', [campaign]), null);
+        assert.equal(matchCampaign('تمام', 'p', [campaign]), null);
+        assert.equal(matchCampaign('يتم الرد', 'p', [campaign]), null);
+    });
+
+    it("still fires on the real keyword in 'word' mode", () => {
+        const campaign = short('word');
+        assert.equal(matchCampaign('تم التسجيل', 'p', [campaign])?.id, 'short');
+        assert.equal(matchCampaign('تم', 'p', [campaign])?.id, 'short');
+        assert.equal(matchCampaign('ابغى تم، شكرا', 'p', [campaign])?.id, 'short');
+    });
+
+    it('treats an unrecognised mode as substring rather than matching nothing', () => {
+        // A hand-edited row, or a value from before the CHECK constraint existed. Refusing to
+        // match would silently disable the campaign.
+        assert.equal(matchCampaign('اهتمام', 'p', [short('exact')])?.id, 'short');
+        assert.equal(matchCampaign('اهتمام', 'p', [short('WORD')])?.id, 'short');
+    });
+
+    it('applies each campaign its own mode when several compete', () => {
+        // Ordering is by specificity, not by mode, so a word-mode campaign that does not match
+        // must not shadow a substring-mode one that does.
+        const wordMode: Campaign & { match_mode?: string } = {
+            id: 'word', trigger_keyword: 'تم', post_id: 'p', is_active: true, match_mode: 'word',
+        };
+        const substringMode: Campaign & { match_mode?: string } = {
+            id: 'substring', trigger_keyword: 'تم', post_id: null, is_active: true, match_mode: 'substring',
+        };
+
+        // The post-specific word-mode campaign is ranked first and declines اهتمام...
+        assert.equal(matchCampaign('اهتمام', 'p', [wordMode, substringMode])?.id, 'substring');
+        // ...and wins on a real word boundary.
+        assert.equal(matchCampaign('تم التسجيل', 'p', [wordMode, substringMode])?.id, 'word');
+    });
+
+    it('applies the mode to every keyword in a comma-separated list', () => {
+        const multi: Campaign & { match_mode?: string } = {
+            id: 'multi', trigger_keyword: 'تم, خصم', post_id: null, is_active: true, match_mode: 'word',
+        };
+        assert.equal(matchCampaign('اهتمام واهتمامات', 'p', [multi]), null);
+        assert.equal(matchCampaign('ابي خصم', 'p', [multi])?.id, 'multi');
+    });
+});

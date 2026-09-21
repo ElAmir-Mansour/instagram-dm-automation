@@ -63,6 +63,9 @@ function fakeQueue(batches: Job[][]): JobQueue & {
         async reapStale() {
             return 0;
         },
+        async pruneCompleted() {
+            return 0;
+        },
     };
 }
 

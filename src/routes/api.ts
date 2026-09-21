@@ -14,7 +14,9 @@ import {
 } from '../services/tenant.js';
 import { encryptSecret, decryptSecret, verifyPassword } from '../config/crypto.js';
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
-import { pruneRawPayloads } from '../services/retention.js';
+import { runRetentionSweep } from '../services/retention.js';
+import { noteMetaFailure } from '../services/tokenHealth.js';
+import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
 import { getMediaStore } from '../services/storage.js';
@@ -285,6 +287,52 @@ router.get('/jobs/drain', async (req, res) => {
 
 // ─── Cron: Publish Scheduled Posts ──────────────────────────────────────────
 
+/**
+ * Which platforms a row has already been published to.
+ *
+ * `published_post_id` holds `FB:<id>`, `IG:<id>` or `FB:<id> | IG:<id>`. That string was only
+ * ever written on full success, which hid a real problem: on `platform = 'both'`, Facebook is
+ * published first, so a Facebook success followed by an Instagram failure threw away the
+ * Facebook post id and recorded the row as FAILED. The post *was* live on Facebook. Editing
+ * the row (which flips FAILED back to PENDING) then republished it, so the honest-looking
+ * "retry" duplicated the Facebook post on the live account — the exact outcome the atomic
+ * claim beside it was written to prevent.
+ *
+ * Recording the partial success and reading it back on the next attempt is what makes a retry
+ * finish the job instead of doing half of it twice.
+ */
+export function publishedPlatforms(publishedPostId: unknown): { fb: string | null; ig: string | null } {
+    if (typeof publishedPostId !== 'string') return { fb: null, ig: null };
+    const fb = /(?:^|\s)FB:([^\s|]+)/.exec(publishedPostId);
+    const ig = /(?:^|\s)IG:([^\s|]+)/.exec(publishedPostId);
+    return { fb: fb?.[1] ?? null, ig: ig?.[1] ?? null };
+}
+
+/** The `FB:… | IG:…` string, from whatever ids exist. Empty when neither does. */
+export function formatPublishedIds(fbId: string | null, igId: string | null): string {
+    if (fbId && igId) return `FB:${fbId} | IG:${igId}`;
+    if (fbId) return `FB:${fbId}`;
+    if (igId) return `IG:${igId}`;
+    return '';
+}
+
+/**
+ * A scheduled post's target platforms, validated against what this service can actually do.
+ *
+ * `publishFacebookPost` throws on `post_type: 'story'` — Facebook Page stories need the
+ * two-step /photo_stories + /video_stories upload, which is not implemented — and on
+ * `platform: 'both'` Facebook runs first, so a story scheduled for both platforms fails at
+ * Facebook and never reaches Instagram, where it would have worked. Rejecting the combination
+ * at create time says so once, to the person who can fix it, instead of once a day in a cron
+ * log nobody reads.
+ */
+export function unsupportedPlatformCombination(platform: unknown, postType: unknown): string | null {
+    if (postType === 'story' && (platform === 'facebook' || platform === 'both')) {
+        return 'Facebook Page stories are not supported — this service has no /photo_stories or /video_stories upload. Schedule a story for Instagram only.';
+    }
+    return null;
+}
+
 router.get('/cron/publish', async (req, res) => {
     if (!requireCronSecret(req, res, '/api/cron/publish')) return;
 
@@ -316,7 +364,16 @@ router.get('/cron/publish', async (req, res) => {
         `);
 
         await pruneRateLimitData();
-        await pruneRawPayloads();
+
+        // The retention sweep, and the only thing that calls it. Two things matter here: it
+        // clears `messages.raw_payload`, which is the mechanism by which the published
+        // /data-deletion promise is otherwise untrue, and it deletes completed `jobs` rows,
+        // which nothing did before. It converges rather than clearing one batch a day, and it
+        // cannot throw — a retention failure must not stop the publishes below it.
+        const sweep = await runRetentionSweep();
+        if (sweep.rawPayloadsCleared > 0 || sweep.jobsDeleted > 0 || sweep.moreRemaining) {
+            log('info', 'cron.retention_sweep', { ...sweep });
+        }
 
         // The daily cron is also the backstop drain. If no external scheduler is calling
         // /api/jobs/drain, this is what eventually picks up work that was enqueued while an
@@ -365,16 +422,19 @@ router.get('/cron/publish', async (req, res) => {
                 post_id: post.id, platform: post.platform, post_type: post.post_type,
             });
 
-            try {
-                let fbId: string | null = null;
-                let igId: string | null = null;
+            // Anything a previous attempt already got live. Re-publishing it would duplicate
+            // a real post on a real account, which cannot be undone from here.
+            const already = publishedPlatforms(post.published_post_id);
+            let fbId: string | null = already.fb;
+            let igId: string | null = already.ig;
 
+            try {
                 // Read straight off the joined creator row, so it has not been through the
                 // tenant service's decryption — do it here.
                 const token = decryptSecret(post.page_access_token);
 
                 // 1. Publish to Facebook
-                if (post.platform === 'facebook' || post.platform === 'both') {
+                if ((post.platform === 'facebook' || post.platform === 'both') && !fbId) {
                     if (!post.facebook_page_id) {
                         throw new Error('Facebook Page ID is missing for this creator.');
                     }
@@ -388,10 +448,14 @@ router.get('/cron/publish', async (req, res) => {
                     );
                     fbId = fbRes.id || fbRes.post_id;
                     log('info', 'publish.facebook_done', { post_id: post.id, fb_post_id: fbId });
+                } else if (fbId) {
+                    log('info', 'publish.facebook_skipped_already_live', {
+                        post_id: post.id, fb_post_id: fbId,
+                    });
                 }
 
                 // 2. Publish to Instagram
-                if (post.platform === 'instagram' || post.platform === 'both') {
+                if ((post.platform === 'instagram' || post.platform === 'both') && !igId) {
                     if (!post.instagram_page_id) {
                         throw new Error('Instagram Account ID is missing for this creator.');
                     }
@@ -405,38 +469,56 @@ router.get('/cron/publish', async (req, res) => {
                         post.caption || '',
                         post.media_url,
                         token,
+                        // `cover_url` is the reason a reel does not get a black tile in the
+                        // profile grid. It survives create, edit and publish-now; this is the
+                        // fourth path and the one that runs unattended.
                         post.cover_url
                     );
                     igId = igRes.id;
                     log('info', 'publish.instagram_done', { post_id: post.id, ig_media_id: igId });
-                }
-
-                // Format published ID string
-                let resultId = '';
-                if (fbId && igId) {
-                    resultId = `FB:${fbId} | IG:${igId}`;
-                } else if (fbId) {
-                    resultId = `FB:${fbId}`;
                 } else if (igId) {
-                    resultId = `IG:${igId}`;
+                    log('info', 'publish.instagram_skipped_already_live', {
+                        post_id: post.id, ig_media_id: igId,
+                    });
                 }
 
                 await pool.query(
-                    `UPDATE scheduled_posts 
-                     SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL 
+                    `UPDATE scheduled_posts
+                     SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL
                      WHERE id = $2`,
-                    [resultId, post.id]
+                    [formatPublishedIds(fbId, igId), post.id]
                 );
 
                 publishedIds.push(post.id);
 
             } catch (err: any) {
-                log('error', 'cron.publish_failed', { post_id: post.id, ...describeError(err) });
+                log('error', 'cron.publish_failed', {
+                    post_id: post.id,
+                    fb_post_id: fbId,
+                    ig_media_id: igId,
+                    ...describeError(err),
+                });
+
+                // A dead token stops every publish, not just this one. `creator_id` is
+                // nullable on this table, and a null would be a query that matches nothing.
+                if (post.creator_id) await noteMetaFailure(post.creator_id, err);
+
+                // The partial case, stated plainly. The status stays FAILED — the dashboard
+                // filters on that vocabulary and this is genuinely not a finished post — but
+                // `published_post_id` now keeps whatever did go live, so the next attempt
+                // skips it instead of posting it twice, and the error names what is already
+                // public so the operator is not hunting for a Facebook post they were told
+                // failed.
+                const partial = formatPublishedIds(fbId, igId);
+                const message = partial
+                    ? `Partially published (${partial}) — the rest failed: ${err.message}`
+                    : err.message;
+
                 await pool.query(
-                    `UPDATE scheduled_posts 
-                     SET status = 'FAILED', error_log = $1 
-                     WHERE id = $2`,
-                    [err.message, post.id]
+                    `UPDATE scheduled_posts
+                     SET status = 'FAILED', error_log = $1, published_post_id = $2
+                     WHERE id = $3`,
+                    [message, partial || null, post.id]
                 );
             }
         }
@@ -748,8 +830,16 @@ router.get('/stats', async (req, res) => {
         // `activeCreators` is the one count here that is not about the tenant's own data. For a
         // platform_admin it stays what it always was — how many creators the deployment runs.
         // For a normal user that number is meaningless and mildly disclosive, so they get the
-        // count of tenants they can actually see, which is what the tile means to them.
-        const creatorsQuery = req.session?.role === 'platform_admin'
+        // count of tenants they can actually see.
+        //
+        // Which means the number answers two different questions depending on who asks, and
+        // nothing in the response said which. `activeCreatorsScope` below is the missing half:
+        // a UI cannot label this honestly without it, and "Active creators: 1" meaning
+        // "everyone on this deployment" and "the one account you belong to" are not the same
+        // claim. Note that nothing in `dashboard/` reads either field today — the redesign
+        // dropped the tile — so this is here for whoever puts it back.
+        const isPlatformAdmin = req.session?.role === 'platform_admin';
+        const creatorsQuery = isPlatformAdmin
             ? pool.query('SELECT COUNT(*)::int as count FROM creators WHERE is_active = true')
             : pool.query(
                 `SELECT COUNT(*)::int as count
@@ -762,7 +852,13 @@ router.get('/stats', async (req, res) => {
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}`, [tenantId]),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.status = 'SENT'`, [tenantId]),
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.status = 'FAILED'`, [tenantId]),
-            pool.query('SELECT COUNT(*)::int as count FROM campaigns WHERE creator_id = $1', [tenantId]),
+            // `AND is_active` is new and the field has been called `activeCampaigns` all
+            // along: it counted every campaign including the paused ones, so the tile said
+            // "12 active campaigns" while eleven of them were switched off.
+            pool.query(
+                'SELECT COUNT(*)::int as count FROM campaigns WHERE creator_id = $1 AND is_active = true',
+                [tenantId]
+            ),
             creatorsQuery,
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.timestamp > NOW() - INTERVAL '24 hours'`, [tenantId]),
             pool.query(`SELECT COUNT(DISTINCT i.sender_username)::int as count FROM interactions i WHERE ${owned}`, [tenantId]),
@@ -780,6 +876,8 @@ router.get('/stats', async (req, res) => {
             successRate: totalCount > 0 ? Math.round((sentCount / totalCount) * 100) : 0,
             activeCampaigns: campaigns.rows[0].count,
             activeCreators: creators.rows[0].count,
+            /** 'deployment' = every active creator here; 'memberships' = the ones you can see. */
+            activeCreatorsScope: isPlatformAdmin ? 'deployment' : 'memberships',
             todayActivity: today.rows[0].count,
             uniqueUsersReached: uniqueUsers.rows[0].count,
             instagramCount: instagram.rows[0].count,
@@ -873,6 +971,29 @@ router.get('/campaigns', async (req, res) => {
     }
 });
 
+/**
+ * Validate an incoming `match_mode`.
+ *
+ * Rejected rather than coerced, unlike the read path in `src/utils/arabic.ts`. The asymmetry
+ * is the point: a campaign owner who types `match_mode: "exact"` and is silently given
+ * substring matching has been told their keyword is safe when it is not. On the webhook path
+ * the tradeoff runs the other way, where the alternative to a fallback is answering nobody.
+ *
+ * `undefined` means "not supplied" and leaves the column alone.
+ */
+function readMatchMode(body: any): { ok: true; value?: string } | { ok: false; error: string } {
+    if (!('match_mode' in (body ?? {})) || body.match_mode === undefined || body.match_mode === null) {
+        return { ok: true };
+    }
+    if (!isKeywordMatchMode(body.match_mode)) {
+        return {
+            ok: false,
+            error: `match_mode must be one of: ${KEYWORD_MATCH_MODES.join(', ')}.`,
+        };
+    }
+    return { ok: true, value: body.match_mode };
+}
+
 router.post('/campaigns', async (req, res) => {
     try {
         const { trigger_keyword, dm_template, public_reply_template, post_id, is_active } = req.body;
@@ -882,15 +1003,26 @@ router.post('/campaigns', async (req, res) => {
             return;
         }
 
+        const matchMode = readMatchMode(req.body);
+        if (!matchMode.ok) {
+            res.status(400).json({ error: matchMode.error });
+            return;
+        }
+
         // `creator_id` in the request body is deliberately ignored: honouring it would let any
         // session create a campaign inside another tenant. The session decides the owner, and
         // only the session. Use /auth/switch-tenant to write somewhere else.
         const creatorId = getTenantId(req);
 
         const result = await pool.query(
-            `INSERT INTO campaigns (creator_id, trigger_keyword, dm_template, public_reply_template, post_id, is_active)
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-            [creatorId, trigger_keyword, dm_template, public_reply_template || null, post_id || null, is_active !== false]
+            // `COALESCE($7, 'substring')` rather than relying on the column default, because
+            // binding NULL to a NOT NULL DEFAULT column is an error, not a default.
+            `INSERT INTO campaigns (creator_id, trigger_keyword, dm_template, public_reply_template, post_id, is_active, match_mode)
+             VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 'substring')) RETURNING *`,
+            [
+                creatorId, trigger_keyword, dm_template, public_reply_template || null,
+                post_id || null, is_active !== false, matchMode.value ?? null,
+            ]
         );
 
         res.status(201).json(result.rows[0]);
@@ -910,20 +1042,34 @@ router.put('/campaigns/:id', async (req, res) => {
             return;
         }
 
+        const matchMode = readMatchMode(req.body);
+        if (!matchMode.ok) {
+            res.status(400).json({ error: matchMode.error });
+            return;
+        }
+
         const result = await pool.query(
-            `UPDATE campaigns 
+            // `public_reply_template` and `post_id` are assigned unconditionally on purpose:
+            // both are clearable, and COALESCE would make "remove the post targeting" — the
+            // difference between a campaign that fires on one post and one that fires on every
+            // post — impossible to express. `match_mode` is COALESCEd instead, because it has
+            // no "cleared" state and omitting it must not silently reset a campaign the owner
+            // deliberately switched to word matching.
+            `UPDATE campaigns
              SET trigger_keyword = COALESCE($1, trigger_keyword),
                  dm_template = COALESCE($2, dm_template),
                  public_reply_template = $3,
                  post_id = $4,
-                 is_active = COALESCE($5, is_active)
-             WHERE id = $6 AND creator_id = $7 RETURNING *`,
+                 is_active = COALESCE($5, is_active),
+                 match_mode = COALESCE($6, match_mode)
+             WHERE id = $7 AND creator_id = $8 RETURNING *`,
             [
                 trigger_keyword,
                 dm_template,
                 public_reply_template || null,
                 post_id || null,
                 typeof is_active === 'boolean' ? is_active : null,
+                matchMode.value ?? null,
                 id,
                 getTenantId(req)
             ]
@@ -1361,6 +1507,15 @@ router.post('/posts/scheduled', async (req, res) => {
             return;
         }
 
+        // Rejected here rather than discovered by the cron at 00:00 UTC. A story scheduled to
+        // `both` cannot work: Facebook runs first and throws, so Instagram — where it would
+        // have published fine — is never reached.
+        const unsupported = unsupportedPlatformCombination(platform, post_type);
+        if (unsupported) {
+            res.status(400).json({ error: unsupported });
+            return;
+        }
+
         const creatorId = getTenantId(req);
         const creator = await getTenant(creatorId, [
             'id', 'page_access_token', 'instagram_page_id', 'facebook_page_id'
@@ -1393,10 +1548,13 @@ router.post('/posts/scheduled', async (req, res) => {
 
             const token = creator.page_access_token;
 
-            try {
-                let fbId: string | null = null;
-                let igId: string | null = null;
+            // Declared outside the try so the catch can report what already went live. They
+            // used to be scoped to the try, which is the mechanical reason a partial publish
+            // was reported as a clean failure.
+            let fbId: string | null = null;
+            let igId: string | null = null;
 
+            try {
                 // Mark as publishing
                 await pool.query("UPDATE scheduled_posts SET status = 'PUBLISHING' WHERE id = $1", [newPost.id]);
 
@@ -1416,41 +1574,53 @@ router.post('/posts/scheduled', async (req, res) => {
                     if (!creator.instagram_page_id) {
                         throw new Error('Instagram Account ID is missing for this creator.');
                     }
+                    // The cron path has always checked this; without the same check here a
+                    // missing media_url reached Meta as `image_url: undefined` and came back
+                    // as an unrelated Graph error.
+                    if (!media_url) {
+                        throw new Error('Instagram requires a media URL to publish.');
+                    }
                     const igRes = await publishInstagramPost(creator.instagram_page_id, post_type, caption || '', media_url, token, cover_url);
                     igId = igRes.id;
                 }
 
-                let resultId = '';
-                if (fbId && igId) {
-                    resultId = `FB:${fbId} | IG:${igId}`;
-                } else if (fbId) {
-                    resultId = `FB:${fbId}`;
-                } else if (igId) {
-                    resultId = `IG:${igId}`;
-                }
-
                 const finalRes = await pool.query(
-                    `UPDATE scheduled_posts 
-                     SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL 
+                    `UPDATE scheduled_posts
+                     SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL
                      WHERE id = $2 RETURNING *`,
-                    [resultId, newPost.id]
+                    [formatPublishedIds(fbId, igId), newPost.id]
                 );
                 res.status(201).json(finalRes.rows[0]);
                 return;
             } catch (publishErr: any) {
-                log('error', 'publish.immediate_failed', { post_id: newPost.id, ...describeError(publishErr) });
+                log('error', 'publish.immediate_failed', {
+                    post_id: newPost.id, fb_post_id: fbId, ig_media_id: igId,
+                    ...describeError(publishErr),
+                });
+                await noteMetaFailure(creatorId, publishErr);
+
+                // Same partial-success problem as the cron path, and worse here because the
+                // caller is a person watching: `platform: 'both'` publishes Facebook first,
+                // so a Facebook success plus an Instagram failure used to discard the
+                // Facebook post id entirely and report a clean failure for a post that was
+                // already live.
+                const partial = formatPublishedIds(fbId, igId);
+                const message = partial
+                    ? `Partially published (${partial}) — the rest failed: ${publishErr.message}`
+                    : publishErr.message;
+
                 const finalRes = await pool.query(
                     `UPDATE scheduled_posts
-                     SET status = 'FAILED', error_log = $1
-                     WHERE id = $2 RETURNING *`,
-                    [publishErr.message, newPost.id]
+                     SET status = 'FAILED', error_log = $1, published_post_id = $2
+                     WHERE id = $3 RETURNING *`,
+                    [message, partial || null, newPost.id]
                 );
                 // 201 for a row we just marked FAILED read as success to every caller, so a
                 // publish that Meta rejected looked identical to one that went live.
                 res.status(502).json({
                     ...finalRes.rows[0],
                     status: 'FAILED',
-                    error: publishErr.message
+                    error: message
                 });
                 return;
             }

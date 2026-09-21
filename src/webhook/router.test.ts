@@ -150,6 +150,76 @@ describe('planJobs', () => {
         const planned = planJobs({ entry: [{ id: 'p', changes: [weird] }] });
         assert.deepEqual((planned[0]!.payload as any).change, weird);
     });
+
+    it('does not enqueue read watermarks, delivery receipts or reactions', () => {
+        // On an active account these are the bulk of `entry.messaging`. None of them can
+        // reach a reply — `normalizeDm` rejects every one for having no text and no payload —
+        // and none of them carry a `mid`, so they got no dedupe key either: a redelivered
+        // batch of read receipts wrote a fresh `jobs` row per receipt per delivery, each of
+        // which was then claimed, run, logged and marked done.
+        const planned = planJobs({
+            entry: [{
+                id: 'p',
+                messaging: [
+                    { sender: { id: 'u' }, read: { watermark: 1700000000000 } },
+                    { sender: { id: 'u' }, delivery: { mids: ['m1'], watermark: 1700000000000 } },
+                    { sender: { id: 'u' }, reaction: { mid: 'm1', action: 'react', emoji: '❤' } },
+                    { sender: { id: 'u' }, messaging_referral: { ref: 'promo' } },
+                ],
+            }],
+        });
+        assert.deepEqual(planned, []);
+    });
+
+    it('still enqueues a message whose only content is an attachment', () => {
+        // Erring towards enqueueing: the handler is what knows whether an image or a voice
+        // note can be answered. Dropping a real customer message here would be far worse
+        // than one wasted job.
+        const planned = planJobs({
+            entry: [{
+                id: 'p',
+                messaging: [{
+                    sender: { id: 'u' },
+                    message: { mid: 'm1', attachments: [{ type: 'image', payload: { url: 'x' } }] },
+                }],
+            }],
+        });
+        assert.equal(planned.length, 1);
+        assert.equal(planned[0]!.kind, 'dm.process');
+    });
+
+    it('still enqueues a postback, which carries no `message` at all', () => {
+        const planned = planJobs({
+            entry: [{
+                id: 'p',
+                messaging: [{ sender: { id: 'u' }, postback: { mid: 'pb1', payload: 'GO' } }],
+            }],
+        });
+        assert.deepEqual(planned.map((p) => p.dedupeKey), ['dm:pb1']);
+    });
+
+    it('carries the page id as the fair-queueing partition key', () => {
+        // `creator_id` would be the natural partition and is unusable: resolving the tenant
+        // needs a database read, and the point of enqueueing is to acknowledge Meta first, so
+        // every row the webhook writes has it NULL. Without `tenant_key` the round-robin claim
+        // puts every tenant in one group and silently degrades back to FIFO.
+        const planned = planJobs({
+            entry: [
+                { id: 'page-a', changes: [{ field: 'comments', value: { id: 'c1' } }] },
+                { id: 'page-b', messaging: [{ sender: { id: 'u' }, message: { mid: 'm1', text: 'hi' } }] },
+            ],
+        });
+        assert.deepEqual(planned.map((p) => p.tenantKey), ['page-a', 'page-b']);
+    });
+
+    it('leaves the partition key undefined when the entry has no id', () => {
+        // Rather than inventing one. An unattributed job becomes its own partition in the
+        // claim, which cannot crowd anyone out.
+        const planned = planJobs({
+            entry: [{ changes: [{ field: 'comments', value: { id: 'c1' } }] }],
+        });
+        assert.equal(planned[0]!.tenantKey, undefined);
+    });
 });
 
 /** A queue that records enqueues and can be told to dedupe or to fail. */
@@ -166,6 +236,7 @@ function recordingQueue(behaviour: 'ok' | 'dedupe' | 'throw' = 'ok'): JobQueue &
         async complete() {},
         async fail() {},
         async reapStale() { return 0; },
+        async pruneCompleted() { return 0; },
     };
 }
 

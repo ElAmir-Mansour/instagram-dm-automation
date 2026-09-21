@@ -6,11 +6,14 @@
  * the original were free to drift, so a green test proved nothing about production. This
  * module is the single definition both now import.
  *
- * Matching itself is deliberately unchanged: normalise both sides with `normalizeArabic`,
- * then substring-match. Substring matching is what makes short keywords dangerous (`تم`
- * matches inside اهتمام, تمام, يتم) but changing it would silently break live campaigns.
+ * Matching normalises both sides with `normalizeArabic` and then tests each keyword according
+ * to the campaign's own `match_mode`. Substring matching is what makes short keywords
+ * dangerous (`تم` matches inside اهتمام, تمام, يتم); `'word'` anchors the keyword to token
+ * boundaries instead. `'substring'` remains the default everywhere — including for a row whose
+ * query forgot to select the column — because changing it implicitly would silently stop live
+ * campaigns from firing.
  */
-import { normalizeArabic, keywordMatches } from '../utils/arabic.js';
+import { normalizeArabic, keywordMatches, normalizeMatchMode } from '../utils/arabic.js';
 
 /** The fields matching actually reads. Rows carry far more; generics preserve the rest. */
 export interface CampaignMatchFields {
@@ -18,6 +21,11 @@ export interface CampaignMatchFields {
     post_id?: string | null;
     is_active?: boolean;
     created_at?: string | Date | null;
+    /**
+     * `'word'` requires the keyword to sit on a token boundary; anything else (including
+     * absent, which is what a query that does not select the column yields) means substring.
+     */
+    match_mode?: string | null;
 }
 
 function toTime(value: string | Date | null | undefined): number {
@@ -69,10 +77,11 @@ export function matchCampaign<T extends CampaignMatchFields>(
             .map((k: string) => normalizeArabic(k.trim()))
             .filter(Boolean);
 
-        // Default mode is 'substring' — the historical behaviour, kept so live campaigns
-        // keep firing exactly as they do today.
+        // The campaign's own mode, defaulting to 'substring' — the historical behaviour, kept
+        // so a campaign created before v14 keeps firing exactly as it does today.
+        const mode = normalizeMatchMode(c.match_mode);
         const hasKeyword = triggerKeywordsList.some((normalizedKeyword: string) =>
-            keywordMatches(normalizedCommentText, normalizedKeyword)
+            keywordMatches(normalizedCommentText, normalizedKeyword, mode)
         );
 
         // If post_id filter is set, it must match the current comment's post_id

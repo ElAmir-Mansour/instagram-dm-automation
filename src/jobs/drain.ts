@@ -37,6 +37,26 @@ function workerBudgetMs(): number {
  */
 export async function drainInline(): Promise<DrainResult | null> {
     try {
+        // Reap before claiming, for the same reason `drainWorker` does — and it matters more
+        // here, because this is the drain that gets frozen.
+        //
+        // The inline drain runs after the response, which on Vercel is exactly where the
+        // invocation can be stopped. A job claimed and then frozen sits at `running` until
+        // something reaps it, and the only two things that reap are `GET /api/jobs/drain` and
+        // the daily cron. On a deployment with no external scheduler provisioned — which is
+        // the documented state of this one — that is up to 24 hours of a comment or DM
+        // sitting invisible in a state nothing is looking at, for a delivery the app was
+        // otherwise perfectly able to finish on the next webhook seconds later.
+        //
+        // Two UPDATEs against a partial index that is empty whenever nothing is stale, so the
+        // cost when there is nothing to do is negligible.
+        try {
+            await getJobQueue().reapStale(CLAIM_VISIBILITY_SECONDS);
+        } catch (err) {
+            // A failed reap must not stop the drain: there may be perfectly claimable work.
+            log('warn', 'job.inline_reap_failed', { message: (err as Error)?.message });
+        }
+
         return await drainJobs({
             queue: getJobQueue(),
             handlers,

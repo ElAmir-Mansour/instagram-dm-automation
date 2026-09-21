@@ -24,8 +24,62 @@ const TRANSIENT_CODES = new Set([1, 2, 4, 17, 32, 341, 613]);
  */
 const PERMANENT_CODES = new Set([190, 200, 10903]);
 
+/**
+ * `error_subcode` values that mean the token itself is dead rather than the request being
+ * wrong. Meta reports all of them under code 190, so the code alone cannot tell "expired"
+ * from "the user changed their password" from "the app was uninstalled" — and those need
+ * different words in front of the operator.
+ *
+ *   458 — the app was uninstalled / user has not authorised it
+ *   459 — the user must log in again (checkpointed)
+ *   460 — the password was changed
+ *   463 — the token expired
+ *   467 — the token is invalid (logged out)
+ *   492 — the user is not an admin of the page the token was issued for
+ *
+ * @see https://developers.facebook.com/docs/graph-api/guides/error-handling/
+ */
+export const TOKEN_DEATH_SUBCODES = new Set([458, 459, 460, 463, 467, 492]);
+
+/**
+ * The Meta error code, wherever it is.
+ *
+ * `src/services/instagram.ts` rewraps axios failures into plain `Error`s so the caller gets a
+ * readable message, which used to throw away `response.data.error` entirely — so
+ * `isPermanentMetaError` returned false for *every* error that came out of that module,
+ * including a dead token. The rewrapped errors now carry `metaCode` / `metaSubcode`, and this
+ * reads either shape.
+ */
+export function metaErrorCode(err: any): number | undefined {
+    const structured = err?.response?.data?.error?.code;
+    if (typeof structured === 'number') return structured;
+    return typeof err?.metaCode === 'number' ? err.metaCode : undefined;
+}
+
+export function metaErrorSubcode(err: any): number | undefined {
+    const structured = err?.response?.data?.error?.error_subcode;
+    if (typeof structured === 'number') return structured;
+    return typeof err?.metaSubcode === 'number' ? err.metaSubcode : undefined;
+}
+
+/**
+ * True when Meta is saying the access token no longer works.
+ *
+ * This is the one Meta failure that stops the entire product rather than one send, and until
+ * now nothing detected it at a call site: `creators.token_status` only changed when a token
+ * was saved or when someone opened the dashboard's token page. A dead token on a Friday was
+ * invisible until Monday.
+ */
+export function isTokenDeathError(err: any): boolean {
+    if (metaErrorCode(err) !== 190) return false;
+    const subcode = metaErrorSubcode(err);
+    // A bare 190 with no subcode is still a dead token — subcodes narrow the reason, they do
+    // not gate the conclusion.
+    return subcode === undefined || TOKEN_DEATH_SUBCODES.has(subcode);
+}
+
 export function isPermanentMetaError(err: any): boolean {
-    const code = err?.response?.data?.error?.code;
+    const code = metaErrorCode(err);
     return typeof code === 'number' && PERMANENT_CODES.has(code);
 }
 
@@ -36,7 +90,7 @@ function isRetryable(err: any): boolean {
     if (typeof status === 'number' && status >= 500) return true;
     if (status === 429) return true;
 
-    const code = err?.response?.data?.error?.code;
+    const code = metaErrorCode(err);
     if (typeof code === 'number' && TRANSIENT_CODES.has(code)) return true;
 
     // Network-level failures carry no HTTP response at all.
