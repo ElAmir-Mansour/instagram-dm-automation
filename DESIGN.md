@@ -106,8 +106,29 @@ the alarms are vivid at ~85) and is reported but not enforced, being the weaker 
 | **Platform** | `--brand-instagram`, `--brand-facebook` | **data, never decoration** |
 
 The platform colours are Meta's, not ours. They exist to say *which network this row belongs
-to* and they must never be used to style a button, a heading or a surface. Borrowing them as
-brand colour would be claiming an affiliation we do not have.
+to* and they must never be used to style a button, a heading or a surface.
+
+**Asked and answered: no, the product cannot just use Facebook blue.** Two reasons, and the
+second is the one that would bite first.
+
+*Policy.* A third party may not "imply an endorsement or partnership of any kind" with Meta's
+brands without written permission, and their assets may not be "modified in any way, such as
+by changing the design or color". Wearing their blue as our own is exactly that, and this app
+is heading for App Review, where Meta looks at the app and its branding.
+
+*Product, which is measurable.* This dashboard shows Facebook and Instagram **side by side**.
+An accent at Facebook blue's hue is **0 degrees** from `--brand-facebook`, so `.btn-primary`
+and `.badge-facebook` become the same colour: "Publish" reads as a platform tag, Instagram
+rows read as "the other one", and the interface takes a side between two platforms it treats
+equally. It is the indigo trap again, except indigo merely sat *between* the two platform hues
+where Facebook blue *is* one of them.
+
+There is also nothing to adopt on the system-design side: Meta publishes brand *guidelines*,
+not a component library. Unlike Polaris, Carbon or Primer there is no public Meta design
+system for third parties to build on.
+
+`check-contrast.mjs` enforces the separation, so this is a rule the build holds rather than a
+paragraph someone has to remember.
 
 ### Neutrals are warm
 

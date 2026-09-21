@@ -127,6 +127,25 @@ const MUST_DIFFER = [
     ['accent', 'danger', 'a primary action must not read as a destructive one'],
     ['accent', 'warning', 'a primary action must not read as a caution state'],
     ['danger', 'warning', 'an error must not read as a warning'],
+
+    // The platform colours are Meta's, and DESIGN.md §3 says they are DATA, never
+    // decoration: they exist to say which network a row belongs to. Two things break if the
+    // accent drifts into one of them.
+    //
+    // The product break is the concrete one. This dashboard shows Facebook and Instagram
+    // side by side, so an accent at Facebook blue's hue makes `.btn-primary` and
+    // `.badge-facebook` the same colour — "Publish" reads as a platform tag, and Instagram
+    // rows read as "the other one", with the interface taking a side between two platforms
+    // it treats equally. Measured: Facebook blue as the accent is 0 degrees from
+    // --brand-facebook. This is the indigo trap again, except indigo merely sat BETWEEN the
+    // two platform hues where Facebook blue IS one of them.
+    //
+    // The second is Meta's policy: a third-party product may not "imply an endorsement or
+    // partnership of any kind" with their brands, and their assets may not be "modified in
+    // any way, such as by changing the design or color". Wearing their blue as our own is
+    // exactly that, and this app is heading for App Review.
+    ['accent', 'brand-facebook', 'the accent must not read as the Facebook platform tag'],
+    ['accent', 'brand-instagram', 'the accent must not read as the Instagram platform tag'],
 ];
 
 function toHue(rgb) {
