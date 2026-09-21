@@ -136,6 +136,10 @@
        (a chart canvas, an image frame) must use `--surface-solid`, which exists
        for exactly that and is not glass. */
     --surface-page: #161617;
+    /* The lightest stop equals --surface-page, so the flat value the contrast
+       guard measures remains the worst case for light text. */
+    --surface-ambient:
+        radial-gradient(1100px 760px at 18% -12%, #161617 0%, #121213 48%, #0d0d0e 100%);
     --surface-sunken: #0f0f10;
     --surface-raised: rgba(40, 40, 44, 0.65);
     --surface-overlay: rgba(48, 48, 52, 0.82);
@@ -211,6 +215,9 @@
         color-scheme: light;
 
         --surface-page: #f5f5f7;
+        /* Darkest stop equals --surface-page: worst case for dark text. */
+        --surface-ambient:
+            radial-gradient(1100px 760px at 18% -12%, #ffffff 0%, #fafafc 48%, #f5f5f7 100%);
         --surface-sunken: #ededf0;
         --surface-raised: rgba(255, 255, 255, 0.72);
         --surface-overlay: rgba(255, 255, 255, 0.88);
@@ -280,6 +287,9 @@
     color-scheme: light;
 
     --surface-page: #f5f5f7;
+        /* Darkest stop equals --surface-page: worst case for dark text. */
+        --surface-ambient:
+            radial-gradient(1100px 760px at 18% -12%, #ffffff 0%, #fafafc 48%, #f5f5f7 100%);
     --surface-sunken: #ededf0;
     --surface-raised: rgba(255, 255, 255, 0.72);
     --surface-overlay: rgba(255, 255, 255, 0.88);

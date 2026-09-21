@@ -37,7 +37,25 @@ body {
     font-family: var(--font-ui);
     font-size: var(--fs-200);
     line-height: var(--lh-normal);
-    background: var(--surface-page);
+    /* ─── An ambient ground, so the glass has something to blur ────────────────
+       Translucent surfaces over a SINGLE FLAT COLOUR are indistinguishable from
+       flat opaque ones: the blur has nothing to reveal and you pay for it in GPU
+       anyway. Apple's vibrancy reads because there is a desktop behind the
+       window; the web equivalent is a large, very soft gradient on the canvas.
+
+       `--surface-ambient` is arranged so that `--surface-page` stays the WORST
+       CASE for contrast, which is what keeps scripts/check-contrast.mjs honest
+       while it still measures a flat value:
+
+         - dark mode gradients only DARKER than --surface-page, so light text can
+           only gain contrast away from the measured point;
+         - light mode only LIGHTER, so dark text can only gain.
+
+       Change one of those directions and the guard starts reporting a number
+       better than the real worst case, which is the failure mode it exists to
+       prevent. */
+    background: var(--surface-ambient, var(--surface-page));
+    background-attachment: fixed;
     color: var(--text-default);
     min-height: 100vh;
     min-height: 100dvh;
@@ -129,7 +147,7 @@ bdi { unicode-bidi: isolate; }
 
 /* ─── Surfaces ───────────────────────────────────────────────────────────── */
 .surface {
-    background: var(--surface-glass);
+    background: var(--surface-raised);
     backdrop-filter: blur(var(--blur-glass)) saturate(180%);
     -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
     border: 1px solid var(--border-subtle);
@@ -156,7 +174,7 @@ bdi { unicode-bidi: isolate; }
 /* `glass-card` is kept as a plain alias so any markup that still emits it
    keeps its background — but it no longer implies a hover transform. */
 .glass-card {
-    background: var(--surface-glass);
+    background: var(--surface-raised);
     backdrop-filter: blur(var(--blur-glass)) saturate(180%);
     -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
     border: 1px solid var(--border-subtle);
@@ -1135,7 +1153,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     padding: var(--space-4);
     border-radius: var(--radius-md);
     border: 1px solid var(--border-subtle);
-    background: var(--surface-glass);
+    background: var(--surface-raised);
     border-inline-start: 3px solid var(--text-muted);
 }
 .alert-card .alert-icon {
@@ -1664,7 +1682,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     padding: var(--space-4);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
-    background: var(--surface-glass);
+    background: var(--surface-raised);
     display: flex; flex-direction: column; gap: var(--space-2);
 }
 .log-card-head { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
@@ -1740,7 +1758,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .bulk-row {
     padding: var(--space-4);
     display: flex; flex-direction: column; gap: var(--space-3);
-    background: var(--surface-glass);
+    background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     /* A Udemy CSV of thirty courses builds thirty of these, each with a text
@@ -1868,7 +1886,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     border: 1px solid var(--border-subtle);
     border-inline-start: 3px solid var(--warning);
     border-radius: var(--radius-sm);
-    background: var(--surface-glass);
+    background: var(--surface-raised);
 }
 .hazard-main { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
 .hazard-keyword { font-size: var(--fs-300); color: var(--text-strong); font-weight: var(--fw-semibold); }
