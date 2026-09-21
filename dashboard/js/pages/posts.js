@@ -953,14 +953,30 @@ const PostsPage = {
     },
 
     /**
-     * The confirm() has already asked, so the card goes now and the DELETE
-     * follows it. A failure puts the card back at its old index and says why —
-     * it used to re-fetch the whole queue and both feeds to show a row it had
-     * never actually removed.
+     * Ask first, in the product's own dialog.
+     *
+     * This used `window.confirm()`, which is browser chrome: it cannot be styled
+     * as dangerous, cannot be translated, and drops the product's visual identity
+     * at exactly the moment the operator is deciding whether to destroy something.
+     * `Admin.confirm` is loaded eagerly for this reason.
      */
     deletePost(id) {
-        if (!confirm(t('posts.deleteConfirm'))) return Promise.resolve();
+        Admin.confirm({
+            title: t('posts.deleteTitle'),
+            body: t('posts.deleteConfirm'),
+            hint: t('posts.deleteHint'),
+            confirmLabel: t('common.delete'),
+            onConfirm: () => PostsPage.deletePostConfirmed(id),
+        });
+    },
 
+    /**
+     * The confirmation has already been given, so the card goes now and the
+     * DELETE follows it. A failure puts the card back at its old index and says
+     * why — it used to re-fetch the whole queue and both feeds to show a row it
+     * had never actually removed.
+     */
+    deletePostConfirmed(id) {
         const index = this.posts.findIndex((p) => String(p.id) === String(id));
         if (index === -1) return Promise.resolve();
         const removed = this.posts[index];

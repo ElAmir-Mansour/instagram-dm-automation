@@ -492,7 +492,15 @@ const UI = {
         return dirty;
     },
 
-    /** The operator asked to close. Ask back if there is unsaved work. */
+    /**
+     * The operator asked to close. Ask back if there is unsaved work.
+     *
+     * The one deliberate `window.confirm()` left in the dashboard. `Admin.confirm`
+     * works by calling `UI.showModal`, and this runs while a modal is already open —
+     * confirming a modal's dismissal by replacing its contents would destroy the very
+     * fields being asked about. Replacing this needs a second modal layer, which is a
+     * larger change than the problem justifies.
+     */
     requestCloseModal() {
         if (UI.isModalDirty() && !confirm(t('common.discardConfirm'))) return;
         UI.closeModal();

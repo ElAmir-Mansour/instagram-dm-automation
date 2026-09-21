@@ -125,14 +125,23 @@ const Admin = {
      *   body         what will happen, in one sentence
      *   hint         the consequence that is not obvious
      *   confirmLabel a VERB
+     *   tone         'danger' (default) or 'primary'
      *   requireText  the operator must type this string to enable the button
      *   onConfirm()  runs after the modal closes
+     *
+     * `tone` exists because not every confirmation is destructive. Extending the
+     * Meta token is consequential and worth confirming, but it destroys nothing —
+     * dressing it in a red button would be miscommunication. Atlassian's guidance
+     * is that the danger appearance is for genuinely destructive actions, so it
+     * stays the default (all eight existing callers delete something) and the
+     * exception is opt-in.
      */
     confirm(options) {
         const {
-            title, body, hint, confirmLabel, confirmIcon = 'trash-2',
+            title, body, hint, confirmLabel, confirmIcon = 'trash-2', tone = 'danger',
             requireText = '', requireHint = '', onConfirm,
         } = options || {};
+        const confirmClass = tone === 'primary' ? 'btn btn-primary' : 'btn btn-danger';
 
         Admin._pending = typeof onConfirm === 'function' ? onConfirm : null;
         const gated = !!requireText;
@@ -152,7 +161,7 @@ const Admin = {
             ` : ''}
             <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                <button type="button" class="btn btn-danger" id="admin-confirm-btn"
+                <button type="button" class="${confirmClass}" id="admin-confirm-btn"
                         data-action="admin:runConfirm" ${gated ? html.raw('disabled') : ''}>
                     <i data-lucide="${confirmIcon}" aria-hidden="true"></i> ${confirmLabel || t('common.delete')}
                 </button>
