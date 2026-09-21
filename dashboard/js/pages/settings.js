@@ -309,8 +309,28 @@ const SettingsPage = {
         }
     },
 
-    async extendToken(btn) {
-        if (!confirm(t('settings.extendConfirm'))) return;
+    /**
+     * Ask first, in the product's own dialog — and NOT in red.
+     *
+     * Extending the token is consequential enough to confirm but destroys
+     * nothing, so it passes tone: 'primary'. The hint carries the part that is
+     * genuinely not obvious: Meta does not revoke the existing token when it
+     * issues a new one.
+     */
+    extendToken(btn) {
+        if (btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.extendTitle'),
+            body: t('settings.extendConfirm'),
+            hint: t('settings.extendHint'),
+            confirmLabel: t('settings.extend'),
+            confirmIcon: 'key-round',
+            tone: 'primary',
+            onConfirm: () => SettingsPage.extendTokenConfirmed(btn),
+        });
+    },
+
+    async extendTokenConfirmed(btn) {
         if (btn.disabled) return;
 
         // Same reason as the two forms: disabling it blurs it.
