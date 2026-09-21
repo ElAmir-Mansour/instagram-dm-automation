@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "migrate": "node --env-file=.env scripts/migrate.mjs",
     "migrate:status": "node --env-file=.env scripts/migrate.mjs --status",
-    "check:assets": "node scripts/check-asset-version.mjs"
+    "check:assets": "node scripts/check-asset-version.mjs",
+    "check:icons": "node scripts/check-rtl-icons.mjs"
   },
   "keywords": [
     "instagram",
