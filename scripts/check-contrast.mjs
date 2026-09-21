@@ -104,10 +104,72 @@ for (const name of Object.keys(THEMES)) {
     }
 }
 
+// ─── Semantic hue separation ────────────────────────────────────────────────────────────────
+//
+// Contrast is not the only way a palette fails. The accent moved to terracotta (hue ~16) to
+// agree with the warm neutrals, which put it BETWEEN the two alarm colours: danger was at
+// 358 and warning at 38 — 18 and 22 degrees away. Two solid buttons side by side at that
+// separation are genuinely hard to tell apart at a glance, and "delete" must never be
+// mistakable for "publish".
+//
+// So danger went cooler and warning yellower until both cleared 25 degrees. This check is
+// what stops that widening being quietly undone by the next colour tweak — nobody would
+// notice, because each colour still passes contrast on its own.
+//
+// 25 degrees is a judgement, not a standard. It is the point at which these three read as
+// distinct in side-by-side rows in this product; saturation difference helps too and is
+// reported but not enforced, because it is the weaker signal of the two.
+
+const MIN_HUE_SEPARATION = 25;
+
+/** Pairs that must stay visually distinct, with why. */
+const MUST_DIFFER = [
+    ['accent', 'danger', 'a primary action must not read as a destructive one'],
+    ['accent', 'warning', 'a primary action must not read as a caution state'],
+    ['danger', 'warning', 'an error must not read as a warning'],
+];
+
+function toHue(rgb) {
+    const [r, g, b] = rgb.slice(0, 3).map(v => v / 255);
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    if (d === 0) return null; // greys have no hue to compare
+    let hDeg;
+    if (max === r) hDeg = ((g - b) / d) % 6;
+    else if (max === g) hDeg = (b - r) / d + 2;
+    else hDeg = (r - g) / d + 4;
+    hDeg *= 60;
+    return (hDeg + 360) % 360;
+}
+
+const hueGap = (a, b) => {
+    const d = Math.abs(a - b) % 360;
+    return Math.min(d, 360 - d);
+};
+
+for (const [name, theme] of Object.entries(THEMES)) {
+    for (const [a, b, why] of MUST_DIFFER) {
+        const ca = resolve(theme, theme[a]);
+        const cb = resolve(theme, theme[b]);
+        if (!ca || !cb) { failures.push(`--${a} or --${b} (${name}) could not be resolved.`); continue; }
+        const ha = toHue(ca), hb = toHue(cb);
+        if (ha === null || hb === null) continue;
+        const gap = hueGap(ha, hb);
+        if (gap < MIN_HUE_SEPARATION) {
+            failures.push(
+                `--${a} and --${b} (${name} theme) are only ${gap.toFixed(0)}\u00b0 apart in hue ` +
+                `(minimum ${MIN_HUE_SEPARATION}\u00b0) \u2014 ${why}.`
+            );
+        }
+    }
+}
+
 if (failures.length > 0) {
     console.error('\n\u274c contrast check failed:\n');
     for (const f of failures) console.error(`   \u2022 ${f}`);
     console.error('');
     process.exit(1);
 }
-console.log(`\u2713 contrast: ${total} token pairs across both themes clear ${MIN}:1 (tightest ${worst.toFixed(2)}:1 - ${worstLabel})`);
+console.log(
+    `\u2713 colour system: ${total} pairs clear ${MIN}:1 (tightest ${worst.toFixed(2)}:1 - ${worstLabel}); `
+    + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart`
+);
