@@ -54,3 +54,9 @@ jobs:
       # would notice. The tightest real pair currently sits at ~4.71:1 - almost no headroom.
       - name: Check colour contrast
         run: npm run check:contrast
+
+      # t() falls back active -> English -> the key itself, which makes a missing Arabic
+      # string render English inside an RTL page with nothing logged. Arabic is the primary
+      # language here, so en-without-ar is the failure, not the reverse.
+      - name: Check translations
+        run: npm run check:i18n

@@ -12,7 +12,8 @@
     "migrate:status": "node --env-file=.env scripts/migrate.mjs --status",
     "check:assets": "node scripts/check-asset-version.mjs",
     "check:icons": "node scripts/check-rtl-icons.mjs",
-    "check:contrast": "node scripts/check-contrast.mjs"
+    "check:contrast": "node scripts/check-contrast.mjs",
+    "check:i18n": "node scripts/check-i18n.mjs"
   },
   "keywords": [
     "instagram",
