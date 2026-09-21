@@ -1,31 +1,41 @@
 /**
- * Users Page — platform-admin only.
+ * Users — platform-admin only.
  *
- * Deliberately plain: this is an internal tool for the handful of people who
- * operate the platform, not a product surface. List, create, revoke, grant.
- * Field names are read tolerantly for the same reason as in tenants.js.
+ * Still deliberately plain: this is an internal tool for the handful of people
+ * who operate the platform. What changed is that it is now COMPLETE. The old
+ * screen could list, create, revoke sessions and grant a membership; it could
+ * not change a role, could not switch an account off, could not reset a
+ * password, and could not take a membership away again. Each of those was a
+ * trip to the SQL editor.
+ *
+ * It also stops lying. `users.passwordHint` told the admin "they can change it
+ * later" while no password-change route existed. It does now, it is reachable
+ * from the sidebar on every page, and the hint says where.
+ *
+ * ─── Rows are cards, not a table ────────────────────────────────────────────
+ * Each row carries a role select, an active switch, a membership list with a
+ * revoke control per membership, and three buttons. That is not a table row at
+ * 375px, and rendering the same controls twice (a table for desktop, cards for
+ * mobile) would mean two elements sharing one `id` — which breaks every
+ * `for=`/`aria-describedby` on the screen. One card list, one data path.
  */
 const UsersPage = {
     users: [],
+    tenants: [],
 
     resetTenantState() {
         this.users = [];
+        this.tenants = [];
     },
 
-    pick(row, ...keys) {
-        for (const key of keys) {
-            if (row && row[key] !== undefined && row[key] !== null) return row[key];
-        }
-        return undefined;
+    id(u) {
+        return Admin.pick(u, 'id', 'user_id');
     },
 
     skeleton() {
         return html`
             ${Motion.toolbar()}
-            ${Motion.tableCard(5, [
-                t('users.table.email'), t('users.table.role'),
-                t('users.table.lastLogin'), t('users.table.tenants'), '',
-            ])}
+            ${Motion.cardGrid(3, 4)}
             ${Motion.busy()}
         `;
     },
@@ -34,114 +44,273 @@ const UsersPage = {
         const container = document.getElementById('page-container');
         const gate = Motion.beginLoad(container, () => this.skeleton());
 
+        let result;
         try {
-            const result = await API.getAdminUsers();
-            this.users = Array.isArray(result) ? result : (result && result.users) || [];
+            result = await API.getAdminUsers();
         } catch (err) {
             gate.done();
-            if (err.status === 403 || err.status === 404) {
-                App.dropAdminAccess();
-                UI.renderError(container, {
-                    title: t('users.unavailableTitle'),
-                    message: t('tenants.unavailableBody'),
-                    icon: 'shield-off',
-                });
-                return;
-            }
-            UI.renderError(container, { title: t('users.loadFailed'), message: err.message }, () => this.render());
+            Admin.renderLoadFailure(container, err, {
+                unavailableTitle: t('users.unavailableTitle'),
+                failedTitle: t('users.loadFailed'),
+                retry: () => this.render(),
+            });
             return;
         }
         gate.done();
 
+        this.users = Array.isArray(result) ? result : (result && result.users) || [];
+        this.paint(container);
+    },
+
+    paint(container) {
         const users = this.users;
+        const canChangeOwn = App.canChangeOwnPassword();
 
         container.innerHTML = esc(html`
             <div class="page-toolbar">
                 <p class="page-toolbar-count">${t('users.count', { count: users.length })}</p>
                 <div class="toolbar-actions">
+                    ${canChangeOwn ? html`
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="app:showPasswordModal">
+                            <i data-lucide="key-round" aria-hidden="true"></i> ${t('password.change')}
+                        </button>
+                    ` : ''}
                     <button type="button" class="btn btn-primary btn-sm" data-action="users:showCreateModal">
                         <i data-lucide="user-plus" aria-hidden="true"></i> ${t('users.new')}
                     </button>
                 </div>
             </div>
 
-            <div class="table-card surface">
-                <div class="table-wrapper">
-                    <table class="data-table">
-                        <thead><tr>
-                            <th scope="col">${t('users.table.email')}</th>
-                            <th scope="col">${t('users.table.role')}</th>
-                            <th scope="col">${t('users.table.lastLogin')}</th>
-                            <th scope="col">${t('users.table.tenants')}</th>
-                            <th scope="col"><span class="sr-only">${t('tenants.table.actions')}</span></th>
-                        </tr></thead>
-                        <tbody>
-                            ${users.map((u) => this.renderRow(u))}
-                            ${users.length === 0 ? html`
-                                <tr><td colspan="5" class="table-empty-cell">${t('users.empty')}</td></tr>
-                            ` : ''}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+            <section class="section">
+                <h2 class="section-title">${t('users.listTitle')}</h2>
+                ${users.length === 0
+                    ? html`<div class="surface pad-5">${Admin.emptyState('users', t('users.emptyTitle'), t('users.empty'))}</div>`
+                    : html`<div class="user-card-list">${users.map((u) => this.renderCard(u))}</div>`}
+            </section>
         `);
 
         UI.icons(container);
     },
 
-    renderRow(u) {
-        const id = this.pick(u, 'id', 'user_id');
-        const email = this.pick(u, 'email') || '—';
-        const role = String(this.pick(u, 'role') || 'user');
+    renderCard(u) {
+        const id = this.id(u);
+        const email = Admin.pick(u, 'email') || '—';
+        const role = String(Admin.pick(u, 'role') || 'user');
         const isAdmin = role === 'platform_admin';
-        const lastLogin = this.pick(u, 'last_login_at', 'lastLoginAt', 'last_login');
-        const age = UI.relativeAge(lastLogin, {
-            neverText: t('users.neverSignedIn'), warnMs: Infinity, staleMs: Infinity,
-        });
-        const memberships = this.pick(u, 'memberships', 'tenants');
+        const isActive = Admin.pick(u, 'is_active', 'isActive') !== false;
+        const isSelf = App.session && App.session.userId && String(App.session.userId) === String(id);
+        const lastLogin = Admin.pick(u, 'last_login_at', 'lastLoginAt', 'last_login');
+        const createdAt = Admin.pick(u, 'created_at', 'createdAt');
+        const memberships = this.memberships(u);
+
+        // Ids are per-row so every control keeps its own label.
+        const roleId = `user-role-${id}`;
+        const activeId = `user-active-${id}`;
 
         return html`
-            <tr>
-                <td>${UI.ltr(email)}</td>
-                <td><span class="role-chip ${isAdmin ? html.raw('role-admin') : ''}">${isAdmin ? t('users.admin') : role}</span></td>
-                <td class="nowrap" title="${lastLogin ? age.title : ''}">
-                    ${lastLogin ? UI.formatDate(lastLogin) : t('common.never')}
-                </td>
-                <td class="user-tenants">
-                    ${Array.isArray(memberships) && memberships.length > 0
-                        ? memberships.map((m) => html`<span class="chip" dir="auto">${
-                            (typeof m === 'string' ? m : (m.name || m.tenant_name || m.creator_id || m.tenant_id || '—'))
-                          }</span>`)
-                        : html`<span class="text-meta">${t('common.none')}</span>`}
-                </td>
-                <td>
-                    <div class="row-actions">
-                        <button type="button" class="icon-btn" data-action="users:showMembershipModal" data-id="${id}"
-                                aria-label="${t('users.grant', { email })}" title="${t('users.grant', { email })}">
-                            <i data-lucide="link" aria-hidden="true"></i>
-                        </button>
-                        <button type="button" class="icon-btn icon-btn-danger" data-action="users:revoke" data-id="${id}"
-                                data-email="${email}" aria-label="${t('users.revoke', { email })}" title="${t('users.revoke', { email })}">
-                            <i data-lucide="log-out" aria-hidden="true"></i>
-                        </button>
+            <article class="user-card surface ${isActive ? '' : html.raw('user-card-off')}" data-user-id="${id}">
+                <header class="user-card-head">
+                    <h3 class="user-card-email">${UI.ltr(email)}</h3>
+                    <div class="user-card-tags">
+                        <span class="role-chip ${isAdmin ? html.raw('role-admin') : ''}">${
+                            isAdmin ? t('users.admin') : t('users.member')
+                        }</span>
+                        ${isSelf ? html`<span class="chip chip-accent">${t('users.you')}</span>` : ''}
+                        ${isActive ? '' : html`<span class="chip chip-danger">${t('users.disabledChip')}</span>`}
                     </div>
-                </td>
-            </tr>
+                </header>
+
+                <dl class="ops-facts">
+                    ${Admin.field(t('users.table.lastLogin'), lastLogin
+                        ? html`<span title="${UI.formatDateTime(lastLogin)}">${UI.relativeAge(lastLogin, {
+                            warnMs: Infinity, staleMs: Infinity, neverText: t('users.neverSignedIn'),
+                        }).text}</span>`
+                        : html`<span class="text-meta">${t('users.neverSignedIn')}</span>`)}
+                    ${Admin.field(t('users.createdAt'), createdAt ? UI.formatDay(createdAt) : html`—`)}
+                </dl>
+
+                <div class="user-card-controls">
+                    <div class="form-group">
+                        <label class="form-label" for="${roleId}">${t('users.role')}</label>
+                        <select class="select" id="${roleId}" data-change="users:changeRole" data-id="${id}">
+                            <option value="user" ${isAdmin ? '' : html.raw('selected')}>${t('users.roleUser')}</option>
+                            <option value="platform_admin" ${isAdmin ? html.raw('selected') : ''}>${t('users.roleAdmin')}</option>
+                        </select>
+                    </div>
+
+                    <div class="switch-row user-active-row">
+                        <span class="switch">
+                            <input type="checkbox" id="${activeId}" data-change="users:toggleActive" data-id="${id}"
+                                   ${isActive ? html.raw('checked') : ''}>
+                            <span class="switch-track"></span>
+                        </span>
+                        <label class="switch-label" for="${activeId}">${
+                            isActive ? t('users.activeOn') : t('users.activeOff')
+                        }</label>
+                    </div>
+                </div>
+
+                <div class="user-memberships">
+                    <p class="form-label">${t('users.table.tenants')}</p>
+                    ${memberships.length === 0
+                        ? html`<p class="text-meta">${t('users.noMemberships')}</p>`
+                        : html`<ul class="membership-list">
+                            ${memberships.map((m) => this.renderMembership(id, email, m))}
+                        </ul>`}
+                    <button type="button" class="btn btn-secondary btn-sm mbs-4"
+                            data-action="users:showMembershipModal" data-id="${id}"
+                            aria-label="${t('users.grant', { email })}">
+                        <i data-lucide="link" aria-hidden="true"></i> ${t('users.grantBtn')}
+                    </button>
+                </div>
+
+                <div class="user-card-actions">
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            data-action="users:showPasswordModal" data-id="${id}" data-email="${email}"
+                            aria-label="${t('users.setPasswordFor', { email })}">
+                        <i data-lucide="key-round" aria-hidden="true"></i> ${t('users.setPassword')}
+                    </button>
+                    <button type="button" class="btn btn-danger btn-sm"
+                            data-action="users:confirmRevoke" data-id="${id}" data-email="${email}"
+                            aria-label="${t('users.revoke', { email })}">
+                        <i data-lucide="log-out" aria-hidden="true"></i> ${t('users.revokeBtn')}
+                    </button>
+                </div>
+            </article>
         `;
     },
 
-    // ─── Actions ─────────────────────────────────────────────────────────────
+    /** Normalise the membership list: strings, ids, or full objects. */
+    memberships(u) {
+        const raw = Admin.pick(u, 'memberships', 'tenants');
+        if (!Array.isArray(raw)) return [];
+        return raw.map((m) => {
+            if (typeof m === 'string') return { id: m, name: m, role: '' };
+            return {
+                id: Admin.pick(m, 'creator_id', 'creatorId', 'tenant_id', 'tenantId', 'id'),
+                name: Admin.pick(m, 'name', 'tenant_name', 'creator_name')
+                    || Admin.pick(m, 'creator_id', 'creatorId', 'tenant_id', 'tenantId', 'id')
+                    || t('tenants.untitled'),
+                role: Admin.pick(m, 'role') || '',
+            };
+        });
+    },
 
-    modalHeader(title) {
+    renderMembership(userId, email, m) {
+        const label = m.role
+            ? t('users.membershipChip', { name: m.name, role: this.membershipRoleLabel(m.role) })
+            : String(m.name);
         return html`
-            <div class="modal-header">
-                <h2 class="modal-title">${title}</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="${t('common.closeDialog')}">
-                    <i data-lucide="x" aria-hidden="true"></i>
+            <li class="membership-item">
+                <span class="chip" dir="auto">${label}</span>
+                <button type="button" class="icon-btn icon-btn-danger"
+                        data-action="users:confirmRevokeMembership"
+                        data-id="${userId}" data-creator="${m.id}" data-email="${email}" data-name="${m.name}"
+                        aria-label="${t('users.revokeMembership', { name: m.name, email })}"
+                        title="${t('users.revokeMembership', { name: m.name, email })}"
+                        ${m.id ? '' : html.raw('disabled')}>
+                    <i data-lucide="unlink" aria-hidden="true"></i>
                 </button>
-            </div>
+            </li>
         `;
     },
+
+    membershipRoleLabel(role) {
+        const key = `users.role${String(role).charAt(0).toUpperCase()}${String(role).slice(1)}`;
+        const label = t(key);
+        return label === key ? String(role) : label;
+    },
+
+    // ─── Errors ──────────────────────────────────────────────────────────────
+    /**
+     * The server refuses to remove the platform's last administrator, and it
+     * says so specifically. Surfacing that instead of "Request failed" is the
+     * difference between "I understand, cancel" and "the page is broken".
+     */
+    describeUserError(err, fallbackKey) {
+        const body = (err && err.body) || {};
+        const code = String(body.code || body.error || '');
+        if (/last[_\s-]?admin/i.test(code) || /last administrator/i.test(code)) {
+            return t('users.lastAdmin');
+        }
+        return (err && err.message) || t(fallbackKey || 'common.error');
+    },
+
+    // ─── Role & active state ─────────────────────────────────────────────────
+
+    changeRole(select) {
+        const id = select.dataset.id;
+        const u = this.users.find((x) => String(this.id(x)) === String(id));
+        if (!u) return Promise.resolve();
+
+        const previous = String(Admin.pick(u, 'role') || 'user');
+        const next = select.value === 'platform_admin' ? 'platform_admin' : 'user';
+        if (next === previous) return Promise.resolve();
+
+        select.disabled = true;
+        return Motion.optimistic({
+            apply: () => { u.role = next; },
+            send: () => API.updateAdminUser(id, { role: next }),
+            revert: () => {
+                u.role = previous;
+                select.value = previous;
+            },
+            onError: (err) => UI.toast(this.describeUserError(err, 'users.roleFailed'), 'error'),
+        }).then(async (result) => {
+            select.disabled = false;
+            if (result !== null) {
+                UI.toast(next === 'platform_admin' ? t('users.roleNowAdmin') : t('users.roleNowUser'));
+                await this.render();
+            } else {
+                await this.render();
+            }
+            return result;
+        });
+    },
+
+    toggleActive(input) {
+        const id = input.dataset.id;
+        const u = this.users.find((x) => String(this.id(x)) === String(id));
+        if (!u) return Promise.resolve();
+
+        const email = Admin.pick(u, 'email') || '';
+        const wasActive = Admin.pick(u, 'is_active', 'isActive') !== false;
+        const next = !!input.checked;
+        if (next === wasActive) return Promise.resolve();
+
+        // Switching an account OFF signs that person out of the product. The
+        // control has already moved, so this is a confirmation, not a gate:
+        // saying no puts the switch back.
+        if (!next) {
+            input.checked = true;
+            Admin.confirm({
+                title: t('users.disableTitle'),
+                body: t('users.disableBody', { email }),
+                hint: t('users.disableHint'),
+                confirmLabel: t('users.disableCta'),
+                confirmIcon: 'user-x',
+                onConfirm: () => this.setActive(id, false),
+            });
+            return Promise.resolve();
+        }
+        return this.setActive(id, true);
+    },
+
+    async setActive(id, value) {
+        const u = this.users.find((x) => String(this.id(x)) === String(id));
+        if (!u) return;
+        try {
+            await API.updateAdminUser(id, { is_active: value });
+            u.is_active = value;
+            if ('isActive' in u) u.isActive = value;
+            UI.toast(value ? t('users.enabledToast') : t('users.disabledToast'));
+        } catch (err) {
+            UI.toast(this.describeUserError(err, 'users.activeFailed'), 'error');
+        }
+        await this.render();
+    },
+
+    // ─── Create ──────────────────────────────────────────────────────────────
 
     /**
      * Tenant options for the two modals. Falls back to the session's own tenant
@@ -150,21 +319,23 @@ const UsersPage = {
     async loadTenantOptions() {
         try {
             const result = await API.getAdminTenants();
-            return Array.isArray(result) ? result : (result && result.tenants) || [];
+            const list = Array.isArray(result) ? result : (result && result.tenants) || [];
+            this.tenants = list;
+            return list;
         } catch {
             return (App.session && App.session.tenants) || [];
         }
     },
 
-    /**
-     * The create call also takes an optional first membership. A user with no
-     * membership can sign in and reach nothing, so granting one here is worth
-     * the extra field.
-     */
+    tenantOption(x) {
+        const id = Admin.pick(x, 'id', 'creator_id');
+        return html`<option value="${id}">${Admin.pick(x, 'name', 'display_name') || id}</option>`;
+    },
+
     async showCreateModal() {
         const tenants = await this.loadTenantOptions();
         UI.showModal(html`
-            ${this.modalHeader(t('users.createTitle'))}
+            ${Admin.modalHeader(t('users.createTitle'))}
             <form id="user-create-form" data-submit="users:handleCreate">
                 <div class="form-group">
                     <label class="form-label" for="user-email">${t('users.email')}</label>
@@ -174,8 +345,8 @@ const UsersPage = {
                 <div class="form-group">
                     <label class="form-label" for="user-password">${t('users.password')}</label>
                     <input class="field" id="user-password" name="password" type="password" dir="ltr"
-                           autocomplete="new-password" minlength="12" required>
-                    <p class="form-hint">${t('users.passwordHint')}</p>
+                           autocomplete="new-password" minlength="12" required aria-describedby="user-password-hint">
+                    <p class="form-hint" id="user-password-hint">${t('users.passwordHint')}</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="user-role">${t('users.role')}</label>
@@ -190,7 +361,7 @@ const UsersPage = {
                     </label>
                     <select class="select" id="user-tenant" name="creator_id">
                         <option value="" selected>${t('users.noTenantYet')}</option>
-                        ${tenants.map((x) => html`<option value="${this.pick(x, 'id', 'creator_id')}">${this.pick(x, 'name') || this.pick(x, 'id')}</option>`)}
+                        ${tenants.map((x) => this.tenantOption(x))}
                     </select>
                 </div>
                 <div class="modal-actions">
@@ -217,21 +388,22 @@ const UsersPage = {
             await API.createAdminUser(payload);
             UI.closeModal();
             UI.toast(t('users.created'));
-            this.render();
+            await this.render();
         } catch (err) {
             if (submit) submit.disabled = false;
-            UI.toast(err.message || t('users.createFailed'), 'error');
+            UI.toast((err && err.message) || t('users.createFailed'), 'error');
         }
     },
 
-    async showMembershipModal(id) {
-        const u = this.users.find((x) => String(this.pick(x, 'id', 'user_id')) === String(id));
-        const email = (u && this.pick(u, 'email')) || '';
+    // ─── Memberships ─────────────────────────────────────────────────────────
 
+    async showMembershipModal(id) {
+        const u = this.users.find((x) => String(this.id(x)) === String(id));
+        const email = (u && Admin.pick(u, 'email')) || '';
         const tenants = await this.loadTenantOptions();
 
         UI.showModal(html`
-            ${this.modalHeader(t('users.membershipTitle'))}
+            ${Admin.modalHeader(t('users.membershipTitle'))}
             <form id="user-membership-form" data-submit="users:handleMembership" data-id="${id}">
                 <p class="form-hint mbe-4">${UI.ltr(email)}</p>
                 <div class="form-group">
@@ -239,16 +411,16 @@ const UsersPage = {
                     <select class="select" id="membership-tenant" name="creator_id" required>
                         ${tenants.length === 0
                             ? html`<option value="">${t('users.noTenants')}</option>`
-                            : tenants.map((x) => html`<option value="${this.pick(x, 'id', 'creator_id')}">${this.pick(x, 'name') || this.pick(x, 'id')}</option>`)}
+                            : tenants.map((x) => this.tenantOption(x))}
                     </select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="membership-role">${t('users.membershipRole')}</label>
-                    <select class="select" id="membership-role" name="role">
+                    <select class="select" id="membership-role" name="role" aria-describedby="membership-role-hint">
                         <option value="owner" selected>${t('users.roleOwner')}</option>
                         <option value="member">${t('users.roleMember')}</option>
                     </select>
-                    <p class="form-hint">${t('users.membershipHint')}</p>
+                    <p class="form-hint" id="membership-role-hint">${t('users.membershipHint')}</p>
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
@@ -266,44 +438,126 @@ const UsersPage = {
         const data = new FormData(form);
         const creatorId = (data.get('creator_id') || '').toString();
         if (!creatorId) return;
+        const submit = form.querySelector('button[type="submit"]');
+        if (submit) submit.disabled = true;
         try {
-            await API.createUserMembership(id, { creator_id: creatorId, role: (data.get('role') || 'owner').toString() });
+            await API.createUserMembership(id, {
+                creator_id: creatorId,
+                role: (data.get('role') || 'owner').toString(),
+            });
             UI.closeModal();
             UI.toast(t('users.granted'));
-            this.render();
+            await this.render();
         } catch (err) {
-            UI.toast(err.message || t('users.grantFailed'), 'error');
+            if (submit) submit.disabled = false;
+            UI.toast((err && err.message) || t('users.grantFailed'), 'error');
         }
     },
 
-    async revoke(btn) {
-        const email = btn.dataset.email || '';
-        if (!confirm(t('users.revokeConfirm', { email }))) return;
-        btn.disabled = true;
+    confirmRevokeMembership(btn) {
+        const { id, creator, email, name } = btn.dataset;
+        if (!id || !creator) return;
+        Admin.confirm({
+            title: t('users.revokeMembershipTitle'),
+            body: t('users.revokeMembershipBody', { name: name || '—', email: email || '—' }),
+            hint: t('users.revokeMembershipHint'),
+            confirmLabel: t('users.revokeMembershipCta'),
+            confirmIcon: 'unlink',
+            onConfirm: () => this.revokeMembership(id, creator),
+        });
+    },
+
+    async revokeMembership(id, creatorId) {
         try {
-            await API.revokeUserSessions(btn.dataset.id);
-            UI.toast(t('users.revoked'));
-            this.render();
+            await API.deleteUserMembership(id, creatorId);
+            UI.toast(t('users.membershipRevoked'));
         } catch (err) {
-            btn.disabled = false;
-            UI.toast(err.message || t('users.revokeFailed'), 'error');
+            UI.toast(this.describeUserError(err, 'users.membershipRevokeFailed'), 'error');
+        }
+        await this.render();
+    },
+
+    // ─── Passwords ───────────────────────────────────────────────────────────
+
+    showPasswordModal(btn) {
+        const id = btn.dataset.id;
+        const email = btn.dataset.email || '';
+        UI.showModal(html`
+            ${Admin.modalHeader(t('users.setPasswordTitle'))}
+            <form id="user-password-form" data-submit="users:handlePassword" data-id="${id}">
+                <p class="modal-body-text">${t('users.setPasswordBody', { email })}</p>
+                <div class="form-group">
+                    <label class="form-label" for="user-new-password">${t('users.newPassword')}</label>
+                    <input class="field" id="user-new-password" name="password" type="password" dir="ltr"
+                           autocomplete="new-password" minlength="12" required aria-describedby="user-new-password-hint">
+                    <p class="form-hint" id="user-new-password-hint">${t('users.setPasswordHint')}</p>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i data-lucide="key-round" aria-hidden="true"></i> ${t('users.setPasswordCta')}
+                    </button>
+                </div>
+            </form>
+        `);
+    },
+
+    async handlePassword(form, event) {
+        event.preventDefault();
+        const id = form.dataset.id;
+        const password = (new FormData(form).get('password') || '').toString();
+        if (password.length < 12) {
+            UI.toast(t('password.tooShort'), 'error');
+            return;
+        }
+        const submit = form.querySelector('button[type="submit"]');
+        if (submit) submit.disabled = true;
+        try {
+            await API.setAdminUserPassword(id, password);
+            UI.closeModal();
+            UI.toast(t('users.passwordSet'));
+        } catch (err) {
+            if (submit) submit.disabled = false;
+            UI.toast((err && err.message) || t('users.passwordSetFailed'), 'error');
         }
     },
-};
 
-/** The delegated dispatcher only catches synchronous throws, so async handlers
- *  surface their own failures rather than dying in an unhandled rejection. */
-const reportFailure = (promise) => {
-    if (promise && typeof promise.catch === 'function') {
-        promise.catch((err) => UI.toast((err && err.message) || t('common.error'), 'error'));
-    }
+    // ─── Sessions ────────────────────────────────────────────────────────────
+
+    confirmRevoke(btn) {
+        const email = btn.dataset.email || '';
+        const id = btn.dataset.id;
+        Admin.confirm({
+            title: t('users.revokeTitle'),
+            body: t('users.revokeConfirm', { email }),
+            hint: t('users.revokeHint'),
+            confirmLabel: t('users.revokeCta'),
+            confirmIcon: 'log-out',
+            onConfirm: () => this.revokeSessions(id),
+        });
+    },
+
+    async revokeSessions(id) {
+        try {
+            await API.revokeUserSessions(id);
+            UI.toast(t('users.revoked'));
+        } catch (err) {
+            UI.toast((err && err.message) || t('users.revokeFailed'), 'error');
+        }
+        await this.render();
+    },
 };
 
 UI.registerActions('users', {
-    render: () => reportFailure(UsersPage.render()),
-    showCreateModal: () => reportFailure(UsersPage.showCreateModal()),
-    handleCreate: (el, e) => reportFailure(UsersPage.handleCreate(el, e)),
-    showMembershipModal: (el) => reportFailure(UsersPage.showMembershipModal(el.dataset.id)),
-    handleMembership: (el, e) => reportFailure(UsersPage.handleMembership(el, e)),
-    revoke: (el) => reportFailure(UsersPage.revoke(el)),
+    render: () => Admin.report(UsersPage.render()),
+    showCreateModal: () => Admin.report(UsersPage.showCreateModal()),
+    handleCreate: (el, e) => Admin.report(UsersPage.handleCreate(el, e)),
+    showMembershipModal: (el) => Admin.report(UsersPage.showMembershipModal(el.dataset.id)),
+    handleMembership: (el, e) => Admin.report(UsersPage.handleMembership(el, e)),
+    confirmRevokeMembership: (el) => UsersPage.confirmRevokeMembership(el),
+    showPasswordModal: (el) => UsersPage.showPasswordModal(el),
+    handlePassword: (el, e) => Admin.report(UsersPage.handlePassword(el, e)),
+    confirmRevoke: (el) => UsersPage.confirmRevoke(el),
+    changeRole: (el) => Admin.report(UsersPage.changeRole(el)),
+    toggleActive: (el) => Admin.report(UsersPage.toggleActive(el)),
 });

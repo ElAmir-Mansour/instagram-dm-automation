@@ -1736,6 +1736,185 @@ html[dir='rtl'] .page-btn svg { transform: scaleX(-1); }
 .import-progress .spinner { margin-inline: auto; margin-block-end: var(--space-4); }
 .import-progress p { color: var(--text-default); font-size: var(--fs-200); margin-block-start: var(--space-2); }
 
+/* ─── Administration UI ──────────────────────────────────────────────────────
+   Operations, tenant detail, users, jobs, audit and erasure. No new values:
+   every number below is a token from tokens.css, and every colour is a
+   semantic pair (`--*-soft` background with `--*-text` foreground) so the light
+   theme follows without a second rule.
+
+   Direction is logical throughout — `padding-inline`, `border-inline-start`,
+   `margin-block-end` — because these screens read right-to-left first. There
+   is no physical `left`/`right` in this section. */
+
+/* The strip above the page container. It is the ordinary operator's answer to
+   "are webhooks still arriving?", so it sits above the fold on Settings rather
+   than inside it. Padding is block-start only: the page container below
+   supplies its own top padding, and doubling them would push the page down. */
+.page-prelude { padding: var(--space-5) var(--space-6) 0; }
+
+.health-strip { padding: var(--space-5); }
+.health-strip-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-3); flex-wrap: wrap;
+    margin-block-end: var(--space-4);
+}
+.health-strip-title { font-size: var(--fs-400); color: var(--text-strong); }
+/* An alarm is a border, not a fill: the tiles inside carry their own severity
+   colour and a red panel behind red pills reads as noise. */
+.health-strip-alarm { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.health-strip-lede {
+    font-size: var(--fs-200);
+    color: var(--text-strong);
+    background: var(--danger-soft);
+    border-inline-start: 3px solid var(--danger);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3) var(--space-4);
+    margin-block-end: var(--space-4);
+}
+.health-strip-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: var(--space-4);
+}
+.health-tile { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); min-width: 0; }
+.health-tile-label { font-size: var(--fs-100); color: var(--text-muted); }
+.health-tile-note { font-size: var(--fs-100); color: var(--text-muted); }
+.health-strip-facts { margin-block-start: var(--space-4); }
+
+/* Meta's own explanation of a bad token. It was on the wire the whole time and
+   being thrown away, which left a red pill and no diagnosis. */
+.health-diagnosis {
+    display: flex; align-items: flex-start; gap: var(--space-2);
+    margin-block: var(--space-3);
+    padding: var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--danger-soft);
+    border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+    font-size: var(--fs-100);
+    color: var(--text-strong);
+    overflow-wrap: anywhere;
+}
+.health-diagnosis svg { width: 15px; height: 15px; color: var(--danger-text); flex-shrink: 0; margin-block-start: 2px; }
+
+/* ─── Definition pairs (the detail cards' shared shape) ─────────────────── */
+.ops-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--space-3) var(--space-4); }
+.detail-field { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.detail-field dt { font-size: var(--fs-100); color: var(--text-muted); }
+.detail-field dd { font-size: var(--fs-200); color: var(--text-default); display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.detail-field dd strong { color: var(--text-strong); }
+
+/* ─── Operations ────────────────────────────────────────────────────────── */
+.ops-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: var(--space-4); }
+.ops-card { padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.ops-card-alarm { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.ops-card-off { opacity: 0.62; }
+.ops-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.ops-card-title {
+    font-size: var(--fs-400); color: var(--text-strong);
+    display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+    min-width: 0;
+}
+.ops-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+/* The lead. Token status and webhook age are the two facts the page exists to
+   report, so they get their own band above everything else rather than being
+   two more cells in a list. */
+.ops-lead {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-4);
+    padding: var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+}
+.ops-lead-item { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); min-width: 0; }
+.ops-lead-label { font-size: var(--fs-100); color: var(--text-muted); }
+.ops-lead-note { font-size: var(--fs-100); color: var(--text-muted); }
+
+.queue-triple { display: inline-flex; gap: var(--space-3); flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.icon-success { color: var(--success-text); }
+
+/* Short-keyword hazards: each row is a keyword plus the way out. */
+.hazard-list { display: flex; flex-direction: column; gap: var(--space-3); }
+.hazard-item {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-4); flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-inline-start: 3px solid var(--warning);
+    border-radius: var(--radius-sm);
+    background: var(--surface-glass);
+}
+.hazard-main { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
+.hazard-keyword { font-size: var(--fs-300); color: var(--text-strong); font-weight: var(--fw-semibold); }
+
+/* ─── Tenant detail ─────────────────────────────────────────────────────── */
+.detail-name {
+    font-size: var(--fs-500); color: var(--text-strong);
+    display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+    min-width: 0;
+}
+
+/* ─── Users ─────────────────────────────────────────────────────────────── */
+.user-card-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: var(--space-4); }
+.user-card { padding: var(--space-5); display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.user-card-off { opacity: 0.62; }
+.user-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.user-card-email { font-size: var(--fs-300); color: var(--text-strong); overflow-wrap: anywhere; min-width: 0; }
+.user-card-tags { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.user-card-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); align-items: end; }
+/* The last control in a card must not add a trailing margin the flex gap has
+   already accounted for. */
+.user-card-controls .form-group { margin-block-end: 0; }
+.user-active-row { min-height: var(--tap-target); }
+.user-memberships { padding-block-start: var(--space-4); border-block-start: 1px solid var(--border-subtle); }
+.membership-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.membership-item { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.user-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+/* ─── Jobs ──────────────────────────────────────────────────────────────── */
+/* Cards are the phone form of the table; CSS picks one, so there is one data
+   path and no resize listener — the same arrangement the activity log uses. */
+.jobs-cards, .audit-cards { display: none; flex-direction: column; gap: var(--space-3); }
+.jobs-table .data-table, .audit-table .data-table { min-width: 720px; }
+.job-kind { font-weight: var(--fw-semibold); color: var(--text-strong); display: block; overflow-wrap: anywhere; }
+.job-tenant, .job-claimed { display: block; font-size: var(--fs-100); color: var(--text-muted); margin-block-start: var(--space-1); }
+.job-error {
+    font-size: var(--fs-100);
+    color: var(--danger-text);
+    background: var(--danger-soft);
+    border-radius: var(--radius-sm);
+    padding: var(--space-3);
+    overflow-wrap: anywhere;
+}
+
+/* ─── Audit ─────────────────────────────────────────────────────────────── */
+.audit-detail { max-width: 320px; font-size: var(--fs-100); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-detail-block { font-size: var(--fs-100); color: var(--text-muted); overflow-wrap: anywhere; }
+.audit-target-type { font-size: var(--fs-100); color: var(--text-muted); margin-inline-end: var(--space-1); }
+
+/* ─── Erasure ───────────────────────────────────────────────────────────── */
+.erasure-subtitle { font-size: var(--fs-300); color: var(--text-strong); margin-block-end: var(--space-3); }
+.erasure-sample {
+    display: flex; flex-direction: column; gap: var(--space-2);
+    max-height: 220px; overflow-y: auto;
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    font-size: var(--fs-100);
+    color: var(--text-default);
+}
+.erasure-sample li { overflow-wrap: anywhere; }
+
+/* ─── Sidebar group label ───────────────────────────────────────────────── */
+.nav-group-label {
+    display: block;
+    padding: var(--space-4) var(--space-4) var(--space-2);
+    font-size: var(--fs-100);
+    font-weight: var(--fw-semibold);
+    color: var(--text-muted);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Responsive.  Every screen has to work at 375px.
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -1831,6 +2010,55 @@ html[dir='rtl'] .page-btn svg { transform: scaleX(-1); }
 @media (prefers-reduced-motion: reduce) {
     /* Slowed, not stopped: a frozen spinner reads as a hung request. */
     .spinner { animation-duration: 2s; }
+}
+
+/* ─── Administration UI, narrow ──────────────────────────────────────────────
+   Kept as its own block rather than folded into the media queries above, so
+   the two sets of rules can be read (and merged) independently.
+
+   Rule for these screens: a table either becomes cards or scrolls on purpose.
+   Nothing overflows the page. */
+@media (max-width: 1100px) {
+    /* One card per row before the cards themselves get squeezed: an ops card
+       holds two health pills side by side and a six-cell fact grid. */
+    .ops-grid, .user-card-list { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+    .page-prelude { padding: var(--space-4) var(--space-4) 0; }
+    .health-strip, .ops-card, .user-card { padding: var(--space-4); }
+
+    /* Jobs and audit stop being wide tables and become cards. */
+    .jobs-table, .audit-table { display: none; }
+    .jobs-cards, .audit-cards { display: flex; }
+
+    /* A stat row of three at 375px is three unreadable columns. */
+    .ops-lead { grid-template-columns: 1fr; }
+    .ops-facts, .health-strip-grid, .user-card-controls { grid-template-columns: 1fr; }
+
+    /* Full-width actions, so a 44px target is not also a 44px-wide target. */
+    .ops-card-actions .btn,
+    .user-card-actions .btn { flex: 1 1 auto; }
+
+    .hazard-item { align-items: stretch; }
+    .hazard-item .btn { width: 100%; }
+
+    /* The tenants table gains two row actions (inspect, re-check), so it needs
+       more room before it scrolls; the count/refresh row and the filters must
+       not share a flex line. */
+    .tenants-table { min-width: 720px; }
+}
+
+@media (max-width: 560px) {
+    .detail-name { font-size: var(--fs-400); }
+    .health-strip-title { font-size: var(--fs-300); }
+    /* A definition value that is a meter needs the whole column. */
+    .detail-field dd { align-items: flex-start; }
+}
+
+@media (max-width: 400px) {
+    .page-prelude { padding: var(--space-3) var(--space-3) 0; }
+    .ops-card-actions, .user-card-actions { flex-direction: column; align-items: stretch; }
 }
 
 html[dir='rtl'] .select { background-position: left var(--space-3) center; }

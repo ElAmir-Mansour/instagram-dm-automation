@@ -50,12 +50,21 @@ const App = {
         analytics: { src: 'analytics', page: () => AnalyticsPage },
         activity: { src: 'activity', page: () => ActivityPage },
         settings: { src: 'settings', page: () => SettingsPage },
+        // ─── Platform administration ─────────────────────────────────────────
+        // `navAs` points a page with no nav item of its own at the item that
+        // should read as current while it is open — otherwise the active
+        // marker disappears the moment you open a tenant's detail view.
+        operations: { src: 'operations', page: () => OperationsPage, adminOnly: true },
         tenants: { src: 'tenants', page: () => TenantsPage, adminOnly: true },
+        tenant_detail: { src: 'tenant_detail', page: () => TenantDetailPage, adminOnly: true, navAs: 'tenants' },
         users: { src: 'users', page: () => UsersPage, adminOnly: true },
+        jobs: { src: 'jobs', page: () => JobsPage, adminOnly: true },
+        audit: { src: 'audit', page: () => AuditPage, adminOnly: true },
+        erasure: { src: 'erasure', page: () => ErasurePage, adminOnly: true },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '5.2',
+    ASSET_VERSION: '5.3',
 
     _modules: Object.create(null),
 
@@ -258,12 +267,55 @@ const App = {
         return this.pages[raw] ? raw : this.DEFAULT_PAGE;
     },
 
+    /**
+     * The query half of the hash — `#/tenant_detail?id=…`.
+     *
+     * The hash is attacker-controllable, so a value read from here is data
+     * like any other: it is escaped where it is rendered and percent-encoded
+     * where it goes into a path. Nothing interpolates it into markup raw.
+     */
+    hashQuery() {
+        const raw = String(location.hash || '');
+        const at = raw.indexOf('?');
+        try {
+            return new URLSearchParams(at === -1 ? '' : raw.slice(at + 1));
+        } catch {
+            return new URLSearchParams('');
+        }
+    },
+
+    hashParam(name) {
+        const value = this.hashQuery().get(name);
+        return value === null ? '' : value;
+    },
+
     /** Navigate by updating the hash; hashchange does the actual render. */
     go(page) {
         if (!this.pages[page]) return;
         const target = `#/${page}`;
         if (location.hash === target) {
             this.show(page); // same hash, force a re-render
+        } else {
+            location.hash = target;
+        }
+    },
+
+    /**
+     * Navigate to a page WITH parameters — the detail views. Same rule as
+     * `go()`: the page name is only ever a key of `this.pages`, and the params
+     * are encoded, so nothing operator-supplied lands in the hash unescaped.
+     */
+    goWithQuery(page, params) {
+        if (!this.pages[page]) return;
+        const query = new URLSearchParams();
+        Object.keys(params || {}).forEach((key) => {
+            const value = params[key];
+            if (value !== null && value !== undefined && value !== '') query.set(key, String(value));
+        });
+        const search = query.toString();
+        const target = `#/${page}${search ? `?${search}` : ''}`;
+        if (location.hash === target) {
+            this.show(page);
         } else {
             location.hash = target;
         }
@@ -295,10 +347,15 @@ const App = {
         this.applyChrome();
 
         const page = this.pageFromHash();
-        if (location.hash !== `#/${page}`) {
+        // Normalise the PAGE part only. `#/tenant_detail?id=…` is a legitimate
+        // deep link and rewriting it to `#/tenant_detail` would throw the id
+        // away on every reload and every bookmarked link.
+        const pagePart = String(location.hash || '').split('?')[0];
+        if (pagePart !== `#/${page}`) {
             // Normalise without adding a history entry AND without firing
             // hashchange (which would render the page a second time).
-            history.replaceState(null, '', `#/${page}`);
+            const query = String(location.hash || '').split('?')[1];
+            history.replaceState(null, '', `#/${page}${query ? `?${query}` : ''}`);
         }
         await this.navigate(page);
     },
@@ -367,6 +424,13 @@ const App = {
         const admin = this.isAdmin();
         document.querySelectorAll('[data-admin-only]').forEach((el) => {
             el.classList.toggle('hidden', !admin);
+        });
+
+        // Affordances that need a real user account rather than the shared
+        // dashboard password — currently just "change my password".
+        const identified = this.canChangeOwnPassword();
+        document.querySelectorAll('[data-user-only]').forEach((el) => {
+            el.classList.toggle('hidden', !identified);
         });
 
         const app = document.getElementById('app');
@@ -525,10 +589,18 @@ const App = {
 
     // ─── Navigation ──────────────────────────────────────────────────────────
 
-    /** Which nav item is current, plus its accessible state. */
+    /**
+     * Which nav item is current, plus its accessible state.
+     *
+     * A page with `navAs` has no nav item of its own (the tenant detail view
+     * is reached from a row, not from the sidebar) and borrows the item it
+     * belongs under, so the marker stays put instead of vanishing.
+     */
     markNavItem(page) {
+        const entry = this.pages[page];
+        const target = (entry && entry.navAs) || page;
         document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
-            const active = item.dataset.page === page;
+            const active = item.dataset.page === target;
             item.classList.toggle('active', active);
             if (active) item.setAttribute('aria-current', 'page');
             else item.removeAttribute('aria-current');
@@ -601,6 +673,7 @@ const App = {
             this.currentPage = null;
             this.markNavItem(page);
             this.moveNavIndicator(true);
+            if (typeof HealthStrip !== 'undefined') HealthStrip.hide();
             this.renderSetup();
             return;
         }
@@ -661,6 +734,17 @@ const App = {
             );
         };
 
+        // The health strip lives ABOVE the page container, so it is mounted by
+        // the router rather than by the page module underneath it. That is what
+        // lets webhook freshness and token health appear on a screen whose own
+        // module knows nothing about them, and it keeps the two independent:
+        // the strip's own failure cannot take the page down with it.
+        if (typeof HealthStrip !== 'undefined') {
+            Promise.resolve(HealthStrip.mountFor(page)).catch((err) => {
+                console.warn('Health strip failed:', err);
+            });
+        }
+
         try {
             // Most pages' render() is async; a throw after its first await
             // rejects rather than raising, so both paths land on `fail`.
@@ -670,6 +754,114 @@ const App = {
             fail(err);
         }
     },
+
+    // ─── Your own password ───────────────────────────────────────────────────
+    /**
+     * `POST /api/auth/password` needs a user identity. The shared dashboard
+     * password has none — no row, no `userId` in the session token — so the
+     * affordance is hidden for that path rather than offered and then refused.
+     */
+    canChangeOwnPassword() {
+        return !!(this.session && this.session.available && this.session.userId);
+    },
+
+    /**
+     * The control lives in the sidebar footer, next to Log out, because it has
+     * to be reachable by an ORDINARY user: `users.passwordHint` has always told
+     * admins "they can change it later", and the Users page is admin-only.
+     */
+    showPasswordModal() {
+        if (!this.canChangeOwnPassword()) {
+            UI.toast(t('password.unavailable'), 'error');
+            return;
+        }
+        UI.showModal(html`
+            <div class="modal-header">
+                <h2 class="modal-title">${t('password.title')}</h2>
+                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+            <form id="own-password-form" data-submit="app:handlePasswordChange">
+                <p class="modal-body-text">${t('password.body')}</p>
+                <div class="form-group">
+                    <label class="form-label" for="own-current-password">${t('password.current')}</label>
+                    <input class="field" id="own-current-password" name="currentPassword" type="password"
+                           dir="ltr" autocomplete="current-password" required>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="own-new-password">${t('password.new')}</label>
+                    <input class="field" id="own-new-password" name="newPassword" type="password"
+                           dir="ltr" autocomplete="new-password" minlength="12" required
+                           aria-describedby="own-new-password-hint">
+                    <p class="form-hint" id="own-new-password-hint">${t('password.newHint')}</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="own-repeat-password">${t('password.repeat')}</label>
+                    <input class="field" id="own-repeat-password" name="repeatPassword" type="password"
+                           dir="ltr" autocomplete="new-password" minlength="12" required>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i data-lucide="key-round" aria-hidden="true"></i> ${t('password.submit')}
+                    </button>
+                </div>
+            </form>
+        `);
+    },
+
+    /**
+     * Changing your password kills every other session. This one survives only
+     * because the server hands back a fresh token and we store it — dropping
+     * it would log the operator out of the tab they are standing in.
+     */
+    async handlePasswordChange(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const current = (data.get('currentPassword') || '').toString();
+        const next = (data.get('newPassword') || '').toString();
+        const repeat = (data.get('repeatPassword') || '').toString();
+
+        if (next.length < 12) {
+            UI.toast(t('password.tooShort'), 'error');
+            return;
+        }
+        if (next !== repeat) {
+            UI.toast(t('password.mismatch'), 'error');
+            return;
+        }
+        if (next === current) {
+            UI.toast(t('password.unchanged'), 'error');
+            return;
+        }
+
+        const submit = form.querySelector('button[type="submit"]');
+        const original = submit ? submit.innerHTML : '';
+        if (submit) {
+            submit.disabled = true;
+            submit.innerHTML = UI.buttonSpinner(t('password.saving'));
+        }
+
+        try {
+            const result = await API.changeOwnPassword(current, next);
+            if (result && result.token) API.setToken(result.token);
+            UI.closeModal();
+            UI.toast(t('password.changed'));
+        } catch (err) {
+            if (submit) {
+                submit.disabled = false;
+                submit.innerHTML = original;
+                UI.icons(submit);
+            }
+            // A 401 has already cleared the token and put the login screen up
+            // (API.request does that for every route); a toast on top of it
+            // would describe the wrong failure.
+            if (err && err.status === 401) return;
+            const wrong = err && (err.status === 400 || err.status === 403 || err.status === 422);
+            UI.toast(wrong ? t('password.wrongCurrent') : ((err && err.message) || t('password.failed')), 'error');
+        }
+    },
 };
 
 UI.registerActions('app', {
@@ -677,11 +869,33 @@ UI.registerActions('app', {
         const main = document.getElementById('page-container');
         if (main) main.focus();
     },
+    /**
+     * `data-target` is the page; `data-query` is an optional querystring for a
+     * deep link (`focus=<id>`). It is parsed rather than concatenated, so a
+     * malformed or hostile value produces no parameters instead of a crafted
+     * hash.
+     */
     navigate(el) {
-        App.go(el.dataset.target);
+        const query = el.dataset.query;
+        if (!query) {
+            App.go(el.dataset.target);
+            return;
+        }
+        const params = {};
+        new URLSearchParams(query).forEach((value, key) => { params[key] = value; });
+        App.goWithQuery(el.dataset.target, params);
     },
     switchTenantFromSelect(el) {
         App.switchTenant(el.value);
+    },
+    showPasswordModal() {
+        App.showPasswordModal();
+    },
+    handlePasswordChange(el, e) {
+        const result = App.handlePasswordChange(el, e);
+        if (result && typeof result.catch === 'function') {
+            result.catch((err) => UI.toast((err && err.message) || t('password.failed'), 'error'));
+        }
     },
     /** The header affordance: two languages, so it is a toggle. */
     toggleLanguage() {

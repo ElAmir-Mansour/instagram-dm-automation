@@ -141,6 +141,89 @@ const API = {
         method: 'POST', body: JSON.stringify(data),
     }),
 
+    // ─── Administration UI (operations, jobs, audit, erasure) ────────────────
+    // Every route below follows the same rule as the block above: a 403 or a
+    // 404 means "this session cannot administer" or "this deployment does not
+    // serve the route yet", and the caller hides the affordance instead of
+    // showing an error the operator cannot act on.
+
+    /** One tenant's full record, including the connection fields. */
+    getAdminTenant: (id) => API.request(`/admin/tenants/${encodeURIComponent(id)}`),
+
+    /** Platform-wide health: per-tenant rows, queue, schema, storage, hazards. */
+    getAdminOps: () => API.request('/admin/ops'),
+
+    /** Ask Meta about one tenant's token right now, rather than reading a
+     *  status that can be weeks old. Returns the fresh token state. */
+    recheckAdminTenantToken: (id) => API.request(
+        `/admin/tenants/${encodeURIComponent(id)}/recheck-token`, { method: 'POST' }
+    ),
+
+    /**
+     * The same re-check for the acting tenant, available to any authenticated
+     * operator — this is the non-admin half of "is the token still good".
+     */
+    recheckToken: () => API.request('/settings/token/recheck', { method: 'POST' }),
+
+    /**
+     * Health for the ACTING tenant. Any authenticated user may call it, which
+     * is what makes webhook freshness visible to an ordinary operator instead
+     * of only on the admin tenants list.
+     */
+    getTenantHealth: () => API.request('/health/tenant'),
+
+    // Users
+    updateAdminUser: (id, data) => API.request(`/admin/users/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: JSON.stringify(data),
+    }),
+    setAdminUserPassword: (id, password) => API.request(
+        `/admin/users/${encodeURIComponent(id)}/password`,
+        { method: 'POST', body: JSON.stringify({ password }) }
+    ),
+    deleteUserMembership: (id, creatorId) => API.request(
+        `/admin/users/${encodeURIComponent(id)}/memberships/${encodeURIComponent(creatorId)}`,
+        { method: 'DELETE' }
+    ),
+
+    /**
+     * Change your OWN password. The server answers with a fresh session token
+     * because every other session is invalidated — store it like a login or
+     * this tab logs itself out.
+     */
+    changeOwnPassword: (currentPassword, newPassword) => API.request('/auth/password', {
+        method: 'POST', body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
+    // Job queue
+    getAdminJobs: (params = {}) => {
+        const query = new URLSearchParams(
+            Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined)
+        ).toString();
+        return API.request(`/admin/jobs${query ? `?${query}` : ''}`);
+    },
+    retryAdminJob: (id) => API.request(`/admin/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
+    cancelAdminJob: (id) => API.request(`/admin/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+
+    /**
+     * Data-subject erasure, in two halves that cannot be collapsed into one.
+     * The preview returns a short-lived `token`; the POST takes nothing but
+     * that token, so there is no way to erase without having first been shown
+     * what would be erased.
+     */
+    previewErasure: (handle) => API.request(
+        `/admin/erasure/preview?handle=${encodeURIComponent(handle)}`
+    ),
+    executeErasure: (token) => API.request('/admin/erasure', {
+        method: 'POST', body: JSON.stringify({ token }),
+    }),
+
+    getAdminAudit: (params = {}) => {
+        const query = new URLSearchParams(
+            Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined)
+        ).toString();
+        return API.request(`/admin/audit${query ? `?${query}` : ''}`);
+    },
+
     // Stats
     getStats: () => API.request('/stats'),
     getHourlyStats: (days = 7) => API.request(`/stats/hourly?days=${days}`),
