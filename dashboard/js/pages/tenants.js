@@ -82,6 +82,9 @@ const TenantsPage = {
             <div class="page-toolbar">
                 <p class="page-toolbar-count">${t('tenants.count', { count: tenants.length })}</p>
                 <div class="toolbar-actions">
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="app:navigate" data-target="operations">
+                        <i data-lucide="activity" aria-hidden="true"></i> ${t('tenants.openOps')}
+                    </button>
                     <button type="button" class="btn btn-primary btn-sm" data-action="tenants:showCreateModal">
                         <i data-lucide="plus" aria-hidden="true"></i> ${t('tenants.new')}
                     </button>
@@ -177,6 +180,17 @@ const TenantsPage = {
                 <td>${conversations === null ? '—' : UI.formatNumber(conversations)}</td>
                 <td>
                     <div class="row-actions">
+                        <!-- Inspect FIRST: investigating a red row should not
+                             require switching into the tenant and losing your
+                             place, which is what every other route here does. -->
+                        <button type="button" class="icon-btn" data-action="tenants:openDetail" data-id="${id}"
+                                aria-label="${t('ops.inspectFor', { name })}" title="${t('ops.inspect')}">
+                            <i data-lucide="search" aria-hidden="true"></i>
+                        </button>
+                        <button type="button" class="icon-btn" data-action="tenants:recheckToken" data-id="${id}"
+                                aria-label="${t('ops.recheckFor', { name })}" title="${t('ops.recheck')}">
+                            <i data-lucide="refresh-cw" aria-hidden="true"></i>
+                        </button>
                         <button type="button" class="icon-btn" data-action="tenants:switchInto" data-id="${id}"
                                 aria-label="${t('tenants.switchInto', { name })}" title="${t('tenants.switchInto', { name })}"
                                 ${isCurrent ? html.raw('disabled') : ''}>
@@ -393,6 +407,13 @@ const TenantsPage = {
         });
     },
 
+    /**
+     * Deactivating stops this tenant's webhooks being processed and its
+     * scheduled posts publishing, so it asks first — through the product's own
+     * modal. `window.confirm()` used to sit here: unstyleable, untranslatable,
+     * and dropping the interface's identity at exactly the moment the operator
+     * is deciding whether to break something.
+     */
     toggleActive(btn) {
         const id = btn.dataset.id;
         const row = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
@@ -400,18 +421,36 @@ const TenantsPage = {
         const isActive = this.pick(row, 'is_active', 'isActive') !== false;
         const name = this.pick(row, 'name', 'display_name') || t('tenants.untitled');
 
-        if (isActive && !confirm(t('tenants.deactivateConfirm', { name }))) return Promise.resolve();
+        if (isActive) {
+            Admin.confirm({
+                title: t('tenantDetail.deactivateTitle'),
+                body: t('tenants.deactivateConfirm', { name }),
+                hint: t('tenantDetail.deactivateHint'),
+                confirmLabel: t('tenantDetail.deactivate'),
+                confirmIcon: 'power-off',
+                onConfirm: () => this.setActive(id, false),
+            });
+            return Promise.resolve();
+        }
+        return this.setActive(id, true);
+    },
 
-        const paint = (value) => {
-            row.is_active = value;
-            if ('isActive' in row) row.isActive = value;
+    setActive(id, value) {
+        const row = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
+        if (!row) return Promise.resolve();
+        const isActive = this.pick(row, 'is_active', 'isActive') !== false;
+        if (isActive === value) return Promise.resolve();
+
+        const paint = (next) => {
+            row.is_active = next;
+            if ('isActive' in row) row.isActive = next;
             this.patchRow(id);
         };
 
-        paint(!isActive);
+        paint(value);
 
         return Motion.optimistic({
-            send: () => API.updateAdminTenant(id, { is_active: !isActive }),
+            send: () => API.updateAdminTenant(id, { is_active: value }),
             revert: () => paint(isActive),
             onError: (err) => UI.toast((err && err.message) || t('tenants.updateFailed'), 'error'),
         }).then(async (result) => {
@@ -422,6 +461,30 @@ const TenantsPage = {
 
     async switchInto(btn) {
         await App.switchTenant(btn.dataset.id);
+    },
+
+    /** The detail view, which does NOT mint a token for the tenant. */
+    openDetail(id) {
+        if (!id) return;
+        App.goWithQuery('tenant_detail', { id });
+    },
+
+    /**
+     * Ask Meta about this token right now. A `token_status` column can be
+     * weeks stale, and a green pill last checked eleven days ago is not
+     * evidence that anything still works.
+     */
+    async recheckToken(btn) {
+        const id = btn.dataset.id;
+        btn.disabled = true;
+        try {
+            await API.recheckAdminTenantToken(id);
+            UI.toast(t('ops.rechecked'));
+            await this.render();
+        } catch (err) {
+            btn.disabled = false;
+            UI.toast((err && err.message) || t('ops.recheckFailed'), 'error');
+        }
     },
 };
 
@@ -441,4 +504,6 @@ UI.registerActions('tenants', {
     handleRename: (el, e) => reportTenantFailure(TenantsPage.handleRename(el, e)),
     toggleActive: (el) => reportTenantFailure(TenantsPage.toggleActive(el)),
     switchInto: (el) => reportTenantFailure(TenantsPage.switchInto(el)),
+    openDetail: (el) => TenantsPage.openDetail(el.dataset.id),
+    recheckToken: (el) => reportTenantFailure(TenantsPage.recheckToken(el)),
 });

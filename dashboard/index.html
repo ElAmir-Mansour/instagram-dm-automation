@@ -24,8 +24,8 @@
 
     <!-- Design tokens first: styles.css only composes them, and eid.html loads
          the same file so there is one design system in this repo, not two. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=5.2">
-    <link rel="stylesheet" href="/dashboard/css/styles.css?v=5.2">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=5.3">
+    <link rel="stylesheet" href="/dashboard/css/styles.css?v=5.3">
 
     <script>
         /* Applied before first paint so a pinned light theme never flashes dark.
@@ -64,13 +64,14 @@
                known page list rather than interpolated into a path. */
             try {
                 var PAGES = ['overview', 'campaigns', 'posts', 'inbox', 'ai_settings',
-                             'analytics', 'activity', 'settings', 'tenants', 'users'];
+                             'analytics', 'activity', 'settings', 'operations', 'tenants',
+                             'tenant_detail', 'users', 'jobs', 'audit', 'erasure'];
                 var want = (location.hash || '').replace(/^#\/?/, '').split('?')[0];
                 var page = PAGES.indexOf(want) === -1 ? 'overview' : want;
                 var link = document.createElement('link');
                 link.rel = 'preload';
                 link.as = 'script';
-                link.href = '/dashboard/js/pages/' + page + '.js?v=5.2';
+                link.href = '/dashboard/js/pages/' + page + '.js?v=5.3';
                 document.head.appendChild(link);
             } catch (e) { /* the module still loads, just a beat later */ }
         }());
@@ -173,7 +174,18 @@
                 </a>
 
                 <!-- Platform administration. Revealed by App.applyChrome() only when
-                     /auth/me reports role === 'platform_admin'. -->
+                     /auth/me reports role === 'platform_admin'; every one of these
+                     routes 404s for anyone else, so the links are not there rather
+                     than being there and failing.
+
+                     Order is the order you reach for them: Operations answers "is
+                     the platform healthy" and is the morning screen; Erasure is
+                     last because it is the only hard delete in the product. -->
+                <span class="nav-group-label hidden" data-admin-only data-i18n="nav.group.admin">الإدارة</span>
+                <a href="#/operations" class="nav-item hidden" data-page="operations" data-admin-only>
+                    <i data-lucide="activity" aria-hidden="true"></i>
+                    <span data-i18n="nav.operations">التشغيل</span>
+                </a>
                 <a href="#/tenants" class="nav-item hidden" data-page="tenants" data-admin-only>
                     <i data-lucide="building-2" aria-hidden="true"></i>
                     <span data-i18n="nav.tenants">الحسابات</span>
@@ -182,9 +194,30 @@
                     <i data-lucide="users" aria-hidden="true"></i>
                     <span data-i18n="nav.users">المستخدمون</span>
                 </a>
+                <a href="#/jobs" class="nav-item hidden" data-page="jobs" data-admin-only>
+                    <i data-lucide="list-checks" aria-hidden="true"></i>
+                    <span data-i18n="nav.jobs">طابور المهام</span>
+                </a>
+                <a href="#/audit" class="nav-item hidden" data-page="audit" data-admin-only>
+                    <i data-lucide="file-clock" aria-hidden="true"></i>
+                    <span data-i18n="nav.audit">سجل التدقيق</span>
+                </a>
+                <a href="#/erasure" class="nav-item hidden" data-page="erasure" data-admin-only>
+                    <i data-lucide="user-x" aria-hidden="true"></i>
+                    <span data-i18n="nav.erasure">حذف بيانات شخص</span>
+                </a>
             </div>
 
             <div class="sidebar-footer">
+                <!-- Your own password. Hidden for the shared-password path, which
+                     has no user identity for POST /api/auth/password to change.
+                     It lives here, not on the admin-only Users page, because an
+                     ORDINARY user is exactly who needs it. -->
+                <button id="password-btn" type="button" class="nav-item hidden" data-user-only
+                        data-action="app:showPasswordModal">
+                    <i data-lucide="key-round" aria-hidden="true"></i>
+                    <span data-i18n="password.change">تغيير كلمة المرور</span>
+                </button>
                 <button id="logout-btn" type="button" class="nav-item nav-logout">
                     <i data-lucide="log-out" aria-hidden="true"></i>
                     <span data-i18n="app.logout">تسجيل الخروج</span>
@@ -223,6 +256,12 @@
                 </div>
             </header>
 
+            <!-- Mounted by App.navigate, above the page's own content and
+                 outside the container the page replaces. It is how the health
+                 strip reaches a screen whose module knows nothing about it,
+                 and it is `hidden` on every page that does not ask for it. -->
+            <div id="page-prelude" class="page-prelude hidden"></div>
+
             <div id="page-container" class="page-container" tabindex="-1">
                 <!-- Pages are injected here -->
             </div>
@@ -255,12 +294,17 @@
          Charts.ensure() injects it, with the same pin and the same SRI hash,
          the first time a chart is about to be drawn. -->
 
-    <script defer src="/dashboard/js/i18n.js?v=5.2"></script>
-    <script defer src="/dashboard/js/api.js?v=5.2"></script>
-    <script defer src="/dashboard/js/components.js?v=5.2"></script>
-    <script defer src="/dashboard/js/motion.js?v=5.2"></script>
-    <script defer src="/dashboard/js/charts.js?v=5.2"></script>
-    <script defer src="/dashboard/js/app.js?v=5.2"></script>
+    <script defer src="/dashboard/js/i18n.js?v=5.3"></script>
+    <script defer src="/dashboard/js/api.js?v=5.3"></script>
+    <script defer src="/dashboard/js/components.js?v=5.3"></script>
+    <script defer src="/dashboard/js/motion.js?v=5.3"></script>
+    <script defer src="/dashboard/js/charts.js?v=5.3"></script>
+    <!-- Not a page: the administration foundation (Admin.confirm, which replaces
+         window.confirm for destructive actions anywhere) plus the health strip,
+         which has to be available on a page whose own module does not know
+         about it. Small, and needed off the admin screens, so it is eager. -->
+    <script defer src="/dashboard/js/pages/admin_common.js?v=5.3"></script>
+    <script defer src="/dashboard/js/app.js?v=5.3"></script>
 
 </body>
 </html>
