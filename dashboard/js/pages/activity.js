@@ -8,6 +8,19 @@ const ActivityPage = {
     currentPlatform: '',
     currentCampaignId: '',
 
+    /**
+     * Tenant switch: page number and search are stale, and currentCampaignId is
+     * a row id that does not exist in the new tenant — leaving it filters the
+     * log down to nothing with no visible reason.
+     */
+    resetTenantState() {
+        this.currentPage = 1;
+        this.currentStatus = '';
+        this.currentSearch = '';
+        this.currentPlatform = '';
+        this.currentCampaignId = '';
+    },
+
     async render() {
         const container = document.getElementById('page-container');
         container.innerHTML = UI.loader('Loading activity…');

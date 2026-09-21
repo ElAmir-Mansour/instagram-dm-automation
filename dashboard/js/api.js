@@ -108,7 +108,38 @@ const API = {
     },
 
     // Auth
-    login: (password) => API.request('/auth/login', { method: 'POST', body: JSON.stringify({ password }) }),
+    /**
+     * `email` is optional. An empty email is the shared-password path that has
+     * always existed and is still the operator's only way in, so it must send
+     * exactly the body it used to — no `email: null`, no `email: ''`.
+     */
+    login: (password, email) => API.request('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify(email ? { email, password } : { password }),
+    }),
+
+    /** Who am I, what may I do, and which tenants can I act as. */
+    getMe: () => API.request('/auth/me'),
+
+    /** Returns a NEW session token scoped to `tenantId`. Store it like a login. */
+    switchTenant: (tenantId) => API.request('/auth/switch-tenant', {
+        method: 'POST', body: JSON.stringify({ tenantId }),
+    }),
+
+    // Platform administration
+    // A 403/404 from any of these means "not a platform admin" (or the route is
+    // not deployed yet) — callers hide the UI rather than surfacing an error.
+    getAdminTenants: () => API.request('/admin/tenants'),
+    createAdminTenant: (data) => API.request('/admin/tenants', { method: 'POST', body: JSON.stringify(data) }),
+    updateAdminTenant: (id, data) => API.request(`/admin/tenants/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: JSON.stringify(data),
+    }),
+    getAdminUsers: () => API.request('/admin/users'),
+    createAdminUser: (data) => API.request('/admin/users', { method: 'POST', body: JSON.stringify(data) }),
+    revokeUserSessions: (id) => API.request(`/admin/users/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
+    createUserMembership: (id, data) => API.request(`/admin/users/${encodeURIComponent(id)}/memberships`, {
+        method: 'POST', body: JSON.stringify(data),
+    }),
 
     // Stats
     getStats: () => API.request('/stats'),

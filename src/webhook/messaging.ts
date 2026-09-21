@@ -141,12 +141,13 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
     //    re-sent a DM to a real person, and left duplicate inbound rows poisoning the
     //    15-message history ai.ts reads back.
     const claim = await pool.query(
-        `INSERT INTO messages (conversation_id, direction, message_type, text, payload, raw_payload, meta_message_id)
-         VALUES ($1, 'inbound', $2, $3, $4, $5, $6)
+        `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, payload, raw_payload, meta_message_id)
+         VALUES ($1, $2, 'inbound', $3, $4, $5, $6, $7)
          ON CONFLICT (meta_message_id) WHERE meta_message_id IS NOT NULL DO NOTHING
          RETURNING id`,
         [
             conversationId,
+            creator.id,
             dm.isStoryMention ? 'story_mention' : 'text',
             dm.text || (dm.isStoryMention ? '[Story Mention]' : ''),
             dm.payload || null,
@@ -223,10 +224,11 @@ export async function handleMessagingEvent(event: any, entryId: string): Promise
 
         // Log outbound message
         await pool.query(
-            `INSERT INTO messages (conversation_id, direction, message_type, text, raw_payload)
-             VALUES ($1, 'outbound', $2, $3, $4)`,
+            `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload)
+             VALUES ($1, $2, 'outbound', $3, $4, $5)`,
             [
                 conversationId,
+                creator.id,
                 aiRes.message_type,
                 metaMessagePayload.text || '[Structured Template]',
                 JSON.stringify(metaMessagePayload),

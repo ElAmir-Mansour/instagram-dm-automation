@@ -305,6 +305,34 @@ const UI = {
         return d.toLocaleTimeString(UI.LOCALE, { hour: '2-digit', minute: '2-digit' });
     },
 
+    /**
+     * "3d ago" plus a severity, for the columns where the operator has to see
+     * that something is broken without doing date arithmetic in their head.
+     * Returns { text, level: 'fresh' | 'warn' | 'stale', title }.
+     */
+    relativeAge(value, options) {
+        const { warnMs = 6 * 60 * 60 * 1000, staleMs = 24 * 60 * 60 * 1000, neverText = 'Never' } = options || {};
+        const d = UI._date(value);
+        if (!d) return { text: neverText, level: 'stale', title: 'Nothing recorded yet.' };
+
+        const diff = Date.now() - d.getTime();
+        const abs = Math.abs(diff);
+        const minute = 60000;
+        const hour = 60 * minute;
+        const day = 24 * hour;
+
+        let text;
+        if (abs < minute) text = 'just now';
+        else if (abs < hour) text = `${Math.floor(abs / minute)}m`;
+        else if (abs < day) text = `${Math.floor(abs / hour)}h`;
+        else text = `${Math.floor(abs / day)}d`;
+        if (abs >= minute) text = diff < 0 ? `in ${text}` : `${text} ago`;
+
+        // A future timestamp is a clock problem, not freshness — never green.
+        const level = diff < 0 ? 'warn' : diff >= staleMs ? 'stale' : diff >= warnMs ? 'warn' : 'fresh';
+        return { text, level, title: UI.formatDateTime(d) };
+    },
+
     _date(iso) {
         if (!iso) return null;
         const d = iso instanceof Date ? iso : new Date(iso);
