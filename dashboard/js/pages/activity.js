@@ -27,14 +27,29 @@ const ActivityPage = {
         this.currentCampaignId = '';
     },
 
+    /** 15 rows, which is exactly this page's limit, so the table's height is
+     *  final before a single row of data has arrived. */
+    skeleton() {
+        return html`
+            ${Motion.tableCard(15, [
+                t('table.user'), t('table.keyword'), t('table.postId'),
+                t('table.status'), t('table.error'), t('table.time'),
+            ])}
+            ${Motion.busy()}
+        `;
+    },
+
     async render() {
-        const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
-        await this.loadData(container);
+        await this.loadData(document.getElementById('page-container'));
     },
 
     async loadData(container) {
         if (!container) container = document.getElementById('page-container');
+
+        // A filter change or a page step re-enters here. The skeleton is only
+        // painted if the request outlasts a blink, so paging through a warm
+        // endpoint does not strobe.
+        const gate = Motion.beginLoad(container, () => this.skeleton());
 
         const params = { page: this.currentPage, limit: 15 };
         if (this.currentStatus) params.status = this.currentStatus;
@@ -50,9 +65,11 @@ const ActivityPage = {
                 API.getCampaigns(),
             ]);
         } catch (err) {
+            gate.done();
             UI.renderError(container, { title: t('activity.errorTitle'), message: err.message }, () => this.loadData());
             return;
         }
+        gate.done();
 
         const rows = result.data || [];
 

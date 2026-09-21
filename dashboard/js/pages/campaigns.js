@@ -27,16 +27,31 @@ const CampaignsPage = {
         this.pendingImport = null;
     },
 
+    skeleton() {
+        return html`
+            ${Motion.toolbar()}
+            ${Motion.cardGrid(4, 3)}
+            ${Motion.busy()}
+        `;
+    },
+
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
+
+        // On a navigation the skeleton is already up (App.navigate painted it
+        // inside the view transition). On an in-place refresh — after a create,
+        // an edit, a rolled-back delete — it is only painted if the request
+        // takes longer than a blink, so a fast round trip does not flash.
+        const gate = Motion.beginLoad(container, () => this.skeleton());
 
         try {
             this.campaigns = await API.getCampaigns();
         } catch (err) {
+            gate.done();
             UI.renderError(container, { title: t('error.pageTitle'), message: err.message }, () => this.render());
             return;
         }
+        gate.done();
 
         const campaigns = this.campaigns;
 
@@ -101,9 +116,6 @@ const CampaignsPage = {
                         `)}
                     </div>
                     <div class="row gap-2 shrink-0">
-                        <span class="campaign-state ${isActive ? html.raw('is-on') : html.raw('is-off')}">
-                            ${isActive ? t('common.active') : t('common.paused')}
-                        </span>
                         <label class="switch">
                             <span class="sr-only">${t('campaigns.toggleLabel')}</span>
                             <input type="checkbox" ${isActive ? html.raw('checked') : ''}
@@ -123,8 +135,9 @@ const CampaignsPage = {
                 <div class="template-preview user-content" dir="auto">${c.dm_template}</div>
 
                 ${c.public_reply_template ? html`
-                    <p class="campaign-meta-line" dir="auto">
-                        💬 ${t('campaigns.publicPrefix')}: ${c.public_reply_template}
+                    <p class="campaign-meta-line row gap-2" dir="auto">
+                        <i data-lucide="message-circle" aria-hidden="true"></i>
+                        ${t('campaigns.publicPrefix')}: ${c.public_reply_template}
                     </p>
                 ` : ''}
                 ${c.post_id ? html`
@@ -283,16 +296,40 @@ const CampaignsPage = {
         `;
     },
 
-    /** Live update from the keyword input. */
-    inspectKeywords(input) {
+    /**
+     * Live update from the keyword input — but not on the typing path.
+     *
+     * This is the heaviest per-keystroke handler in the dashboard: for every
+     * comma-separated keyword it runs the webhook's own Arabic normalisation
+     * (a five-regex chain) against a 60-word corpus, normalising each corpus
+     * word too, then rebuilds the inspector's DOM. At one keyword that is ~120
+     * regex passes per character typed, and at four keywords it is ~480 —
+     * enough to show up between a key press and the glyph appearing on a
+     * phone.
+     *
+     * The work is now trailing-debounced at 140ms, which is under the ~200ms
+     * at which a reaction stops feeling immediate and well past the gap
+     * between two keystrokes. The verdict still appears while the operator is
+     * looking at the field, which was the whole point of it.
+     */
+    inspect(value) {
         const host = document.getElementById('match-inspector');
         if (!host) return;
         const replacement = document.createElement('div');
-        replacement.innerHTML = esc(this.renderMatchInspector(input.value));
+        replacement.innerHTML = esc(this.renderMatchInspector(value));
         const next = replacement.firstElementChild;
         if (!next) return;
         host.replaceWith(next);
         UI.icons(next);
+    },
+
+    _inspectDebounced: null,
+
+    inspectKeywords(input) {
+        if (!this._inspectDebounced) {
+            this._inspectDebounced = Motion.debounce((value) => this.inspect(value), 140);
+        }
+        this._inspectDebounced(input.value);
     },
 
     // ─── Modals ──────────────────────────────────────────────────────────────
@@ -403,9 +440,29 @@ const CampaignsPage = {
         `);
     },
 
+    /**
+     * A create cannot be optimistic: the row's id comes from the server and the
+     * server is the only thing that can reject the keyword. What it CAN do is
+     * stop looking dead while it works — the submit button used to sit there
+     * unchanged until the response came back.
+     */
+    _busy(form, running) {
+        const btn = form && form.querySelector('button[type="submit"]');
+        if (!btn) return () => {};
+        const original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = UI.buttonSpinner(running);
+        return () => {
+            btn.disabled = false;
+            btn.innerHTML = original;
+            UI.icons(btn);
+        };
+    },
+
     async handleCreate(form, event) {
         event.preventDefault();
         const data = new FormData(form);
+        const restore = this._busy(form, t('common.saving'));
         try {
             await API.createCampaign({
                 trigger_keyword: data.get('trigger_keyword'),
@@ -416,13 +473,17 @@ const CampaignsPage = {
             UI.closeModal();
             UI.toast(t('campaigns.created'));
             this.render();
-        } catch (err) { UI.toast(err.message, 'error'); }
+        } catch (err) {
+            restore();
+            UI.toast(err.message, 'error');
+        }
     },
 
     async handleEdit(form, event) {
         event.preventDefault();
         const id = form.dataset.id;
         const data = new FormData(form);
+        const restore = this._busy(form, t('common.saving'));
         try {
             await API.updateCampaign(id, {
                 trigger_keyword: data.get('trigger_keyword'),
@@ -434,18 +495,42 @@ const CampaignsPage = {
             UI.closeModal();
             UI.toast(t('campaigns.updated'));
             this.render();
-        } catch (err) { UI.toast(err.message, 'error'); }
+        } catch (err) {
+            restore();
+            UI.toast(err.message, 'error');
+        }
     },
 
-    async toggleActive(id, isChecked) {
-        try {
-            await API.updateCampaign(id, { is_active: isChecked });
-            UI.toast(isChecked ? t('campaigns.activated') : t('campaigns.pausedToast'));
-            this.render();
-        } catch (err) {
-            UI.toast(err.message, 'error');
-            this.render();
-        }
+    /**
+     * Pausing a campaign is one boolean, and the operator has already moved
+     * the switch. Waiting for the server, then re-fetching the whole list, then
+     * rebuilding every card was three round trips of latency to show a state
+     * the screen was already showing.
+     *
+     * Now the card dims immediately and the request goes out behind it. If it
+     * fails, the switch and the card go back to where they were and the error
+     * is named — the screen is allowed to be ahead of the server, never wrong
+     * about it.
+     */
+    toggleActive(id, isChecked) {
+        const campaign = this.campaigns.find((x) => String(x.id) === String(id));
+        const previous = campaign ? campaign.is_active !== false : !isChecked;
+        const card = document.querySelector(`.campaign-card[data-id="${CSS.escape(String(id))}"]`);
+        const input = card && card.querySelector('input[type="checkbox"]');
+
+        const paint = (active) => {
+            if (campaign) campaign.is_active = active;
+            if (card) card.classList.toggle('is-paused', !active);
+            if (input && input.checked !== active) input.checked = active;
+        };
+
+        paint(isChecked);
+
+        return Motion.optimistic({
+            send: () => API.updateCampaign(id, { is_active: isChecked }),
+            revert: () => paint(previous),
+            onError: (err) => UI.toast((err && err.message) || t('common.error'), 'error'),
+        });
     },
 
     confirmDelete(id, keyword) {
@@ -462,13 +547,46 @@ const CampaignsPage = {
         `);
     },
 
-    async handleDelete(id) {
-        try {
-            await API.deleteCampaign(id);
-            UI.closeModal();
-            UI.toast(t('campaigns.deleted'));
-            this.render();
-        } catch (err) { UI.toast(err.message, 'error'); }
+    /**
+     * The confirmation modal already asked. Once the operator has said yes,
+     * the card goes immediately and the DELETE follows it; a failure puts the
+     * card back where it was, at its old index, and says why.
+     */
+    handleDelete(id) {
+        const index = this.campaigns.findIndex((x) => String(x.id) === String(id));
+        if (index === -1) return Promise.resolve();
+        const removed = this.campaigns[index];
+        const card = document.querySelector(`.campaign-card[data-id="${CSS.escape(String(id))}"]`);
+
+        UI.closeModal();
+
+        const countEl = document.querySelector('.page-toolbar-count');
+        const paintCount = () => {
+            if (countEl) countEl.textContent = t('campaigns.count', { count: this.campaigns.length });
+        };
+
+        this.campaigns.splice(index, 1);
+        if (card) card.remove();
+        paintCount();
+
+        return Motion.optimistic({
+            send: () => API.deleteCampaign(id),
+            revert: () => {
+                this.campaigns.splice(index, 0, removed);
+                // The card element is gone; the grid is the honest way back.
+                this.renderGrid();
+                paintCount();
+            },
+            onError: (err) => UI.toast((err && err.message) || t('campaigns.deleteFailed'), 'error'),
+        });
+    },
+
+    /** Re-paint just the card grid from `this.campaigns`, with no fetch. */
+    renderGrid() {
+        const grid = document.querySelector('.card-grid');
+        if (!grid) { this.render(); return; }
+        grid.innerHTML = esc(html`${this.campaigns.map((c) => this.renderCard(c))}`);
+        UI.icons(grid);
     },
 
     // ─── Post picker ─────────────────────────────────────────────────────────

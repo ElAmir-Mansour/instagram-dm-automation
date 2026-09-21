@@ -7,9 +7,30 @@
  * the middle of an Arabic sentence has to keep that URL where it was typed.
  */
 const AiSettingsPage = {
+    /**
+     * This screen has no data of its own to wait for — the form's shape is
+     * fixed and loadSettings() only fills in values — so the shell IS the
+     * skeleton. App.navigate paints it inside the view transition and render()
+     * finds it already there, which is why the page appears in one motion
+     * instead of cross-fading to a placeholder and then snapping to a form.
+     */
+    skeleton() {
+        return this.shell();
+    },
+
     render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = esc(html`
+        if (!container) return;
+        if (!container.querySelector('.ai-grid')) {
+            container.innerHTML = esc(this.shell());
+            UI.icons(container);
+        }
+        Motion.clearSkeleton(container);
+        this.loadSettings();
+    },
+
+    shell() {
+        return html`
             <div class="ai-grid">
                 <section class="surface ai-panel">
                     <div class="panel-head">
@@ -106,10 +127,7 @@ const AiSettingsPage = {
                     </div>
                 </section>
             </div>
-        `);
-
-        UI.icons(container);
-        this.loadSettings();
+        `;
     },
 
     async loadSettings() {

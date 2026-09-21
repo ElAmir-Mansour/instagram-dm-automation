@@ -35,9 +35,21 @@ const TenantsPage = {
             : null;
     },
 
+    skeleton() {
+        return html`
+            ${Motion.toolbar()}
+            ${Motion.tableCard(6, [
+                t('tenants.table.tenant'), t('tenants.table.token'), t('tenants.table.webhook'),
+                t('tenants.table.dms'), t('tenants.table.posts7d'), t('tenants.table.campaigns'),
+                t('tenants.table.scheduled'), t('tenants.table.conversations'), '',
+            ])}
+            ${Motion.busy()}
+        `;
+    },
+
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
+        const gate = Motion.beginLoad(container, () => this.skeleton());
 
         try {
             const result = await API.getAdminTenants();
@@ -48,6 +60,7 @@ const TenantsPage = {
         } catch (err) {
             // 403/404 is "not a platform admin", or the route is not deployed yet.
             // Either way this is not an error the operator can act on by retrying.
+            gate.done();
             if (err.status === 403 || err.status === 404) {
                 App.dropAdminAccess();
                 UI.renderError(container, {
@@ -60,6 +73,7 @@ const TenantsPage = {
             UI.renderError(container, { title: t('tenants.loadFailed'), message: err.message }, () => this.render());
             return;
         }
+        gate.done();
 
         const tenants = this.tenants;
         const currentId = App.session && App.session.tenantId;
@@ -133,7 +147,7 @@ const TenantsPage = {
             ?? (typeof this.dmCeiling === 'number' ? this.dmCeiling : null);
 
         return html`
-            <tr class="${isActive ? '' : html.raw('tenant-row-inactive')}">
+            <tr class="${isActive ? '' : html.raw('tenant-row-inactive')}" data-tenant-id="${id}">
                 <td>
                     <div class="tenant-name-cell">
                         <span class="tenant-name" dir="auto">${name}</span>
@@ -336,41 +350,74 @@ const TenantsPage = {
         `);
     },
 
-    async handleRename(form, event) {
+    /** Repaint one row from the local model — no fetch, no full table rebuild. */
+    patchRow(id) {
+        const row = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
+        const tr = document.querySelector(`tr[data-tenant-id="${CSS.escape(String(id))}"]`);
+        if (!row || !tr) { this.render(); return; }
+        const wrapper = document.createElement('tbody');
+        wrapper.innerHTML = esc(this.renderRow(row, App.session && App.session.tenantId));
+        const next = wrapper.firstElementChild;
+        if (!next) return;
+        tr.replaceWith(next);
+        UI.icons(next);
+    },
+
+    /**
+     * A rename is one string the operator just typed, so the modal closes and
+     * the name changes on the spot. The session refresh (which repopulates the
+     * tenant switcher in the header) happens behind it rather than in front of
+     * it, and a rejection puts the old name back.
+     */
+    handleRename(form, event) {
         event.preventDefault();
         const id = form.dataset.id;
         const name = (new FormData(form).get('name') || '').toString().trim();
-        if (!name) return;
-        try {
-            await API.updateAdminTenant(id, { name });
-            UI.closeModal();
-            UI.toast(t('tenants.renamed'));
-            await App.refreshSession();
-            this.render();
-        } catch (err) {
-            UI.toast(err.message || t('tenants.renameFailed'), 'error');
-        }
+        if (!name) return Promise.resolve();
+
+        const row = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
+        if (!row) return Promise.resolve();
+        const previous = row.name;
+
+        UI.closeModal();
+        row.name = name;
+        this.patchRow(id);
+
+        return Motion.optimistic({
+            send: () => API.updateAdminTenant(id, { name }),
+            revert: () => { row.name = previous; this.patchRow(id); },
+            onError: (err) => UI.toast((err && err.message) || t('tenants.renameFailed'), 'error'),
+        }).then(async (result) => {
+            if (result !== null) await App.refreshSession();
+            return result;
+        });
     },
 
-    async toggleActive(btn) {
+    toggleActive(btn) {
         const id = btn.dataset.id;
         const row = this.tenants.find((x) => String(this.pick(x, 'id', 'tenant_id', 'creator_id')) === String(id));
-        if (!row) return;
+        if (!row) return Promise.resolve();
         const isActive = this.pick(row, 'is_active', 'isActive') !== false;
         const name = this.pick(row, 'name', 'display_name') || t('tenants.untitled');
 
-        if (isActive && !confirm(t('tenants.deactivateConfirm', { name }))) return;
+        if (isActive && !confirm(t('tenants.deactivateConfirm', { name }))) return Promise.resolve();
 
-        btn.disabled = true;
-        try {
-            await API.updateAdminTenant(id, { is_active: !isActive });
-            UI.toast(isActive ? t('tenants.deactivated') : t('tenants.activatedToast'));
-            await App.refreshSession();
-            this.render();
-        } catch (err) {
-            btn.disabled = false;
-            UI.toast(err.message || t('tenants.updateFailed'), 'error');
-        }
+        const paint = (value) => {
+            row.is_active = value;
+            if ('isActive' in row) row.isActive = value;
+            this.patchRow(id);
+        };
+
+        paint(!isActive);
+
+        return Motion.optimistic({
+            send: () => API.updateAdminTenant(id, { is_active: !isActive }),
+            revert: () => paint(isActive),
+            onError: (err) => UI.toast((err && err.message) || t('tenants.updateFailed'), 'error'),
+        }).then(async (result) => {
+            if (result !== null) await App.refreshSession();
+            return result;
+        });
     },
 
     async switchInto(btn) {

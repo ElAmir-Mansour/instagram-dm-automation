@@ -37,11 +37,35 @@ const I18N = {
 
     lang: 'ar',
 
-    /** Read the stored preference once, at boot. */
+    /**
+     * Read the stored preference once, at boot. On a FIRST visit there is no
+     * preference, so take the language from the browser rather than hardcoding
+     * one — an English-speaking operator should not have to find the toggle.
+     * Arabic stays the default when the browser asks for neither.
+     *
+     * index.html runs the same resolution inline, before first paint, so the
+     * document is never RTL for a frame on an English machine. This is the
+     * fallback for the case where that write failed (private mode).
+     */
+    fromNavigator() {
+        try {
+            const prefs = navigator.languages || [navigator.language || ''];
+            for (const tag of prefs) {
+                const code = String(tag || '').toLowerCase().split('-')[0];
+                if (I18N.LANGS[code]) return code;
+            }
+        } catch { /* no navigator language information */ }
+        return null;
+    },
+
     init() {
         let stored = null;
         try { stored = localStorage.getItem(I18N.STORAGE_KEY); } catch { /* private mode */ }
-        I18N.lang = I18N.LANGS[stored] ? stored : I18N.DEFAULT;
+        if (I18N.LANGS[stored]) {
+            I18N.lang = stored;
+        } else {
+            I18N.lang = I18N.fromNavigator() || I18N.DEFAULT;
+        }
         I18N.applyDocument();
         return I18N.lang;
     },
@@ -126,6 +150,11 @@ I18N.strings = {
         'app.tagline': 'أتمتة الردود والرسائل على إنستجرام وفيسبوك',
         'app.skipToContent': 'تخطَّ إلى المحتوى',
         'app.language': 'اللغة',
+        // The header toggle's accessible name. The visible label is the target
+        // language's autonym, which reads as a noun; this is the verb.
+        'app.switchTo': 'التبديل إلى {name}',
+        'lang.name.ar': 'العربية',
+        'lang.name.en': 'الإنجليزية',
         'app.theme': 'المظهر',
         'app.theme.auto': 'حسب النظام',
         'app.theme.dark': 'داكن',
@@ -134,10 +163,6 @@ I18N.strings = {
         'app.menu': 'قائمة التنقل',
         'app.tenant': 'الحساب النشط',
         'app.mainNav': 'التنقل الرئيسي',
-
-        'status.online': 'النظام يعمل',
-        'status.degraded': 'أخطاء في الخادم',
-        'status.offline': 'تعذّر الوصول للخادم',
 
         // ─── Login ──────────────────────────────────────────────────────────
         'login.title': 'أوتوريبلاي برو',
@@ -190,8 +215,6 @@ I18N.strings = {
         'common.loading': 'جارٍ التحميل…',
         'common.none': 'لا شيء',
         'common.never': 'أبداً',
-        'common.active': 'نشطة',
-        'common.paused': 'متوقفة',
         'common.optional': '(اختياري)',
         'common.search': 'بحث',
         'common.back': 'رجوع',
@@ -230,6 +253,7 @@ I18N.strings = {
         'error.unexpected': 'خطأ غير متوقع.',
         'error.render': 'تعذّر عرض هذه الصفحة',
         'error.network': 'لم تستطع اللوحة الوصول إلى ‎/api‎ إطلاقاً.',
+        'error.moduleFailed': 'تعذّر تحميل ملف هذه الشاشة. تحقّق من الاتصال ثم أعد المحاولة.',
 
         'http.network': 'تعذّر الوصول إلى الخادم. تحقّق من الاتصال وحاول مجدداً.',
         'http.sessionExpired': 'انتهت الجلسة. سجّل الدخول من جديد.',
@@ -296,7 +320,6 @@ I18N.strings = {
         'overview.stat.successRate': 'نسبة النجاح',
         'overview.stat.successRateSub': '{sent} ناجحة · {failed} فاشلة',
         'overview.stat.users': 'أشخاص وصلتهم',
-        'overview.stat.usersSub': 'مستخدمون فريدون',
         'overview.stat.campaigns': 'إجمالي الحملات',
         'overview.stat.campaignsSub': '{count} تفاعل إجمالاً',
 
@@ -331,9 +354,7 @@ I18N.strings = {
         'campaigns.deleteWarning': 'سيُحذف معها كامل سجل تفاعلات هذه الحملة.',
         'campaigns.created': 'تم إنشاء الحملة.',
         'campaigns.updated': 'تم تحديث الحملة.',
-        'campaigns.deleted': 'تم حذف الحملة.',
-        'campaigns.activated': 'تم تفعيل الحملة.',
-        'campaigns.pausedToast': 'تم إيقاف الحملة.',
+        'campaigns.deleteFailed': 'تعذّر حذف الحملة، وقد تمت استعادتها.',
         'campaigns.toggleLabel': 'تفعيل الحملة',
         'campaigns.keywords': 'الكلمات المفتاحية',
         'campaigns.keywordsHint': 'افصل بين الكلمات بفاصلة. أي كلمة تطابق تُشغِّل الحملة.',
@@ -438,7 +459,7 @@ I18N.strings = {
         'posts.publishedOk': 'تم نشر المنشور بنجاح.',
         'posts.scheduledOk': 'تمت جدولة المنشور.',
         'posts.updatedOk': 'تم تحديث المنشور المجدول.',
-        'posts.deletedOk': 'تم حذف المنشور المجدول.',
+        'posts.deleteFailed': 'تعذّر حذف المنشور، وقد تمت استعادته.',
         'posts.deleteConfirm': 'هل تريد حذف هذا المنشور المجدول؟',
         'posts.deleteLog': 'حذف السجل',
         'posts.publishFailedTitle': 'فشل النشر',
@@ -472,11 +493,9 @@ I18N.strings = {
         'inbox.sendLabel': 'إرسال الردّ',
         'inbox.messages': 'رسائل المحادثة',
         'inbox.loadingMessages': 'جارٍ تحميل الرسائل…',
-        'inbox.loadingThreads': 'جارٍ تحميل المحادثات…',
         'inbox.sent': 'تم الإرسال. أُوقف الردّ الآلي في هذه المحادثة.',
         'inbox.sendFailed': 'تعذّر إرسال الرسالة.',
-        'inbox.botOn': 'تم تشغيل الردّ الآلي في هذه المحادثة.',
-        'inbox.botOff': 'تم إيقاف الردّ الآلي. الوضع اليدوي مفعّل.',
+        'inbox.sending': 'جارٍ الإرسال…',
         'inbox.botFailed': 'تعذّر تغيير حالة الردّ الآلي.',
         'inbox.threadsErrorTitle': 'تعذّر تحميل المحادثات',
         'inbox.messagesErrorTitle': 'تعذّر تحميل هذه المحادثة',
@@ -637,8 +656,6 @@ I18N.strings = {
         'tenants.deactivate': 'إيقاف {name}',
         'tenants.activate': 'تفعيل {name}',
         'tenants.deactivateConfirm': 'إيقاف «{name}»؟ ستتوقف معالجة ويبهوكاته ونشر منشوراته المجدولة.',
-        'tenants.deactivated': 'تم إيقاف الحساب.',
-        'tenants.activatedToast': 'تم تفعيل الحساب.',
         'tenants.createTitle': 'حساب جديد',
         'tenants.firstRunTitle': 'أنشئ أول حساب',
         'tenants.name': 'اسم الحساب',
@@ -654,7 +671,6 @@ I18N.strings = {
         'tenants.created': 'تم إنشاء الحساب.',
         'tenants.createFailed': 'تعذّر إنشاء الحساب.',
         'tenants.renameTitle': 'إعادة تسمية الحساب',
-        'tenants.renamed': 'تم تغيير الاسم.',
         'tenants.renameFailed': 'تعذّر تغيير الاسم.',
         'tenants.updateFailed': 'تعذّر تحديث الحساب.',
         'tenants.unavailableTitle': 'إدارة الحسابات غير متاحة',
@@ -726,6 +742,9 @@ I18N.strings = {
         'app.tagline': 'Instagram & Facebook reply automation',
         'app.skipToContent': 'Skip to main content',
         'app.language': 'Language',
+        'app.switchTo': 'Switch to {name}',
+        'lang.name.ar': 'Arabic',
+        'lang.name.en': 'English',
         'app.theme': 'Theme',
         'app.theme.auto': 'System',
         'app.theme.dark': 'Dark',
@@ -734,10 +753,6 @@ I18N.strings = {
         'app.menu': 'Navigation menu',
         'app.tenant': 'Active tenant',
         'app.mainNav': 'Main navigation',
-
-        'status.online': 'System online',
-        'status.degraded': 'Server errors',
-        'status.offline': 'Cannot reach server',
 
         'login.title': 'AutoReply Pro',
         'login.subtitle': 'Messaging automation dashboard',
@@ -787,8 +802,6 @@ I18N.strings = {
         'common.loading': 'Loading…',
         'common.none': 'None',
         'common.never': 'Never',
-        'common.active': 'Active',
-        'common.paused': 'Paused',
         'common.optional': '(optional)',
         'common.search': 'Search',
         'common.back': 'Back',
@@ -826,6 +839,7 @@ I18N.strings = {
         'error.unexpected': 'Unexpected error.',
         'error.render': 'This page failed to render',
         'error.network': 'The dashboard could not reach /api at all.',
+        'error.moduleFailed': 'This screen’s code could not be downloaded. Check the connection and retry.',
 
         'http.network': 'Could not reach the server. Check your connection and try again.',
         'http.sessionExpired': 'Session expired. Please sign in again.',
@@ -876,7 +890,6 @@ I18N.strings = {
         'overview.stat.successRate': 'Success rate',
         'overview.stat.successRateSub': '{sent} sent · {failed} failed',
         'overview.stat.users': 'People reached',
-        'overview.stat.usersSub': 'Unique users',
         'overview.stat.campaigns': 'Total campaigns',
         'overview.stat.campaignsSub': '{count} interactions in total',
 
@@ -906,9 +919,7 @@ I18N.strings = {
         'campaigns.deleteWarning': 'Its entire interaction history goes with it.',
         'campaigns.created': 'Campaign created.',
         'campaigns.updated': 'Campaign updated.',
-        'campaigns.deleted': 'Campaign deleted.',
-        'campaigns.activated': 'Campaign activated.',
-        'campaigns.pausedToast': 'Campaign paused.',
+        'campaigns.deleteFailed': 'The campaign could not be deleted and has been restored.',
         'campaigns.toggleLabel': 'Campaign active',
         'campaigns.keywords': 'Trigger keywords',
         'campaigns.keywordsHint': 'Separate keywords with commas. Any one of them fires the campaign.',
@@ -1008,7 +1019,7 @@ I18N.strings = {
         'posts.publishedOk': 'Post published successfully.',
         'posts.scheduledOk': 'Post scheduled.',
         'posts.updatedOk': 'Scheduled post updated.',
-        'posts.deletedOk': 'Scheduled post deleted.',
+        'posts.deleteFailed': 'The post could not be deleted and has been restored.',
         'posts.deleteConfirm': 'Delete this scheduled post?',
         'posts.deleteLog': 'Delete log',
         'posts.publishFailedTitle': 'Publishing failed',
@@ -1041,11 +1052,9 @@ I18N.strings = {
         'inbox.sendLabel': 'Send reply',
         'inbox.messages': 'Conversation messages',
         'inbox.loadingMessages': 'Loading messages…',
-        'inbox.loadingThreads': 'Loading conversations…',
         'inbox.sent': 'Message sent. AI auto-replies paused for this thread.',
         'inbox.sendFailed': 'Failed to send the message.',
-        'inbox.botOn': 'AI enabled for this conversation.',
-        'inbox.botOff': 'AI paused. Manual mode is active.',
+        'inbox.sending': 'Sending…',
         'inbox.botFailed': 'Failed to change the AI state.',
         'inbox.threadsErrorTitle': 'Could not load conversations',
         'inbox.messagesErrorTitle': 'Could not load this conversation',
@@ -1192,8 +1201,6 @@ I18N.strings = {
         'tenants.deactivate': 'Deactivate {name}',
         'tenants.activate': 'Activate {name}',
         'tenants.deactivateConfirm': 'Deactivate “{name}”? Its webhooks stop being processed and its scheduled posts stop publishing.',
-        'tenants.deactivated': 'Tenant deactivated.',
-        'tenants.activatedToast': 'Tenant activated.',
         'tenants.createTitle': 'New tenant',
         'tenants.firstRunTitle': 'Create your first tenant',
         'tenants.name': 'Tenant name',
@@ -1209,7 +1216,6 @@ I18N.strings = {
         'tenants.created': 'Tenant created.',
         'tenants.createFailed': 'Could not create the tenant.',
         'tenants.renameTitle': 'Rename tenant',
-        'tenants.renamed': 'Tenant renamed.',
         'tenants.renameFailed': 'Could not rename the tenant.',
         'tenants.updateFailed': 'Could not update the tenant.',
         'tenants.unavailableTitle': 'Tenant administration is not available',

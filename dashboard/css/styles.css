@@ -8,7 +8,7 @@
 
    1.  LOGICAL PROPERTIES ONLY. `margin-inline-start`, `inset-inline-end`,
        `padding-block`, `border-inline-start`, `text-align: start`. There are
-       exactly four physical exceptions in this file, each marked, where a
+       exactly three physical exceptions in this file, each marked, where a
        transform has to know which way the page runs.
    2.  NO LETTER-SPACING ON TEXT. Arabic is a joining script; letter-spacing
        breaks the ligatures apart. The old table headers had `letter-spacing:
@@ -225,8 +225,48 @@ bdi { unicode-bidi: isolate; }
     padding: var(--space-3) var(--space-2);
     display: flex; flex-direction: column; gap: 2px;
     overflow-y: auto;
+    /* Containing block for the indicator below. */
+    position: relative;
 }
+
+/* ─── The active marker ──────────────────────────────────────────────────────
+   One element that MOVES to the current item, instead of a border that blinks
+   on and off eight different items. Positioned by App.moveNavIndicator() with
+   a `translateY` and a height — no horizontal component, so the same code is
+   correct in Arabic and in English; the inline edges come from logical
+   properties here. `view-transition-name` lets the browser morph it between
+   its old and new geometry during a page transition, which is smoother than
+   any JS interpolation and is what `.is-transitioning` stands down for.
+   `--motion-base` is 1ms under prefers-reduced-motion, so the marker teleports
+   rather than slides for operators who asked for that. */
+.nav-indicator {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline: var(--space-2);
+    block-size: var(--tap-target);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    border-inline-start: 2px solid var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 0;
+    view-transition-name: nav-active;
+    transition: transform var(--motion-base) var(--ease-standard),
+                block-size var(--motion-base) var(--ease-standard),
+                opacity var(--motion-fast) var(--ease-standard);
+}
+.nav-indicator.is-visible { opacity: 1; }
+/* First placement, and re-measurements after a resize or a font load: there is
+   no previous position to travel from, so do not travel. */
+.nav-indicator.no-transition { transition: none; }
+/* The browser is morphing the snapshot; animating the live element too would
+   be the same move played twice. */
+.is-transitioning .nav-indicator { transition: none; }
+
 .nav-item {
+    /* Above the marker, which is painted behind the row. */
+    position: relative;
+    z-index: 1;
     display: flex; align-items: center; gap: var(--space-3);
     padding: var(--space-3);
     min-height: var(--tap-target);
@@ -240,13 +280,12 @@ bdi { unicode-bidi: isolate; }
 }
 .nav-item svg { width: 19px; height: 19px; flex-shrink: 0; }
 .nav-item:hover { color: var(--text-strong); background: var(--surface-glass-hover); }
-.nav-item.active {
-    color: var(--text-strong);
-    background: var(--accent-soft);
-    box-shadow: inset 2px 0 0 0 var(--accent);
-}
-/* Physical exception 1/4: the active marker sits on the reading edge. */
-html[dir='rtl'] .nav-item.active { box-shadow: inset -2px 0 0 0 var(--accent); }
+/* The background and the accent bar now belong to .nav-indicator, which moves.
+   This rule only says what the current item's TEXT does — and the old physical
+   exception for the bar's reading edge is gone with it, because `inset-inline`
+   on the indicator needs no direction-specific override. */
+.nav-item.active { color: var(--text-strong); }
+.nav-item.active:hover { background: transparent; }
 
 .sidebar-footer { padding: var(--space-2); border-block-start: 1px solid var(--border-subtle); }
 .nav-logout { width: 100%; }
@@ -292,24 +331,31 @@ html[dir='rtl'] .nav-item.active { box-shadow: inset -2px 0 0 0 var(--accent); }
 .icon-button svg { width: 20px; height: 20px; }
 .menu-button { display: none; }
 
-.status-badge {
-    display: inline-flex; align-items: center; gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-pill);
+/* The "System online" badge that used to live here is gone, along with its
+   pulsing dot. It was a pill that was green whenever the page had rendered,
+   which is exactly when the operator already knew the app was up — and the
+   Overview briefing is where a real problem belongs. Health is silent when
+   fine and loud when broken. */
+
+/* ─── Language toggle ────────────────────────────────────────────────────────
+   A rarely-touched preference next to the primary navigation, so it is a plain
+   text button rather than a pill with a glyph. The label is the target
+   language's autonym and carries its own `lang`, so العربية is shaped by Cairo
+   and "English" set in Inter regardless of the interface language. */
+.lang-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: var(--tap-target);
+    padding-inline: var(--space-3);
+    border-radius: var(--radius-sm);
     font-size: var(--fs-100);
     font-weight: var(--fw-semibold);
+    color: var(--text-muted);
     white-space: nowrap;
+    transition: color var(--motion-fast) var(--ease-standard),
+                background var(--motion-fast) var(--ease-standard);
 }
-.status-online { background: var(--success-soft); color: var(--success-text); }
-.status-degraded { background: var(--warning-soft); color: var(--warning-text); }
-.status-offline { background: var(--danger-soft); color: var(--danger-text); }
-.status-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: currentColor;
-    animation: statusPulse 2s var(--ease-standard) infinite;
-}
-@keyframes statusPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-@media (prefers-reduced-motion: reduce) { .status-dot { animation: none; } }
+.lang-toggle:lang(en) { font-family: var(--font-latin); }
+.lang-toggle:hover { color: var(--text-strong); background: var(--surface-glass-hover); }
 
 /* Compact popover-ish selects in the header */
 .chip-select {
@@ -341,9 +387,183 @@ html[dir='rtl'] .nav-item.active { box-shadow: inset -2px 0 0 0 var(--accent); }
     padding: var(--space-5) var(--space-6);
     flex: 1;
     animation: pageIn var(--motion-slow) var(--ease-standard);
+    /* Navigation replaces this container's contents. Naming it gives it its
+       own snapshot pair, so the browser cross-fades the outgoing page into the
+       incoming page's skeleton instead of showing an empty box between them.
+       Everything else — the page title, the nav labels — stays in the root
+       snapshot and cross-fades with it. */
+    view-transition-name: page;
 }
 @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .page-container { animation: none; } }
+
+/* ─── View transitions ───────────────────────────────────────────────────────
+   Same-document view transitions have been Baseline since October 2025
+   (Chrome 111, Safari 18, Firefox 144). Motion.transition() feature-detects
+   `document.startViewTransition` and runs the DOM update directly where it is
+   absent, so the fallback is simply the behaviour this dashboard had before.
+
+   The page transition is a cross-fade plus a small VERTICAL rise. Nothing
+   slides horizontally: a slide that reads as "forward" in Arabic reads as
+   "back" in English, and this app ships both from the same stylesheet.
+   Vertical is the only direction that means the same thing in both. */
+::view-transition-old(page),
+::view-transition-new(page) {
+    animation-duration: var(--motion-base);
+    animation-timing-function: var(--ease-standard);
+}
+::view-transition-new(page) { animation-name: pageVtIn; }
+::view-transition-old(page) { animation-name: pageVtOut; }
+@keyframes pageVtIn { from { opacity: 0; transform: translateY(8px); } }
+@keyframes pageVtOut { to { opacity: 0; transform: translateY(-4px); } }
+
+::view-transition-group(nav-active) {
+    animation-duration: var(--motion-base);
+    animation-timing-function: var(--ease-standard);
+}
+
+/* Belt and braces: tokens.css already collapses --motion-* to 1ms under
+   reduced motion, and Motion.transition() skips startViewTransition entirely,
+   but a transition started before the setting changed must not keep playing. */
+@media (prefers-reduced-motion: reduce) {
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) { animation: none !important; }
+}
+
+/* ─── Skeletons ──────────────────────────────────────────────────────────────
+   Shapes, not spinners, and shapes that match the real layout row-for-row so
+   the content that lands does not move anything. A spinner tells the operator
+   only that time is passing, which is the one thing they can already see; a
+   skeleton tells them what is coming and roughly how much of it.
+
+   They are never painted for a request that beats ~150ms — see
+   Motion.beginLoad(). A skeleton that appears and vanishes inside a blink
+   reads as a glitch, not as speed. */
+.skel {
+    display: block;
+    background: var(--surface-glass-hover);
+    border-radius: var(--radius-xs);
+    position: relative;
+    overflow: hidden;
+}
+.skel::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, var(--surface-glass), transparent);
+    transform: translateX(-100%);
+    animation: skelSweep 1.4s var(--ease-standard) infinite;
+}
+@keyframes skelSweep { to { transform: translateX(100%); } }
+/* The sweep is the only thing here that moves. Without it the shapes still
+   read as "not yet content", so reduced motion loses nothing. */
+@media (prefers-reduced-motion: reduce) { .skel::after { animation: none; } }
+
+/* The line is an INLINE-BLOCK, 0.7em tall, with no margin. That is what makes
+   a skeleton row exactly as tall as the real row it stands in for: it drops
+   into the text flow and the line box keeps the height the element's own
+   line-height gives it, instead of the skeleton inventing a box of its own.
+   Skeletons built from the real component classes (.stat-card, .data-table,
+   .chart-card) therefore occupy the real component's box, and the content that
+   lands does not move anything. */
+.skel-line {
+    display: inline-block;
+    vertical-align: middle;
+    block-size: 0.7em;
+    margin: 0;
+}
+.skel-block { display: block; block-size: 100%; inline-size: 100%; }
+.skel-btn { display: inline-block; block-size: var(--tap-target); inline-size: 120px; border-radius: var(--radius-sm); }
+.skel-w-xs { inline-size: 20%; }
+.skel-w-sm { inline-size: 35%; }
+.skel-w-md { inline-size: 55%; }
+.skel-w-lg { inline-size: 75%; }
+.skel-w-full { inline-size: 100%; }
+/* For skeletons that stand in for a whole page rather than a fixed region,
+   where there is no real box to match. */
+.skel-stack { display: flex; flex-direction: column; gap: var(--space-3); }
+.skel-card { padding: var(--space-5); }
+.skel-card-tall { min-block-size: 220px; }
+.skel-thread { pointer-events: none; }
+
+/* ─── Press feedback ─────────────────────────────────────────────────────────
+   Every interactive surface acknowledges the press in the same frame as the
+   press, before any network work starts. `--motion-fast` is 1ms under reduced
+   motion, so the acknowledgement survives as a state change without the
+   travel. `touch-action: manipulation` removes the ~300ms double-tap wait that
+   mobile browsers otherwise insert before a click, which is the single largest
+   source of input latency on a phone and costs nothing to remove. */
+.btn, .icon-button, .icon-btn, .nav-item, .thread-item, .post-picker-item,
+.page-btn, .alert-link, .modal-close, .lang-toggle, .login-alt-link, .switch {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+}
+.btn:active:not(:disabled),
+.icon-button:active,
+.icon-btn:active:not(:disabled),
+.post-picker-item:active,
+.page-btn:active:not(:disabled),
+.modal-close:active,
+.lang-toggle:active {
+    transform: scale(0.97);
+    transition-duration: var(--motion-fast);
+}
+/* A full-width row shrinking by 3% looks like a wobble; darken it instead. */
+.nav-item:active, .thread-item:active { background: var(--surface-glass-hover); }
+.alert-link:active { opacity: 0.7; }
+
+/* ─── Icon box reservation ───────────────────────────────────────────────────
+   Lucide is deferred now, so `i[data-lucide]` exists for a moment before it is
+   replaced by the `svg` it becomes. An empty `<i>` is zero-sized, so without
+   this every icon in the shell would push its neighbours sideways the instant
+   the library landed. Each of these mirrors the `svg` rule beside it, so the
+   placeholder occupies exactly the box the icon will.
+
+   The `:where()` rule is the shared default for any icon whose context sizes
+   neither — zero specificity, so every existing `.x svg { width }` rule and
+   every explicit pair below still wins, but a placeholder and the svg that
+   replaces it always agree on 16px when nothing else has an opinion. */
+:where(svg.lucide, i[data-lucide]) { inline-size: 16px; block-size: 16px; }
+i[data-lucide] { display: inline-block; flex-shrink: 0; }
+.logo-mark i[data-lucide],
+.nav-item i[data-lucide] { inline-size: 19px; block-size: 19px; }
+.icon-button i[data-lucide] { inline-size: 20px; block-size: 20px; }
+.chip-select i[data-lucide] { inline-size: 15px; block-size: 15px; }
+.btn i[data-lucide] { inline-size: 16px; block-size: 16px; }
+.icon-btn i[data-lucide] { inline-size: 16px; block-size: 16px; }
+.badge i[data-lucide] { inline-size: 12px; block-size: 12px; }
+.health-pill i[data-lucide] { inline-size: 13px; block-size: 13px; }
+.chip i[data-lucide] { inline-size: 11px; block-size: 11px; }
+.empty-state > i[data-lucide] { inline-size: 44px; block-size: 44px; }
+.error-panel-icon i[data-lucide] { inline-size: 24px; block-size: 24px; }
+.inline-error i[data-lucide] { inline-size: 18px; block-size: 18px; }
+.modal-close i[data-lucide] { inline-size: 20px; block-size: 20px; }
+.toast i[data-lucide] { inline-size: 18px; block-size: 18px; }
+.login-mark i[data-lucide] { inline-size: 30px; block-size: 30px; }
+.stat-icon i[data-lucide] { inline-size: 18px; block-size: 18px; }
+.alert-card .alert-icon i[data-lucide] { inline-size: 17px; block-size: 17px; }
+.alert-link i[data-lucide] { inline-size: 13px; block-size: 13px; }
+.match-inspector h4 i[data-lucide] { inline-size: 14px; block-size: 14px; }
+.post-picker-thumb i[data-lucide] { inline-size: 16px; block-size: 16px; }
+.post-card-meta i[data-lucide] { inline-size: 13px; block-size: 13px; }
+.campaign-meta-line svg,
+.campaign-meta-line i[data-lucide] { inline-size: 13px; block-size: 13px; flex-shrink: 0; }
+.publish-error-head i[data-lucide] { inline-size: 18px; block-size: 18px; }
+.cover-step-head i[data-lucide] { inline-size: 17px; block-size: 17px; }
+.cover-tile-frame i[data-lucide] { inline-size: 20px; block-size: 20px; }
+.schedule-truth i[data-lucide] { inline-size: 16px; block-size: 16px; }
+.chat-empty i[data-lucide] { inline-size: 46px; block-size: 46px; }
+.panel-head i[data-lucide] { inline-size: 20px; block-size: 20px; }
+.setup-icon i[data-lucide] { inline-size: 26px; block-size: 26px; }
+/* This one is not just a size: the real icon is taken out of flow and overlaid
+   on the field, so the placeholder has to be too, or it pushes the input. */
+.input-affix i[data-lucide] {
+    position: absolute;
+    inset-inline-start: var(--space-3);
+    inline-size: 18px; block-size: 18px;
+    pointer-events: none;
+}
 
 .page-toolbar {
     display: flex; align-items: center; justify-content: space-between;
@@ -484,7 +704,7 @@ input[type='checkbox'] { accent-color: var(--accent); width: 18px; height: 18px;
     border-radius: 50%;
     transition: transform var(--motion-base) var(--ease-standard), background var(--motion-base) var(--ease-standard);
 }
-/* Physical exception 2/4: the knob travels toward the inline end. */
+/* Physical exception 1/3: the knob travels toward the inline end. */
 .switch input:checked + .switch-track { background: var(--accent); border-color: var(--accent); }
 .switch input:checked + .switch-track::before { transform: translateX(20px); background: #fff; }
 html[dir='rtl'] .switch input:checked + .switch-track::before { transform: translateX(-20px); }
@@ -743,14 +963,18 @@ html[dir='rtl'] .switch input:checked + .switch-track::before { transform: trans
     box-shadow: var(--elev-3);
     color: var(--text-strong);
     animation: toastIn var(--motion-slow) var(--ease-standard);
-    transition: opacity var(--motion-slow) var(--ease-exit);
+    transition: opacity var(--motion-slow) var(--ease-exit),
+                transform var(--motion-slow) var(--ease-exit);
 }
+/* The exit lives here with the entrance, instead of an inline opacity written
+   from JS, so both collapse to 1ms together under reduced motion. */
+.toast.is-leaving { opacity: 0; transform: scale(0.96); }
 .toast svg { width: 18px; height: 18px; flex-shrink: 0; }
 .toast.success { border-color: color-mix(in srgb, var(--success) 40%, transparent); }
 .toast.success svg { color: var(--success-text); }
 .toast.error { border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 .toast.error svg { color: var(--danger-text); }
-/* Physical exception 3/4: toasts slide in from the inline end. */
+/* Physical exception 2/3: toasts slide in from the inline end. */
 @keyframes toastIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: none; } }
 html[dir='rtl'] .toast { animation-name: toastInRtl; }
 @keyframes toastInRtl { from { opacity: 0; transform: translateX(-30px); } to { opacity: 1; transform: none; } }
@@ -771,13 +995,11 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     width: min(600px, 120vw); height: min(600px, 120vw);
     background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
     pointer-events: none;
-    animation: pulseGlow 4s ease-in-out infinite alternate;
 }
-@keyframes pulseGlow {
-    from { opacity: 0.5; transform: translate(-50%, -50%) scale(0.9); }
-    to { opacity: 1; transform: translate(-50%, -50%) scale(1.1); }
-}
-@media (prefers-reduced-motion: reduce) { .login-glow { animation: none; } }
+/* The glow used to breathe on a 4s loop. It marked no state and explained no
+   change — it was motion for its own sake on the one screen where the operator
+   is trying to type a password. The gradient stays as part of the identity;
+   the animation is gone, which also retires its reduced-motion escape hatch. */
 .login-container { position: relative; z-index: 1; width: 100%; max-width: 420px; }
 .login-card { padding: var(--space-6); text-align: center; background: var(--surface-raised); }
 .login-logo { margin-block-end: var(--space-6); }
@@ -829,11 +1051,18 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     margin-block-end: var(--space-3);
 }
 .stat-label { font-size: var(--fs-200); color: var(--text-default); font-weight: var(--fw-medium); }
+/* Neutral by default. The semantic variants below still exist for the places
+   where the colour IS the message (a missing-scopes warning in Settings), but
+   the stat tiles no longer use them: `.stat-icon.warning` on "People reached"
+   painted a counter in the colour this design system uses for "something needs
+   your attention" everywhere else, which made the token mean nothing. */
 .stat-icon {
     width: 36px; height: 36px;
     border-radius: var(--radius-xs);
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
+    background: var(--surface-glass-hover);
+    color: var(--text-muted);
 }
 .stat-icon svg { width: 18px; height: 18px; }
 .stat-icon.accent { background: var(--accent-soft); color: var(--accent-text); }
@@ -896,7 +1125,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 }
 .alert-link:hover { text-decoration: underline; }
 .alert-link svg { width: 13px; height: 13px; }
-/* Physical exception 4/4: the "go there" chevron points along the reading
+/* Physical exception 3/3: the "go there" chevron points along the reading
    direction, so it flips with the document. */
 html[dir='rtl'] .alert-link svg { transform: scaleX(-1); }
 
@@ -934,9 +1163,10 @@ html[dir='rtl'] .alert-link svg { transform: scaleX(-1); }
 .campaign-card.is-paused { opacity: 0.68; }
 .campaign-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
 .keyword-list { display: flex; flex-wrap: wrap; gap: var(--space-2); min-width: 0; }
-.campaign-state { font-size: var(--fs-100); white-space: nowrap; }
-.campaign-state.is-on { color: var(--success-text); }
-.campaign-state.is-off { color: var(--text-muted); }
+/* `.campaign-state` — the "Active"/"Paused" caption that sat immediately next
+   to the toggle controlling it — is gone. The switch already shows the state
+   and announces it natively, and `.campaign-card.is-paused` dims the whole
+   card; a third copy of one bit of information is not information. */
 .template-preview {
     font-size: var(--fs-200);
     color: var(--text-default);
@@ -1146,6 +1376,16 @@ html[dir='rtl'] .alert-link svg { transform: scaleX(-1); }
     border-radius: var(--radius-sm);
     border: 1px solid transparent;
     transition: background var(--motion-fast) var(--ease-standard);
+    /* A busy account has hundreds of these in a scroller. `auto` skips style,
+       layout and paint for the rows that are off-screen, and the `auto`
+       keyword on contain-intrinsic-size makes the browser remember each row's
+       real height once it has been rendered once, so the scrollbar settles
+       instead of jumping. Rows stay focusable and findable — this is not
+       `hidden`. Deliberately NOT applied to .chat-messages, whose append logic
+       reads scrollHeight/scrollTop to decide whether to stick to the bottom;
+       estimated heights would make that decision wrong. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 84px;
 }
 .thread-item:hover { background: var(--surface-glass-hover); }
 .thread-item.active { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
@@ -1219,6 +1459,11 @@ html[dir='rtl'] .chat-back svg { transform: scaleX(-1); }
     border-start-end-radius: var(--radius-xs);
 }
 .message-time { font-size: var(--fs-100); opacity: 0.7; align-self: flex-end; font-variant-numeric: tabular-nums; }
+/* A reply that has left the composer but not yet the server. Dimmed, because
+   the one thing it must not do is look like a message that was delivered.
+   It is removed on both outcomes: replaced by the canonical row on success,
+   and taken away with the draft restored on failure. */
+.message-bubble.is-pending { opacity: 0.55; }
 
 .chat-composer {
     padding: var(--space-3) var(--space-4);
@@ -1461,6 +1706,14 @@ html[dir='rtl'] .page-btn svg { transform: scaleX(-1); }
     background: var(--surface-glass);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
+    /* A Udemy CSV of thirty courses builds thirty of these, each with a text
+       input, a tall textarea and another input — the single heaviest DOM this
+       dashboard ever constructs, inside a 56vh scroller. Skipping the
+       off-screen ones is the difference between the modal opening and the
+       modal arriving. The fields stay focusable, and executeBulkImport() reads
+       them by id, which content-visibility does not affect. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 420px;
 }
 .bulk-row.is-mapped { border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 .bulk-row-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); }
@@ -1547,17 +1800,12 @@ html[dir='rtl'] .page-btn svg { transform: scaleX(-1); }
     .user-tenants { max-width: none; }
 }
 
-/* Below ~560px the header cannot hold the menu button, the title, the tenant
-   switcher and a spelled-out status label. The badge keeps its dot and its
-   aria-label; the title gets the room. */
+/* Below ~560px the header has to give the page title room. With the status
+   badge gone there is far more of it, so the language toggle — two words, and
+   duplicated in Settings — can now stay; only the tenant name gets shortened. */
 @media (max-width: 560px) {
-    .status-badge [data-status-label] { display: none; }
-    .status-badge { padding: var(--space-2); }
     .chip-select select { max-width: 110px; }
-    /* Three chips plus a menu button leave the page title with ~40px. The
-       language switch also lives in Settings, so it is the one that goes;
-       which tenant you are in is not recoverable from anywhere else. */
-    .header-end > .chip-select:not(#tenant-switcher) { display: none; }
+    .lang-toggle { padding-inline: var(--space-2); }
     .stats-grid { grid-template-columns: 1fr 1fr; }
     .stat-card { padding: var(--space-4); }
     .stat-value { font-size: var(--fs-500); }

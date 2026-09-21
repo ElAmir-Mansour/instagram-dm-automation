@@ -16,14 +16,29 @@ const AnalyticsPage = {
         this.charts = [];
     },
 
+    skeleton() {
+        return html`
+            ${Motion.statsGrid(4)}
+            ${Motion.chartGrid(2)}
+            ${Motion.tableCard(6, [
+                t('table.keyword'), t('analytics.matches'), t('common.sent'), t('common.failed'),
+            ])}
+            ${Motion.busy()}
+        `;
+    },
+
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
+        const gate = Motion.beginLoad(container, () => this.skeleton());
         this.destroy();
 
         let stats;
         let daily;
         let campaignStats;
+        // Chart.js is fetched alongside the data rather than after it: this
+        // screen is nothing but charts, so the library is on its critical path
+        // and there is no reason for it to queue behind three requests.
+        const chartLib = Charts.ensure();
         try {
             [stats, daily, campaignStats] = await Promise.all([
                 API.getStats(),
@@ -31,9 +46,12 @@ const AnalyticsPage = {
                 API.getCampaignStats(),
             ]);
         } catch (err) {
+            gate.done();
             UI.renderError(container, { title: t('analytics.errorTitle'), message: err.message }, () => this.render());
             return;
         }
+        gate.done();
+        await chartLib;
 
         const total = stats.totalInteractions || 0;
         const igCount = stats.instagramCount || 0;
@@ -46,28 +64,28 @@ const AnalyticsPage = {
                 <div class="stat-card surface">
                     <div class="stat-header">
                         <span class="stat-label">${t('analytics.total')}</span>
-                        <span class="stat-icon accent"><i data-lucide="activity" aria-hidden="true"></i></span>
+                        <span class="stat-icon"><i data-lucide="activity" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value">${UI.formatNumber(total)}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
                         <span class="stat-label">${t('analytics.successRate')}</span>
-                        <span class="stat-icon success"><i data-lucide="trending-up" aria-hidden="true"></i></span>
+                        <span class="stat-icon"><i data-lucide="trending-up" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value">${UI.formatPercent(stats.successRate)}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
                         <span class="stat-label">${t('analytics.users')}</span>
-                        <span class="stat-icon warning"><i data-lucide="users" aria-hidden="true"></i></span>
+                        <span class="stat-icon"><i data-lucide="users" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value">${UI.formatNumber(stats.uniqueUsersReached)}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
                         <span class="stat-label">${t('analytics.today')}</span>
-                        <span class="stat-icon accent"><i data-lucide="calendar" aria-hidden="true"></i></span>
+                        <span class="stat-icon"><i data-lucide="calendar" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value">${UI.formatNumber(stats.todayActivity)}</p>
                 </div>
