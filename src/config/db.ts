@@ -9,3 +9,13 @@ export const pool = new Pool({
     idleTimeoutMillis: 30000,       // Close idle clients after 30s
     max: 10                         // Limit max connections
 });
+
+/**
+ * `pg` emits 'error' on the Pool when an *idle* client fails — a routine event with Supabase
+ * (connection limits, restarts, idle reaping). EventEmitter throws unhandled 'error' events,
+ * so without this listener a dropped idle connection took down the whole warm instance,
+ * failing any in-flight webhook with an opaque 500.
+ */
+pool.on('error', (err) => {
+    console.error('[db] idle client error (pool recovers; connection discarded):', err.message);
+});

@@ -20,6 +20,12 @@ const DIGEST_BYTES = 32;
  * @see https://developers.facebook.com/docs/graph-api/webhooks/getting-started#verification-requests
  */
 export function verifyMetaSignature(req: Request, rawBody: Buffer): boolean {
+    // body-parser's `verify` hook only fires for the content types it handles, so a request
+    // that is not JSON never captures a raw body. Feeding that undefined to hmac.update()
+    // throws a TypeError, which surfaces to Meta as a 500 and earns a delivery retry storm
+    // instead of the flat 403 a bogus request deserves.
+    if (!Buffer.isBuffer(rawBody)) return false;
+
     const header = req.headers['x-hub-signature-256'];
     if (typeof header !== 'string' || !header.startsWith(SIG_PREFIX)) return false;
 

@@ -25,7 +25,10 @@
 
     --text-primary: #f1f5f9;
     --text-secondary: #94a3b8;
-    --text-muted: #475569;
+    /* Was #475569 — 2.64:1 on --bg-primary, which fails AA and even AA-large,
+       while carrying form hints, empty states, table headers and timestamps.
+       #7d8a9c is 5.70:1 on --bg-primary and 5.11:1 on --bg-tertiary. */
+    --text-muted: #7d8a9c;
     --gradient-hero: linear-gradient(135deg, #6366f1, #8b5cf6, #a855f7);
     --gradient-card: linear-gradient(135deg, rgba(99,102,241,0.08), rgba(139,92,246,0.04));
 
@@ -42,7 +45,10 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: 16px; -webkit-font-smoothing: antialiased; }
 body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    /* Cairo carries the Arabic — every DM template, caption, inbound DM and the
+       AI system prompt is Arabic, and Inter has no Arabic glyphs at all, so all
+       of it used to fall back to an arbitrary per-OS font. */
+    font-family: 'Inter', 'Cairo', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg-primary);
     color: var(--text-primary);
     min-height: 100vh;
@@ -52,6 +58,57 @@ a { color: inherit; text-decoration: none; }
 button { cursor: pointer; border: none; background: none; font-family: inherit; color: inherit; }
 input, textarea, select { font-family: inherit; font-size: inherit; }
 .hidden { display: none !important; }
+
+/* ─── Focus visibility ───────────────────────────────────────────────────────
+   Buttons, .nav-item, .page-btn, .thread-item and .modal-close had no focus
+   indicator at all, and `outline: none` is set on inputs in six places — this
+   restores a keyboard-only affordance across the whole dashboard. */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+}
+.form-input:focus-visible,
+.form-textarea:focus-visible,
+.filter-input:focus-visible,
+.filter-select:focus-visible,
+.sidebar-search input:focus-visible,
+.sandbox-input-row input:focus-visible,
+.chat-input-area textarea:focus-visible,
+.settings-advanced-row select:focus-visible,
+.input-group input:focus-visible {
+    outline-offset: 0;
+    border-radius: var(--radius-md);
+}
+.toggle-switch input:focus-visible + .toggle-slider {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* ─── Screen-reader-only text ────────────────────────────────────────────── */
+.sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.skip-link {
+    position: absolute;
+    top: -100px; left: 12px;
+    z-index: 300;
+    padding: 10px 18px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px; font-weight: 600;
+    transition: top var(--transition);
+}
+.skip-link:focus-visible { top: 12px; }
+
 
 /* ─── Glass Card ─────────────────────────────────────────────────────────── */
 .glass-card {
@@ -1178,3 +1235,377 @@ input, textarea, select { font-family: inherit; font-size: inherit; }
     color: var(--accent-hover);
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Hardening pass — Arabic text, error panels, a11y, mobile
+   (kept at the end of the file so these win over the base rules above)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Arabic content ─────────────────────────────────────────────────────────
+   `dir="auto"` on each user-content node gives per-string direction without an
+   RTL rewrite of the shell. `unicode-bidi: plaintext` does the same per LINE
+   inside multi-line templates — that is what keeps the "🔗 {url}" line of a DM
+   template from being flipped to the wrong end of the block. */
+.arabic-text,
+.campaign-template,
+.message-bubble,
+.message-bubble p,
+.sandbox-bubble,
+.thread-preview {
+    line-height: 1.8;
+}
+.campaign-template,
+.message-bubble,
+.sandbox-bubble {
+    unicode-bidi: plaintext;
+}
+
+/* ─── Status badge states ────────────────────────────────────────────────── */
+.status-degraded { background: var(--warning-bg); color: var(--warning); }
+.status-offline  { background: var(--danger-bg);  color: var(--danger); }
+
+/* ─── Error panels (every failed fetch gets one, with a Retry button) ────── */
+.error-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 10px;
+    padding: 40px 24px;
+}
+.error-panel-icon {
+    width: 48px; height: 48px;
+    border-radius: 14px;
+    background: var(--danger-bg);
+    color: var(--danger);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 4px;
+}
+.error-panel-icon svg { width: 24px; height: 24px; }
+.error-panel h3 { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+.error-panel-message { font-size: 13px; color: var(--text-secondary); max-width: 460px; line-height: 1.6; }
+.error-panel-hint { font-size: 12px; color: var(--text-muted); }
+.error-panel .btn { margin-top: 8px; }
+
+.inline-error {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    border-radius: var(--radius-md);
+    background: var(--danger-bg);
+    border: 1px solid rgba(239,68,68,0.25);
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.6;
+}
+.inline-error svg { width: 18px; height: 18px; color: var(--danger); flex-shrink: 0; margin-top: 2px; }
+.inline-error strong { font-weight: 600; display: block; }
+.inline-error-hint { display: block; margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+
+.publish-error-panel {
+    padding: 18px 20px;
+    margin-bottom: 20px;
+    border-color: rgba(239,68,68,0.3);
+    background: var(--danger-bg);
+}
+.publish-error-panel:hover { transform: none; }
+.publish-error-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.publish-error-head svg { width: 18px; height: 18px; color: var(--danger); }
+.publish-error-head h3 { font-size: 15px; font-weight: 700; flex: 1; }
+.publish-error-message { font-size: 13px; color: var(--text-primary); line-height: 1.6; word-break: break-word; }
+.publish-error-hint { font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+
+/* ─── Shared page chrome ─────────────────────────────────────────────────── */
+.page-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 24px; gap: 16px; flex-wrap: wrap;
+}
+.page-toolbar-count { font-size: 13px; color: var(--text-secondary); }
+
+.posts-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 24px; flex-wrap: wrap; gap: 16px;
+}
+.tab-switch {
+    display: flex; gap: 4px;
+    background: var(--bg-secondary);
+    padding: 4px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-glass);
+}
+.tab-switch-btn { box-shadow: none; border: none; border-radius: var(--radius-sm); }
+
+.table-empty-cell { text-align: center; padding: 34px 14px; color: var(--text-muted); }
+.cell-post-id { font-size: 11px; color: var(--text-muted); max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+.cell-error {
+    max-width: 200px; font-size: 11px; color: var(--danger);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.platform-badge {
+    font-size: 10px; color: #fff;
+    padding: 2px 6px; border-radius: 4px; margin-left: 6px;
+    display: inline-block;
+}
+.platform-badge.fb { background: #1877F2; }
+.platform-badge.ig { background: #E1306C; }
+.platform-bar {
+    height: 10px; border-radius: 5px;
+    background: rgba(255,255,255,0.05);
+    display: flex; overflow: hidden; margin-bottom: 24px;
+}
+
+/* ─── Campaign cards ─────────────────────────────────────────────────────── */
+.campaign-card-head {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 12px; gap: 10px;
+}
+.campaign-keyword-list { display: flex; flex-wrap: wrap; gap: 6px; max-width: 70%; }
+.campaign-keyword-chip {
+    margin: 0; padding: 2px 8px; font-size: 11px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    display: inline-flex; align-items: center; gap: 4px;
+    color: var(--text-secondary);
+}
+.campaign-state { font-size: 11px; white-space: nowrap; }
+.campaign-public-reply { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+.campaign-post-id {
+    font-size: 11px; color: var(--accent); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 4px; word-break: break-all;
+}
+
+/* ─── Post picker ────────────────────────────────────────────────────────── */
+.post-picker {
+    margin-top: 8px; max-height: 220px; overflow-y: auto;
+    padding: 8px; border-color: var(--border-glass-hover);
+}
+.post-picker:hover { transform: none; }
+.post-picker-item {
+    display: flex; gap: 8px; width: 100%;
+    padding: 8px; border-radius: 6px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    transition: background var(--transition);
+}
+.post-picker-item:hover { background: var(--bg-glass-hover); }
+.post-picker-item img,
+.post-picker-placeholder {
+    width: 40px; height: 40px; border-radius: 4px; object-fit: cover; flex-shrink: 0;
+}
+.post-picker-placeholder {
+    background: var(--bg-tertiary);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-secondary);
+}
+.post-picker-placeholder svg { width: 16px; height: 16px; }
+.post-picker-body { overflow: hidden; display: flex; flex-direction: column; }
+.post-picker-id { font-size: 11px; color: var(--accent); font-weight: 600; }
+.post-picker-caption {
+    font-size: 11px; color: var(--text-secondary);
+    text-overflow: ellipsis; overflow: hidden; white-space: nowrap;
+}
+.post-picker-empty, .post-picker-error { font-size: 12px; text-align: center; padding: 12px; }
+.post-picker-empty { color: var(--text-muted); }
+.post-picker-error { color: var(--danger); }
+
+/* ─── Scheduled / live post cards ────────────────────────────────────────── */
+.post-card-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 12px; gap: 8px;
+}
+.post-card-badges { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.post-card-date { font-size: 11px; color: var(--text-muted); }
+.post-media-frame {
+    width: 100%; height: 160px; overflow: hidden;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    margin-bottom: 12px;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-glass);
+}
+.post-media-frame img, .post-media-frame video { width: 100%; height: 100%; object-fit: cover; }
+.post-cover-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--text-muted); margin-bottom: 12px;
+}
+.post-cover-row img { width: 28px; height: 28px; border-radius: 4px; object-fit: cover; }
+.post-card-meta {
+    font-size: 12px; color: var(--text-secondary); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 6px;
+}
+.post-card-error {
+    background: var(--danger-bg);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 11px; color: var(--danger);
+    margin-bottom: 16px; word-break: break-word; line-height: 1.6;
+}
+.post-card-published-id {
+    font-size: 11px; color: var(--text-muted);
+    margin-bottom: 16px; word-break: break-all;
+}
+
+/* ─── Media upload widgets ───────────────────────────────────────────────── */
+.upload-progress {
+    display: none;
+    align-items: center; gap: 8px; margin-top: 8px;
+    font-size: 12px; color: var(--text-secondary);
+}
+.media-preview {
+    margin-top: 12px; border-radius: 8px; overflow: hidden;
+    width: 100%; height: 160px;
+    border: 1px solid var(--border-glass);
+    background: var(--bg-secondary);
+    align-items: center; justify-content: center;
+}
+.media-preview img, .media-preview video { width: 100%; height: 100%; object-fit: cover; }
+.label-optional { font-weight: 400; color: var(--text-muted); }
+.form-toggle-inline { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+
+/* ─── Bulk import modal ──────────────────────────────────────────────────── */
+.bulk-import-scroll { max-height: 55vh; overflow-y: auto; padding: 16px 2px; }
+.bulk-import-intro { color: var(--text-secondary); font-size: 13px; margin-bottom: 16px; padding: 0 4px; }
+.bulk-import-row {
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    background: rgba(255,255,255,0.015);
+}
+.bulk-import-row:hover { transform: none; }
+.bulk-import-row-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.bulk-import-row-head input[type="checkbox"] {
+    width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; margin-top: 2px;
+}
+.bulk-import-name {
+    font-size: 14px; font-weight: 600; color: var(--text-primary);
+    display: block; cursor: pointer;
+}
+.bulk-import-coupon { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.bulk-import-coupon strong { color: var(--success); }
+.bulk-import-tag {
+    font-size: 11px; padding: 2px 8px; border-radius: 12px;
+    background: rgba(255,255,255,0.05); color: var(--text-secondary);
+    border: 1px solid rgba(255,255,255,0.1);
+    display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+}
+.bulk-import-tag.matched {
+    background: rgba(99,102,241,0.1); color: var(--accent);
+    border-color: rgba(99,102,241,0.2);
+}
+.bulk-import-label { font-size: 11px; margin-bottom: 4px; display: block; }
+.bulk-import-input { height: 36px; font-size: 12px; padding: 6px 10px; }
+.bulk-import-textarea {
+    font-size: 12px; padding: 8px 10px;
+    height: 88px; min-height: 88px; resize: vertical;
+}
+.import-progress { text-align: center; padding: 32px 16px; }
+.import-progress p { color: var(--text-secondary); font-size: 13px; margin-top: 8px; }
+
+/* ─── Settings page ──────────────────────────────────────────────────────── */
+.warning-card {
+    border-left: 4px solid var(--warning);
+    margin-bottom: 24px;
+    background: rgba(245,158,11,0.03);
+}
+.warning-card:hover { transform: none; }
+.warning-card .stat-icon.warning {
+    background: var(--warning-bg); color: var(--warning);
+    width: 40px; height: 40px; border-radius: 10px;
+}
+.warning-card-title { font-size: 14px; font-weight: 700; color: var(--warning); margin-bottom: 6px; }
+.warning-card-list {
+    font-size: 12px; color: var(--text-muted);
+    padding-left: 20px; line-height: 1.7; margin: 0;
+}
+.warning-card-list strong { color: var(--text-secondary); }
+.scope-chip {
+    padding: 4px 10px; border-radius: 6px;
+    background: var(--bg-secondary);
+    font-size: 11px; color: var(--text-secondary);
+}
+
+/* ─── Inbox extras ───────────────────────────────────────────────────────── */
+.empty-threads { padding: 32px 16px; text-align: center; font-size: 13px; color: var(--text-muted); }
+/* .thread-item is a real <button> now: focusable and keyboard-operable. */
+.thread-item {
+    width: 100%;
+    text-align: left;
+    display: block;
+    font-family: inherit;
+    color: inherit;
+}
+.chat-back-btn {
+    display: none;
+    padding: 8px; margin-right: 4px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+}
+.chat-back-btn:hover { background: var(--bg-glass-hover); color: var(--text-primary); }
+.chat-back-btn svg { width: 20px; height: 20px; }
+.chat-header-info { flex: 1; min-width: 0; }
+.chat-header-info h3 { overflow: hidden; text-overflow: ellipsis; }
+
+/* ─── Tap targets (touch only — the desktop design is unchanged) ─────────── */
+@media (pointer: coarse) {
+    .btn-sm { min-height: 44px; padding-top: 10px; padding-bottom: 10px; }
+    .page-btn { min-height: 44px; padding: 10px 18px; }
+    .modal-close { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+    .chat-back-btn { min-width: 44px; min-height: 44px; }
+    .mobile-menu-btn { min-width: 44px; min-height: 44px; }
+    /* Keep the switch visually 44x24 but give it a 44x44 hit area. */
+    .toggle-slider::after {
+        content: '';
+        position: absolute;
+        top: -10px; bottom: -10px; left: 0; right: 0;
+    }
+}
+
+/* ─── Mobile layout ──────────────────────────────────────────────────────── */
+/* Both grids used `calc(100vh - …)`, which ignores mobile browser chrome. */
+.inbox-layout { height: calc(100dvh - var(--header-height) - 56px); }
+.settings-grid { height: calc(100dvh - var(--header-height) - 56px); }
+
+@media (max-width: 900px) {
+    /* Inbox: 320px + 1fr left the chat pane ~39px wide at 375px, which made
+       "check my DMs on my phone" impossible. One pane at a time instead. */
+    .inbox-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+    }
+    .inbox-layout > .inbox-sidebar,
+    .inbox-layout > .chat-pane {
+        grid-column: 1;
+        grid-row: 1;
+        min-width: 0;
+    }
+    .inbox-layout[data-pane="threads"] > .chat-pane { display: none; }
+    .inbox-layout[data-pane="chat"] > .inbox-sidebar { display: none; }
+    .chat-back-btn { display: inline-flex; align-items: center; justify-content: center; }
+    .message-bubble { max-width: 85%; }
+
+    /* AI Settings: same 1.2fr/1fr squeeze. Stack and let the page scroll. */
+    .settings-grid {
+        grid-template-columns: 1fr;
+        height: auto;
+    }
+    .settings-main-panel { overflow-y: visible; }
+    .settings-sandbox-panel { min-height: 480px; }
+    .settings-advanced-row { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+    .modal-overlay { padding: 12px; align-items: flex-start; }
+    /* 32px of modal padding inside a 24px overlay left ~263px usable at 375px. */
+    .modal-content { padding: 20px 16px; max-height: calc(100dvh - 24px); overflow-y: auto; }
+    .modal-actions { flex-wrap: wrap; }
+    .modal-actions .btn { flex: 1; min-width: 120px; justify-content: center; }
+    .posts-toolbar, .page-toolbar { flex-direction: column; align-items: stretch; }
+    .tab-switch { width: 100%; }
+    .tab-switch-btn { flex: 1; }
+    .campaign-keyword-list { max-width: 100%; }
+    .campaign-actions { flex-wrap: wrap; }
+    .bulk-import-scroll { max-height: 50dvh; }
+    .chat-messages { padding: 16px; }
+    .chat-input-area { padding: 12px 16px; }
+    .chat-header { padding: 12px 16px; }
+}
