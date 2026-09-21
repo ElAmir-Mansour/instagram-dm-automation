@@ -21,6 +21,19 @@ const CampaignsPage = {
     campaigns: [],
     pendingImport: null,
 
+    /**
+     * Guards the write against landing after the operator has navigated away.
+     * `App.navigate` calls `render()` fire-and-forget and `#page-container` is
+     * refilled rather than replaced, so a late GET /campaigns painted this
+     * page's card grid into whatever screen the operator had moved to. Same
+     * `_seq`/`live()` shape as OverviewPage.
+     */
+    _seq: 0,
+
+    destroy() {
+        this._seq++;
+    },
+
     /** Tenant switch: cached campaigns and any half-finished CSV import. */
     resetTenantState() {
         this.campaigns = [];
@@ -37,6 +50,11 @@ const CampaignsPage = {
 
     async render() {
         const container = document.getElementById('page-container');
+        if (!container) return;
+
+        const focus = UI.captureFocus(container);
+        const seq = ++this._seq;
+        const live = () => seq === this._seq && !!document.getElementById('page-container');
 
         // On a navigation the skeleton is already up (App.navigate painted it
         // inside the view transition). On an in-place refresh — after a create,
@@ -44,25 +62,34 @@ const CampaignsPage = {
         // takes longer than a blink, so a fast round trip does not flash.
         const gate = Motion.beginLoad(container, () => this.skeleton());
 
+        let campaigns;
         try {
-            this.campaigns = await API.getCampaigns();
+            campaigns = await API.getCampaigns();
         } catch (err) {
+            if (!live()) return;
             gate.done();
             UI.renderError(container, { title: t('error.pageTitle'), message: err.message }, () => this.render());
             return;
         }
+        if (!live()) return;
         gate.done();
 
-        const campaigns = this.campaigns;
+        this.campaigns = campaigns;
 
         container.innerHTML = esc(html`
             <div class="page-toolbar">
-                <p class="page-toolbar-count">${t('campaigns.count', { count: campaigns.length })}</p>
+                <!-- The count was a <p>, so this screen had no heading below
+                     the page <h1> and no way to reach the grid by heading. -->
+                <h2 class="page-toolbar-count">${t('campaigns.count', { count: campaigns.length })}</h2>
                 <div class="toolbar-actions">
-                    <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:triggerCSVSelect">
+                    <button type="button" class="btn btn-secondary btn-sm" id="campaigns-import"
+                            data-action="campaigns:triggerCSVSelect">
                         <i data-lucide="upload" aria-hidden="true"></i> ${t('campaigns.import')}
                     </button>
-                    <button type="button" class="btn btn-primary btn-sm" data-action="campaigns:showCreateModal">
+                    <!-- Stable id: the modal trigger has to be findable again
+                         after the re-render that follows a successful create. -->
+                    <button type="button" class="btn btn-primary btn-sm" id="campaigns-new"
+                            data-action="campaigns:showCreateModal">
                         <i data-lucide="plus" aria-hidden="true"></i> ${t('campaigns.new')}
                     </button>
                 </div>
@@ -79,7 +106,8 @@ const CampaignsPage = {
                         <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:triggerCSVSelect">
                             <i data-lucide="upload" aria-hidden="true"></i> ${t('campaigns.import')}
                         </button>
-                        <button type="button" class="btn btn-primary btn-sm" data-action="campaigns:showCreateModal">
+                        <button type="button" class="btn btn-primary btn-sm" id="campaigns-new-empty"
+                                data-action="campaigns:showCreateModal">
                             <i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}
                         </button>
                     </div>
@@ -90,6 +118,9 @@ const CampaignsPage = {
         `);
 
         UI.icons(container);
+        UI.revealClipped(container);
+        UI.restoreFocus(focus);
+        Motion.announce(t('campaigns.count', { count: campaigns.length }));
     },
 
     /**
@@ -105,9 +136,16 @@ const CampaignsPage = {
         const risky = keywords.filter((k) => this.keywordRisk(k).risky);
 
         return html`
-            <article class="campaign-card surface ${isActive ? '' : html.raw('is-paused')}" data-id="${c.id}">
+            <!-- An <article> with no accessible name is announced as "article"
+                 and nothing else, so eight campaigns were eight identical
+                 landmarks. Named by its own keyword list, which is how the
+                 operator identifies a campaign — and by reference, so the name
+                 keeps the list's dir="auto" instead of being flattened into an
+                 aria-label string. -->
+            <article class="campaign-card surface ${isActive ? '' : html.raw('is-paused')}"
+                     data-id="${c.id}" aria-labelledby="campaign-keywords-${c.id}">
                 <div class="campaign-card-head">
-                    <div class="keyword-list">
+                    <div class="keyword-list" id="campaign-keywords-${c.id}">
                         ${keywords.map((k) => html`
                             <span class="chip ${this.keywordRisk(k).risky ? html.raw('chip-danger') : ''}" dir="auto">
                                 <i data-lucide="${this.keywordRisk(k).risky ? 'alert-triangle' : 'hash'}" aria-hidden="true"></i>
@@ -117,9 +155,15 @@ const CampaignsPage = {
                     </div>
                     <div class="row gap-2 shrink-0">
                         <label class="switch">
-                            <span class="sr-only">${t('campaigns.toggleLabel')}</span>
+                            <!-- Every one of these used to be named "Campaign
+                                 active" and nothing else, so tabbing eight
+                                 switches gave eight identical announcements
+                                 with no way to tell which campaign you were
+                                 about to pause. -->
+                            <span class="sr-only">${t('campaigns.toggleLabel')}: <span dir="auto">${keywords.join(', ')}</span></span>
                             <input type="checkbox" ${isActive ? html.raw('checked') : ''}
-                                   data-change="campaigns:toggleActive" data-id="${c.id}">
+                                   data-change="campaigns:toggleActive" data-id="${c.id}"
+                                   data-focus-key="campaign-toggle-${c.id}">
                             <span class="switch-track"></span>
                         </label>
                     </div>
@@ -132,12 +176,21 @@ const CampaignsPage = {
                     </p>
                 ` : ''}
 
-                <div class="template-preview user-content" dir="auto">${c.dm_template}</div>
+                <!-- The DM template is clipped at 7.5em. previewBlock() adds the
+                     disclosure that lets the operator read the rest of the
+                     message they are about to send — revealed only when the
+                     text is genuinely cut off. lang="ar": the template is
+                     always Arabic, so under the English UI a screen reader was
+                     reading it with an English voice. -->
+                ${UI.previewBlock(c.dm_template, { label: t('campaigns.dmTemplate'), arabic: true })}
 
                 ${c.public_reply_template ? html`
-                    <p class="campaign-meta-line row gap-2" dir="auto">
+                    <p class="campaign-meta-line row gap-2">
                         <i data-lucide="message-circle" aria-hidden="true"></i>
-                        ${t('campaigns.publicPrefix')}: ${c.public_reply_template}
+                        <!-- The label is UI copy in whichever language the
+                             interface is in; only the reply itself is the
+                             creator's Arabic, so only it carries lang. -->
+                        ${t('campaigns.publicPrefix')}: <span dir="auto" lang="ar">${c.public_reply_template}</span>
                     </p>
                 ` : ''}
                 ${c.post_id ? html`
@@ -154,11 +207,17 @@ const CampaignsPage = {
                 </div>
 
                 <div class="card-actions">
-                    <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:showEditModal" data-id="${c.id}">
+                    <!-- data-focus-key, not id: these buttons are destroyed and
+                         rebuilt by every render, and the key is what lets
+                         closeModal() find this card's Edit button again after a
+                         save has re-rendered the grid. -->
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:showEditModal"
+                            data-id="${c.id}" data-focus-key="campaign-edit-${c.id}">
                         <i data-lucide="pencil" aria-hidden="true"></i> ${t('common.edit')}
                     </button>
                     <button type="button" class="btn btn-danger btn-sm"
-                            data-action="campaigns:confirmDelete" data-id="${c.id}" data-keyword="${c.trigger_keyword}">
+                            data-action="campaigns:confirmDelete" data-id="${c.id}" data-keyword="${c.trigger_keyword}"
+                            data-focus-key="campaign-delete-${c.id}">
                         <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
                     </button>
                 </div>
@@ -251,11 +310,15 @@ const CampaignsPage = {
     },
 
     /**
-     * The inspector under the keyword field. Re-rendered on every keystroke,
-     * so the warning appears at the moment of the decision rather than after
-     * the campaign has been live for a week.
+     * What this keyword will also fire on. Computed on every keystroke, so the
+     * warning appears at the moment of the decision rather than after the
+     * campaign has been live for a week.
+     *
+     * Returns { state, hasProblem, verdict } rather than the whole inspector,
+     * because the container and the static explanation must NOT be rebuilt —
+     * see renderMatchInspector() and inspect() below.
      */
-    renderMatchInspector(value) {
+    matchVerdict(value) {
         const keywords = this.splitKeywords(value);
         const seen = new Set();
         const duplicates = [];
@@ -269,22 +332,18 @@ const CampaignsPage = {
         });
 
         const hasProblem = risks.length > 0 || duplicates.length > 0;
-        const state = keywords.length === 0 ? '' : (hasProblem ? 'is-risky' : 'is-safe');
 
-        return html`
-            <div class="match-inspector ${html.raw(state)}" id="match-inspector" aria-live="polite">
-                <h4>
-                    <i data-lucide="${hasProblem ? 'alert-triangle' : 'search-check'}" aria-hidden="true"></i>
-                    ${t('campaigns.match.title')}
-                </h4>
-                <p>${t('campaigns.match.explain')}</p>
+        return {
+            hasProblem,
+            state: keywords.length === 0 ? '' : (hasProblem ? 'is-risky' : 'is-safe'),
+            verdict: html`
                 ${!hasProblem && keywords.length > 0 ? html`<p class="text-success">${t('campaigns.match.safe')}</p>` : ''}
                 ${hasProblem ? html`
                     <ul class="match-risk-list">
                         ${risks.map((r) => html`
                             <li dir="auto">
                                 ${r.reason === 'examples'
-                                    ? html`${t('campaigns.match.riskRow', { keyword: r.keyword, examples: '' })}<span class="match-example">${r.examples.join('، ')}</span>`
+                                    ? html`${t('campaigns.match.riskRow', { keyword: r.keyword, examples: '' })}<span class="match-example" lang="ar">${r.examples.join('، ')}</span>`
                                     : t('campaigns.match.riskGeneric', { keyword: r.keyword, length: UI.formatNumber(UI.normalizeArabic(r.keyword).length) })}
                             </li>
                         `)}
@@ -292,6 +351,35 @@ const CampaignsPage = {
                     </ul>
                     <p class="mbs-4">${t('campaigns.match.advice')}</p>
                 ` : ''}
+            `,
+        };
+    },
+
+    /**
+     * The inspector under the keyword field.
+     *
+     * The live region is the INNER div and it is permanent. The old version
+     * put aria-live on the outer container and then replaced that container
+     * on every keystroke — and a live region that is destroyed and recreated
+     * announces nothing at all, because there is no region in the
+     * accessibility tree for the change to be a change TO. So the single most
+     * expensive warning this product can give — that "تم" also fires inside
+     * اهتمام, تمام and يتم — was never once spoken.
+     *
+     * The static explanation sits OUTSIDE the region too, so what gets
+     * announced is the verdict and not the paragraph about how matching works,
+     * repeated on every keystroke.
+     */
+    renderMatchInspector(value) {
+        const { state, hasProblem, verdict } = this.matchVerdict(value);
+        return html`
+            <div class="match-inspector ${html.raw(state)}" id="match-inspector">
+                <h4 id="match-inspector-heading">
+                    <i data-lucide="${hasProblem ? 'alert-triangle' : 'search-check'}" aria-hidden="true"></i>
+                    ${t('campaigns.match.title')}
+                </h4>
+                <p>${t('campaigns.match.explain')}</p>
+                <div id="match-inspector-verdict" aria-live="polite">${verdict}</div>
             </div>
         `;
     },
@@ -314,13 +402,26 @@ const CampaignsPage = {
      */
     inspect(value) {
         const host = document.getElementById('match-inspector');
-        if (!host) return;
-        const replacement = document.createElement('div');
-        replacement.innerHTML = esc(this.renderMatchInspector(value));
-        const next = replacement.firstElementChild;
-        if (!next) return;
-        host.replaceWith(next);
-        UI.icons(next);
+        const verdictHost = document.getElementById('match-inspector-verdict');
+        if (!host || !verdictHost) return;
+
+        const { state, hasProblem, verdict } = this.matchVerdict(value);
+
+        // Only the CONTENTS of the permanent live region are written. The
+        // region itself, the heading and the explanation stay put — replacing
+        // them is what silenced the warning.
+        host.className = `match-inspector${state ? ` ${state}` : ''}`;
+        verdictHost.innerHTML = esc(verdict);
+
+        // The icon is outside the region, so swapping it announces nothing.
+        const icon = host.querySelector('#match-inspector-heading i, #match-inspector-heading svg');
+        if (icon) {
+            const next = document.createElement('i');
+            next.setAttribute('data-lucide', hasProblem ? 'alert-triangle' : 'search-check');
+            next.setAttribute('aria-hidden', 'true');
+            icon.replaceWith(next);
+        }
+        UI.icons(host);
     },
 
     _inspectDebounced: null,
@@ -350,8 +451,9 @@ const CampaignsPage = {
                 <label class="form-label" for="campaign-trigger">${t('campaigns.keywords')}</label>
                 <input class="field" id="campaign-trigger" name="trigger_keyword" dir="auto"
                        value="${value || ''}" placeholder="${t('campaigns.keywordsPlaceholder')}"
-                       data-input="campaigns:inspectKeywords" required>
-                <p class="form-hint">${t('campaigns.keywordsHint')}</p>
+                       aria-describedby="campaign-trigger-hint"
+                       data-input="campaigns:inspectKeywords" data-guard-dirty required>
+                <p class="form-hint" id="campaign-trigger-hint">${t('campaigns.keywordsHint')}</p>
                 ${this.renderMatchInspector(value || '')}
             </div>
         `;
@@ -383,16 +485,21 @@ const CampaignsPage = {
                 ${this.keywordField('')}
                 <div class="form-group">
                     <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
-                    <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto"
-                              placeholder="${t('campaigns.dmPlaceholder')}" required></textarea>
+                    <!-- data-guard-dirty: closing this modal by Escape, by the
+                         overlay or by Cancel now asks before throwing a
+                         half-written template away. lang="ar" because the
+                         template is always Arabic. -->
+                    <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto" lang="ar"
+                              placeholder="${t('campaigns.dmPlaceholder')}" data-guard-dirty required></textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="campaign-public">
                         ${t('campaigns.publicReply')} <span class="label-optional">${t('common.optional')}</span>
                     </label>
-                    <input class="field" id="campaign-public" name="public_reply_template" dir="auto"
-                           placeholder="${t('campaigns.publicReplyPlaceholder')}">
-                    <p class="form-hint">${t('campaigns.publicReplyHint')}</p>
+                    <input class="field" id="campaign-public" name="public_reply_template" dir="auto" lang="ar"
+                           aria-describedby="campaign-public-hint"
+                           placeholder="${t('campaigns.publicReplyPlaceholder')}" data-guard-dirty>
+                    <p class="form-hint" id="campaign-public-hint">${t('campaigns.publicReplyHint')}</p>
                 </div>
                 ${this.postIdField('')}
                 <div class="modal-actions">
@@ -413,15 +520,17 @@ const CampaignsPage = {
                 ${this.keywordField(c.trigger_keyword)}
                 <div class="form-group">
                     <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
-                    <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto" required>${c.dm_template}</textarea>
+                    <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto" lang="ar"
+                              data-guard-dirty required>${c.dm_template}</textarea>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="campaign-public">
                         ${t('campaigns.publicReply')} <span class="label-optional">${t('common.optional')}</span>
                     </label>
-                    <input class="field" id="campaign-public" name="public_reply_template" dir="auto"
+                    <input class="field" id="campaign-public" name="public_reply_template" dir="auto" lang="ar"
+                           aria-describedby="campaign-public-hint" data-guard-dirty
                            value="${c.public_reply_template || ''}" placeholder="${t('campaigns.publicReplyPlaceholder')}">
-                    <p class="form-hint">${t('campaigns.publicReplyHint')}</p>
+                    <p class="form-hint" id="campaign-public-hint">${t('campaigns.publicReplyHint')}</p>
                 </div>
                 ${this.postIdField(c.post_id || '')}
                 <div class="form-group switch-row">
@@ -446,23 +555,16 @@ const CampaignsPage = {
      * stop looking dead while it works — the submit button used to sit there
      * unchanged until the response came back.
      */
+    /** Now one implementation, shared with posts.js and settings.js. */
     _busy(form, running) {
-        const btn = form && form.querySelector('button[type="submit"]');
-        if (!btn) return () => {};
-        const original = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = UI.buttonSpinner(running);
-        return () => {
-            btn.disabled = false;
-            btn.innerHTML = original;
-            UI.icons(btn);
-        };
+        return UI.formBusy(form, running);
     },
 
     async handleCreate(form, event) {
         event.preventDefault();
         const data = new FormData(form);
         const restore = this._busy(form, t('common.saving'));
+        if (!restore) return; // already in flight
         try {
             await API.createCampaign({
                 trigger_keyword: data.get('trigger_keyword'),
@@ -470,9 +572,14 @@ const CampaignsPage = {
                 public_reply_template: data.get('public_reply_template') || null,
                 post_id: data.get('post_id') || null,
             });
-            UI.closeModal();
             UI.toast(t('campaigns.created'));
-            this.render();
+            // render() FIRST, closeModal() after. The other order restored
+            // focus to the "New campaign" button and then destroyed it in the
+            // re-render, which left focus on a button inside a display:none
+            // overlay — i.e. on <body>. closeModal() re-finds the trigger by
+            // key in the freshly rendered toolbar.
+            await this.render();
+            UI.closeModal();
         } catch (err) {
             restore();
             UI.toast(err.message, 'error');
@@ -484,6 +591,7 @@ const CampaignsPage = {
         const id = form.dataset.id;
         const data = new FormData(form);
         const restore = this._busy(form, t('common.saving'));
+        if (!restore) return; // already in flight
         try {
             await API.updateCampaign(id, {
                 trigger_keyword: data.get('trigger_keyword'),
@@ -492,9 +600,10 @@ const CampaignsPage = {
                 post_id: data.get('post_id') || null,
                 is_active: data.get('is_active') === 'on',
             });
-            UI.closeModal();
             UI.toast(t('campaigns.updated'));
-            this.render();
+            // Render, then close — focus lands back on this card's Edit button.
+            await this.render();
+            UI.closeModal();
         } catch (err) {
             restore();
             UI.toast(err.message, 'error');
@@ -569,8 +678,6 @@ const CampaignsPage = {
         const removed = this.campaigns[index];
         const card = document.querySelector(`.campaign-card[data-id="${CSS.escape(String(id))}"]`);
 
-        UI.closeModal();
-
         const countEl = document.querySelector('.page-toolbar-count');
         const paintCount = () => {
             if (countEl) countEl.textContent = t('campaigns.count', { count: this.campaigns.length });
@@ -579,6 +686,12 @@ const CampaignsPage = {
         this.campaigns.splice(index, 1);
         if (card) card.remove();
         paintCount();
+
+        // Closed AFTER the card is gone, so closeModal() does not restore
+        // focus to a button it is about to lose — with the card removed there
+        // is nothing to return to and focus goes to the page region instead.
+        UI.closeModal();
+        Motion.announce(t('campaigns.count', { count: this.campaigns.length }));
 
         return Motion.optimistic({
             send: () => API.deleteCampaign(id),
@@ -596,8 +709,11 @@ const CampaignsPage = {
     renderGrid() {
         const grid = document.querySelector('.card-grid');
         if (!grid) { this.render(); return; }
+        const focus = UI.captureFocus(grid);
         grid.innerHTML = esc(html`${this.campaigns.map((c) => this.renderCard(c))}`);
         UI.icons(grid);
+        UI.revealClipped(grid);
+        UI.restoreFocus(focus);
     },
 
     // ─── Post picker ─────────────────────────────────────────────────────────
@@ -861,12 +977,15 @@ const CampaignsPage = {
                         </div>
                         <div>
                             <label class="form-label" for="import-dm-${c.index}">${t('campaigns.dmTemplate')}</label>
-                            <textarea class="field-textarea bulk-import-textarea user-content" dir="auto"
+                            <!-- Seed copy from COURSE_MAPPINGS: authored Arabic,
+                                 and the operator edits it here before it is sent
+                                 to real customers. -->
+                            <textarea class="field-textarea bulk-import-textarea user-content" dir="auto" lang="ar"
                                       id="import-dm-${c.index}">${c.dmTemplate}</textarea>
                         </div>
                         <div>
                             <label class="form-label" for="import-public-${c.index}">${t('campaigns.publicReply')}</label>
-                            <input class="field bulk-import-input" dir="auto"
+                            <input class="field bulk-import-input" dir="auto" lang="ar"
                                    id="import-public-${c.index}" value="${c.publicReplies}">
                         </div>
                     </div>

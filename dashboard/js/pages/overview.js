@@ -176,6 +176,13 @@ const OverviewPage = {
                 // that announced "loading" has nothing left to say.
                 const busy = this.region('busy');
                 if (busy) busy.innerHTML = '';
+
+                // …but something has to say the page ARRIVED, and it cannot be
+                // a region inside the container that the same write replaces.
+                // The briefing is the page's actual answer, so announce it.
+                Motion.announce(alerts.length
+                    ? t('overview.attention')
+                    : t('overview.allClear'));
             }
         );
     },
@@ -184,7 +191,9 @@ const OverviewPage = {
         return html`
             <div class="table-card surface">
                 <div class="table-header">
-                    <span class="table-title">${t('overview.recent')}</span>
+                    <!-- A real heading, so the table is reachable from a
+                         heading list rather than being an unnamed region. -->
+                    <h2 class="table-title">${t('overview.recent')}</h2>
                     <button type="button" class="btn btn-secondary btn-sm" data-action="app:navigate" data-target="activity">
                         ${t('common.viewAll')}
                     </button>
@@ -419,7 +428,7 @@ const OverviewPage = {
             <div class="chart-grid">
                 <div class="chart-card surface">
                     <div class="chart-card-header">
-                        <span class="chart-card-title">${t('overview.chart.activity')}</span>
+                        <h2 class="chart-card-title">${t('overview.chart.activity')}</h2>
                     </div>
                     <div class="chart-wrapper">
                         <canvas id="activity-chart" role="img" aria-label="${t('overview.chart.activity')}"></canvas>
@@ -427,7 +436,7 @@ const OverviewPage = {
                 </div>
                 <div class="chart-card surface">
                     <div class="chart-card-header">
-                        <span class="chart-card-title">${t('overview.chart.status')}</span>
+                        <h2 class="chart-card-title">${t('overview.chart.status')}</h2>
                     </div>
                     <div class="chart-wrapper">
                         <canvas id="status-chart" role="img" aria-label="${t('overview.chart.status')}"></canvas>

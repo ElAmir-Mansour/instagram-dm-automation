@@ -24,6 +24,19 @@ const PostsPage = {
     liveError: null,
     publishError: null,
 
+    /**
+     * Guards the write against landing after the operator has navigated away.
+     * This page settles two requests and then writes the whole container;
+     * `#page-container` is refilled rather than replaced, so a late
+     * `renderLayout()` painted the queue into whatever page had replaced this
+     * one. Same `_seq`/`live()` shape as OverviewPage.
+     */
+    _seq: 0,
+
+    destroy() {
+        this._seq++;
+    },
+
     /** Tenant switch: queue, live grid and error panels are all tenant-scoped. */
     resetTenantState() {
         this.posts = [];
@@ -59,6 +72,10 @@ const PostsPage = {
 
     async render() {
         const container = document.getElementById('page-container');
+        if (!container) return;
+
+        const seq = ++this._seq;
+        const alive = () => seq === this._seq && !!document.getElementById('page-container');
 
         // Already up on a navigation; scheduled behind a 150ms gate on an
         // in-place refresh, so a fast response never flashes a skeleton.
@@ -68,6 +85,7 @@ const PostsPage = {
             API.getScheduledPosts(),
             API.getLivePosts(),
         ]);
+        if (!alive()) return;
         gate.done();
 
         // A failed fetch is an error, not an empty queue. Rendering the cheerful
@@ -90,39 +108,59 @@ const PostsPage = {
         }
 
         this.renderLayout();
+        Motion.announce(this.activeTab === 'scheduled'
+            ? `${t('posts.tabQueue')} — ${UI.formatNumber(this.posts.length)}`
+            : `${t('posts.tabLive')} — ${UI.formatNumber(this.livePosts.length)}`);
     },
 
     renderLayout() {
         const container = document.getElementById('page-container');
+        if (!container) return;
+        const focus = UI.captureFocus(container);
 
         container.innerHTML = esc(html`
             ${this.publishError ? this.renderPublishErrorPanel() : ''}
             <div class="page-toolbar">
-                <div class="segmented" role="tablist" aria-label="${t('nav.posts')}">
-                    <button type="button" role="tab" aria-selected="${this.activeTab === 'scheduled' ? 'true' : 'false'}"
+                <!-- This declared role="tablist" + role="tab" + aria-selected
+                     with no role="tabpanel", no aria-controls and no arrow-key
+                     handling, so it promised a widget it did not implement: a
+                     screen-reader user was told "tab, 1 of 2" and then arrow
+                     keys did nothing. Two segmented BUTTONS with aria-pressed
+                     is what this control actually is. -->
+                <div class="segmented" role="group" aria-label="${t('nav.posts')}">
+                    <button type="button" id="posts-tab-scheduled"
+                            aria-pressed="${this.activeTab === 'scheduled' ? 'true' : 'false'}"
                             class="btn btn-sm ${this.activeTab === 'scheduled' ? 'btn-primary' : 'btn-ghost'}"
                             data-action="posts:switchTab" data-tab="scheduled">
                         <i data-lucide="calendar" aria-hidden="true"></i> ${t('posts.tabQueue')}
                     </button>
-                    <button type="button" role="tab" aria-selected="${this.activeTab === 'live' ? 'true' : 'false'}"
+                    <button type="button" id="posts-tab-live"
+                            aria-pressed="${this.activeTab === 'live' ? 'true' : 'false'}"
                             class="btn btn-sm ${this.activeTab === 'live' ? 'btn-primary' : 'btn-ghost'}"
                             data-action="posts:switchTab" data-tab="live">
                         <i data-lucide="instagram" aria-hidden="true"></i> ${t('posts.tabLive')}
                     </button>
                 </div>
                 <div class="toolbar-actions">
-                    <button type="button" class="btn btn-primary btn-sm" data-action="posts:showCreateModal">
+                    <button type="button" class="btn btn-primary btn-sm" id="posts-new"
+                            data-action="posts:showCreateModal">
                         <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
                     </button>
                 </div>
             </div>
 
             <div id="posts-content-container">
+                <!-- The only structure below the page <h1> on this screen. -->
+                <h2 class="sr-only">${this.activeTab === 'scheduled' ? t('posts.tabQueue') : t('posts.tabLive')}</h2>
                 ${this.activeTab === 'scheduled' ? this.renderScheduledQueue() : this.renderLiveFeed()}
             </div>
         `);
 
         UI.icons(container);
+        UI.revealClipped(container);
+        // Switching tabs used to throw the operator out of the control they
+        // were using, because the whole toolbar is rebuilt with the content.
+        UI.restoreFocus(focus);
 
         // Error panels own their Retry wiring (no inline handlers).
         const errorHost = container.querySelector('[data-error-host]');
@@ -209,7 +247,12 @@ const PostsPage = {
         const typeLabel = this.typeLabel(post.post_type);
 
         return html`
-            <article class="post-card surface" data-id="${post.id}">
+            <!-- An <article> with no accessible name is announced as "article".
+                 Named from the three facts that tell two queued posts apart:
+                 where it goes, what it is, and when. All three are UI copy, so
+                 the name is in whichever language the interface is in. -->
+            <article class="post-card surface" data-id="${post.id}"
+                     aria-label="${badge.label} · ${typeLabel} · ${t('posts.scheduledAt', { when: UI.formatDateTime(post.scheduled_time) })}">
                 <div class="post-card-head">
                     <div class="post-card-badges">
                         <span class="badge ${html.raw(badge.cls)}">
@@ -242,7 +285,12 @@ const PostsPage = {
                     </p>
                 ` : ''}
 
-                <div class="template-preview user-content" dir="auto">${post.caption || t('posts.noCaption')}</div>
+                <!-- The caption is clipped at 7.5em with no way to read the
+                     rest. lang="ar" only when there IS a caption: the
+                     "no caption" placeholder is UI copy. -->
+                ${post.caption
+                    ? UI.previewBlock(post.caption, { label: t('posts.caption'), arabic: true })
+                    : html`<div class="template-preview user-content">${t('posts.noCaption')}</div>`}
 
                 <p class="post-card-meta">
                     <i data-lucide="clock" aria-hidden="true"></i>
@@ -271,13 +319,18 @@ const PostsPage = {
 
                 <div class="card-actions">
                     ${isPending || isFailed ? html`
-                        <button type="button" class="btn btn-primary btn-sm" data-action="posts:publishNow" data-id="${post.id}">
+                        <!-- Stable keys across the re-render, so closeModal()
+                             can put focus back on this card's own button. -->
+                        <button type="button" class="btn btn-primary btn-sm" data-action="posts:publishNow"
+                                data-id="${post.id}" data-focus-key="post-publish-${post.id}">
                             <i data-lucide="send" aria-hidden="true"></i> ${t('posts.publishNow')}
                         </button>
-                        <button type="button" class="btn btn-secondary btn-sm" data-action="posts:showEditModal" data-id="${post.id}">
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="posts:showEditModal"
+                                data-id="${post.id}" data-focus-key="post-edit-${post.id}">
                             <i data-lucide="pencil" aria-hidden="true"></i> ${t('common.edit')}
                         </button>
-                        <button type="button" class="btn btn-danger btn-sm" data-action="posts:deletePost" data-id="${post.id}">
+                        <button type="button" class="btn btn-danger btn-sm" data-action="posts:deletePost"
+                                data-id="${post.id}" data-focus-key="post-delete-${post.id}">
                             <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
                         </button>
                     ` : html`
@@ -301,11 +354,28 @@ const PostsPage = {
         }
 
         if (this.livePosts.length === 0) {
+            /**
+             * GET /posts/live swallows Meta's errors into `[]` server-side, so
+             * an expired access token and an account with nothing published
+             * arrive here as exactly the same response. The old copy ("No posts
+             * detected on your Facebook Page or Instagram account") stated the
+             * second as fact, which is the one reading the operator must not
+             * act on — they would go looking for a publishing bug that is
+             * really a credential.
+             *
+             * The server cannot be fixed from here, so this stops presenting an
+             * empty array as certainty and points at the one screen that can
+             * answer it.
+             */
             return html`
                 <div class="empty-state surface">
                     <i data-lucide="alert-circle" aria-hidden="true"></i>
                     <h3>${t('posts.emptyLiveTitle')}</h3>
-                    <p>${t('posts.emptyLiveBody')}</p>
+                    <p>${t('posts.liveEmptyCaveat')}</p>
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            data-action="app:navigate" data-target="settings">
+                        <i data-lucide="key-round" aria-hidden="true"></i> ${t('overview.openSettings')}
+                    </button>
                 </div>
             `;
         }
@@ -317,7 +387,8 @@ const PostsPage = {
                     const permalink = safeUrl(post.permalink);
                     const badge = this.platformBadge(post.platform);
                     return html`
-                        <article class="post-card surface">
+                        <article class="post-card surface"
+                                 aria-label="${badge.label} · ${UI.formatDay(post.timestamp)}">
                             <div class="post-card-head">
                                 <span class="badge ${html.raw(badge.cls)}">
                                     <i data-lucide="${badge.icon}" aria-hidden="true"></i> ${badge.label}
@@ -331,7 +402,9 @@ const PostsPage = {
                                 </div>
                             ` : ''}
 
-                            <div class="template-preview user-content" dir="auto">${post.caption || t('posts.noCaption')}</div>
+                            ${post.caption
+                                ? UI.previewBlock(post.caption, { label: t('posts.caption'), arabic: true })
+                                : html`<div class="template-preview user-content">${t('posts.noCaption')}</div>`}
                             <p class="post-card-id">${UI.ltr(post.id)}</p>
 
                             ${permalink ? html`
@@ -541,8 +614,8 @@ const PostsPage = {
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="post-caption">${t('posts.caption')}</label>
-                    <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto"
-                              placeholder="${t('posts.captionPlaceholder')}" required></textarea>
+                    <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
+                              placeholder="${t('posts.captionPlaceholder')}" data-guard-dirty required></textarea>
                 </div>
                 ${this.mediaFields(null)}
                 ${this.scheduleFields(defaultTime)}
@@ -598,7 +671,8 @@ const PostsPage = {
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="post-caption">${t('posts.caption')}</label>
-                    <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" required>${post.caption || ''}</textarea>
+                    <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
+                              data-guard-dirty required>${post.caption || ''}</textarea>
                 </div>
                 ${this.mediaFields({ ...post, post_type: postType })}
                 ${this.scheduleFields(defaultTime)}
@@ -701,11 +775,30 @@ const PostsPage = {
         return null;
     },
 
-    showFormError(message) {
+    /**
+     * A `role="alert"` strip at the top of the modal, and — when the failure
+     * belongs to a specific field — that field marked invalid, described by
+     * the strip, and focused.
+     *
+     * Before this, the strip was dropped in and focus stayed on the submit
+     * button with no field marked: a screen-reader user heard the message once
+     * and then had to hunt for which of six fields it was about, and a sighted
+     * keyboard user had to scroll up to find out.
+     */
+    showFormError(message, fieldId) {
         const host = document.getElementById('post-form-error');
         if (!host) return;
-        host.innerHTML = esc(UI.errorStrip(message, t('posts.publishFailedHint')));
+        const stripId = 'post-form-error-strip';
+        const form = document.getElementById('post-schedule-form');
+        UI.clearInvalid(form);
+        host.innerHTML = esc(UI.errorStrip(message, t('posts.publishFailedHint'), stripId));
         UI.icons(host);
+
+        const field = fieldId ? document.getElementById(fieldId) : null;
+        if (field) {
+            UI.markInvalid(field, stripId);
+            return; // focusing the field already scrolls it into view
+        }
         host.scrollIntoView({ block: 'nearest' });
     },
 
@@ -724,11 +817,12 @@ const PostsPage = {
         };
 
         if (!payload.scheduled_time) {
-            this.showFormError(t('posts.schedule.unreadable'));
+            this.showFormError(t('posts.schedule.unreadable'), 'post-scheduled-time');
             return;
         }
 
         const btn = form.querySelector('button[type="submit"]');
+        if (btn.disabled) return; // already in flight
         const originalHtml = btn.innerHTML;
         btn.disabled = true;
         btn.innerHTML = UI.buttonSpinner();
@@ -750,8 +844,11 @@ const PostsPage = {
             }
 
             UI.toast(publishNow ? t('posts.publishedOk') : t('posts.scheduledOk'));
-            UI.closeModal();
+            // render() first, close after: closing first restored focus to the
+            // "New post" button and the re-render then destroyed it, leaving
+            // focus on a control inside the hidden overlay.
             await this.render();
+            UI.closeModal();
         } catch (err) {
             const failure = this.publishFailure(null, err);
             if (publishNow) this.publishError = { message: failure };
@@ -770,18 +867,24 @@ const PostsPage = {
         const scheduledTime = UI.fromLocalInputValue(data.get('scheduled_time'));
 
         if (!scheduledTime) {
-            this.showFormError(t('posts.schedule.unreadable'));
+            this.showFormError(t('posts.schedule.unreadable'), 'post-scheduled-time');
             return;
         }
 
         const payload = { ...this.formPayload(form), scheduled_time: scheduledTime };
 
+        // This was the one submit handler on the page with no guard at all:
+        // two Enters on a cold start sent two PUTs for the same row.
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+
         try {
             await API.updateScheduledPost(id, payload);
             UI.toast(t('posts.updatedOk'));
-            UI.closeModal();
             await this.render();
+            UI.closeModal();
         } catch (err) {
+            restore();
             this.showFormError(err.message);
         }
     },
@@ -863,8 +966,14 @@ const PostsPage = {
         const removed = this.posts[index];
         const card = document.querySelector(`.post-card[data-id="${CSS.escape(String(id))}"]`);
 
+        // Removing the card removes the button that is holding focus, so focus
+        // would fall to <body>. There is nothing to return to on a delete, so
+        // it goes to the page region.
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+
         this.posts.splice(index, 1);
         if (card) card.remove();
+        UI.restoreFocus(focus);
 
         return Motion.optimistic({
             send: () => API.deleteScheduledPost(id),

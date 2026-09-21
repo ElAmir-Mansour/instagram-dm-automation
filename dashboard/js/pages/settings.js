@@ -14,6 +14,19 @@ const SettingsPage = {
         'instagram_content_publish',
     ],
 
+    /**
+     * Guards the write against landing after the operator has navigated away.
+     * This page awaits TWO requests in series, so it owns the container for
+     * longer than any other — and `#page-container` is refilled, never
+     * replaced, so a late write lands on whatever page is there now. Same
+     * `_seq`/`live()` shape as OverviewPage.
+     */
+    _seq: 0,
+
+    destroy() {
+        this._seq++;
+    },
+
     skeleton() {
         return html`
             ${Motion.cardGrid(2, 5)}
@@ -23,17 +36,23 @@ const SettingsPage = {
 
     async render() {
         const container = document.getElementById('page-container');
+        if (!container) return;
+        const focus = UI.captureFocus(container);
         const gate = Motion.beginLoad(container, () => this.skeleton());
+        const seq = ++this._seq;
+        const live = () => seq === this._seq && !!document.getElementById('page-container');
 
         // The access token status is the page — if it fails there is nothing to show.
         let tokenStatus;
         try {
             tokenStatus = await API.getTokenStatus();
         } catch (err) {
+            if (!live()) return;
             gate.done();
             UI.renderError(container, { title: t('settings.errorTitle'), message: err.message }, () => this.render());
             return;
         }
+        if (!live()) return;
 
         // The webhook verify token is loaded separately: a failure here used to
         // render "Not set" for a token that IS set, inviting the creator to
@@ -47,6 +66,7 @@ const SettingsPage = {
             webhookError = err;
         }
 
+        if (!live()) return;
         gate.done();
 
         const isValid = tokenStatus.status === 'valid';
@@ -57,8 +77,12 @@ const SettingsPage = {
             ? this.REQUIRED_SCOPES.filter((scope) => !tokenStatus.scopes.includes(scope))
             : [];
 
+        // When the fetch failed we do not know whether the token is set in the
+        // environment, and the sentence that says so was being rendered with a
+        // bare "." interpolated where the answer should be. There is no copy
+        // for "unknown", so the sentence is simply not claimed.
         const envNote = webhookError
-            ? '.'
+            ? null
             : (webhookToken.configuredInEnv ? t('settings.webhookEnvSet') : t('settings.webhookEnvUnset'));
 
         container.innerHTML = esc(html`
@@ -102,7 +126,8 @@ const SettingsPage = {
                                     </span>
                                 ` : ''}
                             </p>
-                            <button type="button" class="btn btn-secondary btn-sm" data-action="settings:extendToken">
+                            <button type="button" class="btn btn-secondary btn-sm" id="settings-extend"
+                                    data-action="settings:extendToken">
                                 <i data-lucide="refresh-cw" aria-hidden="true"></i> ${t('settings.extend')}
                             </button>
                         </div>
@@ -126,7 +151,7 @@ const SettingsPage = {
                             <textarea class="field-textarea field-mono" id="settings-token-input" name="token" dir="ltr"
                                       placeholder="${t('settings.tokenPlaceholder')}" required></textarea>
                             <div class="form-actions">
-                                <button type="submit" class="btn btn-primary btn-sm">
+                                <button type="submit" class="btn btn-primary btn-sm" id="settings-token-submit">
                                     <i data-lucide="key" aria-hidden="true"></i> ${t('settings.validateSave')}
                                 </button>
                             </div>
@@ -163,7 +188,7 @@ const SettingsPage = {
                     `}
 
                     <p class="form-hint">${t('settings.webhookBody')}</p>
-                    <p class="form-hint mbe-4">${t('settings.webhookBody2', { env: envNote })}</p>
+                    ${envNote ? html`<p class="form-hint mbe-4">${t('settings.webhookBody2', { env: envNote })}</p>` : ''}
 
                     <form id="webhook-token-form" data-submit="settings:handleWebhookTokenUpdate">
                         <label class="form-label" for="settings-webhook-input">${t('settings.webhookLabel')}</label>
@@ -171,7 +196,10 @@ const SettingsPage = {
                                autocomplete="off" spellcheck="false"
                                placeholder="${t('settings.webhookPlaceholder')}" required>
                         <div class="form-actions">
-                            <button type="submit" class="btn btn-primary btn-sm">
+                            <!-- Stable id: after a successful save the page
+                                 re-renders and this button is destroyed, so it
+                                 is what restoreFocus() re-finds. -->
+                            <button type="submit" class="btn btn-primary btn-sm" id="settings-webhook-submit">
                                 <i data-lucide="shield-check" aria-hidden="true"></i> ${t('settings.webhookSave')}
                             </button>
                         </div>
@@ -224,18 +252,37 @@ const SettingsPage = {
         `);
 
         UI.icons(container);
+        UI.restoreFocus(focus);
+        Motion.announce(`${t('nav.settings')} — ${t('common.loaded')}`);
     },
 
+    /**
+     * Both token forms were unguarded: submit twice on a cold serverless start
+     * and the second POST overwrote the first with the same credential — or,
+     * worse, raced the extend endpoint. `UI.formBusy` disables the button and
+     * returns null if it was ALREADY disabled, which is the double-submit.
+     */
     async handleWebhookTokenUpdate(form, event) {
         event.preventDefault();
         const token = (new FormData(form).get('token') || '').toString().trim();
         if (!token) return;
 
+        // Captured BEFORE the button is disabled: disabling the focused element
+        // blurs it, so by the time render() runs there is nothing to remember.
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // a submit is already in flight
+
         try {
             const result = await API.updateWebhookToken(token);
             UI.toast(result.message || t('settings.webhookSaved'), 'success');
-            this.render();
+            // render() replaces the form, so the restore would be writing to a
+            // detached button — and it must not run before the re-render puts
+            // a fresh, enabled one on screen.
+            await this.render();
+            UI.restoreFocus(focus);
         } catch (err) {
+            restore();
             UI.toast(err.message || t('settings.webhookSaveFailed'), 'error');
         }
     },
@@ -245,20 +292,29 @@ const SettingsPage = {
         const token = (new FormData(form).get('token') || '').toString().trim();
         if (!token) return;
 
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // a submit is already in flight
+
         try {
             const result = await API.updateToken(token);
             UI.toast(t('settings.tokenUpdated', {
                 date: result.expiresAt ? UI.formatDay(result.expiresAt) : t('common.never'),
             }));
-            this.render();
+            await this.render();
+            UI.restoreFocus(focus);
         } catch (err) {
+            restore();
             UI.toast(err.message, 'error');
         }
     },
 
     async extendToken(btn) {
         if (!confirm(t('settings.extendConfirm'))) return;
+        if (btn.disabled) return;
 
+        // Same reason as the two forms: disabling it blurs it.
+        const focus = UI.captureFocus(document.getElementById('page-container'));
         const originalHtml = btn.innerHTML;
         btn.innerHTML = UI.buttonSpinner();
         btn.disabled = true;
@@ -267,6 +323,7 @@ const SettingsPage = {
             await API.request('/settings/token/extend', { method: 'POST' });
             UI.toast(t('settings.extended'), 'success');
             await this.render();
+            UI.restoreFocus(focus);
         } catch (err) {
             console.error(err);
             UI.toast(err.message || t('settings.extendFailed'), 'error');
