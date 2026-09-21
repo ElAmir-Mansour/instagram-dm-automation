@@ -31,15 +31,15 @@
  * Only the core stats call is still fatal: without it there is no page.
  */
 const OverviewPage = {
-    charts: [],
 
     /** Guards a fill against landing after the operator has navigated away. */
     _seq: 0,
 
     destroy() {
         this._seq++;
-        this.charts.forEach((c) => { try { c.destroy(); } catch (e) { /* already gone */ } });
-        this.charts = [];
+        // No chart instances to destroy any more: the charts are SVG strings written
+        // into the page, so navigating away removes them with the markup. This loop
+        // existed only because Chart.js held canvases and event listeners alive.
     },
 
     /**
@@ -119,7 +119,6 @@ const OverviewPage = {
         const postsP = this._settle(API.getScheduledPosts());
         const threadsP = this._settle(API.getConversations());
         const dailyP = this._settle(API.getDailyStats(7));
-        const chartLibP = Charts.ensure();
 
         // ── Region 1+2+3: the stats tiles, then the charts they feed ────────
         statsP.then(async (statsRes) => {
@@ -147,8 +146,9 @@ const OverviewPage = {
                 UI.animateCounter(document.getElementById('stat-campaigns'), stats.activeCampaigns);
             }
 
-            const [dailyRes, hasChart] = await Promise.all([dailyP, chartLibP]);
-            if (!live() || !hasChart) return;
+            // No library to wait on: the charts are SVG built from this data.
+            const dailyRes = await dailyP;
+            if (!live()) return;
             this.renderCharts(stats, dailyRes);
         });
 
@@ -416,13 +416,20 @@ const OverviewPage = {
     },
 
     /**
-     * The chart region: real cards first, then the charts inside them. The
-     * cards are only written once Chart.js has actually arrived, so a CDN
-     * failure leaves the skeleton's box rather than two empty framed holes.
+     * The chart region.
+     *
+     * No library and no canvas: `Charts.dayStrip` and `Charts.splitBar` return SVG
+     * strings, so this renders synchronously from data it already has. The old
+     * version had to await a CDN and bailed out entirely when Chart.js failed to
+     * arrive, leaving the skeleton in place forever.
      */
     renderCharts(stats, dailyRes) {
         const host = this.region('charts');
-        if (!host || typeof Chart === 'undefined') return;
+        if (!host) return;
+
+        const daily = (dailyRes && dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value))
+            ? dailyRes.value
+            : [];
 
         host.innerHTML = esc(html`
             <div class="chart-grid">
@@ -430,58 +437,31 @@ const OverviewPage = {
                     <div class="chart-card-header">
                         <h2 class="chart-card-title">${t('overview.chart.activity')}</h2>
                     </div>
-                    <div class="chart-wrapper">
-                        <canvas id="activity-chart" role="img" aria-label="${t('overview.chart.activity')}"></canvas>
-                    </div>
+                    ${Charts.dayStrip(daily, {
+                        label: t('overview.chart.activity'),
+                        emptyMessage: t('overview.chart.noActivity'),
+                        dayHeader: t('common.day'),
+                        sentHeader: t('common.sent'),
+                        failedHeader: t('common.failed'),
+                    })}
+                    <p class="chart-foot">${t('overview.chart.stripLegend')}</p>
                 </div>
                 <div class="chart-card surface">
                     <div class="chart-card-header">
                         <h2 class="chart-card-title">${t('overview.chart.status')}</h2>
                     </div>
-                    <div class="chart-wrapper">
-                        <canvas id="status-chart" role="img" aria-label="${t('overview.chart.status')}"></canvas>
-                    </div>
+                    ${Charts.splitBar([
+                        { label: t('common.sent'), value: stats.sent || 0, token: '--success', fallback: '#34c759' },
+                        { label: t('common.failed'), value: stats.failed || 0, token: '--danger', fallback: '#ff3b30' },
+                    ], {
+                        label: t('overview.chart.status'),
+                        emptyMessage: t('overview.chart.noActivity'),
+                        nameHeader: t('common.status'),
+                        valueHeader: t('common.count'),
+                    })}
                 </div>
             </div>
         `);
         UI.icons(host);
-
-        const c = Charts.palette();
-
-        try {
-            const daily = (dailyRes && dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value))
-                ? dailyRes.value
-                : [];
-            const chart = Charts.create('activity-chart', {
-                type: 'line',
-                data: {
-                    labels: daily.map((d) => UI.formatDayShort(d.day)),
-                    datasets: [{
-                        label: t('common.sent'),
-                        data: daily.map((d) => d.sent),
-                        borderColor: c.positive,
-                        backgroundColor: Charts.alpha(c.positive, 0.12),
-                        fill: true, tension: 0.35, pointRadius: 3, pointHoverRadius: 6,
-                    }, {
-                        label: t('common.failed'),
-                        data: daily.map((d) => d.failed),
-                        borderColor: c.negative,
-                        backgroundColor: Charts.alpha(c.negative, 0.08),
-                        fill: true, tension: 0.35, pointRadius: 3, pointHoverRadius: 6,
-                    }],
-                },
-                options: Charts.cartesian(),
-            });
-            if (chart) this.charts.push(chart);
-        } catch (e) {
-            console.warn('Activity chart error:', e);
-        }
-
-        const donut = Charts.create('status-chart', {
-            type: 'doughnut',
-            data: Charts.statusData(stats.sent, stats.failed),
-            options: Charts.doughnut(),
-        });
-        if (donut) this.charts.push(donut);
     },
 };

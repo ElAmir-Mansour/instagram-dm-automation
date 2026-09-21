@@ -258,7 +258,11 @@ const Motion = {
                 ${Motion._times(count || 2, () => html`
                     <div class="chart-card surface">
                         <div class="chart-card-header"><span class="chart-card-title">${Motion.line('lg')}</span></div>
-                        <div class="chart-wrapper"><span class="skel skel-block"></span></div>
+                        <!-- Sized to the SVG charts that replace this, not to the 260px
+                             canvas it used to reserve. A skeleton taller than its content
+                             makes the whole page jump upward the moment data lands, which
+                             is worse than no skeleton. -->
+                        <div class="chart-skel"><span class="skel skel-block"></span></div>
                     </div>
                 `)}
             </div>

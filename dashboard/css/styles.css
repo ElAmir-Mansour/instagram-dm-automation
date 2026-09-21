@@ -1192,7 +1192,11 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     margin-block-end: var(--space-4);
 }
 .chart-card-title { font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); }
-.chart-wrapper { position: relative; height: 260px; }
+/* `.chart-wrapper` reserved 260px for a Chart.js canvas. The SVG charts are a
+   54px strip or a 14px bar plus a two-row legend, so the placeholder matches
+   that instead — a skeleton taller than its content jumps the page when data
+   arrives. */
+.chart-skel { position: relative; height: 92px; }
 
 .platform-bar {
     block-size: 10px;
@@ -2218,4 +2222,63 @@ html[lang='en'] .page-toolbar-count {
 .post-card-id,
 .job-kind {
     letter-spacing: 0.02em;
+}
+
+/* ─── Charts ────────────────────────────────────────────────────────────────────────────────
+   These replaced Chart.js canvases. Deliberately almost no chrome: no gridlines, no axis
+   rules, no boxed legend. A day strip and a proportion bar are legible without any of it, and
+   every one of those was a thing Chart.js drew by default and this design had to fight.
+
+   `dir="ltr"` is set on the strip in JS, not here: the cells are reordered in the builder so
+   the most recent day sits at the reading edge, and the SVG itself must then not be flipped
+   again by the document direction. */
+
+.chart-strip { padding-block: var(--space-2); }
+.chart-strip svg { display: block; overflow: visible; }
+
+.chart-foot {
+    margin-block-start: var(--space-3);
+    font-size: var(--fs-100);
+    color: var(--text-muted);
+    line-height: var(--lh-normal);
+}
+
+.chart-split { padding-block: var(--space-3) 0; }
+.chart-split svg { display: block; border-radius: var(--radius-pill); }
+
+.chart-split-legend {
+    list-style: none;
+    margin: var(--space-4) 0 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2);
+}
+.chart-split-legend li {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    font-size: var(--fs-200);
+}
+.chart-dot {
+    inline-size: 9px; block-size: 9px;
+    border-radius: var(--radius-pill);
+    /* A dot, not a swatch: the colour is a key to the bar above, not a sample. */
+    flex-shrink: 0;
+}
+.chart-split-label { color: var(--text-default); }
+/* Tabular figures so the two rows' numbers line up under each other. */
+.chart-split-value { color: var(--text-strong); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.chart-split-pct { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.chart-spark { padding-block: var(--space-2); }
+.chart-spark svg { display: block; }
+
+/* Says there is nothing, rather than drawing empty axes around no data. */
+.chart-empty {
+    margin: 0;
+    padding-block: var(--space-6);
+    text-align: center;
+    font-size: var(--fs-200);
+    color: var(--text-muted);
 }

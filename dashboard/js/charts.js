@@ -1,199 +1,215 @@
 /**
- * Chart defaults — one definition, shared by Overview and Analytics.
+ * Charts, drawn here rather than by a library.
  *
- * Previously each page carried its own copy of the tick colour, the grid
- * colour, the green/red series hex values and the legend font, so a change to
- * either meant editing two files and the two screens drifted apart.
+ * ─── Why this replaced Chart.js ──────────────────────────────────────────────
  *
- * Two things this adds beyond deduplication:
+ * The previous version loaded Chart.js 4.4.4 from a CDN — ~201KB of UMD, lazily,
+ * for four charts across two of ten screens. The file's own header complained
+ * about that. Three reasons it is gone:
  *
- * 1. THEME. Colours are read from the CSS custom properties at build time, so
- *    the charts follow the light/dark token set instead of hardcoding dark-mode
- *    hex values that vanish on a white background.
+ *   1. It looked generic, because it WAS generic. The charts were Chart.js
+ *      defaults with a token-aware palette bolted on. Restyling a charting
+ *      engine deeply enough to stop looking like a charting engine is more work
+ *      than drawing the four things this product actually needs.
+ *   2. It could not be tested. A canvas render is opaque: there is nothing to
+ *      assert. Every function below is pure — data in, SVG string out — so the
+ *      geometry, the empty states and the RTL handling all have real tests.
+ *   3. It was a third-party script on the critical path of a dashboard that
+ *      handles a live Meta token. Worth being precise about the benefit: this
+ *      does NOT let `cdn.jsdelivr.net` leave the CSP, because Lucide still loads
+ *      from there. What it removes is one more pinned dependency, one more SRI
+ *      hash to keep current, and ~201KB that a CDN outage could withhold.
  *
- * 2. DIRECTION. In an RTL document a time series reads right-to-left like the
- *    rest of the page, so the category axis is reversed and the value axis
- *    moves to the right. Chart.js also needs `rtl: true` on the legend and
- *    tooltip, or their swatches sit on the wrong side of the label.
+ * ─── The chart language ──────────────────────────────────────────────────────
  *
- * 3. LOADING. Chart.js itself is ~201KB of UMD and two of the ten screens use
- *    it, so it is no longer a <script> in index.html. `Charts.ensure()` injects
- *    it on demand — same pinned version, same SRI hash, same CDN that is
- *    already in the CSP — and memoises the promise, so the eight screens that
- *    draw no chart never pay for it and the two that do pay once per session.
- *    An injected <script> is used rather than `import()` because SRI cannot be
- *    attached to a dynamic import, and dropping SRI to save a wrapper would be
- *    a bad trade for a third-party script.
+ * `dayStrip`  — one cell per day. Replaces a line chart that was drawing a
+ *               straight line between two points and labelling it "last 7
+ *               days", which reads as a declining trend when it is two days of
+ *               data with nothing in between. A strip cannot lie about a gap:
+ *               an empty day is an empty cell.
+ * `splitBar`  — one horizontal bar. Replaces a doughnut, which is the weakest
+ *               way to show a two-part split: the eye compares angles badly,
+ *               and it costs a whole card to say "59 and 37".
+ * `sparkline` — a thin trend line for when a trend is real (>= 3 points).
+ *
+ * ─── Two things every chart here does that the canvas could not ──────────────
+ *
+ * ACCESSIBILITY. A `<canvas>` is a black box to a screen reader; the old charts
+ * carried an `aria-label` naming the chart and nothing about its contents. Each
+ * builder emits a `<table class="sr-only">` of the real numbers, so the data is
+ * readable rather than merely announced.
+ *
+ * RTL. SVG does not mirror with `dir`. A day strip must run right-to-left in
+ * Arabic or "most recent" ends up on the wrong end, so cell order is reversed
+ * explicitly. Chart.js needed `rtl: true` in three separate places for this and
+ * still got tooltips wrong.
  */
+
 const Charts = {
+    /** Monotonic, so two charts on one page cannot share an SVG element id. */
+    _seq: 0,
 
-    SRC: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
-    INTEGRITY: 'sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt',
+    /** Every chart reads its colours from the design tokens, never a literal. */
+    token(name, fallback) {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || fallback;
+    },
 
-    _loading: null,
+    /** Nothing to draw. Says so, rather than rendering empty axes. */
+    _empty(message) {
+        return html`<p class="chart-empty">${message}</p>`;
+    },
 
     /**
-     * Resolve true once `window.Chart` exists, false if the CDN is unreachable.
-     * Never rejects: a missing chart must degrade to an empty frame, which is
-     * what `Charts.create()` already does.
+     * A screen-reader table of the values behind a chart.
+     *
+     * Visually hidden, immediately after the graphic. This is the part a canvas
+     * cannot do: the numbers are in the accessibility tree, not just a label
+     * saying a chart exists.
      */
-    ensure() {
-        if (typeof Chart !== 'undefined') return Promise.resolve(true);
-        if (Charts._loading) return Charts._loading;
-
-        Charts._loading = new Promise((resolve) => {
-            const script = document.createElement('script');
-            script.src = Charts.SRC;
-            script.integrity = Charts.INTEGRITY;
-            script.crossOrigin = 'anonymous';
-            script.async = true;
-            script.onload = () => resolve(typeof Chart !== 'undefined');
-            script.onerror = () => {
-                console.warn('Chart.js failed to load from the CDN; charts will be skipped.');
-                // Allow a later page visit to retry rather than caching the failure.
-                Charts._loading = null;
-                resolve(false);
-            };
-            document.head.appendChild(script);
-        });
-        return Charts._loading;
+    _srTable(caption, headers, rows) {
+        return html`
+            <table class="sr-only">
+                <caption>${caption}</caption>
+                <thead><tr>${headers.map((h) => html`<th scope="col">${h}</th>`)}</tr></thead>
+                <tbody>${rows.map((r) => html`<tr>${r.map((cell) => html`<td>${cell}</td>`)}</tr>`)}</tbody>
+            </table>`;
     },
-    /** Read a design token. Falls back so a missing token can never blank a chart. */
-    token(name, fallback) {
-        try {
-            const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-            return value || fallback;
-        } catch {
-            return fallback;
+
+    /**
+     * One cell per day; opacity carries volume, a foot-bar carries failures.
+     *
+     * Deliberately NOT a scale with a y-axis. The question this answers is "did
+     * anything happen, and when", and for that a reader needs to see gaps. A
+     * line chart interpolates across them and invents a trend.
+     */
+    dayStrip(days, options) {
+        const opts = options || {};
+        if (!Array.isArray(days) || days.length === 0) {
+            return Charts._empty(opts.emptyMessage || '');
         }
-    },
 
-    palette() {
-        return {
-            positive: Charts.token('--chart-positive', '#2dd4a7'),
-            negative: Charts.token('--chart-negative', '#f87171'),
-            grid: Charts.token('--chart-grid', 'rgba(255,255,255,0.07)'),
-            tick: Charts.token('--chart-tick', '#9aa7b8'),
-            instagram: Charts.token('--brand-instagram', '#e1306c'),
-            facebook: Charts.token('--brand-facebook', '#1877f2'),
-        };
-    },
+        // Most recent nearest the reading edge: rightmost in LTR, leftmost in RTL.
+        const ordered = I18N.isRtl() ? [...days].reverse() : [...days];
+        const peak = Math.max(1, ...days.map((d) => (d.sent || 0) + (d.failed || 0)));
 
-    /** A colour with an alpha applied, for area fills under a line. */
-    alpha(color, a) {
-        const hex = String(color).trim();
-        const m = /^#?([0-9a-f]{6})$/i.exec(hex);
-        if (!m) return hex;
-        const int = parseInt(m[1], 16);
-        return `rgba(${(int >> 16) & 255}, ${(int >> 8) & 255}, ${int & 255}, ${a})`;
-    },
+        const CELL = 26, GAP = 5, H = 54, FOOT = 4;
+        const width = ordered.length * CELL + (ordered.length - 1) * GAP;
+        const sent = Charts.token('--success', '#34c759');
+        const failed = Charts.token('--danger', '#ff3b30');
+        const empty = Charts.token('--surface-glass', 'rgba(255,255,255,0.08)');
 
-    font() {
-        // Chart.js takes a family NAME, not a CSS variable, so this cannot read
-        // --font-ui and has to name the face. Both are IBM Plex: the Arabic member
-        // for RTL (the Latin member has no Arabic glyphs) and the Latin member for
-        // LTR, which keeps chart labels in the same voice as the rest of the UI
-        // instead of falling back to a system font.
-        return { family: I18N.isRtl() ? 'IBM Plex Sans Arabic' : 'IBM Plex Sans', size: 12 };
-    },
-
-    /** Shared options for any cartesian chart. */
-    cartesian(extra) {
-        const c = Charts.palette();
-        const rtl = I18N.isRtl();
-        const base = {
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-                legend: {
-                    rtl,
-                    textDirection: rtl ? 'rtl' : 'ltr',
-                    labels: { color: c.tick, font: Charts.font(), boxWidth: 12, padding: 14 },
-                },
-                tooltip: {
-                    rtl,
-                    textDirection: rtl ? 'rtl' : 'ltr',
-                    bodyFont: Charts.font(),
-                    titleFont: Charts.font(),
-                },
-            },
-            scales: {
-                x: {
-                    // Time reads in the document's direction.
-                    reverse: rtl,
-                    ticks: { color: c.tick, font: Charts.font(), maxRotation: 0, autoSkipPadding: 12 },
-                    grid: { color: c.grid },
-                },
-                y: {
-                    position: rtl ? 'right' : 'left',
-                    beginAtZero: true,
-                    ticks: { color: c.tick, font: Charts.font(), precision: 0 },
-                    grid: { color: c.grid },
-                },
-            },
-        };
-        return Charts.merge(base, extra || {});
-    },
-
-    /** Shared options for the sent/failed doughnut. */
-    doughnut(extra) {
-        const c = Charts.palette();
-        const rtl = I18N.isRtl();
-        return Charts.merge({
-            responsive: true,
-            maintainAspectRatio: false,
-            cutout: '72%',
-            plugins: {
-                legend: {
-                    position: 'bottom',
-                    rtl,
-                    textDirection: rtl ? 'rtl' : 'ltr',
-                    labels: { color: c.tick, font: Charts.font(), padding: 16, boxWidth: 12 },
-                },
-                tooltip: { rtl, textDirection: rtl ? 'rtl' : 'ltr', bodyFont: Charts.font() },
-            },
-        }, extra || {});
-    },
-
-    /** The sent/failed dataset, identical on both screens. */
-    statusData(sent, failed) {
-        const c = Charts.palette();
-        return {
-            labels: [t('common.sent'), t('common.failed')],
-            datasets: [{
-                data: [Number(sent) || 0, Number(failed) || 0],
-                backgroundColor: [c.positive, c.negative],
-                borderWidth: 0,
-                hoverOffset: 8,
-            }],
-        };
-    },
-
-    /** Shallow-ish merge good enough for Chart.js option trees. */
-    merge(base, extra) {
-        const out = Array.isArray(base) ? base.slice() : { ...base };
-        Object.keys(extra).forEach((key) => {
-            const value = extra[key];
-            if (value && typeof value === 'object' && !Array.isArray(value) && base[key] && typeof base[key] === 'object') {
-                out[key] = Charts.merge(base[key], value);
-            } else {
-                out[key] = value;
-            }
+        const cells = ordered.map((d, i) => {
+            const total = (d.sent || 0) + (d.failed || 0);
+            const x = i * (CELL + GAP);
+            // A floor on opacity: a day with one event must not be invisible.
+            const intensity = total === 0 ? 0 : 0.28 + 0.72 * (total / peak);
+            const failH = total > 0 && d.failed > 0
+                ? Math.max(FOOT, Math.round((H - 14) * (d.failed / total)))
+                : 0;
+            return html`
+                <g>
+                    <rect x="${x}" y="0" width="${CELL}" height="${H - 10}" rx="7"
+                          fill="${total === 0 ? empty : sent}"
+                          fill-opacity="${total === 0 ? 1 : intensity.toFixed(3)}"></rect>
+                    ${failH > 0 ? html`<rect x="${x}" y="${H - 10 - failH}" width="${CELL}" height="${failH}" rx="7"
+                          fill="${failed}" fill-opacity="0.85"></rect>` : ''}
+                </g>`;
         });
-        return out;
+
+        return html`
+            <div class="chart-strip" dir="ltr">
+                <svg viewBox="0 0 ${width} ${H}" width="100%" height="${H}"
+                     preserveAspectRatio="xMidYMid meet" role="img"
+                     aria-label="${opts.label || ''}" focusable="false">
+                    ${cells}
+                </svg>
+            </div>
+            ${Charts._srTable(
+                opts.label || '',
+                [opts.dayHeader || 'Day', opts.sentHeader || 'Sent', opts.failedHeader || 'Failed'],
+                days.map((d) => [UI.formatDayShort(d.day), UI.formatNumber(d.sent || 0), UI.formatNumber(d.failed || 0)])
+            )}`;
     },
 
-    /** Create a chart, or return null if Chart.js failed to load from the CDN. */
-    create(canvasId, config) {
-        if (typeof Chart === 'undefined') return null;
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return null;
-        try {
-            return new Chart(canvas.getContext('2d'), config);
-        } catch (err) {
-            console.warn(`Chart "${canvasId}" failed:`, err);
-            return null;
-        }
+    /**
+     * One bar, segments proportional, numbers stated beneath.
+     *
+     * The numbers are the point. A proportion bar shows the ratio at a glance
+     * and the labels give the exact values, which is everything a doughnut was
+     * being asked for and could only approximate.
+     */
+    splitBar(parts, options) {
+        const opts = options || {};
+        const clean = (parts || []).filter((p) => p && Number(p.value) > 0);
+        const total = clean.reduce((sum, p) => sum + Number(p.value), 0);
+        if (total === 0) return Charts._empty(opts.emptyMessage || '');
+
+        const H = 14;
+        // A fixed id would collide when two split bars render on one page, and a
+        // duplicate id makes clip-path resolve to whichever appeared first.
+        const clipId = `chart-split-clip-${++Charts._seq}`;
+        let cursor = 0;
+        const segments = clean.map((p) => {
+            const w = (Number(p.value) / total) * 100;
+            const seg = html`<rect x="${cursor.toFixed(3)}%" y="0" width="${w.toFixed(3)}%" height="${H}"
+                                   fill="${Charts.token(p.token, p.fallback || '#888')}"></rect>`;
+            cursor += w;
+            return seg;
+        });
+
+        return html`
+            <div class="chart-split">
+                <svg viewBox="0 0 100 ${H}" width="100%" height="${H}" preserveAspectRatio="none"
+                     role="img" aria-label="${opts.label || ''}" focusable="false">
+                    <clipPath id="${clipId}"><rect x="0" y="0" width="100" height="${H}" rx="${H / 2}"></rect></clipPath>
+                    <g clip-path="url(#${clipId})">${segments}</g>
+                </svg>
+                <ul class="chart-split-legend">
+                    ${clean.map((p) => html`
+                        <li>
+                            <span class="chart-dot" style="background: ${Charts.token(p.token, p.fallback || '#888')}"></span>
+                            <span class="chart-split-label">${p.label}</span>
+                            <span class="chart-split-value">${UI.formatNumber(p.value)}</span>
+                            <span class="chart-split-pct">${UI.formatPercent(Number(p.value) / total)}</span>
+                        </li>`)}
+                </ul>
+            </div>
+            ${Charts._srTable(
+                opts.label || '',
+                [opts.nameHeader || 'Series', opts.valueHeader || 'Value'],
+                clean.map((p) => [p.label, UI.formatNumber(p.value)])
+            )}`;
+    },
+
+    /**
+     * A thin trend line. Refuses to draw below three points.
+     *
+     * Two points are a straight line, and a straight line reads as a trend that
+     * the data does not support — the exact failure the day strip replaced.
+     */
+    sparkline(values, options) {
+        const opts = options || {};
+        const nums = (values || []).map(Number).filter((n) => Number.isFinite(n));
+        if (nums.length < 3) return Charts._empty(opts.emptyMessage || '');
+
+        const W = 240, H = 44, PAD = 3;
+        const max = Math.max(...nums), min = Math.min(...nums);
+        const span = max - min || 1;
+        const pts = nums.map((n, i) => {
+            const x = PAD + (i / (nums.length - 1)) * (W - PAD * 2);
+            const y = H - PAD - ((n - min) / span) * (H - PAD * 2);
+            return `${x.toFixed(2)},${y.toFixed(2)}`;
+        });
+        const stroke = Charts.token(opts.token || '--accent', '#0071e3');
+
+        return html`
+            <div class="chart-spark" dir="ltr">
+                <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none"
+                     role="img" aria-label="${opts.label || ''}" focusable="false">
+                    <polyline points="${pts.join(' ')}" fill="none" stroke="${stroke}"
+                              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+                </svg>
+            </div>`;
     },
 };
