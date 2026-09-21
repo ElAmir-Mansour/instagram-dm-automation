@@ -19,14 +19,26 @@ const UsersPage = {
         return undefined;
     },
 
+    skeleton() {
+        return html`
+            ${Motion.toolbar()}
+            ${Motion.tableCard(5, [
+                t('users.table.email'), t('users.table.role'),
+                t('users.table.lastLogin'), t('users.table.tenants'), '',
+            ])}
+            ${Motion.busy()}
+        `;
+    },
+
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
+        const gate = Motion.beginLoad(container, () => this.skeleton());
 
         try {
             const result = await API.getAdminUsers();
             this.users = Array.isArray(result) ? result : (result && result.users) || [];
         } catch (err) {
+            gate.done();
             if (err.status === 403 || err.status === 404) {
                 App.dropAdminAccess();
                 UI.renderError(container, {
@@ -39,6 +51,7 @@ const UsersPage = {
             UI.renderError(container, { title: t('users.loadFailed'), message: err.message }, () => this.render());
             return;
         }
+        gate.done();
 
         const users = this.users;
 

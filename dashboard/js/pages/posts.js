@@ -49,14 +49,26 @@ const PostsPage = {
         { value: 'feed', labelKey: 'posts.type.feed', platforms: ['facebook'] },
     ],
 
+    skeleton() {
+        return html`
+            ${Motion.toolbar()}
+            ${Motion.cardGrid(3, 4)}
+            ${Motion.busy()}
+        `;
+    },
+
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
+
+        // Already up on a navigation; scheduled behind a 150ms gate on an
+        // in-place refresh, so a fast response never flashes a skeleton.
+        const gate = Motion.beginLoad(container, () => this.skeleton());
 
         const [scheduled, live] = await Promise.allSettled([
             API.getScheduledPosts(),
             API.getLivePosts(),
         ]);
+        gate.done();
 
         // A failed fetch is an error, not an empty queue. Rendering the cheerful
         // "No Scheduled Posts" state for a 500 invited the creator to recreate
@@ -837,16 +849,31 @@ const PostsPage = {
         }
     },
 
-    async deletePost(id) {
-        if (!confirm(t('posts.deleteConfirm'))) return;
+    /**
+     * The confirm() has already asked, so the card goes now and the DELETE
+     * follows it. A failure puts the card back at its old index and says why —
+     * it used to re-fetch the whole queue and both feeds to show a row it had
+     * never actually removed.
+     */
+    deletePost(id) {
+        if (!confirm(t('posts.deleteConfirm'))) return Promise.resolve();
 
-        try {
-            await API.deleteScheduledPost(id);
-            UI.toast(t('posts.deletedOk'));
-            await this.render();
-        } catch (err) {
-            UI.toast(err.message, 'error');
-        }
+        const index = this.posts.findIndex((p) => String(p.id) === String(id));
+        if (index === -1) return Promise.resolve();
+        const removed = this.posts[index];
+        const card = document.querySelector(`.post-card[data-id="${CSS.escape(String(id))}"]`);
+
+        this.posts.splice(index, 1);
+        if (card) card.remove();
+
+        return Motion.optimistic({
+            send: () => API.deleteScheduledPost(id),
+            revert: () => {
+                this.posts.splice(index, 0, removed);
+                this.renderLayout();
+            },
+            onError: (err) => UI.toast((err && err.message) || t('posts.deleteFailed'), 'error'),
+        });
     },
 
     // ─── Uploads ─────────────────────────────────────────────────────────────
@@ -926,6 +953,24 @@ const PostsPage = {
     },
 };
 
+/**
+ * The three `data-input` handlers on this screen all do work that must not sit
+ * on the typing path, so they are debounced here rather than inside the
+ * methods — the methods stay directly callable from the code that needs them
+ * to run at once (form open, upload complete).
+ *
+ *   - refreshScheduleNote  formats a timestamp through Intl on every keystroke
+ *     in the datetime field. 120ms, so the "actually publishes" line still
+ *     updates while the operator is nudging the minutes.
+ *   - handleUrlInput / refreshCoverPreview  rebuild an <img>/<video> from the
+ *     field's current value, which STARTS A NETWORK REQUEST per keystroke: a
+ *     40-character URL fired up to 40 image loads, 39 of them for prefixes
+ *     that were never a real URL. 280ms, comfortably past a typing pause.
+ */
+const debouncedScheduleNote = Motion.debounce(() => PostsPage.refreshScheduleNote(), 120);
+const debouncedUrlInput = Motion.debounce((el) => PostsPage.handleUrlInput(el), 280);
+const debouncedCoverPreview = Motion.debounce(() => PostsPage.refreshCoverPreview(), 280);
+
 UI.registerActions('posts', {
     switchTab: (el) => PostsPage.switchTab(el.dataset.tab),
     showCreateModal: () => PostsPage.showCreateModal(),
@@ -936,10 +981,10 @@ UI.registerActions('posts', {
     handlePlatformChange: () => PostsPage.applyPlatformMatrix(),
     handleTypeChange: () => PostsPage.applyTypeMatrix(),
     toggleScheduleTime: (el) => PostsPage.toggleScheduleTime(el.checked),
-    refreshScheduleNote: () => PostsPage.refreshScheduleNote(),
-    refreshCoverPreview: () => PostsPage.refreshCoverPreview(),
+    refreshScheduleNote: () => debouncedScheduleNote(),
+    refreshCoverPreview: () => debouncedCoverPreview(),
     handleCreate: (el, e) => PostsPage.handleCreate(el, e),
     handleEdit: (el, e) => PostsPage.handleEdit(el, e),
     handleFileUpload: (el) => PostsPage.handleFileUpload(el),
-    handleUrlInput: (el) => PostsPage.handleUrlInput(el),
+    handleUrlInput: (el) => debouncedUrlInput(el),
 });

@@ -168,8 +168,10 @@ const UI = {
         container.appendChild(toast);
         UI.icons(toast);
         setTimeout(() => {
-            toast.style.opacity = '0';
-            setTimeout(() => toast.remove(), 300);
+            // A class, so the exit timing lives with the entrance timing in
+            // styles.css and collapses with the rest under reduced motion.
+            toast.classList.add('is-leaving');
+            setTimeout(() => toast.remove(), 320);
         }, 4500);
     },
 
@@ -318,24 +320,6 @@ const UI = {
                        class="username-link">${handle}</a>${badge}`;
     },
 
-    // ─── System status badge ────────────────────────────────────────────────
-    /** Driven by real API outcomes (see api.js), not hardcoded in the markup. */
-    setSystemStatus(state) {
-        const el = document.getElementById('status-indicator');
-        if (!el) return;
-        const label = el.querySelector('[data-status-label]');
-        const map = {
-            online: { cls: 'status-online', key: 'status.online' },
-            degraded: { cls: 'status-degraded', key: 'status.degraded' },
-            offline: { cls: 'status-offline', key: 'status.offline' },
-        };
-        const next = map[state] || map.online;
-        const text = t(next.key);
-        el.className = `status-badge ${next.cls}`;
-        if (label) label.textContent = text;
-        el.setAttribute('aria-label', text);
-    },
-
     // ─── Dates ───────────────────────────────────────────────────────────────
     /**
      * Every date goes through the active locale. For Arabic that is
@@ -344,14 +328,40 @@ const UI = {
      * a business dashboard. Times are 24-hour, which removes the ص/م ambiguity
      * in a log column.
      */
+    /**
+     * Formatters are cached per locale+options.
+     *
+     * `Date.prototype.toLocaleString(locale, options)` constructs a fresh
+     * `Intl.DateTimeFormat` on every call, and constructing one is by far the
+     * expensive part. The activity log renders 15 rows with a date each, the
+     * tenants table renders a relative age per row, and the post scheduler
+     * formats a timestamp on every keystroke — all of which used to build a
+     * formatter from scratch each time.
+     */
+    _fmtCache: new Map(),
+
+    _formatter(options) {
+        const key = `${I18N.locale()}|${JSON.stringify(options)}`;
+        let fmt = UI._fmtCache.get(key);
+        if (fmt === undefined) {
+            try {
+                fmt = new Intl.DateTimeFormat(I18N.locale(), options);
+            } catch {
+                fmt = null; // caller falls back to an ISO slice
+            }
+            UI._fmtCache.set(key, fmt);
+        }
+        return fmt;
+    },
+
     _fmt(iso, options) {
         const d = UI._date(iso);
         if (!d) return '—';
-        try {
-            return d.toLocaleString(I18N.locale(), options);
-        } catch {
-            return d.toISOString().slice(0, 16).replace('T', ' ');
+        const fmt = UI._formatter(options);
+        if (fmt) {
+            try { return fmt.format(d); } catch { /* fall through */ }
         }
+        return d.toISOString().slice(0, 16).replace('T', ' ');
     },
 
     /** "٤ مارس، 09:30" / "Mar 4, 09:30" */
@@ -461,11 +471,19 @@ const UI = {
     },
 
     // ─── Misc ────────────────────────────────────────────────────────────────
+    /**
+     * Count up to `target`.
+     *
+     * `.stat-value` is `tabular-nums`, so every intermediate value occupies the
+     * same width as the final one and the tile does not resize under its own
+     * number as it tweens. Zero is written directly: a tween from 0 to 0 is a
+     * frame budget spent on nothing.
+     */
     animateCounter(el, target, duration = 900) {
         if (!el) return;
         const value = Number(target) || 0;
         const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        if (reduced) { el.textContent = UI.formatNumber(value); return; }
+        if (reduced || value === 0) { el.textContent = UI.formatNumber(value); return; }
         let start = 0;
         const step = (timestamp) => {
             if (!start) start = timestamp;

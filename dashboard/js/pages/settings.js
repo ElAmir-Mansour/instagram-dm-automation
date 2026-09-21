@@ -14,15 +14,23 @@ const SettingsPage = {
         'instagram_content_publish',
     ],
 
+    skeleton() {
+        return html`
+            ${Motion.cardGrid(2, 5)}
+            ${Motion.busy()}
+        `;
+    },
+
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
+        const gate = Motion.beginLoad(container, () => this.skeleton());
 
         // The access token status is the page — if it fails there is nothing to show.
         let tokenStatus;
         try {
             tokenStatus = await API.getTokenStatus();
         } catch (err) {
+            gate.done();
             UI.renderError(container, { title: t('settings.errorTitle'), message: err.message }, () => this.render());
             return;
         }
@@ -38,6 +46,8 @@ const SettingsPage = {
         } catch (err) {
             webhookError = err;
         }
+
+        gate.done();
 
         const isValid = tokenStatus.status === 'valid';
         const expiresAt = tokenStatus.expiresAt ? new Date(tokenStatus.expiresAt) : null;
@@ -189,9 +199,13 @@ const SettingsPage = {
                     <div class="form-grid">
                         <div class="form-group">
                             <label class="form-label" for="settings-lang">${t('app.language')}</label>
+                            <!-- Each option carries its own lang attribute so
+                                 العربية is shaped by Cairo and "English" set in
+                                 Inter, whichever language the interface is in. -->
                             <select class="select" id="settings-lang" data-change="app:setLanguage">
                                 ${Object.keys(I18N.LANGS).map((code) => html`
-                                    <option value="${code}" ${code === I18N.lang ? html.raw('selected') : ''}>${I18N.LANGS[code].label}</option>
+                                    <option value="${code}" lang="${I18N.LANGS[code].htmlLang}"
+                                            ${code === I18N.lang ? html.raw('selected') : ''}>${I18N.LANGS[code].label}</option>
                                 `)}
                             </select>
                         </div>

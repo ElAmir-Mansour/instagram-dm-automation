@@ -16,6 +16,19 @@
  * ─── Titles ─────────────────────────────────────────────────────────────────
  * Page titles and subtitles are i18n KEYS, not strings. They were the last
  * place English copy lived outside the catalog.
+ *
+ * ─── Page modules are loaded on demand ──────────────────────────────────────
+ * All ten used to be <script> tags in index.html: 212KB of JavaScript on every
+ * visit to render one screen. `loadPageModule()` injects the one the operator
+ * asked for and memoises the promise. Two things keep that from being felt:
+ * the inline snippet in index.html starts the fetch for the hash's page during
+ * head parsing, and hovering or focusing a nav item starts the fetch for that
+ * page before the click lands.
+ *
+ * ─── Navigation is one motion, not a teardown and a rebuild ─────────────────
+ * `navigate()` paints the incoming page's SKELETON inside a view transition,
+ * so the old content cross-fades into the new page's shape instead of blinking
+ * through an empty container. The page then fills that shape in place.
  */
 const App = {
     currentPage: null,
@@ -25,20 +38,68 @@ const App = {
     /** Populated by loadSession(). Never null once showApp() has run. */
     session: null,
 
+    /** Bumped on every navigate() so a slow module load cannot land late. */
+    _navSeq: 0,
+
     pages: {
-        overview: { page: () => OverviewPage },
-        campaigns: { page: () => CampaignsPage },
-        posts: { page: () => PostsPage },
-        inbox: { page: () => InboxPage },
-        ai_settings: { page: () => AiSettingsPage },
-        analytics: { page: () => AnalyticsPage },
-        activity: { page: () => ActivityPage },
-        settings: { page: () => SettingsPage },
-        tenants: { page: () => TenantsPage, adminOnly: true },
-        users: { page: () => UsersPage, adminOnly: true },
+        overview: { src: 'overview', page: () => OverviewPage },
+        campaigns: { src: 'campaigns', page: () => CampaignsPage },
+        posts: { src: 'posts', page: () => PostsPage },
+        inbox: { src: 'inbox', page: () => InboxPage },
+        ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
+        analytics: { src: 'analytics', page: () => AnalyticsPage },
+        activity: { src: 'activity', page: () => ActivityPage },
+        settings: { src: 'settings', page: () => SettingsPage },
+        tenants: { src: 'tenants', page: () => TenantsPage, adminOnly: true },
+        users: { src: 'users', page: () => UsersPage, adminOnly: true },
     },
 
+    /** Must match the `?v=` the rest of the assets are served with. */
+    ASSET_VERSION: '5.0',
+
+    _modules: Object.create(null),
+
     DEFAULT_PAGE: 'overview',
+
+    /**
+     * Fetch a page module if it is not already in. Resolves with the page
+     * object, or null if the module could not be loaded — callers render an
+     * error rather than a blank screen.
+     *
+     * `name` is only ever a key of `this.pages`, so nothing operator-supplied
+     * reaches the URL.
+     */
+    loadPageModule(name) {
+        const entry = this.pages[name];
+        if (!entry) return Promise.resolve(null);
+
+        const resolve = () => {
+            try { return entry.page() || null; } catch { return null; }
+        };
+
+        const already = resolve();
+        if (already) return Promise.resolve(already);
+
+        if (!this._modules[name]) {
+            this._modules[name] = new Promise((done) => {
+                const script = document.createElement('script');
+                script.src = `/dashboard/js/pages/${entry.src}.js?v=${this.ASSET_VERSION}`;
+                script.onload = () => done(resolve());
+                script.onerror = () => {
+                    // Let a retry try again instead of caching the failure.
+                    delete this._modules[name];
+                    done(null);
+                };
+                document.head.appendChild(script);
+            });
+        }
+        return this._modules[name];
+    },
+
+    /** Fire-and-forget warm-up, for hover and focus. */
+    prefetchPageModule(name) {
+        if (this.pages[name]) this.loadPageModule(name);
+    },
 
     title(page) { return t(`nav.${page}`); },
     subtitle(page) { return t(`page.${page}.subtitle`); },
@@ -46,7 +107,7 @@ const App = {
     init() {
         I18N.init();
         I18N.applyStatic();
-        this.renderLanguageSelect();
+        this.renderLanguageToggle();
         document.title = `${t('app.name')} — ${t('app.tagline')}`;
 
         // Login form handler
@@ -83,13 +144,28 @@ const App = {
             }
         });
 
-        // Sidebar navigation — real links, so they also work with the hash router
+        // Sidebar navigation — real links, so they also work with the hash router.
+        // Hover and focus warm the page module so the click has nothing to wait
+        // for; `pointerenter` rather than `mouseover` so it fires once per item
+        // and not on touch, where there is no hover to warm from.
         document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
             item.addEventListener('click', (e) => {
                 e.preventDefault();
                 this.go(item.dataset.page);
             });
+            const warm = () => this.prefetchPageModule(item.dataset.page);
+            item.addEventListener('pointerenter', warm, { once: true });
+            item.addEventListener('focus', warm, { once: true });
         });
+
+        // The indicator is positioned from measured geometry, so it has to be
+        // re-measured whenever the nav's box can change.
+        const reposition = Motion.coalesce(() => this.moveNavIndicator(false));
+        window.addEventListener('resize', reposition);
+        if (document.fonts && typeof document.fonts.ready === 'object') {
+            // Cairo landing changes the nav items' height.
+            document.fonts.ready.then(reposition, () => {});
+        }
 
         // Logout — tears the current page down first, so no poller survives it
         document.getElementById('logout-btn').addEventListener('click', () => {
@@ -112,7 +188,7 @@ const App = {
         // Hash router — refresh lands on the same page, Back moves between pages
         window.addEventListener('hashchange', () => {
             if (!API.token) return;
-            this.navigate(this.pageFromHash());
+            this.show(this.pageFromHash());
         });
 
         UI.icons();
@@ -125,14 +201,33 @@ const App = {
     },
 
     // ─── Language & theme ────────────────────────────────────────────────────
-    renderLanguageSelect() {
-        const select = document.getElementById('lang-select');
-        if (!select) return;
-        select.innerHTML = esc(html`
-            ${Object.keys(I18N.LANGS).map((code) => html`
-                <option value="${code}" ${code === I18N.lang ? html.raw('selected') : ''}>${I18N.LANGS[code].label}</option>
-            `)}
-        `);
+    /**
+     * A two-language switcher is a button, not a dropdown, and it is labelled
+     * with the language you GET rather than the one you are in. The old control
+     * read "English" while the interface was already English, which tells the
+     * operator nothing about what clicking it does.
+     *
+     * Three rules:
+     *   - the label is the target language's AUTONYM — العربية, never "Arabic",
+     *     because a language name belongs in its own script;
+     *   - `lang` on the button so Cairo shapes العربية and Inter sets English,
+     *     instead of whichever face the surrounding UI happens to be using;
+     *   - the visible label is a noun, so the accessible name is the verb:
+     *     "التبديل إلى الإنجليزية" / "Switch to Arabic".
+     */
+    otherLang() {
+        return I18N.lang === 'ar' ? 'en' : 'ar';
+    },
+
+    renderLanguageToggle() {
+        const btn = document.getElementById('lang-toggle');
+        if (!btn) return;
+        const target = this.otherLang();
+        const cfg = I18N.LANGS[target];
+        btn.textContent = cfg.label;
+        btn.setAttribute('lang', cfg.htmlLang);
+        btn.setAttribute('dir', cfg.dir);
+        btn.setAttribute('aria-label', t('app.switchTo', { name: t(`lang.name.${target}`) }));
     },
 
     /** 'auto' | 'dark' | 'light'. 'auto' removes the attribute and lets
@@ -155,7 +250,7 @@ const App = {
         if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
         else document.documentElement.setAttribute('data-theme', theme);
         // Charts read their colours from the tokens at construction time.
-        if (this.currentPage) this.navigate(this.currentPage);
+        if (this.currentPage) this.show(this.currentPage);
     },
 
     pageFromHash() {
@@ -168,7 +263,7 @@ const App = {
         if (!this.pages[page]) return;
         const target = `#/${page}`;
         if (location.hash === target) {
-            this.navigate(page); // same hash, force a re-render
+            this.show(page); // same hash, force a re-render
         } else {
             location.hash = target;
         }
@@ -205,7 +300,7 @@ const App = {
             // hashchange (which would render the page a second time).
             history.replaceState(null, '', `#/${page}`);
         }
-        this.navigate(page);
+        await this.navigate(page);
     },
 
     // ─── Session / tenancy ───────────────────────────────────────────────────
@@ -278,6 +373,10 @@ const App = {
         if (app) app.classList.toggle('setup-mode', this.needsSetup());
 
         this.renderTenantSwitcher();
+
+        // #app has just come out of `hidden`, so this is the first point at
+        // which the nav has a measurable box. Placed, not animated.
+        this.moveNavIndicator(false);
     },
 
     /**
@@ -339,7 +438,7 @@ const App = {
 
             const page = this.pages[this.currentPage] ? this.currentPage : this.pageFromHash();
             this.currentPage = null; // teardown already ran; don't run it twice
-            this.navigate(page);
+            this.show(page);
         } catch (err) {
             if (select) {
                 select.disabled = false;
@@ -385,6 +484,10 @@ const App = {
         const admin = this.isAdmin();
         const webhookUrl = `${location.origin}/webhook`;
 
+        // The only button on this screen belongs to the tenants module, which
+        // is no longer loaded eagerly. Warm it now so the click finds a handler.
+        if (admin) this.prefetchPageModule('tenants');
+
         container.innerHTML = esc(html`
             <div class="setup-screen surface">
                 <div class="setup-icon"><i data-lucide="plug-zap" aria-hidden="true"></i></div>
@@ -420,7 +523,66 @@ const App = {
         }
     },
 
-    navigate(page) {
+    // ─── Navigation ──────────────────────────────────────────────────────────
+
+    /** Which nav item is current, plus its accessible state. */
+    markNavItem(page) {
+        document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
+            const active = item.dataset.page === page;
+            item.classList.toggle('active', active);
+            if (active) item.setAttribute('aria-current', 'page');
+            else item.removeAttribute('aria-current');
+        });
+    },
+
+    /**
+     * Put the active marker over the active item.
+     *
+     * `translateY` and `height` only — no horizontal component, so the same
+     * code is correct in an RTL and an LTR document; the marker's inline edges
+     * come from logical properties in CSS. `animate: false` is used for the
+     * first placement and for re-measurements (resize, font load), where a
+     * slide from the previous position would be motion with no meaning.
+     */
+    moveNavIndicator(animate) {
+        const nav = document.getElementById('sidebar-nav');
+        const indicator = document.getElementById('nav-indicator');
+        if (!nav || !indicator) return;
+
+        const item = nav.querySelector('.nav-item.active');
+        if (!item || item.classList.contains('hidden') || !item.offsetParent) {
+            indicator.classList.remove('is-visible');
+            return;
+        }
+
+        const navRect = nav.getBoundingClientRect();
+        const itemRect = item.getBoundingClientRect();
+        const y = Math.round(itemRect.top - navRect.top + nav.scrollTop);
+
+        if (!animate) indicator.classList.add('no-transition');
+        indicator.style.transform = `translateY(${y}px)`;
+        indicator.style.blockSize = `${Math.round(itemRect.height)}px`;
+        indicator.classList.add('is-visible');
+        if (!animate) {
+            // Force the value to be adopted before transitions come back, or
+            // the next move would animate from the old position.
+            void indicator.offsetHeight;
+            indicator.classList.remove('no-transition');
+        }
+    },
+
+    /**
+     * `navigate()` is async now (it may have to fetch the page module), so
+     * every fire-and-forget caller goes through here rather than dropping an
+     * unhandled rejection on the floor.
+     */
+    show(page) {
+        return Promise.resolve(this.navigate(page)).catch((err) => {
+            console.error('Navigation failed:', err);
+        });
+    },
+
+    async navigate(page) {
         if (!this.pages[page]) return;
 
         // A platform-admin page reached by typing the hash, by an account that
@@ -430,43 +592,82 @@ const App = {
             if (location.hash !== `#/${page}`) history.replaceState(null, '', `#/${page}`);
         }
 
-        this.teardownCurrentPage();
-        this.currentPage = page;
-
-        document.querySelectorAll('.nav-item[data-page]').forEach((item) => {
-            const active = item.dataset.page === page;
-            item.classList.toggle('active', active);
-            if (active) item.setAttribute('aria-current', 'page');
-            else item.removeAttribute('aria-current');
-        });
-
-        document.getElementById('page-title').textContent = this.title(page);
-        document.getElementById('page-subtitle').textContent = this.subtitle(page);
-
-        const sidebar = document.getElementById('sidebar');
-        sidebar.classList.remove('open');
-        const menuBtn = document.getElementById('mobile-menu-btn');
-        if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
-
-        UI.closeModal();
+        const seq = ++this._navSeq;
 
         // No tenant exists yet: every page would dead-end on "No active creator
         // found", so show the one screen that can fix that instead.
         if (this.needsSetup()) {
+            this.teardownCurrentPage();
             this.currentPage = null;
+            this.markNavItem(page);
+            this.moveNavIndicator(true);
             this.renderSetup();
             return;
         }
 
-        try {
-            this.pages[page].page().render();
-        } catch (err) {
+        const instance = await this.loadPageModule(page);
+        if (seq !== this._navSeq) return; // a later navigation already won
+
+        const container = document.getElementById('page-container');
+
+        if (!instance) {
+            UI.renderError(container, {
+                icon: 'wifi-off',
+                title: t('error.render'),
+                message: t('error.moduleFailed'),
+            }, () => this.show(page));
+            return;
+        }
+
+        this.teardownCurrentPage();
+        this.currentPage = page;
+
+        // One motion: the chrome moves, the outgoing page cross-fades into the
+        // incoming page's shape, and the browser morphs the nav marker between
+        // its old and new geometry. Everything in here is synchronous — a view
+        // transition holds the frame while the callback runs.
+        await Motion.transition(() => {
+            this.markNavItem(page);
+            this.moveNavIndicator(true);
+
+            document.getElementById('page-title').textContent = this.title(page);
+            document.getElementById('page-subtitle').textContent = this.subtitle(page);
+
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.remove('open');
+            const menuBtn = document.getElementById('mobile-menu-btn');
+            if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+
+            // Inside the transition, so a modal left open does not survive a
+            // frame of the new page. closeModal() restores focus to whatever
+            // opened it and guards against that element having been replaced.
+            UI.closeModal();
+
+            if (container && typeof instance.skeleton === 'function') {
+                container.innerHTML = esc(instance.skeleton());
+                Motion.markSkeleton(container);
+                UI.icons(container);
+            }
+        });
+
+        if (seq !== this._navSeq) return;
+
+        const fail = (err) => {
             console.error('Page render failed:', err);
             UI.renderError(
-                document.getElementById('page-container'),
+                container,
                 { title: t('error.render'), message: (err && err.message) || String(err) },
-                () => this.navigate(page)
+                () => this.show(page)
             );
+        };
+
+        try {
+            // Most pages' render() is async; a throw after its first await
+            // rejects rather than raising, so both paths land on `fail`.
+            const result = instance.render();
+            if (result && typeof result.catch === 'function') result.catch(fail);
+        } catch (err) {
+            fail(err);
         }
     },
 };
@@ -482,6 +683,11 @@ UI.registerActions('app', {
     switchTenantFromSelect(el) {
         App.switchTenant(el.value);
     },
+    /** The header affordance: two languages, so it is a toggle. */
+    toggleLanguage() {
+        I18N.setLang(App.otherLang());
+    },
+    /** The full control in Settings, where a list is the right shape. */
     setLanguage(el) {
         I18N.setLang(el.value);
     },

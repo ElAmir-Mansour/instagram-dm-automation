@@ -7,6 +7,15 @@
  *   - polling stops while the tab is hidden, and on destroy() (navigate/logout)
  *   - the composer is built ONCE per selected thread and never re-rendered, so
  *     an unsent draft survives every poll
+ *   - the thread list is DIFFED, not rebuilt. `renderThreads()` used to write
+ *     `container.innerHTML` every five seconds, which reset the scroller to
+ *     the top, dropped focus off whatever row had it, and re-ran the icon pass
+ *     over every row. Now `Motion.patchList()` touches only the rows whose
+ *     visible content actually changed and moves the rest with `moveBefore()`,
+ *     so a tick in which nothing happened does nothing at all.
+ *   - an optimistic AI toggle is held in `pendingBotState` until the server
+ *     confirms it, so the next poll cannot undo what the operator just did
+ *     and then redo it a tick later.
  *
  * ─── Mobile ─────────────────────────────────────────────────────────────────
  * This is the screen the creator opens on a phone, and the one that used to be
@@ -28,9 +37,23 @@ const InboxPage = {
     chatShellThreadId: null,
     onVisibilityChange: null,
 
-    render() {
-        const container = document.getElementById('page-container');
-        container.innerHTML = esc(html`
+    /** True once the message list has been painted for the open thread. */
+    messagesPainted: false,
+
+    /** id → the AI state the operator chose, until the server confirms it. */
+    pendingBotState: new Map(),
+
+    _pendingSeq: 0,
+    _searchRender: null,
+
+    /**
+     * The shell. `App.navigate` paints this inside the view transition, so the
+     * two panes and the thread rows' shapes are on screen before any request
+     * has come back; `render()` then finds the layout already there and leaves
+     * it alone rather than painting the same markup a second time.
+     */
+    layout() {
+        return html`
             <div class="inbox-layout" data-pane="threads">
                 <section class="inbox-sidebar surface" aria-label="${t('inbox.threads')}">
                     <div class="inbox-search">
@@ -43,7 +66,7 @@ const InboxPage = {
                         </div>
                     </div>
                     <div class="threads-list" id="threads-container">
-                        ${html.raw(UI.loader(t('inbox.loadingThreads')))}
+                        ${Motion.threadRows(7)}
                     </div>
                 </section>
 
@@ -51,13 +74,28 @@ const InboxPage = {
                     ${this.emptyChatState()}
                 </section>
             </div>
-        `);
+        `;
+    },
 
-        UI.icons(container);
+    skeleton() {
+        return this.layout();
+    },
+
+    render() {
+        const container = document.getElementById('page-container');
+        if (!container) return;
+
+        if (!container.querySelector('.inbox-layout')) {
+            container.innerHTML = esc(this.layout());
+            UI.icons(container);
+        }
+        Motion.clearSkeleton(container);
 
         this.selectedConversationId = null;
         this.chatShellThreadId = null;
         this.renderedMessageIds = new Set();
+        this.messagesPainted = false;
+        this.pendingBotState = new Map();
         this.lastMessageStamp = null;
 
         this.loadThreads();
@@ -91,6 +129,8 @@ const InboxPage = {
         this.selectedConversationId = null;
         this.chatShellThreadId = null;
         this.renderedMessageIds = new Set();
+        this.messagesPainted = false;
+        this.pendingBotState = new Map();
         this.lastMessageStamp = null;
         this.threads = [];
     },
@@ -104,6 +144,8 @@ const InboxPage = {
         this.selectedConversationId = null;
         this.chatShellThreadId = null;
         this.renderedMessageIds = new Set();
+        this.messagesPainted = false;
+        this.pendingBotState = new Map();
         this.lastMessageStamp = null;
         this.threads = [];
         this.searchTerm = '';
@@ -144,7 +186,18 @@ const InboxPage = {
     async loadThreads(silent = false) {
         try {
             const result = await API.getConversations();
-            this.threads = (result && result.data) || [];
+            const rows = (result && result.data) || [];
+            // An AI toggle the operator has just flipped outranks a poll that
+            // may have left before the write committed. Without this the badge
+            // flips back for one tick and then forward again.
+            if (this.pendingBotState.size > 0) {
+                rows.forEach((row) => {
+                    if (this.pendingBotState.has(row.id)) {
+                        row.is_bot_active = this.pendingBotState.get(row.id);
+                    }
+                });
+            }
+            this.threads = rows;
             this.renderThreads();
 
             // Only refetch the open conversation when it actually changed.
@@ -185,6 +238,46 @@ const InboxPage = {
         });
     },
 
+    /**
+     * A row's inner markup.
+     *
+     * The 📥/📤 prefix that used to open the preview line is gone. It restated
+     * `last_message_direction`, which the operator only acts on in exactly the
+     * case the "needs a reply" badge below already covers — when the AI is off
+     * and the customer spoke last. While the AI is answering, who spoke last is
+     * not a decision the operator makes, so the glyph was two characters of
+     * chrome on every row of the busiest screen in the product.
+     *
+     * The blinking dot is gone from the "AI active" badge for the same kind of
+     * reason: it animated a state that never changes while you look at it. The
+     * one place a blink still earns its place is a post that is publishing
+     * right now, where something really is in flight.
+     */
+    threadRow(x) {
+        const isInbound = x.last_message_direction === 'inbound';
+        return html`
+            <span class="thread-top">
+                <span class="thread-name"><bdi dir="auto">@${this.threadName(x)}</bdi></span>
+                <span class="thread-time">${UI.formatTime(x.last_message_at)}</span>
+            </span>
+            <span class="thread-preview" dir="auto">${x.last_message_text || t('inbox.noMessages')}</span>
+            <span class="thread-badges">
+                ${x.is_bot_active
+                    ? html`<span class="badge badge-success">${t('inbox.aiActive')}</span>`
+                    : html`<span class="badge badge-warning">${t('inbox.aiPaused')}</span>`}
+                ${!x.is_bot_active && isInbound
+                    ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
+                    : ''}
+            </span>
+        `;
+    },
+
+    /**
+     * Patch, never rebuild. This runs every five seconds; on a tick where
+     * nothing changed, every row's signature matches and not one DOM node is
+     * written — so the scroller does not jump, the focused row keeps focus, and
+     * there is nothing to flash.
+     */
     renderThreads() {
         const container = document.getElementById('threads-container');
         if (!container) return;
@@ -192,47 +285,56 @@ const InboxPage = {
         const threads = this.visibleThreads();
 
         if (threads.length === 0) {
-            container.innerHTML = esc(html`
-                <p class="empty-threads">${this.searchTerm ? t('inbox.noMatch') : t('inbox.noThreads')}</p>
-            `);
+            const message = this.searchTerm ? t('inbox.noMatch') : t('inbox.noThreads');
+            const existing = container.querySelector('.empty-threads');
+            if (existing) {
+                if (existing.textContent !== message) existing.textContent = message;
+                return;
+            }
+            container.innerHTML = esc(html`<p class="empty-threads">${message}</p>`);
             return;
         }
 
-        container.innerHTML = esc(html`
-            ${threads.map((x) => {
+        Motion.patchList(container, threads, {
+            key: (x) => x.id,
+            // Everything the row displays, and nothing else. `` cannot
+            // appear in a username or a DM, so no two states collide.
+            signature: (x) => [
+                this.threadName(x),
+                x.last_message_at,
+                x.last_message_text,
+                x.is_bot_active ? '1' : '0',
+                x.last_message_direction,
+                x.id === this.selectedConversationId ? '1' : '0',
+            ].join(''),
+            create: () => {
+                const el = document.createElement('button');
+                el.type = 'button';
+                el.className = 'thread-item';
+                return el;
+            },
+            update: (el, x) => {
                 const isActive = x.id === this.selectedConversationId;
-                const isInbound = x.last_message_direction === 'inbound';
-                const username = this.threadName(x);
-                return html`
-                    <button type="button"
-                            class="thread-item ${isActive ? 'active' : ''}"
-                            aria-current="${isActive ? 'true' : 'false'}"
-                            data-action="inbox:selectThread" data-id="${x.id}">
-                        <span class="thread-top">
-                            <span class="thread-name"><bdi dir="auto">@${username}</bdi></span>
-                            <span class="thread-time">${UI.formatTime(x.last_message_at)}</span>
-                        </span>
-                        <span class="thread-preview" dir="auto">
-                            ${isInbound ? '📥' : '📤'} ${x.last_message_text || t('inbox.noMessages')}
-                        </span>
-                        <span class="thread-badges">
-                            ${x.is_bot_active
-                                ? html`<span class="badge badge-success"><span class="dot-blink" aria-hidden="true"></span>${t('inbox.aiActive')}</span>`
-                                : html`<span class="badge badge-warning">${t('inbox.aiPaused')}</span>`}
-                            ${!x.is_bot_active && isInbound
-                                ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
-                                : ''}
-                        </span>
-                    </button>
-                `;
-            })}
-        `);
-        UI.icons(container);
+                el.className = `thread-item${isActive ? ' active' : ''}`;
+                el.setAttribute('aria-current', isActive ? 'true' : 'false');
+                el.dataset.action = 'inbox:selectThread';
+                el.dataset.id = x.id;
+                el.innerHTML = esc(this.threadRow(x));
+            },
+        });
     },
 
+    /**
+     * Search feedback stays immediate, but at most one render per frame: a fast
+     * typist firing eight `input` events inside one frame used to get eight
+     * full list rebuilds, of which seven were thrown away unpainted.
+     */
     handleSearch(value) {
         this.searchTerm = value || '';
-        this.renderThreads();
+        if (!this._searchRender) {
+            this._searchRender = Motion.coalesce(() => this.renderThreads());
+        }
+        this._searchRender();
     },
 
     // ─── Chat pane ───────────────────────────────────────────────────────────
@@ -244,6 +346,7 @@ const InboxPage = {
         if (this.selectedConversationId === id) return;
         this.selectedConversationId = id;
         this.renderedMessageIds = new Set();
+        this.messagesPainted = false;
 
         const thread = this.threads.find((x) => x.id === id);
         this.lastMessageStamp = thread ? thread.last_message_at : null;
@@ -340,7 +443,7 @@ const InboxPage = {
         } catch (err) {
             console.error('Messages Load Error:', err);
             const list = document.getElementById('chat-messages-container');
-            if (list && this.renderedMessageIds.size === 0) {
+            if (list && !this.messagesPainted) {
                 UI.renderError(
                     list,
                     { title: t('inbox.messagesErrorTitle'), message: err.message },
@@ -355,8 +458,14 @@ const InboxPage = {
         const list = document.getElementById('chat-messages-container');
         if (!list) return;
 
-        const firstPaint = this.renderedMessageIds.size === 0;
-        if (firstPaint) list.innerHTML = '';
+        // Tracked explicitly rather than inferred from renderedMessageIds,
+        // whose size can now be non-zero before the first server payload lands
+        // (an optimistic outbound bubble holds a key of its own).
+        const firstPaint = !this.messagesPainted;
+        if (firstPaint) {
+            list.innerHTML = '';
+            this.messagesPainted = true;
+        }
 
         const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
         let appended = 0;
@@ -437,45 +546,120 @@ const InboxPage = {
     },
 
     // ─── Actions ─────────────────────────────────────────────────────────────
-    async toggleBot(id, checked) {
-        try {
-            await API.toggleConversationBot(id, checked);
-            UI.toast(checked ? t('inbox.botOn') : t('inbox.botOff'), checked ? 'success' : 'error');
-            this.loadThreads(true);
-        } catch (err) {
-            console.error('Toggle Bot Error:', err);
-            UI.toast(err.message || t('inbox.botFailed'), 'error');
+
+    /**
+     * The operator has already moved the switch; the thread's badge follows in
+     * the same frame and the request goes out behind it. The chosen value is
+     * parked in `pendingBotState` until the server answers, so an in-flight
+     * poll cannot flip the badge back for a tick.
+     *
+     * The success toast is gone: it announced a state the switch and the badge
+     * were both already showing.
+     */
+    toggleBot(id, checked) {
+        const thread = this.threads.find((x) => x.id === id);
+        const previous = thread ? thread.is_bot_active !== false : !checked;
+
+        const paint = (value) => {
+            if (thread) thread.is_bot_active = value;
             const toggle = document.getElementById('bot-toggle-input');
-            if (toggle) toggle.checked = !checked;
-        }
+            if (toggle && toggle.checked !== value) toggle.checked = value;
+            this.renderThreads();
+        };
+
+        this.pendingBotState.set(id, checked);
+        paint(checked);
+
+        return Motion.optimistic({
+            send: () => API.toggleConversationBot(id, checked),
+            revert: () => paint(previous),
+            onError: (err) => {
+                console.error('Toggle Bot Error:', err);
+                UI.toast((err && err.message) || t('inbox.botFailed'), 'error');
+            },
+        }).then((result) => {
+            this.pendingBotState.delete(id);
+            return result;
+        });
     },
 
+    /** A bubble for a reply that has left the composer but not yet the server. */
+    pendingBubble(key, text) {
+        return html`
+            <div class="message-row row-outbound" data-pending="${key}">
+                <div class="message-bubble bubble-outbound is-pending">
+                    <p dir="auto">${text}</p>
+                    <span class="message-time">${t('inbox.sending')}</span>
+                </div>
+            </div>
+        `;
+    },
+
+    /**
+     * Send a manual reply.
+     *
+     * The composer used to disable its own textarea and sit there until the
+     * server answered — on a cold serverless function, a second or more of a
+     * dead field with the operator's text still in it. Now the draft leaves the
+     * box immediately and appears as a dimmed bubble at the bottom of the
+     * thread, which is what every messaging client the operator uses does.
+     *
+     * The textarea is deliberately NOT disabled: disabling the field the user
+     * is typing in is the single most common way a composer feels slow, and it
+     * takes focus with it.
+     *
+     * On failure the placeholder is REMOVED rather than left behind as a failed
+     * marker, and the draft goes back in the box — so the screen never shows a
+     * message that was not sent. The original contract that nothing typed is
+     * ever lost is kept, except that a draft the operator has already started
+     * replacing is not overwritten.
+     */
     async sendMessage(form, event) {
         event.preventDefault();
         const id = form.dataset.id;
         const input = document.getElementById('chat-input-text');
         const button = form.querySelector('button[type="submit"]');
-        const text = input.value.trim();
+        const text = input ? input.value.trim() : '';
         if (!text) return;
 
-        input.disabled = true;
+        const list = document.getElementById('chat-messages-container');
+        const key = `pending:${++this._pendingSeq}`;
+
+        if (input) input.value = '';
         if (button) button.disabled = true;
+
+        if (list && this.messagesPainted) {
+            this.renderedMessageIds.add(key);
+            list.insertAdjacentHTML('beforeend', esc(this.pendingBubble(key, text)));
+            list.scrollTop = list.scrollHeight;
+        }
+
+        const placeholder = () => (list ? list.querySelector(`[data-pending="${CSS.escape(key)}"]`) : null);
+        const dropPlaceholder = () => {
+            const el = placeholder();
+            if (el) el.remove();
+            this.renderedMessageIds.delete(key);
+        };
 
         try {
             await API.sendConversationMessage(id, text);
-            input.value = '';
+            // Drop the placeholder first, then let the canonical row land in
+            // its place — otherwise the same reply appears twice.
+            dropPlaceholder();
+            // Not "sent": the operator cannot see that a manual reply also
+            // pauses the AI for this thread, and that is the part they act on.
             UI.toast(t('inbox.sent'));
             this.lastMessageStamp = null; // force the next poll to pick it up
             await this.loadMessages(id, { scroll: true });
             await this.loadThreads(true);
         } catch (err) {
             console.error('Send Message Error:', err);
-            // The draft is deliberately left in the box so nothing is lost.
+            dropPlaceholder();
+            if (input && !input.value) input.value = text;
             UI.toast(err.message || t('inbox.sendFailed'), 'error');
         } finally {
-            input.disabled = false;
             if (button) button.disabled = false;
-            input.focus();
+            if (input) input.focus();
         }
     },
 };

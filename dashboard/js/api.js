@@ -59,7 +59,10 @@ const API = {
                 headers: { ...headers, ...options.headers },
             });
         } catch (networkErr) {
-            if (typeof UI !== 'undefined') UI.setSystemStatus('offline');
+            // No global health badge any more: a failure is reported by the
+            // thing that failed — an error panel with Retry, or a toast — and
+            // an indicator that is only ever green tells the operator nothing
+            // the page having loaded did not already tell them.
             const err = new Error(t('http.network'));
             err.isNetworkError = true;
             err.cause = networkErr;
@@ -80,10 +83,6 @@ const API = {
         let parseFailed = false;
         if (rawText) {
             try { body = JSON.parse(rawText); } catch { parseFailed = true; }
-        }
-
-        if (typeof UI !== 'undefined') {
-            UI.setSystemStatus(res.status >= 500 ? 'degraded' : 'online');
         }
 
         if (!res.ok) {

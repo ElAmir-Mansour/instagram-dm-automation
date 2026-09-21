@@ -13,71 +13,175 @@
  * and a link straight to the screen that fixes each one. The totals stay,
  * below it, because they are worth a glance — they are just not the headline.
  *
- * Everything is assembled from endpoints that already exist. Each source is
- * fetched with allSettled, so a failing token check (or an admin route that is
- * not deployed) removes one card instead of blanking the page.
+ * Everything is assembled from endpoints that already exist.
+ *
+ * ─── Why this page renders in four pieces ───────────────────────────────────
+ * Six requests go out on load, deliberately, because the briefing needs six
+ * answers. It used to `await Promise.allSettled` on all six and render nothing
+ * until the slowest returned — and then fire a SEVENTH request for the daily
+ * series before it could draw the chart, so the page's real cost was two
+ * round trips deep, not one.
+ *
+ * Now the frame is painted immediately as four regions, every request
+ * (including the daily series and Chart.js itself) goes out in the same tick,
+ * and each region fills the moment its own source lands. The layout does not
+ * move as they arrive because every region's skeleton is built from the real
+ * component classes and therefore already occupies the real component's box.
+ *
+ * Only the core stats call is still fatal: without it there is no page.
  */
 const OverviewPage = {
     charts: [],
 
+    /** Guards a fill against landing after the operator has navigated away. */
+    _seq: 0,
+
     destroy() {
+        this._seq++;
         this.charts.forEach((c) => { try { c.destroy(); } catch (e) { /* already gone */ } });
         this.charts = [];
     },
 
-    async render() {
-        const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader();
-        this.destroy();
-
-        const [statsRes, recentRes, failedRes, tokenRes, postsRes, threadsRes] = await Promise.allSettled([
-            API.getStats(),
-            API.getInteractions({ limit: 8 }),
-            API.getInteractions({ status: 'FAILED', limit: 50 }),
-            API.getTokenStatus(),
-            API.getScheduledPosts(),
-            API.getConversations(),
-        ]);
-
-        // Only the core stats call is fatal: without it there is no page.
-        if (statsRes.status !== 'fulfilled') {
-            const err = statsRes.reason || new Error(t('error.unexpected'));
-            UI.renderError(container, {
-                icon: 'wifi-off',
-                title: t('error.pageTitle'),
-                message: err.message,
-                hint: err.isNetworkError ? t('error.network') : '',
-            }, () => this.render());
-            return;
-        }
-
-        const stats = statsRes.value || {};
-        const rows = (recentRes.status === 'fulfilled' && recentRes.value && recentRes.value.data) || [];
-        const alerts = this.buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes);
-
-        container.innerHTML = esc(html`
-            ${this.renderBriefing(alerts)}
-            ${this.renderStats(stats)}
-
-            <div class="chart-grid">
-                <div class="chart-card surface">
-                    <div class="chart-card-header">
-                        <span class="chart-card-title">${t('overview.chart.activity')}</span>
-                    </div>
-                    <div class="chart-wrapper">
-                        <canvas id="activity-chart" role="img" aria-label="${t('overview.chart.activity')}"></canvas>
-                    </div>
-                </div>
-                <div class="chart-card surface">
-                    <div class="chart-card-header">
-                        <span class="chart-card-title">${t('overview.chart.status')}</span>
-                    </div>
-                    <div class="chart-wrapper">
-                        <canvas id="status-chart" role="img" aria-label="${t('overview.chart.status')}"></canvas>
-                    </div>
-                </div>
+    /**
+     * The frame. `App.navigate` paints this inside the view transition, and
+     * `render()` fills the four `[data-region]` hosts in place rather than
+     * replacing the container — which is why the regions can land in any
+     * order without the page reflowing.
+     */
+    skeleton() {
+        return html`
+            <div data-region="briefing">${this.briefingSkeleton()}</div>
+            <div data-region="stats">${Motion.statsGrid(4)}</div>
+            <div data-region="charts">${Motion.chartGrid(2)}</div>
+            <div data-region="recent">
+                ${Motion.tableCard(8, [t('table.user'), t('table.keyword'), t('table.status'), t('table.time')])}
             </div>
+            <div data-region="busy">${Motion.busy()}</div>
+        `;
+    },
 
+    /** Sized to the all-clear card, which is the state this page is in most days. */
+    briefingSkeleton() {
+        return html`
+            <section class="briefing" aria-hidden="true">
+                <div class="briefing-head">
+                    <h2>${Motion.line('md')}</h2>
+                    <span class="briefing-date">${Motion.line('full')}</span>
+                </div>
+                <div class="alert-card">
+                    <span class="alert-icon"></span>
+                    <div>
+                        <h3>${Motion.line('md')}</h3>
+                        <p>${Motion.line('lg')}</p>
+                    </div>
+                </div>
+            </section>
+        `;
+    },
+
+    region(name) {
+        const container = document.getElementById('page-container');
+        if (!container) return null;
+        return container.querySelector(`[data-region="${name}"]`);
+    },
+
+    /** Turn a promise into an allSettled-shaped record without awaiting it. */
+    _settle(promise) {
+        return promise.then(
+            (value) => ({ status: 'fulfilled', value }),
+            (reason) => ({ status: 'rejected', reason })
+        );
+    },
+
+    render() {
+        const container = document.getElementById('page-container');
+        if (!container) return;
+
+        this.destroy();
+        const seq = this._seq;
+        const live = () => seq === this._seq && !!document.getElementById('page-container');
+
+        // Painted by App.navigate on a navigation; painted here on a retry or
+        // a theme change, where the container holds something else.
+        if (!container.querySelector('[data-region="briefing"]')) {
+            container.innerHTML = esc(this.skeleton());
+            UI.icons(container);
+        }
+        Motion.clearSkeleton(container);
+
+        // Every request in the same tick, including the daily series that used
+        // to wait for the other six and the chart library that used to be
+        // ~201KB on the critical path of all ten screens.
+        const statsP = this._settle(API.getStats());
+        const recentP = this._settle(API.getInteractions({ limit: 8 }));
+        const failedP = this._settle(API.getInteractions({ status: 'FAILED', limit: 50 }));
+        const tokenP = this._settle(API.getTokenStatus());
+        const postsP = this._settle(API.getScheduledPosts());
+        const threadsP = this._settle(API.getConversations());
+        const dailyP = this._settle(API.getDailyStats(7));
+        const chartLibP = Charts.ensure();
+
+        // ── Region 1+2+3: the stats tiles, then the charts they feed ────────
+        statsP.then(async (statsRes) => {
+            if (!live()) return;
+
+            if (statsRes.status !== 'fulfilled') {
+                const err = statsRes.reason || new Error(t('error.unexpected'));
+                UI.renderError(container, {
+                    icon: 'wifi-off',
+                    title: t('error.pageTitle'),
+                    message: err.message,
+                    hint: err.isNetworkError ? t('error.network') : '',
+                }, () => this.render());
+                return;
+            }
+
+            const stats = statsRes.value || {};
+
+            const statsHost = this.region('stats');
+            if (statsHost) {
+                statsHost.innerHTML = esc(this.renderStats(stats));
+                UI.icons(statsHost);
+                UI.animateCounter(document.getElementById('stat-sent'), stats.sent);
+                UI.animateCounter(document.getElementById('stat-users'), stats.uniqueUsersReached);
+                UI.animateCounter(document.getElementById('stat-campaigns'), stats.activeCampaigns);
+            }
+
+            const [dailyRes, hasChart] = await Promise.all([dailyP, chartLibP]);
+            if (!live() || !hasChart) return;
+            this.renderCharts(stats, dailyRes);
+        });
+
+        // ── Region 4: the recent-activity table ────────────────────────────
+        recentP.then((recentRes) => {
+            if (!live()) return;
+            const host = this.region('recent');
+            if (!host) return;
+            const rows = (recentRes.status === 'fulfilled' && recentRes.value && recentRes.value.data) || [];
+            host.innerHTML = esc(this.renderRecent(rows));
+            UI.icons(host);
+        });
+
+        // ── Region 1: the briefing, once its five sources have answered ────
+        Promise.all([statsP, failedP, tokenP, postsP, threadsP]).then(
+            ([statsRes, failedRes, tokenRes, postsRes, threadsRes]) => {
+                if (!live()) return;
+                const host = this.region('briefing');
+                if (!host || statsRes.status !== 'fulfilled') return;
+                const alerts = this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes);
+                host.innerHTML = esc(this.renderBriefing(alerts));
+                UI.icons(host);
+
+                // The briefing is the last region to settle, so the live region
+                // that announced "loading" has nothing left to say.
+                const busy = this.region('busy');
+                if (busy) busy.innerHTML = '';
+            }
+        );
+    },
+
+    renderRecent(rows) {
+        return html`
             <div class="table-card surface">
                 <div class="table-header">
                     <span class="table-title">${t('overview.recent')}</span>
@@ -109,15 +213,7 @@ const OverviewPage = {
                     </table>
                 </div>
             </div>
-        `);
-
-        UI.icons(container);
-
-        UI.animateCounter(document.getElementById('stat-sent'), stats.sent);
-        UI.animateCounter(document.getElementById('stat-users'), stats.uniqueUsersReached);
-        UI.animateCounter(document.getElementById('stat-campaigns'), stats.activeCampaigns);
-
-        await this.renderCharts(stats);
+        `;
     },
 
     // ─── Briefing ────────────────────────────────────────────────────────────
@@ -271,7 +367,7 @@ const OverviewPage = {
                 <div class="stat-card surface">
                     <div class="stat-header">
                         <span class="stat-label">${t('overview.stat.sent')}</span>
-                        <span class="stat-icon accent"><i data-lucide="send" aria-hidden="true"></i></span>
+                        <span class="stat-icon"><i data-lucide="send" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value" id="stat-sent">0</p>
                     <p class="stat-sub">${t('overview.stat.sentSub', { count: UI.formatNumber(stats.todayActivity) })}</p>
@@ -279,7 +375,7 @@ const OverviewPage = {
                 <div class="stat-card surface">
                     <div class="stat-header">
                         <span class="stat-label">${t('overview.stat.successRate')}</span>
-                        <span class="stat-icon success"><i data-lucide="check-circle" aria-hidden="true"></i></span>
+                        <span class="stat-icon"><i data-lucide="check-circle" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value">${UI.formatPercent(stats.successRate)}</p>
                     <p class="stat-sub">${t('overview.stat.successRateSub', {
@@ -289,17 +385,19 @@ const OverviewPage = {
                 <div class="stat-card surface">
                     <div class="stat-header">
                         <span class="stat-label">${t('overview.stat.users')}</span>
-                        <span class="stat-icon warning"><i data-lucide="users" aria-hidden="true"></i></span>
+                        <span class="stat-icon"><i data-lucide="users" aria-hidden="true"></i></span>
                     </div>
+                    <!-- No sub-line: the label already says "People reached",
+                         and "Unique users" underneath it was the same fact in
+                         different words. -->
                     <p class="stat-value" id="stat-users">0</p>
-                    <p class="stat-sub">${t('overview.stat.usersSub')}</p>
                 </div>
                 <div class="stat-card surface">
                     <!-- "Total", not "Active": the backing query counts every
                          campaign row with no WHERE is_active. -->
                     <div class="stat-header">
                         <span class="stat-label">${t('overview.stat.campaigns')}</span>
-                        <span class="stat-icon accent"><i data-lucide="megaphone" aria-hidden="true"></i></span>
+                        <span class="stat-icon"><i data-lucide="megaphone" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value" id="stat-campaigns">0</p>
                     <p class="stat-sub">${t('overview.stat.campaignsSub', { count: UI.formatNumber(stats.totalInteractions) })}</p>
@@ -308,12 +406,43 @@ const OverviewPage = {
         `;
     },
 
-    async renderCharts(stats) {
-        if (typeof Chart === 'undefined') return;
+    /**
+     * The chart region: real cards first, then the charts inside them. The
+     * cards are only written once Chart.js has actually arrived, so a CDN
+     * failure leaves the skeleton's box rather than two empty framed holes.
+     */
+    renderCharts(stats, dailyRes) {
+        const host = this.region('charts');
+        if (!host || typeof Chart === 'undefined') return;
+
+        host.innerHTML = esc(html`
+            <div class="chart-grid">
+                <div class="chart-card surface">
+                    <div class="chart-card-header">
+                        <span class="chart-card-title">${t('overview.chart.activity')}</span>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="activity-chart" role="img" aria-label="${t('overview.chart.activity')}"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card surface">
+                    <div class="chart-card-header">
+                        <span class="chart-card-title">${t('overview.chart.status')}</span>
+                    </div>
+                    <div class="chart-wrapper">
+                        <canvas id="status-chart" role="img" aria-label="${t('overview.chart.status')}"></canvas>
+                    </div>
+                </div>
+            </div>
+        `);
+        UI.icons(host);
+
         const c = Charts.palette();
 
         try {
-            const daily = await API.getDailyStats(7);
+            const daily = (dailyRes && dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value))
+                ? dailyRes.value
+                : [];
             const chart = Charts.create('activity-chart', {
                 type: 'line',
                 data: {

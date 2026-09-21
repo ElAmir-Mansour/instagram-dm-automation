@@ -15,8 +15,49 @@
  *    rest of the page, so the category axis is reversed and the value axis
  *    moves to the right. Chart.js also needs `rtl: true` on the legend and
  *    tooltip, or their swatches sit on the wrong side of the label.
+ *
+ * 3. LOADING. Chart.js itself is ~201KB of UMD and two of the ten screens use
+ *    it, so it is no longer a <script> in index.html. `Charts.ensure()` injects
+ *    it on demand — same pinned version, same SRI hash, same CDN that is
+ *    already in the CSP — and memoises the promise, so the eight screens that
+ *    draw no chart never pay for it and the two that do pay once per session.
+ *    An injected <script> is used rather than `import()` because SRI cannot be
+ *    attached to a dynamic import, and dropping SRI to save a wrapper would be
+ *    a bad trade for a third-party script.
  */
 const Charts = {
+
+    SRC: 'https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js',
+    INTEGRITY: 'sha384-NrKB+u6Ts6AtkIhwPixiKTzgSKNblyhlk0Sohlgar9UHUBzai/sgnNNWWd291xqt',
+
+    _loading: null,
+
+    /**
+     * Resolve true once `window.Chart` exists, false if the CDN is unreachable.
+     * Never rejects: a missing chart must degrade to an empty frame, which is
+     * what `Charts.create()` already does.
+     */
+    ensure() {
+        if (typeof Chart !== 'undefined') return Promise.resolve(true);
+        if (Charts._loading) return Charts._loading;
+
+        Charts._loading = new Promise((resolve) => {
+            const script = document.createElement('script');
+            script.src = Charts.SRC;
+            script.integrity = Charts.INTEGRITY;
+            script.crossOrigin = 'anonymous';
+            script.async = true;
+            script.onload = () => resolve(typeof Chart !== 'undefined');
+            script.onerror = () => {
+                console.warn('Chart.js failed to load from the CDN; charts will be skipped.');
+                // Allow a later page visit to retry rather than caching the failure.
+                Charts._loading = null;
+                resolve(false);
+            };
+            document.head.appendChild(script);
+        });
+        return Charts._loading;
+    },
     /** Read a design token. Falls back so a missing token can never blank a chart. */
     token(name, fallback) {
         try {
