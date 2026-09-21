@@ -115,6 +115,9 @@ const fact = (area, line) => facts.push({ area, line });
 
 const http = axios.create({ timeout: 20000, validateStatus: () => true });
 
+/** Webhook object types owned by META_APP_ID, filled in by the subscription check. */
+const subscribedObjects = new Set();
+
 // ════════════════════════════════════════════════════════════════════════════════════════
 // 1. Deployment and security guards
 // ════════════════════════════════════════════════════════════════════════════════════════
@@ -266,6 +269,9 @@ async function checkMetaConfig(dbState) {
             crit('meta', `object "${sub.object}" is subscribed to the right URL but marked inactive`);
         } else {
             fact('meta', `${sub.object.padEnd(9)} → ${sub.callback_url} (active) [${fields.join(', ')}]`);
+            // Which app signs which object type decides whether INSTAGRAM_APP_SECRET matters at
+            // all — see instagramSecretAdvice() below.
+            subscribedObjects.add(sub.object);
         }
 
         const want = EXPECTED_SUBSCRIPTIONS[sub.object] ?? [];
@@ -322,6 +328,9 @@ async function checkMetaConfig(dbState) {
             `Tried ${candidates.length} candidate(s): ${candidates.map(([l, t]) => `${l} [${fingerprint(t)}]`).join('; ')}. `
             + 'Existing subscriptions keep delivering, but any callback-URL or field change will fail with HTTP 403.');
     }
+    // Placed here, not in checkLocalConfig: only now is it known which app owns which
+    // object type, and that is what decides whether the secret matters.
+    reportInstagramSecretRelevance();
 }
 
 /**
@@ -827,6 +836,48 @@ async function checkStorage(db) {
 // Only ever presence and a fingerprint. The fingerprint is what makes "does my .env match
 // production" answerable without either value being visible.
 
+/**
+ * What to say about a missing local `INSTAGRAM_APP_SECRET`.
+ *
+ * This used to read "--probe-signature cannot test the Instagram app's signing secret",
+ * which assumed the two-app setup CLAUDE.md describes: a Facebook app sending
+ * `object:"page"` and a separate Instagram-Login app sending `object:"instagram"`, each with
+ * its own secret.
+ *
+ * That is no longer this app's configuration. Verified 2026-09-21: `GET /{META_APP_ID}/
+ * subscriptions` returns BOTH objects, so one app signs everything and `META_APP_SECRET` is
+ * the only secret in play. Repeating the old advice would send a reader hunting a vestigial
+ * variable while a silent comment path had some other cause — which is the specific kind of
+ * wrong this whole script exists to prevent.
+ *
+ * So the advice is derived from what the subscriptions actually returned this run rather than
+ * asserted. If the setup ever splits again, the message changes back on its own.
+ */
+function reportInstagramSecretRelevance() {
+    if (process.env.INSTAGRAM_APP_SECRET) return;
+    const hint = instagramSecretAdvice();
+    if (subscribedObjects.has('instagram') && subscribedObjects.has('page')) {
+        ok('meta', 'INSTAGRAM_APP_SECRET is not needed in this configuration', hint);
+    } else {
+        warn('meta', 'INSTAGRAM_APP_SECRET is unset locally and may be load-bearing', hint);
+    }
+}
+
+function instagramSecretAdvice() {
+    if (subscribedObjects.has('instagram') && subscribedObjects.has('page')) {
+        return 'Not a problem here: one app (META_APP_ID) owns BOTH the `instagram` and `page` '
+            + 'subscriptions, so every event is signed with META_APP_SECRET and --probe-signature '
+            + 'already covers it. INSTAGRAM_APP_SECRET is vestigial in this configuration — do not '
+            + 'diagnose a silent comment path by suspecting it.';
+    }
+    if (subscribedObjects.has('instagram')) {
+        return 'Worth setting: the `instagram` subscription is NOT owned by META_APP_ID, so '
+            + 'Instagram-signed events use a different app secret that --probe-signature cannot test.';
+    }
+    return 'Cannot tell whether it matters — the subscription list could not be read this run.';
+}
+
+
 function checkLocalConfig() {
     const required = ['DATABASE_URL', 'META_VERIFY_TOKEN', 'META_APP_SECRET', 'INSTAGRAM_APP_SECRET',
         'GEMINI_API_KEY', 'DASHBOARD_PASSWORD', 'CRON_SECRET'];
@@ -842,7 +893,8 @@ function checkLocalConfig() {
         // 503-vs-200 check in checkDeployment. Say so, rather than raising a false alarm.
         warn('config', `not set in this environment: ${missing.join(', ')}`,
             'Only affects what these diagnostics can verify locally. Production has all of them, or every route would be 503ing. '
-            + (missing.includes('INSTAGRAM_APP_SECRET') ? 'Without INSTAGRAM_APP_SECRET, --probe-signature cannot test the Instagram app\'s signing secret.' : ''));
+            + 'Whether INSTAGRAM_APP_SECRET matters at all depends on which app owns the '
+            + '`instagram` subscription, which the Meta section below determines.');
     }
     if (!process.env.TOKEN_ENCRYPTION_KEY) {
         warn('config', 'TOKEN_ENCRYPTION_KEY is not set here — an encrypted token could not be read to check its health');

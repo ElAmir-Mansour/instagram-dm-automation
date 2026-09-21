@@ -257,6 +257,9 @@ Platform admin only (returns **404** to everyone else — the surface does not a
 7. **`post_type` must be `video`, not `reel`**, for anything cross-posted to Facebook. Always
    set `cover_url` too, or Instagram uses frame 0 as the thumbnail.
 
+> **Verified 2026-09-21: this is no longer the live configuration.** `GET /{META_APP_ID}/subscriptions` returns *both* the `instagram` and `page` objects under one app, so every event is signed with `META_APP_SECRET` and `INSTAGRAM_APP_SECRET` is vestigial. The dual-secret check in `verifyMetaSignature` stays — it costs nothing and this setup has changed before — but do not diagnose a silent comment path by suspecting that secret first. `diagnose.mjs` now derives this for itself and says so.
+
+
 More, with the history behind each: [`RUNBOOK.md`](RUNBOOK.md) and `CLAUDE.md`.
 
 ## License
