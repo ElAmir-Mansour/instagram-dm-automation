@@ -1,62 +1,799 @@
 <!DOCTYPE html>
-<html lang="en">
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  AutoReply Pro — Privacy Policy  ·  سياسة الخصوصية
+  ═══════════════════════════════════════════════════════════════════════════
+
+  WHY THIS PAGE IS BILINGUAL IN ONE FILE, not two.
+  `/privacy` is served by a single hardcoded Express route (src/index.ts:92-94)
+  and `public/**` has no static handler, so a second file (privacy-ar.html)
+  would be unreachable in production. Both languages therefore live here.
+  Without JavaScript both are shown, each with its own lang/dir; with it, the
+  switch in the header filters to one and updates <html lang dir>, exactly as
+  dashboard/js/i18n.js does (applyDocument()).
+
+  EVERY FACTUAL CLAIM BELOW IS TRACEABLE TO CODE. Cited inline as file:line.
+  If the pipeline changes, this page is wrong until it is changed too.
+
+  OWNER: THINGS ONLY YOU CAN SUPPLY — see the marked note at the end of each
+  language, and do not let them ship unfilled:
+    1. A contact email address for privacy and deletion requests.
+    2. The name of the person or entity that operates the service, and the
+       country whose law applies. No legal basis or jurisdiction is asserted
+       anywhere on this page because none could be established from the code.
+    3. Confirmation that RAW_PAYLOAD_RETENTION_DAYS is still 30 in production.
+       This page publishes "30 days" as a promise; the code enforces only a
+       7-day floor (src/services/retention.ts:34) and is a NO-OP when the
+       variable is unset (src/services/retention.ts:84). Change the variable
+       and this page becomes untrue.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+<html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Privacy Policy - Instagram DM Automation</title>
+    <!-- Both schemes are real here: the page consumes the app's tokens, which
+         carry a full light theme as a peer of dark. -->
+    <meta name="color-scheme" content="dark light">
+    <title>سياسة الخصوصية · Privacy Policy — AutoReply Pro</title>
+    <meta name="description" content="كيف يتعامل «أوتوريبلاي برو» مع بيانات مَن يعلّق أو يرسل رسالة خاصة — What AutoReply Pro collects, where it goes, and how to have it deleted.">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+
+    <!-- One design system in this repo, not three. This is the same file the
+         dashboard and dashboard/eid.html load, so the review surface and the
+         product cannot drift apart. Same origin, and allowed by the CSP that
+         src/routes/api.ts:50-63 sets on this route.
+         The `var(--x, literal)` fallbacks below are deliberate and are the only
+         duplication: if this stylesheet ever 404s — the dashboard moving behind
+         Vercel Deployment Protection would do it — the page has to stay legible
+         rather than render as unstyled black-on-transparent. -->
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=5.0">
+
     <style>
+        /* ─── Page ─────────────────────────────────────────────────────────── */
+        * { box-sizing: border-box; }
+
         body {
-            /* No background was set, so a dark-mode UA (Android Chrome's Auto Dark Theme is on
-               by default) put #333 on near-black: measured 1.66:1. Pin the page light. */
-            background: #fff;
-            color-scheme: only light; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.7; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; }
-        h1 { color: #000; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        h2 { color: #222; margin-top: 30px; }
-        a { color: #0070f3; }
+            margin: 0;
+            font-family: var(--font-ui, system-ui, sans-serif);
+            font-size: var(--fs-300, 1rem);
+            line-height: var(--lh-loose, 1.9);
+            background: var(--surface-page, #ffffff);
+            color: var(--text-default, #2c3444);
+            -webkit-text-size-adjust: 100%;
+        }
+
+        /* ─── Skip link ────────────────────────────────────────────────────────
+           There was nothing to skip to on this page before: no landmarks at all. */
+        .skip {
+            position: absolute;
+            inset-inline-start: var(--space-4, 1rem);
+            top: var(--space-2, 0.5rem);
+            z-index: 10;
+            padding: var(--space-2, 0.5rem) var(--space-4, 1rem);
+            border-radius: var(--radius-sm, 10px);
+            background: var(--surface-raised, #ffffff);
+            color: var(--text-strong, #14182a);
+            border: 1px solid var(--border-strong, rgba(19, 24, 41, 0.2));
+            text-decoration: none;
+            font-weight: var(--fw-semibold, 600);
+            transform: translateY(-200%);
+        }
+        .skip:focus { transform: translateY(0); }
+
+        /* ─── Chrome ───────────────────────────────────────────────────────── */
+        .shell {
+            width: 100%;
+            max-width: 52rem;
+            margin: 0 auto;
+            padding: var(--space-5, 1.5rem) var(--space-4, 1rem) var(--space-8, 4rem);
+        }
+
+        .masthead {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-3, 0.75rem);
+            padding-block: var(--space-4, 1rem);
+            margin-bottom: var(--space-5, 1.5rem);
+            border-bottom: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+        }
+
+        .wordmark {
+            font-size: var(--fs-400, 1.125rem);
+            font-weight: var(--fw-bold, 700);
+            color: var(--text-strong, #14182a);
+            line-height: var(--lh-tight, 1.35);
+        }
+        .wordmark .latin {
+            display: block;
+            font-family: var(--font-latin, system-ui, sans-serif);
+            font-size: var(--fs-100, 0.75rem);
+            font-weight: var(--fw-regular, 400);
+            color: var(--text-muted, #5f6a7d);
+        }
+
+        /* ─── Language switch ──────────────────────────────────────────────────
+           Two real buttons, 44px tall, with aria-pressed. Autonyms only, so
+           neither label needs translating. */
+        .langswitch {
+            display: flex;
+            gap: var(--space-1, 0.25rem);
+            padding: var(--space-1, 0.25rem);
+            border-radius: var(--radius-pill, 999px);
+            background: var(--surface-glass, rgba(0, 0, 0, 0.04));
+            border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+        }
+        .langswitch button {
+            min-height: var(--tap-target, 44px);
+            min-width: var(--tap-target, 44px);
+            padding-inline: var(--space-4, 1rem);
+            border: 0;
+            border-radius: var(--radius-pill, 999px);
+            background: transparent;
+            color: var(--text-default, #3c4558);
+            font-family: inherit;
+            font-size: var(--fs-200, 0.875rem);
+            font-weight: var(--fw-semibold, 600);
+            cursor: pointer;
+            transition: background var(--motion-fast, 120ms) var(--ease-standard, ease);
+        }
+        .langswitch button:hover { background: var(--surface-glass-hover, rgba(0, 0, 0, 0.06)); }
+        .langswitch button[aria-pressed='true'] {
+            background: var(--accent-soft, rgba(79, 70, 229, 0.12));
+            color: var(--accent-text, #4338ca);
+        }
+        /* styles.css is not loaded here, so the focus ring is this page's job. */
+        .skip:focus-visible,
+        .langswitch button:focus-visible,
+        a:focus-visible {
+            outline: 2px solid var(--accent, #4f46e5);
+            outline-offset: 2px;
+            border-radius: var(--radius-xs, 6px);
+        }
+
+        /* ─── Document body ────────────────────────────────────────────────── */
+        .doc { max-width: var(--measure, 68ch); }
+        .doc[lang='en'] { font-family: var(--font-latin, system-ui, sans-serif); }
+
+        h1 {
+            font-size: var(--fs-600, 1.75rem);
+            line-height: var(--lh-tight, 1.35);
+            font-weight: var(--fw-bold, 700);
+            color: var(--text-strong, #14182a);
+            margin: 0 0 var(--space-2, 0.5rem);
+        }
+        h2 {
+            font-size: var(--fs-400, 1.125rem);
+            line-height: var(--lh-tight, 1.35);
+            font-weight: var(--fw-semibold, 600);
+            color: var(--text-strong, #14182a);
+            margin: var(--space-6, 2rem) 0 var(--space-2, 0.5rem);
+            padding-top: var(--space-4, 1rem);
+            border-top: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+        }
+        h3 {
+            font-size: var(--fs-300, 1rem);
+            font-weight: var(--fw-semibold, 600);
+            color: var(--text-strong, #14182a);
+            margin: var(--space-5, 1.5rem) 0 var(--space-2, 0.5rem);
+        }
+        p, ul, ol { margin: 0 0 var(--space-4, 1rem); }
+        ul, ol { padding-inline-start: var(--space-5, 1.5rem); }
+        li { margin-bottom: var(--space-2, 0.5rem); }
+        strong { color: var(--text-strong, #14182a); font-weight: var(--fw-semibold, 600); }
+
+        a { color: var(--accent-text, #4338ca); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+        a:hover { color: var(--accent-hover, #4338ca); }
+
+        .stamp {
+            display: inline-block;
+            font-size: var(--fs-100, 0.75rem);
+            color: var(--text-muted, #5f6a7d);
+            margin-bottom: var(--space-5, 1.5rem);
+        }
+
+        /* Latin runs inside Arabic prose — table names, env vars, endpoints. */
+        code, .code {
+            font-family: var(--font-mono, ui-monospace, monospace);
+            font-size: 0.9em;
+            direction: ltr;
+            unicode-bidi: isolate;
+            padding: 0.1em 0.35em;
+            border-radius: var(--radius-xs, 6px);
+            background: var(--surface-glass, rgba(0, 0, 0, 0.05));
+            border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+        }
+
+        /* A callout for the one thing a reader is most likely to want. */
+        .callout {
+            padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
+            margin: 0 0 var(--space-5, 1.5rem);
+            border-radius: var(--radius-md, 14px);
+            border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+            border-inline-start: 3px solid var(--accent, #4f46e5);
+            background: var(--surface-raised, rgba(0, 0, 0, 0.03));
+        }
+        .callout > :last-child { margin-bottom: 0; }
+
+        /* Placeholders the operator must fill. Marked to be impossible to miss
+           rather than quietly plausible — an invented email would be worse than
+           a visible gap. */
+        .todo {
+            padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
+            margin: var(--space-5, 1.5rem) 0 0;
+            border-radius: var(--radius-md, 14px);
+            border: 1px dashed var(--warning, #9a6408);
+            background: var(--warning-soft, rgba(154, 100, 8, 0.12));
+            color: var(--text-default, #3c4558);
+            font-size: var(--fs-200, 0.875rem);
+        }
+        .todo strong { color: var(--warning-text, #7d5106); }
+        .todo > :last-child { margin-bottom: 0; }
+
+        .divider {
+            height: 1px;
+            border: 0;
+            margin: var(--space-8, 4rem) 0;
+            background: var(--border-strong, rgba(19, 24, 41, 0.2));
+        }
+
+        .pagefoot {
+            margin-top: var(--space-7, 3rem);
+            padding-top: var(--space-4, 1rem);
+            border-top: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+            font-size: var(--fs-100, 0.75rem);
+            color: var(--text-muted, #5f6a7d);
+        }
+        .pagefoot a { display: inline-block; min-height: var(--tap-target, 44px); line-height: var(--tap-target, 44px); }
+
+        /* ─── The language filter ──────────────────────────────────────────────
+           No attribute (JS off or failed) = both languages visible, which is the
+           correct degradation for a legal page. */
+        html[data-lang='ar'] [data-doc-lang='en'],
+        html[data-lang='ar'] .t-en,
+        html[data-lang='en'] [data-doc-lang='ar'],
+        html[data-lang='en'] .t-ar { display: none; }
+        html[data-lang='ar'] .divider,
+        html[data-lang='en'] .divider { display: none; }
+
+        /* tokens.css already collapses --motion-* to 1ms under this preference,
+           but the fallbacks in the var() calls above would still animate if that
+           stylesheet failed to load. Stated here too, so the promise holds on its
+           own. */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                transition-duration: 1ms !important;
+                animation-duration: 1ms !important;
+            }
+        }
+
+        @media (max-width: 30rem) {
+            .shell { padding-inline: var(--space-4, 1rem); }
+            h1 { font-size: var(--fs-500, 1.375rem); }
+            .masthead { justify-content: flex-start; }
+        }
     </style>
+
+    <script>
+        /* Resolve the language before first paint so the page never shows the
+           wrong script for a frame. Mirrors dashboard/js/i18n.js: stored choice,
+           then the browser's own languages, then Arabic. */
+        (function () {
+            var lang = null;
+            try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
+            if (lang !== 'ar' && lang !== 'en') {
+                lang = null;
+                try {
+                    var prefs = navigator.languages || [navigator.language || ''];
+                    for (var i = 0; i < prefs.length; i++) {
+                        var code = String(prefs[i] || '').toLowerCase().split('-')[0];
+                        if (code === 'ar' || code === 'en') { lang = code; break; }
+                    }
+                } catch (e) { /* no navigator language information */ }
+            }
+            lang = lang || 'ar';
+            var root = document.documentElement;
+            root.setAttribute('data-lang', lang);
+            root.lang = lang;
+            root.dir = lang === 'ar' ? 'rtl' : 'ltr';
+        })();
+    </script>
 </head>
 <body>
-    <h1>Privacy Policy</h1>
-    <p><strong>Last Updated:</strong> May 18, 2026</p>
-    <p>This Instagram DM Automation service ("we", "us", or "our") operates as an open-source comment-to-DM automation tool. This privacy policy explains our practices regarding the collection, use, and disclosure of data.</p>
-    
-    <h2>1. Data We Collect</h2>
-    <p>We receive the following data via Meta Webhooks when a user comments on an Instagram post:</p>
-    <ul>
-        <li><strong>Username</strong> — The public Instagram username of the commenter.</li>
-        <li><strong>Comment text</strong> — The text content of the comment.</li>
-        <li><strong>Comment ID</strong> — A unique identifier for the comment.</li>
-        <li><strong>Post ID</strong> — The identifier of the post that was commented on.</li>
-    </ul>
-    
-    <h2>2. How We Use the Data</h2>
-    <p>The data is used solely to:</p>
-    <ul>
-        <li>Determine if a comment matches a configured trigger keyword.</li>
-        <li>Send an automated Direct Message to the commenter (if a keyword matches).</li>
-        <li>Prevent duplicate messages by tracking recent interactions.</li>
-    </ul>
-    <p>We do <strong>not</strong> sell this data, and we do not transfer it to anyone for
-    advertising or marketing. We do share it with the service providers listed in section 5,
-    who process it solely to operate this application &mdash; including Google, whose Gemini
-    API receives the content of direct messages in order to generate a reply.</p>
-    
-    <h2>3. Data Storage & Retention</h2>
-    <p>Interaction logs (username, comment ID, post ID, and delivery status) are stored in a secure PostgreSQL database. These logs are used for duplicate prevention (24-hour window) and diagnostic purposes.</p>
-    
-    <h2>4. Data Deletion</h2>
-    <p>Users may request deletion of their data at any time. See our <a href="/data-deletion">Data Deletion Instructions</a> for details.</p>
-    
-    <h2>5. Third-Party Services</h2>
-    <p>This application uses:</p>
-    <ul>
-        <li><strong>Meta Graph API</strong> — To receive comment notifications and send messages. Subject to <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener">Meta's Privacy Policy</a>.</li>
-        <li><strong>Supabase</strong> — For database hosting. Subject to <a href="https://supabase.com/privacy" target="_blank" rel="noopener">Supabase's Privacy Policy</a>.</li>
-        <li><strong>Vercel</strong> — For application hosting. Subject to <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener">Vercel's Privacy Policy</a>.</li>
-        <li><strong>Google (Gemini API)</strong> &mdash; The content of direct messages sent to the account is transmitted to Google's Gemini API to generate an automated reply. Subject to <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's Privacy Policy</a>.</li>
-    </ul>
-    
-    <h2>6. Contact</h2>
-    <p>If you have any questions about this Privacy Policy, please open an issue on our GitHub repository or contact the administrator of the Instagram account that triggered the automation.</p>
+    <a class="skip" href="#content"><span class="t-ar">تخطَّ إلى المحتوى</span><span class="t-sep"> · </span><span class="t-en">Skip to content</span></a>
+
+    <div class="shell">
+        <header class="masthead">
+            <div class="wordmark">
+                أوتوريبلاي برو
+                <span class="latin" lang="en" dir="ltr">AutoReply Pro</span>
+            </div>
+            <nav class="langswitch" aria-label="اللغة · Language">
+                <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
+                <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
+            </nav>
+        </header>
+
+        <main id="content">
+
+            <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
+            <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
+                <h1>سياسة الخصوصية</h1>
+                <p class="stamp">آخر تحديث: 21 سبتمبر 2026</p>
+
+                <p>
+                    «أوتوريبلاي برو» أداة تُشغّلها صاحبة أو صاحب حساب واحد على إنستجرام وفيسبوك،
+                    وتقوم بأمرين فقط: الردّ الآلي على التعليقات التي تُطابِق كلمة مفتاحية محدّدة
+                    مسبقاً، والردّ على الرسائل الخاصة الواردة إلى ذلك الحساب. لا تقوم الأداة
+                    بأي نشاط إعلاني أو تسويقي موجّه، ولا تبيع البيانات.
+                </p>
+                <p>
+                    هذه الصفحة تصف ما يحدث لبياناتك أنت — بوصفك مَن علّق على منشور أو أرسل رسالة
+                    خاصة — لا بيانات صاحب الحساب. وهي مكتوبة بحسب ما يفعله الكود فعلاً، لا بحسب
+                    ما ينبغي أن يفعله.
+                </p>
+                <p>
+                    تعمل الخدمة عبر تطبيق مُسجَّل في «منصّة مطوّري ميتا» باسم
+                    <span class="code" lang="en" dir="ltr">AutoResponseBot</span>، وهو الاسم الذي
+                    تجده لدى ميتا، بينما <strong>أوتوريبلاي برو</strong> هو اسم المنتج نفسه.
+                </p>
+
+                <div class="callout">
+                    <p>
+                        <strong>تريد حذف بياناتك؟</strong>
+                        الطريقة كاملة، ومدى ما يمكن حذفه فعلاً، في
+                        <a href="/data-deletion">صفحة حذف البيانات</a>.
+                    </p>
+                </div>
+
+                <h2>1. ما يَصل إلينا، وما يُخزَّن فعلاً</h2>
+                <p>
+                    هذان أمران مختلفان، والتمييز بينهما هو أصدق ما يمكن قوله: يَصلنا من ميتا أكثر
+                    مما نحتفظ به.
+                </p>
+
+                <h3>عندما تعلّق على منشور</h3>
+                <p>يُرسل إلينا ميتا معرّف التعليق، ومعرّف المنشور، ونصّ التعليق، واسمك ومعرّف حسابك.</p>
+                <ul>
+                    <li>
+                        <strong>يُخزَّن:</strong> معرّف التعليق، ومعرّف المنشور، واسم المستخدم
+                        الظاهر على إنستجرام (أو الاسم المعروض على فيسبوك)، والمنصّة، وحالة
+                        الإرسال، ونصّ أي خطأ أعادته ميتا.
+                    </li>
+                    <li>
+                        <strong>لا يُخزَّن نصّ تعليقك.</strong> يُقارَن بالكلمات المفتاحية في الذاكرة
+                        أثناء المعالجة ثم يُهمل؛ لا يوجد في قاعدة البيانات عمود يحتفظ به.
+                    </li>
+                    <li>
+                        <strong>يُخزَّن لمدة 48 ساعة:</strong> معرّف حسابك عند ميتا مع وقت الإرسال،
+                        وذلك لتطبيق قاعدة «رسالة آلية واحدة لكل شخص في اليوم».
+                    </li>
+                </ul>
+
+                <h3>عندما ترسل رسالة خاصة</h3>
+                <ul>
+                    <li>
+                        <strong>نصّ رسالتك كما كتبته</strong>، واتجاه الرسالة، ونوعها، وأي زرّ
+                        ضغطته، ومعرّف الرسالة عند ميتا.
+                    </li>
+                    <li>
+                        <strong>الحدث الأصلي كما ورد من ميتا</strong>، حرفياً وبالكامل. يحتوي هذا
+                        الحدث على نصّ رسالتك ومعرّف حسابك، وهو نسخة ثانية منهما إلى جانب الأعمدة
+                        السابقة. مدة الاحتفاظ به في القسم 4.
+                    </li>
+                    <li>
+                        <strong>معرّف حسابك عند ميتا</strong> ووقت آخر رسالة ومتى أُبلغتَ آخر مرة
+                        بأن الردود آلية. لا يُخزَّن اسم المستخدم الخاص بك في مسار الرسائل الخاصة —
+                        المعرّف فقط.
+                    </li>
+                    <li>الردود المُرسَلة إليك تُخزَّن بالطريقة نفسها، بنصّها.</li>
+                </ul>
+                <p>
+                    لا نطلب ولا نتلقّى ولا نخزّن بريدك الإلكتروني أو رقم هاتفك أو عنوانك أو بيانات
+                    الدفع. لكن نصّ رسالتك يُخزَّن كما كتبته: إن ذكرتَ فيه معلومة شخصية، فهي مخزّنة
+                    لأنك كتبتها.
+                </p>
+
+                <h2>2. لماذا نستخدم هذه البيانات</h2>
+                <ul>
+                    <li>معرفة ما إذا كان التعليق يُطابِق كلمة مفتاحية لحملة قائمة.</li>
+                    <li>إرسال الردّ الآلي إليك، علناً على التعليق أو في رسالة خاصة.</li>
+                    <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
+                    <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
+                    <li>تشخيص الأعطال: معرفة سبب فشل ردّ لم يصل.</li>
+                </ul>
+
+                <h2>3. الردّ الآلي و«جيميناي» من جوجل</h2>
+                <p>
+                    الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي، لا إنسان. لتوليد الردّ،
+                    يُرسَل <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
+                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">واجهة Gemini API</a>
+                    من جوجل.
+                </p>
+                <p>
+                    ما يُرسَل إلى جوجل هو النصوص واتجاه كل رسالة فقط. <strong>لا يُرسَل اسمك ولا
+                    معرّف حسابك ولا معرّف المحادثة</strong> إلى جوجل. ونصوص التعليقات لا تُرسَل
+                    إلى جوجل إطلاقاً — مسار التعليقات لا يستخدم الذكاء الاصطناعي.
+                </p>
+                <p>
+                    وبحسب سياسة ميتا، تُخبرك أول رسالة في المحادثة — ومرة أخرى بعد انقطاع طويل —
+                    بأنك تتحدّث إلى خدمة آلية.
+                </p>
+
+                <h2>4. مدة الاحتفاظ</h2>
+                <ul>
+                    <li>
+                        <strong>الحدث الأصلي الوارد من ميتا:</strong> يُمحى بعد أن يتجاوز عمره
+                        30 يوماً. تعمل عملية التنظيف مرة واحدة يومياً، فقد يصل العمر الفعلي إلى
+                        نحو 31 يوماً.
+                    </li>
+                    <li>
+                        <strong>صفوف طابور المعالجة:</strong> تحتوي هي أيضاً على نسخة من الحدث
+                        الأصلي. تُحذف بعد 7 أيام من إتمامها بنجاح. أمّا الصفوف التي
+                        <strong>فشلت</strong> فتبقى بلا حدّ زمني، لأنها هي ما يُفحَص لمعرفة سبب
+                        الفشل — فإن فشل ردّ على رسالتك، فقد تبقى نسخة من حدثها الأصلي مخزّنة
+                        أكثر من 30 يوماً.
+                    </li>
+                    <li><strong>سجلّ «رسالة واحدة في اليوم» وعدّادات الحدّ:</strong> تُحذف بعد 48 ساعة.</li>
+                    <li>
+                        <strong>نصوص الرسائل والمحادثات وسجلّ التفاعلات:</strong> تبقى بلا مدة
+                        انتهاء تلقائية، حتى يحذفها صاحب الحساب. السبب أنها هي ما يقرأه صاحب
+                        الحساب في صندوق رسائله. <strong>هذا يشمل نصّ رسائلك الخاصة.</strong> إن
+                        أردتَ حذفها، فالطريق هو <a href="/data-deletion">صفحة حذف البيانات</a>.
+                    </li>
+                </ul>
+
+                <h2>5. مَن يعالج البيانات معنا</h2>
+                <p>لا نبيع بياناتك، ولا ننقلها إلى أي جهة لأغراض إعلانية أو تسويقية. نستعين بمزوّدي الخدمة التاليين لتشغيل الأداة فقط:</p>
+                <ul>
+                    <li>
+                        <strong>ميتا</strong> (إنستجرام وفيسبوك) — منها تأتي التعليقات والرسائل،
+                        وعبرها تُرسَل الردود.
+                        <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية ميتا</a>.
+                    </li>
+                    <li>
+                        <strong>جوجل</strong> — تتلقّى واجهة Gemini API نصوص الرسائل الخاصة كما
+                        هو موضّح في القسم 3.
+                        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية جوجل</a>.
+                    </li>
+                    <li>
+                        <strong>Supabase</strong> — استضافة قاعدة البيانات التي يُخزَّن فيها كل ما
+                        سبق.
+                        <a href="https://supabase.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية Supabase</a>.
+                    </li>
+                    <li>
+                        <strong>Vercel</strong> — استضافة التطبيق. تتلقّى Vercel أيضاً سجلّات
+                        التشغيل، وهي تحتوي على أسماء المستخدمين ومعرّفات ميتا وحالات الأخطاء،
+                        ولا تحتوي على نصوص الرسائل.
+                        <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية Vercel</a>.
+                    </li>
+                </ul>
+
+                <h2>6. حذف بياناتك</h2>
+                <p>
+                    يمكنك طلب حذف بياناتك في أي وقت. الخطوات، وما يُحذف فعلاً وما لا يُحذف،
+                    في <a href="/data-deletion">صفحة حذف البيانات</a>.
+                </p>
+
+                <h2>7. كيف تُحفَظ البيانات</h2>
+                <ul>
+                    <li>كل الاتصالات تجري عبر HTTPS.</li>
+                    <li>
+                        كل إشعار وارد من ميتا يُتحقَّق من توقيعه قبل معالجته، فلا يمكن لطرف آخر
+                        أن يُدخل أحداثاً مزيّفة إلى النظام.
+                    </li>
+                    <li>
+                        رمز وصول ميتا الخاص بصاحب الحساب <strong>يُشفَّر قبل التخزين</strong>
+                        بخوارزمية AES-256-GCM، ومفتاح التشفير محفوظ خارج قاعدة البيانات.
+                    </li>
+                    <li>لوحة التحكم — وهي المكان الوحيد الذي تُقرأ منه المحادثات — محميّة بكلمة مرور.</li>
+                </ul>
+                <p>
+                    ولا نزعم أكثر من ذلك: لا يوجد تشفير من طرف إلى طرف، ونصوص الرسائل مخزّنة
+                    كنصّ صريح داخل قاعدة البيانات ليقرأها صاحب الحساب.
+                </p>
+
+                <h2>8. تغييرات هذه الصفحة</h2>
+                <p>
+                    إن تغيّر ما يجمعه النظام أو مدة احتفاظه به، يُحدَّث هذا النصّ ويُحدَّث معه
+                    تاريخ «آخر تحديث» أعلى الصفحة. لا يوجد إشعار مباشر، لأننا لا نحتفظ بأي وسيلة
+                    للتواصل معك.
+                </p>
+
+                <h2>9. للتواصل</h2>
+                <p>لأي سؤال عن هذه السياسة أو عن بياناتك:</p>
+                <ul>
+                    <li>ردّ على الحساب نفسه الذي راسلك على إنستجرام أو فيسبوك؛ أو</li>
+                    <li>
+                        افتح موضوعاً على
+                        <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني للمشروع</a>
+                        — وهو علني، فلا تكتب فيه معلومات شخصية.
+                    </li>
+                </ul>
+
+                <div class="todo">
+                    <p>
+                        <strong>ملاحظة تحريرية — على مُشغّل الخدمة إكمالها:</strong>
+                    </p>
+                    <ul>
+                        <li>بريد إلكتروني للتواصل بشأن الخصوصية وطلبات الحذف: <span class="code">[غير مُحدَّد بعد]</span></li>
+                        <li>اسم الشخص أو الجهة التي تُشغّل الخدمة، والدولة التي يسري قانونها: <span class="code">[غير مُحدَّد بعد]</span></li>
+                    </ul>
+                    <p>
+                        لم يُذكر في هذه الصفحة أي أساس قانوني للمعالجة ولا أي قانون واجب التطبيق،
+                        لأن شيئاً من ذلك غير موجود في الكود ولا يصحّ اختراعه.
+                    </p>
+                </div>
+            </article>
+
+            <hr class="divider">
+
+            <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
+            <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
+                <h1>Privacy Policy</h1>
+                <p class="stamp">Last updated: 21 September 2026</p>
+
+                <p>
+                    AutoReply Pro is a tool operated by the owner of a single Instagram and
+                    Facebook account. It does two things: it replies automatically to comments
+                    that match a keyword the owner configured, and it answers direct messages
+                    sent to that account. It runs no advertising or marketing targeting, and it
+                    does not sell data.
+                </p>
+                <p>
+                    This page describes what happens to <em>your</em> data — as someone who
+                    commented on a post or sent a direct message — not the account owner's. It
+                    is written from what the code actually does, not from what it ought to do.
+                </p>
+                <p>
+                    The service runs through an app registered on the Meta Developer Platform as
+                    <span class="code">AutoResponseBot</span>, which is the name Meta holds;
+                    <strong>AutoReply Pro</strong> is the name of the product itself.
+                </p>
+
+                <div class="callout">
+                    <p>
+                        <strong>Want your data deleted?</strong>
+                        The full procedure — and the limits of what can actually be erased — is on the
+                        <a href="/data-deletion">data deletion page</a>.
+                    </p>
+                </div>
+
+                <h2>1. What reaches us, and what is actually stored</h2>
+                <p>
+                    These are two different things, and the distinction is the most honest thing
+                    we can tell you: Meta sends us more than we keep.
+                </p>
+
+                <h3>When you comment on a post</h3>
+                <p>Meta sends us the comment ID, the post ID, the text of the comment, your name, and your account ID.</p>
+                <ul>
+                    <li>
+                        <strong>Stored:</strong> the comment ID, the post ID, your public
+                        Instagram username (or your display name on Facebook), the platform,
+                        the delivery status, and the text of any error Meta returned.
+                    </li>
+                    <li>
+                        <strong>The text of your comment is not stored.</strong> It is matched
+                        against keywords in memory while the event is processed and then
+                        discarded; no database column holds it.
+                    </li>
+                    <li>
+                        <strong>Stored for 48 hours:</strong> your Meta-scoped account ID and a
+                        timestamp, to enforce a limit of one automated DM per person per day.
+                    </li>
+                </ul>
+
+                <h3>When you send a direct message</h3>
+                <ul>
+                    <li>
+                        <strong>The text of your message as you wrote it</strong>, its direction
+                        and type, any button you tapped, and Meta's message ID.
+                    </li>
+                    <li>
+                        <strong>The verbatim event Meta sent us</strong>, in full. That event
+                        contains your message text and your account ID, so it is a second copy
+                        of both alongside the columns above. Its retention is in section 4.
+                    </li>
+                    <li>
+                        <strong>Your Meta-scoped account ID</strong>, the time of the last
+                        message, and when you were last told the replies are automated. Your
+                        username is not stored on the direct-message path — only the ID.
+                    </li>
+                    <li>Replies sent to you are stored the same way, with their text.</li>
+                </ul>
+                <p>
+                    We do not ask for, receive, or store your email address, phone number,
+                    postal address, or payment details. Your message text, however, is stored as
+                    written: if you put something personal in it, that is stored because you
+                    wrote it.
+                </p>
+
+                <h2>2. Why we use it</h2>
+                <ul>
+                    <li>To decide whether a comment matches a keyword on an active campaign.</li>
+                    <li>To send you the automated reply, publicly under the comment or as a direct message.</li>
+                    <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
+                    <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
+                    <li>To diagnose faults: to find out why a reply that should have arrived did not.</li>
+                </ul>
+
+                <h2>3. Automated replies and Google Gemini</h2>
+                <p>
+                    Replies to direct messages are written by an AI model, not a person. To
+                    generate one, <strong>the text of your message and the last eight messages
+                    in the thread</strong> are sent to Google's
+                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Gemini API</a>.
+                </p>
+                <p>
+                    What is sent to Google is message text and the direction of each message,
+                    nothing more. <strong>Your username, your account ID, and the conversation
+                    ID are not sent to Google.</strong> Comment text is never sent to Google at
+                    all — the comment path does not use AI.
+                </p>
+                <p>
+                    As Meta's policy requires, the first message in a thread — and another one
+                    after a long gap — tells you that you are talking to an automated service.
+                </p>
+
+                <h2>4. How long it is kept</h2>
+                <ul>
+                    <li>
+                        <strong>The verbatim event from Meta:</strong> erased once it is more
+                        than 30 days old. The sweep runs once a day, so in practice the age can
+                        reach about 31 days.
+                    </li>
+                    <li>
+                        <strong>Processing-queue rows:</strong> these hold a copy of the
+                        verbatim event too. They are deleted 7 days after completing
+                        successfully. Rows that <strong>failed</strong> are kept with no time
+                        limit, because they are what gets inspected to find out why — so if a
+                        reply to your message failed, a copy of its verbatim event may be stored
+                        for longer than 30 days.
+                    </li>
+                    <li><strong>The one-DM-per-day log and the rate counters:</strong> deleted after 48 hours.</li>
+                    <li>
+                        <strong>Message text, conversations, and the interaction log:</strong>
+                        kept with no automatic expiry until the account owner deletes them,
+                        because they are what the owner reads in their own inbox.
+                        <strong>This includes the text of your private messages.</strong> If you
+                        want yours removed, the route is the
+                        <a href="/data-deletion">data deletion page</a>.
+                    </li>
+                </ul>
+
+                <h2>5. Who else processes it</h2>
+                <p>We do not sell your data and we do not transfer it to anyone for advertising or marketing. We rely on these service providers purely to run the tool:</p>
+                <ul>
+                    <li>
+                        <strong>Meta</strong> (Instagram and Facebook) — comments and messages
+                        arrive from Meta, and replies are sent back through it.
+                        <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Google</strong> — the Gemini API receives direct-message text as
+                        described in section 3.
+                        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Supabase</strong> — hosts the database everything above is
+                        stored in.
+                        <a href="https://supabase.com/privacy" target="_blank" rel="noopener noreferrer">Supabase's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>Vercel</strong> — hosts the application. Vercel also receives
+                        operational logs, which contain usernames, Meta IDs, and error states,
+                        and do not contain message text.
+                        <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">Vercel's privacy policy</a>.
+                    </li>
+                </ul>
+
+                <h2>6. Deleting your data</h2>
+                <p>
+                    You can ask for your data to be deleted at any time. The steps, and what is
+                    and is not actually erased, are on the
+                    <a href="/data-deletion">data deletion page</a>.
+                </p>
+
+                <h2>7. How the data is protected</h2>
+                <ul>
+                    <li>All traffic runs over HTTPS.</li>
+                    <li>
+                        Every incoming notification from Meta has its signature verified before
+                        it is processed, so no one else can inject forged events into the system.
+                    </li>
+                    <li>
+                        The account owner's Meta access token is
+                        <strong>encrypted before it is stored</strong>, with AES-256-GCM, and
+                        the encryption key is held outside the database.
+                    </li>
+                    <li>The dashboard — the only place conversations are read from — is password-protected.</li>
+                </ul>
+                <p>
+                    We claim no more than that: there is no end-to-end encryption, and message
+                    text sits in the database in plain text so that the account owner can read it.
+                </p>
+
+                <h2>8. Changes to this page</h2>
+                <p>
+                    If what the system collects or how long it keeps it changes, this text is
+                    updated and the "last updated" date at the top changes with it. There is no
+                    direct notice, because we hold no way to contact you.
+                </p>
+
+                <h2>9. Contact</h2>
+                <p>For any question about this policy or about your data:</p>
+                <ul>
+                    <li>Reply to the same Instagram or Facebook account that messaged you; or</li>
+                    <li>
+                        Open an issue on the
+                        <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">project's public issue tracker</a>
+                        — it is public, so do not put personal information in it.
+                    </li>
+                </ul>
+
+                <div class="todo">
+                    <p><strong>Editorial note — for the operator to complete:</strong></p>
+                    <ul>
+                        <li>A contact email address for privacy and deletion requests: <span class="code">[not yet supplied]</span></li>
+                        <li>The name of the person or entity operating the service, and the country whose law applies: <span class="code">[not yet supplied]</span></li>
+                    </ul>
+                    <p>
+                        No legal basis for processing and no governing law are stated anywhere on
+                        this page, because neither could be established from the code and neither
+                        may be invented.
+                    </p>
+                </div>
+            </article>
+
+        </main>
+
+        <footer class="pagefoot">
+            <p>
+                <a href="/data-deletion"><span class="t-ar">حذف بياناتك</span><span class="t-sep"> · </span><span class="t-en">Delete your data</span></a>
+            </p>
+            <p>
+                <span class="t-ar">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك.</span>
+                <span class="t-en">AutoReply Pro — comment and message automation for Instagram and Facebook.</span>
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        /* The switch. Sets the attribute the CSS filters on, keeps <html lang dir>
+           honest, and remembers the choice under the same key the dashboard uses
+           so a visitor is not asked twice. */
+        (function () {
+            var root = document.documentElement;
+            var buttons = document.querySelectorAll('[data-set-lang]');
+
+            function apply(lang) {
+                root.setAttribute('data-lang', lang);
+                root.lang = lang;
+                root.dir = lang === 'ar' ? 'rtl' : 'ltr';
+                for (var i = 0; i < buttons.length; i++) {
+                    buttons[i].setAttribute(
+                        'aria-pressed',
+                        buttons[i].getAttribute('data-set-lang') === lang ? 'true' : 'false'
+                    );
+                }
+                try { localStorage.setItem('dashboard_lang', lang); } catch (e) { /* private mode */ }
+            }
+
+            for (var i = 0; i < buttons.length; i++) {
+                buttons[i].addEventListener('click', function () {
+                    apply(this.getAttribute('data-set-lang'));
+                });
+            }
+
+            /* The head script already chose; reflect it on the buttons. */
+            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+        })();
+    </script>
 </body>
 </html>

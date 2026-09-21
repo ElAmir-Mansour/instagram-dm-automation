@@ -1,13 +1,16 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-    <!-- This page's colours are all dark-assuming (white gradient headline, white-alpha
-         rules, ambient glows). tokens.css flips light under prefers-color-scheme, which made
-         half the headline invisible. Pin dark until the page is properly dualised. -->
-    <meta name="color-scheme" content="dark">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Both schemes are real now. This page used to be pinned dark because every
+         colour in it assumed dark — a white-to-grey gradient headline, white-alpha
+         rules, white-on-#7c81f2 buttons — so tokens.css flipping light left half
+         the headline invisible. Every one of those is now a token that has a light
+         value, so the pin is gone and the page follows the reader's OS. -->
+    <meta name="color-scheme" content="dark light">
     <title>عيدية المبرمجين — 9 كورسات مجانية بالكامل 🎉</title>
+    <meta name="description" content="تسعة كورسات برمجة بالعربية متاحة مجاناً بكوبونات محدودة — اختر كورسك وسجّل فوراً.">
     <!-- Google Fonts: Cairo & Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,7 +21,6 @@
          legacy names its own rules still use. -->
     <link rel="stylesheet" href="/dashboard/css/tokens.css?v=5.0">
     <style>
-        :root { color-scheme: dark; }
         :root {
             --bg-primary: var(--surface-page);
             --bg-glass: var(--surface-glass);
@@ -28,6 +30,27 @@
             --text-secondary: var(--text-default);
             --gradient-hero: var(--gradient-brand);
             --radius: var(--radius-lg);
+
+            /* The two ambient glows. Dark values; the light peers are below.
+               These are the only colours this page owns, because tokens.css has
+               no "decorative glow" semantic and inventing one for a single
+               landing page would be the wrong place to extend the scale. */
+            --glow-1: rgba(99, 102, 241, 0.15);
+            --glow-2: rgba(168, 85, 247, 0.1);
+        }
+
+        /* The light peers, mirroring tokens.css's own two-block pattern: once
+           under the media query for "OS asks for light and nothing is pinned",
+           once for an explicitly pinned light theme. */
+        @media (prefers-color-scheme: light) {
+            :root:not([data-theme='dark']) {
+                --glow-1: rgba(79, 70, 229, 0.1);
+                --glow-2: rgba(147, 51, 234, 0.07);
+            }
+        }
+        :root[data-theme='light'] {
+            --glow-1: rgba(79, 70, 229, 0.1);
+            --glow-2: rgba(147, 51, 234, 0.07);
         }
 
         * {
@@ -40,12 +63,15 @@
             font-family: var(--font-ui);
             background-color: var(--bg-primary);
             color: var(--text-primary);
+            /* dvh, so the glows and the page do not jump when a mobile browser's
+               URL bar collapses. vh first as the fallback for old engines. */
             min-height: 100vh;
+            min-height: 100dvh;
             overflow-x: hidden;
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 40px 20px;
+            padding: var(--space-6) var(--space-5);
             position: relative;
         }
 
@@ -57,7 +83,7 @@
             transform: translateX(-50%);
             width: 600px;
             height: 600px;
-            background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%);
+            background: radial-gradient(circle, var(--glow-1) 0%, transparent 70%);
             pointer-events: none;
             z-index: 0;
         }
@@ -68,7 +94,7 @@
             right: 10%;
             width: 400px;
             height: 400px;
-            background: radial-gradient(circle, rgba(168, 85, 247, 0.1) 0%, transparent 70%);
+            background: radial-gradient(circle, var(--glow-2) 0%, transparent 70%);
             pointer-events: none;
             z-index: 0;
         }
@@ -82,30 +108,46 @@
 
         /* Hero Header */
         header {
-            margin-bottom: 48px;
-            animation: fadeInDown 0.8s ease-out;
+            margin-bottom: var(--space-7);
+            animation: fadeInDown 0.8s var(--ease-standard);
         }
 
         .badge {
             display: inline-block;
-            padding: 6px 16px;
-            border-radius: 30px;
-            background: rgba(99, 102, 241, 0.1);
-            border: 1px solid rgba(99, 102, 241, 0.2);
-            color: var(--accent-hover);
-            font-weight: 700;
-            font-size: 14px;
-            margin-bottom: 16px;
+            padding: var(--space-1) var(--space-4);
+            border-radius: var(--radius-pill);
+            background: var(--accent-soft);
+            border: 1px solid var(--accent-ring);
+            color: var(--accent-text);
+            font-weight: var(--fw-bold);
+            font-size: var(--fs-200);
+            margin-bottom: var(--space-4);
         }
 
         h1 {
             font-size: clamp(28px, 5vw, 42px);
             font-weight: 800;
-            line-height: 1.3;
-            margin-bottom: 12px;
-            background: linear-gradient(to left, #fff, var(--text-secondary));
+            line-height: var(--lh-tight);
+            margin-bottom: var(--space-3);
+            /* Was `linear-gradient(to left, #fff, …)`, which is why this page had
+               to be pinned dark: on a light page the first stop is invisible.
+               Both stops are tokens now, so the headline is legible in either
+               theme — 18.3:1 → 12.6:1 on dark, 16.2:1 → 8.8:1 on light. */
+            background: linear-gradient(to left, var(--text-strong), var(--text-default));
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
+            color: transparent;
+        }
+
+        /* Without background-clip:text, `-webkit-text-fill-color: transparent`
+           would render the headline as nothing at all. */
+        @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+            h1 {
+                background: none;
+                -webkit-text-fill-color: currentColor;
+                color: var(--text-strong);
+            }
         }
 
         header p {
@@ -113,16 +155,34 @@
             font-size: clamp(15px, 2.5vw, 18px);
             max-width: 600px;
             margin: 0 auto;
-            line-height: 1.6;
+            line-height: var(--lh-normal);
         }
+
+        /* ─── Offer status ───────────────────────────────────────────────────────
+           Hidden until the owner fills in `data-coupons-expire` on .courses-grid
+           AND that date has passed. See the script at the bottom. */
+        .offer-status {
+            display: none;
+            max-width: 600px;
+            margin: var(--space-4) auto 0;
+            padding: var(--space-3) var(--space-4);
+            border-radius: var(--radius-md);
+            background: var(--warning-soft);
+            border: 1px solid var(--warning);
+            color: var(--warning-text);
+            font-size: var(--fs-200);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lh-normal);
+        }
+        [data-offer='expired'] .offer-status { display: block; }
 
         /* Course Grid */
         .courses-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 20px;
-            margin-bottom: 48px;
-            animation: fadeInUp 0.8s ease-out 0.2s both;
+            gap: var(--space-5);
+            margin-bottom: var(--space-7);
+            animation: fadeInUp 0.8s var(--ease-standard) 0.2s both;
         }
 
         /* Glassmorphic Course Card */
@@ -132,12 +192,18 @@
             -webkit-backdrop-filter: blur(12px);
             border: 1px solid var(--border-glass);
             border-radius: var(--radius);
-            padding: 24px;
+            padding: var(--space-5);
             display: flex;
             flex-direction: column;
             align-items: flex-start;
-            text-align: right;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            /* Logical, not physical: `right` was correct only by accident of this
+               page being RTL, and wrong the moment anything reuses the card. */
+            text-align: start;
+            transition:
+                transform var(--motion-slow) var(--ease-standard),
+                border-color var(--motion-slow) var(--ease-standard),
+                box-shadow var(--motion-slow) var(--ease-standard),
+                background var(--motion-slow) var(--ease-standard);
             position: relative;
             overflow: hidden;
         }
@@ -151,14 +217,14 @@
             height: 3px;
             background: var(--gradient-hero);
             opacity: 0;
-            transition: opacity 0.3s ease;
+            transition: opacity var(--motion-slow) var(--ease-standard);
         }
 
         .course-card:hover {
             transform: translateY(-5px);
             border-color: var(--border-glass-hover);
-            box-shadow: 0 20px 40px -15px rgba(99, 102, 241, 0.15);
-            background: rgba(255, 255, 255, 0.03);
+            box-shadow: var(--elev-glow);
+            background: var(--surface-glass-hover);
         }
 
         .course-card:hover::before {
@@ -166,24 +232,25 @@
         }
 
         .card-icon {
-            font-size: 32px;
-            margin-bottom: 16px;
+            font-size: var(--fs-700);
+            line-height: 1;
+            margin-bottom: var(--space-4);
         }
 
         .course-title {
-            font-size: 17px;
-            font-weight: 700;
-            margin-bottom: 8px;
+            font-size: var(--fs-400);
+            font-weight: var(--fw-bold);
+            margin-bottom: var(--space-2);
             color: var(--text-primary);
-            line-height: 1.4;
+            line-height: var(--lh-tight);
             min-height: 48px;
         }
 
         .course-desc {
-            font-size: 14px;
+            font-size: var(--fs-200);
             color: var(--text-secondary);
-            line-height: 1.6;
-            margin-bottom: 20px;
+            line-height: var(--lh-normal);
+            margin-bottom: var(--space-5);
             min-height: 60px;
         }
 
@@ -192,55 +259,92 @@
             margin-top: auto;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: var(--space-3);
         }
 
         .coupon-tag {
-            font-size: 12px;
-            font-weight: 700;
-            color: var(--success);
-            background: rgba(34, 197, 94, 0.1);
-            border: 1px solid rgba(34, 197, 94, 0.2);
-            padding: 4px 10px;
-            border-radius: 6px;
+            font-size: var(--fs-100);
+            font-weight: var(--fw-bold);
+            color: var(--success-text);
+            background: var(--success-soft);
+            border: 1px solid var(--success);
+            padding: var(--space-1) var(--space-3);
+            border-radius: var(--radius-xs);
             align-self: flex-start;
+        }
+        [data-offer='expired'] .coupon-tag {
+            color: var(--text-muted);
+            background: var(--surface-sunken);
+            border-color: var(--border-subtle);
         }
 
         .enroll-btn {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
+            gap: var(--space-2);
             width: 100%;
-            padding: 12px;
-            border-radius: 10px;
-            background: var(--accent);
-            color: #fff;
-            font-weight: 700;
-            font-size: 14px;
+            min-height: var(--tap-target);
+            padding: var(--space-3);
+            border-radius: var(--radius-sm);
+            /* Was `background: var(--accent)` with white text, which measures
+               3.34:1 on the dark theme — below AA, on the nine buttons that are
+               the entire point of the page. --gradient-brand is the token whose
+               stops were chosen for white text: 5.50 / 5.32 / 5.13:1 on dark and
+               6.29 / 5.70 / 5.38:1 on light. */
+            background: var(--gradient-brand);
+            color: var(--text-on-accent);
+            font-weight: var(--fw-bold);
+            font-size: var(--fs-200);
             text-decoration: none;
-            transition: background 0.2s ease, transform 0.1s ease;
+            /* Hover changes elevation, not colour: brightening a gradient under
+               white text is how the contrast above gets lost again. */
+            transition:
+                box-shadow var(--motion-base) var(--ease-standard),
+                transform var(--motion-fast) var(--ease-standard);
             border: none;
         }
 
         .enroll-btn:hover {
-            background: var(--accent-hover);
+            box-shadow: var(--elev-glow);
+            transform: translateY(-1px);
         }
 
         .enroll-btn:active {
-            transform: scale(0.98);
+            transform: translateY(0) scale(0.98);
+        }
+
+        /* This page does not load styles.css, so the focus ring is its own job.
+           Without this, every one of the nine links was keyboard-invisible. */
+        a:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
         }
 
         /* Footer */
         footer {
             color: var(--text-muted);
-            font-size: 12px;
-            margin-top: 40px;
-            border-top: 1px solid rgba(255, 255, 255, 0.05);
-            padding-top: 24px;
+            font-size: var(--fs-100);
+            line-height: var(--lh-normal);
+            border-top: 1px solid var(--border-subtle);
+            padding-top: var(--space-5);
             width: 100%;
             max-width: 600px;
-            margin: 40px auto 0 auto;
+            margin: var(--space-6) auto 0;
+        }
+
+        /* Visually hidden but announced — the grid's heading, which existed only
+           as a jump from <h1> straight to <h3> before. */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
         }
 
         /* Animations */
@@ -254,8 +358,29 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
+        /* The two entrance animations used to run unconditionally, and the card
+           hover lifted 5px with a 0.3s transition, with no escape hatch. The
+           tokens go to 1ms on their own; the keyframes and the transform have to
+           be switched off by name. */
+        @media (prefers-reduced-motion: reduce) {
+            header,
+            .courses-grid {
+                animation: none;
+            }
+            .course-card,
+            .course-card::before,
+            .enroll-btn {
+                transition: none;
+            }
+            .course-card:hover,
+            .enroll-btn:hover,
+            .enroll-btn:active {
+                transform: none;
+            }
+        }
+
         @media (max-width: 480px) {
-            body { padding: 24px 16px; }
+            body { padding: var(--space-5) var(--space-4); }
             h1 { font-size: 26px; }
             .courses-grid { grid-template-columns: 1fr; }
         }
@@ -270,14 +395,45 @@
             <span class="badge">🎁 عيدية المبرمجين الحصرية</span>
             <h1>كل عام وأنتم بخير وصحة وسلامة 🎉</h1>
             <p>اختر الدورة التي تريدها وسجل مجاناً فوراً! الكوبونات محدودة بـ 100 مقعد فقط لكل كورس وصالحة لفترة محدودة.</p>
+            <p class="offer-status">انتهت صلاحية كوبونات العيدية. الروابط أدناه تفتح صفحة كل كورس على يوديمي بسعره المعتاد.</p>
         </header>
 
-        <main class="courses-grid">
+        <!--
+          COUPON EXPIRY — READ BEFORE THE NEXT CAMPAIGN.
+
+          Udemy free coupons die after 5 days OR 100 redemptions, whichever comes
+          first. A dead `?couponCode=` link does not fail gracefully on Udemy: the
+          visitor lands on a paid checkout with no explanation, having been told
+          the course was free. Nine of them do it at once.
+
+          `data-coupons-expire` below is the single place a date is written. Fill
+          it with the ISO date the coupons were issued + 5 days, e.g.
+          data-coupons-expire="2026-04-05". The script at the bottom of this file
+          then, from that date onwards:
+              · shows the "offer ended" notice in the header,
+              · greys the nine coupon tags,
+              · strips `?couponCode=…` from every link so they open the real
+                course page instead of a broken checkout,
+              · and relabels the buttons.
+
+          EMPTY = INERT. Nothing changes and the page behaves exactly as it does
+          today. It is left empty deliberately: the issue date is not in this
+          repo and must not be guessed.
+
+          The redemption cap (100) cannot be detected from here at all — only
+          Udemy knows the count. If that is the limit that gets hit first, the
+          links are dead before the date passes and nothing on this page can tell.
+          The durable fix is to stop hardcoding coupons in markup and read them
+          from `campaigns`, which is where the rest of the product already keeps
+          its per-campaign copy.
+        -->
+        <h2 class="sr-only" id="courses-heading">الكورسات المتاحة</h2>
+        <main class="courses-grid" aria-labelledby="courses-heading" data-coupons-expire="">
             <!-- Card 1 -->
             <div class="course-card">
-                <div class="card-icon">🤖</div>
-                <h3 class="course-title">Agentic AI: الذكاء الاصطناعي العملي</h3>
-                <p class="course-desc">تعلم بناء عملائك الأذكياء وأنظمة الذكاء الاصطناعي التفاعلية باستخدام أحدث تقنيات الـ LLMs.</p>
+                <div class="card-icon" aria-hidden="true">🤖</div>
+                <h3 class="course-title"><span lang="en" dir="ltr">Agentic AI</span>: الذكاء الاصطناعي العملي</h3>
+                <p class="course-desc">تعلم بناء عملائك الأذكياء وأنظمة الذكاء الاصطناعي التفاعلية باستخدام أحدث تقنيات الـ <span lang="en" dir="ltr">LLMs</span>.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
                     <a href="https://www.udemy.com/course/agentic-ai-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
@@ -286,9 +442,9 @@
 
             <!-- Card 2 -->
             <div class="course-card">
-                <div class="card-icon">🐹</div>
-                <h3 class="course-title">لغة GoLang: من الصفر للاحتراف</h3>
-                <p class="course-desc">تعلم لغة Go الحديثة لبناء خدمات ويب وسيرفرات فائقة السرعة والأداء العالي باللغة العربية.</p>
+                <div class="card-icon" aria-hidden="true">🐹</div>
+                <h3 class="course-title">لغة <span lang="en" dir="ltr">GoLang</span>: من الصفر للاحتراف</h3>
+                <p class="course-desc">تعلم لغة <span lang="en" dir="ltr">Go</span> الحديثة لبناء خدمات ويب وسيرفرات فائقة السرعة والأداء العالي باللغة العربية.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
                     <a href="https://www.udemy.com/course/golang-course-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
@@ -297,9 +453,9 @@
 
             <!-- Card 3 -->
             <div class="course-card">
-                <div class="card-icon">📱</div>
-                <h3 class="course-title">برمجة تطبيقات iOS بلغة Swift</h3>
-                <p class="course-desc">ابدأ مسيرتك في برمجة تطبيقات الآيفون والآيباد من الصفر مع تغطية شاملة للغة Swift.</p>
+                <div class="card-icon" aria-hidden="true">📱</div>
+                <h3 class="course-title">برمجة تطبيقات <span lang="en" dir="ltr">iOS</span> بلغة <span lang="en" dir="ltr">Swift</span></h3>
+                <p class="course-desc">ابدأ مسيرتك في برمجة تطبيقات الآيفون والآيباد من الصفر مع تغطية شاملة للغة <span lang="en" dir="ltr">Swift</span>.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
                     <a href="https://www.udemy.com/course/swift-programming-language-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
@@ -308,8 +464,8 @@
 
             <!-- Card 4 -->
             <div class="course-card">
-                <div class="card-icon">🐍</div>
-                <h3 class="course-title">لغة بايثون Python للمبتدئين</h3>
+                <div class="card-icon" aria-hidden="true">🐍</div>
+                <h3 class="course-title">لغة بايثون <span lang="en" dir="ltr">Python</span> للمبتدئين</h3>
                 <p class="course-desc">البداية الأسهل والأفضل في عالم البرمجة من خلال تعلم لغة بايثون وتطبيقاتها المتنوعة.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
@@ -319,9 +475,9 @@
 
             <!-- Card 5 -->
             <div class="course-card">
-                <div class="card-icon">🧠</div>
-                <h3 class="course-title">Problem Solving بـ C#</h3>
-                <p class="course-desc">قم بصقل مهاراتك المنطقية والتحليلية من خلال حل 25 مسألة برمجية شيقة باستخدام C#.</p>
+                <div class="card-icon" aria-hidden="true">🧠</div>
+                <h3 class="course-title"><span lang="en" dir="ltr">Problem Solving</span> بـ <span lang="en" dir="ltr">C#</span></h3>
+                <p class="course-desc">قم بصقل مهاراتك المنطقية والتحليلية من خلال حل 25 مسألة برمجية شيقة باستخدام <span lang="en" dir="ltr">C#</span>.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
                     <a href="https://www.udemy.com/course/problem-solving-25-problems-solved-with-c-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
@@ -330,9 +486,9 @@
 
             <!-- Card 6 -->
             <div class="course-card">
-                <div class="card-icon">🎮</div>
-                <h3 class="course-title">لغة C# للمبتدئين من الصفر</h3>
-                <p class="course-desc">تعلم أساسيات لغة C# وكيفية بناء تطبيقات سطح المكتب والألعاب في 5 ساعات فقط.</p>
+                <div class="card-icon" aria-hidden="true">🎮</div>
+                <h3 class="course-title">لغة <span lang="en" dir="ltr">C#</span> للمبتدئين من الصفر</h3>
+                <p class="course-desc">تعلم أساسيات لغة <span lang="en" dir="ltr">C#</span> وكيفية بناء تطبيقات سطح المكتب والألعاب في 5 ساعات فقط.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
                     <a href="https://www.udemy.com/course/csharpin5hours/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
@@ -341,9 +497,9 @@
 
             <!-- Card 7 -->
             <div class="course-card">
-                <div class="card-icon">☕</div>
-                <h3 class="course-title">لغة Java للمبتدئين</h3>
-                <p class="course-desc">ابنِ أساساً قوياً في البرمجة كائنية التوجه (OOP) وتعلم لغة جافا الشهيرة والمستخدمة عالمياً.</p>
+                <div class="card-icon" aria-hidden="true">☕</div>
+                <h3 class="course-title">لغة <span lang="en" dir="ltr">Java</span> للمبتدئين</h3>
+                <p class="course-desc">ابنِ أساساً قوياً في البرمجة كائنية التوجه (<span lang="en" dir="ltr">OOP</span>) وتعلم لغة جافا الشهيرة والمستخدمة عالمياً.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
                     <a href="https://www.udemy.com/course/java-for-beginners-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
@@ -352,8 +508,8 @@
 
             <!-- Card 8 -->
             <div class="course-card">
-                <div class="card-icon">🌐</div>
-                <h3 class="course-title">HTML5 For Beginners</h3>
+                <div class="card-icon" aria-hidden="true">🌐</div>
+                <h3 class="course-title" lang="en" dir="ltr">HTML5 For Beginners</h3>
                 <p class="course-desc">تعلم حجر الأساس الأول لبناء وهيكلة صفحات الويب والمشاريع من الصفر للمبتدئين.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
@@ -363,9 +519,9 @@
 
             <!-- Card 9 -->
             <div class="course-card">
-                <div class="card-icon">🎨</div>
-                <h3 class="course-title">CSS3 For Beginners</h3>
-                <p class="course-desc">تعلم أساسيات تصميم المواقع وتنسيق صفحات الويب وتعديل الألوان والخطوط باستخدام CSS3.</p>
+                <div class="card-icon" aria-hidden="true">🎨</div>
+                <h3 class="course-title" lang="en" dir="ltr">CSS3 For Beginners</h3>
+                <p class="course-desc">تعلم أساسيات تصميم المواقع وتنسيق صفحات الويب وتعديل الألوان والخطوط باستخدام <span lang="en" dir="ltr">CSS3</span>.</p>
                 <div class="card-footer">
                     <span class="coupon-tag">متاح مجاناً (كوبون مفعّل)</span>
                     <a href="https://www.udemy.com/course/css3-full-course-with-project-in-arabic/?couponCode=ELAMIR-100" target="_blank" rel="noopener noreferrer" class="enroll-btn">سجل مجاناً الآن 🚀</a>
@@ -377,5 +533,44 @@
             جميع الحقوق محفوظة © ElAmir Mansour 2026. الكوبونات مخصصة للتعلم الفردي وتخضع لشروط منصة Udemy.
         </footer>
     </div>
+
+    <script>
+        /* Coupon expiry. Inert unless `data-coupons-expire` on .courses-grid holds
+           a date that has passed — see the long comment above the grid.
+
+           Deliberately NOT responsible for building the links: the nine hrefs stay
+           in the markup so the page works with JavaScript off, which is the state
+           that matters while the coupons are live. This only degrades them once
+           they are known-dead. */
+        (function () {
+            var grid = document.querySelector('.courses-grid');
+            if (!grid) return;
+
+            var raw = (grid.getAttribute('data-coupons-expire') || '').trim();
+            if (!raw) return;                       // not configured — do nothing
+
+            var expiresAt = Date.parse(raw);
+            if (isNaN(expiresAt)) return;           // unparseable — do nothing
+
+            /* End of the stated day, not its midnight: a coupon dated the 5th is
+               still good during the 5th. */
+            if (Date.now() < expiresAt + 86400000) return;
+
+            document.documentElement.setAttribute('data-offer', 'expired');
+
+            var tags = grid.querySelectorAll('.coupon-tag');
+            for (var i = 0; i < tags.length; i++) {
+                tags[i].textContent = 'انتهى العرض المجاني';
+            }
+
+            var links = grid.querySelectorAll('.enroll-btn');
+            for (var j = 0; j < links.length; j++) {
+                /* A dead coupon lands the visitor on a paid checkout with no
+                   explanation. The bare course URL is at least honest. */
+                links[j].href = links[j].href.split('?')[0];
+                links[j].textContent = 'صفحة الكورس على يوديمي';
+            }
+        })();
+    </script>
 </body>
 </html>
