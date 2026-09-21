@@ -163,6 +163,9 @@ API with Instagram Login is a *separate Meta app with its own secret*. Dropping 
 (`src/config/env.ts:16-19`) — if it were missing, every route would be 503ing, so a running app
 proves it is set.
 
+> **Verified 2026-09-21: this is no longer the live configuration.** `GET /{META_APP_ID}/subscriptions` returns *both* the `instagram` and `page` objects under one app, so every event is signed with `META_APP_SECRET` and `INSTAGRAM_APP_SECRET` is vestigial. The dual-secret check in `verifyMetaSignature` stays — it costs nothing and this setup has changed before — but do not diagnose a silent comment path by suspecting that secret first. `diagnose.mjs` now derives this for itself and says so.
+
+
 ### 2.4 Did it get past the guards?
 
 If `jobs` shows the delivery but no DM went out, one of the send guards refused it. Each writes
