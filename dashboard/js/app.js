@@ -64,7 +64,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '5.5',
+    ASSET_VERSION: '5.6',
 
     _modules: Object.create(null),
 
@@ -172,7 +172,7 @@ const App = {
         const reposition = Motion.coalesce(() => this.moveNavIndicator(false));
         window.addEventListener('resize', reposition);
         if (document.fonts && typeof document.fonts.ready === 'object') {
-            // Cairo landing changes the nav items' height.
+            // The webfont landing changes the nav items' height.
             document.fonts.ready.then(reposition, () => {});
         }
 
@@ -219,7 +219,7 @@ const App = {
      * Three rules:
      *   - the label is the target language's AUTONYM — العربية, never "Arabic",
      *     because a language name belongs in its own script;
-     *   - `lang` on the button so Cairo shapes العربية and Inter sets English,
+     *   - `lang` on the button so Plex Sans Arabic shapes العربية and Plex Sans sets English,
      *     instead of whichever face the surrounding UI happens to be using;
      *   - the visible label is a noun, so the accessible name is the verb:
      *     "التبديل إلى الإنجليزية" / "Switch to Arabic".

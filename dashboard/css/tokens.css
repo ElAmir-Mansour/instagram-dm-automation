@@ -23,10 +23,25 @@
     /* ─── Type ───────────────────────────────────────────────────────────────
        Seven steps, replacing the twelve ad-hoc sizes (9,10,11,12,13,14,15,16,
        18,20,28,32px) the eight screens used to share. 11px was unreadable in
-       Cairo and carried table headers and timestamps; the floor is now 12px. */
-    --font-ui: 'Cairo', 'Noto Sans Arabic', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-latin: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+       the UI face and carried table headers and timestamps; the floor is now 12px. */
+    /* ─── One type family, three scripts ──────────────────────────────────────
+       Was Cairo (Arabic) + Inter (Latin). Both are good faces and they are the
+       wrong pair: Cairo is geometric-humanist with tall, open Arabic forms,
+       Inter is a neo-grotesque tuned for screens at small sizes. Their x-heights
+       and weight axes do not agree, so every line mixing Arabic with a Latin
+       product name, a handle or an id sat at two slightly different optical
+       weights. In an Arabic-first product where mixed script is the NORM — every
+       campaign keyword list has both — that is not a detail.
+
+       IBM Plex Sans Arabic and IBM Plex Sans are one family, designed together,
+       so the Arabic leads and the Latin follows it at the same weight and
+       proportion. Plex Mono completes it for ids and tokens, which means the
+       whole interface is one voice rather than three borrowed ones. It is also
+       emphatically not the Cairo/Inter default that every Arabic dashboard
+       reaches for first. */
+    --font-ui: 'IBM Plex Sans Arabic', 'IBM Plex Sans', 'Noto Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-latin: 'IBM Plex Sans', 'IBM Plex Sans Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 
     --fs-100: 0.75rem;    /* 12px — meta, timestamps, chips            */
     --fs-200: 0.875rem;   /* 14px — the UI default                     */
@@ -60,11 +75,15 @@
     --space-8: 4rem;      /* 64 */
 
     /* ─── Radius ─────────────────────────────────────────────────────────── */
-    --radius-xs: 6px;
-    --radius-sm: 10px;
-    --radius-md: 14px;
-    --radius-lg: 18px;
-    --radius-xl: 24px;
+    /* Tightened from 6/10/14/18/24. That ramp is the default soft-rounded shape
+       of a generated dashboard; at 14px and above a data table starts to read as
+       a set of pills rather than a document. These are the radii of a working
+       tool: enough to be modern, not enough to be cuddly. */
+    --radius-xs: 3px;
+    --radius-sm: 6px;
+    --radius-md: 9px;
+    --radius-lg: 13px;
+    --radius-xl: 18px;
     --radius-pill: 999px;
 
     /* ─── Layout ─────────────────────────────────────────────────────────── */
@@ -96,8 +115,8 @@
        theme instead of carrying their own duplicated hex values. */
     --chart-positive: #2dd4a7;
     --chart-negative: #f87171;
-    --chart-grid: rgba(255, 255, 255, 0.07);
-    --chart-tick: #9aa7b8;
+    --chart-grid: rgba(255, 248, 238, 0.075);
+    --chart-tick: #a89e90;
 }
 
 /* ─── Dark theme (default, and the product's identity) ─────────────────── */
@@ -105,30 +124,46 @@
 :root[data-theme='dark'] {
     color-scheme: dark;
 
-    --surface-page: #08080d;
-    --surface-sunken: #0c0c13;
-    --surface-raised: #12121b;
-    --surface-overlay: #171722;
-    --surface-glass: rgba(255, 255, 255, 0.032);
-    --surface-glass-hover: rgba(255, 255, 255, 0.06);
-    --surface-scrim: rgba(3, 3, 6, 0.72);
+    /* Warm, not cold. The old ramp (#08080d -> #171722) was blue-tinted
+       near-black: the palette of a monitoring console. But nobody is monitoring
+       machines here — they are reading what a customer wrote them. A warm
+       graphite reads as a lamp over a desk, and warm neutrals are also kinder to
+       Arabic text, which has more stroke contrast and more fine detail per line
+       than Latin at the same size. */
+    --surface-page: #100f0d;
+    --surface-sunken: #161513;
+    --surface-raised: #1d1b18;
+    --surface-overlay: #25221e;
+    --surface-glass: rgba(255, 250, 242, 0.035);
+    --surface-glass-hover: rgba(255, 250, 242, 0.065);
+    --surface-scrim: rgba(8, 7, 6, 0.74);
 
-    --border-subtle: rgba(255, 255, 255, 0.08);
-    --border-strong: rgba(255, 255, 255, 0.16);
+    --border-subtle: rgba(255, 248, 238, 0.09);
+    --border-strong: rgba(255, 248, 238, 0.18);
 
     /* Contrast on --surface-page: strong 16.8:1, default 9.4:1, muted 5.7:1.
        The old --text-muted was #475569 at 2.64:1 and carried form hints, empty
        states, table headers and every timestamp. */
-    --text-strong: #f2f5f9;
-    --text-default: #c6cedb;
-    --text-muted: #8d9aab;
+    --text-strong: #f8f5f0;
+    --text-default: #d5cfc5;
+    --text-muted: #a09789;
     --text-on-accent: #ffffff;
 
-    --accent: #7c81f2;
-    --accent-hover: #9ba0ff;
-    --accent-soft: rgba(124, 129, 242, 0.16);
-    --accent-ring: rgba(124, 129, 242, 0.35);
-    --accent-text: #a8acff;
+    /* Was #7c81f2 / #4f46e5 — Tailwind's default Indigo, the single most
+       recognisable "an AI generated this" colour on the web, and the reason this
+       product looked like a template rather than itself.
+
+       Teal instead, for a reason rather than a preference: this is a tool about
+       messages arriving and being answered, and teal is the colour vocabulary of
+       signal and communication rather than of machine learning. It is also far
+       enough from both Instagram pink and Facebook blue that a primary button
+       never competes with the platform colours beside it in the same row — which
+       indigo did, sitting between them on the hue wheel. */
+    --accent: #34a8a0;
+    --accent-hover: #4dc0b6;
+    --accent-soft: rgba(52, 168, 160, 0.16);
+    --accent-ring: rgba(52, 168, 160, 0.36);
+    --accent-text: #66d3c7;
 
     --success: #2dd4a7;
     --success-soft: rgba(45, 212, 167, 0.14);
@@ -143,16 +178,25 @@
     --info-soft: rgba(85, 168, 245, 0.14);
     --info-text: #8fc6ff;
 
-    /* Darkened from #6366f1/#8b5cf6/#a855f7, which measured 4.47/4.23/3.96:1 against white
-       at --fs-200/--fw-semibold — below AA across the whole of the most-clicked component in
-       the product. These measure 5.50/5.32/5.13:1. */
-    --gradient-brand: linear-gradient(135deg, #5457e0, #7c4ae3 55%, #8f45e0);
-    --gradient-brand-soft: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(168, 85, 247, 0.06));
+    /* The indigo-to-violet 135deg gradient is gone. It was the loudest single
+       "generated" signal in the interface, and no amount of darkening it for
+       contrast (which the previous pass did, twice) made it belong to this
+       product. A primary action does not need a rainbow to look primary.
+
+       What replaces it is one hue with depth — the same teal, lit from the top
+       edge. It still reads as raised and clickable; it just does not announce a
+       genre it is not part of. */
+    --gradient-brand: linear-gradient(160deg, #3bb3aa, #2a8f89 60%, #227a75);
+    --gradient-brand-soft: linear-gradient(160deg, rgba(52, 168, 160, 0.15), rgba(34, 122, 117, 0.05));
 
     --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --elev-2: 0 8px 24px -12px rgba(0, 0, 0, 0.7);
     --elev-3: 0 24px 60px -24px rgba(0, 0, 0, 0.8);
-    --elev-glow: 0 10px 34px -14px var(--accent-ring);
+    /* Was a coloured glow under raised surfaces. Glow is the glassmorphism tell,
+       and a shadow tinted with the accent means "this is special" on components
+       that are merely present. A warm neutral shadow says the same thing about
+       elevation without the costume. */
+    --elev-glow: 0 10px 30px -16px rgba(0, 0, 0, 0.55);
 
     --chart-grid: rgba(255, 255, 255, 0.07);
     --chart-tick: #9aa7b8;
@@ -166,28 +210,29 @@
     :root:not([data-theme='dark']) {
         color-scheme: light;
 
-        --surface-page: #f4f5f9;
-        --surface-sunken: #eceef4;
+        --surface-page: #faf8f4;
+        --surface-sunken: #f1ede6;
         --surface-raised: #ffffff;
         --surface-overlay: #ffffff;
         --surface-glass: rgba(255, 255, 255, 0.78);
         --surface-glass-hover: rgba(255, 255, 255, 0.98);
-        --surface-scrim: rgba(24, 26, 38, 0.44);
+        --surface-scrim: rgba(28, 24, 18, 0.46);
 
-        --border-subtle: rgba(19, 24, 41, 0.1);
-        --border-strong: rgba(19, 24, 41, 0.2);
+        --border-subtle: rgba(41, 34, 24, 0.12);
+        --border-strong: rgba(41, 34, 24, 0.22);
 
-        /* On --surface-page #f4f5f9: strong 14.9:1, default 8.6:1, muted 4.9:1. */
-        --text-strong: #14182a;
-        --text-default: #3c4558;
-        --text-muted: #5f6a7d;
+        /* Warm ink on paper. Ratios are enforced by scripts/check-contrast.mjs
+           rather than asserted here, so this comment cannot go stale again. */
+        --text-strong: #1b1813;
+        --text-default: #433d34;
+        --text-muted: #6a6157;
         --text-on-accent: #ffffff;
 
-        --accent: #4f46e5;
-        --accent-hover: #4338ca;
-        --accent-soft: rgba(79, 70, 229, 0.1);
-        --accent-ring: rgba(79, 70, 229, 0.3);
-        --accent-text: #4338ca;
+        --accent: #0f7f78;
+        --accent-hover: #0b6660;
+        --accent-soft: rgba(15, 127, 120, 0.1);
+        --accent-ring: rgba(15, 127, 120, 0.32);
+        --accent-text: #0b625d;
 
         --success: #0f8f6c;
         --success-soft: rgba(15, 143, 108, 0.12);
@@ -207,18 +252,18 @@
         --brand-facebook-soft: rgba(24, 119, 242, 0.1);
         --brand-facebook-text: #0f5bc0;
 
-        --gradient-brand: linear-gradient(135deg, #4f46e5, #7c3aed 55%, #9333ea);
-        --gradient-brand-soft: linear-gradient(135deg, rgba(79, 70, 229, 0.1), rgba(147, 51, 234, 0.04));
+        --gradient-brand: linear-gradient(160deg, #139087, #0f7f78 60%, #0b6a65);
+        --gradient-brand-soft: linear-gradient(160deg, rgba(15, 127, 120, 0.09), rgba(11, 106, 101, 0.03));
 
         --elev-1: 0 1px 2px rgba(19, 24, 41, 0.08);
         --elev-2: 0 10px 26px -16px rgba(19, 24, 41, 0.34);
         --elev-3: 0 26px 60px -28px rgba(19, 24, 41, 0.4);
-        --elev-glow: 0 10px 30px -16px var(--accent-ring);
+        --elev-glow: 0 10px 26px -16px rgba(41, 34, 24, 0.22);
 
         --chart-positive: #0f8f6c;
         --chart-negative: #cf2f3c;
-        --chart-grid: rgba(19, 24, 41, 0.09);
-        --chart-tick: #5f6a7d;
+        --chart-grid: rgba(41, 34, 24, 0.1);
+        --chart-tick: #6a6157;
     }
 }
 
@@ -229,27 +274,27 @@
 :root[data-theme='light'] {
     color-scheme: light;
 
-    --surface-page: #f4f5f9;
-    --surface-sunken: #eceef4;
+    --surface-page: #faf8f4;
+    --surface-sunken: #f1ede6;
     --surface-raised: #ffffff;
     --surface-overlay: #ffffff;
     --surface-glass: rgba(255, 255, 255, 0.78);
     --surface-glass-hover: rgba(255, 255, 255, 0.98);
-    --surface-scrim: rgba(24, 26, 38, 0.44);
+    --surface-scrim: rgba(28, 24, 18, 0.46);
 
-    --border-subtle: rgba(19, 24, 41, 0.1);
-    --border-strong: rgba(19, 24, 41, 0.2);
+    --border-subtle: rgba(41, 34, 24, 0.12);
+    --border-strong: rgba(41, 34, 24, 0.22);
 
-    --text-strong: #14182a;
-    --text-default: #3c4558;
-    --text-muted: #5f6a7d;
+    --text-strong: #1b1813;
+    --text-default: #433d34;
+    --text-muted: #6a6157;
     --text-on-accent: #ffffff;
 
-    --accent: #4f46e5;
-    --accent-hover: #4338ca;
-    --accent-soft: rgba(79, 70, 229, 0.1);
-    --accent-ring: rgba(79, 70, 229, 0.3);
-    --accent-text: #4338ca;
+    --accent: #0f7f78;
+    --accent-hover: #0b6660;
+    --accent-soft: rgba(15, 127, 120, 0.1);
+    --accent-ring: rgba(15, 127, 120, 0.32);
+    --accent-text: #0b625d;
 
     --success: #0f8f6c;
     --success-soft: rgba(15, 143, 108, 0.12);
@@ -269,18 +314,18 @@
     --brand-facebook-soft: rgba(24, 119, 242, 0.1);
     --brand-facebook-text: #0f5bc0;
 
-    --gradient-brand: linear-gradient(135deg, #4f46e5, #7c3aed 55%, #9333ea);
-    --gradient-brand-soft: linear-gradient(135deg, rgba(79, 70, 229, 0.1), rgba(147, 51, 234, 0.04));
+    --gradient-brand: linear-gradient(160deg, #139087, #0f7f78 60%, #0b6a65);
+    --gradient-brand-soft: linear-gradient(160deg, rgba(15, 127, 120, 0.09), rgba(11, 106, 101, 0.03));
 
     --elev-1: 0 1px 2px rgba(19, 24, 41, 0.08);
     --elev-2: 0 10px 26px -16px rgba(19, 24, 41, 0.34);
     --elev-3: 0 26px 60px -28px rgba(19, 24, 41, 0.4);
-    --elev-glow: 0 10px 30px -16px var(--accent-ring);
+    --elev-glow: 0 10px 26px -16px rgba(41, 34, 24, 0.22);
 
     --chart-positive: #0f8f6c;
     --chart-negative: #cf2f3c;
-    --chart-grid: rgba(19, 24, 41, 0.09);
-    --chart-tick: #5f6a7d;
+    --chart-grid: rgba(41, 34, 24, 0.1);
+    --chart-tick: #6a6157;
 }
 
 /* Latin UI runs tighter than Arabic at the same size. */

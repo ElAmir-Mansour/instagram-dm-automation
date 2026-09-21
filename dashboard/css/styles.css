@@ -340,7 +340,7 @@ bdi { unicode-bidi: isolate; }
 /* ─── Language toggle ────────────────────────────────────────────────────────
    A rarely-touched preference next to the primary navigation, so it is a plain
    text button rather than a pill with a glyph. The label is the target
-   language's autonym and carries its own `lang`, so العربية is shaped by Cairo
+   language's autonym and carries its own `lang`, so العربية is shaped by the Arabic face
    and "English" set in Inter regardless of the interface language. */
 .lang-toggle {
     display: inline-flex; align-items: center; justify-content: center;

@@ -228,7 +228,7 @@ const SettingsPage = {
                         <div class="form-group">
                             <label class="form-label" for="settings-lang">${t('app.language')}</label>
                             <!-- Each option carries its own lang attribute so
-                                 العربية is shaped by Cairo and "English" set in
+                                 العربية is shaped by the Arabic face and "English" set in
                                  Inter, whichever language the interface is in. -->
                             <select class="select" id="settings-lang" data-change="app:setLanguage">
                                 ${Object.keys(I18N.LANGS).map((code) => html`
