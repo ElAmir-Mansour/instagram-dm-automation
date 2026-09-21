@@ -38,9 +38,6 @@
     <title>سياسة الخصوصية · Privacy Policy — AutoReply Pro</title>
     <meta name="description" content="كيف يتعامل «أوتوريبلاي برو» مع بيانات مَن يعلّق أو يرسل رسالة خاصة — What AutoReply Pro collects, where it goes, and how to have it deleted.">
 
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
 
     <!-- One design system in this repo, not three. This is the same file the
          dashboard and dashboard/eid.html load, so the review surface and the
@@ -50,7 +47,12 @@
          duplication: if this stylesheet ever 404s — the dashboard moving behind
          Vercel Deployment Protection would do it — the page has to stay legible
          rather than render as unstyled black-on-transparent. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=5.9">
+    <!-- No webfont. HIG's answer to typography is the system font, and --font-ui in
+         tokens.css is the -apple-system stack, so there is nothing to download: one fewer
+         third-party round trip on the critical path and ~100KB saved. The preconnects to
+         fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
+         nothing requests is a wasted DNS lookup and TLS handshake. -->
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=6.0">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */

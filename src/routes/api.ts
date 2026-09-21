@@ -58,8 +58,13 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
     res.setHeader('Content-Security-Policy', [
         "default-src 'self'",
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com",
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net https://unpkg.com",
-        "font-src 'self' data: https://fonts.gstatic.com",
+        // fonts.googleapis.com and fonts.gstatic.com were dropped here when the HIG pass
+        // removed the webfont: typography is the -apple-system stack now and the dashboard
+        // downloads no font at all. A CSP allowance nothing needs is not harmless - it is a
+        // hole left open for whatever is injected next, and it is exactly the kind of thing
+        // that silently outlives the feature that justified it.
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com",
+        "font-src 'self' data:",
         // Post previews are served straight off Meta's CDN, whose hostnames rotate.
         "img-src 'self' data: blob: https:",
         "media-src 'self' data: blob: https:",

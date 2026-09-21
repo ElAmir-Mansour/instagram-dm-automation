@@ -12,14 +12,16 @@
     <title>عيدية المبرمجين — 9 كورسات مجانية بالكامل 🎉</title>
     <meta name="description" content="تسعة كورسات برمجة بالعربية متاحة مجاناً بكوبونات محدودة — اختر كورسك وسجّل فوراً.">
     <!-- Google Fonts: IBM Plex Sans Arabic & IBM Plex Sans -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
     <!-- One design system in this repo, not two. This page used to redefine the
          whole variable block with values a hex digit and a pixel away from the
          app's; it now consumes the same tokens and only maps the handful of
          legacy names its own rules still use. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=5.9">
+    <!-- No webfont. HIG's answer to typography is the system font, and --font-ui in
+         tokens.css is the -apple-system stack, so there is nothing to download: one fewer
+         third-party round trip on the critical path and ~100KB saved. The preconnects to
+         fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
+         nothing requests is a wasted DNS lookup and TLS handshake. -->
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=6.0">
     <style>
         :root {
             --bg-primary: var(--surface-page);

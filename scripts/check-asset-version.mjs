@@ -133,6 +133,36 @@ if (base && fail.length === 0) {
     }
 }
 
+// ─── No third-party font requests ───────────────────────────────────────────────────────────
+//
+// The HIG pass switched typography to the `-apple-system` stack, which downloads nothing —
+// and I removed the webfont from the token and then CLAIMED the request was gone while four
+// `<link>` tags were still fetching it. The tokens and the markup had to agree and did not.
+//
+// So this asserts the property rather than trusting the claim: no page may request a font or
+// stylesheet from a font CDN. It also keeps the matching CSP tightening honest, since a
+// reintroduced <link> would now be blocked at runtime and fail confusingly instead.
+const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com', 'use.typekit.net', 'fonts.bunny.net'];
+
+for (const page of [INDEX, ...SHARED_ASSET_PAGES]) {
+    let html3;
+    try {
+        html3 = readFileSync(page, 'utf8');
+    } catch {
+        continue;
+    }
+    // Comments may mention the hosts (they explain why they are gone); tags may not.
+    const withoutComments = html3.replace(/<!--[\s\S]*?-->/g, '');
+    for (const host of FONT_HOSTS) {
+        if (withoutComments.includes(host)) {
+            fail.push(
+                `${page} references ${host}. Typography is the system font stack, so nothing should `
+                + `be downloaded — and the CSP no longer allows it, so this would be blocked at runtime.`
+            );
+        }
+    }
+}
+
 if (fail.length > 0) {
     console.error('\n❌ dashboard cache-version check failed:\n');
     for (const f of fail) console.error(`   • ${f}\n`);
