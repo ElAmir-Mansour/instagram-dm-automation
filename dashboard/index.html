@@ -1,18 +1,21 @@
 <!DOCTYPE html>
-<html lang="en" dir="ltr">
+<!-- lang/dir are the Arabic defaults and are re-applied by I18N.init() before
+     first paint, so the shell is RTL from the very first frame rather than
+     flipping after the scripts run. -->
+<html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AutoReply Pro — Instagram DM Automation Dashboard</title>
-    <meta name="description" content="Control your Instagram Comment-to-DM automation with a premium dashboard. Create campaigns, view analytics, and manage your bot.">
+    <title>أوتوريبلاي برو — لوحة تحكم أتمتة الرسائل</title>
+    <meta name="description" content="لوحة تحكم أتمتة التعليقات والرسائل على إنستجرام وفيسبوك: الحملات، الجدولة، صندوق الرسائل والتحليلات.">
+    <meta name="color-scheme" content="dark light">
 
-    <!-- Fonts — Inter for the English shell, Cairo for the Arabic content
-         (DM templates, captions, inbound DMs, the AI system prompt). Inter has
-         no Arabic glyphs, so without Cairo all Arabic fell back to whatever the
-         OS happened to pick. -->
+    <!-- Cairo is the PRIMARY UI face, not a fallback for Arabic content inside
+         an English shell: the interface itself is Arabic now. Inter is kept for
+         Latin runs (IDs, tokens, URLs) that Cairo renders less comfortably. -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Cairo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <!-- Chart.js — pinned + SRI -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"
@@ -25,177 +28,202 @@
             integrity="sha384-orgVf2eX2+m1zKAOIi09hD0W6GtVhoOUmqDK+sysYB2JTZ4vS86j4jm+X7a4Nnei"
             crossorigin="anonymous"></script>
 
-    <!-- Styles -->
-    <link rel="stylesheet" href="/dashboard/css/styles.css?v=3.1">
+    <!-- Design tokens first: styles.css only composes them, and eid.html loads
+         the same file so there is one design system in this repo, not two. -->
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=4.0">
+    <link rel="stylesheet" href="/dashboard/css/styles.css?v=4.0">
+
+    <script>
+        /* Applied before first paint so a pinned light theme never flashes dark.
+           Kept inline and tiny on purpose; the rest of the app is in modules. */
+        (function () {
+            try {
+                var theme = localStorage.getItem('dashboard_theme');
+                if (theme === 'dark' || theme === 'light') {
+                    document.documentElement.setAttribute('data-theme', theme);
+                }
+                var lang = localStorage.getItem('dashboard_lang');
+                if (lang === 'en') {
+                    document.documentElement.lang = 'en';
+                    document.documentElement.dir = 'ltr';
+                }
+            } catch (e) { /* private mode: defaults are fine */ }
+        }());
+    </script>
 </head>
 <body>
 
-    <button type="button" class="skip-link" data-action="app:skipToContent">Skip to main content</button>
+    <button type="button" class="skip-link" data-action="app:skipToContent" data-i18n="app.skipToContent">تخطَّ إلى المحتوى</button>
 
-    <!-- ─── Login Screen ─────────────────────────────────────────────────── -->
+    <!-- ─── Login ────────────────────────────────────────────────────────── -->
     <div id="login-screen" class="login-screen">
+        <div class="login-glow" aria-hidden="true"></div>
         <div class="login-container">
-            <div class="login-glow"></div>
-            <div class="login-card glass-card">
+            <div class="login-card surface">
                 <div class="login-logo">
-                    <div class="logo-icon">
-                        <i data-lucide="zap" class="logo-zap" aria-hidden="true"></i>
-                    </div>
-                    <h1 class="login-title">AutoReply Pro</h1>
-                    <p class="login-subtitle">Instagram DM Automation Dashboard</p>
+                    <div class="login-mark"><i data-lucide="zap" aria-hidden="true"></i></div>
+                    <h1 class="login-title" data-i18n="login.title">أوتوريبلاي برو</h1>
+                    <p class="login-subtitle" data-i18n="login.subtitle">لوحة تحكم أتمتة الرسائل</p>
                 </div>
                 <form id="login-form" class="login-form">
                     <!-- Optional. Hidden by default so the shared-password path —
                          still the operator's only way in — stays a one-field form. -->
-                    <div id="login-email-group" class="input-group hidden">
-                        <i data-lucide="mail" class="input-icon" aria-hidden="true"></i>
-                        <label class="sr-only" for="login-email">Email address</label>
-                        <input type="email" id="login-email" placeholder="you@example.com" autocomplete="username">
+                    <div id="login-email-group" class="form-group hidden">
+                        <label class="form-label" for="login-email" data-i18n="login.email">البريد الإلكتروني</label>
+                        <div class="input-affix">
+                            <i data-lucide="mail" aria-hidden="true"></i>
+                            <input class="field" type="email" id="login-email" autocomplete="username"
+                                   data-i18n-attr="placeholder:login.emailPlaceholder" placeholder="you@example.com">
+                        </div>
                     </div>
-                    <div class="input-group">
-                        <i data-lucide="lock" class="input-icon" aria-hidden="true"></i>
-                        <label class="sr-only" for="login-password">Dashboard password</label>
-                        <input type="password" id="login-password" placeholder="Enter dashboard password" autocomplete="current-password" required>
+                    <div class="form-group">
+                        <label class="form-label" for="login-password" data-i18n="login.password">كلمة مرور اللوحة</label>
+                        <div class="input-affix">
+                            <i data-lucide="lock" aria-hidden="true"></i>
+                            <input class="field" type="password" id="login-password" autocomplete="current-password" required
+                                   data-i18n-attr="placeholder:login.passwordPlaceholder" placeholder="أدخل كلمة المرور">
+                        </div>
                     </div>
                     <button type="submit" id="login-btn" class="btn btn-primary btn-full">
-                        <span>Sign In</span>
-                        <i data-lucide="arrow-right" aria-hidden="true"></i>
+                        <span data-i18n="login.submit">تسجيل الدخول</span>
                     </button>
                     <p id="login-error" class="login-error hidden" role="alert"></p>
                     <button type="button" id="login-email-toggle" class="login-alt-link"
-                            data-action="app:revealEmailField">Sign in with an account</button>
+                            data-action="app:revealEmailField" data-i18n="login.useAccount">الدخول بحساب بريد إلكتروني</button>
                 </form>
             </div>
         </div>
     </div>
 
-    <!-- ─── Main App ─────────────────────────────────────────────────────── -->
+    <!-- ─── App ──────────────────────────────────────────────────────────── -->
     <div id="app" class="app hidden">
 
-        <!-- Sidebar -->
-        <nav id="sidebar" class="sidebar" aria-label="Main navigation">
+        <nav id="sidebar" class="sidebar" data-i18n-attr="aria-label:app.mainNav" aria-label="التنقل الرئيسي">
             <div class="sidebar-header">
                 <div class="sidebar-logo">
-                    <div class="logo-icon-sm">
-                        <i data-lucide="zap" aria-hidden="true"></i>
-                    </div>
-                    <span class="sidebar-brand">AutoReply Pro</span>
+                    <div class="logo-mark"><i data-lucide="zap" aria-hidden="true"></i></div>
+                    <span class="sidebar-brand" data-i18n="app.name">أوتوريبلاي برو</span>
                 </div>
             </div>
 
             <div class="sidebar-nav">
                 <a href="#/overview" class="nav-item active" data-page="overview">
                     <i data-lucide="layout-dashboard" aria-hidden="true"></i>
-                    <span>Overview</span>
+                    <span data-i18n="nav.overview">نظرة عامة</span>
                 </a>
                 <a href="#/campaigns" class="nav-item" data-page="campaigns">
                     <i data-lucide="megaphone" aria-hidden="true"></i>
-                    <span>Campaigns</span>
+                    <span data-i18n="nav.campaigns">الحملات</span>
                 </a>
                 <a href="#/posts" class="nav-item" data-page="posts">
                     <i data-lucide="calendar-days" aria-hidden="true"></i>
-                    <span>Posts Scheduler</span>
+                    <span data-i18n="nav.posts">جدولة المنشورات</span>
                 </a>
                 <a href="#/inbox" class="nav-item" data-page="inbox">
                     <i data-lucide="message-square" aria-hidden="true"></i>
-                    <span>DM Inbox</span>
+                    <span data-i18n="nav.inbox">صندوق الرسائل</span>
                 </a>
                 <a href="#/ai_settings" class="nav-item" data-page="ai_settings">
                     <i data-lucide="bot" aria-hidden="true"></i>
-                    <span>AI Settings</span>
+                    <span data-i18n="nav.ai_settings">إعدادات الذكاء الاصطناعي</span>
                 </a>
                 <a href="#/analytics" class="nav-item" data-page="analytics">
                     <i data-lucide="bar-chart-3" aria-hidden="true"></i>
-                    <span>Analytics</span>
+                    <span data-i18n="nav.analytics">التحليلات</span>
                 </a>
                 <a href="#/activity" class="nav-item" data-page="activity">
                     <i data-lucide="scroll-text" aria-hidden="true"></i>
-                    <span>Activity Log</span>
+                    <span data-i18n="nav.activity">سجل النشاط</span>
                 </a>
                 <a href="#/settings" class="nav-item" data-page="settings">
                     <i data-lucide="settings" aria-hidden="true"></i>
-                    <span>Settings</span>
+                    <span data-i18n="nav.settings">الإعدادات</span>
                 </a>
 
                 <!-- Platform administration. Revealed by App.applyChrome() only when
                      /auth/me reports role === 'platform_admin'. -->
                 <a href="#/tenants" class="nav-item hidden" data-page="tenants" data-admin-only>
                     <i data-lucide="building-2" aria-hidden="true"></i>
-                    <span>Tenants</span>
+                    <span data-i18n="nav.tenants">الحسابات</span>
                 </a>
                 <a href="#/users" class="nav-item hidden" data-page="users" data-admin-only>
                     <i data-lucide="users" aria-hidden="true"></i>
-                    <span>Users</span>
+                    <span data-i18n="nav.users">المستخدمون</span>
                 </a>
-
             </div>
 
             <div class="sidebar-footer">
                 <button id="logout-btn" type="button" class="nav-item nav-logout">
                     <i data-lucide="log-out" aria-hidden="true"></i>
-                    <span>Logout</span>
+                    <span data-i18n="app.logout">تسجيل الخروج</span>
                 </button>
             </div>
         </nav>
 
-        <!-- Main Content -->
         <main id="main-content" class="main-content">
 
-            <!-- Page Header -->
             <header class="page-header">
-                <div class="header-left">
-                    <button id="mobile-menu-btn" type="button" class="mobile-menu-btn"
-                            aria-label="Toggle navigation menu" aria-controls="sidebar" aria-expanded="false">
+                <div class="header-start">
+                    <button id="mobile-menu-btn" type="button" class="icon-button menu-button"
+                            data-i18n-attr="aria-label:app.menu" aria-label="قائمة التنقل"
+                            aria-controls="sidebar" aria-expanded="false">
                         <i data-lucide="menu" aria-hidden="true"></i>
                     </button>
                     <div>
-                        <h1 id="page-title" class="page-title">Overview</h1>
-                        <p id="page-subtitle" class="page-subtitle">Welcome back. Here's how your automation is performing.</p>
+                        <h1 id="page-title" class="page-title">نظرة عامة</h1>
+                        <p id="page-subtitle" class="page-subtitle"></p>
                     </div>
                 </div>
-                <div class="header-right">
+                <div class="header-end">
                     <!-- Tenant switcher. Rendered by App.renderTenantSwitcher(), and
                          hidden entirely unless this account can reach 2+ tenants. -->
-                    <div id="tenant-switcher" class="tenant-switcher hidden"></div>
-                    <!-- Driven by real API outcomes via UI.setSystemStatus(); was static markup. -->
-                    <div id="status-indicator" class="status-badge status-online" role="status" aria-live="polite" aria-label="System Online">
+                    <div id="tenant-switcher" class="chip-select hidden"></div>
+
+                    <!-- Language: the whole point of the redesign is that this is a
+                         switch between two first-class languages, not a patch. -->
+                    <div class="chip-select">
+                        <i data-lucide="languages" aria-hidden="true"></i>
+                        <label class="sr-only" for="lang-select" data-i18n="app.language">اللغة</label>
+                        <select id="lang-select" data-change="app:setLanguage"></select>
+                    </div>
+
+                    <!-- Driven by real API outcomes via UI.setSystemStatus(). -->
+                    <div id="status-indicator" class="status-badge status-online" role="status" aria-live="polite">
                         <span class="status-dot" aria-hidden="true"></span>
-                        <span data-status-label>System Online</span>
+                        <span data-status-label data-i18n="status.online">النظام يعمل</span>
                     </div>
                 </div>
             </header>
 
-            <!-- Page Container -->
             <div id="page-container" class="page-container" tabindex="-1">
-                <!-- Pages are dynamically injected here -->
+                <!-- Pages are injected here -->
             </div>
         </main>
     </div>
 
-    <!-- ─── Toast Notification ───────────────────────────────────────────── -->
     <div id="toast-container" class="toast-container"></div>
 
-    <!-- ─── Modal Container ──────────────────────────────────────────────── -->
     <div id="modal-overlay" class="modal-overlay hidden">
-        <div id="modal-content" class="modal-content glass-card" role="dialog" aria-modal="true" tabindex="-1">
+        <div id="modal-content" class="modal-content" role="dialog" aria-modal="true" tabindex="-1">
             <!-- Modal content injected dynamically -->
         </div>
     </div>
 
-    <!-- Scripts -->
-    <script src="/dashboard/js/api.js?v=3.1"></script>
-    <script src="/dashboard/js/components.js?v=3.1"></script>
-    <script src="/dashboard/js/pages/overview.js?v=3.0"></script>
-    <script src="/dashboard/js/pages/campaigns.js?v=3.1"></script>
-    <script src="/dashboard/js/pages/posts.js?v=3.1"></script>
-    <script src="/dashboard/js/pages/inbox.js?v=3.1"></script>
-    <script src="/dashboard/js/pages/ai_settings.js?v=3.0"></script>
-    <script src="/dashboard/js/pages/analytics.js?v=3.0"></script>
-    <script src="/dashboard/js/pages/activity.js?v=3.1"></script>
-    <script src="/dashboard/js/pages/settings.js?v=3.0"></script>
-    <script src="/dashboard/js/pages/tenants.js?v=3.1"></script>
-    <script src="/dashboard/js/pages/users.js?v=3.1"></script>
-    <script src="/dashboard/js/app.js?v=3.1"></script>
+    <script src="/dashboard/js/i18n.js?v=4.0"></script>
+    <script src="/dashboard/js/api.js?v=4.0"></script>
+    <script src="/dashboard/js/components.js?v=4.0"></script>
+    <script src="/dashboard/js/charts.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/overview.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/campaigns.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/posts.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/inbox.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/ai_settings.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/analytics.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/activity.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/settings.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/tenants.js?v=4.0"></script>
+    <script src="/dashboard/js/pages/users.js?v=4.0"></script>
+    <script src="/dashboard/js/app.js?v=4.0"></script>
 
 </body>
 </html>

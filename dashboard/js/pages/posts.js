@@ -1,5 +1,20 @@
 /**
- * Posts Scheduler Page — Create, schedule, and publish posts to Instagram & Facebook.
+ * Posts Scheduler — create, schedule and publish to Instagram & Facebook.
+ *
+ * ─── Two honesty problems this screen had ───────────────────────────────────
+ *
+ * 1. THE MINUTE IS A LIE. `vercel.json` runs the publish cron once a day at
+ *    00:00 UTC (a Hobby-plan limit), so a `datetime-local` field that accepts
+ *    14:35 is promising something the backend cannot deliver. The field stays
+ *    — the API takes a full ISO timestamp and the date genuinely matters — but
+ *    next to it the form now computes and shows the instant the post will
+ *    ACTUALLY go out, live, as the operator picks a time.
+ *
+ * 2. THE THUMBNAIL WAS A FOOTNOTE. `cover_url` is supported end to end, and
+ *    without it Instagram thumbnails a reel from frame 0 — a black tile for
+ *    any video that fades up from black, which is the entire reason the field
+ *    exists. It is now a titled step with a side-by-side preview of the two
+ *    tiles: the frame the platform would pick, and the cover chosen instead.
  */
 const PostsPage = {
     activeTab: 'scheduled', // 'scheduled' or 'live'
@@ -28,18 +43,15 @@ const PostsPage = {
      *  - `feed` (text/link) is Facebook-only.
      */
     POST_TYPES: [
-        { value: 'image', label: 'Single Image', platforms: ['instagram', 'facebook', 'both'] },
-        { value: 'video', label: 'Video / Reel', platforms: ['instagram', 'facebook', 'both'] },
-        { value: 'story', label: 'Story (Instagram only)', platforms: ['instagram'] },
-        { value: 'feed', label: 'Text / Link Post (Facebook only)', platforms: ['facebook'] },
+        { value: 'image', labelKey: 'posts.type.image', platforms: ['instagram', 'facebook', 'both'] },
+        { value: 'video', labelKey: 'posts.type.video', platforms: ['instagram', 'facebook', 'both'] },
+        { value: 'story', labelKey: 'posts.type.story', platforms: ['instagram'] },
+        { value: 'feed', labelKey: 'posts.type.feed', platforms: ['facebook'] },
     ],
-
-    SCHEDULE_HINT_AR: 'ملاحظة: النشر يتم عند تشغيل المُجدوِل التالي — مرة واحدة يومياً الساعة 00:00 بتوقيت UTC. الوقت المحدد هنا يحدد اليوم، وليس الدقيقة بالضبط.',
-    UPLOAD_HINT_AR: 'الرفع ينشئ رابطاً عاماً تلقائياً. الحد الأقصى لحجم الملف 3.2 ميجابايت (حد Vercel للطلب 4.5 ميجابايت بعد ترميز base64).',
 
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader('Loading posts…');
+        container.innerHTML = UI.loader();
 
         const [scheduled, live] = await Promise.allSettled([
             API.getScheduledPosts(),
@@ -73,22 +85,22 @@ const PostsPage = {
 
         container.innerHTML = esc(html`
             ${this.publishError ? this.renderPublishErrorPanel() : ''}
-            <div class="posts-toolbar">
-                <div class="tab-switch" role="tablist" aria-label="Posts view">
+            <div class="page-toolbar">
+                <div class="segmented" role="tablist" aria-label="${t('nav.posts')}">
                     <button type="button" role="tab" aria-selected="${this.activeTab === 'scheduled' ? 'true' : 'false'}"
-                            class="btn btn-sm ${this.activeTab === 'scheduled' ? 'btn-primary' : 'btn-secondary'} tab-switch-btn"
+                            class="btn btn-sm ${this.activeTab === 'scheduled' ? 'btn-primary' : 'btn-ghost'}"
                             data-action="posts:switchTab" data-tab="scheduled">
-                        <i data-lucide="calendar" aria-hidden="true"></i> Scheduled Queue
+                        <i data-lucide="calendar" aria-hidden="true"></i> ${t('posts.tabQueue')}
                     </button>
                     <button type="button" role="tab" aria-selected="${this.activeTab === 'live' ? 'true' : 'false'}"
-                            class="btn btn-sm ${this.activeTab === 'live' ? 'btn-primary' : 'btn-secondary'} tab-switch-btn"
+                            class="btn btn-sm ${this.activeTab === 'live' ? 'btn-primary' : 'btn-ghost'}"
                             data-action="posts:switchTab" data-tab="live">
-                        <i data-lucide="instagram" aria-hidden="true"></i> Live Published Feed
+                        <i data-lucide="instagram" aria-hidden="true"></i> ${t('posts.tabLive')}
                     </button>
                 </div>
-                <div>
+                <div class="toolbar-actions">
                     <button type="button" class="btn btn-primary btn-sm" data-action="posts:showCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> Schedule New Post
+                        <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
                     </button>
                 </div>
             </div>
@@ -109,19 +121,17 @@ const PostsPage = {
 
     renderPublishErrorPanel() {
         return html`
-            <div class="publish-error-panel glass-card" role="alert">
+            <div class="publish-error-panel" role="alert">
                 <div class="publish-error-head">
                     <i data-lucide="alert-triangle" aria-hidden="true"></i>
-                    <h3>Publishing failed</h3>
-                    <button type="button" class="modal-close" data-action="posts:dismissPublishError" aria-label="Dismiss publishing error">
+                    <h3>${t('posts.publishFailedTitle')}</h3>
+                    <button type="button" class="modal-close" data-action="posts:dismissPublishError"
+                            aria-label="${t('posts.dismissError')}">
                         <i data-lucide="x" aria-hidden="true"></i>
                     </button>
                 </div>
                 <p class="publish-error-message" dir="auto">${this.publishError.message}</p>
-                <p class="publish-error-hint">
-                    Nothing was deleted — the post is still in the queue with status FAILED. Fix the
-                    media or caption and publish again.
-                </p>
+                <p class="publish-error-hint">${t('posts.publishFailedHint')}</p>
             </div>
         `;
     },
@@ -136,7 +146,7 @@ const PostsPage = {
         // so the Retry button gets a real listener instead of an inline onclick.
         const options = JSON.stringify({
             title,
-            message: (error && error.message) || 'Unknown error.',
+            message: (error && error.message) || t('error.unexpected'),
             hint: error && error.status ? `HTTP ${error.status}` : '',
         });
         return html`<div data-error-host data-error-options="${options}"></div>`;
@@ -144,27 +154,30 @@ const PostsPage = {
 
     renderScheduledQueue() {
         if (this.scheduledError) {
-            return this.errorHost(this.scheduledError, 'Could not load the scheduled queue');
+            return this.errorHost(this.scheduledError, t('posts.queueErrorTitle'));
         }
 
         if (this.posts.length === 0) {
             return html`
-                <div class="empty-state glass-card" style="padding:48px 24px;">
+                <div class="empty-state surface">
                     <i data-lucide="calendar-days" aria-hidden="true"></i>
-                    <h3>No Scheduled Posts</h3>
-                    <p>Schedule your first post to run automatically on Instagram or Facebook.</p>
-                    <button type="button" class="btn btn-primary btn-sm" style="margin-top:16px;" data-action="posts:showCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> Schedule New Post
+                    <h3>${t('posts.emptyQueueTitle')}</h3>
+                    <p>${t('posts.emptyQueueBody')}</p>
+                    <button type="button" class="btn btn-primary btn-sm" data-action="posts:showCreateModal">
+                        <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
                     </button>
                 </div>
             `;
         }
 
-        return html`
-            <div class="campaigns-grid">
-                ${this.posts.map((post) => this.renderScheduledCard(post))}
-            </div>
-        `;
+        return html`<div class="card-grid">${this.posts.map((post) => this.renderScheduledCard(post))}</div>`;
+    },
+
+    platformBadge(platform) {
+        const value = String(platform || '');
+        if (value === 'instagram') return { cls: 'badge-instagram', icon: 'instagram', label: t('common.instagram') };
+        if (value === 'facebook') return { cls: 'badge-facebook', icon: 'facebook', label: t('common.facebook') };
+        return { cls: 'badge-neutral', icon: 'share-2', label: t('common.both') };
     },
 
     renderScheduledCard(post) {
@@ -177,30 +190,25 @@ const PostsPage = {
         if (isFailed) statusClass = 'failed';
         if (isPublished) statusClass = 'sent';
 
-        const platform = String(post.platform || '');
-        const platformBadge = platform === 'instagram'
-            ? 'badge-info-glow'
-            : platform === 'facebook' ? 'badge-success-glow' : 'badge-warning-glow';
-        const platformIcon = platform === 'instagram'
-            ? 'instagram'
-            : platform === 'facebook' ? 'facebook' : 'share-2';
-
+        const badge = this.platformBadge(post.platform);
         const mediaUrl = safeUrl(post.media_url);
         const coverUrl = safeUrl(post.cover_url);
         const isVideo = post.post_type === 'video' || post.post_type === 'reel';
+        const typeLabel = this.typeLabel(post.post_type);
 
         return html`
-            <div class="campaign-card glass-card" data-id="${post.id}">
+            <article class="post-card surface" data-id="${post.id}">
                 <div class="post-card-head">
                     <div class="post-card-badges">
-                        <span class="badge ${platformBadge}">
-                            <i data-lucide="${platformIcon}" style="width:12px;height:12px;margin-right:4px;" aria-hidden="true"></i>
-                            ${platform.toUpperCase()}
+                        <span class="badge ${html.raw(badge.cls)}">
+                            <i data-lucide="${badge.icon}" aria-hidden="true"></i> ${badge.label}
                         </span>
-                        <span class="badge badge-info-glow" style="text-transform: capitalize;">${post.post_type}</span>
+                        <span class="badge badge-neutral">${typeLabel}</span>
                     </div>
-                    <span class="status-pill ${statusClass}">
-                        ${isPublishing ? html`<span class="dot-blink" style="background:var(--warning);" aria-hidden="true"></span> PUBLISHING` : post.status}
+                    <span class="status-pill ${html.raw(statusClass)}">
+                        ${isPublishing
+                            ? html`<span class="dot-blink" aria-hidden="true"></span> ${t('posts.statusPublishing')}`
+                            : UI.statusLabel(post.status)}
                     </span>
                 </div>
 
@@ -208,109 +216,121 @@ const PostsPage = {
                     <div class="post-media-frame">
                         ${isVideo
                             ? html`<video src="${mediaUrl}" poster="${coverUrl}" muted loop
-                                          aria-label="Video attached to this scheduled post"></video>`
-                            : html`<img src="${mediaUrl}" alt="Media attached to this scheduled post">`}
+                                          aria-label="${t('posts.mediaPreview')}"></video>`
+                            : html`<img src="${mediaUrl}" alt="${t('posts.mediaPreview')}">`}
                     </div>
                 ` : ''}
 
-                ${coverUrl && isVideo ? html`
-                    <div class="post-cover-row">
-                        <img src="${coverUrl}" alt="Reel cover thumbnail">
-                        <span>Cover image set</span>
-                    </div>
+                ${isVideo ? html`
+                    <p class="post-card-meta">
+                        <i data-lucide="${coverUrl ? 'image-plus' : 'alert-triangle'}" aria-hidden="true"></i>
+                        <span class="${coverUrl ? html.raw('text-success') : html.raw('text-warning')}">
+                            ${coverUrl ? t('posts.cover.set') : t('posts.cover.missingBadge')}
+                        </span>
+                    </p>
                 ` : ''}
 
-                <div class="campaign-template" dir="auto">${post.caption || '(No caption)'}</div>
+                <div class="template-preview user-content" dir="auto">${post.caption || t('posts.noCaption')}</div>
 
-                <div class="post-card-meta">
-                    <i data-lucide="clock" style="width:12px;height:12px;" aria-hidden="true"></i>
-                    <span>Scheduled: ${UI.formatDateTime(post.scheduled_time)}</span>
-                </div>
+                <p class="post-card-meta">
+                    <i data-lucide="clock" aria-hidden="true"></i>
+                    <span>${t('posts.scheduledAt', { when: UI.formatDateTime(post.scheduled_time) })}</span>
+                </p>
+                ${isPending ? html`
+                    <p class="post-card-meta">
+                        <i data-lucide="calendar-clock" aria-hidden="true"></i>
+                        <span>${t('posts.schedule.actual', {
+                            when: UI.formatDateTime(UI.nextCronRun(
+                                new Date(post.scheduled_time) > new Date() ? post.scheduled_time : new Date()
+                            )),
+                        })}</span>
+                    </p>
+                ` : ''}
 
                 ${isFailed ? html`
-                    <div class="post-card-error" dir="auto">
-                        <strong>Error:</strong> ${post.error_log || 'Unknown failure'}
-                    </div>
+                    <p class="post-card-error" dir="auto">
+                        <strong>${t('posts.errorLabel')}</strong> ${post.error_log || t('error.unexpected')}
+                    </p>
                 ` : ''}
 
                 ${isPublished ? html`
-                    <div class="post-card-published-id">
-                        <strong>Post ID:</strong> ${post.published_post_id}
-                    </div>
+                    <p class="post-card-id"><strong>${t('posts.publishedIdLabel')}</strong> ${UI.ltr(post.published_post_id)}</p>
                 ` : ''}
 
-                <div class="campaign-actions">
+                <div class="card-actions">
                     ${isPending || isFailed ? html`
                         <button type="button" class="btn btn-primary btn-sm" data-action="posts:publishNow" data-id="${post.id}">
-                            <i data-lucide="send" aria-hidden="true"></i> Publish Now
+                            <i data-lucide="send" aria-hidden="true"></i> ${t('posts.publishNow')}
                         </button>
                         <button type="button" class="btn btn-secondary btn-sm" data-action="posts:showEditModal" data-id="${post.id}">
-                            <i data-lucide="pencil" aria-hidden="true"></i> Edit
+                            <i data-lucide="pencil" aria-hidden="true"></i> ${t('common.edit')}
                         </button>
                         <button type="button" class="btn btn-danger btn-sm" data-action="posts:deletePost" data-id="${post.id}">
-                            <i data-lucide="trash-2" aria-hidden="true"></i> Delete
+                            <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
                         </button>
                     ` : html`
-                        <button type="button" class="btn btn-secondary btn-sm btn-full" data-action="posts:deletePost" data-id="${post.id}" style="justify-content:center;">
-                            <i data-lucide="trash-2" aria-hidden="true"></i> Delete Log
+                        <button type="button" class="btn btn-secondary btn-sm btn-full" data-action="posts:deletePost" data-id="${post.id}">
+                            <i data-lucide="trash-2" aria-hidden="true"></i> ${t('posts.deleteLog')}
                         </button>
                     `}
                 </div>
-            </div>
+            </article>
         `;
+    },
+
+    typeLabel(value) {
+        const type = this.POST_TYPES.find((x) => x.value === (value === 'reel' ? 'video' : value));
+        return type ? t(type.labelKey) : String(value || '');
     },
 
     renderLiveFeed() {
         if (this.liveError) {
-            return this.errorHost(this.liveError, 'Could not load the live feed');
+            return this.errorHost(this.liveError, t('posts.liveErrorTitle'));
         }
 
         if (this.livePosts.length === 0) {
             return html`
-                <div class="empty-state glass-card" style="padding:48px 24px;">
+                <div class="empty-state surface">
                     <i data-lucide="alert-circle" aria-hidden="true"></i>
-                    <h3>No Live Posts Found</h3>
-                    <p>No active posts detected on your Facebook Page or Instagram Account.</p>
+                    <h3>${t('posts.emptyLiveTitle')}</h3>
+                    <p>${t('posts.emptyLiveBody')}</p>
                 </div>
             `;
         }
 
         return html`
-            <div class="campaigns-grid">
+            <div class="card-grid">
                 ${this.livePosts.map((post) => {
                     const mediaUrl = safeUrl(post.media_url);
                     const permalink = safeUrl(post.permalink);
+                    const badge = this.platformBadge(post.platform);
                     return html`
-                        <div class="campaign-card glass-card">
+                        <article class="post-card surface">
                             <div class="post-card-head">
-                                <span class="badge ${post.platform === 'instagram' ? 'badge-info-glow' : 'badge-success-glow'}">
-                                    <i data-lucide="${post.platform === 'instagram' ? 'instagram' : 'facebook'}" style="width:12px;height:12px;margin-right:4px;" aria-hidden="true"></i>
-                                    ${String(post.platform || '').toUpperCase()}
+                                <span class="badge ${html.raw(badge.cls)}">
+                                    <i data-lucide="${badge.icon}" aria-hidden="true"></i> ${badge.label}
                                 </span>
-                                <span class="post-card-date">${UI.formatDay(post.timestamp)}</span>
+                                <span class="text-meta">${UI.formatDay(post.timestamp)}</span>
                             </div>
 
                             ${mediaUrl ? html`
                                 <div class="post-media-frame">
-                                    <img src="${mediaUrl}" alt="Thumbnail of the published post">
+                                    <img src="${mediaUrl}" alt="${t('posts.mediaPreview')}">
                                 </div>
                             ` : ''}
 
-                            <div class="campaign-template" dir="auto">${post.caption || '(No text/caption)'}</div>
+                            <div class="template-preview user-content" dir="auto">${post.caption || t('posts.noCaption')}</div>
+                            <p class="post-card-id">${UI.ltr(post.id)}</p>
 
-                            <div class="post-card-published-id">
-                                <strong>ID:</strong> ${post.id}
-                            </div>
-
-                            <div style="display:flex; gap:8px;">
-                                ${permalink ? html`
+                            ${permalink ? html`
+                                <div class="card-actions">
                                     <a href="${permalink}" target="_blank" rel="noopener noreferrer"
-                                       class="btn btn-secondary btn-sm btn-full" style="justify-content:center;">
-                                        <i data-lucide="external-link" aria-hidden="true"></i> View on Live
+                                       class="btn btn-secondary btn-sm btn-full">
+                                        <i data-lucide="external-link" aria-hidden="true"></i> ${t('posts.viewLive')}
                                     </a>
-                                ` : ''}
-                            </div>
-                        </div>
+                                </div>
+                            ` : ''}
+                        </article>
                     `;
                 })}
             </div>
@@ -322,63 +342,163 @@ const PostsPage = {
         return this.POST_TYPES.map((type) => html`
             <option value="${type.value}"
                     ${selected === type.value ? html.raw('selected') : ''}
-                    ${type.platforms.includes(platform) ? '' : html.raw('hidden disabled')}>${type.label}</option>
+                    ${type.platforms.includes(platform) ? '' : html.raw('hidden disabled')}>${t(type.labelKey)}</option>
         `);
     },
 
     mediaFields(post) {
         const mediaUrl = safeUrl(post && post.media_url);
-        const coverUrl = safeUrl(post && post.cover_url);
         const isVideo = post && (post.post_type === 'video' || post.post_type === 'reel');
 
         return html`
             <div class="form-group" id="media-url-group">
-                <label class="form-label" for="post-media-file">Media File</label>
-                <div style="display:flex; flex-direction:column; gap:8px;">
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <input type="file" id="post-media-file" class="form-input" style="flex:1;"
-                               accept="image/*,video/*" data-change="posts:handleFileUpload" data-target="media">
-                        <span style="font-size:12px; color:var(--text-muted);">or</span>
-                    </div>
-                    <label class="sr-only" for="post-media-url">Direct media URL</label>
-                    <input class="form-input" id="post-media-url" name="media_url" value="${mediaUrl}"
-                           placeholder="Paste direct image or video URL (https://...)" data-input="posts:handleUrlInput">
-                </div>
+                <label class="form-label" for="post-media-file">${t('posts.media')}</label>
+                <input type="file" id="post-media-file" class="field"
+                       accept="image/*,video/*" data-change="posts:handleFileUpload" data-target="media">
+                <label class="sr-only" for="post-media-url">${t('posts.mediaUrl')}</label>
+                <input class="field mbs-4" id="post-media-url" name="media_url" value="${mediaUrl}" dir="ltr"
+                       placeholder="${t('posts.mediaUrlPlaceholder')}" data-input="posts:handleUrlInput">
                 <div id="media-upload-progress" class="upload-progress" role="status" aria-live="polite">
-                    <div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div>
-                    <span>Uploading and converting to public link...</span>
+                    <span class="spinner spinner-sm"></span>
+                    <span>${t('posts.uploading')}</span>
                 </div>
-                <div id="media-preview-container" class="media-preview" style="${mediaUrl ? html.raw('display:flex;') : html.raw('display:none;')}">
+                <div id="media-preview-container" class="media-preview ${mediaUrl ? html.raw('is-visible') : ''}">
                     ${mediaUrl
                         ? (isVideo
-                            ? html`<video src="${mediaUrl}" muted controls aria-label="Media preview"></video>`
-                            : html`<img src="${mediaUrl}" alt="Media preview">`)
+                            ? html`<video src="${mediaUrl}" muted controls aria-label="${t('posts.mediaPreview')}"></video>`
+                            : html`<img src="${mediaUrl}" alt="${t('posts.mediaPreview')}">`)
                         : ''}
                 </div>
-                <p class="form-hint" dir="auto">${this.UPLOAD_HINT_AR}</p>
+                <p class="form-hint">${t('posts.uploadHint')}</p>
             </div>
 
-            <!-- Reel/video cover. Instagram otherwise thumbnails frame 0, which is a
-                 black tile for any video that fades up from black. -->
-            <div class="form-group" id="cover-url-group" style="${isVideo ? html.raw('') : html.raw('display:none;')}">
+            ${this.coverStep(post)}
+        `;
+    },
+
+    /**
+     * The thumbnail step. Two tiles side by side: what Instagram would pick on
+     * its own (literally the video element at frame 0) and what the cover will
+     * make it instead. The problem this field solves is visual, so the control
+     * for it is visual too.
+     */
+    coverStep(post) {
+        const coverUrl = safeUrl(post && post.cover_url);
+        const mediaUrl = safeUrl(post && post.media_url);
+        const isVideo = post && (post.post_type === 'video' || post.post_type === 'reel');
+
+        return html`
+            <div class="cover-step ${isVideo ? '' : html.raw('hidden')}" id="cover-url-group">
+                <div class="cover-step-head">
+                    <i data-lucide="image-plus" aria-hidden="true"></i>
+                    <h4>${t('posts.cover.step')}</h4>
+                </div>
+                <p class="cover-step-why">${t('posts.cover.why')}</p>
+
                 <label class="form-label" for="post-cover-file">
-                    Cover Image <span class="label-optional">(optional, recommended for video)</span>
+                    ${t('posts.cover.upload')} <span class="label-optional">${t('common.optional')}</span>
                 </label>
-                <div style="display:flex; flex-direction:column; gap:8px;">
-                    <div style="display:flex; gap:8px; align-items:center;">
-                        <input type="file" id="post-cover-file" class="form-input" style="flex:1;"
-                               accept="image/*" data-change="posts:handleFileUpload" data-target="cover">
-                        <span style="font-size:12px; color:var(--text-muted);">or</span>
-                    </div>
-                    <label class="sr-only" for="post-cover-url">Direct cover image URL</label>
-                    <input class="form-input" id="post-cover-url" name="cover_url" value="${coverUrl}"
-                           placeholder="Paste a cover image URL (https://...)">
-                </div>
+                <input type="file" id="post-cover-file" class="field"
+                       accept="image/*" data-change="posts:handleFileUpload" data-target="cover">
+                <label class="sr-only" for="post-cover-url">${t('posts.cover.url')}</label>
+                <input class="field mbs-4" id="post-cover-url" name="cover_url" value="${coverUrl}" dir="ltr"
+                       placeholder="${t('posts.cover.urlPlaceholder')}" data-input="posts:refreshCoverPreview">
                 <div id="cover-upload-progress" class="upload-progress" role="status" aria-live="polite">
-                    <div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div>
-                    <span>Uploading cover image...</span>
+                    <span class="spinner spinner-sm"></span>
+                    <span>${t('posts.cover.uploading')}</span>
                 </div>
-                <p class="form-hint" dir="auto">بدون صورة غلاف، إنستجرام يستخدم أول لقطة من الفيديو (غالباً سوداء) كصورة مصغّرة في البروفايل.</p>
+
+                <div class="cover-compare" id="cover-compare">
+                    ${this.coverTiles(mediaUrl, coverUrl)}
+                </div>
+            </div>
+        `;
+    },
+
+    coverTiles(mediaUrl, coverUrl) {
+        return html`
+            <div class="cover-tile ${coverUrl ? '' : html.raw('is-chosen')}">
+                <div class="cover-tile-frame">
+                    ${mediaUrl
+                        ? html`<video src="${mediaUrl}" muted preload="metadata" aria-hidden="true"></video>`
+                        : html`<i data-lucide="video-off" aria-hidden="true"></i>`}
+                </div>
+                <p class="cover-tile-label">${t('posts.cover.frameZero')}</p>
+            </div>
+            <div class="cover-tile ${coverUrl ? html.raw('is-chosen') : ''}">
+                <div class="cover-tile-frame">
+                    ${coverUrl
+                        ? html`<img src="${coverUrl}" alt="${t('posts.cover.gridPreview')}">`
+                        : html`<i data-lucide="image-off" aria-hidden="true"></i>`}
+                </div>
+                <p class="cover-tile-label">${coverUrl ? t('posts.cover.set') : t('posts.cover.missing')}</p>
+            </div>
+            <p class="cover-note">${t('posts.cover.gridPreview')}</p>
+        `;
+    },
+
+    refreshCoverPreview() {
+        const host = document.getElementById('cover-compare');
+        if (!host) return;
+        const media = document.getElementById('post-media-url');
+        const cover = document.getElementById('post-cover-url');
+        host.innerHTML = esc(this.coverTiles(
+            safeUrl(media && media.value),
+            safeUrl(cover && cover.value)
+        ));
+        UI.icons(host);
+    },
+
+    /**
+     * The scheduling block. `scheduleNote()` is recomputed on every change of
+     * the time field, so the operator watches "actually publishes" stay on the
+     * same 00:00 UTC run while they nudge the minutes.
+     */
+    scheduleFields(value) {
+        return html`
+            <div class="form-group" id="schedule-time-group">
+                <label class="form-label" for="post-scheduled-time">${t('posts.schedule.label')}</label>
+                <input type="datetime-local" class="field" id="post-scheduled-time" name="scheduled_time"
+                       value="${value}" data-input="posts:refreshScheduleNote" required>
+                <div class="schedule-truth">
+                    <i data-lucide="info" aria-hidden="true"></i>
+                    <div>
+                        ${t('posts.schedule.truth')}
+                        <span class="schedule-actual" id="schedule-actual">${this.scheduleNoteText(value)}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    scheduleNoteText(localValue) {
+        const iso = UI.fromLocalInputValue(localValue);
+        if (!iso) return '';
+        const requested = new Date(iso);
+        const isPast = requested.getTime() <= Date.now();
+        const run = UI.nextCronRun(isPast ? new Date() : requested);
+        return isPast
+            ? `${t('posts.schedule.pastWarning')} ${t('posts.schedule.actual', { when: UI.formatDateTime(run) })}`
+            : t('posts.schedule.actual', { when: UI.formatDateTime(run) });
+    },
+
+    refreshScheduleNote() {
+        const input = document.getElementById('post-scheduled-time');
+        const note = document.getElementById('schedule-actual');
+        if (!input || !note) return;
+        const iso = UI.fromLocalInputValue(input.value);
+        const isPast = iso ? new Date(iso).getTime() <= Date.now() : false;
+        note.textContent = this.scheduleNoteText(input.value);
+        note.classList.toggle('is-warning', isPast);
+    },
+
+    modalHeader(title) {
+        return html`
+            <div class="modal-header">
+                <h2 class="modal-title">${title}</h2>
+                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
             </div>
         `;
     },
@@ -390,50 +510,42 @@ const PostsPage = {
         const defaultTime = UI.toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000));
 
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">Schedule New Post</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
+            ${this.modalHeader(t('posts.createTitle'))}
             <div id="post-form-error"></div>
             <form id="post-schedule-form" data-submit="posts:handleCreate">
                 <div class="form-group">
-                    <label class="form-label" for="post-platform-select">Platform</label>
-                    <select class="form-input" id="post-platform-select" name="platform" data-change="posts:handlePlatformChange" required>
-                        <option value="instagram">Instagram Account</option>
-                        <option value="facebook">Facebook Page</option>
-                        <option value="both">Both (Facebook &amp; Instagram)</option>
+                    <label class="form-label" for="post-platform-select">${t('posts.platform')}</label>
+                    <select class="select" id="post-platform-select" name="platform" data-change="posts:handlePlatformChange" required>
+                        <option value="instagram">${t('common.instagram')}</option>
+                        <option value="facebook">${t('common.facebook')}</option>
+                        <option value="both">${t('common.both')}</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="post-type-select">Post Type</label>
-                    <select class="form-input" name="post_type" id="post-type-select" data-change="posts:handleTypeChange" required>
+                    <label class="form-label" for="post-type-select">${t('posts.type')}</label>
+                    <select class="select" name="post_type" id="post-type-select" data-change="posts:handleTypeChange" required>
                         ${this.typeOptions('instagram', 'image')}
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="post-caption">Caption / Message</label>
-                    <textarea class="form-textarea arabic-text" id="post-caption" name="caption" dir="auto"
-                              placeholder="Write your post caption..." required></textarea>
+                    <label class="form-label" for="post-caption">${t('posts.caption')}</label>
+                    <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto"
+                              placeholder="${t('posts.captionPlaceholder')}" required></textarea>
                 </div>
                 ${this.mediaFields(null)}
-                <div class="form-group" id="schedule-time-group">
-                    <label class="form-label" for="post-scheduled-time">Scheduled Publish Time</label>
-                    <input type="datetime-local" class="form-input" id="post-scheduled-time" name="scheduled_time" value="${defaultTime}" required>
-                    <p class="form-hint" dir="auto">${this.SCHEDULE_HINT_AR}</p>
-                </div>
-                <div class="form-group form-toggle-inline">
-                    <label class="toggle-switch" style="margin:0;">
+                ${this.scheduleFields(defaultTime)}
+                <div class="form-group switch-row">
+                    <label class="switch" for="post-publish-now">
+                        <span class="sr-only">${t('posts.publishNowToggle')}</span>
                         <input type="checkbox" name="publish_now" id="post-publish-now" data-change="posts:toggleScheduleTime">
-                        <span class="toggle-slider"></span>
+                        <span class="switch-track"></span>
                     </label>
-                    <label class="toggle-label" for="post-publish-now" style="font-size:13px; color:var(--text-secondary);">Publish Immediately</label>
+                    <span class="switch-label">${t('posts.publishNowToggle')}</span>
                 </div>
-                <div class="modal-actions" style="margin-top:24px;">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
                     <button type="submit" class="btn btn-primary" id="schedule-submit-btn">
-                        <i data-lucide="plus" aria-hidden="true"></i> Schedule
+                        <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.scheduleBtn')}
                     </button>
                 </div>
             </form>
@@ -455,41 +567,32 @@ const PostsPage = {
         const platform = post.platform;
 
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">Edit Scheduled Post</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
+            ${this.modalHeader(t('posts.editTitle'))}
             <div id="post-form-error"></div>
             <form id="post-schedule-form" data-submit="posts:handleEdit" data-id="${post.id}">
                 <div class="form-group">
-                    <label class="form-label" for="post-platform-select">Platform</label>
-                    <select class="form-input" id="post-platform-select" name="platform" data-change="posts:handlePlatformChange" required>
-                        <option value="instagram" ${platform === 'instagram' ? html.raw('selected') : ''}>Instagram Account</option>
-                        <option value="facebook" ${platform === 'facebook' ? html.raw('selected') : ''}>Facebook Page</option>
-                        <option value="both" ${platform === 'both' ? html.raw('selected') : ''}>Both (Facebook &amp; Instagram)</option>
+                    <label class="form-label" for="post-platform-select">${t('posts.platform')}</label>
+                    <select class="select" id="post-platform-select" name="platform" data-change="posts:handlePlatformChange" required>
+                        <option value="instagram" ${platform === 'instagram' ? html.raw('selected') : ''}>${t('common.instagram')}</option>
+                        <option value="facebook" ${platform === 'facebook' ? html.raw('selected') : ''}>${t('common.facebook')}</option>
+                        <option value="both" ${platform === 'both' ? html.raw('selected') : ''}>${t('common.both')}</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="post-type-select">Post Type</label>
-                    <select class="form-input" name="post_type" id="post-type-select" data-change="posts:handleTypeChange" required>
+                    <label class="form-label" for="post-type-select">${t('posts.type')}</label>
+                    <select class="select" name="post_type" id="post-type-select" data-change="posts:handleTypeChange" required>
                         ${this.typeOptions(platform, postType)}
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="post-caption">Caption / Message</label>
-                    <textarea class="form-textarea arabic-text" id="post-caption" name="caption" dir="auto" required>${post.caption || ''}</textarea>
+                    <label class="form-label" for="post-caption">${t('posts.caption')}</label>
+                    <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" required>${post.caption || ''}</textarea>
                 </div>
                 ${this.mediaFields({ ...post, post_type: postType })}
-                <div class="form-group">
-                    <label class="form-label" for="post-scheduled-time">Scheduled Publish Time</label>
-                    <input type="datetime-local" class="form-input" id="post-scheduled-time" name="scheduled_time" value="${defaultTime}" required>
-                    <p class="form-hint" dir="auto">${this.SCHEDULE_HINT_AR}</p>
-                </div>
-                <div class="modal-actions" style="margin-top:24px;">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> Save Changes</button>
+                ${this.scheduleFields(defaultTime)}
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> ${t('common.saveChanges')}</button>
                 </div>
             </form>
         `);
@@ -510,7 +613,7 @@ const PostsPage = {
 
         const platform = platformSelect.value;
         const allowed = new Set(
-            this.POST_TYPES.filter((t) => t.platforms.includes(platform)).map((t) => t.value)
+            this.POST_TYPES.filter((x) => x.platforms.includes(platform)).map((x) => x.value)
         );
 
         Array.from(typeSelect.options).forEach((option) => {
@@ -531,12 +634,13 @@ const PostsPage = {
         this.applyTypeMatrix();
     },
 
-    /** The cover field only makes sense for video. */
+    /** The cover step only makes sense for video. */
     applyTypeMatrix() {
         const typeSelect = document.getElementById('post-type-select');
         const coverGroup = document.getElementById('cover-url-group');
         if (!typeSelect || !coverGroup) return;
-        coverGroup.style.display = typeSelect.value === 'video' ? '' : 'none';
+        coverGroup.classList.toggle('hidden', typeSelect.value !== 'video');
+        if (typeSelect.value === 'video') this.refreshCoverPreview();
     },
 
     toggleScheduleTime(publishNow) {
@@ -545,12 +649,12 @@ const PostsPage = {
         const submitBtn = document.getElementById('schedule-submit-btn');
         if (!timeGroup || !timeInput || !submitBtn) return;
 
-        timeGroup.style.opacity = publishNow ? '0.35' : '1';
+        timeGroup.classList.toggle('hidden', publishNow);
         timeInput.required = !publishNow;
         timeInput.disabled = publishNow;
-        submitBtn.innerHTML = publishNow
-            ? '<i data-lucide="send"></i> Publish Now'
-            : '<i data-lucide="plus"></i> Schedule';
+        submitBtn.innerHTML = esc(publishNow
+            ? html`<i data-lucide="send" aria-hidden="true"></i> ${t('posts.publishNow')}`
+            : html`<i data-lucide="plus" aria-hidden="true"></i> ${t('posts.scheduleBtn')}`);
         UI.icons(submitBtn);
     },
 
@@ -577,10 +681,10 @@ const PostsPage = {
     publishFailure(result, err) {
         if (err) {
             const fromBody = err.body && (err.body.error || err.body.error_log);
-            return fromBody || err.message || 'Unknown publishing error.';
+            return fromBody || err.message || t('error.unexpected');
         }
         if (result && result.status === 'FAILED') {
-            return result.error || result.error_log || 'Meta rejected the post.';
+            return result.error || result.error_log || t('error.unexpected');
         }
         return null;
     },
@@ -588,7 +692,7 @@ const PostsPage = {
     showFormError(message) {
         const host = document.getElementById('post-form-error');
         if (!host) return;
-        host.innerHTML = esc(UI.errorStrip(message, 'The post stays in the queue with status FAILED — nothing was deleted.'));
+        host.innerHTML = esc(UI.errorStrip(message, t('posts.publishFailedHint')));
         UI.icons(host);
         host.scrollIntoView({ block: 'nearest' });
     },
@@ -608,14 +712,14 @@ const PostsPage = {
         };
 
         if (!payload.scheduled_time) {
-            this.showFormError('That scheduled time could not be read. Pick a date and time again.');
+            this.showFormError(t('posts.schedule.unreadable'));
             return;
         }
 
         const btn = form.querySelector('button[type="submit"]');
         const originalHtml = btn.innerHTML;
         btn.disabled = true;
-        btn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0;"></div>';
+        btn.innerHTML = UI.buttonSpinner();
 
         try {
             const result = await API.createScheduledPost(payload);
@@ -628,11 +732,12 @@ const PostsPage = {
                 this.showFormError(failure);
                 btn.disabled = false;
                 btn.innerHTML = originalHtml;
+                UI.icons(btn);
                 await this.render();
                 return;
             }
 
-            UI.toast(publishNow ? 'Post published successfully.' : 'Post scheduled successfully.');
+            UI.toast(publishNow ? t('posts.publishedOk') : t('posts.scheduledOk'));
             UI.closeModal();
             await this.render();
         } catch (err) {
@@ -641,6 +746,7 @@ const PostsPage = {
             this.showFormError(failure);
             btn.disabled = false;
             btn.innerHTML = originalHtml;
+            UI.icons(btn);
             if (publishNow) await this.render();
         }
     },
@@ -652,7 +758,7 @@ const PostsPage = {
         const scheduledTime = UI.fromLocalInputValue(data.get('scheduled_time'));
 
         if (!scheduledTime) {
-            this.showFormError('That scheduled time could not be read. Pick a date and time again.');
+            this.showFormError(t('posts.schedule.unreadable'));
             return;
         }
 
@@ -660,7 +766,7 @@ const PostsPage = {
 
         try {
             await API.updateScheduledPost(id, payload);
-            UI.toast('Scheduled post updated.');
+            UI.toast(t('posts.updatedOk'));
             UI.closeModal();
             await this.render();
         } catch (err) {
@@ -677,16 +783,15 @@ const PostsPage = {
         const post = this.posts.find((p) => p.id === id);
         if (!post) return;
 
-        const card = document.querySelector(`.campaign-card[data-id="${CSS.escape(id)}"]`);
+        const card = document.querySelector(`.post-card[data-id="${CSS.escape(id)}"]`);
         if (card) {
             const statusPill = card.querySelector('.status-pill');
-            const actions = card.querySelector('.campaign-actions');
+            const actions = card.querySelector('.card-actions');
             if (statusPill) {
-                statusPill.className = 'status-pill pending';
-                statusPill.innerHTML = '<span class="dot-blink" style="background:var(--warning);"></span> PUBLISHING';
+                statusPill.className = 'status-pill publishing';
+                statusPill.textContent = t('posts.statusPublishing');
             }
             if (actions) {
-                actions.style.opacity = '0.3';
                 actions.querySelectorAll('button').forEach((b) => { b.disabled = true; });
             }
         }
@@ -708,7 +813,7 @@ const PostsPage = {
             const failure = this.publishFailure(result, null);
             if (failure) {
                 this.publishError = { message: failure };
-                UI.toast('Publishing failed — see the details at the top of the page.', 'error');
+                UI.toast(t('posts.publishFailedToast'), 'error');
                 await this.render();
                 return;
             }
@@ -718,26 +823,26 @@ const PostsPage = {
                 await API.deleteScheduledPost(id);
             } catch (cleanupErr) {
                 console.warn('Published, but the original queue row could not be removed:', cleanupErr);
-                UI.toast('Published. The original queue entry could not be removed — delete it manually.', 'error');
+                UI.toast(t('posts.publishedNotRemoved'), 'error');
                 await this.render();
                 return;
             }
 
-            UI.toast('Post published successfully.');
+            UI.toast(t('posts.publishedOk'));
             await this.render();
         } catch (err) {
             this.publishError = { message: this.publishFailure(null, err) };
-            UI.toast('Publishing failed — see the details at the top of the page.', 'error');
+            UI.toast(t('posts.publishFailedToast'), 'error');
             await this.render();
         }
     },
 
     async deletePost(id) {
-        if (!confirm('Are you sure you want to delete this scheduled post?')) return;
+        if (!confirm(t('posts.deleteConfirm'))) return;
 
         try {
             await API.deleteScheduledPost(id);
-            UI.toast('Scheduled post deleted.');
+            UI.toast(t('posts.deletedOk'));
             await this.render();
         } catch (err) {
             UI.toast(err.message, 'error');
@@ -757,14 +862,13 @@ const PostsPage = {
         // Vercel caps the request body at 4.5MB and /api/upload takes base64 JSON,
         // so the real ceiling is ~3.2MB of file — not the 10MB this used to claim.
         if (file.size > API.MAX_UPLOAD_BYTES) {
-            const mb = (file.size / (1024 * 1024)).toFixed(1);
-            UI.toast(`حجم الملف ${mb} ميجابايت — الحد الأقصى 3.2 ميجابايت. اضغط الملف أو ارفعه مباشرة إلى قاعدة البيانات.`, 'error');
+            UI.toast(t('posts.uploadTooBig', { size: (file.size / (1024 * 1024)).toFixed(1) }), 'error');
             input.value = '';
             return;
         }
 
-        if (progress) progress.style.display = 'flex';
-        if (target === 'media' && preview) preview.style.display = 'none';
+        if (progress) progress.classList.add('is-active');
+        if (target === 'media' && preview) preview.classList.remove('is-visible');
 
         const reader = new FileReader();
         reader.onload = async (e) => {
@@ -776,19 +880,20 @@ const PostsPage = {
                 });
 
                 if (urlInput) urlInput.value = res.url;
-                if (progress) progress.style.display = 'none';
+                if (progress) progress.classList.remove('is-active');
 
                 if (target === 'media') this.showMediaPreview(res.url, file.type.startsWith('video/'));
-                UI.toast('Media uploaded and ready.');
+                this.refreshCoverPreview();
+                UI.toast(t('posts.uploadDone'));
             } catch (err) {
-                UI.toast(`Upload failed: ${err.message}`, 'error');
-                if (progress) progress.style.display = 'none';
+                UI.toast(t('posts.uploadFailed', { message: err.message }), 'error');
+                if (progress) progress.classList.remove('is-active');
                 input.value = '';
             }
         };
         reader.onerror = () => {
-            UI.toast('Failed to read that file.', 'error');
-            if (progress) progress.style.display = 'none';
+            UI.toast(t('posts.readFailed'), 'error');
+            if (progress) progress.classList.remove('is-active');
         };
         reader.readAsDataURL(file);
     },
@@ -798,24 +903,26 @@ const PostsPage = {
         if (!preview) return;
         const clean = safeUrl(url);
         if (!clean) {
-            preview.style.display = 'none';
+            preview.classList.remove('is-visible');
             preview.innerHTML = '';
             return;
         }
-        preview.style.display = 'flex';
+        preview.classList.add('is-visible');
         preview.innerHTML = esc(isVideo
-            ? html`<video src="${clean}" muted controls aria-label="Media preview"></video>`
-            : html`<img src="${clean}" alt="Media preview">`);
+            ? html`<video src="${clean}" muted controls aria-label="${t('posts.mediaPreview')}"></video>`
+            : html`<img src="${clean}" alt="${t('posts.mediaPreview')}">`);
     },
 
     handleUrlInput(input) {
         const value = input.value;
         if (!value) {
             const preview = document.getElementById('media-preview-container');
-            if (preview) { preview.style.display = 'none'; preview.innerHTML = ''; }
+            if (preview) { preview.classList.remove('is-visible'); preview.innerHTML = ''; }
+            this.refreshCoverPreview();
             return;
         }
         this.showMediaPreview(value, /\.(mp4|mov|avi|wmv|m4v|webm)(\?|$)/i.test(value));
+        this.refreshCoverPreview();
     },
 };
 
@@ -829,6 +936,8 @@ UI.registerActions('posts', {
     handlePlatformChange: () => PostsPage.applyPlatformMatrix(),
     handleTypeChange: () => PostsPage.applyTypeMatrix(),
     toggleScheduleTime: (el) => PostsPage.toggleScheduleTime(el.checked),
+    refreshScheduleNote: () => PostsPage.refreshScheduleNote(),
+    refreshCoverPreview: () => PostsPage.refreshCoverPreview(),
     handleCreate: (el, e) => PostsPage.handleCreate(el, e),
     handleEdit: (el, e) => PostsPage.handleEdit(el, e),
     handleFileUpload: (el) => PostsPage.handleFileUpload(el),

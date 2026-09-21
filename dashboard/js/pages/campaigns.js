@@ -1,5 +1,21 @@
 /**
- * Campaigns Page — CRUD campaign management with glassmorphic cards.
+ * Campaigns — keywords, DM templates, public replies.
+ *
+ * ─── The keyword hazard ─────────────────────────────────────────────────────
+ * Matching in production is SUBSTRING matching over Arabic-normalised text
+ * (src/services/matching.ts → src/utils/arabic.ts). `تم` therefore fires inside
+ * اهتمام, تمام and يتم, and the old form's own placeholder suggested `تم`.
+ *
+ * `keywordMatches()` in the backend does take a `'word'` mode — but nothing
+ * persists a per-campaign choice: the campaigns table has no such column, the
+ * POST/PUT handlers destructure only trigger_keyword, dm_template,
+ * public_reply_template, post_id and is_active, and the webhook calls
+ * matchCampaign() with no mode argument. A mode switch here would be a control
+ * that silently does nothing, which is worse than no control, so this screen
+ * does the honest version instead: it runs the SAME normalisation the webhook
+ * runs, and at the moment the operator types a keyword it names the real
+ * Arabic words that keyword will also fire on. Shipping the persisted `word`
+ * mode is a backend change (one column, two handlers, one call site).
  */
 const CampaignsPage = {
     campaigns: [],
@@ -13,16 +29,12 @@ const CampaignsPage = {
 
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader('Loading campaigns…');
+        container.innerHTML = UI.loader();
 
         try {
             this.campaigns = await API.getCampaigns();
         } catch (err) {
-            UI.renderError(
-                container,
-                { title: 'Could not load campaigns', message: err.message },
-                () => this.render()
-            );
+            UI.renderError(container, { title: t('error.pageTitle'), message: err.message }, () => this.render());
             return;
         }
 
@@ -30,35 +42,36 @@ const CampaignsPage = {
 
         container.innerHTML = esc(html`
             <div class="page-toolbar">
-                <p class="page-toolbar-count">${campaigns.length} campaign${campaigns.length !== 1 ? 's' : ''}</p>
-                <div style="display:flex;gap:12px;">
+                <p class="page-toolbar-count">${t('campaigns.count', { count: campaigns.length })}</p>
+                <div class="toolbar-actions">
                     <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:triggerCSVSelect">
-                        <i data-lucide="upload" aria-hidden="true"></i> Bulk Import CSV
+                        <i data-lucide="upload" aria-hidden="true"></i> ${t('campaigns.import')}
                     </button>
                     <button type="button" class="btn btn-primary btn-sm" data-action="campaigns:showCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> New Campaign
+                        <i data-lucide="plus" aria-hidden="true"></i> ${t('campaigns.new')}
                     </button>
                 </div>
             </div>
-            <label class="sr-only" for="csv-file-input">Campaign CSV file</label>
-            <input type="file" id="csv-file-input" accept=".csv" style="display:none;" data-change="campaigns:handleCSVSelect">
-            <div class="campaigns-grid" id="campaigns-list">
-                ${campaigns.length === 0 ? html`
-                    <div class="empty-state glass-card" style="grid-column:1/-1;">
-                        <i data-lucide="megaphone" aria-hidden="true"></i>
-                        <h3>No Campaigns Yet</h3>
-                        <p>Create campaigns or bulk import your courses from a CSV file to automate replies.</p>
-                        <div style="display:flex;gap:12px;margin-top:16px;justify-content:center;">
-                            <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:triggerCSVSelect">
-                                <i data-lucide="upload" aria-hidden="true"></i> Bulk Import CSV
-                            </button>
-                            <button type="button" class="btn btn-primary btn-sm" data-action="campaigns:showCreateModal">
-                                <i data-lucide="plus" aria-hidden="true"></i> Create Campaign
-                            </button>
-                        </div>
+            <label class="sr-only" for="csv-file-input">${t('campaigns.csvLabel')}</label>
+            <input type="file" id="csv-file-input" accept=".csv" class="hidden" data-change="campaigns:handleCSVSelect">
+
+            ${campaigns.length === 0 ? html`
+                <div class="empty-state surface">
+                    <i data-lucide="megaphone" aria-hidden="true"></i>
+                    <h3>${t('campaigns.emptyTitle')}</h3>
+                    <p>${t('campaigns.emptyBody')}</p>
+                    <div class="row gap-3 row--center row--wrap">
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:triggerCSVSelect">
+                            <i data-lucide="upload" aria-hidden="true"></i> ${t('campaigns.import')}
+                        </button>
+                        <button type="button" class="btn btn-primary btn-sm" data-action="campaigns:showCreateModal">
+                            <i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}
+                        </button>
                     </div>
-                ` : campaigns.map((c) => this.renderCard(c))}
-            </div>
+                </div>
+            ` : html`
+                <div class="card-grid">${campaigns.map((c) => this.renderCard(c))}</div>
+            `}
         `);
 
         UI.icons(container);
@@ -73,109 +86,284 @@ const CampaignsPage = {
      */
     renderCard(c) {
         const isActive = c.is_active !== false;
-        const keywords = String(c.trigger_keyword || '').split(',').map((k) => k.trim()).filter(Boolean);
+        const keywords = this.splitKeywords(c.trigger_keyword);
+        const risky = keywords.filter((k) => this.keywordRisk(k).risky);
 
         return html`
-            <div class="campaign-card glass-card" data-id="${c.id}" style="${isActive ? '' : html.raw('opacity:0.65;')}">
+            <article class="campaign-card surface ${isActive ? '' : html.raw('is-paused')}" data-id="${c.id}">
                 <div class="campaign-card-head">
-                    <div class="campaign-keyword-list">
+                    <div class="keyword-list">
                         ${keywords.map((k) => html`
-                            <span class="campaign-keyword-chip" dir="auto">
-                                <i data-lucide="hash" style="width:10px;height:10px;" aria-hidden="true"></i>
+                            <span class="chip ${this.keywordRisk(k).risky ? html.raw('chip-danger') : ''}" dir="auto">
+                                <i data-lucide="${this.keywordRisk(k).risky ? 'alert-triangle' : 'hash'}" aria-hidden="true"></i>
                                 ${k}
                             </span>
                         `)}
                     </div>
-                    <div style="display:flex;align-items:center;gap:8px;">
-                        <span class="campaign-state" style="color:${isActive ? html.raw('var(--success)') : html.raw('var(--text-muted)')};">
-                            ${isActive ? 'Active' : 'Paused'}
+                    <div class="row gap-2 shrink-0">
+                        <span class="campaign-state ${isActive ? html.raw('is-on') : html.raw('is-off')}">
+                            ${isActive ? t('common.active') : t('common.paused')}
                         </span>
-                        <label class="toggle-switch" style="transform:scale(0.8);margin:0;">
-                            <span class="sr-only">Campaign active</span>
+                        <label class="switch">
+                            <span class="sr-only">${t('campaigns.toggleLabel')}</span>
                             <input type="checkbox" ${isActive ? html.raw('checked') : ''}
                                    data-change="campaigns:toggleActive" data-id="${c.id}">
-                            <span class="toggle-slider"></span>
+                            <span class="switch-track"></span>
                         </label>
                     </div>
                 </div>
-                <div class="campaign-template" dir="auto">${c.dm_template}</div>
+
+                ${risky.length > 0 ? html`
+                    <p class="text-meta text-warning">
+                        <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                        ${t('campaigns.match.riskGeneric', { keyword: risky[0], length: UI.formatNumber(risky[0].length) })}
+                    </p>
+                ` : ''}
+
+                <div class="template-preview user-content" dir="auto">${c.dm_template}</div>
+
                 ${c.public_reply_template ? html`
-                    <div class="campaign-public-reply" dir="auto">💬 Public: "${c.public_reply_template}"</div>
+                    <p class="campaign-meta-line" dir="auto">
+                        💬 ${t('campaigns.publicPrefix')}: ${c.public_reply_template}
+                    </p>
                 ` : ''}
                 ${c.post_id ? html`
-                    <div class="campaign-post-id">
-                        <i data-lucide="instagram" style="width:12px;height:12px;" aria-hidden="true"></i> Post ID: ${c.post_id}
-                    </div>
+                    <p class="campaign-meta-line row gap-2">
+                        <i data-lucide="image" aria-hidden="true"></i>
+                        ${t('campaigns.postId')}: ${UI.ltr(c.post_id)}
+                    </p>
                 ` : ''}
+
                 <div class="campaign-stats">
-                    <div class="campaign-stat"><span class="dot green" aria-hidden="true"></span> ${c.sent_count} sent</div>
-                    <div class="campaign-stat"><span class="dot red" aria-hidden="true"></span> ${c.failed_count} failed</div>
-                    <div class="campaign-stat" style="color:var(--text-muted);">${c.total_interactions} total</div>
+                    <span class="campaign-stat"><span class="dot ok" aria-hidden="true"></span> ${t('campaigns.statSent', { count: UI.formatNumber(c.sent_count) })}</span>
+                    <span class="campaign-stat"><span class="dot bad" aria-hidden="true"></span> ${t('campaigns.statFailed', { count: UI.formatNumber(c.failed_count) })}</span>
+                    <span class="campaign-stat text-muted">${t('campaigns.statTotal', { count: UI.formatNumber(c.total_interactions) })}</span>
                 </div>
-                <div class="campaign-actions">
+
+                <div class="card-actions">
                     <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:showEditModal" data-id="${c.id}">
-                        <i data-lucide="pencil" aria-hidden="true"></i> Edit
+                        <i data-lucide="pencil" aria-hidden="true"></i> ${t('common.edit')}
                     </button>
                     <button type="button" class="btn btn-danger btn-sm"
                             data-action="campaigns:confirmDelete" data-id="${c.id}" data-keyword="${c.trigger_keyword}">
-                        <i data-lucide="trash-2" aria-hidden="true"></i> Delete
+                        <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
                     </button>
                 </div>
+            </article>
+        `;
+    },
+
+    // ─── Keyword hazard analysis ─────────────────────────────────────────────
+
+    splitKeywords(value) {
+        return String(value || '').split(',').map((k) => k.trim()).filter(Boolean);
+    },
+
+    /**
+     * Common Arabic words used to DEMONSTRATE a false positive, rather than
+     * just asserting one. These are ordinary comment vocabulary — the point is
+     * that the operator sees `اهتمام` listed under `تم` and understands the
+     * failure without having to imagine it.
+     */
+    COMMON_WORDS: [
+        'اهتمام', 'تمام', 'يتم', 'اهتم', 'تمت', 'مهتم', 'التمام', 'استمرار',
+        'كتاب', 'كتابه', 'مكتوب', 'كتب',
+        'سلام', 'السلام', 'اسلام', 'تسليم', 'مسلم',
+        'شكرا', 'مشكور', 'الشكر',
+        'ممكن', 'يمكن', 'امكانيه', 'مكان',
+        'جميل', 'تجميل', 'جمال',
+        'رابط', 'روابط', 'مرتبط',
+        'كورس', 'كورسات', 'الكورس',
+        'حساب', 'حسابي', 'محاسبه', 'الحساب',
+        'دوره', 'دورات', 'الدوره', 'مدور',
+        'سعر', 'اسعار', 'التسعير', 'مسعر',
+        'خصم', 'خصومات', 'شخص', 'شخصي',
+        'برمجه', 'مبرمج', 'البرنامج', 'برنامج',
+        'عمل', 'اعمال', 'معلم', 'علم', 'تعليم', 'معلومات',
+        'جديد', 'تجديد', 'جد', 'جدا',
+        'نعم', 'انعام', 'طعم',
+        'ابي', 'حبيبي', 'تجربه', 'جربت',
+        'ارجو', 'الرجاء', 'راجع',
+        'وين', 'اين', 'عين', 'زين',
+        'كم', 'كمال', 'اكمل', 'يكمل', 'حكم', 'حكمه',
+        'هل', 'اهلا', 'سهل', 'مهله', 'جاهل',
+        'من', 'ممتاز', 'امن', 'زمن', 'ثمن', 'يمن',
+    ],
+
+    /**
+     * Arabic inflections of the keyword itself — كورس → كورسات, الكورس — are
+     * matches the operator WANTS. Flagging them would make the warning noise,
+     * and a warning that cries wolf on every keyword is worse than none.
+     * A candidate only counts as a false positive if it is not one of these.
+     */
+    SUFFIXES: ['ات', 'ون', 'ين', 'ان', 'ها', 'هم', 'يه', 'ه', 'ي', 'ك', 'نا'],
+
+    isMorphologicalVariant(candidate, keyword) {
+        if (candidate === keyword) return true;
+        // Definite article, with or without a suffix on top of it.
+        const bare = candidate.startsWith('ال') ? candidate.slice(2) : candidate;
+        if (bare === keyword) return true;
+        if (!bare.startsWith(keyword)) return false;
+        const suffix = bare.slice(keyword.length);
+        return this.SUFFIXES.includes(suffix);
+    },
+
+    /**
+     * What will this keyword also match? Runs the same normalisation the
+     * webhook runs, then looks for common words that CONTAIN it but are not
+     * inflections of it. Returns { risky, examples, reason }.
+     */
+    keywordRisk(keyword) {
+        const normalized = UI.normalizeArabic(keyword);
+        if (!normalized) return { risky: false, examples: [], reason: null };
+
+        // A keyword with a space is a phrase; substring matching on a phrase is
+        // specific enough that false positives stop being a practical worry.
+        if (/\s/.test(normalized)) return { risky: false, examples: [], reason: null };
+
+        const examples = [];
+        for (const word of this.COMMON_WORDS) {
+            const nWord = UI.normalizeArabic(word);
+            if (nWord === normalized) continue;
+            if (!nWord.includes(normalized)) continue;
+            if (this.isMorphologicalVariant(nWord, normalized)) continue;
+            examples.push(word);
+            if (examples.length === 4) break;
+        }
+
+        // Latin keywords are just as exposed: "ai" matches "email", "said".
+        if (examples.length > 0) return { risky: true, examples, reason: 'examples' };
+        if (normalized.length <= 3) return { risky: true, examples: [], reason: 'short' };
+        return { risky: false, examples: [], reason: null };
+    },
+
+    /**
+     * The inspector under the keyword field. Re-rendered on every keystroke,
+     * so the warning appears at the moment of the decision rather than after
+     * the campaign has been live for a week.
+     */
+    renderMatchInspector(value) {
+        const keywords = this.splitKeywords(value);
+        const seen = new Set();
+        const duplicates = [];
+        const risks = [];
+
+        keywords.forEach((k) => {
+            const n = UI.normalizeArabic(k);
+            if (seen.has(n)) duplicates.push(k); else seen.add(n);
+            const risk = this.keywordRisk(k);
+            if (risk.risky) risks.push({ keyword: k, ...risk });
+        });
+
+        const hasProblem = risks.length > 0 || duplicates.length > 0;
+        const state = keywords.length === 0 ? '' : (hasProblem ? 'is-risky' : 'is-safe');
+
+        return html`
+            <div class="match-inspector ${html.raw(state)}" id="match-inspector" aria-live="polite">
+                <h4>
+                    <i data-lucide="${hasProblem ? 'alert-triangle' : 'search-check'}" aria-hidden="true"></i>
+                    ${t('campaigns.match.title')}
+                </h4>
+                <p>${t('campaigns.match.explain')}</p>
+                ${!hasProblem && keywords.length > 0 ? html`<p class="text-success">${t('campaigns.match.safe')}</p>` : ''}
+                ${hasProblem ? html`
+                    <ul class="match-risk-list">
+                        ${risks.map((r) => html`
+                            <li dir="auto">
+                                ${r.reason === 'examples'
+                                    ? html`${t('campaigns.match.riskRow', { keyword: r.keyword, examples: '' })}<span class="match-example">${r.examples.join('، ')}</span>`
+                                    : t('campaigns.match.riskGeneric', { keyword: r.keyword, length: UI.formatNumber(UI.normalizeArabic(r.keyword).length) })}
+                            </li>
+                        `)}
+                        ${duplicates.map((d) => html`<li dir="auto">${t('campaigns.match.duplicate', { keyword: d })}</li>`)}
+                    </ul>
+                    <p class="mbs-4">${t('campaigns.match.advice')}</p>
+                ` : ''}
+            </div>
+        `;
+    },
+
+    /** Live update from the keyword input. */
+    inspectKeywords(input) {
+        const host = document.getElementById('match-inspector');
+        if (!host) return;
+        const replacement = document.createElement('div');
+        replacement.innerHTML = esc(this.renderMatchInspector(input.value));
+        const next = replacement.firstElementChild;
+        if (!next) return;
+        host.replaceWith(next);
+        UI.icons(next);
+    },
+
+    // ─── Modals ──────────────────────────────────────────────────────────────
+    modalHeader(title) {
+        return html`
+            <div class="modal-header">
+                <h2 class="modal-title">${title}</h2>
+                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+        `;
+    },
+
+    keywordField(value) {
+        return html`
+            <div class="form-group">
+                <label class="form-label" for="campaign-trigger">${t('campaigns.keywords')}</label>
+                <input class="field" id="campaign-trigger" name="trigger_keyword" dir="auto"
+                       value="${value || ''}" placeholder="${t('campaigns.keywordsPlaceholder')}"
+                       data-input="campaigns:inspectKeywords" required>
+                <p class="form-hint">${t('campaigns.keywordsHint')}</p>
+                ${this.renderMatchInspector(value || '')}
+            </div>
+        `;
+    },
+
+    postIdField(value) {
+        return html`
+            <div class="form-group">
+                <label class="form-label" for="campaign-post-id">
+                    ${t('campaigns.postId')} <span class="label-optional">${t('common.optional')}</span>
+                </label>
+                <div class="field-row">
+                    <input class="field" id="campaign-post-id" name="post_id" value="${value}"
+                           inputmode="numeric" dir="ltr" placeholder="17841459652725922">
+                    <button type="button" class="btn btn-secondary btn-sm shrink-0" data-action="campaigns:openPostPicker">
+                        <i data-lucide="image" aria-hidden="true"></i> ${t('campaigns.pickPost')}
+                    </button>
+                </div>
+                <div id="post-picker-container" class="post-picker hidden"></div>
+                <p class="form-hint">${t('campaigns.postIdHint')}</p>
             </div>
         `;
     },
 
     showCreateModal() {
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">Create Campaign</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
+            ${this.modalHeader(t('campaigns.createTitle'))}
             <form id="campaign-form" data-submit="campaigns:handleCreate">
+                ${this.keywordField('')}
                 <div class="form-group">
-                    <label class="form-label" for="campaign-trigger">Trigger Keyword(s)</label>
-                    <input class="form-input arabic-text" id="campaign-trigger" name="trigger_keyword" dir="auto"
-                           placeholder="e.g. تم, كورس, كوبون" required>
-                    <p class="form-hint" dir="auto">Separate multiple keywords with commas (e.g. "كورس, كوبون"). The bot triggers on any match.</p>
+                    <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
+                    <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto"
+                              placeholder="${t('campaigns.dmPlaceholder')}" required></textarea>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="campaign-dm">DM Template</label>
-                    <textarea class="form-textarea arabic-text" id="campaign-dm" name="dm_template" dir="auto"
-                              placeholder="The message sent to the user's DMs..." required></textarea>
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="campaign-public">Public Reply (optional)</label>
-                    <input class="form-input arabic-text" id="campaign-public" name="public_reply_template" dir="auto"
-                           placeholder="e.g. تم الإرسال! 📩 | شوف الخاص! 🚀">
-                    <p class="form-hint">Separate variations with "|" to rotate replies randomly and bypass spam filters.</p>
+                    <label class="form-label" for="campaign-public">
+                        ${t('campaigns.publicReply')} <span class="label-optional">${t('common.optional')}</span>
+                    </label>
+                    <input class="field" id="campaign-public" name="public_reply_template" dir="auto"
+                           placeholder="${t('campaigns.publicReplyPlaceholder')}">
+                    <p class="form-hint">${t('campaigns.publicReplyHint')}</p>
                 </div>
                 ${this.postIdField('')}
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="plus" aria-hidden="true"></i> Create</button>
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary"><i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}</button>
                 </div>
             </form>
         `);
-    },
-
-    postIdField(value) {
-        return html`
-            <div class="form-group">
-                <label class="form-label" for="campaign-post-id">Target Post ID (optional)</label>
-                <div style="display:flex; gap:8px;">
-                    <input class="form-input" id="campaign-post-id" name="post_id" value="${value}"
-                           placeholder="e.g. 17841459652725922" style="flex:1;">
-                    <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:openPostPicker"
-                            style="padding:0 12px; height:45px;">
-                        <i data-lucide="image" aria-hidden="true"></i> Pick Post
-                    </button>
-                </div>
-                <div id="post-picker-container" class="glass-card post-picker" style="display:none;"></div>
-                <p class="form-hint">If specified, this campaign will only trigger on comments under this specific post.</p>
-            </div>
-        `;
     },
 
     showEditModal(id) {
@@ -183,41 +371,33 @@ const CampaignsPage = {
         if (!c) return;
 
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">Edit Campaign</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
+            ${this.modalHeader(t('campaigns.editTitle'))}
             <form id="campaign-form" data-submit="campaigns:handleEdit" data-id="${c.id}">
+                ${this.keywordField(c.trigger_keyword)}
                 <div class="form-group">
-                    <label class="form-label" for="campaign-trigger">Trigger Keyword(s)</label>
-                    <input class="form-input arabic-text" id="campaign-trigger" name="trigger_keyword" dir="auto"
-                           value="${c.trigger_keyword}" placeholder="e.g. تم, كورس" required>
-                    <p class="form-hint">Separate multiple keywords with commas.</p>
+                    <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
+                    <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto" required>${c.dm_template}</textarea>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="campaign-dm">DM Template</label>
-                    <textarea class="form-textarea arabic-text" id="campaign-dm" name="dm_template" dir="auto" required>${c.dm_template}</textarea>
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="campaign-public">Public Reply (optional)</label>
-                    <input class="form-input arabic-text" id="campaign-public" name="public_reply_template" dir="auto"
-                           value="${c.public_reply_template || ''}" placeholder="e.g. Reply A | Reply B">
-                    <p class="form-hint">Separate variations with "|" to rotate replies randomly.</p>
+                    <label class="form-label" for="campaign-public">
+                        ${t('campaigns.publicReply')} <span class="label-optional">${t('common.optional')}</span>
+                    </label>
+                    <input class="field" id="campaign-public" name="public_reply_template" dir="auto"
+                           value="${c.public_reply_template || ''}" placeholder="${t('campaigns.publicReplyPlaceholder')}">
+                    <p class="form-hint">${t('campaigns.publicReplyHint')}</p>
                 </div>
                 ${this.postIdField(c.post_id || '')}
-                <div class="form-group form-toggle-inline">
-                    <label class="toggle-switch" style="margin:0;">
-                        <span class="sr-only">Campaign active</span>
-                        <input type="checkbox" name="is_active" ${c.is_active !== false ? html.raw('checked') : ''}>
-                        <span class="toggle-slider"></span>
+                <div class="form-group switch-row">
+                    <label class="switch" for="campaign-active-toggle">
+                        <span class="sr-only">${t('campaigns.toggleLabel')}</span>
+                        <input type="checkbox" id="campaign-active-toggle" name="is_active" ${c.is_active !== false ? html.raw('checked') : ''}>
+                        <span class="switch-track"></span>
                     </label>
-                    <span class="toggle-label" style="font-size:13px;color:var(--text-secondary);">Campaign Active</span>
+                    <span class="switch-label">${t('campaigns.toggleLabel')}</span>
                 </div>
-                <div class="modal-actions" style="margin-top:24px;">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> Save</button>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> ${t('common.save')}</button>
                 </div>
             </form>
         `);
@@ -234,7 +414,7 @@ const CampaignsPage = {
                 post_id: data.get('post_id') || null,
             });
             UI.closeModal();
-            UI.toast('Campaign created successfully.');
+            UI.toast(t('campaigns.created'));
             this.render();
         } catch (err) { UI.toast(err.message, 'error'); }
     },
@@ -252,7 +432,7 @@ const CampaignsPage = {
                 is_active: data.get('is_active') === 'on',
             });
             UI.closeModal();
-            UI.toast('Campaign updated.');
+            UI.toast(t('campaigns.updated'));
             this.render();
         } catch (err) { UI.toast(err.message, 'error'); }
     },
@@ -260,7 +440,7 @@ const CampaignsPage = {
     async toggleActive(id, isChecked) {
         try {
             await API.updateCampaign(id, { is_active: isChecked });
-            UI.toast(isChecked ? 'Campaign activated.' : 'Campaign paused.');
+            UI.toast(isChecked ? t('campaigns.activated') : t('campaigns.pausedToast'));
             this.render();
         } catch (err) {
             UI.toast(err.message, 'error');
@@ -270,21 +450,13 @@ const CampaignsPage = {
 
     confirmDelete(id, keyword) {
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">Delete Campaign</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
-            <p style="color:var(--text-secondary);font-size:14px;line-height:1.6;margin-bottom:8px;">
-                Are you sure you want to delete the campaign with keyword
-                <strong style="color:var(--accent);" dir="auto">"${keyword}"</strong>?
-            </p>
-            <p style="color:var(--text-muted);font-size:13px;margin-bottom:24px;">This will also delete all interaction history for this campaign.</p>
+            ${this.modalHeader(t('campaigns.deleteTitle'))}
+            <p class="modal-body-text" dir="auto">${t('campaigns.deleteBody', { keyword })}</p>
+            <p class="form-hint">${t('campaigns.deleteWarning')}</p>
             <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
                 <button type="button" class="btn btn-danger" data-action="campaigns:handleDelete" data-id="${id}">
-                    <i data-lucide="trash-2" aria-hidden="true"></i> Delete
+                    <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
                 </button>
             </div>
         `);
@@ -294,7 +466,7 @@ const CampaignsPage = {
         try {
             await API.deleteCampaign(id);
             UI.closeModal();
-            UI.toast('Campaign deleted.');
+            UI.toast(t('campaigns.deleted'));
             this.render();
         } catch (err) { UI.toast(err.message, 'error'); }
     },
@@ -304,20 +476,21 @@ const CampaignsPage = {
         const picker = document.getElementById('post-picker-container');
         if (!picker) return;
 
-        if (picker.style.display === 'block') {
-            picker.style.display = 'none';
+        if (!picker.classList.contains('hidden')) {
+            picker.classList.add('hidden');
             return;
         }
 
+        const original = btn.innerHTML;
         btn.disabled = true;
-        btn.innerHTML = '<div class="spinner" style="width:12px;height:12px;border-width:2px;margin:0;"></div> Loading...';
+        btn.innerHTML = UI.buttonSpinner();
 
         try {
             const livePosts = await API.getLivePosts();
-            picker.style.display = 'block';
+            picker.classList.remove('hidden');
 
             if (!livePosts || livePosts.length === 0) {
-                picker.innerHTML = esc(html`<div class="post-picker-empty">No published posts found.</div>`);
+                picker.innerHTML = esc(html`<p class="post-picker-note">${t('campaigns.postPickerEmpty')}</p>`);
             } else {
                 picker.innerHTML = esc(html`
                     ${livePosts.map((p) => {
@@ -325,11 +498,11 @@ const CampaignsPage = {
                         return html`
                             <button type="button" class="post-picker-item" data-action="campaigns:selectPickedPost" data-id="${p.id}">
                                 ${media
-                                    ? html`<img src="${media}" alt="Thumbnail of post ${p.id}">`
-                                    : html`<span class="post-picker-placeholder"><i data-lucide="${p.platform === 'facebook' ? 'facebook' : 'instagram'}" aria-hidden="true"></i></span>`}
+                                    ? html`<img src="${media}" alt="">`
+                                    : html`<span class="post-picker-thumb"><i data-lucide="${p.platform === 'facebook' ? 'facebook' : 'instagram'}" aria-hidden="true"></i></span>`}
                                 <span class="post-picker-body">
-                                    <span class="post-picker-id">ID: ${p.id}</span>
-                                    <span class="post-picker-caption" dir="auto">${p.caption || '(No caption)'}</span>
+                                    <span class="post-picker-id">${UI.ltr(p.id)}</span>
+                                    <span class="post-picker-caption" dir="auto">${p.caption || t('posts.noCaption')}</span>
                                 </span>
                             </button>
                         `;
@@ -338,11 +511,11 @@ const CampaignsPage = {
                 UI.icons(picker);
             }
         } catch (err) {
-            picker.style.display = 'block';
-            picker.innerHTML = esc(html`<div class="post-picker-error">Failed to load: ${err.message}</div>`);
+            picker.classList.remove('hidden');
+            picker.innerHTML = esc(html`<p class="post-picker-note is-error" dir="auto">${t('campaigns.postPickerFailed', { message: err.message })}</p>`);
         } finally {
             btn.disabled = false;
-            btn.innerHTML = '<i data-lucide="image"></i> Pick Post';
+            btn.innerHTML = original;
             UI.icons(btn);
         }
     },
@@ -351,7 +524,7 @@ const CampaignsPage = {
         const input = document.getElementById('campaign-post-id');
         if (input) input.value = id;
         const picker = document.getElementById('post-picker-container');
-        if (picker) picker.style.display = 'none';
+        if (picker) picker.classList.add('hidden');
     },
 
     // ─── CSV bulk import ─────────────────────────────────────────────────────
@@ -368,7 +541,7 @@ const CampaignsPage = {
             try {
                 const rows = this.parseCSV(event.target.result);
                 if (rows.length <= 1) {
-                    UI.toast('The CSV file is empty or invalid.', 'error');
+                    UI.toast(t('campaigns.bulk.emptyCsv'), 'error');
                     return;
                 }
 
@@ -396,13 +569,13 @@ const CampaignsPage = {
 
                 const uniqueCourses = Object.values(courseMap);
                 if (uniqueCourses.length === 0) {
-                    UI.toast('No valid courses found in CSV.', 'error');
+                    UI.toast(t('campaigns.bulk.noCourses'), 'error');
                     return;
                 }
 
                 this.showBulkImportModal(uniqueCourses);
             } catch (err) {
-                UI.toast(`Error parsing CSV: ${err.message}`, 'error');
+                UI.toast(t('campaigns.bulk.parseError', { message: err.message }), 'error');
             }
         };
         reader.readAsText(file);
@@ -438,49 +611,54 @@ const CampaignsPage = {
         return lines;
     },
 
+    /**
+     * Seed copy for known courses. This is CONTENT, not chrome: it is the
+     * Arabic the creator actually sends, so it is not part of the i18n catalog
+     * and does not change with the interface language.
+     */
     COURSE_MAPPINGS: {
         'agentic ai': {
-            triggerKeywords: 'ذكاء, ذكاء اصطناعي, ايجنت, اجنت, ايجنتك, عميل ذكي, agentic, ai, agent, agents, agentic ai',
+            triggerKeywords: 'ذكاء اصطناعي, ايجنتك, عميل ذكي, agentic ai, ai agent',
             dmTemplate: `أهلاً بك {username}! 👋\nسعيد جداً باهتمامك بدورة "Agentic AI: الدليل العملي لبناء ما تحتاجه بالذكاء الاصطناعي". 🤖🚀\n\nهذا هو رابط التسجيل المجاني المباشر الخاص بك (الكوبون مفعّل تلقائياً):\n🔗 {url}\n\n💡 الكوبون صالح لفترة محدودة ولـ 100 مقعد فقط. سارع بالتسجيل واستمتع بالرحلة التعليمية!\nإذا كان لديك أي استفسار، أنا هنا دائماً لمساعدتك. بالتوفيق! ✨`,
             publicReplies: 'تم إرسال رابط الدورة والتفاصيل إلى الخاص بك يا {username}! تفقد رسائلك 📩🤖 | أهلاً بك {username}! شيك الخاص أرسلت لك كوبون التسجيل المجاني 🚀✨ | تم الإرسال على الخاص بنجاح! بالتوفيق في رحلتك التعليمية 🎓🌟',
         },
         golang: {
-            triggerKeywords: 'جو, جولانج, كورس جو, لغة جو, go, golang, go lang, golang course',
+            triggerKeywords: 'جولانج, كورس جو, لغة جو, golang, go lang',
             dmTemplate: `أهلاً بك {username}! 👋\nسعيد باهتمامك بتعلم لغة Go القوية مع دورة "GoLang Course: Learn Go in Arabic". 🐹🚀\n\nإليك رابط التسجيل المجاني المباشر الخاص بك (الكوبون مفعّل):\n🔗 {url}\n\n💡 الكوبون مخصص لـ 100 طالب وصالح لفترة محدودة. سجل الآن لتبدأ في بناء تطبيقات عالية الأداء!\nأراك داخل الدورة! 🎓✨`,
             publicReplies: 'شيك الخاص يا {username}! أرسلت لك رابط الدورة المجاني 🐹📩 | تم إرسال كوبون لغة Go إلى الخاص بك بنجاح! بالتوفيق 🚀 | أهلاً {username}، تفقد صندوق الوارد للبدء فوراً! 🎓💡',
         },
         swift: {
-            triggerKeywords: 'سويفت, ايفون, برمجة ايفون, تطبيقات ايفون, swift, swift programming, ios, swift arabic',
+            triggerKeywords: 'سويفت, برمجة ايفون, تطبيقات ايفون, swift programming, swift arabic',
             dmTemplate: `أهلاً بك {username}! 👋\nخطوة رائعة لدخول عالم برمجة تطبيقات الآيفون والآيباد! 📱✨\nإليك رابط التسجيل المجاني المباشر في دورة "Swift Programming Language | in Arabic":\n🔗 {url}\n\n💡 الكوبون متاح لأول 100 مقعد فقط. لا تفوت الفرصة وابدأ الآن!\nبالتوفيق لك في مسيرتك البرمجية! 🚀`,
             publicReplies: 'أهلاً بك {username}! تم إرسال رابط كورس سويفت على الخاص 📩📱 | شيك الخاص يا {username} لتجد كوبون الدورة المجاني! 🚀✨ | تم الإرسال بنجاح! بالتوفيق في برمجة تطبيقات iOS 🍏💡',
         },
         css3: {
-            triggerKeywords: 'سي اس اس, css, css3, تصميم, تنسيق, ستايل, ويب, web design',
+            triggerKeywords: 'سي اس اس, تصميم ويب, css3, web design',
             dmTemplate: `أهلاً بك {username}! 👋\nهل أنت جاهز لتصميم مواقع ويب احترافية وجذابة؟ 🎨💻\nإليك رابط التسجيل المجاني المباشر في دورة "CSS3 For Beginners [In Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لفترة محدودة ومحدود بـ 100 عملية تسجيل.\nبالتوفيق وسأكون سعيداً برؤية تصميماتك! 🚀✨`,
             publicReplies: 'تم إرسال كوبون كورس CSS3 إلى الخاص بك يا {username}! 🎨📩 | تفقد الخاص {username} لتجد رابط التسجيل المجاني! 💻✨ | أهلاً بك! تم الإرسال بنجاح، بالتوفيق في مسيرتك في تصميم الويب 🚀🌟',
         },
         html5: {
-            triggerKeywords: 'اتش تي ام ال, html, html5, بناء موقع, ويب للمبتدئين, html beginners',
+            triggerKeywords: 'اتش تي ام ال, بناء موقع, html5, html beginners',
             dmTemplate: `أهلاً بك {username}! 👋\nأول خطوة في تطوير الويب تبدأ من هنا! 🌐💻\nإليك رابط التسجيل المجاني المباشر لدورة "HTML5 For Beginners [In Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لأول 100 طالب مسجل فقط. احجز مقعدك الآن!\nبالتوفيق لك في بدايتك الموفقة! 🚀✨`,
             publicReplies: 'أرسلت لك رابط كورس HTML5 على الخاص يا {username}! 🌐📩 | تفقد رسائلك {username} للتسجيل في الدورة مجاناً! 🚀 | تم إرسال الكوبون بنجاح! بداية موفقة في تطوير الويب 💻✨',
         },
         'problem solving': {
-            triggerKeywords: 'حل مسائل, بروبلم, بروبلم سولفينج, سي شارب مسائل, logic, problem solving, c# problem',
+            triggerKeywords: 'حل مسائل, بروبلم سولفينج, problem solving, c# problem',
             dmTemplate: `أهلاً بك {username}! 👋\nحل المسائل هو السلاح السري لكل مبرمج محترف! 🧠💻\nإليك رابط التسجيل المجاني في دورة "Problem Solving - with C# [in Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لـ 100 مقعد فقط. سجل الآن وابدأ بتدريب عقلك البرمجي!\nبالتوفيق لك! 🚀✨`,
             publicReplies: 'تم إرسال رابط كورس حل المسائل على الخاص يا {username}! 🧠📩 | تفقد الخاص {username} لتجد الكوبون المجاني! 🚀✨ | تم الإرسال بنجاح! تمنياتي لك بالتوفيق في صقل مهاراتك المنطقية 💻🌟',
         },
         java: {
-            triggerKeywords: 'جافا, كورس جافا, java, java for beginners, java course, java arabic',
+            triggerKeywords: 'كورس جافا, جافا, java for beginners, java arabic',
             dmTemplate: `أهلاً بك {username}! 👋\nتعلم واحدة من أكثر لغات البرمجة طلباً واستخداماً في الشركات! ☕️🚀\nإليك رابط التسجيل المجاني المباشر في دورة "Java for Beginners [in Arabic]":\n🔗 {url}\n\n💡 الكوبون مخصص لـ 100 طالب وصالح لفترة محدودة. سجل الآن لتبني أساساً قوياً!\nبالتوفيق لك! 🎓✨`,
             publicReplies: 'تم إرسال رابط كورس الجافا على الخاص يا {username}! ☕️📩 | شيك الخاص {username} للحصول على الكوبون المجاني 🚀 | تم الإرسال بنجاح! بالتوفيق في مسيرتك البرمجية 💻✨',
         },
         python: {
-            triggerKeywords: 'بايثون, بايثون للمبتدئين, python, python arabic, python beginners, python course',
+            triggerKeywords: 'بايثون, بايثون للمبتدئين, python arabic, python course',
             dmTemplate: `أهلاً بك {username}! 👋\nالبداية الأسهل والأكثر متعة في عالم البرمجة هي لغة بايثون! 🐍🚀\nإليك رابط التسجيل المجاني لدورة "Python For Beginners [in Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لأول 100 طالب مسجل فقط. احجز مقعدك الآن!\nأتمنى لك رحلة ممتعة وموفقة! ✨`,
             publicReplies: 'شيك الخاص يا {username}! أرسلت لك رابط كورس بايثون المجاني 🐍📩 | تم إرسال الكوبون إلى الخاص بك بنجاح! بالتوفيق 🚀 | أهلاً {username}، تفقد صندوق الوارد للبدء فوراً! 🎓💡',
         },
         'c#': {
-            triggerKeywords: 'سي شارب, كورس سي شارب, c#, csharp, c# beginners, csharp course',
+            triggerKeywords: 'سي شارب, كورس سي شارب, csharp, c# beginners',
             dmTemplate: `أهلاً بك {username}! 👋\nتعلم لغة C# القوية لبناء تطبيقات سطح المكتب، الألعاب، والمواقع! 🎮💻\nإليك رابط التسجيل المجاني المباشر لدورة "C# For Beginners [in Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لـ 100 مقعد فقط ولفترة محدودة. احرص على التسجيل الآن!\nبالتوفيق وسأكون سعيداً بمتابعة تقدمك! 🚀✨`,
             publicReplies: 'تم إرسال رابط كورس سي شارب على الخاص يا {username}! 💻📩 | تفقد رسائل الخاص {username} لتجد الكوبون المجاني 🚀 | تم الإرسال بنجاح! بالتوفيق في مسيرتك البرمجية 🎓🌟',
         },
@@ -526,61 +704,49 @@ const CampaignsPage = {
         this.pendingImport = campaignData;
 
         UI.showModal(html`
-            <div class="modal-header" style="padding-bottom:12px; border-bottom:1px solid var(--border-glass);">
-                <h2 class="modal-title" style="font-size:18px;">Bulk Import Campaigns (${campaignData.length})</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
-            <div class="bulk-import-scroll" id="bulk-import-container">
-                <p class="bulk-import-intro">
-                    We found ${campaignData.length} courses in the CSV. Matched courses have predefined rich
-                    triggers and messages. Unmatched courses use generated generic campaigns.
-                </p>
-                <div style="display:flex; flex-direction:column; gap:16px;">
-                    ${campaignData.map((c) => html`
-                        <div class="glass-card bulk-import-row" style="border-color:${c.matched ? html.raw('rgba(99, 102, 241, 0.15)') : html.raw('var(--border-glass)')};">
-                            <div class="bulk-import-row-head">
-                                <div style="display:flex; align-items:flex-start; gap:8px;">
-                                    <input type="checkbox" class="import-checkbox" id="import-check-${c.index}"
-                                           data-index="${c.index}" checked>
-                                    <div>
-                                        <label class="bulk-import-name" for="import-check-${c.index}" dir="auto">${c.name}</label>
-                                        <div class="bulk-import-coupon">
-                                            Coupon: <strong>${c.couponCode}</strong> (${c.redemptions} redemptions)
-                                        </div>
-                                    </div>
+            ${this.modalHeader(t('campaigns.bulk.title', { count: UI.formatNumber(campaignData.length) }))}
+            <div class="bulk-scroll" id="bulk-import-container">
+                <p class="bulk-intro">${t('campaigns.bulk.intro', { count: UI.formatNumber(campaignData.length) })}</p>
+                ${campaignData.map((c) => html`
+                    <div class="bulk-row ${c.matched ? html.raw('is-mapped') : ''}">
+                        <div class="bulk-row-head">
+                            <div class="row row--start gap-2">
+                                <input type="checkbox" class="import-checkbox" id="import-check-${c.index}"
+                                       data-index="${c.index}" checked>
+                                <div>
+                                    <label class="bulk-name" for="import-check-${c.index}" dir="auto">${c.name}</label>
+                                    <p class="bulk-coupon" dir="auto">${t('campaigns.bulk.coupon', {
+                                        code: c.couponCode, count: UI.formatNumber(c.redemptions),
+                                    })}</p>
                                 </div>
-                                ${c.matched
-                                    ? html`<span class="bulk-import-tag matched"><i data-lucide="sparkles" style="width:10px;height:10px;" aria-hidden="true"></i> Pre-mapped</span>`
-                                    : html`<span class="bulk-import-tag">Generated</span>`}
                             </div>
-
-                            <div class="form-group" style="margin:0;">
-                                <label class="form-label bulk-import-label" for="import-trigger-${c.index}">Trigger Keyword(s)</label>
-                                <input class="form-input bulk-import-input arabic-text" dir="auto"
-                                       id="import-trigger-${c.index}" value="${c.triggerKeywords}">
-                            </div>
-
-                            <div class="form-group" style="margin:0;">
-                                <label class="form-label bulk-import-label" for="import-dm-${c.index}">DM Template</label>
-                                <textarea class="form-textarea bulk-import-textarea arabic-text" dir="auto"
-                                          id="import-dm-${c.index}">${c.dmTemplate}</textarea>
-                            </div>
-
-                            <div class="form-group" style="margin:0;">
-                                <label class="form-label bulk-import-label" for="import-public-${c.index}">Public Reply (separated by |)</label>
-                                <input class="form-input bulk-import-input arabic-text" dir="auto"
-                                       id="import-public-${c.index}" value="${c.publicReplies}">
-                            </div>
+                            ${c.matched
+                                ? html`<span class="chip chip-accent"><i data-lucide="sparkles" aria-hidden="true"></i> ${t('campaigns.bulk.mapped')}</span>`
+                                : html`<span class="chip">${t('campaigns.bulk.generated')}</span>`}
                         </div>
-                    `)}
-                </div>
+
+                        <div>
+                            <label class="form-label" for="import-trigger-${c.index}">${t('campaigns.keywords')}</label>
+                            <input class="field bulk-import-input" dir="auto"
+                                   id="import-trigger-${c.index}" value="${c.triggerKeywords}">
+                        </div>
+                        <div>
+                            <label class="form-label" for="import-dm-${c.index}">${t('campaigns.dmTemplate')}</label>
+                            <textarea class="field-textarea bulk-import-textarea user-content" dir="auto"
+                                      id="import-dm-${c.index}">${c.dmTemplate}</textarea>
+                        </div>
+                        <div>
+                            <label class="form-label" for="import-public-${c.index}">${t('campaigns.publicReply')}</label>
+                            <input class="field bulk-import-input" dir="auto"
+                                   id="import-public-${c.index}" value="${c.publicReplies}">
+                        </div>
+                    </div>
+                `)}
             </div>
-            <div class="modal-actions" style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border-glass);">
-                <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
                 <button type="button" class="btn btn-primary" data-action="campaigns:executeBulkImport">
-                    <i data-lucide="check" aria-hidden="true"></i> Import Selected
+                    <i data-lucide="check" aria-hidden="true"></i> ${t('campaigns.bulk.importSelected')}
                 </button>
             </div>
         `);
@@ -602,7 +768,7 @@ const CampaignsPage = {
             const public_reply_template = document.getElementById(`import-public-${idx}`).value.trim();
 
             if (!trigger_keyword || !dm_template) {
-                UI.toast(`Trigger and DM Template are required for course: ${original.name}`, 'error');
+                UI.toast(t('campaigns.bulk.required', { name: original.name }), 'error');
                 return;
             }
 
@@ -615,15 +781,17 @@ const CampaignsPage = {
         }
 
         if (toImport.length === 0) {
-            UI.toast('No courses selected for import.', 'error');
+            UI.toast(t('campaigns.bulk.nothingSelected'), 'error');
             return;
         }
 
         UI.showModal(html`
             <div class="import-progress" role="status" aria-live="polite">
-                <div class="spinner" style="width:40px; height:40px; border-width:3px; margin:0 auto 16px auto;"></div>
-                <h3 class="modal-title">Importing Campaigns</h3>
-                <p id="import-progress-status">Saving campaign 1 of ${toImport.length}...</p>
+                <div class="spinner"></div>
+                <h3 class="modal-title">${t('campaigns.bulk.progressTitle')}</h3>
+                <p id="import-progress-status">${t('campaigns.bulk.progress', {
+                    current: UI.formatNumber(1), total: UI.formatNumber(toImport.length),
+                })}</p>
             </div>
         `);
 
@@ -633,7 +801,11 @@ const CampaignsPage = {
 
         for (let i = 0; i < toImport.length; i++) {
             const statusEl = document.getElementById('import-progress-status');
-            if (statusEl) statusEl.textContent = `Saving campaign ${i + 1} of ${toImport.length}...`;
+            if (statusEl) {
+                statusEl.textContent = t('campaigns.bulk.progress', {
+                    current: UI.formatNumber(i + 1), total: UI.formatNumber(toImport.length),
+                });
+            }
 
             try {
                 await API.createCampaign(toImport[i]);
@@ -649,9 +821,11 @@ const CampaignsPage = {
         this.pendingImport = null;
 
         if (failCount === 0) {
-            UI.toast(`Successfully imported all ${successCount} campaigns.`);
+            UI.toast(t('campaigns.bulk.allOk', { count: UI.formatNumber(successCount) }));
         } else {
-            UI.toast(`Import complete. ${successCount} succeeded, ${failCount} failed. Last error: ${lastError}`, 'error');
+            UI.toast(t('campaigns.bulk.partial', {
+                ok: UI.formatNumber(successCount), failed: UI.formatNumber(failCount), message: lastError,
+            }), 'error');
         }
 
         this.render();
@@ -666,6 +840,7 @@ UI.registerActions('campaigns', {
     toggleActive: (el) => CampaignsPage.toggleActive(el.dataset.id, el.checked),
     handleCreate: (el, e) => CampaignsPage.handleCreate(el, e),
     handleEdit: (el, e) => CampaignsPage.handleEdit(el, e),
+    inspectKeywords: (el) => CampaignsPage.inspectKeywords(el),
     openPostPicker: (el) => CampaignsPage.openPostPicker(el),
     selectPickedPost: (el) => CampaignsPage.selectPickedPost(el.dataset.id),
     triggerCSVSelect: () => CampaignsPage.triggerCSVSelect(),

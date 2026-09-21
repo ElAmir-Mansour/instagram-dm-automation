@@ -12,29 +12,43 @@
  * (older deployment, route not shipped yet) `session.available` is false, the
  * switcher and the admin nav stay hidden, and the dashboard behaves exactly as
  * it did before — the shared-password operator keeps working.
+ *
+ * ─── Titles ─────────────────────────────────────────────────────────────────
+ * Page titles and subtitles are i18n KEYS, not strings. They were the last
+ * place English copy lived outside the catalog.
  */
 const App = {
     currentPage: null,
+
+    THEME_KEY: 'dashboard_theme',
 
     /** Populated by loadSession(). Never null once showApp() has run. */
     session: null,
 
     pages: {
-        overview: { title: 'Overview', subtitle: 'Welcome back. Here\'s how your automation is performing.', page: () => OverviewPage },
-        campaigns: { title: 'Campaigns', subtitle: 'Manage your keyword triggers and DM templates.', page: () => CampaignsPage },
-        posts: { title: 'Posts Scheduler', subtitle: 'Create, schedule, and publish posts to Instagram and Facebook.', page: () => PostsPage },
-        inbox: { title: 'Live DM Inbox', subtitle: 'Real-time customer conversations and AI agent controls.', page: () => InboxPage },
-        ai_settings: { title: 'AI Agent Settings', subtitle: 'Configure instructions, knowledge bases, and test simulations.', page: () => AiSettingsPage },
-        analytics: { title: 'Analytics', subtitle: 'Deep dive into your automation performance.', page: () => AnalyticsPage },
-        activity: { title: 'Activity Log', subtitle: 'Every interaction logged in real-time.', page: () => ActivityPage },
-        settings: { title: 'Settings', subtitle: 'Manage your account and access tokens.', page: () => SettingsPage },
-        tenants: { title: 'Tenants', subtitle: 'Every connected account, and whether it is actually working.', page: () => TenantsPage, adminOnly: true },
-        users: { title: 'Users', subtitle: 'Accounts, roles, and who can reach which tenant.', page: () => UsersPage, adminOnly: true },
+        overview: { page: () => OverviewPage },
+        campaigns: { page: () => CampaignsPage },
+        posts: { page: () => PostsPage },
+        inbox: { page: () => InboxPage },
+        ai_settings: { page: () => AiSettingsPage },
+        analytics: { page: () => AnalyticsPage },
+        activity: { page: () => ActivityPage },
+        settings: { page: () => SettingsPage },
+        tenants: { page: () => TenantsPage, adminOnly: true },
+        users: { page: () => UsersPage, adminOnly: true },
     },
 
     DEFAULT_PAGE: 'overview',
 
+    title(page) { return t(`nav.${page}`); },
+    subtitle(page) { return t(`page.${page}.subtitle`); },
+
     init() {
+        I18N.init();
+        I18N.applyStatic();
+        this.renderLanguageSelect();
+        document.title = `${t('app.name')} — ${t('app.tagline')}`;
+
         // Login form handler
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -47,9 +61,10 @@ const App = {
                 : '';
             const errorEl = document.getElementById('login-error');
             const btn = document.getElementById('login-btn');
+            const originalHtml = btn.innerHTML;
 
             btn.disabled = true;
-            btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;"></div>';
+            btn.innerHTML = UI.buttonSpinner();
 
             try {
                 const result = await API.login(password, email);
@@ -58,12 +73,12 @@ const App = {
                 await this.showApp();
             } catch (err) {
                 errorEl.textContent = err && err.status === 401
-                    ? (email ? 'Invalid email or password. Try again.' : 'Invalid password. Try again.')
-                    : (err && err.message) || 'Sign in failed. Try again.';
+                    ? (email ? t('login.invalidAccount') : t('login.invalidPassword'))
+                    : (err && err.message) || t('login.failed');
                 errorEl.classList.remove('hidden');
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = '<span>Sign In</span><i data-lucide="arrow-right"></i>';
+                btn.innerHTML = originalHtml;
                 UI.icons(btn);
             }
         });
@@ -107,6 +122,40 @@ const App = {
         } else {
             this.showLogin();
         }
+    },
+
+    // ─── Language & theme ────────────────────────────────────────────────────
+    renderLanguageSelect() {
+        const select = document.getElementById('lang-select');
+        if (!select) return;
+        select.innerHTML = esc(html`
+            ${Object.keys(I18N.LANGS).map((code) => html`
+                <option value="${code}" ${code === I18N.lang ? html.raw('selected') : ''}>${I18N.LANGS[code].label}</option>
+            `)}
+        `);
+    },
+
+    /** 'auto' | 'dark' | 'light'. 'auto' removes the attribute and lets
+     *  prefers-color-scheme decide, which is the default. */
+    currentTheme() {
+        try {
+            const stored = localStorage.getItem(App.THEME_KEY);
+            return stored === 'dark' || stored === 'light' ? stored : 'auto';
+        } catch {
+            return 'auto';
+        }
+    },
+
+    setTheme(value) {
+        const theme = value === 'dark' || value === 'light' ? value : 'auto';
+        try {
+            if (theme === 'auto') localStorage.removeItem(App.THEME_KEY);
+            else localStorage.setItem(App.THEME_KEY, theme);
+        } catch { /* private mode */ }
+        if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
+        else document.documentElement.setAttribute('data-theme', theme);
+        // Charts read their colours from the tokens at construction time.
+        if (this.currentPage) this.navigate(this.currentPage);
     },
 
     pageFromHash() {
@@ -215,7 +264,7 @@ const App = {
 
     currentTenant() {
         if (!this.session) return null;
-        return this.session.tenants.find((t) => String(t.id) === String(this.session.tenantId)) || null;
+        return this.session.tenants.find((t2) => String(t2.id) === String(this.session.tenantId)) || null;
     },
 
     /** Nav gating, tenant switcher, setup mode — everything session-dependent. */
@@ -248,11 +297,11 @@ const App = {
 
         const currentId = this.session.tenantId;
         wrap.innerHTML = esc(html`
-            <i data-lucide="building-2" class="tenant-switcher-icon" aria-hidden="true"></i>
-            <label class="sr-only" for="tenant-select">Active tenant</label>
-            <select id="tenant-select" class="tenant-select" data-change="app:switchTenantFromSelect">
-                ${tenants.map((t) => html`
-                    <option value="${t.id}" ${String(t.id) === String(currentId) ? html.raw('selected') : ''}>${t.name || t.id}</option>
+            <i data-lucide="building-2" aria-hidden="true"></i>
+            <label class="sr-only" for="tenant-select">${t('app.tenant')}</label>
+            <select id="tenant-select" data-change="app:switchTenantFromSelect">
+                ${tenants.map((tenant) => html`
+                    <option value="${tenant.id}" ${String(tenant.id) === String(currentId) ? html.raw('selected') : ''}>${tenant.name || tenant.id}</option>
                 `)}
             </select>
         `);
@@ -274,7 +323,7 @@ const App = {
 
         try {
             const result = await API.switchTenant(tenantId);
-            if (!result || !result.token) throw new Error('The server did not return a session token for that tenant.');
+            if (!result || !result.token) throw new Error(t('tenants.switchNoToken'));
 
             // Stop the outgoing page's timers BEFORE the token changes, so no
             // in-flight poll can write tenant A's data into tenant B's screen.
@@ -286,7 +335,7 @@ const App = {
             if (!ok) return;
 
             const tenant = this.currentTenant();
-            UI.toast(`Now viewing ${tenant && tenant.name ? tenant.name : 'the selected tenant'}.`);
+            UI.toast(t('tenants.switched', { name: (tenant && tenant.name) || '—' }));
 
             const page = this.pages[this.currentPage] ? this.currentPage : this.pageFromHash();
             this.currentPage = null; // teardown already ran; don't run it twice
@@ -296,7 +345,7 @@ const App = {
                 select.disabled = false;
                 select.value = previousId == null ? '' : String(previousId);
             }
-            UI.toast((err && err.message) || 'Could not switch tenant.', 'error');
+            UI.toast((err && err.message) || t('tenants.switchFailed'), 'error');
         }
     },
 
@@ -330,33 +379,28 @@ const App = {
      */
     renderSetup() {
         const container = document.getElementById('page-container');
-        document.getElementById('page-title').textContent = 'Set up your first tenant';
-        document.getElementById('page-subtitle').textContent = 'Nothing is connected yet — this takes one form.';
+        document.getElementById('page-title').textContent = t('setup.title');
+        document.getElementById('page-subtitle').textContent = t('setup.subtitle');
 
         const admin = this.isAdmin();
+        const webhookUrl = `${location.origin}/webhook`;
+
         container.innerHTML = esc(html`
-            <div class="setup-screen glass-card">
+            <div class="setup-screen surface">
                 <div class="setup-icon"><i data-lucide="plug-zap" aria-hidden="true"></i></div>
-                <h2>No tenant is connected yet</h2>
-                <p>
-                    A tenant is one Instagram/Facebook account pair: its page IDs and its page access
-                    token. Until one exists, campaigns, the scheduler and the inbox have nothing to
-                    read and every action answers <em>“No active creator found”</em>.
-                </p>
+                <h2>${t('setup.heading')}</h2>
+                <p>${t('setup.body')}</p>
                 ${admin ? html`
                     <ol class="setup-steps">
-                        <li>Create the tenant with its Instagram page ID (required) and its Facebook page ID.</li>
-                        <li>Paste the page access token — the server requires it and encrypts it before storing.</li>
-                        <li>Point the Meta webhook callback at <code>${location.origin}/webhook</code>, using the verify token from the same form.</li>
+                        <li>${t('setup.step1')}</li>
+                        <li>${t('setup.step2')}</li>
+                        <li>${t('setup.step3')} <code>${UI.ltr(webhookUrl)}</code></li>
                     </ol>
                     <button type="button" class="btn btn-primary" data-action="tenants:showFirstRunCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> Create the first tenant
+                        <i data-lucide="plus" aria-hidden="true"></i> ${t('setup.cta')}
                     </button>
                 ` : html`
-                    <p class="setup-note">
-                        Your account has not been granted access to any tenant. Ask a platform
-                        administrator to grant you one, then sign in again.
-                    </p>
+                    <p class="setup-note">${t('setup.noAccess')}</p>
                 `}
             </div>
         `);
@@ -396,8 +440,8 @@ const App = {
             else item.removeAttribute('aria-current');
         });
 
-        document.getElementById('page-title').textContent = this.pages[page].title;
-        document.getElementById('page-subtitle').textContent = this.pages[page].subtitle;
+        document.getElementById('page-title').textContent = this.title(page);
+        document.getElementById('page-subtitle').textContent = this.subtitle(page);
 
         const sidebar = document.getElementById('sidebar');
         sidebar.classList.remove('open');
@@ -420,7 +464,7 @@ const App = {
             console.error('Page render failed:', err);
             UI.renderError(
                 document.getElementById('page-container'),
-                { title: 'This page failed to render', message: (err && err.message) || String(err) },
+                { title: t('error.render'), message: (err && err.message) || String(err) },
                 () => this.navigate(page)
             );
         }
@@ -437,6 +481,12 @@ UI.registerActions('app', {
     },
     switchTenantFromSelect(el) {
         App.switchTenant(el.value);
+    },
+    setLanguage(el) {
+        I18N.setLang(el.value);
+    },
+    setTheme(el) {
+        App.setTheme(el.value);
     },
     /**
      * The email field is hidden behind an affordance so the shared-password

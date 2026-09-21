@@ -1,12 +1,20 @@
 /**
- * Live DM Inbox — conversations, messages, manual replies, per-thread AI toggle.
+ * DM Inbox — conversations, messages, manual replies, per-thread AI toggle.
  *
- * Polling contract:
+ * ─── Polling contract (do not regress) ──────────────────────────────────────
  *   - one request per tick (the thread list), not three
  *   - messages are only re-fetched when that thread's last_message_at changed
  *   - polling stops while the tab is hidden, and on destroy() (navigate/logout)
  *   - the composer is built ONCE per selected thread and never re-rendered, so
  *     an unsent draft survives every poll
+ *
+ * ─── Mobile ─────────────────────────────────────────────────────────────────
+ * This is the screen the creator opens on a phone, and the one that used to be
+ * least usable there. The layout is a single grid cell below 900px with the
+ * two panes stacked on top of each other and `data-pane` deciding which is
+ * shown, so "list → thread → back" is a real navigation, not a 39px-wide chat
+ * column. The back button is part of the chat header, is 44px, and its chevron
+ * flips with the document direction.
  */
 const InboxPage = {
     POLL_MS: 5000,
@@ -24,23 +32,24 @@ const InboxPage = {
         const container = document.getElementById('page-container');
         container.innerHTML = esc(html`
             <div class="inbox-layout" data-pane="threads">
-                <!-- Threads list -->
-                <div class="inbox-sidebar glass-card">
-                    <div class="sidebar-search">
-                        <i data-lucide="search" class="search-icon" aria-hidden="true"></i>
-                        <label class="sr-only" for="inbox-search">Search conversations</label>
-                        <input type="search" id="inbox-search" placeholder="Search conversations..."
-                               autocomplete="off" data-input="inbox:handleSearch">
+                <section class="inbox-sidebar surface" aria-label="${t('inbox.threads')}">
+                    <div class="inbox-search">
+                        <label class="sr-only" for="inbox-search">${t('inbox.searchLabel')}</label>
+                        <div class="input-affix">
+                            <i data-lucide="search" aria-hidden="true"></i>
+                            <input class="field" type="search" id="inbox-search"
+                                   placeholder="${t('inbox.searchPlaceholder')}"
+                                   autocomplete="off" data-input="inbox:handleSearch">
+                        </div>
                     </div>
                     <div class="threads-list" id="threads-container">
-                        ${html.raw(UI.loader('Loading conversations…'))}
+                        ${html.raw(UI.loader(t('inbox.loadingThreads')))}
                     </div>
-                </div>
+                </section>
 
-                <!-- Chat Pane -->
-                <div class="chat-pane glass-card" id="chat-pane-container">
+                <section class="chat-pane surface" id="chat-pane-container" aria-label="${t('inbox.messages')}">
                     ${this.emptyChatState()}
-                </div>
+                </section>
             </div>
         `);
 
@@ -117,10 +126,10 @@ const InboxPage = {
 
     emptyChatState() {
         return html`
-            <div class="empty-chat-state">
-                <i data-lucide="message-square" class="empty-icon" aria-hidden="true"></i>
-                <h3>Select a Conversation</h3>
-                <p>Choose a contact from the sidebar to view history or send messages.</p>
+            <div class="chat-empty">
+                <i data-lucide="message-square" aria-hidden="true"></i>
+                <h3>${t('inbox.emptyTitle')}</h3>
+                <p>${t('inbox.emptyBody')}</p>
             </div>
         `;
     },
@@ -128,7 +137,7 @@ const InboxPage = {
     threadName(thread) {
         if (thread.username) return thread.username;
         const id = String(thread.instagram_user_id || '');
-        return `User ${id.slice(-4)}`;
+        return t('inbox.anonUser', { id: id.slice(-4) });
     },
 
     // ─── Threads ─────────────────────────────────────────────────────────────
@@ -140,7 +149,7 @@ const InboxPage = {
 
             // Only refetch the open conversation when it actually changed.
             if (this.selectedConversationId) {
-                const thread = this.threads.find((t) => t.id === this.selectedConversationId);
+                const thread = this.threads.find((x) => x.id === this.selectedConversationId);
                 if (thread) {
                     this.updateChatHeader(thread);
                     if (thread.last_message_at !== this.lastMessageStamp) {
@@ -156,7 +165,7 @@ const InboxPage = {
             if (container) {
                 UI.renderError(
                     container,
-                    { title: 'Could not load conversations', message: err.message },
+                    { title: t('inbox.threadsErrorTitle'), message: err.message },
                     () => this.loadThreads()
                 );
             }
@@ -166,11 +175,11 @@ const InboxPage = {
     visibleThreads() {
         const term = this.searchTerm.trim().toLowerCase();
         if (!term) return this.threads;
-        return this.threads.filter((t) => {
+        return this.threads.filter((x) => {
             const haystack = [
-                t.username,
-                t.instagram_user_id,
-                t.last_message_text,
+                x.username,
+                x.instagram_user_id,
+                x.last_message_text,
             ].filter(Boolean).join(' ').toLowerCase();
             return haystack.includes(term);
         });
@@ -184,39 +193,41 @@ const InboxPage = {
 
         if (threads.length === 0) {
             container.innerHTML = esc(html`
-                <div class="empty-threads">
-                    <p>${this.searchTerm ? 'No conversations match that search.' : 'No conversations found yet.'}</p>
-                </div>
+                <p class="empty-threads">${this.searchTerm ? t('inbox.noMatch') : t('inbox.noThreads')}</p>
             `);
             return;
         }
 
         container.innerHTML = esc(html`
-            ${threads.map((t) => {
-                const isActive = t.id === this.selectedConversationId;
-                const direction = t.last_message_direction === 'inbound' ? '📥' : '📤';
-                const username = this.threadName(t);
+            ${threads.map((x) => {
+                const isActive = x.id === this.selectedConversationId;
+                const isInbound = x.last_message_direction === 'inbound';
+                const username = this.threadName(x);
                 return html`
                     <button type="button"
                             class="thread-item ${isActive ? 'active' : ''}"
                             aria-current="${isActive ? 'true' : 'false'}"
-                            data-action="inbox:selectThread" data-id="${t.id}">
-                        <div class="thread-info">
-                            <div class="thread-header">
-                                <span class="thread-username" dir="auto">@${username}</span>
-                                <span class="thread-time">${UI.formatTime(t.last_message_at)}</span>
-                            </div>
-                            <p class="thread-preview" dir="auto">${direction} ${t.last_message_text || 'No messages yet'}</p>
-                            <div class="thread-badges">
-                                ${t.is_bot_active
-                                    ? html`<span class="badge badge-success-glow flex-center gap-1"><span class="dot-blink bg-success" aria-hidden="true"></span>AI Active</span>`
-                                    : html`<span class="badge badge-warning-glow">AI Paused</span>`}
-                            </div>
-                        </div>
+                            data-action="inbox:selectThread" data-id="${x.id}">
+                        <span class="thread-top">
+                            <span class="thread-name"><bdi dir="auto">@${username}</bdi></span>
+                            <span class="thread-time">${UI.formatTime(x.last_message_at)}</span>
+                        </span>
+                        <span class="thread-preview" dir="auto">
+                            ${isInbound ? '📥' : '📤'} ${x.last_message_text || t('inbox.noMessages')}
+                        </span>
+                        <span class="thread-badges">
+                            ${x.is_bot_active
+                                ? html`<span class="badge badge-success"><span class="dot-blink" aria-hidden="true"></span>${t('inbox.aiActive')}</span>`
+                                : html`<span class="badge badge-warning">${t('inbox.aiPaused')}</span>`}
+                            ${!x.is_bot_active && isInbound
+                                ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
+                                : ''}
+                        </span>
                     </button>
                 `;
             })}
         `);
+        UI.icons(container);
     },
 
     handleSearch(value) {
@@ -226,24 +237,27 @@ const InboxPage = {
 
     // ─── Chat pane ───────────────────────────────────────────────────────────
     selectThread(id) {
+        // Mobile: even re-selecting the open thread has to move to the chat pane.
+        const layout = document.querySelector('.inbox-layout');
+        if (layout) layout.dataset.pane = 'chat';
+
         if (this.selectedConversationId === id) return;
         this.selectedConversationId = id;
         this.renderedMessageIds = new Set();
 
-        const thread = this.threads.find((t) => t.id === id);
+        const thread = this.threads.find((x) => x.id === id);
         this.lastMessageStamp = thread ? thread.last_message_at : null;
         this.renderChatShell(thread);
         this.renderThreads(); // highlight the active row
         this.loadMessages(id, { scroll: true });
-
-        // Mobile: the layout is a single pane, so switch to the chat.
-        const layout = document.querySelector('.inbox-layout');
-        if (layout) layout.dataset.pane = 'chat';
     },
 
     backToThreads() {
         const layout = document.querySelector('.inbox-layout');
         if (layout) layout.dataset.pane = 'threads';
+        // Send focus somewhere real, or it lands on <body> after the pane swap.
+        const active = document.querySelector('.thread-item.active') || document.getElementById('inbox-search');
+        if (active && typeof active.focus === 'function') active.focus();
     },
 
     /**
@@ -259,41 +273,40 @@ const InboxPage = {
         const username = this.threadName(thread);
 
         chatPane.innerHTML = esc(html`
-            <div class="chat-header">
-                <button type="button" class="chat-back-btn" data-action="inbox:backToThreads" aria-label="Back to conversations">
+            <header class="chat-header">
+                <button type="button" class="icon-button chat-back" data-action="inbox:backToThreads"
+                        aria-label="${t('inbox.backToThreads')}">
                     <i data-lucide="arrow-left" aria-hidden="true"></i>
                 </button>
                 <div class="chat-header-info">
-                    <h3 dir="auto" data-chat-username>@${username}</h3>
-                    <span class="sub-text">Instagram User: ${thread.instagram_user_id}</span>
+                    <h3 data-chat-username><bdi dir="auto">@${username}</bdi></h3>
+                    <span class="chat-sub">${t('inbox.userId', { id: '' })}${UI.ltr(thread.instagram_user_id)}</span>
                 </div>
                 <div class="chat-header-actions">
-                    <label class="toggle-switch" for="bot-toggle-input">
-                        <span class="sr-only">AI assistant for this conversation</span>
+                    <label class="switch" for="bot-toggle-input">
+                        <span class="sr-only">${t('inbox.aiToggleLabel')}</span>
                         <input type="checkbox" id="bot-toggle-input"
                                ${thread.is_bot_active ? html.raw('checked') : ''}
                                data-change="inbox:toggleBot" data-id="${thread.id}">
-                        <span class="toggle-slider"></span>
+                        <span class="switch-track"></span>
                     </label>
-                    <span class="toggle-label flex-center gap-1" aria-hidden="true">
-                        <i data-lucide="bot" style="width:16px;height:16px;"></i>
-                        AI Assistant
+                    <span class="switch-label" aria-hidden="true">
+                        <i data-lucide="bot" aria-hidden="true"></i>
                     </span>
                 </div>
+            </header>
+
+            <div class="chat-messages" id="chat-messages-container" role="log" aria-live="polite"
+                 aria-label="${t('inbox.messages')}">
+                ${html.raw(UI.loader(t('inbox.loadingMessages')))}
             </div>
 
-            <div class="chat-messages" id="chat-messages-container" role="log" aria-live="polite" aria-label="Conversation messages">
-                ${html.raw(UI.loader('Loading messages…'))}
-            </div>
-
-            <div class="chat-input-area">
+            <div class="chat-composer">
                 <form id="chat-send-form" data-submit="inbox:sendMessage" data-id="${thread.id}">
-                    <label class="sr-only" for="chat-input-text">Manual reply</label>
-                    <textarea id="chat-input-text" dir="auto" class="arabic-text"
-                              placeholder="Type a manual reply... (This will automatically pause the AI Bot for this conversation)"></textarea>
-                    <button type="submit" class="btn btn-primary flex-center gap-2">
-                        <span>Send</span>
-                        <i data-lucide="send" style="width:16px;height:16px;" aria-hidden="true"></i>
+                    <label class="sr-only" for="chat-input-text">${t('inbox.replyLabel')}</label>
+                    <textarea id="chat-input-text" dir="auto" placeholder="${t('inbox.replyPlaceholder')}"></textarea>
+                    <button type="submit" class="btn btn-primary" aria-label="${t('inbox.sendLabel')}">
+                        <i data-lucide="send" aria-hidden="true"></i>
                     </button>
                 </form>
             </div>
@@ -303,10 +316,17 @@ const InboxPage = {
         UI.icons(chatPane);
     },
 
-    /** Poll-safe header refresh: text nodes only, never a re-render. */
+    /**
+     * Poll-safe header refresh: text nodes only, never a re-render.
+     *
+     * It writes into the <bdi>, not the <h3>. Replacing the h3's textContent
+     * destroyed the isolation element, and a bare "@sara_dev" in an RTL
+     * heading renders as "sara_dev@" — the @ jumps to the other end on the
+     * first poll, five seconds after the thread opens.
+     */
     updateChatHeader(thread) {
         if (this.chatShellThreadId !== thread.id) return;
-        const nameEl = document.querySelector('[data-chat-username]');
+        const nameEl = document.querySelector('[data-chat-username] bdi');
         if (nameEl) nameEl.textContent = `@${this.threadName(thread)}`;
         const toggle = document.getElementById('bot-toggle-input');
         if (toggle && document.activeElement !== toggle) toggle.checked = !!thread.is_bot_active;
@@ -323,7 +343,7 @@ const InboxPage = {
             if (list && this.renderedMessageIds.size === 0) {
                 UI.renderError(
                     list,
-                    { title: 'Could not load this conversation', message: err.message },
+                    { title: t('inbox.messagesErrorTitle'), message: err.message },
                     () => this.loadMessages(id, { scroll: true })
                 );
             }
@@ -397,12 +417,12 @@ const InboxPage = {
                         const image = safeUrl(el && el.image_url);
                         const buttons = Array.isArray(el && el.buttons) ? el.buttons : [];
                         return html`
-                            <div class="carousel-card glass-card">
-                                ${image ? html`<img src="${image}" class="carousel-card-img" alt="${(el && el.title) || 'Carousel image'}">` : ''}
+                            <div class="carousel-card">
+                                ${image ? html`<img src="${image}" class="carousel-card-img" alt="${(el && el.title) || ''}">` : ''}
                                 <div class="carousel-card-body">
                                     <h4 class="carousel-card-title" dir="auto">${el && el.title}</h4>
                                     ${el && el.subtitle ? html`<p class="carousel-card-desc" dir="auto">${el.subtitle}</p>` : ''}
-                                    <div class="carousel-card-buttons">
+                                    <div class="stack gap-1">
                                         ${buttons.map((btn) => html`<span class="carousel-btn" dir="auto">${btn && btn.title}</span>`)}
                                     </div>
                                 </div>
@@ -420,14 +440,11 @@ const InboxPage = {
     async toggleBot(id, checked) {
         try {
             await API.toggleConversationBot(id, checked);
-            UI.toast(
-                checked ? 'AI Bot enabled for this chat thread.' : 'AI Bot paused. Manual response mode active.',
-                checked ? 'success' : 'error'
-            );
+            UI.toast(checked ? t('inbox.botOn') : t('inbox.botOff'), checked ? 'success' : 'error');
             this.loadThreads(true);
         } catch (err) {
             console.error('Toggle Bot Error:', err);
-            UI.toast(err.message || 'Failed to change AI state.', 'error');
+            UI.toast(err.message || t('inbox.botFailed'), 'error');
             const toggle = document.getElementById('bot-toggle-input');
             if (toggle) toggle.checked = !checked;
         }
@@ -447,14 +464,14 @@ const InboxPage = {
         try {
             await API.sendConversationMessage(id, text);
             input.value = '';
-            UI.toast('Message sent. AI auto-replies paused for this thread.');
+            UI.toast(t('inbox.sent'));
             this.lastMessageStamp = null; // force the next poll to pick it up
             await this.loadMessages(id, { scroll: true });
             await this.loadThreads(true);
         } catch (err) {
             console.error('Send Message Error:', err);
             // The draft is deliberately left in the box so nothing is lost.
-            UI.toast(err.message || 'Failed to send message.', 'error');
+            UI.toast(err.message || t('inbox.sendFailed'), 'error');
         } finally {
             input.disabled = false;
             if (button) button.disabled = false;

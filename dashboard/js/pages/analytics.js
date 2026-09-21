@@ -1,5 +1,12 @@
 /**
- * Analytics Page — Charts and insights.
+ * Analytics — the "how is this performing over time" screen.
+ *
+ * Overview answers "what is broken this morning"; this page is the one the
+ * operator opens on purpose, so it keeps the long series and the per-campaign
+ * table. What changed: the chart configuration now comes from `Charts` (one
+ * definition, theme-aware, direction-aware) instead of two divergent copies of
+ * the same hex values, and the platform split reads from brand tokens rather
+ * than `#1877f2` written into the markup.
  */
 const AnalyticsPage = {
     charts: [],
@@ -11,7 +18,7 @@ const AnalyticsPage = {
 
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader('Loading analytics…');
+        container.innerHTML = UI.loader();
         this.destroy();
 
         let stats;
@@ -24,11 +31,7 @@ const AnalyticsPage = {
                 API.getCampaignStats(),
             ]);
         } catch (err) {
-            UI.renderError(
-                container,
-                { title: 'Could not load analytics', message: err.message },
-                () => this.render()
-            );
+            UI.renderError(container, { title: t('analytics.errorTitle'), message: err.message }, () => this.render());
             return;
         }
 
@@ -39,96 +42,120 @@ const AnalyticsPage = {
         const fbPct = total > 0 ? Math.round((fbCount / total) * 100) : 0;
 
         container.innerHTML = esc(html`
-            <div class="stats-grid" style="margin-bottom:24px;">
-                <div class="stat-card glass-card">
-                    <div class="stat-header"><span class="stat-label">Total Interactions</span><div class="stat-icon accent"><i data-lucide="activity" aria-hidden="true"></i></div></div>
-                    <div class="stat-value">${total}</div>
+            <div class="stats-grid">
+                <div class="stat-card surface">
+                    <div class="stat-header">
+                        <span class="stat-label">${t('analytics.total')}</span>
+                        <span class="stat-icon accent"><i data-lucide="activity" aria-hidden="true"></i></span>
+                    </div>
+                    <p class="stat-value">${UI.formatNumber(total)}</p>
                 </div>
-                <div class="stat-card glass-card">
-                    <div class="stat-header"><span class="stat-label">Success Rate</span><div class="stat-icon success"><i data-lucide="trending-up" aria-hidden="true"></i></div></div>
-                    <div class="stat-value">${stats.successRate}%</div>
+                <div class="stat-card surface">
+                    <div class="stat-header">
+                        <span class="stat-label">${t('analytics.successRate')}</span>
+                        <span class="stat-icon success"><i data-lucide="trending-up" aria-hidden="true"></i></span>
+                    </div>
+                    <p class="stat-value">${UI.formatPercent(stats.successRate)}</p>
                 </div>
-                <div class="stat-card glass-card">
-                    <div class="stat-header"><span class="stat-label">Users Reached</span><div class="stat-icon warning"><i data-lucide="users" aria-hidden="true"></i></div></div>
-                    <div class="stat-value">${stats.uniqueUsersReached}</div>
+                <div class="stat-card surface">
+                    <div class="stat-header">
+                        <span class="stat-label">${t('analytics.users')}</span>
+                        <span class="stat-icon warning"><i data-lucide="users" aria-hidden="true"></i></span>
+                    </div>
+                    <p class="stat-value">${UI.formatNumber(stats.uniqueUsersReached)}</p>
                 </div>
-                <div class="stat-card glass-card">
-                    <div class="stat-header"><span class="stat-label">Today</span><div class="stat-icon accent"><i data-lucide="calendar" aria-hidden="true"></i></div></div>
-                    <div class="stat-value">${stats.todayActivity}</div>
+                <div class="stat-card surface">
+                    <div class="stat-header">
+                        <span class="stat-label">${t('analytics.today')}</span>
+                        <span class="stat-icon accent"><i data-lucide="calendar" aria-hidden="true"></i></span>
+                    </div>
+                    <p class="stat-value">${UI.formatNumber(stats.todayActivity)}</p>
                 </div>
             </div>
+
             <div class="chart-grid">
-                <div class="chart-card glass-card">
-                    <div class="chart-card-header"><span class="chart-card-title">DMs Over Last 30 Days</span></div>
-                    <div class="chart-wrapper"><canvas id="analytics-line" role="img" aria-label="DMs sent and failed over the last 30 days"></canvas></div>
+                <div class="chart-card surface">
+                    <div class="chart-card-header"><span class="chart-card-title">${t('analytics.chart30')}</span></div>
+                    <div class="chart-wrapper">
+                        <canvas id="analytics-line" role="img" aria-label="${t('analytics.chart30')}"></canvas>
+                    </div>
                 </div>
-                <div class="chart-card glass-card">
-                    <div class="chart-card-header"><span class="chart-card-title">Sent vs Failed</span></div>
-                    <div class="chart-wrapper"><canvas id="analytics-donut" role="img" aria-label="Sent versus failed breakdown"></canvas></div>
+                <div class="chart-card surface">
+                    <div class="chart-card-header"><span class="chart-card-title">${t('analytics.chartStatus')}</span></div>
+                    <div class="chart-wrapper">
+                        <canvas id="analytics-donut" role="img" aria-label="${t('analytics.chartStatus')}"></canvas>
+                    </div>
                 </div>
             </div>
-            <div class="chart-grid" style="margin-top: 24px;">
-                <div class="chart-card glass-card" style="padding: 24px;">
+
+            <div class="chart-grid chart-grid--even">
+                <div class="chart-card surface">
                     <div class="chart-card-header">
-                        <span class="chart-card-title">Top Performing Campaigns</span>
+                        <span class="chart-card-title">${t('analytics.topCampaigns')}</span>
                     </div>
                     <div class="table-wrapper">
                         ${campaignStats && campaignStats.length > 0 ? html`
                             <table class="data-table">
                                 <thead>
                                     <tr>
-                                        <th scope="col">Trigger Keyword</th>
-                                        <th scope="col" style="text-align: right;">Total Matches</th>
-                                        <th scope="col" style="text-align: right;">Sent (Success)</th>
-                                        <th scope="col" style="text-align: right;">Failed</th>
+                                        <th scope="col">${t('table.keyword')}</th>
+                                        <th scope="col" class="cell-num">${t('analytics.matches')}</th>
+                                        <th scope="col" class="cell-num">${t('common.sent')}</th>
+                                        <th scope="col" class="cell-num">${t('common.failed')}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${campaignStats.map((c) => html`
                                         <tr>
-                                            <td><span class="campaign-keyword" style="margin:0; font-size:12px; padding:4px 10px;" dir="auto">${c.trigger_keyword}</span></td>
-                                            <td style="text-align: right; font-weight: 600;">${c.total_triggers}</td>
-                                            <td style="text-align: right; color: var(--success);">${c.sent_count}</td>
-                                            <td style="text-align: right; color: var(--danger);">${c.failed_count}</td>
+                                            <td><span class="chip chip-accent" dir="auto">${c.trigger_keyword}</span></td>
+                                            <td class="cell-num text-strong">${UI.formatNumber(c.total_triggers)}</td>
+                                            <td class="cell-num text-success">${UI.formatNumber(c.sent_count)}</td>
+                                            <td class="cell-num text-danger">${UI.formatNumber(c.failed_count)}</td>
                                         </tr>
                                     `)}
                                 </tbody>
                             </table>
                         ` : html`
-                            <div class="empty-state" style="padding: 20px;">
-                                <i data-lucide="award" style="width:32px;height:32px;" aria-hidden="true"></i>
-                                <p>No campaign performance data yet.</p>
+                            <div class="empty-state">
+                                <i data-lucide="award" aria-hidden="true"></i>
+                                <p>${t('analytics.noCampaignData')}</p>
                             </div>
                         `}
                     </div>
                 </div>
-                <div class="chart-card glass-card">
+
+                <div class="chart-card surface">
                     <div class="chart-card-header">
-                        <span class="chart-card-title">Platform Distribution</span>
+                        <span class="chart-card-title">${t('analytics.platformSplit')}</span>
                     </div>
-                    <div style="display:flex; flex-direction:column; justify-content:center; height: calc(100% - 40px); padding: 10px 0;">
-                        <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 13px; color: var(--text-secondary);">
-                            <span>Instagram</span>
-                            <span style="font-weight: 600; color: var(--accent);">${igCount} (${igPct}%)</span>
+                    <div class="platform-legend">
+                        <div class="platform-legend-row">
+                            <span>${t('common.instagram')}</span>
+                            <strong class="text-strong">${t('analytics.share', {
+                                count: UI.formatNumber(igCount), percent: UI.formatNumber(igPct),
+                            })}</strong>
                         </div>
-                        <div style="display:flex; justify-content:space-between; margin-bottom: 20px; font-size: 13px; color: var(--text-secondary);">
-                            <span>Facebook</span>
-                            <span style="font-weight: 600; color: #1877f2;">${fbCount} (${fbPct}%)</span>
+                        <div class="platform-legend-row">
+                            <span>${t('common.facebook')}</span>
+                            <strong class="text-strong">${t('analytics.share', {
+                                count: UI.formatNumber(fbCount), percent: UI.formatNumber(fbPct),
+                            })}</strong>
                         </div>
-                        <div class="platform-bar">
-                            <div style="width: ${total > 0 ? (igCount / total) * 100 : 50}%; background: var(--gradient-hero);"></div>
-                            <div style="width: ${total > 0 ? (fbCount / total) * 100 : 50}%; background: #1877f2;"></div>
+                    </div>
+                    <div class="platform-bar" role="img"
+                         aria-label="${t('analytics.share', { count: UI.formatNumber(igCount), percent: UI.formatNumber(igPct) })} — ${t('common.instagram')}">
+                        <span class="platform-bar-ig" data-share="${total > 0 ? igPct : 50}"></span>
+                        <span class="platform-bar-fb" data-share="${total > 0 ? fbPct : 50}"></span>
+                    </div>
+                    <div class="platform-totals">
+                        <div>
+                            <p class="platform-total-value">${UI.formatNumber(igCount)}</p>
+                            <p class="platform-total-label">${t('common.instagram')} · ${t('analytics.hits')}</p>
                         </div>
-                        <div style="display: flex; justify-content: space-around; text-align: center;">
-                            <div>
-                                <div style="font-size: 20px; font-weight: 700; color: var(--text-primary);">${igCount}</div>
-                                <div style="font-size: 11px; color: var(--text-muted);">Instagram Hits</div>
-                            </div>
-                            <div style="border-left: 1px solid var(--border-glass); height: 32px;"></div>
-                            <div>
-                                <div style="font-size: 20px; font-weight: 700; color: var(--text-primary);">${fbCount}</div>
-                                <div style="font-size: 11px; color: var(--text-muted);">Facebook Hits</div>
-                            </div>
+                        <div class="platform-totals-divider" aria-hidden="true"></div>
+                        <div>
+                            <p class="platform-total-value">${UI.formatNumber(fbCount)}</p>
+                            <p class="platform-total-label">${t('common.facebook')} · ${t('analytics.hits')}</p>
                         </div>
                     </div>
                 </div>
@@ -137,49 +164,40 @@ const AnalyticsPage = {
 
         UI.icons(container);
 
+        // The two bar widths are data, not style: set as inline flex-basis from
+        // the data-share attribute rather than interpolated into the markup.
+        container.querySelectorAll('.platform-bar > span[data-share]').forEach((el) => {
+            el.style.flexBasis = `${Number(el.dataset.share) || 0}%`;
+        });
+
         if (typeof Chart === 'undefined') return;
+        const c = Charts.palette();
 
-        const tickColor = '#94a3b8';
-        const gridColor = 'rgba(255,255,255,0.06)';
+        const bars = Charts.create('analytics-line', {
+            type: 'bar',
+            data: {
+                labels: daily.map((d) => UI.formatDayShort(d.day)),
+                datasets: [{
+                    label: t('common.sent'),
+                    data: daily.map((d) => d.sent),
+                    backgroundColor: Charts.alpha(c.positive, 0.75),
+                    borderRadius: 6,
+                }, {
+                    label: t('common.failed'),
+                    data: daily.map((d) => d.failed),
+                    backgroundColor: Charts.alpha(c.negative, 0.65),
+                    borderRadius: 6,
+                }],
+            },
+            options: Charts.cartesian({ scales: { x: { stacked: true }, y: { stacked: true } } }),
+        });
+        if (bars) this.charts.push(bars);
 
-        const lineCanvas = document.getElementById('analytics-line');
-        if (lineCanvas) {
-            this.charts.push(new Chart(lineCanvas.getContext('2d'), {
-                type: 'bar',
-                data: {
-                    labels: daily.map((d) => UI.formatDay(d.day)),
-                    datasets: [{
-                        label: 'Sent', data: daily.map((d) => d.sent),
-                        backgroundColor: 'rgba(34,197,94,0.6)', borderRadius: 6,
-                    }, {
-                        label: 'Failed', data: daily.map((d) => d.failed),
-                        backgroundColor: 'rgba(239,68,68,0.5)', borderRadius: 6,
-                    }],
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false,
-                    plugins: { legend: { labels: { color: tickColor, font: { family: 'Inter' } } } },
-                    scales: {
-                        x: { stacked: true, ticks: { color: tickColor }, grid: { color: gridColor } },
-                        y: { stacked: true, ticks: { color: tickColor }, grid: { color: gridColor }, beginAtZero: true },
-                    },
-                },
-            }));
-        }
-
-        const donutCanvas = document.getElementById('analytics-donut');
-        if (donutCanvas) {
-            this.charts.push(new Chart(donutCanvas.getContext('2d'), {
-                type: 'doughnut',
-                data: {
-                    labels: ['Sent', 'Failed'],
-                    datasets: [{ data: [stats.sent, stats.failed], backgroundColor: ['#22c55e', '#ef4444'], borderWidth: 0, hoverOffset: 8 }],
-                },
-                options: {
-                    responsive: true, maintainAspectRatio: false, cutout: '72%',
-                    plugins: { legend: { position: 'bottom', labels: { color: tickColor, font: { family: 'Inter' }, padding: 16 } } },
-                },
-            }));
-        }
+        const donut = Charts.create('analytics-donut', {
+            type: 'doughnut',
+            data: Charts.statusData(stats.sent, stats.failed),
+            options: Charts.doughnut(),
+        });
+        if (donut) this.charts.push(donut);
     },
 };

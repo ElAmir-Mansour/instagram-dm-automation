@@ -1,0 +1,298 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AutoReply Pro — Design tokens
+   ═══════════════════════════════════════════════════════════════════════════
+
+   The ONE place colour, type, spacing, elevation and motion are defined.
+   `styles.css` and `eid.html` both load this file: the campaign landing page
+   used to carry its own copy of the variable block with values 1px and a few
+   hex digits away from the app's, which is two design systems in one repo.
+
+   Rules this file encodes:
+
+   1.  Every value is a token. If a component needs a number that is not here,
+       the scale is wrong — extend the scale, do not write a magic value.
+   2.  Semantic names, not literal ones. Components reference `--surface-raised`
+       and `--text-muted`; only this file knows they are grey.
+   3.  Themes swap the semantic layer, never the component CSS. Dark is the
+       default and the identity; light is a full peer, not an afterthought.
+   4.  Arabic is the primary script. Line-height is generous by default and
+       letter-spacing is NEVER applied to text — it breaks Arabic joining.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+    /* ─── Type ───────────────────────────────────────────────────────────────
+       Seven steps, replacing the twelve ad-hoc sizes (9,10,11,12,13,14,15,16,
+       18,20,28,32px) the eight screens used to share. 11px was unreadable in
+       Cairo and carried table headers and timestamps; the floor is now 12px. */
+    --font-ui: 'Cairo', 'Noto Sans Arabic', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-latin: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+    --fs-100: 0.75rem;    /* 12px — meta, timestamps, chips            */
+    --fs-200: 0.875rem;   /* 14px — the UI default                     */
+    --fs-300: 1rem;       /* 16px — body copy, message bubbles         */
+    --fs-400: 1.125rem;   /* 18px — card and section titles            */
+    --fs-500: 1.375rem;   /* 22px — page title                         */
+    --fs-600: 1.75rem;    /* 28px — stat values                        */
+    --fs-700: 2.25rem;    /* 36px — hero                               */
+
+    --fw-regular: 400;
+    --fw-medium: 500;
+    --fw-semibold: 600;
+    --fw-bold: 700;
+
+    /* Arabic needs more leading than Latin at the same size. These are the
+       Arabic-first values; `:root:lang(en)` tightens them below. */
+    --lh-tight: 1.45;     /* headings, single-line chrome */
+    --lh-normal: 1.75;    /* UI text */
+    --lh-loose: 2;        /* multi-line Arabic content: DM templates, bubbles */
+
+    /* ─── Space ──────────────────────────────────────────────────────────────
+       A 4px base, eight steps. Replaces 2,4,6,8,10,12,14,16,18,20,24,28,32,36,
+       40 and 48px used interchangeably across the pages. */
+    --space-1: 0.25rem;   /*  4 */
+    --space-2: 0.5rem;    /*  8 */
+    --space-3: 0.75rem;   /* 12 */
+    --space-4: 1rem;      /* 16 */
+    --space-5: 1.5rem;    /* 24 */
+    --space-6: 2rem;      /* 32 */
+    --space-7: 3rem;      /* 48 */
+    --space-8: 4rem;      /* 64 */
+
+    /* ─── Radius ─────────────────────────────────────────────────────────── */
+    --radius-xs: 6px;
+    --radius-sm: 10px;
+    --radius-md: 14px;
+    --radius-lg: 18px;
+    --radius-xl: 24px;
+    --radius-pill: 999px;
+
+    /* ─── Layout ─────────────────────────────────────────────────────────── */
+    --sidebar-width: 268px;
+    --header-height: 76px;
+    --tap-target: 44px;
+    --measure: 68ch;
+
+    /* ─── Motion ─────────────────────────────────────────────────────────── */
+    --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+    --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+    --motion-fast: 120ms;
+    --motion-base: 200ms;
+    --motion-slow: 320ms;
+
+    /* ─── Brand (platform) ───────────────────────────────────────────────────
+       Instagram #E1306C and Facebook #1877F2 were hardcoded in five places
+       each, and again inside two Chart.js config blocks. */
+    --brand-instagram: #e1306c;
+    --brand-instagram-soft: rgba(225, 48, 108, 0.14);
+    --brand-instagram-text: #ff75a6;
+    --brand-facebook: #1877f2;
+    --brand-facebook-soft: rgba(24, 119, 242, 0.14);
+    --brand-facebook-text: #6fa8ff;
+    --brand-on-solid: #ffffff;
+
+    /* ─── Chart series ───────────────────────────────────────────────────────
+       Read by js/charts.js through getComputedStyle, so the charts follow the
+       theme instead of carrying their own duplicated hex values. */
+    --chart-positive: #2dd4a7;
+    --chart-negative: #f87171;
+    --chart-grid: rgba(255, 255, 255, 0.07);
+    --chart-tick: #9aa7b8;
+}
+
+/* ─── Dark theme (default, and the product's identity) ─────────────────── */
+:root,
+:root[data-theme='dark'] {
+    color-scheme: dark;
+
+    --surface-page: #08080d;
+    --surface-sunken: #0c0c13;
+    --surface-raised: #12121b;
+    --surface-overlay: #171722;
+    --surface-glass: rgba(255, 255, 255, 0.032);
+    --surface-glass-hover: rgba(255, 255, 255, 0.06);
+    --surface-scrim: rgba(3, 3, 6, 0.72);
+
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.16);
+
+    /* Contrast on --surface-page: strong 16.8:1, default 9.4:1, muted 5.7:1.
+       The old --text-muted was #475569 at 2.64:1 and carried form hints, empty
+       states, table headers and every timestamp. */
+    --text-strong: #f2f5f9;
+    --text-default: #c6cedb;
+    --text-muted: #8d9aab;
+    --text-on-accent: #ffffff;
+
+    --accent: #7c81f2;
+    --accent-hover: #9ba0ff;
+    --accent-soft: rgba(124, 129, 242, 0.16);
+    --accent-ring: rgba(124, 129, 242, 0.35);
+    --accent-text: #a8acff;
+
+    --success: #2dd4a7;
+    --success-soft: rgba(45, 212, 167, 0.14);
+    --success-text: #5ce3bd;
+    --danger: #f2565b;
+    --danger-soft: rgba(242, 86, 91, 0.14);
+    --danger-text: #ff8b8f;
+    --warning: #f0a92b;
+    --warning-soft: rgba(240, 169, 43, 0.14);
+    --warning-text: #ffc266;
+    --info: #55a8f5;
+    --info-soft: rgba(85, 168, 245, 0.14);
+    --info-text: #8fc6ff;
+
+    --gradient-brand: linear-gradient(135deg, #6366f1, #8b5cf6 55%, #a855f7);
+    --gradient-brand-soft: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(168, 85, 247, 0.06));
+
+    --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --elev-2: 0 8px 24px -12px rgba(0, 0, 0, 0.7);
+    --elev-3: 0 24px 60px -24px rgba(0, 0, 0, 0.8);
+    --elev-glow: 0 10px 34px -14px var(--accent-ring);
+
+    --chart-grid: rgba(255, 255, 255, 0.07);
+    --chart-tick: #9aa7b8;
+}
+
+/* ─── Light theme ────────────────────────────────────────────────────────────
+   Applied when the OS asks for light and the operator has not pinned a theme,
+   or when they pin light explicitly. Glass is inverted rather than reused:
+   a white-alpha overlay on a light page is invisible. */
+@media (prefers-color-scheme: light) {
+    :root:not([data-theme='dark']) {
+        color-scheme: light;
+
+        --surface-page: #f4f5f9;
+        --surface-sunken: #eceef4;
+        --surface-raised: #ffffff;
+        --surface-overlay: #ffffff;
+        --surface-glass: rgba(255, 255, 255, 0.78);
+        --surface-glass-hover: rgba(255, 255, 255, 0.98);
+        --surface-scrim: rgba(24, 26, 38, 0.44);
+
+        --border-subtle: rgba(19, 24, 41, 0.1);
+        --border-strong: rgba(19, 24, 41, 0.2);
+
+        /* On --surface-page #f4f5f9: strong 14.9:1, default 8.6:1, muted 4.9:1. */
+        --text-strong: #14182a;
+        --text-default: #3c4558;
+        --text-muted: #5f6a7d;
+        --text-on-accent: #ffffff;
+
+        --accent: #4f46e5;
+        --accent-hover: #4338ca;
+        --accent-soft: rgba(79, 70, 229, 0.1);
+        --accent-ring: rgba(79, 70, 229, 0.3);
+        --accent-text: #4338ca;
+
+        --success: #0f8f6c;
+        --success-soft: rgba(15, 143, 108, 0.12);
+        --success-text: #0b6f53;
+        --danger: #cf2f3c;
+        --danger-soft: rgba(207, 47, 60, 0.1);
+        --danger-text: #b31f2c;
+        --warning: #9a6408;
+        --warning-soft: rgba(154, 100, 8, 0.12);
+        --warning-text: #7d5106;
+        --info: #1a6fc4;
+        --info-soft: rgba(26, 111, 196, 0.1);
+        --info-text: #155a9f;
+
+        --brand-instagram-soft: rgba(225, 48, 108, 0.1);
+        --brand-instagram-text: #b81d55;
+        --brand-facebook-soft: rgba(24, 119, 242, 0.1);
+        --brand-facebook-text: #0f5bc0;
+
+        --gradient-brand: linear-gradient(135deg, #4f46e5, #7c3aed 55%, #9333ea);
+        --gradient-brand-soft: linear-gradient(135deg, rgba(79, 70, 229, 0.1), rgba(147, 51, 234, 0.04));
+
+        --elev-1: 0 1px 2px rgba(19, 24, 41, 0.08);
+        --elev-2: 0 10px 26px -16px rgba(19, 24, 41, 0.34);
+        --elev-3: 0 26px 60px -28px rgba(19, 24, 41, 0.4);
+        --elev-glow: 0 10px 30px -16px var(--accent-ring);
+
+        --chart-positive: #0f8f6c;
+        --chart-negative: #cf2f3c;
+        --chart-grid: rgba(19, 24, 41, 0.09);
+        --chart-tick: #5f6a7d;
+    }
+}
+
+/* The same block again for an explicitly pinned light theme, so the toggle
+   works on a machine whose OS is in dark mode. Kept verbatim rather than
+   factored into a class: a `[data-theme]` selector and a media query cannot
+   share a declaration block without a preprocessor, and there is none here. */
+:root[data-theme='light'] {
+    color-scheme: light;
+
+    --surface-page: #f4f5f9;
+    --surface-sunken: #eceef4;
+    --surface-raised: #ffffff;
+    --surface-overlay: #ffffff;
+    --surface-glass: rgba(255, 255, 255, 0.78);
+    --surface-glass-hover: rgba(255, 255, 255, 0.98);
+    --surface-scrim: rgba(24, 26, 38, 0.44);
+
+    --border-subtle: rgba(19, 24, 41, 0.1);
+    --border-strong: rgba(19, 24, 41, 0.2);
+
+    --text-strong: #14182a;
+    --text-default: #3c4558;
+    --text-muted: #5f6a7d;
+    --text-on-accent: #ffffff;
+
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --accent-soft: rgba(79, 70, 229, 0.1);
+    --accent-ring: rgba(79, 70, 229, 0.3);
+    --accent-text: #4338ca;
+
+    --success: #0f8f6c;
+    --success-soft: rgba(15, 143, 108, 0.12);
+    --success-text: #0b6f53;
+    --danger: #cf2f3c;
+    --danger-soft: rgba(207, 47, 60, 0.1);
+    --danger-text: #b31f2c;
+    --warning: #9a6408;
+    --warning-soft: rgba(154, 100, 8, 0.12);
+    --warning-text: #7d5106;
+    --info: #1a6fc4;
+    --info-soft: rgba(26, 111, 196, 0.1);
+    --info-text: #155a9f;
+
+    --brand-instagram-soft: rgba(225, 48, 108, 0.1);
+    --brand-instagram-text: #b81d55;
+    --brand-facebook-soft: rgba(24, 119, 242, 0.1);
+    --brand-facebook-text: #0f5bc0;
+
+    --gradient-brand: linear-gradient(135deg, #4f46e5, #7c3aed 55%, #9333ea);
+    --gradient-brand-soft: linear-gradient(135deg, rgba(79, 70, 229, 0.1), rgba(147, 51, 234, 0.04));
+
+    --elev-1: 0 1px 2px rgba(19, 24, 41, 0.08);
+    --elev-2: 0 10px 26px -16px rgba(19, 24, 41, 0.34);
+    --elev-3: 0 26px 60px -28px rgba(19, 24, 41, 0.4);
+    --elev-glow: 0 10px 30px -16px var(--accent-ring);
+
+    --chart-positive: #0f8f6c;
+    --chart-negative: #cf2f3c;
+    --chart-grid: rgba(19, 24, 41, 0.09);
+    --chart-tick: #5f6a7d;
+}
+
+/* Latin UI runs tighter than Arabic at the same size. */
+:root:lang(en) {
+    --lh-tight: 1.3;
+    --lh-normal: 1.55;
+    --lh-loose: 1.7;
+}
+
+/* Honour the OS setting. The dashboard animated a pulsing login glow, a
+   blinking status dot, typing dots and a counter tween with no escape hatch. */
+@media (prefers-reduced-motion: reduce) {
+    :root {
+        --motion-fast: 1ms;
+        --motion-base: 1ms;
+        --motion-slow: 1ms;
+    }
+}

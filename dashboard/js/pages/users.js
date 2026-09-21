@@ -21,7 +21,7 @@ const UsersPage = {
 
     async render() {
         const container = document.getElementById('page-container');
-        container.innerHTML = UI.loader('Loading users…');
+        container.innerHTML = UI.loader();
 
         try {
             const result = await API.getAdminUsers();
@@ -30,17 +30,13 @@ const UsersPage = {
             if (err.status === 403 || err.status === 404) {
                 App.dropAdminAccess();
                 UI.renderError(container, {
-                    title: 'User administration is not available',
-                    message: 'This account is not a platform administrator, or this deployment does not serve the admin API yet.',
+                    title: t('users.unavailableTitle'),
+                    message: t('tenants.unavailableBody'),
                     icon: 'shield-off',
                 });
                 return;
             }
-            UI.renderError(
-                container,
-                { title: 'Could not load users', message: err.message },
-                () => this.render()
-            );
+            UI.renderError(container, { title: t('users.loadFailed'), message: err.message }, () => this.render());
             return;
         }
 
@@ -48,28 +44,28 @@ const UsersPage = {
 
         container.innerHTML = esc(html`
             <div class="page-toolbar">
-                <p class="page-toolbar-count">${users.length} user${users.length !== 1 ? 's' : ''}</p>
-                <button type="button" class="btn btn-primary btn-sm" data-action="users:showCreateModal">
-                    <i data-lucide="user-plus" aria-hidden="true"></i> New User
-                </button>
+                <p class="page-toolbar-count">${t('users.count', { count: users.length })}</p>
+                <div class="toolbar-actions">
+                    <button type="button" class="btn btn-primary btn-sm" data-action="users:showCreateModal">
+                        <i data-lucide="user-plus" aria-hidden="true"></i> ${t('users.new')}
+                    </button>
+                </div>
             </div>
 
-            <div class="table-card glass-card">
+            <div class="table-card surface">
                 <div class="table-wrapper">
                     <table class="data-table">
                         <thead><tr>
-                            <th scope="col">Email</th>
-                            <th scope="col">Role</th>
-                            <th scope="col">Last login</th>
-                            <th scope="col">Tenants</th>
-                            <th scope="col" aria-label="Actions"></th>
+                            <th scope="col">${t('users.table.email')}</th>
+                            <th scope="col">${t('users.table.role')}</th>
+                            <th scope="col">${t('users.table.lastLogin')}</th>
+                            <th scope="col">${t('users.table.tenants')}</th>
+                            <th scope="col"><span class="sr-only">${t('tenants.table.actions')}</span></th>
                         </tr></thead>
                         <tbody>
                             ${users.map((u) => this.renderRow(u))}
                             ${users.length === 0 ? html`
-                                <tr><td colspan="5" class="table-empty-cell">
-                                    No user accounts yet — the shared dashboard password is still the only way in.
-                                </td></tr>
+                                <tr><td colspan="5" class="table-empty-cell">${t('users.empty')}</td></tr>
                             ` : ''}
                         </tbody>
                     </table>
@@ -86,31 +82,33 @@ const UsersPage = {
         const role = String(this.pick(u, 'role') || 'user');
         const isAdmin = role === 'platform_admin';
         const lastLogin = this.pick(u, 'last_login_at', 'lastLoginAt', 'last_login');
-        const age = UI.relativeAge(lastLogin, { neverText: 'Never signed in', warnMs: Infinity, staleMs: Infinity });
+        const age = UI.relativeAge(lastLogin, {
+            neverText: t('users.neverSignedIn'), warnMs: Infinity, staleMs: Infinity,
+        });
         const memberships = this.pick(u, 'memberships', 'tenants');
 
         return html`
             <tr>
-                <td><span class="user-email" dir="auto">${email}</span></td>
-                <td><span class="role-chip ${isAdmin ? html.raw('role-admin') : ''}">${isAdmin ? 'Platform admin' : role}</span></td>
-                <td style="white-space:nowrap;" title="${lastLogin ? age.title : ''}">
-                    ${lastLogin ? UI.formatDate(lastLogin) : 'Never'}
+                <td>${UI.ltr(email)}</td>
+                <td><span class="role-chip ${isAdmin ? html.raw('role-admin') : ''}">${isAdmin ? t('users.admin') : role}</span></td>
+                <td class="nowrap" title="${lastLogin ? age.title : ''}">
+                    ${lastLogin ? UI.formatDate(lastLogin) : t('common.never')}
                 </td>
                 <td class="user-tenants">
                     ${Array.isArray(memberships) && memberships.length > 0
-                        ? memberships.map((m) => html`<span class="scope-chip" dir="auto">${
+                        ? memberships.map((m) => html`<span class="chip" dir="auto">${
                             (typeof m === 'string' ? m : (m.name || m.tenant_name || m.creator_id || m.tenant_id || '—'))
                           }</span>`)
-                        : html`<span class="text-muted-sm">None</span>`}
+                        : html`<span class="text-meta">${t('common.none')}</span>`}
                 </td>
                 <td>
                     <div class="row-actions">
                         <button type="button" class="icon-btn" data-action="users:showMembershipModal" data-id="${id}"
-                                aria-label="Grant ${email} access to a tenant" title="Grant tenant access">
+                                aria-label="${t('users.grant', { email })}" title="${t('users.grant', { email })}">
                             <i data-lucide="link" aria-hidden="true"></i>
                         </button>
                         <button type="button" class="icon-btn icon-btn-danger" data-action="users:revoke" data-id="${id}"
-                                data-email="${email}" aria-label="Revoke all sessions for ${email}" title="Revoke sessions">
+                                data-email="${email}" aria-label="${t('users.revoke', { email })}" title="${t('users.revoke', { email })}">
                             <i data-lucide="log-out" aria-hidden="true"></i>
                         </button>
                     </div>
@@ -120,6 +118,17 @@ const UsersPage = {
     },
 
     // ─── Actions ─────────────────────────────────────────────────────────────
+
+    modalHeader(title) {
+        return html`
+            <div class="modal-header">
+                <h2 class="modal-title">${title}</h2>
+                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+        `;
+    },
 
     /**
      * Tenant options for the two modals. Falls back to the session's own tenant
@@ -142,41 +151,38 @@ const UsersPage = {
     async showCreateModal() {
         const tenants = await this.loadTenantOptions();
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">New User</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
+            ${this.modalHeader(t('users.createTitle'))}
             <form id="user-create-form" data-submit="users:handleCreate">
                 <div class="form-group">
-                    <label class="form-label" for="user-email">Email</label>
-                    <input class="form-input" id="user-email" name="email" type="email"
+                    <label class="form-label" for="user-email">${t('users.email')}</label>
+                    <input class="field" id="user-email" name="email" type="email" dir="ltr"
                            autocomplete="off" spellcheck="false" placeholder="name@example.com" required>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="user-password">Password</label>
-                    <input class="form-input" id="user-password" name="password" type="password"
+                    <label class="form-label" for="user-password">${t('users.password')}</label>
+                    <input class="field" id="user-password" name="password" type="password" dir="ltr"
                            autocomplete="new-password" minlength="12" required>
-                    <p class="form-hint">At least 12 characters. Send it to them over a channel you trust; they can change it later.</p>
+                    <p class="form-hint">${t('users.passwordHint')}</p>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="user-role">Role</label>
-                    <select class="form-input" id="user-role" name="role">
-                        <option value="user" selected>User — only the tenants you grant</option>
-                        <option value="platform_admin">Platform admin — every tenant, plus this page</option>
+                    <label class="form-label" for="user-role">${t('users.role')}</label>
+                    <select class="select" id="user-role" name="role">
+                        <option value="user" selected>${t('users.roleUser')}</option>
+                        <option value="platform_admin">${t('users.roleAdmin')}</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="user-tenant">First tenant <span class="label-optional">(optional)</span></label>
-                    <select class="form-input" id="user-tenant" name="creator_id">
-                        <option value="" selected>None — grant access later</option>
-                        ${tenants.map((t) => html`<option value="${this.pick(t, 'id', 'creator_id')}">${this.pick(t, 'name') || this.pick(t, 'id')}</option>`)}
+                    <label class="form-label" for="user-tenant">
+                        ${t('users.firstTenant')} <span class="label-optional">${t('common.optional')}</span>
+                    </label>
+                    <select class="select" id="user-tenant" name="creator_id">
+                        <option value="" selected>${t('users.noTenantYet')}</option>
+                        ${tenants.map((x) => html`<option value="${this.pick(x, 'id', 'creator_id')}">${this.pick(x, 'name') || this.pick(x, 'id')}</option>`)}
                     </select>
                 </div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="user-plus" aria-hidden="true"></i> Create</button>
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary"><i data-lucide="user-plus" aria-hidden="true"></i> ${t('common.create')}</button>
                 </div>
             </form>
         `);
@@ -197,11 +203,11 @@ const UsersPage = {
             if (creatorId) payload.creator_id = creatorId;
             await API.createAdminUser(payload);
             UI.closeModal();
-            UI.toast('User created.');
+            UI.toast(t('users.created'));
             this.render();
         } catch (err) {
             if (submit) submit.disabled = false;
-            UI.toast(err.message || 'Could not create the user.', 'error');
+            UI.toast(err.message || t('users.createFailed'), 'error');
         }
     },
 
@@ -212,34 +218,29 @@ const UsersPage = {
         const tenants = await this.loadTenantOptions();
 
         UI.showModal(html`
-            <div class="modal-header">
-                <h2 class="modal-title">Grant Tenant Access</h2>
-                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="Close dialog">
-                    <i data-lucide="x" aria-hidden="true"></i>
-                </button>
-            </div>
+            ${this.modalHeader(t('users.membershipTitle'))}
             <form id="user-membership-form" data-submit="users:handleMembership" data-id="${id}">
-                <p class="form-hint" style="margin-bottom:16px;" dir="auto">${email}</p>
+                <p class="form-hint mbe-4">${UI.ltr(email)}</p>
                 <div class="form-group">
-                    <label class="form-label" for="membership-tenant">Tenant</label>
-                    <select class="form-input" id="membership-tenant" name="creator_id" required>
+                    <label class="form-label" for="membership-tenant">${t('users.membershipTenant')}</label>
+                    <select class="select" id="membership-tenant" name="creator_id" required>
                         ${tenants.length === 0
-                            ? html`<option value="">No tenants available</option>`
-                            : tenants.map((t) => html`<option value="${this.pick(t, 'id', 'creator_id')}">${this.pick(t, 'name') || this.pick(t, 'id')}</option>`)}
+                            ? html`<option value="">${t('users.noTenants')}</option>`
+                            : tenants.map((x) => html`<option value="${this.pick(x, 'id', 'creator_id')}">${this.pick(x, 'name') || this.pick(x, 'id')}</option>`)}
                     </select>
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="membership-role">Role in this tenant</label>
-                    <select class="form-input" id="membership-role" name="role">
-                        <option value="owner" selected>Owner</option>
-                        <option value="member">Member</option>
+                    <label class="form-label" for="membership-role">${t('users.membershipRole')}</label>
+                    <select class="select" id="membership-role" name="role">
+                        <option value="owner" selected>${t('users.roleOwner')}</option>
+                        <option value="member">${t('users.roleMember')}</option>
                     </select>
-                    <p class="form-hint">A label only — access is the membership itself, not this value.</p>
+                    <p class="form-hint">${t('users.membershipHint')}</p>
                 </div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">Cancel</button>
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
                     <button type="submit" class="btn btn-primary" ${tenants.length === 0 ? html.raw('disabled') : ''}>
-                        <i data-lucide="link" aria-hidden="true"></i> Grant
+                        <i data-lucide="link" aria-hidden="true"></i> ${t('users.grantBtn')}
                     </button>
                 </div>
             </form>
@@ -255,24 +256,24 @@ const UsersPage = {
         try {
             await API.createUserMembership(id, { creator_id: creatorId, role: (data.get('role') || 'owner').toString() });
             UI.closeModal();
-            UI.toast('Access granted.');
+            UI.toast(t('users.granted'));
             this.render();
         } catch (err) {
-            UI.toast(err.message || 'Could not grant access.', 'error');
+            UI.toast(err.message || t('users.grantFailed'), 'error');
         }
     },
 
     async revoke(btn) {
-        const email = btn.dataset.email || 'this user';
-        if (!confirm(`Revoke every session for ${email}? They will be signed out everywhere immediately.`)) return;
+        const email = btn.dataset.email || '';
+        if (!confirm(t('users.revokeConfirm', { email }))) return;
         btn.disabled = true;
         try {
             await API.revokeUserSessions(btn.dataset.id);
-            UI.toast('Sessions revoked.');
+            UI.toast(t('users.revoked'));
             this.render();
         } catch (err) {
             btn.disabled = false;
-            UI.toast(err.message || 'Could not revoke sessions.', 'error');
+            UI.toast(err.message || t('users.revokeFailed'), 'error');
         }
     },
 };
@@ -281,7 +282,7 @@ const UsersPage = {
  *  surface their own failures rather than dying in an unhandled rejection. */
 const reportFailure = (promise) => {
     if (promise && typeof promise.catch === 'function') {
-        promise.catch((err) => UI.toast((err && err.message) || 'Something went wrong.', 'error'));
+        promise.catch((err) => UI.toast((err && err.message) || t('common.error'), 'error'));
     }
 };
 
