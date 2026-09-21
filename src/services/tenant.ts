@@ -303,21 +303,34 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
 
 // ─── Tenant predicates for SQL ──────────────────────────────────────────────────────────
 //
-// v12 added `creator_id` to `interactions` and `messages` and backfilled it, so the obvious
-// filter is `i.creator_id = $n`. It is not sufficient *yet*: the webhook writers
-// (src/webhook/comments.ts, src/webhook/messaging.ts) still INSERT without the column, so
-// every row arriving right now is NULL. Filtering on the column alone would empty the
-// dashboard of today's activity — a regression that looks exactly like the webhook having
-// stopped, which is the single hardest failure in this project to diagnose.
+// v12 added `creator_id` to `interactions` and `messages` and backfilled it. This predicate
+// used to match the direct column and then fall back, for NULLs only, to the relationship the
+// v12 backfill itself used — because at the time the webhook writers still INSERTed without
+// the column, so every row arriving *then* was NULL and filtering on the column alone would
+// have emptied the dashboard of that day's activity.
 //
-// So each predicate matches the direct column and falls back, only for NULLs, to the
-// relationship the v12 backfill itself used. Once the writers set `creator_id`, delete the
-// second half of each predicate; the first half is already correct.
+// That is no longer true, and the fallback has been removed. Both writers now set the column
+// explicitly (src/webhook/comments.ts:166, src/webhook/messaging.ts:175 and :388), and the
+// live database was audited read-only: 0 of 96 `interactions` rows and 0 of 12 `messages` rows
+// have a NULL `creator_id`, and the fallback's own EXISTS clause rescued 0 rows. So it was
+// matching nothing while forcing every query through it to give up
+// `idx_interactions_creator` — a sequential scan to find rows that do not exist.
+
+/**
+ * Rows of `interactions` (aliased `i`) owned by the tenant named by a SQL expression.
+ *
+ * `tenantExpr` is interpolated into SQL, so it must be a literal written here in the source —
+ * `'$1'`, `'c.id'` — and never a value that came from a request. The cross-tenant health query
+ * needs the correlated form (`c.id`), which a bound parameter cannot express; every other
+ * caller wants a parameter and uses `interactionsOwnedBy` below.
+ */
+export function interactionsOwnedByExpr(tenantExpr: string): string {
+    return `i.creator_id = ${tenantExpr}`;
+}
 
 /** Rows of `interactions` (aliased `i`) owned by the tenant bound at `$n`. */
 export function interactionsOwnedBy(n: number): string {
-    return `(i.creator_id = $${n} OR (i.creator_id IS NULL AND EXISTS (
-        SELECT 1 FROM campaigns tc WHERE tc.id = i.campaign_id AND tc.creator_id = $${n})))`;
+    return interactionsOwnedByExpr(`$${n}`);
 }
 
 // `messages` has no equivalent helper because nothing reads it by tenant directly: the inbox

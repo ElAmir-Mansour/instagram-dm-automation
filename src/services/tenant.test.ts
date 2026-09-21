@@ -8,7 +8,9 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { assertTenantAccess, checkSessionValidity, interactionsOwnedBy } from './tenant.js';
+import {
+    assertTenantAccess, checkSessionValidity, interactionsOwnedBy, interactionsOwnedByExpr,
+} from './tenant.js';
 
 /** A membership lookup that answers yes only for the pairs it was given. */
 function membershipsOf(...pairs: [string, string][]) {
@@ -31,6 +33,19 @@ describe('assertTenantAccess', () => {
 
         assert.equal(allowed, true);
         assert.equal(calls.length, 0, 'admin must not need a membership lookup');
+    });
+
+    it('still lets a platform_admin in after every membership is revoked', async () => {
+        // This is what `DELETE /api/admin/users/:id/memberships/:creatorId` relies on, and why
+        // that route is deliberately NOT guarded against admin lockout the way the role and
+        // active flags are: a platform_admin reaches every tenant with no memberships at all,
+        // so removing their last one cannot lock anybody out of anything.
+        const { lookup } = membershipsOf();
+
+        assert.equal(
+            await assertTenantAccess({ userId: 'u-1', role: 'platform_admin', tenantId: 't-9' }, lookup),
+            true
+        );
     });
 
     it('lets a user act as a tenant they hold a membership in', async () => {
@@ -145,8 +160,7 @@ describe('interactionsOwnedBy', () => {
 
         assert.match(sql, /i\.creator_id = \$3/);
         assert.equal(sql.includes('$1'), false, 'no stray placeholder from a copied predicate');
-        // Two references, both $3: the direct column and the campaign fallback.
-        assert.equal(sql.split('$3').length - 1, 2);
+        assert.equal(sql.split('$3').length - 1, 1);
     });
 
     it('interpolates only the placeholder number, never a value', () => {
@@ -155,13 +169,22 @@ describe('interactionsOwnedBy', () => {
         assert.equal(interactionsOwnedBy(12).includes('$12'), true);
     });
 
-    it('falls back through campaigns for rows the webhook wrote without a creator_id', () => {
-        // src/webhook/comments.ts still inserts interactions without creator_id. Filtering on
-        // the column alone would hide today's activity, which is indistinguishable from the
-        // webhook having silently stopped — the failure this project is worst at diagnosing.
+    it('no longer carries the campaigns fallback, so the index can be used', () => {
+        // It used to match `creator_id IS NULL` and join through `campaigns`, for rows the
+        // webhook wrote before it set the column. Both writers set it now, and a read-only
+        // audit of the live database found 0 of 96 interactions and 0 of 12 messages with a
+        // NULL creator_id — so the fallback rescued nothing and cost every query the use of
+        // `idx_interactions_creator`. If a NULL-writing path is ever reintroduced, this test
+        // is the thing that should be reconsidered along with it.
         const sql = interactionsOwnedBy(1);
 
-        assert.match(sql, /i\.creator_id IS NULL/);
-        assert.match(sql, /FROM campaigns/);
+        assert.equal(sql.includes('IS NULL'), false);
+        assert.equal(sql.includes('campaigns'), false);
+    });
+
+    it('takes a correlated expression for the cross-tenant health query', () => {
+        // `/api/admin/ops` reports every tenant in one statement, so the tenant reference has
+        // to be a column from the outer query rather than a bound parameter.
+        assert.equal(interactionsOwnedByExpr('c.id'), 'i.creator_id = c.id');
     });
 });

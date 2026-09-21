@@ -8,9 +8,17 @@ import type { Request, Response, NextFunction } from 'express';
  * any Vercel serverless instance can independently verify the token
  * without needing shared state.
  *
- * Token format: <timestamp>.<hmac_signature>
- * - timestamp: when the token was created (unix ms)
- * - hmac_signature: HMAC-SHA256 of the timestamp, signed with DASHBOARD_PASSWORD
+ * Token format: <payload>.<hmac_signature>
+ * - payload: base64url of a JSON `SessionPayload` — who this is, which tenant they are acting
+ *   as, their `token_version`, and `iat` (issued-at, unix ms)
+ * - hmac_signature: HMAC-SHA256 of the payload string, keyed on
+ *   `DASHBOARD_PASSWORD:META_APP_SECRET`
+ *
+ * This described a bare `<timestamp>.<hmac>` until the payload started carrying an identity.
+ * The stale docstring was not harmless: two tests derived a "different" body with
+ * `Number(body) ± n`, which is `NaN` on a base64url string, so they were rejected by the
+ * signature check and never exercised the TTL they claimed to test. Removing the expiry check
+ * entirely left the suite green.
  */
 
 const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
@@ -66,6 +74,19 @@ declare global {
 
 function sign(data: string): string {
     return crypto.createHmac('sha256', getSecret()).update(data).digest('hex');
+}
+
+/**
+ * HMAC an arbitrary string with the session signing secret.
+ *
+ * Exported for the erasure preview token (src/services/erasure.ts), which needs a short-lived
+ * signed claim that is not a session and not a download token. It signs rather than exporting
+ * `getSecret()` so the secret itself never leaves this module — the same reason the download
+ * token helpers live here instead of at their call site. Callers must namespace their own
+ * payload (`erasure:v1:...`) so a token minted for one purpose cannot verify for another.
+ */
+export function signWithSessionSecret(data: string): string {
+    return sign(data);
 }
 
 /** Create a stateless signed token carrying who this is and which tenant they are acting as. */

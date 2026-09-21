@@ -232,6 +232,60 @@ function enforceMetaConstraints(response: AiResponse): AiResponse {
  * @param overrides Substitutes the stored prompt/knowledge base for this call only, without
  *                  writing to `ai_agents`. Used by the Settings "test" endpoint.
  */
+/** The persona the sandbox runs against when no agent row exists yet. */
+const SANDBOX_FALLBACK_AGENT = {
+    system_prompt: 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.',
+    knowledge_base: '',
+    model: DEFAULT_MODEL,
+    temperature: DEFAULT_TEMPERATURE as number | null,
+};
+
+/** The fields the generator reads off an agent row. */
+export interface AgentSettings {
+    system_prompt: string;
+    knowledge_base: string | null;
+    model: string | null;
+    temperature: number | null;
+}
+
+export type AgentDecision =
+    | { speak: false; reason: 'unconfigured' | 'disabled' }
+    | { speak: true; agent: AgentSettings };
+
+/**
+ * Whether this creator's agent should answer, and with what.
+ *
+ * Extracted from `generateAiResponse` because it is the whole safety rule and it had no test —
+ * and because both halves of it have been wrong in production.
+ *
+ * The `is_active` filter used to be in the WHERE clause, so a *disabled* agent returned zero
+ * rows and was indistinguishable from an *unconfigured* one; the `|| default` below then
+ * answered the customer anyway with a generic persona and an empty knowledge base, and the
+ * toggle changed who replied rather than whether anyone did. That was fixed for the disabled
+ * case by selecting the column instead of filtering on it.
+ *
+ * The unconfigured case was left substituting, and it is the more dangerous of the two: a
+ * tenant created through `POST /api/admin/tenants` had no `ai_agents` row at all, so there was
+ * no `is_active` for the off switch to be false on. Their bot answered their real customers in
+ * a persona nobody chose, while `dm.sent` logged success, an outbound `messages` row was
+ * written and the inbox showed a reply — every layer reporting that it had worked.
+ *
+ * Saying nothing is the right default for an account nobody has configured, and the caller
+ * already honours it: src/webhook/messaging.ts leaves the message unanswered rather than
+ * inventing an outbound turn.
+ *
+ * The sandbox is the one exception, and it has to be: `overrides` means the dashboard's test
+ * box, where trying a prompt out *before* configuring an agent is exactly the point.
+ */
+export function decideAgent(stored: AgentSettings & { is_active?: boolean } | null | undefined, isSandbox: boolean): AgentDecision {
+    if (isSandbox) {
+        return { speak: true, agent: stored ?? SANDBOX_FALLBACK_AGENT };
+    }
+    if (!stored) return { speak: false, reason: 'unconfigured' };
+    if (stored.is_active === false) return { speak: false, reason: 'disabled' };
+    return { speak: true, agent: stored };
+}
+
 export async function generateAiResponse(
     conversationId: string,
     userMessage: string,
@@ -261,18 +315,16 @@ export async function generateAiResponse(
     // silently makes the tool that helps you decide return nothing.
     const isSandbox = overrides !== undefined;
 
-    if (stored && stored.is_active === false && !isSandbox) {
-        log('debug', 'ai.disabled', { creator_id: creatorId });
+    const decision = decideAgent(stored, isSandbox);
+    if (!decision.speak) {
+        // `warn` for unconfigured, `debug` for disabled: a tenant that switched their agent
+        // off is doing what the toggle is for, while a newly onboarded tenant receiving DMs
+        // with no agent at all is something to go and fix.
+        log(decision.reason === 'unconfigured' ? 'warn' : 'debug', `ai.${decision.reason}`,
+            { creator_id: creatorId });
         return null;
     }
-
-    // Only reached when the creator has never configured an agent at all.
-    const agent = stored || {
-        system_prompt: 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.',
-        knowledge_base: '',
-        model: DEFAULT_MODEL,
-        temperature: DEFAULT_TEMPERATURE
-    };
+    const agent = decision.agent;
 
     // 2. Fetch recent conversation history
     const historyRows = await queryRows<HistoryRow>(

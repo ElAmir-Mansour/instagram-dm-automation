@@ -46,7 +46,14 @@ export interface JobPayloads {
     };
 }
 
-export type JobStatus = 'pending' | 'running' | 'done' | 'failed';
+/**
+ * `cancelled` is terminal and operator-initiated: `POST /api/admin/jobs/:id/cancel` sets it on
+ * a pending job the operator has decided must never run. It is a distinct value rather than a
+ * reuse of `failed` because the failed list is the queue's work list, and a deliberate
+ * cancellation does not belong on it. Nothing on a hot path can see it — the claim filters
+ * `pending`, the reaper `running`, the retention sweep `done` — so the row is inert.
+ */
+export type JobStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
 
 /** A claimed job, as the runner sees it. */
 export interface Job<K extends JobKind = JobKind> {

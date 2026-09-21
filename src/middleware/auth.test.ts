@@ -30,6 +30,21 @@ function fakeReq(authorization?: string): Request {
     return { headers } as unknown as Request;
 }
 
+/**
+ * A correctly signed token issued `ageMs` ago.
+ *
+ * Signing it here rather than mutating a real token is the only way to test the TTL:
+ * `verifySession` checks the signature first, so an edited payload is rejected before the
+ * expiry is ever consulted. The formula is duplicated deliberately and minimally — the same
+ * technique the future-dated test already uses.
+ */
+function staleToken(ageMs: number): string {
+    const body = Buffer.from(JSON.stringify({ ...SESSION, iat: Date.now() - ageMs }))
+        .toString('base64url');
+    const signature = createHmac('sha256', `${PASSWORD}:${APP_SECRET}`).update(body).digest('hex');
+    return `${body}.${signature}`;
+}
+
 function runAuth(authorization?: string): { status: number | null; nextCalls: number } {
     const result = { status: null as number | null, nextCalls: 0 };
     const res = {
@@ -81,19 +96,33 @@ describe('session tokens', () => {
     });
 
     it('rejects a signature lifted onto a different body', () => {
-        const [body, signature] = newToken().split('.') as [string, string];
-        const other = (Number(body) - 1000).toString();
+        // Both bodies are real, correctly formed payloads — the point is that a signature is
+        // bound to the one it was made over. `Number(body) - 1000` used to stand in for "a
+        // different body", which on a base64url payload is the string "NaN": still rejected,
+        // but by the shape check, so this proved nothing about signature binding.
+        const signature = newToken().split('.')[1] as string;
+        const otherBody = createSession({ ...SESSION, tenantId: 't-2' }).split('.')[0] as string;
 
-        assert.equal(runAuth(`Bearer ${other}.${signature}`).status, 401);
+        assert.equal(runAuth(`Bearer ${otherBody}.${signature}`).status, 401);
     });
 
     it('rejects a token older than the 24h TTL', () => {
-        // Expiry is checked before the signature, so an out-of-date body reaches the TTL
-        // guard regardless of what the signature says.
-        const [body, signature] = newToken().split('.') as [string, string];
-        const stale = (Number(body) - 25 * 60 * 60 * 1000).toString();
+        // Correctly signed, and stale. This is the assertion that has to be real: the
+        // signature is checked BEFORE the expiry in verifySession, so a body that does not
+        // verify never reaches the TTL guard at all. The previous version sent
+        // `Bearer NaN.<sig>` and passed on the signature check — with the expiry check
+        // deleted outright, the whole suite stayed green and every session became permanent.
+        const stale = staleToken(25 * 60 * 60 * 1000);
 
-        assert.equal(runAuth(`Bearer ${stale}.${signature}`).status, 401);
+        assert.equal(runAuth(`Bearer ${stale}`).status, 401);
+    });
+
+    it('accepts a correctly signed token from just inside the TTL', () => {
+        // The other half of the boundary. Without this, an expiry check that rejected
+        // *everything* would also pass the test above.
+        const fresh = staleToken(23 * 60 * 60 * 1000);
+
+        assert.equal(runAuth(`Bearer ${fresh}`).nextCalls, 1);
     });
 
     it('rejects a token signed under a different secret', () => {
