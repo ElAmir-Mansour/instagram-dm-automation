@@ -119,6 +119,72 @@ const RESPONSE_SCHEMA = {
 };
 
 /**
+ * Force whatever Gemini returned into a payload Meta will actually accept.
+ *
+ * `responseSchema` is a strong constraint and not a guarantee. The failure modes seen in
+ * practice, every one of which used to reach `toMetaMessage` unchecked:
+ *
+ *   - `message_type: "carousel"` with `carousel_elements` absent or empty. `toMetaMessage`
+ *     builds `attachment.payload.elements = undefined`, and Meta answers "param message must
+ *     be a non-empty object" — a message the operator cannot trace back to the model.
+ *   - `message_type: "quick_reply"` with no `quick_replies`.
+ *   - `text` returned as a number, or `quick_replies[].title` as one. `enforceMetaConstraints`
+ *     then called `.substring` on it and threw a TypeError from inside the success path, which
+ *     surfaced as `dm.pipeline_failed` with a message about `substring` and no mention of
+ *     Gemini at all.
+ *   - A model that ignores the enum and invents a fourth `message_type`.
+ *
+ * Every case degrades to a plain text reply rather than throwing. The person on the other end
+ * gets the words the model wrote, which is what they were waiting for; the structure was
+ * always a presentation detail. A throw here would be a silence instead.
+ */
+export function coerceAiResponse(parsed: unknown): AiResponse {
+    const raw = (parsed ?? {}) as Record<string, unknown>;
+
+    // Numbers and booleans are coerced; objects and arrays are not, because `String({})` is
+    // `[object Object]` and sending that to a customer is worse than sending nothing.
+    const text = typeof raw.text === 'string'
+        ? raw.text
+        : (typeof raw.text === 'number' || typeof raw.text === 'boolean') ? String(raw.text) : '';
+
+    const quickReplies = Array.isArray(raw.quick_replies)
+        ? raw.quick_replies.filter(
+            (qr): qr is { title: string; payload: string } =>
+                Boolean(qr) && typeof (qr as any).title === 'string' && typeof (qr as any).payload === 'string'
+        )
+        : [];
+
+    const carousel = Array.isArray(raw.carousel_elements)
+        ? raw.carousel_elements.filter(
+            (el): el is AiResponse['carousel_elements'] extends (infer E)[] | undefined ? E : never =>
+                Boolean(el) && typeof (el as any).title === 'string'
+        )
+        : [];
+
+    if (raw.message_type === 'quick_reply' && quickReplies.length > 0) {
+        return { message_type: 'quick_reply', text, quick_replies: quickReplies };
+    }
+
+    // A carousel carries no `text` field — Meta rejects `text` alongside `attachment` — so the
+    // text is kept on the object for the disclosure path, which needs somewhere to put the
+    // standalone line, and dropped by `toMetaMessage`.
+    if (raw.message_type === 'carousel' && carousel.length > 0) {
+        return { message_type: 'carousel', text, carousel_elements: carousel };
+    }
+
+    if (raw.message_type !== 'text') {
+        log('warn', 'ai.response_downgraded', {
+            requested_type: typeof raw.message_type === 'string' ? raw.message_type : null,
+            quick_replies: quickReplies.length,
+            carousel_elements: carousel.length,
+            has_text: text.length > 0,
+        });
+    }
+
+    return { message_type: 'text', text };
+}
+
+/**
  * Truncates strings to respect Meta's strict character constraints.
  */
 function enforceMetaConstraints(response: AiResponse): AiResponse {
@@ -301,8 +367,32 @@ export async function generateAiResponse(
             );
         }
 
-        const parsedResponse: AiResponse = JSON.parse(rawJsonText);
-        return enforceMetaConstraints(parsedResponse);
+        // `JSON.parse` of model output is the one place in this function where the type
+        // annotation used to be pure fiction: it asserted `AiResponse` over whatever came
+        // back. `coerceAiResponse` makes the claim true.
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(rawJsonText);
+        } catch (parseErr) {
+            // `responseMimeType: application/json` makes this rare, not impossible — a reply
+            // truncated by MAX_TOKENS is valid text and invalid JSON. Worth its own message,
+            // because "Unexpected end of JSON input" points nowhere on its own.
+            throw new Error(
+                `Gemini returned text that is not valid JSON (${(parseErr as Error)?.message}). ` +
+                `First 200 characters: ${String(rawJsonText).slice(0, 200)}`
+            );
+        }
+
+        const coerced = coerceAiResponse(parsed);
+
+        // An empty reply is a failure, not a message. Sending it produces a Meta rejection
+        // ("param message must be a non-empty object") attributed to the send rather than to
+        // the model, and writing it to `messages` would feed a blank turn back as history.
+        if (!coerced.text.trim() && coerced.message_type === 'text') {
+            throw new Error('Gemini returned a structured response with no usable text.');
+        }
+
+        return enforceMetaConstraints(coerced);
 
     } catch (err: any) {
         // This used to swallow rate limits, network faults, safety blocks and JSON syntax

@@ -13,7 +13,10 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { consumeDownloadToken, createDownloadToken } from '../middleware/auth.js';
-import { exportScopeFor, parseExportDownload } from './api.js';
+import {
+    exportScopeFor, formatPublishedIds, parseExportDownload, publishedPlatforms,
+    unsupportedPlatformCombination,
+} from './api.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
 const TENANT_B = '22222222-2222-4222-8222-222222222222';
@@ -89,5 +92,79 @@ describe('export download binding', () => {
         // If two tenants shared a scope string, either token would verify for both.
         assert.notEqual(exportScopeFor(TENANT_A), exportScopeFor(TENANT_B));
         assert.equal(exportScopeFor(TENANT_A).includes(TENANT_A), true);
+    });
+});
+
+/**
+ * The partial-publish bug, which is the one on this branch with a consequence that cannot be
+ * undone: a duplicate post on a live Instagram or Facebook account.
+ *
+ * `platform: 'both'` publishes Facebook first. A Facebook success followed by an Instagram
+ * failure used to throw away the Facebook post id and record the row as FAILED — so the post
+ * was live, the dashboard said it was not, and editing the row (which flips FAILED back to
+ * PENDING) republished it to Facebook a second time.
+ */
+describe('publishedPlatforms', () => {
+    it('reads back both ids from the string the publisher writes', () => {
+        assert.deepEqual(publishedPlatforms('FB:123 | IG:456'), { fb: '123', ig: '456' });
+    });
+
+    it('reads back a single-platform publish', () => {
+        assert.deepEqual(publishedPlatforms('FB:123'), { fb: '123', ig: null });
+        assert.deepEqual(publishedPlatforms('IG:456'), { fb: null, ig: '456' });
+    });
+
+    it('handles the Facebook composite id format', () => {
+        // Facebook returns page-scoped ids as `<pageId>_<postId>`, which contains an
+        // underscore and no space — the id must survive intact or the skip check misfires.
+        assert.deepEqual(publishedPlatforms('FB:102938_5566'), { fb: '102938_5566', ig: null });
+    });
+
+    it('finds nothing in an empty or absent value, so a fresh post publishes normally', () => {
+        for (const raw of [null, undefined, '', 42, {}, 'FAILED']) {
+            assert.deepEqual(publishedPlatforms(raw), { fb: null, ig: null },
+                `input ${JSON.stringify(raw)}`);
+        }
+    });
+
+    it('does not mistake an id containing FB: for a platform marker', () => {
+        // `IG:` must be matched at a boundary, not anywhere in the string.
+        assert.deepEqual(publishedPlatforms('IG:abcFB:def'), { fb: null, ig: 'abcFB:def' });
+    });
+});
+
+describe('formatPublishedIds', () => {
+    it('round-trips through publishedPlatforms', () => {
+        for (const [fb, ig] of [['1', '2'], ['1', null], [null, '2']] as [string | null, string | null][]) {
+            assert.deepEqual(publishedPlatforms(formatPublishedIds(fb, ig)), { fb, ig });
+        }
+    });
+
+    it('is empty when nothing was published', () => {
+        assert.equal(formatPublishedIds(null, null), '');
+    });
+});
+
+describe('unsupportedPlatformCombination', () => {
+    it('rejects a story aimed at Facebook, where it silently cannot work', () => {
+        // `publishFacebookPost` throws on 'story' — Page stories need /photo_stories and
+        // /video_stories, which this service does not implement. On `both`, Facebook runs
+        // first, so the throw means Instagram is never attempted even though it would have
+        // worked. Caught at create time instead of once a day in a cron log.
+        assert.ok(unsupportedPlatformCombination('facebook', 'story'));
+        assert.ok(unsupportedPlatformCombination('both', 'story'));
+    });
+
+    it('allows an Instagram story, which is implemented', () => {
+        assert.equal(unsupportedPlatformCombination('instagram', 'story'), null);
+    });
+
+    it('allows every other combination unchanged', () => {
+        for (const platform of ['instagram', 'facebook', 'both']) {
+            for (const postType of ['image', 'video', 'reel']) {
+                assert.equal(unsupportedPlatformCombination(platform, postType), null,
+                    `${platform}/${postType}`);
+            }
+        }
     });
 });

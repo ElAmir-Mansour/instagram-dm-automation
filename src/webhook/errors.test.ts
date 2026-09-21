@@ -1,16 +1,31 @@
 /**
  * The status strings this produces are load-bearing — the dashboard filters on them — and the
- * awkward part is that `src/services/instagram.ts` rewraps every axios failure into a plain
- * Error with the Meta code interpolated into the message, so the structured shape is usually
- * gone by the time a real failure arrives here.
+ * awkward part used to be that `src/services/instagram.ts` rewrapped every axios failure into
+ * a plain Error with the Meta code interpolated into the message, so the structured shape was
+ * gone by the time a real failure arrived here. It now throws `MetaApiError`, which keeps the
+ * code and subcode; both shapes are exercised below because a thrown value from anywhere else
+ * still arrives flat.
+ *
+ * `permanent` is no longer decorative. The comment pipeline reads it to decide whether to
+ * leave the interaction PENDING for a retry or record it as a final failure, so a
+ * misclassification is either a customer who is never answered or a dead token retried
+ * against Meta three more times.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { MetaApiError } from '../services/instagram.js';
 import { classifyDmError } from './errors.js';
 
-/** What instagram.ts actually throws after a failed send. */
+/** A bare Error carrying only the interpolated code — anything not from instagram.ts. */
 function rewrapped(code: number | 'N/A', message = 'Some Meta message'): Error {
     return new Error(`DM Send Failed: ${message} (Code: ${code})`);
+}
+
+/** What instagram.ts actually throws now: the same message, with the code still attached. */
+function metaApiError(code: number, subcode?: number): MetaApiError {
+    return new MetaApiError(`DM Send Failed: Some Meta message (Code: ${code})`, {
+        response: { data: { error: { code, error_subcode: subcode } } },
+    });
 }
 
 /** The raw axios shape, as it looks before instagram.ts rewraps it. */
@@ -44,13 +59,31 @@ describe('classifyDmError', () => {
         assert.equal(classifyDmError(structured(200)).permanent, true);
     });
 
-    it('cannot see a dead token once instagram.ts has rewrapped it', () => {
-        // Only 10903 has a string fallback, so a rewrapped 190 or 200 — the two codes the
-        // retry policy treats as fatal — comes back permanent: false. Nothing reads the flag
-        // today, which is the only reason this is harmless.
-        assert.equal(classifyDmError(rewrapped(190)).permanent, false);
-        assert.equal(classifyDmError(rewrapped(200)).permanent, false);
+    it('sees a dead token through the error instagram.ts actually throws', () => {
+        // This is the regression that matters: MetaApiError keeps `metaCode`, so a dead token
+        // is permanent rather than being retried three more times against a token Meta has
+        // already refused.
+        assert.equal(classifyDmError(metaApiError(190)).permanent, true);
+        assert.equal(classifyDmError(metaApiError(190, 463)).permanent, true);
+        assert.equal(classifyDmError(metaApiError(200)).permanent, true);
+        assert.equal(classifyDmError(metaApiError(10903)).status, 'USER_BLOCKED_DMS');
+    });
+
+    it('still sees a dead token in a message-only error, as a backstop', () => {
+        // A flat Error from somewhere that predates MetaApiError. The string check is the only
+        // signal left, and getting this wrong means a dead token is treated as transient and
+        // hammered on every retry.
+        assert.equal(classifyDmError(rewrapped(190)).permanent, true);
+        assert.equal(classifyDmError(rewrapped(200)).permanent, true);
         assert.equal(classifyDmError(rewrapped(190)).status, 'FAILED');
+    });
+
+    it('keeps a transient code transient in both shapes', () => {
+        // The other direction, and the one that costs a customer: code 4 is Meta's rate
+        // limit. Misreading it as permanent is a comment that is never answered.
+        assert.equal(classifyDmError(metaApiError(4)).permanent, false);
+        assert.equal(classifyDmError(rewrapped(4)).permanent, false);
+        assert.equal(classifyDmError(metaApiError(2)).permanent, false);
     });
 
     it('survives a thrown value that is not an Error', () => {

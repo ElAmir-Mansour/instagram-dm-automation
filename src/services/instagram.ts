@@ -3,6 +3,42 @@ import { log } from '../utils/log.js';
 
 export const API_VERSION = 'v21.0';
 
+/**
+ * A Meta failure, rewrapped for readability but not flattened.
+ *
+ * Every function here used to `throw new Error('... (Code: 190)')`, which reads well in
+ * `interactions.error_log` and destroys everything a caller could act on: `response.data.error`
+ * was gone, so `isPermanentMetaError` returned false for a dead token, and the `error_subcode`
+ * that distinguishes "expired" from "password changed" from "app uninstalled" never left this
+ * file. `src/webhook/errors.test.ts` documented that as a known hole.
+ *
+ * The message is unchanged — the dashboard renders it — and the code, subcode and original
+ * error now ride along beside it.
+ */
+export class MetaApiError extends Error {
+    readonly metaCode: number | undefined;
+    readonly metaSubcode: number | undefined;
+
+    constructor(message: string, source: any) {
+        super(message, { cause: source });
+        this.name = 'MetaApiError';
+        const metaError = source?.response?.data?.error;
+        this.metaCode = typeof metaError?.code === 'number' ? metaError.code : undefined;
+        this.metaSubcode = typeof metaError?.error_subcode === 'number'
+            ? metaError.error_subcode
+            : undefined;
+    }
+}
+
+/** `[Private Reply Failed: ... (Code: 190)]` — the shape the dashboard has always shown. */
+function metaFailure(prefix: string, error: any): MetaApiError {
+    const metaError = error?.response?.data?.error;
+    return new MetaApiError(
+        `${prefix}: ${metaError?.message || error?.message} (Code: ${metaError?.code ?? 'N/A'})`,
+        error
+    );
+}
+
 const GRAPH_BASE = `https://graph.facebook.com/${API_VERSION}`;
 
 /**
@@ -79,10 +115,7 @@ export async function sendPrivateReply(
         );
         return response.data;
     } catch (error: any) {
-        const metaError = error.response?.data?.error;
-        throw new Error(
-            `Private Reply Failed [${endpoint}]: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
-        );
+        throw metaFailure(`Private Reply Failed [${endpoint}]`, error);
     }
 }
 
@@ -115,10 +148,7 @@ export async function sendPublicReply(
         );
         return response.data;
     } catch (error: any) {
-        const metaError = error.response?.data?.error;
-        throw new Error(
-            `Public Reply Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
-        );
+        throw metaFailure('Public Reply Failed', error);
     }
 }
 
@@ -156,10 +186,7 @@ export async function sendDirectMessage(
         );
         return response.data;
     } catch (error: any) {
-        const metaError = error.response?.data?.error;
-        throw new Error(
-            `DM Send Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
-        );
+        throw metaFailure('DM Send Failed', error);
     }
 }
 
@@ -185,10 +212,7 @@ export async function likeComment(
         );
         return response.data;
     } catch (error: any) {
-        const metaError = error.response?.data?.error;
-        throw new Error(
-            `Comment Auto-Like Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
-        );
+        throw metaFailure('Comment Auto-Like Failed', error);
     }
 }
 
@@ -237,10 +261,7 @@ export async function publishFacebookPost(
         );
         return response.data; // returns { id: "post_id" }
     } catch (error: any) {
-        const metaError = error.response?.data?.error;
-        throw new Error(
-            `Facebook Publish Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
-        );
+        throw metaFailure('Facebook Publish Failed', error);
     }
 }
 
@@ -388,9 +409,6 @@ export async function publishInstagramPost(
         // caller requeue rather than guess; flattening it into a string Error loses that.
         if (error instanceof MediaProcessingTimeoutError) throw error;
 
-        const metaError = error.response?.data?.error;
-        throw new Error(
-            `Instagram Publish Failed: ${metaError?.message || error.message} (Code: ${metaError?.code || 'N/A'})`
-        );
+        throw metaFailure('Instagram Publish Failed', error);
     }
 }

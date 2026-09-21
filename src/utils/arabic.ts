@@ -29,6 +29,30 @@ function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/** The two ways a keyword can be tested. Mirrors `campaigns.match_mode` (migration v14). */
+export type KeywordMatchMode = 'substring' | 'word';
+
+export const KEYWORD_MATCH_MODES: readonly KeywordMatchMode[] = ['substring', 'word'];
+
+/**
+ * Coerce anything — a request body field, a column a query forgot to select, a row written
+ * before v14 — into a mode the matcher understands.
+ *
+ * Falls back to `'substring'` rather than throwing, and that direction is deliberate: this is
+ * called on the webhook's critical path, where the alternative to "match the way you always
+ * did" is "answer nobody". An unrecognised value is worth a look, not an outage — so callers
+ * that are validating user input should use {@link isKeywordMatchMode} and reject, while
+ * callers reading a row should use this.
+ */
+export function normalizeMatchMode(value: unknown): KeywordMatchMode {
+    return value === 'word' ? 'word' : 'substring';
+}
+
+/** True only for a value that is exactly one of the supported modes. For input validation. */
+export function isKeywordMatchMode(value: unknown): value is KeywordMatchMode {
+    return typeof value === 'string' && (KEYWORD_MATCH_MODES as readonly string[]).includes(value);
+}
+
 /**
  * Tests a normalized keyword against normalized comment text.
  *
@@ -46,7 +70,7 @@ function escapeRegExp(value: string): string {
 export function keywordMatches(
     normalizedText: string,
     normalizedKeyword: string,
-    mode: 'substring' | 'word' = 'substring'
+    mode: KeywordMatchMode = 'substring'
 ): boolean {
     // An empty keyword is a substring of everything, so a trailing comma in a campaign's
     // keyword list would otherwise fire on every comment that arrives.

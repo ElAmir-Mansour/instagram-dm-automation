@@ -27,13 +27,18 @@ interface JobDbRow {
     max_attempts: number;
     request_id: string | null;
     creator_id: string | null;
+    tenant_key: string | null;
 }
 
 export class PostgresJobQueue implements JobQueue {
     async enqueue<K extends JobKind>(input: EnqueueInput<K>): Promise<string | null> {
         const row = await queryOne<{ id: string }>(
-            `INSERT INTO jobs (kind, payload, creator_id, dedupe_key, run_after, max_attempts, request_id)
-             VALUES ($1, $2::jsonb, $3, $4, COALESCE($5, NOW()), COALESCE($6, 3), $7)
+            // `tenant_key` takes the creator id when no explicit key was given, so the fair
+            // claim can partition on the bare column and use its index. Doing the COALESCE
+            // here costs nothing; doing it in the claim's PARTITION BY would cost a sort on
+            // every claim.
+            `INSERT INTO jobs (kind, payload, creator_id, dedupe_key, run_after, max_attempts, request_id, tenant_key)
+             VALUES ($1, $2::jsonb, $3, $4, COALESCE($5, NOW()), COALESCE($6, 3), $7, COALESCE($8, $3::text))
              ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
              RETURNING id`,
             [
@@ -44,6 +49,7 @@ export class PostgresJobQueue implements JobQueue {
                 input.runAfter ?? null,
                 input.maxAttempts ?? null,
                 input.requestId ?? null,
+                input.tenantKey ?? null,
             ]
         );
 
@@ -64,20 +70,55 @@ export class PostgresJobQueue implements JobQueue {
     }
 
     async claim(limit: number): Promise<Job[]> {
+        // Fair across tenants, not first-come-first-served.
+        //
+        // This was `ORDER BY run_after` — strict FIFO — so a tenant whose reel just went
+        // viral fills the queue with ten thousand events and every other tenant's DMs wait
+        // behind all of them. Round-robin instead: rank each tenant's pending jobs
+        // oldest-first, then take every tenant's oldest job before anyone's second.
+        //
+        // `tenant_key` is the partition, and the enqueue writes `COALESCE(tenantKey,
+        // creatorId)` into it so that the COALESCE costs nothing here. Partitioning on the
+        // bare column is what lets `idx_jobs_claimable_fair (tenant_key, run_after) WHERE
+        // status = 'pending'` satisfy both the PARTITION BY and the ORDER BY without a sort.
+        // Jobs with no key at all form one group together, which is the conservative answer:
+        // they share a slot rather than each getting one.
+        //
+        // What makes the claim atomic is `AND status = 'pending'` on the UPDATE, not the
+        // ranking. If a concurrent drain took a row between this statement's snapshot and its
+        // write, the UPDATE waits on that row's lock and then re-evaluates its WHERE against
+        // the committed version — which now reads 'running', so the row is skipped and never
+        // returned twice. Two concurrent drains therefore split the work; they cannot both run
+        // the same job, which would be a duplicate DM to a real person.
+        //
+        // `FOR UPDATE SKIP LOCKED` is deliberately absent: Postgres rejects it outright in
+        // the presence of a window function ("FOR UPDATE is not allowed with window
+        // functions"), so the previous shape of this query could not have run at all. The
+        // guard above gives the same guarantee; the only thing lost is that a contending
+        // claimer waits a moment rather than skipping ahead, and that wait is the length of
+        // one autocommit UPDATE.
         const rows = await queryRows<JobDbRow & Record<string, unknown>>(
-            `UPDATE jobs
+            `WITH ranked AS (
+                 SELECT id,
+                        run_after,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY tenant_key
+                            ORDER BY run_after, created_at
+                        ) AS tenant_rank
+                   FROM jobs
+                  WHERE status = 'pending' AND run_after <= NOW()
+             ),
+             picked AS (
+                 SELECT id FROM ranked ORDER BY tenant_rank, run_after LIMIT $1
+             )
+             UPDATE jobs
                 SET status = 'running',
                     claimed_at = NOW(),
                     attempts = attempts + 1,
                     updated_at = NOW()
-              WHERE id IN (
-                    SELECT id FROM jobs
-                     WHERE status = 'pending' AND run_after <= NOW()
-                     ORDER BY run_after
-                     LIMIT $1
-                     FOR UPDATE SKIP LOCKED
-              )
-          RETURNING id, kind, payload, attempts, max_attempts, request_id, creator_id`,
+              WHERE id IN (SELECT id FROM picked)
+                AND status = 'pending'
+          RETURNING id, kind, payload, attempts, max_attempts, request_id, creator_id, tenant_key`,
             [limit]
         );
 
@@ -98,6 +139,7 @@ export class PostgresJobQueue implements JobQueue {
                 max_attempts: row.max_attempts,
                 request_id: row.request_id,
                 creator_id: row.creator_id,
+                tenant_key: row.tenant_key,
             });
         }
         return claimed;
@@ -163,6 +205,32 @@ export class PostgresJobQueue implements JobQueue {
             log('warn', 'job.reaped', { requeued, abandoned });
         }
         return requeued + abandoned;
+    }
+
+    /**
+     * Delete completed jobs.
+     *
+     * Named in ARCHITECTURE.md §9 as deliberately deferred: `done` rows accumulate forever, in
+     * the same 500MB tier as the video in `media_uploads`, and each one holds a verbatim Meta
+     * event — so this is a retention question and not only a storage one. Batched for the same
+     * reason `pruneRawPayloads` is: a first run against months of history must not be one
+     * DELETE inside an invocation with a wall clock, because a DELETE that times out rolls
+     * back entirely and never makes progress.
+     *
+     * Only `done`. A `failed` row is the one an operator needs to look at, and a `pending` or
+     * `running` row is live work.
+     */
+    async pruneCompleted(olderThanDays: number, limit: number): Promise<number> {
+        return queryCount(
+            `DELETE FROM jobs
+              WHERE id IN (
+                    SELECT id FROM jobs
+                     WHERE status = 'done'
+                       AND updated_at < NOW() - make_interval(days => $1)
+                     LIMIT $2
+              )`,
+            [olderThanDays, limit]
+        );
     }
 }
 

@@ -58,6 +58,8 @@ export interface Job<K extends JobKind = JobKind> {
     /** The correlation id of the request that enqueued this, when there was one. */
     request_id: string | null;
     creator_id: string | null;
+    /** The fair-queueing partition. See `EnqueueInput.tenantKey`. */
+    tenant_key: string | null;
 }
 
 export interface EnqueueInput<K extends JobKind = JobKind> {
@@ -70,6 +72,16 @@ export interface EnqueueInput<K extends JobKind = JobKind> {
      */
     dedupeKey?: string | undefined;
     creatorId?: string | undefined;
+    /**
+     * The partition the fair claim round-robins over.
+     *
+     * `creatorId` would be the natural key and is the wrong one here: resolving the tenant
+     * needs a database read, and the entire point of enqueueing is to acknowledge Meta before
+     * doing any — so every job the webhook writes has `creator_id` NULL, and partitioning on
+     * it puts all tenants in one group. `entry.id` (the Meta page id) is already in the
+     * payload, needs no lookup, and is stable per tenant.
+     */
+    tenantKey?: string | undefined;
     /** Earliest execution time. Omitted means "now"; this is what makes the queue a scheduler. */
     runAfter?: Date | undefined;
     maxAttempts?: number | undefined;
@@ -108,11 +120,16 @@ export type JobHandlerRegistry = { [K in JobKind]: JobHandler<K> };
 export interface JobQueue {
     /** Returns the job id, or null when the dedupe key meant nothing was enqueued. */
     enqueue<K extends JobKind>(input: EnqueueInput<K>): Promise<string | null>;
-    /** Atomically take up to `limit` due jobs. Safe against concurrent drains. */
+    /**
+     * Atomically take up to `limit` due jobs, fairly across tenants. Safe against concurrent
+     * drains.
+     */
     claim(limit: number): Promise<Job[]>;
     complete(jobId: string): Promise<void>;
     /** Record a failure and either schedule a retry after `retryInSeconds` or give up. */
     fail(jobId: string, error: string, retryInSeconds: number | null): Promise<void>;
     /** Return claims older than the visibility timeout to `pending`. Returns how many. */
     reapStale(olderThanSeconds: number): Promise<number>;
+    /** Delete `done` rows older than the retention window. Returns how many. */
+    pruneCompleted(olderThanDays: number, limit: number): Promise<number>;
 }
