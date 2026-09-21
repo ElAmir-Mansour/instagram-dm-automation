@@ -16,8 +16,15 @@
 import { queryOne, queryRows } from '../db/query.js';
 import { pool } from '../config/db.js';
 
-/** Conservative buffer under Meta's ~200/hr automation ceiling. */
-const DEFAULT_HOURLY_LIMIT = 180;
+/**
+ * Conservative buffer under Meta's ~200/hr automation ceiling.
+ *
+ * Exported because the number is meaningless on its own: the dashboard shows "41 of 180", not
+ * "41", and src/routes/admin.ts kept its own copy of `180` with a comment saying it mirrored
+ * this one. Two constants that must agree is one constant too many — the copy is now an
+ * import, so the dashboard cannot drift from what the limiter actually enforces.
+ */
+export const DEFAULT_HOURLY_LIMIT = 180;
 
 /**
  * The app-wide ceiling, shared by every tenant.

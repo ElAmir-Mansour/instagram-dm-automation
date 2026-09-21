@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { setLogSink } from '../utils/log.js';
-import { coerceAiResponse } from './ai.js';
+import { coerceAiResponse, decideAgent } from './ai.js';
 import { toMetaMessage } from '../webhook/meta-payload.js';
 
 // The downgrade path logs a warning by design; keep the assertions readable.
@@ -108,5 +108,86 @@ describe('coerceAiResponse', () => {
             assert.equal(result.message_type, 'text', `input ${JSON.stringify(input)}`);
             assert.equal(typeof result.text, 'string');
         }
+    });
+});
+
+/**
+ * Whether the agent is allowed to speak at all.
+ *
+ * Both halves of this rule have shipped broken. The disabled case was fixed by selecting
+ * `is_active` instead of filtering on it — before that, a switched-off agent returned zero
+ * rows and the fallback answered the customer anyway. The unconfigured case was left
+ * substituting, and it was worse: a tenant created through `POST /api/admin/tenants` had no
+ * `ai_agents` row, so there was nothing for the off switch to be false on, and their bot
+ * answered their real customers in a persona nobody chose while `dm.sent` logged success.
+ *
+ * Neither path had a test. This is that test.
+ */
+describe('decideAgent', () => {
+    const configured = {
+        is_active: true,
+        system_prompt: 'a real persona',
+        knowledge_base: 'real facts',
+        model: 'gemini-2.5-flash',
+        temperature: 0.2,
+    };
+
+    it('lets a configured, enabled agent speak with its own settings', () => {
+        const decision = decideAgent(configured, false);
+
+        assert.equal(decision.speak, true);
+        assert.equal(decision.speak && decision.agent.system_prompt, 'a real persona');
+        // A deliberate temperature must survive: `|| 0.7` used to turn a chosen 0 — picked
+        // precisely to stop the agent improvising about prices — back into 0.7.
+        assert.equal(decision.speak && decision.agent.temperature, 0.2);
+    });
+
+    it('says nothing for a creator with no agent row at all', () => {
+        // The bug. There is no `is_active` to be false on, so the disabled branch cannot help,
+        // and substituting a default persona means answering a stranger on a customer's
+        // account with words nobody approved.
+        assert.deepEqual(decideAgent(null, false), { speak: false, reason: 'unconfigured' });
+        assert.deepEqual(decideAgent(undefined, false), { speak: false, reason: 'unconfigured' });
+    });
+
+    it('says nothing for a disabled agent', () => {
+        assert.deepEqual(decideAgent({ ...configured, is_active: false }, false),
+            { speak: false, reason: 'disabled' });
+    });
+
+    it('never substitutes a fallback persona on a real customer path', () => {
+        // The specific regression to guard: whatever else changes here, a real inbound DM must
+        // never be answered with a prompt the tenant did not write.
+        for (const stored of [null, undefined, { ...configured, is_active: false }]) {
+            const decision = decideAgent(stored, false);
+            assert.equal(decision.speak, false, JSON.stringify(stored));
+        }
+    });
+
+    it('distinguishes unconfigured from disabled, because the fixes differ', () => {
+        // "Nobody has set this up" sends an operator to AI Settings; "somebody turned it off"
+        // means leave it alone. Collapsing them is what made the original bug invisible.
+        assert.notEqual(
+            (decideAgent(null, false) as { reason: string }).reason,
+            (decideAgent({ ...configured, is_active: false }, false) as { reason: string }).reason
+        );
+    });
+
+    it('still answers in the sandbox when nothing is configured', () => {
+        // The dashboard's test box has to work before an agent exists — trying a prompt out is
+        // how you decide what to configure. Its fallback persona never reaches a real person.
+        const decision = decideAgent(null, true);
+
+        assert.equal(decision.speak, true);
+        assert.equal(decision.speak && typeof decision.agent.system_prompt, 'string');
+    });
+
+    it('still answers in the sandbox when the agent is switched off', () => {
+        // Otherwise the toggle you are about to flip silently breaks the tool that helps you
+        // decide whether to flip it.
+        const decision = decideAgent({ ...configured, is_active: false }, true);
+
+        assert.equal(decision.speak, true);
+        assert.equal(decision.speak && decision.agent.system_prompt, 'a real persona');
     });
 });

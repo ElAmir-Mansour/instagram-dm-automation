@@ -12,10 +12,17 @@ import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
     assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache
 } from '../services/tenant.js';
-import { encryptSecret, decryptSecret, verifyPassword } from '../config/crypto.js';
+import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from '../config/crypto.js';
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
 import { runRetentionSweep } from '../services/retention.js';
-import { noteMetaFailure } from '../services/tokenHealth.js';
+import {
+    describeInspection, inspectionStatus, noteMetaFailure, recheckTenantToken,
+} from '../services/tokenHealth.js';
+import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
+import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
+import { passwordProblem } from '../services/adminGuards.js';
+import { queryOne } from '../db/query.js';
+import type { UserRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
@@ -813,12 +820,154 @@ router.post('/auth/switch-tenant', async (req, res) => {
     }
 });
 
+/**
+ * Change your own password.
+ *
+ * The dashboard has told operators they can do this for as long as `users.passwordHint` has
+ * existed. There was no password route anywhere in the app, so the UI was simply lying.
+ *
+ * Above `resolveTenant` on purpose: a user holding no membership still needs to be able to
+ * change their password, and behind it they would get a 409 instead.
+ */
+router.post('/auth/password', async (req, res) => {
+    try {
+        const session = req.session!;
+        const { currentPassword, newPassword } = req.body ?? {};
+
+        // A legacy shared-password session has no user row to change. Say so plainly rather
+        // than 404ing: on this deployment it is the *only* kind of session that exists, so
+        // "not found" would read as a bug in the endpoint.
+        if (!session.userId) {
+            res.status(400).json({
+                code: 'NO_USER_ACCOUNT',
+                error: 'This session was created with the shared dashboard password, which is not a user '
+                    + 'account and has no password to change here. Rotate DASHBOARD_PASSWORD in the '
+                    + 'environment, or create a user account and sign in with it.',
+            });
+            return;
+        }
+
+        // Same rule as user creation and the admin reset, from one place: three endpoints
+        // enforcing the same minimum with three copies of the check is how they drift.
+        const issue = passwordProblem(newPassword);
+        if (issue) {
+            res.status(400).json({ error: issue });
+            return;
+        }
+
+        const user = await queryOne<Pick<UserRow, 'id' | 'password_hash' | 'role' | 'token_version'>>(
+            'SELECT id, password_hash, role, token_version FROM users WHERE id = $1',
+            [session.userId]
+        );
+        if (!user) {
+            // This one IS a 401, and it is the only one on this route: the session names a
+            // user row that no longer exists, so the session genuinely is dead and the
+            // client's "clear the token and go to login" reflex is the correct response.
+            res.status(401).json({ error: 'Session expired or invalid — please login again.' });
+            return;
+        }
+
+        if (typeof currentPassword !== 'string' || !(await verifyPassword(currentPassword, user.password_hash))) {
+            // 400, deliberately NOT 401.
+            //
+            // The dashboard's shared client treats any 401 as "your session died": it clears
+            // the stored token and bounces to the login screen before a page's own handler
+            // runs. So answering 401 here would log an operator out for mistyping their
+            // current password — losing the form they were filling in, and looking like the
+            // product is broken rather than like a typo.
+            //
+            // 401 on an authenticated route has to mean exactly one thing, because the client
+            // is entitled to act on it without asking why. This is a validation failure: the
+            // caller is authenticated, and one of the values they sent is wrong.
+            //
+            // Not throttled: the caller already holds a valid session for this account, so
+            // this is not an authentication oracle.
+            res.status(400).json({ code: 'WRONG_CURRENT_PASSWORD', error: 'Current password is incorrect.' });
+            return;
+        }
+
+        if (currentPassword === newPassword) {
+            // Refused rather than accepted as a no-op: the write below invalidates every other
+            // session this user holds, and doing that for a change that changes nothing is a
+            // surprising way to be signed out on your phone.
+            res.status(400).json({ error: 'The new password is the same as the current one.' });
+            return;
+        }
+
+        const passwordHash = await hashPassword(newPassword);
+
+        // `token_version` bumps, which kills every session including this request's own token.
+        // A fresh one is minted below carrying the new version, so the caller stays signed in
+        // and everybody else is signed out — which is the whole point of changing a password.
+        const updated = await queryOne<Pick<UserRow, 'token_version'>>(
+            `UPDATE users SET password_hash = $2, token_version = token_version + 1
+              WHERE id = $1 RETURNING token_version`,
+            [user.id, passwordHash]
+        );
+
+        const token = createSession({
+            userId: user.id,
+            role: session.role,
+            tenantId: session.tenantId,
+            tokenVersion: updated?.token_version ?? user.token_version + 1,
+        });
+
+        const actor = await actorFromSession(session);
+        await writeAudit(actor, {
+            action: AUDIT_ACTIONS.userPasswordChange,
+            targetType: 'user',
+            targetId: user.id,
+            detail: { self_service: true, sessions_invalidated: true },
+        });
+
+        res.json({
+            message: 'Password updated. Every other session has been signed out.',
+            token,
+            expiresIn: '24h',
+        });
+    } catch (err) {
+        log('error', 'api.password_change_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to change the password.' });
+    }
+});
+
 // ─── Everything below acts as exactly one tenant ────────────────────────────
 // resolveTenant pins it and enforces the membership check, so no route has to remember to.
 // `getTenantId(req)` throws rather than falling back to "the first active creator" — that
 // silent fallback is the bug this whole layer exists to remove — which is why it is safe to
 // call inline inside a query.
 router.use(resolveTenant);
+
+// ─── Health ─────────────────────────────────────────────────────────────────
+//
+// The missing answer to "are webhooks still arriving?".
+//
+// Until now that question had no screen. `last_webhook_at` existed only on the platform-admin
+// tenants endpoint, so an ordinary operator — the person who would notice first — could not
+// see it at all; and this project's own notes call a webhook signature failure invisible,
+// because the 403 happens before anything touches the database and "rejected" looks exactly
+// like "nobody messaged us".
+//
+// Every field is read from columns, with no outbound Meta call, so the dashboard can poll it.
+// `GET /settings/token/status` is the endpoint that asks Meta, and it stays a deliberate act.
+
+router.get('/health/tenant', async (req, res) => {
+    try {
+        const health = await getTenantHealth(getTenantId(req));
+        if (!health) {
+            res.status(404).json({ error: 'Not found.' });
+            return;
+        }
+        res.json(health);
+    } catch (err) {
+        log('error', 'api.tenant_health_failed', describeError(err));
+        if (isMissingSchema(err)) {
+            res.status(500).json({ error: MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        res.status(500).json({ error: 'Failed to read tenant health.' });
+    }
+});
 
 // ─── Dashboard Stats ────────────────────────────────────────────────────────
 
@@ -1266,19 +1415,35 @@ router.get('/settings/token/status', async (req, res) => {
             });
 
             const data = debugRes.data.data;
+
+            // `describeInspection` rather than reading `data` field by field, so this endpoint
+            // and the re-check action cannot disagree about what a healthy token looks like —
+            // and so `data_access_expires_at` is finally read at all.
+            //
+            // That omission was the whole bug here. A never-expiring PAGE token reports
+            // `expires_at: 0`, so `expiresAt` was always null and the dashboard rendered
+            // "never expires" — while data access, which lapses 90 days after the account last
+            // re-authorised, ticked down unseen. `scripts/diagnose.mjs` has always reported it.
+            // When it lapses every Meta call returns code 190 and the product stops, with the
+            // dashboard still showing a valid token that never expires.
+            const inspection = describeInspection(data);
+
             await recordTokenStatus(
                 creatorId,
-                data.is_valid ? 'valid' : 'invalid',
-                data.is_valid ? null : 'Meta reported the token as not valid.'
+                inspectionStatus(inspection),
+                inspection.error
             );
             res.json({
-                status: data.is_valid ? 'valid' : 'invalid',
-                type: data.type,
-                expiresAt: data.expires_at ? new Date(data.expires_at * 1000).toISOString() : null,
-                scopes: data.scopes || [],
+                status: inspectionStatus(inspection),
+                type: inspection.type,
+                expiresAt: inspection.expiresAt?.toISOString() ?? null,
+                // Additive, and the field this endpoint was missing.
+                dataAccessExpiresAt: inspection.dataAccessExpiresAt?.toISOString() ?? null,
+                scopes: inspection.scopes,
+                missingScopes: inspection.missingScopes,
+                error: inspection.error,
                 instagramPageId: creator.instagram_page_id,
                 facebookPageId: creator.facebook_page_id,
-                pageId: creator.instagram_page_id,   // backwards compat
                 isActive: creator.is_active,
             });
         } catch (metaErr: any) {
@@ -1289,9 +1454,10 @@ router.get('/settings/token/status', async (req, res) => {
             res.json({
                 status: 'invalid',
                 message: 'Token validation failed — token may be expired or revoked.',
+                expiresAt: null,
+                dataAccessExpiresAt: null,
                 instagramPageId: creator.instagram_page_id,
                 facebookPageId: creator.facebook_page_id,
-                pageId: creator.instagram_page_id,
                 isActive: creator.is_active,
             });
         }
@@ -1387,6 +1553,21 @@ router.post('/settings/token', async (req, res) => {
 
         invalidateTenantCache();
 
+        // A token write is the highest-consequence settings change in the product — it decides
+        // whether anything works at all — and nothing recorded that it happened.
+        await writeAudit(await actorFromSession(req.session), {
+            action: AUDIT_ACTIONS.settingsTokenWrite,
+            targetType: 'creator',
+            targetId: creatorId,
+            // The *fact*, never the value. `credential_replaced` avoids the word "token" so
+            // the audit redaction pattern does not blank a boolean.
+            detail: {
+                credential_replaced: true,
+                credential_type: data.type,
+                scopes: data.scopes ?? [],
+            },
+        });
+
         res.json({
             message: 'Token updated successfully!',
             pageId: result.rows[0].instagram_page_id,
@@ -1397,6 +1578,43 @@ router.post('/settings/token', async (req, res) => {
     } catch (err: any) {
         log('error', 'token.update_failed', describeError(err));
         res.status(500).json({ error: err.response?.data?.error?.message || 'Failed to update token.' });
+    }
+});
+
+/**
+ * Re-check the acting tenant's token against Meta and record the answer.
+ *
+ * The counterpart of `POST /api/admin/tenants/:id/recheck-token`, for an operator who is only
+ * a member of their own tenant. It exists separately from `GET /settings/token/status` — which
+ * also calls Meta — because that one is a page render: it reports and forgets, so the two
+ * expiry dates never reached a column and `token_status` could only change as a side effect of
+ * somebody happening to open a page. This one is the explicit action, and it persists.
+ */
+router.post('/settings/token/recheck', async (req, res) => {
+    try {
+        const creatorId = getTenantId(req);
+        const result = await recheckTenantToken(creatorId);
+        if (!result) {
+            res.status(404).json({ error: 'No creator account found.' });
+            return;
+        }
+
+        const actor = await actorFromSession(req.session);
+        await writeAudit(actor, {
+            action: AUDIT_ACTIONS.settingsTokenRecheck,
+            targetType: 'creator',
+            targetId: creatorId,
+            detail: {
+                result_status: result.tokenStatus,
+                credential_type: result.tokenType,
+                missing_scopes: result.missingScopes,
+            },
+        });
+
+        res.json(result);
+    } catch (err) {
+        log('error', 'token.recheck_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to re-check the token.' });
     }
 });
 
@@ -1452,6 +1670,14 @@ router.post('/settings/token/extend', async (req, res) => {
                 [encryptedToken, creatorId]
             );
             invalidateTenantCache();
+
+            await writeAudit(await actorFromSession(req.session), {
+                action: AUDIT_ACTIONS.settingsTokenExtend,
+                targetType: 'creator',
+                targetId: creatorId,
+                detail: { credential_replaced: true },
+            });
+
             res.json({ message: 'Token successfully extended to a never-expiring token.' });
         } else {
             res.status(400).json({ error: 'Failed to obtain an extended token from Meta.' });
@@ -2183,6 +2409,15 @@ router.post('/settings/webhook-token', async (req, res) => {
         }
 
         invalidateTenantCache();
+
+        // The verify token decides whether Meta will accept a webhook subscription change at
+        // all, and production has had it empty before. Worth knowing who last set it.
+        await writeAudit(await actorFromSession(req.session), {
+            action: AUDIT_ACTIONS.settingsWebhookTokenWrite,
+            targetType: 'creator',
+            targetId: creatorId,
+            detail: { verify_value_changed: true, value_length: token.length },
+        });
 
         res.json({
             success: true,

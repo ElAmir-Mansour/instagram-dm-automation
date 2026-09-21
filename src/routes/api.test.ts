@@ -12,8 +12,13 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { consumeDownloadToken, createDownloadToken } from '../middleware/auth.js';
+import type { Request, Response } from 'express';
 import {
+    consumeDownloadToken, createDownloadToken, createLegacySession, requireAuth,
+} from '../middleware/auth.js';
+import { requireLiveSession, resolveTenant } from '../services/tenant.js';
+import adminRouter from './admin.js';
+import apiRouter, {
     exportScopeFor, formatPublishedIds, parseExportDownload, publishedPlatforms,
     unsupportedPlatformCombination,
 } from './api.js';
@@ -166,5 +171,133 @@ describe('unsupportedPlatformCombination', () => {
                     `${platform}/${postType}`);
             }
         }
+    });
+});
+
+/**
+ * The guards mounted on the API router, and the order they run in.
+ *
+ * This exists because both of them were deletable with the suite green. Verified by mutation:
+ * commenting out `router.use(requireLiveSession)` left 281/281 passing, and `users.token_version`
+ * — described elsewhere in this codebase as the only kill switch it has — stopped being
+ * enforced at all. Nothing asserted that the line was there, because every test of the rule
+ * tested `checkSessionValidity` in isolation, and the rule is only worth anything if something
+ * calls it.
+ *
+ * Asserted structurally, against the router's own middleware stack, because that is the thing
+ * that actually broke: the decision functions were all fine.
+ */
+describe('API router middleware stack', () => {
+    /** The router-level middleware, in mount order, ignoring routes. */
+    function middlewareOrder(): unknown[] {
+        return ((apiRouter as unknown as { stack: Array<{ handle: unknown; route?: unknown }> }).stack)
+            .filter((layer) => !layer.route)
+            .map((layer) => layer.handle);
+    }
+
+    it('mounts requireAuth, then requireLiveSession, then resolveTenant', () => {
+        const order = middlewareOrder();
+        const auth = order.indexOf(requireAuth);
+        const live = order.indexOf(requireLiveSession);
+        const tenant = order.indexOf(resolveTenant);
+
+        assert.ok(auth >= 0, 'requireAuth must be mounted on the API router');
+        assert.ok(live >= 0, 'requireLiveSession must be mounted — it is the token_version kill switch');
+        assert.ok(tenant >= 0, 'resolveTenant must be mounted');
+
+        assert.ok(live > auth, 'requireLiveSession must run after requireAuth, which sets req.session');
+        assert.ok(tenant > live,
+            'resolveTenant must run after requireLiveSession, or a revoked session would still '
+            + 'resolve a tenant and reach tenant-scoped data');
+    });
+
+    it('keeps the admin router above resolveTenant', () => {
+        // resolveTenant 409s when the deployment has no creator at all, which is precisely the
+        // state POST /api/admin/tenants exists to fix. Behind it, the first-run endpoint is
+        // unreachable on exactly the deployment that needs it.
+        // By reference, not by mount path: Express 5's Layer does not expose the path it was
+        // mounted at, and comparing the handle is the stronger assertion anyway.
+        const order = middlewareOrder();
+        const adminAt = order.indexOf(adminRouter as unknown as never);
+        const tenantAt = order.indexOf(resolveTenant);
+
+        assert.ok(adminAt >= 0, 'the admin router must be mounted');
+        assert.ok(adminAt < tenantAt, 'the admin router must be mounted above resolveTenant');
+    });
+});
+
+/**
+ * POST /api/auth/password — the route that made `users.passwordHint` stop being a lie.
+ *
+ * Only the branches that decide before any SQL are exercised here; there is no database in
+ * this suite. The password rule itself lives in `passwordProblem`
+ * (src/services/adminGuards.test.ts) so that this route, user creation and the admin reset
+ * cannot drift apart.
+ */
+describe('POST /auth/password', () => {
+    let savedPassword: string | undefined;
+    let savedAppSecret: string | undefined;
+
+    beforeEach(() => {
+        savedPassword = process.env.DASHBOARD_PASSWORD;
+        savedAppSecret = process.env.META_APP_SECRET;
+        process.env.DASHBOARD_PASSWORD = 'dashboard-password';
+        process.env.META_APP_SECRET = 'meta-app-secret';
+    });
+
+    afterEach(() => {
+        setEnv('DASHBOARD_PASSWORD', savedPassword);
+        setEnv('META_APP_SECRET', savedAppSecret);
+    });
+
+    function post(body: unknown, token: string): Promise<{ status: number; body: any }> {
+        return new Promise((resolve) => {
+            const req = {
+                method: 'POST', url: '/auth/password', originalUrl: '/api/auth/password',
+                body, query: {}, params: {},
+                headers: { authorization: `Bearer ${token}` },
+                socket: { remoteAddress: '127.0.0.1' },
+            } as unknown as Request;
+
+            const res = {
+                statusCode: 200,
+                status(code: number) { (this as any).statusCode = code; return this; },
+                json(payload: unknown) { resolve({ status: (this as any).statusCode, body: payload }); return this; },
+                setHeader() { return this; },
+            } as unknown as Response;
+
+            apiRouter(req, res, () => resolve({ status: 0, body: { fellThrough: true } }));
+        });
+    }
+
+    it('401s a request with no session at all', async () => {
+        const reply = await post({}, 'not-a-token');
+
+        assert.equal(reply.status, 401);
+    });
+
+    it('explains itself to a shared-password session instead of 404ing', async () => {
+        // The only kind of session that exists on this deployment: the `users` table is empty,
+        // so every operator today holds a legacy token with no user row behind it. "Not found"
+        // would read as a broken endpoint; this has to say what to do instead.
+        const reply = await post(
+            { currentPassword: 'x', newPassword: 'a-long-enough-password' },
+            createLegacySession('t-1')
+        );
+
+        assert.equal(reply.status, 400);
+        assert.equal(reply.body.code, 'NO_USER_ACCOUNT');
+        assert.match(reply.body.error, /shared dashboard password/);
+        assert.match(reply.body.error, /DASHBOARD_PASSWORD/);
+    });
+
+    it('never answers 401 for a validation failure', async () => {
+        // The dashboard's shared client clears the token and bounces to login on ANY 401,
+        // before a page's handler runs — so a 401 here logs an operator out for a typo.
+        // 401 on an authenticated route must mean "your session died" and nothing else.
+        const reply = await post({ newPassword: 'short' }, createLegacySession('t-1'));
+
+        assert.notEqual(reply.status, 401);
+        assert.equal(reply.status, 400);
     });
 });
