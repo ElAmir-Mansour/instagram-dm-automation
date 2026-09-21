@@ -19,7 +19,7 @@ const REQUIRED_VARS = [
     { key: 'INSTAGRAM_APP_SECRET', description: 'Instagram App Secret — the second webhook signing secret' },
     { key: 'GEMINI_API_KEY', description: 'Google Gemini API Key for AI direct messaging response generation' },
     { key: 'DASHBOARD_PASSWORD', description: 'Dashboard login password — also the session-token signing key' },
-    { key: 'CRON_SECRET', description: 'Bearer secret guarding /api/cron/publish' },
+    { key: 'CRON_SECRET', description: 'Bearer secret guarding /api/cron/publish AND /api/jobs/drain' },
 ];
 
 /** The fallback this app used to ship with. It is in the public repo's history, so it is a published password. */

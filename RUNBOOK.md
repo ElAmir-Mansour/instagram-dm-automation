@@ -530,18 +530,45 @@ The sweep runs once daily from the publish cron and converges rather than cleari
 day — up to 20 passes of 5,000 rows (`src/services/retention.ts:190-222`,
 `src/routes/api.ts:373`).
 
-> **Flagged, not fixed:** `.env.example` declares `RAW_PAYLOAD_RETENTION_DAYS` **twice** — once
-> empty at line 84 and again as `30` at line 90. Whichever wins depends on the parser, and the
-> two blocks give contradictory advice (90 recommended vs 30). Anyone copying the example gets
-> an ambiguous config. `ARCHITECTURE.md` recommends 90, the published page commits to 30; the
-> page wins, because it is the promise.
+> **Fixed 2026-09-21.** `.env.example` used to declare `RAW_PAYLOAD_RETENTION_DAYS` twice —
+> empty in one block and `30` in another, with contradictory advice (90 vs 30) — so which one
+> applied depended on the parser. It is now declared once, as `30`, because that is what the
+> published page commits to. The value is a promise to users, not a preference.
 
 ### Handling a request
 
-There is **no erasure endpoint and no tooling** — verified: nothing in `src/` issues a
-`DELETE FROM interactions`, `messages` or `conversations`. Erasure is manual SQL against the
-tenant's rows, matched on the username in `interactions` and the Meta-scoped user id in
-`conversations`/`messages`.
+**There is now tooling, as of 2026-09-21.** This section previously said there was none, and
+that erasure was manual SQL — true when written, false now. Use the dashboard: **Erasure**, the
+last item in the admin nav because it is the only hard DELETE in the product. It is backed by
+`src/services/erasure.ts` and `GET /api/admin/erasure/preview` + `POST /api/admin/erasure`,
+both `platform_admin` only.
+
+The flow is deliberately two-step, and there is no way to spell "delete this handle" in one
+request:
+
+1. **Preview** resolves the handle, counts what would go, writes nothing, and returns a
+   short-lived signed token bound to *that handle and those counts*.
+2. **Execute** accepts only a token. It re-resolves the target from inside the token, re-counts
+   within the deleting transaction, and refuses if anything moved.
+
+That drift check is not just a guard against a stale preview — it is what makes a replayed
+token harmless. Once the rows are gone the counts are zero, so the same token cannot delete a
+second person who later arrives under the same handle.
+
+It clears all four tables the published page names — `interactions`, `messages`,
+`conversations` and `dm_send_log` — which is the part manual SQL got wrong: the obvious
+statement clears `messages.text` and leaves `raw_payload` holding the same text as a verbatim
+JSONB copy of the Meta event, so the row still contains everything the person wrote plus their
+Meta user id.
+
+The preview deliberately returns **metadata only, never message bodies**. Usernames, IGSIDs,
+tenant names and timestamps are enough to confirm the right person; the text of what a private
+individual wrote does not need to be rendered into an admin page and a browser cache on its way
+to being deleted.
+
+Every execution is written to the audit log. If you still need raw SQL — for a case the tool
+cannot express — match on the username in `interactions` and the Meta-scoped user id in
+`conversations`/`messages`, and remember `raw_payload`.
 
 Before running anything, note what the page says is *retained*: message text and interaction
 logs are kept beyond 30 days so the account owner can read their own conversation history. Only
@@ -688,7 +715,9 @@ npm run typecheck    # tsc --noEmit
 npm test             # 281 unit tests, node:test via tsx
 ```
 
-Both pass on `main` as of 2026-09-21 (281 tests, 44 suites, 0 failures). There is **no build
+Both pass on `main` as of 2026-09-21 (417 tests, 80 suites, 0 failures). CI also runs four
+content guards — `check:assets`, `check:icons`, `check:contrast` and `check:i18n` — each added
+after a failure that nothing else could see. There is **no build
 step**: TypeScript runs through `ts-node/esm` locally and `@vercel/node` in production. The
 dashboard has no build and no typecheck, so a syntax error there ships silently and blanks the
 page — `find dashboard -name '*.js' | xargs -n1 node --check` is the only guard it has, and CI

@@ -217,7 +217,9 @@ which is the per-recipient cap working, not a fault.
   detector only fires on a real send failure (`src/services/tokenHealth.ts:47`). Data access
   on the current token lapses **2026-12-19** while `/debug_token` still reports it valid; see
   `RUNBOOK.md` §3.
-- **Data-subject erasure.** There is no erasure endpoint, and the retention sweep that the
+- **Data-subject erasure.** *Superseded 2026-09-21: there is now a two-step preview-then-execute
+  tool at Dashboard → Erasure, backed by `src/services/erasure.ts`. See RUNBOOK §7.* The
+  original note follows, for the retention half which still applies. The retention sweep that the
   published `/data-deletion` page depends on is a no-op until `RAW_PAYLOAD_RETENTION_DAYS` is
   set. See `RUNBOOK.md` §7.
 
