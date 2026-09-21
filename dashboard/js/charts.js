@@ -89,8 +89,12 @@ const Charts = {
     },
 
     font() {
-        // Cairo renders the Arabic legend labels; Inter has no Arabic glyphs.
-        return { family: I18N.isRtl() ? 'Cairo' : 'Inter', size: 12 };
+        // Chart.js takes a family NAME, not a CSS variable, so this cannot read
+        // --font-ui and has to name the face. Both are IBM Plex: the Arabic member
+        // for RTL (the Latin member has no Arabic glyphs) and the Latin member for
+        // LTR, which keeps chart labels in the same voice as the rest of the UI
+        // instead of falling back to a system font.
+        return { family: I18N.isRtl() ? 'IBM Plex Sans Arabic' : 'IBM Plex Sans', size: 12 };
     },
 
     /** Shared options for any cartesian chart. */
