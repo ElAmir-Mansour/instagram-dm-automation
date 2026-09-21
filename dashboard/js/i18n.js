@@ -321,6 +321,16 @@ I18N.strings = {
         'overview.stat.successRateSub': '{sent} ناجحة · {failed} فاشلة',
         'overview.stat.users': 'أشخاص وصلتهم',
         'overview.stat.campaigns': 'الحملات النشطة',
+
+        // ── Added for the page-lifecycle pass (focus restore, dirty guards,
+        //    stale-poll marker, clipped-text disclosure). ──────────────────
+        'common.loaded': 'تم التحميل',
+        'common.showFull': 'عرض النص كاملاً',
+        'common.discardConfirm': 'لديك تغييرات غير محفوظة. هل تريد إغلاق النافذة وفقدانها؟',
+        'ai.temperatureLabel': 'درجة الإبداع',
+        'ai.draftRestored': 'تمت استعادة التعديلات غير المحفوظة من آخر زيارة.',
+        'inbox.stale': 'توقف تحديث قائمة المحادثات — قد تكون هذه القائمة قديمة.',
+        'posts.liveEmptyCaveat': 'يُرجع الخادم قائمة فارغة في حالتين: ألا يوجد منشور فعلاً، أو أن ميتا رفضت الطلب — ورمز الوصول المنتهي يظهر هكذا تماماً. تحقق من الرمز قبل أن تفترض أن الحساب خالٍ.',
         'overview.stat.campaignsSub': '{count} تفاعل إجمالاً',
 
         'overview.chart.activity': 'نشاط الرسائل — آخر 7 أيام',
@@ -891,6 +901,16 @@ I18N.strings = {
         'overview.stat.successRateSub': '{sent} sent · {failed} failed',
         'overview.stat.users': 'People reached',
         'overview.stat.campaigns': 'Active campaigns',
+
+        // ── Added for the page-lifecycle pass (focus restore, dirty guards,
+        //    stale-poll marker, clipped-text disclosure). ──────────────────
+        'common.loaded': 'Loaded',
+        'common.showFull': 'Show the full text',
+        'common.discardConfirm': 'You have unsaved changes. Close and lose them?',
+        'ai.temperatureLabel': 'Temperature',
+        'ai.draftRestored': 'Your unsaved edits from last time were restored.',
+        'inbox.stale': 'The conversation list has stopped updating — it may be out of date.',
+        'posts.liveEmptyCaveat': 'The server returns an empty list both when nothing is published and when Meta rejected the request — an expired access token looks exactly like this. Check the token before assuming the account is empty.',
         'overview.stat.campaignsSub': '{count} interactions in total',
 
         'overview.chart.activity': 'DM activity — last 7 days',

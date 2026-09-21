@@ -1845,3 +1845,16 @@ html[dir='rtl'] .select { background-position: left var(--space-3) center; }
 ::view-transition-group(root),
 ::view-transition-old(root),
 ::view-transition-new(root) { animation-duration: var(--motion-base); animation-timing-function: var(--ease-standard); }
+
+/* The page-lifecycle pass promoted these from <span> to real headings so the screens have an
+   outline a screen reader can navigate. The base h1..h5 rule sets bold and tight leading, and
+   neither class pinned either — so without this the promotion would have been visible. */
+.table-title, .page-toolbar-count { font-weight: var(--fw-regular); }
+.table-title, .page-toolbar-count, .chart-card-title { line-height: var(--lh-normal); }
+
+/* A clipped error cell is readable by a screen reader via its title; this lets a sighted
+   keyboard user see it too. */
+.cell-error:focus-visible { white-space: normal; overflow: visible; }
+
+/* A long Meta error must not squeeze the toast's new close button out of reach. */
+.toast .modal-close { flex-shrink: 0; }
