@@ -264,7 +264,7 @@ const InboxPage = {
             <span class="thread-badges">
                 ${x.is_bot_active
                     ? html`<span class="badge badge-success">${t('inbox.aiActive')}</span>`
-                    : html`<span class="badge badge-warning">${t('inbox.aiPaused')}</span>`}
+                    : html`<span class="badge badge-neutral">${t('inbox.aiPaused')}</span>`}
                 ${!x.is_bot_active && isInbound
                     ? html`<span class="badge badge-danger"><i data-lucide="reply" aria-hidden="true"></i>${t('inbox.inbound')}</span>`
                     : ''}

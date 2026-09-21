@@ -32,7 +32,10 @@
         <li>Send an automated Direct Message to the commenter (if a keyword matches).</li>
         <li>Prevent duplicate messages by tracking recent interactions.</li>
     </ul>
-    <p>We do <strong>not</strong> sell, share, or transfer this data to any third parties.</p>
+    <p>We do <strong>not</strong> sell this data, and we do not transfer it to anyone for
+    advertising or marketing. We do share it with the service providers listed in section 5,
+    who process it solely to operate this application &mdash; including Google, whose Gemini
+    API receives the content of direct messages in order to generate a reply.</p>
     
     <h2>3. Data Storage & Retention</h2>
     <p>Interaction logs (username, comment ID, post ID, and delivery status) are stored in a secure PostgreSQL database. These logs are used for duplicate prevention (24-hour window) and diagnostic purposes.</p>
@@ -46,6 +49,7 @@
         <li><strong>Meta Graph API</strong> — To receive comment notifications and send messages. Subject to <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener">Meta's Privacy Policy</a>.</li>
         <li><strong>Supabase</strong> — For database hosting. Subject to <a href="https://supabase.com/privacy" target="_blank" rel="noopener">Supabase's Privacy Policy</a>.</li>
         <li><strong>Vercel</strong> — For application hosting. Subject to <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener">Vercel's Privacy Policy</a>.</li>
+        <li><strong>Google (Gemini API)</strong> &mdash; The content of direct messages sent to the account is transmitted to Google's Gemini API to generate an automated reply. Subject to <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google's Privacy Policy</a>.</li>
     </ul>
     
     <h2>6. Contact</h2>

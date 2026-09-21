@@ -162,8 +162,8 @@ const AnalyticsPage = {
                     </div>
                     <div class="platform-bar" role="img"
                          aria-label="${t('analytics.share', { count: UI.formatNumber(igCount), percent: UI.formatNumber(igPct) })} — ${t('common.instagram')}">
-                        <span class="platform-bar-ig" data-share="${total > 0 ? igPct : 50}"></span>
-                        <span class="platform-bar-fb" data-share="${total > 0 ? fbPct : 50}"></span>
+                        <span class="platform-bar-ig" data-share="${total > 0 ? igPct : 0}"></span>
+                        <span class="platform-bar-fb" data-share="${total > 0 ? fbPct : 0}"></span>
                     </div>
                     <div class="platform-totals">
                         <div>

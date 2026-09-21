@@ -789,8 +789,10 @@ html[dir='rtl'] .switch input:checked + .switch-track::before { transform: trans
     border-radius: var(--radius-xs);
     margin-inline-start: var(--space-2);
 }
-.platform-tag.ig { background: var(--brand-instagram); }
-.platform-tag.fb { background: var(--brand-facebook); }
+/* Solid brand + white measured 4.34:1 (ig) / 4.23:1 (fb) at this size — below AA, in every
+   log row. The soft/text pair is the same treatment `.badge-instagram` already uses. */
+.platform-tag.ig { background: var(--brand-instagram-soft); color: var(--brand-instagram-text); }
+.platform-tag.fb { background: var(--brand-facebook-soft); color: var(--brand-facebook-text); }
 
 .username-link {
     color: var(--accent-text);
@@ -1075,10 +1077,11 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     color: var(--text-strong);
     line-height: 1.15;
     font-variant-numeric: tabular-nums;
-    /* Numbers are Latin even in the Arabic UI; keep them LTR-isolated so a
-       trailing "%" or "/" does not jump to the other end. */
-    direction: ltr;
-    unicode-bidi: isolate;
+    /* Numbers are Latin even in the Arabic UI, but `direction: ltr` here also flipped
+       `text-align: start` to mean LEFT — putting the card's biggest number on the far side
+       from its own label. Isolate the Latin run without redirecting the box: `plaintext`
+       keeps a trailing "%" or "/" attached while the block stays on the reading edge. */
+    unicode-bidi: plaintext;
     text-align: start;
 }
 .stat-sub { font-size: var(--fs-100); color: var(--text-muted); margin-block-start: var(--space-2); }
@@ -1458,7 +1461,9 @@ html[dir='rtl'] .chat-back svg { transform: scaleX(-1); }
     color: #fff;
     border-start-end-radius: var(--radius-xs);
 }
-.message-time { font-size: var(--fs-100); opacity: 0.7; align-self: flex-end; font-variant-numeric: tabular-nums; }
+/* `opacity: 0.7` measured 3.02:1 on the outbound gradient. An explicit mix is contrast you
+   can check. */
+.message-time { font-size: var(--fs-100); color: color-mix(in srgb, currentColor 78%, transparent); align-self: flex-end; font-variant-numeric: tabular-nums; }
 /* A reply that has left the composer but not yet the server. Dimmed, because
    the one thing it must not do is look like a message that was delivered.
    It is removed on both outcomes: replaced by the canonical row on success,
@@ -1815,4 +1820,9 @@ html[dir='rtl'] .page-btn svg { transform: scaleX(-1); }
 @media (max-width: 400px) {
     .stats-grid { grid-template-columns: 1fr; }
     .page-container { padding: var(--space-3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    /* Slowed, not stopped: a frozen spinner reads as a hung request. */
+    .spinner { animation-duration: 2s; }
 }

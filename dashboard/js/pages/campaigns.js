@@ -527,7 +527,18 @@ const CampaignsPage = {
         paint(isChecked);
 
         return Motion.optimistic({
-            send: () => API.updateCampaign(id, { is_active: isChecked }),
+            // Send the WHOLE row, not just is_active. PUT /campaigns/:id assigns
+            // public_reply_template and post_id unconditionally — deliberately, so both can be
+            // cleared — so a partial body sends them as undefined -> null. A one-click pause was
+            // erasing the campaign's public reply and its post targeting, with no undo.
+            send: () => API.updateCampaign(id, {
+                trigger_keyword: campaign && campaign.trigger_keyword,
+                dm_template: campaign && campaign.dm_template,
+                public_reply_template: (campaign && campaign.public_reply_template) || null,
+                post_id: (campaign && campaign.post_id) || null,
+                match_mode: campaign && campaign.match_mode,
+                is_active: isChecked,
+            }),
             revert: () => paint(previous),
             onError: (err) => UI.toast((err && err.message) || t('common.error'), 'error'),
         });
