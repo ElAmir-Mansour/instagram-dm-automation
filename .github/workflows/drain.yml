@@ -1,0 +1,84 @@
+name: Drain job queue
+
+# ─── Why this exists ────────────────────────────────────────────────────────────────────────
+#
+# The webhook writes work into the `jobs` table before answering Meta 200, which is what
+# makes it durable — but something has to come back and run that work. Until now nothing did
+# on a schedule: `vercel.json` can only register one cron a day on the Hobby plan, and it
+# points at `/api/cron/publish`. The queue drained only opportunistically, inline with
+# whatever request happened to arrive next. ARCHITECTURE.md §7 Stage 1 calls closing this
+# "the highest value-per-effort action available anywhere in this document".
+#
+# ─── Why GitHub Actions, with its known unreliability ───────────────────────────────────────
+#
+# Because it is free for public repositories, needs no third-party account, and keeps the
+# schedule in the repo where it is reviewable. GitHub explicitly does not guarantee schedule
+# punctuality: runs are throttled under load and are routinely several minutes late, and
+# `*/5` is about the finest granularity worth asking for.
+#
+# That is worth saying plainly: this does NOT deliver the minute-accurate scheduling the
+# dashboard UI implies. What it delivers is a drain every ~5-15 minutes instead of once every
+# 24 hours — which is the difference between a queue and a backlog. If exact timing matters
+# later, a dedicated cron service with 1-minute granularity is a drop-in replacement: same
+# URL, same bearer token, nothing here changes.
+#
+# ─── Failure behaviour ──────────────────────────────────────────────────────────────────────
+#
+# A failed drain must be loud, because a silently broken scheduler is indistinguishable from
+# an empty queue — the same invisible-failure shape this project keeps being bitten by. So the
+# step asserts on the HTTP status rather than trusting curl's exit code, which is 0 for a 500.
+
+on:
+  schedule:
+    # Every 5 minutes. GitHub will not honour this precisely; see above.
+    - cron: '*/5 * * * *'
+  # So it can be run by hand while debugging, without waiting for the schedule.
+  workflow_dispatch:
+
+# If a run is somehow still going when the next fires, let it finish and skip the new one
+# rather than draining twice concurrently. The claim is atomic either way, so this is about
+# not wasting a runner.
+concurrency:
+  group: drain-job-queue
+  cancel-in-progress: false
+
+jobs:
+  drain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Drain the queue
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          BASE_URL: ${{ vars.BASE_URL || 'https://msg-response-auto.vercel.app' }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET is not set as a repository secret — the drain cannot authenticate."
+            echo "Add it with: gh secret set CRON_SECRET"
+            exit 1
+          fi
+
+          # -s quiet, -S still show errors, --max-time so a hung socket cannot hold the runner.
+          body=$(curl -sS --max-time 60 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -w '\n%{http_code}' \
+            "$BASE_URL/api/jobs/drain")
+
+          status=$(printf '%s' "$body" | tail -n1)
+          payload=$(printf '%s' "$body" | sed '$d')
+
+          echo "HTTP $status"
+          echo "$payload"
+
+          # curl exits 0 on a 500, so the status has to be asserted explicitly.
+          if [ "$status" != "200" ]; then
+            echo "::error::drain returned HTTP $status"
+            exit 1
+          fi
+
+          # Surface the numbers in the run summary so a glance at the Actions tab answers
+          # "is the queue moving" without opening a log.
+          echo "### Queue drain" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "$payload" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

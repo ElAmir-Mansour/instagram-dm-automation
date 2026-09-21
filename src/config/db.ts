@@ -8,7 +8,14 @@ export const pool = new Pool({
     // Essential for serverless/pgBouncer
     connectionTimeoutMillis: 10000, // Wait up to 10s to connect
     idleTimeoutMillis: 30000,       // Close idle clients after 30s
-    max: 10                         // Limit max connections
+
+    // 3, not 10. This is a per-lambda pool, and Vercel runs many lambdas concurrently —
+    // so the real connection count is `max` x (concurrent instances), against a shared
+    // Supabase pooler. At max: 10, twenty warm instances would ask for two hundred
+    // connections, and the pooler starts refusing rather than queueing. A single request
+    // here never needs more than a couple: the handlers are sequential, and the one place
+    // that fans out (the job drain) is budgeted. ARCHITECTURE.md §3.3 / §7 Stage 1.
+    max: 3
 });
 
 /**
