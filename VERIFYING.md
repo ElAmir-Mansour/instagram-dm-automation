@@ -1,13 +1,16 @@
 # Verifying AutoReply Pro against a real Meta event
 
 The pipeline was split into modules, given a durable job queue, moved the 200 to before the
-work, wired rate limiting and added an AI disclosure prefix. 210 unit tests cover the pieces.
-None of that proves the deployed system handles a real Instagram comment, and the live
-database shows **zero events processed since the deploy** — so the refactor is currently
-unverified in production.
+work, wired rate limiting and added an AI disclosure prefix. 281 unit tests cover the pieces.
+None of that proves the deployed system handles a real Instagram comment, and as of
+2026-09-21 the live database shows **zero jobs, zero interactions and zero messages since the
+last migration** — so the refactor is currently unverified in production.
 
 Only the account owner can post a comment. This is the procedure, with what to run at each
 step and what a healthy result looks like.
+
+> This document is for **proving the pipeline works once**. When something is already broken
+> and you need to fix it, go to [`RUNBOOK.md`](RUNBOOK.md) instead.
 
 **Budget 15 minutes.** You need a second Instagram (or Facebook) account you control, because
 step 5 sends a real DM to whoever comments.
@@ -47,25 +50,47 @@ the rest of this procedure meaningless:
 
 Exit codes: `0` healthy, `1` warnings, `2` critical, `3` the diagnostics could not run.
 
+**Expected warnings before you start** — these are the ones this procedure exists to clear, so
+seeing them is the point, not a problem:
+
+```
+! queue    the jobs table is EMPTY — no webhook delivery has ever been enqueued
+! flow     NOTHING has been processed since <last migration> — the current code has never handled a real event
+! flow     no inbound DM for 124d — the DM path is unexercised, not necessarily broken
+```
+
+Two more are environmental rather than faults: `INSTAGRAM_APP_SECRET` not being in your local
+`.env` (it only limits what `--probe-signature` can test), and the short-keyword warning from
+step 2.
+
 ## Step 2 — Pick a keyword that will actually match
 
-Matching is **substring** based on the normalised comment text, and `trigger_keyword` is a
-comma-separated list. Take one from an active campaign:
+Matching is **substring** by default, on the normalised comment text, and `trigger_keyword` is
+a comma-separated list. Take one from an active campaign:
 
 ```bash
 node --input-type=module -e "
 import { loadEnv, connectReadOnly } from './scripts/lib/live.mjs';
 loadEnv();
 const db = await connectReadOnly();
-const r = await db.query('SELECT left(trigger_keyword, 60) kw, post_id FROM campaigns WHERE is_active ORDER BY created_at');
+const r = await db.query('SELECT left(trigger_keyword, 60) kw, match_mode, post_id FROM campaigns WHERE is_active ORDER BY created_at');
 console.table(r.rows); await db.end();"
 ```
 
-Healthy result: a list of keywords. Note two things:
+Healthy result: a list of keywords. Verified on 2026-09-21: **18 active campaigns, 104 active
+keywords, all of them `match_mode = 'substring'`** — nothing has opted into word matching yet.
+
+Note three things:
 
 - A campaign with a non-null `post_id` only fires on **that** post. Prefer a keyword whose
   `post_id` is `null`, or comment on the post it names.
 - Write the keyword **exactly**, as its own word, in a comment on a recent post.
+- **Pick a long keyword.** Ten of the 104 are 1–3 characters, and in substring mode they fire
+  inside unrelated words — `عيد` matches inside `سعيد`, `جو` inside `موجود`. A short keyword
+  makes step 5 ambiguous, because you cannot tell a real match from an accidental one. It also
+  means a campaign you did not intend may claim the comment first: the winner is the most
+  specific campaign, ranked post-specific before generic, then by keyword length
+  (`src/services/matching.ts:45-51`).
 
 ## Step 3 — Start the watcher
 
@@ -183,8 +208,18 @@ which is the per-recipient cap working, not a fault.
   unrecognised, which returns 200 before the enqueue and writes nothing). `INSTAGRAM_APP_SECRET`
   belongs to the separate Instagram-Login app and is not in the local `.env`, so the only proof
   for it is a real Instagram-signed delivery — which is step 5.
-- **Multi-tenant isolation.** One active creator exists; the tenant scoping cannot be exercised
-  with one tenant.
+- **Multi-tenant isolation.** One creator row exists and it is the active one, so the tenant
+  scoping cannot be exercised at all. Fair queueing by `tenant_key` is likewise untestable
+  here: with one page id every job lands in one partition, which is exactly the degenerate case
+  the round-robin was written to avoid (`src/jobs/queue.ts:100-123`).
+- **Token re-checking.** Nothing asks Meta about the token on a schedule. A token that dies
+  while the account is quiet will not be noticed by anything in this procedure — the passive
+  detector only fires on a real send failure (`src/services/tokenHealth.ts:47`). Data access
+  on the current token lapses **2026-12-19** while `/debug_token` still reports it valid; see
+  `RUNBOOK.md` §3.
+- **Data-subject erasure.** There is no erasure endpoint, and the retention sweep that the
+  published `/data-deletion` page depends on is a no-op until `RAW_PAYLOAD_RETENTION_DAYS` is
+  set. See `RUNBOOK.md` §7.
 
 ## If it all goes wrong
 
