@@ -163,9 +163,97 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
     }
 }
 
+/**
+ * Media whose only remaining reference is a post that already went live.
+ *
+ * `media_uploads` is `BYTEA` in Postgres and **nothing has ever deleted from it**. It grows
+ * monotonically: 40MB across 17 files as of 2026-09-21, of which 30MB belongs to posts that
+ * are already PUBLISHED. Meta fetches the URL once, at publish time, and hosts its own copy
+ * afterwards — so three quarters of that storage is a copy nobody reads, on a 500MB tier.
+ *
+ * ARCHITECTURE.md §7 Stage 3 proposes moving media to object storage. For a single-operator
+ * deployment that is the wrong shape of fix: it adds an integration and a migration to solve
+ * a problem better solved by deleting what is already dead. Reclaim rather than relocate.
+ * The `MediaStore` seam stays, so Stage 3 remains available if the volume ever justifies it.
+ *
+ * ── What it will NOT delete, and why each matters ──
+ *
+ * A row is only eligible when **no** scheduled post in a non-final state references it, by
+ * either `media_url` or `cover_url`:
+ *
+ *   - `PENDING` / `PUBLISHING` — the media is about to be fetched by Meta. Deleting it is a
+ *     publish that fails with a broken URL.
+ *   - `FAILED` — editing a failed post flips it back to `PENDING` and republishes, so its
+ *     media has to survive. This is the non-obvious one: "failed" looks final and is not.
+ *
+ * `cover_url` is checked as well as `media_url` because it is a separate upload — it is the
+ * whole reason a reel does not get a black frame-0 tile — and six posts currently have one.
+ * Matching only `media_url` would delete covers that are still in use.
+ *
+ * Opt-in, like `pruneRawPayloads`, and off by default: this is an irreversible delete of the
+ * operator's own media, and it should be their decision rather than a surprise on upgrade.
+ * Never throws — it runs in the same cron invocation as the publishes.
+ */
+export type MediaPruneOutcome =
+    | { deleted: number; skipped: false }
+    /** Retention is off, or configured below the minimum. Nothing was attempted. */
+    | { deleted: 0; skipped: true; reason: 'disabled' }
+    /** It was attempted and the query failed. Materially different from `disabled`. */
+    | { deleted: 0; skipped: true; reason: 'error' };
+
+export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
+    const setting = resolveRetention(process.env.MEDIA_RETENTION_DAYS);
+
+    if (!setting.enabled) {
+        if (setting.reason !== 'unset') {
+            log('warn', 'retention.media_misconfigured', {
+                reason: setting.reason,
+                value: process.env.MEDIA_RETENTION_DAYS,
+                minimum_days: MIN_RETENTION_DAYS,
+            });
+        }
+        return { deleted: 0, skipped: true, reason: 'disabled' };
+    }
+
+    try {
+        const deleted = await queryCount(
+            `DELETE FROM media_uploads
+              WHERE id IN (
+                    SELECT m.id
+                      FROM media_uploads m
+                     WHERE m.created_at < NOW() - make_interval(days => $1)
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM scheduled_posts s
+                            WHERE s.status IN ('PENDING', 'PUBLISHING', 'FAILED')
+                              AND (
+                                    s.media_url LIKE '%' || m.id::text || '%'
+                                 OR s.cover_url LIKE '%' || m.id::text || '%'
+                              )
+                       )
+                     LIMIT $2
+              )`,
+            [setting.days, PRUNE_BATCH_SIZE]
+        );
+
+        if (deleted > 0) {
+            log('info', 'retention.media_pruned', {
+                deleted,
+                retention_days: setting.days,
+                more_likely: deleted === PRUNE_BATCH_SIZE,
+            });
+        }
+        return { deleted, skipped: false };
+    } catch (err) {
+        log('error', 'retention.media_prune_failed', { message: (err as Error)?.message });
+        return { deleted: 0, skipped: true, reason: 'error' };
+    }
+}
+
 export interface RetentionSweepResult {
     rawPayloadsCleared: number;
     jobsDeleted: number;
+    mediaDeleted: number;
     passes: number;
     /** True when a pass came back full, so there is more behind it than this run cleared. */
     moreRemaining: boolean;
@@ -175,6 +263,7 @@ export interface RetentionSweepResult {
 export interface RetentionSweepDeps {
     pruneRaw: typeof pruneRawPayloads;
     pruneJobs: typeof pruneCompletedJobs;
+    pruneMedia: typeof pruneOrphanedMedia;
 }
 
 /**
@@ -188,10 +277,14 @@ export interface RetentionSweepDeps {
  * retention sweep must not be able to stop a publish.
  */
 export async function runRetentionSweep(
-    deps: RetentionSweepDeps = { pruneRaw: pruneRawPayloads, pruneJobs: pruneCompletedJobs }
+    deps: RetentionSweepDeps = {
+        pruneRaw: pruneRawPayloads,
+        pruneJobs: pruneCompletedJobs,
+        pruneMedia: pruneOrphanedMedia,
+    }
 ): Promise<RetentionSweepResult> {
     const result: RetentionSweepResult = {
-        rawPayloadsCleared: 0, jobsDeleted: 0, passes: 0, moreRemaining: false,
+        rawPayloadsCleared: 0, jobsDeleted: 0, mediaDeleted: 0, passes: 0, moreRemaining: false,
     };
 
     for (let pass = 0; pass < MAX_SWEEP_PASSES; pass++) {
@@ -199,15 +292,18 @@ export async function runRetentionSweep(
 
         const raw = await deps.pruneRaw();
         const jobs = await deps.pruneJobs();
+        const media = await deps.pruneMedia();
         result.rawPayloadsCleared += raw.cleared;
         result.jobsDeleted += jobs.deleted;
+        result.mediaDeleted += media.deleted;
 
         const rawFull = raw.cleared === PRUNE_BATCH_SIZE;
         const jobsFull = jobs.deleted === JOB_PRUNE_BATCH_SIZE;
+        const mediaFull = media.deleted === PRUNE_BATCH_SIZE;
 
-        // Nothing moved: either both are caught up, or retention is switched off and the job
-        // sweep found nothing. Either way another identical pass would do nothing.
-        if (!rawFull && !jobsFull) return result;
+        // Nothing moved: every sweep is caught up, or switched off and finding nothing.
+        // Either way another identical pass would do nothing.
+        if (!rawFull && !jobsFull && !mediaFull) return result;
 
         if (pass === MAX_SWEEP_PASSES - 1) {
             result.moreRemaining = true;
@@ -215,6 +311,7 @@ export async function runRetentionSweep(
                 passes: result.passes,
                 raw_payloads_cleared: result.rawPayloadsCleared,
                 jobs_deleted: result.jobsDeleted,
+                media_deleted: result.mediaDeleted,
             });
         }
     }

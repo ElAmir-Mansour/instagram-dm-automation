@@ -7,11 +7,16 @@
  * webhook problem that is still happening.
  */
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setLogSink } from '../utils/log.js';
 import {
-    JOB_PRUNE_BATCH_SIZE, MAX_SWEEP_PASSES, MIN_RETENTION_DAYS, PRUNE_BATCH_SIZE,
-    resolveRetention, runRetentionSweep,
+    JOB_PRUNE_BATCH_SIZE,
+    MAX_SWEEP_PASSES,
+    MIN_RETENTION_DAYS,
+    PRUNE_BATCH_SIZE,
+    pruneOrphanedMedia,
+    resolveRetention,
+    runRetentionSweep,
 } from './retention.js';
 
 describe('resolveRetention', () => {
@@ -82,12 +87,16 @@ describe('runRetentionSweep', () => {
     after(() => restoreSink?.());
 
     /** Pruners that report a scripted count per pass, then zero. */
-    function scripted(rawCounts: number[], jobCounts: number[] = []) {
+    function scripted(rawCounts: number[], jobCounts: number[] = [], mediaCounts: number[] = []) {
         let rawPass = 0;
         let jobPass = 0;
+        let mediaPass = 0;
         return {
             pruneRaw: async () => ({ cleared: rawCounts[rawPass++] ?? 0, skipped: false }),
             pruneJobs: async () => ({ deleted: jobCounts[jobPass++] ?? 0 }),
+            // Defaults to nothing-to-do, which is the real default: media retention is
+            // opt-in, so every existing assertion below keeps meaning what it meant.
+            pruneMedia: async () => ({ deleted: mediaCounts[mediaPass++] ?? 0, skipped: false as const }),
         };
     }
 
@@ -129,16 +138,61 @@ describe('runRetentionSweep', () => {
         assert.equal(result.jobsDeleted, JOB_PRUNE_BATCH_SIZE + 4);
     });
 
+    it('keeps going for a full media batch too', async () => {
+        // Same convergence rule as the other two sweeps. Without it, reclaiming a large
+        // media backlog would take one batch per day - and media is the sweep most likely
+        // to have a backlog, because nothing has ever deleted from media_uploads.
+        const result = await runRetentionSweep(scripted([0, 0], [0, 0], [PRUNE_BATCH_SIZE, 6]));
+
+        assert.equal(result.passes, 2);
+        assert.equal(result.mediaDeleted, PRUNE_BATCH_SIZE + 6);
+        assert.equal(result.moreRemaining, false);
+    });
+
     it('gives up after the pass cap rather than running until the invocation dies', async () => {
         // An endless supply of full batches. The cap is what stops a sweep from eating the
         // cron invocation that has scheduled posts to publish after it.
         const endless = {
             pruneRaw: async () => ({ cleared: PRUNE_BATCH_SIZE, skipped: false }),
             pruneJobs: async () => ({ deleted: 0 }),
+            pruneMedia: async () => ({ deleted: 0 as const, skipped: true as const, reason: 'disabled' as const }),
         };
         const result = await runRetentionSweep(endless);
 
         assert.equal(result.passes, MAX_SWEEP_PASSES);
         assert.equal(result.moreRemaining, true, 'and says so, so the operator knows to expect another run');
+    });
+});
+
+describe('media retention gating', () => {
+    let saved: string | undefined;
+
+    beforeEach(() => { saved = process.env.MEDIA_RETENTION_DAYS; });
+    afterEach(() => {
+        if (saved === undefined) delete process.env.MEDIA_RETENTION_DAYS;
+        else process.env.MEDIA_RETENTION_DAYS = saved;
+    });
+
+    it('does nothing when unset — this is an irreversible delete of the operator\'s own media', async () => {
+        delete process.env.MEDIA_RETENTION_DAYS;
+        const out = await pruneOrphanedMedia();
+        // `reason` is the whole point: without it, "retention is off" and "the DELETE threw"
+        // are the same value, and this assertion passes even when the gate is removed.
+        assert.deepEqual(out, { deleted: 0, skipped: true, reason: 'disabled' });
+    });
+
+    it('refuses a window below the minimum rather than silently using a default', async () => {
+        // Falling back to a default would delete media the operator never agreed to lose.
+        for (const bad of ['0', '1', '6', '-30', 'thirty', '']) {
+            process.env.MEDIA_RETENTION_DAYS = bad;
+            const out = await pruneOrphanedMedia();
+            assert.deepEqual(out, { deleted: 0, skipped: true, reason: 'disabled' }, `value ${JSON.stringify(bad)}`);
+        }
+    });
+
+    it('accepts the minimum and above', () => {
+        for (const good of [String(MIN_RETENTION_DAYS), '30', '365']) {
+            assert.equal(resolveRetention(good).enabled, true, `value ${good}`);
+        }
     });
 });
