@@ -7,7 +7,9 @@
     "start:dev": "node --env-file=.env --loader ts-node/esm src/index.ts",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "test:watch": "tsx --test --watch \"src/**/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "migrate": "node --env-file=.env scripts/migrate.mjs",
+    "migrate:status": "node --env-file=.env scripts/migrate.mjs --status"
   },
   "keywords": [
     "instagram",
