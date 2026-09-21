@@ -46,6 +46,9 @@ const InboxPage = {
     _pendingSeq: 0,
     _searchRender: null,
 
+    /** Consecutive silent poll failures. Two is enough to stop pretending. */
+    _pollFailures: 0,
+
     /**
      * The shell. `App.navigate` paints this inside the view transition, so the
      * two panes and the thread rows' shapes are on screen before any request
@@ -65,6 +68,10 @@ const InboxPage = {
                                    autocomplete="off" data-input="inbox:handleSearch">
                         </div>
                     </div>
+                    <!-- The 5s poll used to fail completely silently, so a
+                         dropped network looked exactly like a quiet inbox:
+                         a frozen list, indefinitely, with no way to tell. -->
+                    <div id="threads-stale" class="hidden"></div>
                     <div class="threads-list" id="threads-container">
                         ${Motion.threadRows(7)}
                     </div>
@@ -97,6 +104,8 @@ const InboxPage = {
         this.messagesPainted = false;
         this.pendingBotState = new Map();
         this.lastMessageStamp = null;
+        this._pollFailures = 0;
+        this.markStale(false);
 
         this.loadThreads();
         this.startPolling();
@@ -133,6 +142,7 @@ const InboxPage = {
         this.pendingBotState = new Map();
         this.lastMessageStamp = null;
         this.threads = [];
+        this._pollFailures = 0;
     },
 
     /**
@@ -149,6 +159,7 @@ const InboxPage = {
         this.lastMessageStamp = null;
         this.threads = [];
         this.searchTerm = '';
+        this._pollFailures = 0;
     },
 
     startPolling() {
@@ -183,10 +194,38 @@ const InboxPage = {
     },
 
     // ─── Threads ─────────────────────────────────────────────────────────────
+    /**
+     * The stale marker. `api.js` already tags a dropped connection with
+     * `isNetworkError`, so the honest thing is to say the list has stopped
+     * updating rather than leave it looking live. One failure is a blip on a
+     * mobile connection; two in a row is a state the operator has to know
+     * about, because every decision on this screen assumes the list is current.
+     */
+    markStale(show, err) {
+        const host = document.getElementById('threads-stale');
+        if (!host) return;
+        if (!show) {
+            if (!host.classList.contains('hidden')) {
+                host.classList.add('hidden');
+                host.innerHTML = '';
+            }
+            return;
+        }
+        if (!host.classList.contains('hidden')) return; // already saying it
+        host.innerHTML = esc(UI.errorStrip(
+            t('inbox.stale'),
+            err && err.isNetworkError ? t('error.network') : (err && err.message) || ''
+        ));
+        host.classList.remove('hidden');
+        UI.icons(host);
+    },
+
     async loadThreads(silent = false) {
         try {
             const result = await API.getConversations();
             const rows = (result && result.data) || [];
+            this._pollFailures = 0;
+            this.markStale(false);
             // An AI toggle the operator has just flipped outranks a poll that
             // may have left before the write committed. Without this the badge
             // flips back for one tick and then forward again.
@@ -213,9 +252,19 @@ const InboxPage = {
             }
         } catch (err) {
             console.error('Threads Load Error:', err);
-            if (silent) return;
+            this._pollFailures++;
+            if (silent) {
+                // A silent tick must not replace the list the operator is
+                // reading — but after two failures it must stop implying the
+                // list is live.
+                if (this._pollFailures >= 2) this.markStale(true, err);
+                return;
+            }
             const container = document.getElementById('threads-container');
             if (container) {
+                // The error panel is not a row, so the list role would be a lie.
+                container.removeAttribute('role');
+                container.removeAttribute('aria-label');
                 UI.renderError(
                     container,
                     { title: t('inbox.threadsErrorTitle'), message: err.message },
@@ -291,9 +340,25 @@ const InboxPage = {
                 if (existing.textContent !== message) existing.textContent = message;
                 return;
             }
+            // A paragraph is not a listitem, so the role comes off with the rows.
+            container.removeAttribute('role');
+            container.removeAttribute('aria-label');
             container.innerHTML = esc(html`<p class="empty-threads">${message}</p>`);
             return;
         }
+
+        /**
+         * List semantics.
+         *
+         * This was a plain <div> of <button>s, so there was no "list, 24
+         * items" and no "3 of 24" as you moved down it — on the busiest screen
+         * in the product, and the one the creator uses on a phone. The role
+         * goes on the container and each row is a real listitem WRAPPING the
+         * button: role="listitem" on the button itself would replace the
+         * button role, and the row would stop being announced as pressable.
+         */
+        container.setAttribute('role', 'list');
+        container.setAttribute('aria-label', t('inbox.threads'));
 
         Motion.patchList(container, threads, {
             key: (x) => x.id,
@@ -308,18 +373,27 @@ const InboxPage = {
                 x.id === this.selectedConversationId ? '1' : '0',
             ].join('\u001f'),
             create: () => {
-                const el = document.createElement('button');
-                el.type = 'button';
-                el.className = 'thread-item';
-                return el;
+                const item = document.createElement('div');
+                item.setAttribute('role', 'listitem');
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'thread-item';
+                item.appendChild(btn);
+                return item;
             },
             update: (el, x) => {
+                const btn = el.querySelector('.thread-item') || el.firstElementChild;
+                if (!btn) return;
                 const isActive = x.id === this.selectedConversationId;
-                el.className = `thread-item${isActive ? ' active' : ''}`;
-                el.setAttribute('aria-current', isActive ? 'true' : 'false');
-                el.dataset.action = 'inbox:selectThread';
-                el.dataset.id = x.id;
-                el.innerHTML = esc(this.threadRow(x));
+                btn.className = `thread-item${isActive ? ' active' : ''}`;
+                // Conventionally the attribute is REMOVED rather than set to
+                // "false": aria-current="false" on the other 23 rows is 23
+                // announcements of a state that is not the case.
+                if (isActive) btn.setAttribute('aria-current', 'true');
+                else btn.removeAttribute('aria-current');
+                btn.dataset.action = 'inbox:selectThread';
+                btn.dataset.id = x.id;
+                btn.innerHTML = esc(this.threadRow(x));
             },
         });
     },
@@ -343,7 +417,12 @@ const InboxPage = {
         const layout = document.querySelector('.inbox-layout');
         if (layout) layout.dataset.pane = 'chat';
 
-        if (this.selectedConversationId === id) return;
+        // The row that was just activated. At 900px and below the sidebar
+        // becomes display:none the instant data-pane flips, so this element is
+        // now inside a hidden subtree and the browser has thrown focus away.
+        const trigger = document.activeElement;
+
+        if (this.selectedConversationId === id) { this.focusChatPane(trigger); return; }
         this.selectedConversationId = id;
         this.renderedMessageIds = new Set();
         this.messagesPainted = false;
@@ -353,6 +432,30 @@ const InboxPage = {
         this.renderChatShell(thread);
         this.renderThreads(); // highlight the active row
         this.loadMessages(id, { scroll: true });
+        this.focusChatPane(trigger);
+    },
+
+    /**
+     * The mirror image of backToThreads(), which has always done this
+     * correctly: after a pane swap, put focus somewhere real.
+     *
+     * On a wide screen both panes are visible and the row keeps focus, which
+     * is right — moving it would be motion the operator did not ask for. The
+     * check is on whether the trigger is still RENDERED rather than on a
+     * hardcoded breakpoint, so it cannot drift from the stylesheet.
+     */
+    focusChatPane(trigger) {
+        if (trigger && document.contains(trigger) && trigger.offsetParent !== null) return;
+        const back = document.querySelector('.chat-pane .chat-back');
+        if (back && back.offsetParent !== null && typeof back.focus === 'function') {
+            back.focus();
+            return;
+        }
+        const composer = document.getElementById('chat-input-text');
+        // Not focused on a phone unless there is nothing better: focusing a
+        // textarea raises the on-screen keyboard over the conversation the
+        // operator just opened to read.
+        if (composer && !back && typeof composer.focus === 'function') composer.focus();
     },
 
     backToThreads() {
@@ -382,7 +485,11 @@ const InboxPage = {
                     <i data-lucide="arrow-left" aria-hidden="true"></i>
                 </button>
                 <div class="chat-header-info">
-                    <h3 data-chat-username><bdi dir="auto">@${username}</bdi></h3>
+                    <!-- aria-level, not <h2>: the stylesheet scopes this rule to
+                         the element (.chat-header h3), so changing the tag would
+                         change the type size. This fixes the outline, not the
+                         pixels. -->
+                    <h3 aria-level="2" data-chat-username><bdi dir="auto">@${username}</bdi></h3>
                     <span class="chat-sub">${t('inbox.userId', { id: '' })}${UI.ltr(thread.instagram_user_id)}</span>
                 </div>
                 <div class="chat-header-actions">
@@ -399,10 +506,23 @@ const InboxPage = {
                 </div>
             </header>
 
-            <div class="chat-messages" id="chat-messages-container" role="log" aria-live="polite"
-                 aria-label="${t('inbox.messages')}">
-                ${html.raw(UI.loader(t('inbox.loadingMessages')))}
-            </div>
+            <!-- The loader is a live region of its own (role="status") and it
+                 used to be injected INSIDE the log, so opening a thread
+                 announced "Loading messages…" from inside the thing that was
+                 about to announce the whole thread. It lives outside now. -->
+            <div id="chat-messages-loading">${html.raw(UI.loader(t('inbox.loadingMessages')))}</div>
+
+            <!-- aria-live starts OFF.
+                 role="log" carries an implicit polite live region, and
+                 renderMessages() clears the list and appends every bubble — so
+                 opening a conversation read the ENTIRE history aloud before the
+                 operator could reach the composer. The initial paint happens
+                 with the region suppressed and renderMessages() turns it on
+                 afterwards, so only genuinely new messages announce.
+                 aria-relevant drops the default "text", which would otherwise
+                 re-announce a bubble whose text changed in place. -->
+            <div class="chat-messages" id="chat-messages-container" role="log" aria-live="off"
+                 aria-relevant="additions" aria-label="${t('inbox.messages')}"></div>
 
             <div class="chat-composer">
                 <form id="chat-send-form" data-submit="inbox:sendMessage" data-id="${thread.id}">
@@ -435,6 +555,12 @@ const InboxPage = {
         if (toggle && document.activeElement !== toggle) toggle.checked = !!thread.is_bot_active;
     },
 
+    /** The loader / error host that sits OUTSIDE the log region. */
+    clearChatLoading() {
+        const host = document.getElementById('chat-messages-loading');
+        if (host && host.innerHTML !== '') host.innerHTML = '';
+    },
+
     async loadMessages(id, { scroll = false } = {}) {
         try {
             const messages = await API.getConversationMessages(id);
@@ -442,10 +568,12 @@ const InboxPage = {
             this.renderMessages(Array.isArray(messages) ? messages : [], scroll);
         } catch (err) {
             console.error('Messages Load Error:', err);
-            const list = document.getElementById('chat-messages-container');
-            if (list && !this.messagesPainted) {
+            const host = document.getElementById('chat-messages-loading');
+            if (host && !this.messagesPainted) {
+                // Into the host, not into the log: an error panel is not a
+                // message, and the log is append-only.
                 UI.renderError(
-                    list,
+                    host,
                     { title: t('inbox.messagesErrorTitle'), message: err.message },
                     () => this.loadMessages(id, { scroll: true })
                 );
@@ -465,6 +593,7 @@ const InboxPage = {
         if (firstPaint) {
             list.innerHTML = '';
             this.messagesPainted = true;
+            this.clearChatLoading();
         }
 
         const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
@@ -482,6 +611,29 @@ const InboxPage = {
             UI.icons(list);
             if (forceScroll || firstPaint || nearBottom) list.scrollTop = list.scrollHeight;
         }
+
+        // The history that was already on screen when the thread opened is not
+        // news, so it is painted with the region off and the region is armed
+        // AFTERWARDS — from here on, an append is a message that has just
+        // arrived, which is exactly what a log should announce.
+        this.armMessageLog();
+    },
+
+    /**
+     * Turn the log's live region on, one frame after the initial paint.
+     *
+     * The delay matters: a live region that is armed in the same task as the
+     * nodes it contains can still have those nodes treated as additions,
+     * because the AT diffs the subtree at the end of the task rather than per
+     * mutation.
+     */
+    armMessageLog() {
+        const list = document.getElementById('chat-messages-container');
+        if (!list || list.getAttribute('aria-live') === 'polite') return;
+        requestAnimationFrame(() => {
+            const el = document.getElementById('chat-messages-container');
+            if (el) el.setAttribute('aria-live', 'polite');
+        });
     },
 
     messageBubble(msg) {
@@ -489,7 +641,13 @@ const InboxPage = {
         return html`
             <div class="message-row ${isOut ? 'row-outbound' : 'row-inbound'}">
                 <div class="message-bubble ${isOut ? 'bubble-outbound' : 'bubble-inbound'}">
-                    <p dir="auto">${msg.text}</p>
+                    <!-- lang on the OUTBOUND side only. What this account sends
+                         is always Arabic — it is the AI's reply or the
+                         operator's own — so with the English UI a screen reader
+                         was reading it with an English voice. What arrives is
+                         genuinely unknown, so an inbound bubble gets dir="auto"
+                         and no lang claim. -->
+                    <p dir="auto" ${isOut ? html.raw('lang="ar"') : ''}>${msg.text}</p>
                     ${this.structuredContent(msg)}
                     <span class="message-time">${UI.formatTime(msg.created_at)}</span>
                 </div>
@@ -510,7 +668,9 @@ const InboxPage = {
         if (Array.isArray(payload.quick_replies)) {
             parts.push(html`
                 <div class="msg-quick-replies">
-                    ${payload.quick_replies.map((qr) => html`<span class="qr-pill" dir="auto">${qr && qr.title}</span>`)}
+                    <!-- Quick-reply titles are authored by this account (the AI
+                         writes them from the Arabic prompt), so they carry lang. -->
+                    ${payload.quick_replies.map((qr) => html`<span class="qr-pill" dir="auto" lang="ar">${qr && qr.title}</span>`)}
                 </div>
             `);
         }
@@ -529,10 +689,10 @@ const InboxPage = {
                             <div class="carousel-card">
                                 ${image ? html`<img src="${image}" class="carousel-card-img" alt="${(el && el.title) || ''}">` : ''}
                                 <div class="carousel-card-body">
-                                    <h4 class="carousel-card-title" dir="auto">${el && el.title}</h4>
-                                    ${el && el.subtitle ? html`<p class="carousel-card-desc" dir="auto">${el.subtitle}</p>` : ''}
+                                    <h4 class="carousel-card-title" dir="auto" lang="ar">${el && el.title}</h4>
+                                    ${el && el.subtitle ? html`<p class="carousel-card-desc" dir="auto" lang="ar">${el.subtitle}</p>` : ''}
                                     <div class="stack gap-1">
-                                        ${buttons.map((btn) => html`<span class="carousel-btn" dir="auto">${btn && btn.title}</span>`)}
+                                        ${buttons.map((btn) => html`<span class="carousel-btn" dir="auto" lang="ar">${btn && btn.title}</span>`)}
                                     </div>
                                 </div>
                             </div>
@@ -588,7 +748,7 @@ const InboxPage = {
         return html`
             <div class="message-row row-outbound" data-pending="${key}">
                 <div class="message-bubble bubble-outbound is-pending">
-                    <p dir="auto">${text}</p>
+                    <p dir="auto" lang="ar">${text}</p>
                     <span class="message-time">${t('inbox.sending')}</span>
                 </div>
             </div>
@@ -628,7 +788,20 @@ const InboxPage = {
         if (input) input.value = '';
         if (button) button.disabled = true;
 
-        if (list && this.messagesPainted) {
+        if (list) {
+            // The bubble used to be appended only `if (this.messagesPainted)`,
+            // so a reply typed while the history was still loading vanished
+            // from the composer and appeared nowhere — the operator's text
+            // existed only in this closure. If the list has not been painted
+            // yet, paint it now (which drops the loader) and put the reply in
+            // it; the server's canonical copy replaces the placeholder later,
+            // exactly as on the painted path.
+            if (!this.messagesPainted) {
+                list.innerHTML = '';
+                this.messagesPainted = true;
+                this.clearChatLoading();
+                this.armMessageLog();
+            }
             this.renderedMessageIds.add(key);
             list.insertAdjacentHTML('beforeend', esc(this.pendingBubble(key, text)));
             list.scrollTop = list.scrollHeight;

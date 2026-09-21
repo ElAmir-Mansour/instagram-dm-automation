@@ -70,8 +70,151 @@ function safeUrl(value) {
 const UI = {
     _modalSeq: 0,
     _lastFocus: null,
+    _lastFocusKey: null,
     _onModalKeydown: null,
     _actions: Object.create(null),
+    _guardBaseline: null,
+
+    // ─── Focus across a re-render ───────────────────────────────────────────
+    /**
+     * Every page on this dashboard re-renders by writing `container.innerHTML`,
+     * which destroys the element the operator was using — focus falls to
+     * `<body>` and a keyboard user restarts from the skip link. The Activity
+     * Log was the worst case: a filter change rebuilt the whole card, so the
+     * `<select>` that fired the change no longer existed.
+     *
+     * The fix is one pair of calls around the re-render:
+     *
+     *     const focus = UI.captureFocus(container);
+     *     container.innerHTML = esc(...);
+     *     UI.restoreFocus(focus);
+     *
+     * The element is re-found by a STABLE key — its `id`, or `data-focus-key`
+     * for things that are rebuilt per row — not by node identity, which the
+     * re-render has already thrown away. Text selection and the caret are
+     * carried over too, so a half-typed search term survives.
+     */
+    focusKey(el) {
+        if (!el || el === document.body || el.nodeType !== 1) return null;
+        if (el.id) return el.id;
+        const own = el.dataset ? el.dataset.focusKey : null;
+        return own || null;
+    },
+
+    /** Find an element by the key `focusKey()` produced. */
+    elementByFocusKey(key) {
+        if (!key) return null;
+        const byId = document.getElementById(key);
+        if (byId) return byId;
+        try {
+            return document.querySelector(`[data-focus-key="${CSS.escape(key)}"]`);
+        } catch {
+            return null;
+        }
+    },
+
+    /**
+     * Remember what has focus inside `root`. Returns null when focus is
+     * elsewhere, so a re-render triggered by a background poll never steals it.
+     */
+    captureFocus(root) {
+        const active = document.activeElement;
+        if (!active || !root || !root.contains(active)) return null;
+        const key = UI.focusKey(active);
+        if (!key) return null;
+        const token = { key, start: null, end: null };
+        // Only text-ish controls expose a caret; reading it on others throws.
+        try {
+            if (typeof active.selectionStart === 'number') {
+                token.start = active.selectionStart;
+                token.end = active.selectionEnd;
+            }
+        } catch { /* not a text control */ }
+        return token;
+    },
+
+    /**
+     * Put focus back. `fallbackKey` covers the case where the control the
+     * operator used no longer exists at all — paging to the last page disables
+     * "Next", deleting the last row removes its own button — and the honest
+     * answer is a neighbour rather than `<body>`.
+     */
+    restoreFocus(token, fallbackKey) {
+        const tryFocus = (el) => {
+            if (!el || typeof el.focus !== 'function') return false;
+            if (el.disabled) return false;
+            // A hidden element cannot take focus; focus() would be a silent no-op.
+            if (el.offsetParent === null && el !== document.documentElement) return false;
+            el.focus({ preventScroll: true });
+            return document.activeElement === el;
+        };
+
+        if (token && token.key) {
+            const el = UI.elementByFocusKey(token.key);
+            if (tryFocus(el)) {
+                if (token.start !== null) {
+                    try { el.setSelectionRange(token.start, token.end); } catch { /* not supported */ }
+                }
+                return true;
+            }
+        }
+
+        if (fallbackKey && tryFocus(UI.elementByFocusKey(fallbackKey))) return true;
+        if (!token) return false;
+
+        // Last resort: the page region itself, which carries tabindex="-1".
+        const main = document.getElementById('page-container');
+        if (main && typeof main.focus === 'function') {
+            main.focus({ preventScroll: true });
+            return true;
+        }
+        return false;
+    },
+
+    // ─── Submit guards ──────────────────────────────────────────────────────
+    /**
+     * Disable a form's submit button and spin it while the request is out.
+     * Returns the restore function. This is the only double-submit guard in the
+     * dashboard: without it, Enter twice on a slow serverless cold start
+     * created two campaigns, or two posts.
+     */
+    formBusy(form, label) {
+        const btn = form && form.querySelector('button[type="submit"]');
+        if (!btn) return () => {};
+        if (btn.disabled) return null; // already in flight — caller must bail
+        const original = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = UI.buttonSpinner(label);
+        return () => {
+            btn.disabled = false;
+            btn.innerHTML = original;
+            UI.icons(btn);
+        };
+    },
+
+    /**
+     * Mark a field as failing validation and point it at the message that says
+     * why. `aria-invalid` alone is a state with no explanation; the pairing is
+     * what makes an error reachable from the field.
+     */
+    markInvalid(field, describedById) {
+        if (!field) return;
+        field.setAttribute('aria-invalid', 'true');
+        if (describedById) field.setAttribute('aria-describedby', describedById);
+        if (typeof field.focus === 'function') field.focus();
+    },
+
+    clearInvalid(root) {
+        if (!root) return;
+        root.querySelectorAll('[aria-invalid="true"]').forEach((el) => {
+            el.removeAttribute('aria-invalid');
+            // Only the strip's id is removed; a field's own description stays.
+            const described = el.getAttribute('aria-describedby') || '';
+            const kept = described.split(/\s+/).filter((id) => id && !id.endsWith('-error-strip')).join(' ');
+            if (kept) el.setAttribute('aria-describedby', kept);
+            else el.removeAttribute('aria-describedby');
+        });
+    },
 
     // ─── Bidi ───────────────────────────────────────────────────────────────
     /**
@@ -149,28 +292,70 @@ const UI = {
     },
 
     // ─── Toast ───────────────────────────────────────────────────────────────
+    /**
+     * A toast used to be a 4500ms window with no way to hold it open, which is
+     * fine for "Saved" and useless for the thing this dashboard most often has
+     * to say: a Meta error, in full, in a sentence nobody reads in four and a
+     * half seconds. So:
+     *
+     *   - an error gets 9s rather than 4.5s;
+     *   - hovering or focusing the toast cancels the countdown and restarts it
+     *     on the way out, which is the WCAG 2.2.1 escape hatch for anything
+     *     that disappears on a timer;
+     *   - there is a close button, so it can also be dismissed early — and its
+     *     presence is what makes the toast focusable enough to pause at all.
+     */
     toast(message, type = 'success') {
         const container = document.getElementById('toast-container');
         if (!container) return;
         const icon = type === 'success' ? 'check-circle' : 'alert-circle';
+        const lifetime = type === 'error' ? 9000 : 4500;
+
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
+
         const iconEl = document.createElement('i');
         iconEl.setAttribute('data-lucide', icon);
+
         const span = document.createElement('span');
         // Server messages and Meta error strings can be either script.
         span.setAttribute('dir', 'auto');
         span.textContent = message === null || message === undefined ? '' : String(message);
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'modal-close';
+        close.setAttribute('aria-label', t('common.dismiss'));
+        const closeIcon = document.createElement('i');
+        closeIcon.setAttribute('data-lucide', 'x');
+        close.appendChild(closeIcon);
+
         toast.appendChild(iconEl);
         toast.appendChild(span);
+        toast.appendChild(close);
         container.appendChild(toast);
         UI.icons(toast);
-        setTimeout(() => {
+
+        let timer = null;
+        const dismiss = () => {
+            if (timer) { clearTimeout(timer); timer = null; }
             // A class, so the exit timing lives with the entrance timing in
             // styles.css and collapses with the rest under reduced motion.
             toast.classList.add('is-leaving');
             setTimeout(() => toast.remove(), 320);
-        }, 4500);
+        };
+        const start = () => {
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(dismiss, lifetime);
+        };
+        const hold = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+        close.addEventListener('click', dismiss);
+        toast.addEventListener('pointerenter', hold);
+        toast.addEventListener('pointerleave', start);
+        toast.addEventListener('focusin', hold);
+        toast.addEventListener('focusout', start);
+        start();
     },
 
     // ─── Modal ───────────────────────────────────────────────────────────────
@@ -181,6 +366,10 @@ const UI = {
 
         if (overlay.classList.contains('hidden')) {
             UI._lastFocus = document.activeElement;
+            // The node itself is not enough: the trigger is usually a button on
+            // a card, and the re-render that follows a successful save destroys
+            // it. The key survives the re-render; the node does not.
+            UI._lastFocusKey = UI.focusKey(document.activeElement);
         }
 
         content.innerHTML = esc(markup);
@@ -198,6 +387,7 @@ const UI = {
 
         overlay.classList.remove('hidden');
         UI.icons(content);
+        UI._snapshotGuard(content);
 
         const focusables = UI._focusables(content);
         const preferred = content.querySelector(
@@ -205,13 +395,17 @@ const UI = {
         );
         (preferred || focusables.find((el) => !el.classList.contains('modal-close')) || content).focus();
 
-        overlay.onclick = (e) => { if (e.target === overlay) UI.closeModal(); };
+        // Both of these are the OPERATOR asking to close, so both go through the
+        // guarded path that can ask about unsaved work first. `closeModal()`
+        // itself stays unguarded: App.navigate calls it inside a view
+        // transition, which is no place for a confirm() dialog.
+        overlay.onclick = (e) => { if (e.target === overlay) UI.requestCloseModal(); };
 
         if (UI._onModalKeydown) document.removeEventListener('keydown', UI._onModalKeydown, true);
         UI._onModalKeydown = (e) => {
             if (e.key === 'Escape') {
                 e.preventDefault();
-                UI.closeModal();
+                UI.requestCloseModal();
                 return;
             }
             if (e.key !== 'Tab') return;
@@ -229,6 +423,16 @@ const UI = {
         document.addEventListener('keydown', UI._onModalKeydown, true);
     },
 
+    /**
+     * Close unconditionally. Focus goes back to whatever opened the modal —
+     * and if that element is gone, to the element carrying the same key, and
+     * failing that to the page region.
+     *
+     * ORDER MATTERS at the call sites: a successful save must `render()` FIRST
+     * and close AFTER. Closing first restored focus to the trigger button and
+     * the re-render then destroyed it, which put focus on a button inside a
+     * `display:none` overlay — i.e. on `<body>`.
+     */
     closeModal() {
         const overlay = document.getElementById('modal-overlay');
         if (!overlay) return;
@@ -238,11 +442,60 @@ const UI = {
             document.removeEventListener('keydown', UI._onModalKeydown, true);
             UI._onModalKeydown = null;
         }
+        UI._guardBaseline = null;
         const restore = UI._lastFocus;
+        const key = UI._lastFocusKey;
         UI._lastFocus = null;
-        if (restore && document.contains(restore) && typeof restore.focus === 'function') {
+        UI._lastFocusKey = null;
+        if (restore && document.contains(restore) && typeof restore.focus === 'function'
+            && restore.offsetParent !== null) {
             restore.focus();
+            return;
         }
+        UI.restoreFocus(key ? { key, start: null, end: null } : {}, null);
+    },
+
+    // ─── Unsaved-work guard ─────────────────────────────────────────────────
+    /**
+     * A modal field marked `data-guard-dirty` is one whose contents the
+     * operator would be upset to lose — the campaign DM template is the
+     * obvious one; it is the product. `showModal` records what those fields
+     * started as, and an operator-initiated close compares before throwing the
+     * edits away.
+     *
+     * Deliberately NOT wired into `closeModal()`: navigation closes the modal
+     * from inside a view transition, and a synchronous confirm() there would
+     * freeze the frame the browser is mid-way through capturing.
+     */
+    _snapshotGuard(content) {
+        const fields = content ? content.querySelectorAll('[data-guard-dirty]') : [];
+        if (!fields || fields.length === 0) { UI._guardBaseline = null; return; }
+        UI._guardBaseline = new Map();
+        fields.forEach((el, i) => {
+            const key = el.id || `guard-${i}`;
+            UI._guardBaseline.set(key, el.type === 'checkbox' ? String(el.checked) : String(el.value || ''));
+        });
+    },
+
+    isModalDirty() {
+        if (!UI._guardBaseline) return false;
+        const content = document.getElementById('modal-content');
+        if (!content) return false;
+        const fields = content.querySelectorAll('[data-guard-dirty]');
+        let dirty = false;
+        fields.forEach((el, i) => {
+            const key = el.id || `guard-${i}`;
+            if (!UI._guardBaseline.has(key)) return;
+            const now = el.type === 'checkbox' ? String(el.checked) : String(el.value || '');
+            if (now !== UI._guardBaseline.get(key)) dirty = true;
+        });
+        return dirty;
+    },
+
+    /** The operator asked to close. Ask back if there is unsaved work. */
+    requestCloseModal() {
+        if (UI.isModalDirty() && !confirm(t('common.discardConfirm'))) return;
+        UI.closeModal();
     },
 
     _focusables(root) {
@@ -284,10 +537,15 @@ const UI = {
         }
     },
 
-    /** Inline (non page-replacing) error strip, e.g. inside a modal. */
-    errorStrip(message, hint) {
+    /**
+     * Inline (non page-replacing) error strip, e.g. inside a modal.
+     * `id` lets a field point at it with `aria-describedby`, which is the only
+     * thing that connects "this field is invalid" to "here is why".
+     */
+    errorStrip(message, hint, id) {
+        const stripId = id || `error-strip-${++UI._previewSeq}`;
         return html`
-            <div class="inline-error" role="alert">
+            <div class="inline-error" role="alert" id="${stripId}">
                 <i data-lucide="alert-circle" aria-hidden="true"></i>
                 <div>
                     <strong dir="auto">${message}</strong>
@@ -295,6 +553,67 @@ const UI = {
                 </div>
             </div>
         `;
+    },
+
+    // ─── Clipped content ────────────────────────────────────────────────────
+    /**
+     * `.template-preview` clips a DM template at 7.5em with no fade, no
+     * scrollbar and no way in from the keyboard — so the operator cannot read
+     * the rest of the message they are about to send to a customer. Rather
+     * than a CSS-only affordance nobody can reach, the block gets a disclosure
+     * that opens the full text in the modal (which already has a focus trap,
+     * Escape, and focus restore).
+     *
+     * The button is rendered hidden and only revealed for blocks that are
+     * ACTUALLY clipped — which is measured after paint by `revealClipped()`,
+     * because character counts are not a reliable proxy for 7.5em of a
+     * proportional Arabic face.
+     */
+    previewBlock(text, options) {
+        const { label = '', arabic = false } = options || {};
+        const id = `preview-${++UI._previewSeq}`;
+        const value = text === null || text === undefined ? '' : String(text);
+        return html`
+            <div class="template-preview user-content" id="${id}" dir="auto"
+                 ${arabic ? html.raw('lang="ar"') : ''}
+                 data-preview-label="${label}">${value}</div>
+            <button type="button" class="btn btn-secondary btn-sm hidden"
+                    data-action="ui:showFullText" data-preview="${id}" data-clip-disclosure>
+                <i data-lucide="chevrons-down-up" aria-hidden="true"></i> ${t('common.showFull')}
+            </button>
+        `;
+    },
+
+    _previewSeq: 0,
+
+    /**
+     * Post-paint measurement pass.
+     *
+     *   - a `.template-preview` taller than its box gets its disclosure button;
+     *   - an element marked `data-clip-focus` whose text is cut off
+     *     horizontally becomes focusable, so the full string — which IS in the
+     *     DOM, just painted outside the box — is reachable without a `title`
+     *     tooltip a keyboard user can never open.
+     *
+     * Only genuinely clipped elements are touched, so a log page with no
+     * errors gains no extra tab stops.
+     */
+    revealClipped(root) {
+        if (!root) return;
+        root.querySelectorAll('[data-clip-disclosure]').forEach((btn) => {
+            const target = document.getElementById(btn.dataset.preview || '');
+            if (!target) return;
+            const clipped = target.scrollHeight - target.clientHeight > 1;
+            btn.classList.toggle('hidden', !clipped);
+        });
+        root.querySelectorAll('[data-clip-focus]').forEach((el) => {
+            const clipped = el.scrollWidth - el.clientWidth > 1;
+            if (clipped) {
+                el.setAttribute('tabindex', '0');
+            } else {
+                el.removeAttribute('tabindex');
+            }
+        });
     },
 
     /**
@@ -541,7 +860,40 @@ const UI = {
 };
 
 UI.registerActions('ui', {
-    closeModal: () => UI.closeModal(),
+    /**
+     * Every Cancel and every × in the dashboard points here, so the
+     * unsaved-work question is asked once, in one place, for all of them.
+     */
+    closeModal: () => UI.requestCloseModal(),
+
+    /**
+     * Open a clipped preview in full. The text is read out of the DOM rather
+     * than carried on the button, so nothing operator- or Meta-supplied ever
+     * makes a second trip through an attribute.
+     */
+    showFullText: (el) => {
+        const source = document.getElementById(el.dataset.preview || '');
+        if (!source) return;
+        const label = source.dataset.previewLabel || t('common.showFull');
+        const isArabic = source.getAttribute('lang') === 'ar';
+        UI.showModal(html`
+            <div class="modal-header">
+                <h2 class="modal-title">${label}</h2>
+                <button type="button" class="modal-close" data-action="ui:closeModal"
+                        aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+            <!-- .modal-content is the scroll container (overflow-y: auto) and
+                 focus sits inside it on the Close button, so a long template
+                 scrolls with the keyboard without a second scroller or an
+                 extra tab stop here. -->
+            <div class="user-content" dir="auto" ${isArabic ? html.raw('lang="ar"') : ''}>${source.textContent}</div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.close')}</button>
+            </div>
+        `);
+    },
 });
 
 // One set of delegated listeners for the whole dashboard.

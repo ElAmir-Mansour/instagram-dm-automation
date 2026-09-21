@@ -11,7 +11,19 @@
 const AnalyticsPage = {
     charts: [],
 
+    /**
+     * Guards the write against landing after the operator has navigated away.
+     *
+     * This page fires three requests and `App.navigate` calls `render()`
+     * fire-and-forget; `#page-container` is refilled, never replaced. Leave
+     * Analytics while those three are outstanding and the resolved handler
+     * wrote this page's stats grid into the container the NEXT page already
+     * owned — charts and all. Same `_seq`/`live()` shape as OverviewPage.
+     */
+    _seq: 0,
+
     destroy() {
+        this._seq++;
         this.charts.forEach((c) => { try { c.destroy(); } catch (e) { /* already gone */ } });
         this.charts = [];
     },
@@ -29,8 +41,11 @@ const AnalyticsPage = {
 
     async render() {
         const container = document.getElementById('page-container');
+        if (!container) return;
         const gate = Motion.beginLoad(container, () => this.skeleton());
         this.destroy();
+        const seq = this._seq;
+        const live = () => seq === this._seq && !!document.getElementById('page-container');
 
         let stats;
         let daily;
@@ -46,12 +61,15 @@ const AnalyticsPage = {
                 API.getCampaignStats(),
             ]);
         } catch (err) {
+            if (!live()) return;
             gate.done();
             UI.renderError(container, { title: t('analytics.errorTitle'), message: err.message }, () => this.render());
             return;
         }
+        if (!live()) return;
         gate.done();
         await chartLib;
+        if (!live()) return;
 
         const total = stats.totalInteractions || 0;
         const igCount = stats.instagramCount || 0;
@@ -92,14 +110,18 @@ const AnalyticsPage = {
             </div>
 
             <div class="chart-grid">
+                <!-- Every panel title on this screen was a <span>, so the page
+                     had ZERO headings below the page <h1> and a screen-reader
+                     user had no way to move between the four panels. Real
+                     headings, same classes. -->
                 <div class="chart-card surface">
-                    <div class="chart-card-header"><span class="chart-card-title">${t('analytics.chart30')}</span></div>
+                    <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chart30')}</h2></div>
                     <div class="chart-wrapper">
                         <canvas id="analytics-line" role="img" aria-label="${t('analytics.chart30')}"></canvas>
                     </div>
                 </div>
                 <div class="chart-card surface">
-                    <div class="chart-card-header"><span class="chart-card-title">${t('analytics.chartStatus')}</span></div>
+                    <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chartStatus')}</h2></div>
                     <div class="chart-wrapper">
                         <canvas id="analytics-donut" role="img" aria-label="${t('analytics.chartStatus')}"></canvas>
                     </div>
@@ -109,7 +131,7 @@ const AnalyticsPage = {
             <div class="chart-grid chart-grid--even">
                 <div class="chart-card surface">
                     <div class="chart-card-header">
-                        <span class="chart-card-title">${t('analytics.topCampaigns')}</span>
+                        <h2 class="chart-card-title">${t('analytics.topCampaigns')}</h2>
                     </div>
                     <div class="table-wrapper">
                         ${campaignStats && campaignStats.length > 0 ? html`
@@ -144,7 +166,7 @@ const AnalyticsPage = {
 
                 <div class="chart-card surface">
                     <div class="chart-card-header">
-                        <span class="chart-card-title">${t('analytics.platformSplit')}</span>
+                        <h2 class="chart-card-title">${t('analytics.platformSplit')}</h2>
                     </div>
                     <div class="platform-legend">
                         <div class="platform-legend-row">
@@ -160,8 +182,12 @@ const AnalyticsPage = {
                             })}</strong>
                         </div>
                     </div>
-                    <div class="platform-bar" role="img"
-                         aria-label="${t('analytics.share', { count: UI.formatNumber(igCount), percent: UI.formatNumber(igPct) })} — ${t('common.instagram')}">
+                    <!-- The bar's aria-label described only Instagram's share
+                         while the legend above it states both, so a screen
+                         reader heard half the split twice. The legend and the
+                         totals below carry every number the bar encodes, so
+                         the bar itself is decoration. -->
+                    <div class="platform-bar" aria-hidden="true">
                         <span class="platform-bar-ig" data-share="${total > 0 ? igPct : 0}"></span>
                         <span class="platform-bar-fb" data-share="${total > 0 ? fbPct : 0}"></span>
                     </div>
@@ -181,6 +207,10 @@ const AnalyticsPage = {
         `);
 
         UI.icons(container);
+
+        // Motion.busy() announced "loading" and the swap to real content was
+        // silent. This page has no row count, so it names its own arrival.
+        Motion.announce(`${t('nav.analytics')} — ${t('common.loaded')}`);
 
         // The two bar widths are data, not style: set as inline flex-basis from
         // the data-share attribute rather than interpolated into the markup.

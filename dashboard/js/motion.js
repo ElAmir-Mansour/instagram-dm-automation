@@ -296,6 +296,54 @@ const Motion = {
         return html`<span class="sr-only" role="status" aria-live="polite">${label || t('common.loading')}</span>`;
     },
 
+    /**
+     * The other half of `busy()`: say that the wait is OVER.
+     *
+     * `busy()` announces "loading" and then the skeleton is replaced by the
+     * real content in silence — a screen-reader user is told the page started
+     * and never told it finished. This cannot be solved from inside the page
+     * markup, because the live region that would carry the message is itself
+     * destroyed by the same `innerHTML` write that lands the content: a live
+     * region only announces changes to a region that was ALREADY in the
+     * accessibility tree.
+     *
+     * So there is exactly one permanent region, outside `#page-container`,
+     * and pages write their arrival into it — a count where they have one
+     * ("15 results", "8 campaigns"), which is more use than "loaded".
+     */
+    _announcer: null,
+
+    announcer() {
+        if (Motion._announcer && document.contains(Motion._announcer)) return Motion._announcer;
+        let el = document.getElementById('motion-announcer');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'motion-announcer';
+            el.className = 'sr-only';
+            el.setAttribute('role', 'status');
+            el.setAttribute('aria-live', 'polite');
+            document.body.appendChild(el);
+        }
+        Motion._announcer = el;
+        return el;
+    },
+
+    /**
+     * A zero-width space (U+200B), written as a code point rather than as an
+     * escape so that nothing invisible is ever pasted into this file.
+     */
+    _NUDGE: String.fromCharCode(0x200B),
+
+    announce(message) {
+        const text = message === null || message === undefined ? '' : String(message);
+        if (!text) return;
+        const el = Motion.announcer();
+        // Identical consecutive text is not a CHANGE, so it is not announced.
+        // The nudge makes the second one a change without being audible or
+        // visible — paging twice to the same count still says it twice.
+        el.textContent = el.textContent === text ? text + Motion._NUDGE : text;
+    },
+
     // ─── Scheduling ─────────────────────────────────────────────────────────
     /**
      * Trailing debounce. Used for per-keystroke work heavy enough to be felt:
@@ -377,6 +425,7 @@ const Motion = {
 
         const active = document.activeElement;
         const hadFocus = !!active && container.contains(active);
+        const focusedRow = hadFocus && active.closest ? active.closest('[data-row-key]') : null;
 
         const wanted = [];
         items.forEach((item) => {
@@ -398,6 +447,22 @@ const Motion = {
             wanted.push(el);
         });
 
+        /**
+         * If the row holding focus is one of the rows about to go, focus has
+         * nowhere to land and the browser drops it to `<body>`.
+         *
+         * In the inbox this is not an edge case: the 5-second poll and every
+         * search keystroke re-filter the list, so a keyboard user who has
+         * arrowed down to a conversation gets thrown to the top of the
+         * document in the middle of reading it. Remember where the row WAS and
+         * hand focus to whichever row takes that position.
+         */
+        let orphanIndex = -1;
+        if (focusedRow && focusedRow.parentNode === container && existing.has(focusedRow.dataset.rowKey)
+            && existing.get(focusedRow.dataset.rowKey) === focusedRow) {
+            orphanIndex = Array.prototype.indexOf.call(container.children, focusedRow);
+        }
+
         existing.forEach((el) => el.remove());
 
         const canMove = typeof container.moveBefore === 'function';
@@ -415,9 +480,23 @@ const Motion = {
         if (hadFocus && document.activeElement !== active
             && active && container.contains(active) && typeof active.focus === 'function') {
             active.focus({ preventScroll: true });
+        } else if (orphanIndex >= 0 && wanted.length > 0) {
+            const heir = wanted[Math.min(orphanIndex, wanted.length - 1)];
+            const target = Motion._firstFocusable(heir);
+            if (target) target.focus({ preventScroll: true });
         }
 
         return wanted.length;
+    },
+
+    /** The row element itself when it is focusable, else its first control. */
+    _firstFocusable(row) {
+        if (!row) return null;
+        if (typeof row.focus === 'function' && !row.disabled
+            && (row.tabIndex >= 0 || /^(a|button|input|select|textarea)$/i.test(row.tagName))) {
+            return row;
+        }
+        return row.querySelector('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
     },
 
     // ─── Optimistic mutations ───────────────────────────────────────────────
