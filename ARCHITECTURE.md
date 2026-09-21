@@ -1,7 +1,9 @@
 # AutoReply Pro — architecture assessment and target design
 
-**Status:** assessment of `chore/secrets-and-migrations` @ `1581c5e`, plus the changes landed
-on `feat/architecture`.
+**Status:** everything described below as "landed on this branch" is now on `main`. The
+hardening, tenancy, architecture, admin-API and admin-UI branches have all merged; the branch
+names survive in the prose because they are how the decisions were made, not where the code
+is. Last reconciled against `main` on 2026-09-21 with 417 tests passing.
 **Audience:** whoever implements the next stage. Written to be actionable, not admired.
 
 > This file lives at the repository root rather than in `docs/` because `docs/` is gitignored
@@ -13,7 +15,8 @@ on `feat/architecture`.
 
 The codebase is in far better shape than its history suggests. The hardening and tenancy
 passes did real work: the webhook is decomposed, tenant resolution is centralised, tokens are
-encrypted, migrations have a ledger, and 281 tests exist where there were none. The remaining
+encrypted, migrations have a ledger, and 417 tests exist where there were none — including,
+as of 2026-09-21, the dashboard's XSS defence, which had none. The remaining
 problems are almost all **architectural rather than defective** — the code does what it says,
 but the shape it is in cannot survive the next order of magnitude.
 
@@ -838,40 +841,67 @@ Recorded so it is a decision rather than an omission.
 
 ## 10. Corrections to the existing project documentation
 
-The four `CLAUDE.md` entries this section previously flagged as stale — the uncalled rate
-limiter, the fail-open cron guard, the emoji `console.log` count, and keyword matching's
-location — **have now been corrected in `CLAUDE.md` itself.** They are listed here only as the
-record of what was wrong, and should not be re-applied.
+Every item this section previously listed as outstanding has now been closed. It is kept as
+the record of what was wrong, and should not be re-applied.
 
-### Still stale, in the source rather than the docs
+### Closed 2026-09-21
 
-These are comments that no longer describe the code beside them. Each sends a reader to the
-wrong conclusion, which is the expensive kind of wrong.
+1. **`jobs/queue.ts` header** claimed "`FOR UPDATE SKIP LOCKED` inside the subquery is what
+   makes it atomic" while the query's own comment, sixty lines below, explained that it is
+   *deliberately absent* because Postgres rejects it alongside a window function. One file
+   disagreed with itself about its most safety-critical mechanism. The header now names the
+   real guarantee — the `status = 'pending'` predicate on the claiming UPDATE.
+2. **`routes/api.ts` drain doc comment** repeated the same wrong mechanism. Fixed the same way,
+   with a pointer to `src/jobs/queue.ts`.
+3. **`services/tenant.ts`** — *was already correct before this pass, and this section was the
+   stale thing.* The comment now accurately records that the NULL-`creator_id` fallback was
+   removed after a read-only audit found 0 of 96 `interactions` rows and 0 of 12 `messages`
+   rows with a NULL, and that the fallback was rescuing nothing while costing every query
+   `idx_interactions_creator`. A design document can go stale about its own findings.
+4. **`config/env.ts`** described `CRON_SECRET` as guarding `/api/cron/publish`. It guards
+   `/api/jobs/drain` too — `requireCronSecret` is called from both. Now says so.
+5. **`.env.example` declared `RAW_PAYLOAD_RETENTION_DAYS` twice**, empty at one point and `30`
+   at another, with two different recommendations (90 vs 30) in the surrounding comments —
+   so which applied depended on the parser. Collapsed to a single declaration of `30`, which
+   is what the published `/data-deletion` page commits to. That value is a promise to users,
+   not a preference, and the comment now says so.
 
-1. **`jobs/queue.ts:10-15`** — the module header still says "`FOR UPDATE SKIP LOCKED` inside
-   the subquery is what makes it atomic". It is not there, and `:94-99` in the same file
-   explains at length why it cannot be. The header and the body of one file disagree.
-2. **`routes/api.ts:273-274`** — the `/api/jobs/drain` doc comment repeats the same claim:
-   "the claim is atomic (`FOR UPDATE SKIP LOCKED`)". The conclusion is right, the mechanism
-   named is not.
-3. **`services/tenant.ts:304-315`** — states that the webhook writers do not set `creator_id`,
-   so every arriving row is NULL and the tenant predicates need a relationship fallback. The
-   writers do set it (`webhook/comments.ts`, `webhook/messaging.ts`). The fallback now serves
-   only pre-backfill rows and can be removed once a backfill is confirmed — see §7 Stage 4.
-4. **`config/env.ts:22`** — describes `CRON_SECRET` as "Bearer secret guarding
-   /api/cron/publish". It guards `/api/jobs/drain` too (`routes/api.ts:277`).
+### Added 2026-09-21, from verification against production
 
-### Still stale in configuration
+6. **Both webhook object types live under ONE Meta app.** `GET /847772258381375/subscriptions`
+   returns `instagram` (comments, mentions, messages, messaging_postbacks, story_insights)
+   *and* `page` (feed, messages, messaging_postbacks), both active, both pointing at this
+   deployment. So Instagram comments are signed with **`META_APP_SECRET`**, which
+   `diagnose.mjs --probe-signature` confirms production accepts. `INSTAGRAM_APP_SECRET` is
+   currently vestigial. The dual-secret check in `verifyMetaSignature` should stay — it costs
+   nothing and this configuration has changed before — but a silent comment path should no
+   longer be diagnosed by suspecting that secret first.
 
-5. **`.env.example` declares `RAW_PAYLOAD_RETENTION_DAYS` twice** — empty at line 84 and `30`
-   at line 90, with two different recommendations in the surrounding comments (90 vs 30).
-   Whichever wins depends on the parser. The published `/data-deletion` page commits to 30, so
-   30 is the value; the duplicate and the conflicting advice should go.
+7. **`vercel env pull` cannot be used to audit production secrets.** Every sensitive value
+   comes back as the 11-character placeholder `[ENCRYPTED]`. A fingerprint comparison across
+   them therefore shows every secret as identical, which reads as "one secret reused
+   everywhere" and is meaningless. Only a Graph API round-trip proves a secret is correct.
 
-### A correction to this document's own prior claims
+8. **The diagnostic's own guard probes used to be indistinguishable from real incidents.**
+   `diagnose.mjs` proves the guards hold by POSTing an unsigned body to `/webhook` and hitting
+   the cron endpoints unauthenticated, producing `webhook.signature_rejected` and
+   `cron.unauthorized` lines byte-identical to a genuine failure — in an app whose worst
+   documented failure mode is an invisible signature rejection. Both lines now carry
+   `probe: true|false`, authenticated by an HMAC over a timestamp so the label cannot be
+   forged to disguise real probing as a self-test. See `src/utils/probe.ts`; it is a log label
+   and never an authorisation input.
 
-6. **§6.1's fair-queueing proposal was not merely undone, it was unimplementable.** Round-robin
-   by `creator_id` could not have worked, because that column is NULL on every webhook row by
-   design. Recorded at §6.1 item 2 and ADR-6 so the next person does not re-derive it. This is
-   the failure mode worth noting about design documents: a proposal that typechecks in prose
-   can still be impossible in the schema.
+9. **`ASSET_VERSION` drift, RTL icon mirroring, token contrast and translation parity are now
+   CI-enforced**, each after a live or latent failure: a mixed dashboard bundle that blanked
+   `/dashboard#/posts`, five directional icons pointing the wrong way in Arabic, hand-tuned
+   contrast tokens with 0.21 of headroom above AA, and a fallback chain that renders English
+   inside an RTL page without logging anything. `scripts/check-*.mjs`, four steps in
+   `.github/workflows/ci.yml`.
+
+### The lesson worth keeping
+
+A proposal that typechecks in prose can still be impossible in the schema — §6.1's
+round-robin-by-`creator_id` fair queueing could never have worked, because that column is
+NULL on every webhook row by design (ADR-6). And a correction can itself go stale, as item 3
+above did. Both failures have the same cause: asserting from the document rather than checking
+against the code.

@@ -280,7 +280,9 @@ function requireCronSecret(req: Request, res: Response, route: string): boolean 
  * so costs nothing here and is the single change that takes the architecture from
  * "opportunistic" to "durable": see ARCHITECTURE.md, stage 2.
  *
- * Idempotent and safe to call concurrently — the claim is atomic (`FOR UPDATE SKIP LOCKED`),
+ * Idempotent and safe to call concurrently — the claim is atomic via the `status = 'pending'`
+ * guard on the claiming UPDATE (not `FOR UPDATE SKIP LOCKED`, which Postgres rejects
+ * alongside a window function — see src/jobs/queue.ts),
  * so two overlapping callers split the work rather than duplicating it.
  */
 router.get('/jobs/drain', async (req, res) => {

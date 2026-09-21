@@ -10,9 +10,14 @@
  * The one thing that has to be right here is the claim. Two concurrent invocations both
  * reading a job as pending and both running it is a duplicate DM to a real person, which
  * cannot be undone from here — the same failure the scheduled-post claim in api.ts was
- * written to prevent. `FOR UPDATE SKIP LOCKED` inside the subquery is what makes it atomic:
- * the lock is taken during the select, and a concurrent claimer skips the locked rows rather
- * than blocking on them or seeing them as free.
+ * written to prevent. What makes it atomic is the `status = 'pending'` guard on the UPDATE
+ * itself: the second claimer's UPDATE re-reads the committed row, sees 'running', matches
+ * nothing, and returns it to no one.
+ *
+ * `FOR UPDATE SKIP LOCKED` is NOT what makes it atomic, and is deliberately absent —
+ * Postgres rejects it outright alongside a window function ("FOR UPDATE is not allowed with
+ * window functions"), so the shape this comment used to describe could never have run. See
+ * the note at the query itself, and ADR-2 in ARCHITECTURE.md.
  */
 import { queryCount, queryOne, queryRows } from '../db/query.js';
 import { log } from '../utils/log.js';
