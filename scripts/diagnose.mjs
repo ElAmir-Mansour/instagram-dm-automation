@@ -35,7 +35,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {
     color, decryptSecret, describeDbTarget, fingerprint, fmtAge, fmtBytes, fmtTime,
-    connectReadOnly, isEncrypted, loadEnv, parseArgs, safeQuery,
+    connectReadOnly, isEncrypted, loadEnv, parseArgs, probeHeaders, safeQuery,
 } from './lib/live.mjs';
 
 const args = parseArgs(process.argv.slice(2));
@@ -159,6 +159,7 @@ async function checkDeployment() {
             name: 'webhook rejects a bad verify token',
             req: () => http.get(`${BASE_URL}/webhook`, {
                 params: { 'hub.mode': 'subscribe', 'hub.verify_token': `diagnostic-wrong-${Date.now()}`, 'hub.challenge': 'probe' },
+                headers: probeHeaders(),
             }),
             expect: 403,
         },
@@ -166,12 +167,12 @@ async function checkDeployment() {
             name: 'webhook rejects an unsigned POST',
             // No x-hub-signature-256 header at all. Nothing downstream runs: verifyMetaSignature
             // is the first statement in the handler.
-            req: () => http.post(`${BASE_URL}/webhook`, { object: 'instagram', entry: [] }),
+            req: () => http.post(`${BASE_URL}/webhook`, { object: 'instagram', entry: [] }, { headers: probeHeaders() }),
             expect: 403,
         },
         {
             name: '/api/cron/publish requires the cron secret',
-            req: () => http.get(`${BASE_URL}/api/cron/publish`),
+            req: () => http.get(`${BASE_URL}/api/cron/publish`, { headers: probeHeaders() }),
             expect: 401,
             // A 500 here is the fail-open regression: requireCronSecret answers 500 when
             // CRON_SECRET is unset, which means the guard is only holding by accident of
@@ -182,7 +183,7 @@ async function checkDeployment() {
         },
         {
             name: '/api/jobs/drain requires the cron secret',
-            req: () => http.get(`${BASE_URL}/api/jobs/drain`),
+            req: () => http.get(`${BASE_URL}/api/jobs/drain`, { headers: probeHeaders() }),
             expect: 401,
         },
         {

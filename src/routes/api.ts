@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import { pool } from '../config/db.js';
+import { isDiagnosticProbe } from '../utils/probe.js';
 import {
     createLegacySession, createSession, requireAuth, createDownloadToken, consumeDownloadToken
 } from '../middleware/auth.js';
@@ -259,7 +260,9 @@ function requireCronSecret(req: Request, res: Response, route: string): boolean 
     // Header only: a ?token= variant ends up in Vercel's access logs for their whole retention.
     const authHeader = req.headers['authorization'];
     if (typeof authHeader !== 'string' || !secretEquals(authHeader, `Bearer ${cronSecret}`)) {
-        log('warn', 'cron.unauthorized', { route });
+        // See src/utils/probe.ts: a label for diagnose.mjs's own guard probe, never an
+        // authorisation input — this rejection has already happened.
+        log('warn', 'cron.unauthorized', { route, probe: isDiagnosticProbe(req) });
         res.status(401).json({ error: 'Unauthorized cron request.' });
         return false;
     }

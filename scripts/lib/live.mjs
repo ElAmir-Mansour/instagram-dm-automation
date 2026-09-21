@@ -219,3 +219,29 @@ export const color = {
     red: wrap('31;1'), yellow: wrap('33;1'), green: wrap('32'),
     dim: wrap('2'), bold: wrap('1'), cyan: wrap('36'),
 };
+
+// ─── Diagnostic probe tag ───────────────────────────────────────────────────────────────
+
+/**
+ * Header that lets a log line say "this rejection was our own guard probe".
+ *
+ * The security guards in `diagnose.mjs` prove themselves by POSTing an unsigned body to
+ * /webhook and hitting the cron endpoints unauthenticated. Those produce
+ * `webhook.signature_rejected` and `cron.unauthorized` lines that are byte-identical to the
+ * ones a real incident produces — which is a trap in an app whose worst documented failure
+ * is an invisible signature rejection. It fooled me once, reading real logs.
+ *
+ * Signed rather than a plain header, for one reason: an unauthenticated attacker could
+ * otherwise set it and have their probing appear as our benign self-test, turning a
+ * detection signal into cover. It grants nothing either way — the server uses it only when
+ * building a log payload, after the request has already been rejected (src/utils/probe.ts).
+ *
+ * Returns {} when META_APP_SECRET is unavailable, so the probes still run untagged.
+ */
+export function probeHeaders() {
+    const secret = process.env.META_APP_SECRET;
+    if (!secret) return {};
+    const ts = Date.now();
+    const mac = crypto.createHmac('sha256', secret).update(`probe:${ts}`).digest('hex');
+    return { 'x-autoreply-probe': `${ts}.${mac}` };
+}
