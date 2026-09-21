@@ -18,6 +18,7 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { pool } from '../config/db.js';
 import { encryptSecret, hashPassword } from '../config/crypto.js';
+import { describeError, log } from '../utils/log.js';
 import { invalidateTenantCache } from '../services/tenant.js';
 
 const router = Router();
@@ -109,7 +110,7 @@ router.get('/tenants', async (_req, res) => {
             tenants: result.rows,
         });
     } catch (err) {
-        console.error('Admin Tenants Error:', err);
+        log('error', 'admin.tenants_list_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch tenants.' });
     }
 });
@@ -138,7 +139,7 @@ router.post('/tenants', async (req, res) => {
         try {
             encrypted = encryptSecret(page_access_token.trim());
         } catch (keyErr) {
-            console.error('Admin Create Tenant — encryption:', keyErr);
+            log('error', 'admin.tenant_encryption_failed', describeError(keyErr));
             res.status(500).json({
                 error: 'TOKEN_ENCRYPTION_KEY is not configured. Generate one with `openssl rand -hex 32` and set it before creating a tenant.'
             });
@@ -171,7 +172,7 @@ router.post('/tenants', async (req, res) => {
             res.status(409).json({ error: 'A creator with that page id already exists.' });
             return;
         }
-        console.error('Admin Create Tenant Error:', err);
+        log('error', 'admin.tenant_create_failed', describeError(err));
         res.status(500).json({ error: 'Failed to create tenant.' });
     }
 });
@@ -214,7 +215,7 @@ router.patch('/tenants/:id', async (req, res) => {
 
         res.json(result.rows[0]);
     } catch (err) {
-        console.error('Admin Update Tenant Error:', err);
+        log('error', 'admin.tenant_update_failed', describeError(err));
         res.status(500).json({ error: 'Failed to update tenant.' });
     }
 });
@@ -243,7 +244,7 @@ router.get('/users', async (_req, res) => {
         `);
         res.json(result.rows);
     } catch (err) {
-        console.error('Admin Users Error:', err);
+        log('error', 'admin.users_list_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch users.' });
     }
 });
@@ -301,7 +302,7 @@ router.post('/users', async (req, res) => {
             res.status(409).json({ error: 'A user with that email already exists.' });
             return;
         }
-        console.error('Admin Create User Error:', err);
+        log('error', 'admin.user_create_failed', describeError(err));
         res.status(500).json({ error: 'Failed to create user.' });
     }
 });
@@ -337,7 +338,7 @@ router.post('/users/:id/revoke', async (req, res) => {
             ...result.rows[0],
         });
     } catch (err) {
-        console.error('Admin Revoke Error:', err);
+        log('error', 'admin.user_revoke_failed', describeError(err));
         res.status(500).json({ error: 'Failed to revoke sessions.' });
     }
 });
@@ -371,7 +372,7 @@ router.post('/users/:id/memberships', async (req, res) => {
             res.status(404).json({ error: 'No such user or tenant.' });
             return;
         }
-        console.error('Admin Membership Error:', err);
+        log('error', 'admin.membership_failed', describeError(err));
         res.status(500).json({ error: 'Failed to grant membership.' });
     }
 });

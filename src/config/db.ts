@@ -1,4 +1,5 @@
 import pkg from 'pg';
+import { log } from '../utils/log.js';
 const { Pool } = pkg;
 
 export const pool = new Pool({
@@ -17,5 +18,5 @@ export const pool = new Pool({
  * failing any in-flight webhook with an opaque 500.
  */
 pool.on('error', (err) => {
-    console.error('[db] idle client error (pool recovers; connection discarded):', err.message);
+    log('error', 'db.idle_client_error', { message: err.message });
 });

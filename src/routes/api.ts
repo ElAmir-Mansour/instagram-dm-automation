@@ -14,6 +14,10 @@ import {
 } from '../services/tenant.js';
 import { encryptSecret, decryptSecret, verifyPassword } from '../config/crypto.js';
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
+import { pruneRawPayloads } from '../services/retention.js';
+import { drainWorker } from '../jobs/drain.js';
+import { describeError, log } from '../utils/log.js';
+import { getMediaStore } from '../services/storage.js';
 import adminRouter from './admin.js';
 
 
@@ -187,14 +191,14 @@ router.post('/auth/login', async (req, res) => {
             // `token` and `expiresIn` are what the dashboard reads; the rest is additive.
             res.json({ token, expiresIn: '24h', userId: user.id, role: user.role, tenantId });
         } catch (err) {
-            console.error('User Login Error:', err);
+            log('error', 'api.login_failed', describeError(err));
             res.status(500).json({ error: 'Login failed.' });
         }
         return;
     }
 
     if (!dashboardPassword) {
-        console.error('❌ Login attempted while DASHBOARD_PASSWORD is unset.');
+        log('error', 'auth.dashboard_password_unset');
         res.status(500).json({ error: 'Dashboard authentication is not configured.' });
         return;
     }
@@ -219,33 +223,73 @@ router.post('/auth/login', async (req, res) => {
         const token = createLegacySession(tenantId);
         res.json({ token, expiresIn: '24h' });
     } catch (err) {
-        console.error('Login Error:', err);
+        log('error', 'api.legacy_login_failed', describeError(err));
         res.status(500).json({ error: 'Dashboard authentication is not configured.' });
+    }
+});
+
+// ─── Scheduled / machine-triggered endpoints ────────────────────────────────
+
+/**
+ * Shared bearer guard for the endpoints a scheduler calls.
+ *
+ * Returns false having already answered, so callers read as `if (!requireCronSecret(...))
+ * return;`. Extracted when the drain endpoint arrived: two copies of a fail-closed auth check
+ * is one copy too many, and this is the guard whose earlier `if (cronSecret && ...)` form
+ * skipped itself entirely when the variable was unset.
+ */
+function requireCronSecret(req: Request, res: Response, route: string): boolean {
+    const cronSecret = process.env.CRON_SECRET;
+
+    if (!cronSecret) {
+        log('error', 'cron.secret_missing', { route });
+        res.status(500).json({ error: 'CRON_SECRET not configured.' });
+        return false;
+    }
+
+    // Header only: a ?token= variant ends up in Vercel's access logs for their whole retention.
+    const authHeader = req.headers['authorization'];
+    if (typeof authHeader !== 'string' || !secretEquals(authHeader, `Bearer ${cronSecret}`)) {
+        log('warn', 'cron.unauthorized', { route });
+        res.status(401).json({ error: 'Unauthorized cron request.' });
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Drain the job queue.
+ *
+ * This is the endpoint that makes the queue real. `vercel.json` can only schedule one cron a
+ * day on the Hobby plan, which is why `scheduled_time` is effectively day-granular despite a
+ * minute-precision UI — but nothing stops an *external* scheduler (QStash, GitHub Actions,
+ * cron-job.org, an uptime pinger) calling this every minute with the same bearer token. Doing
+ * so costs nothing here and is the single change that takes the architecture from
+ * "opportunistic" to "durable": see ARCHITECTURE.md, stage 2.
+ *
+ * Idempotent and safe to call concurrently — the claim is atomic (`FOR UPDATE SKIP LOCKED`),
+ * so two overlapping callers split the work rather than duplicating it.
+ */
+router.get('/jobs/drain', async (req, res) => {
+    if (!requireCronSecret(req, res, '/api/jobs/drain')) return;
+
+    try {
+        const result = await drainWorker();
+        res.json(result);
+    } catch (err) {
+        log('error', 'job.drain_endpoint_failed', describeError(err));
+        res.status(500).json({ error: 'Drain failed.' });
     }
 });
 
 // ─── Cron: Publish Scheduled Posts ──────────────────────────────────────────
 
 router.get('/cron/publish', async (req, res) => {
-    const cronSecret = process.env.CRON_SECRET;
-
-    // Fail closed. `if (cronSecret && ...)` skipped the whole guard whenever the variable was
-    // unset, which is exactly the deployment where you least want an open publish endpoint.
-    if (!cronSecret) {
-        console.error('❌ /api/cron/publish called but CRON_SECRET is not configured.');
-        res.status(500).json({ error: 'CRON_SECRET not configured.' });
-        return;
-    }
-
-    // Header only: a ?token= variant ends up in Vercel's access logs for their whole retention.
-    const authHeader = req.headers['authorization'];
-    if (typeof authHeader !== 'string' || !secretEquals(authHeader, `Bearer ${cronSecret}`)) {
-        res.status(401).json({ error: 'Unauthorized cron request.' });
-        return;
-    }
+    if (!requireCronSecret(req, res, '/api/cron/publish')) return;
 
     try {
-        console.log('⏰ Running Post Publisher Cron Job...');
+        log('info', 'cron.publish_start');
 
         // Release claims from runs that died mid-publish. Without this a lambda that timed out
         // leaves the row in PUBLISHING forever and nothing ever picks it up again.
@@ -258,7 +302,7 @@ router.get('/cron/publish', async (req, res) => {
          RETURNING id
         `);
         if (reaped.rows.length > 0) {
-            console.log(`⏰ Released ${reaped.rows.length} stale claim(s) back to PENDING.`);
+            log('warn', 'cron.publish_claims_released', { count: reaped.rows.length });
         }
 
         // Past five tries it is not a transient failure; stop retrying it every day forever.
@@ -272,6 +316,13 @@ router.get('/cron/publish', async (req, res) => {
         `);
 
         await pruneRateLimitData();
+        await pruneRawPayloads();
+
+        // The daily cron is also the backstop drain. If no external scheduler is calling
+        // /api/jobs/drain, this is what eventually picks up work that was enqueued while an
+        // invocation was being frozen — once a day is poor, but it is bounded, where before
+        // that work was simply gone.
+        await drainWorker();
 
         // Find pending posts due for publishing
         const result = await pool.query(`
@@ -283,12 +334,12 @@ router.get('/cron/publish', async (req, res) => {
         `);
 
         if (result.rows.length === 0) {
-            console.log('⏰ No pending scheduled posts found.');
+            log('info', 'cron.publish_none_due');
             res.json({ message: 'No pending posts to publish.' });
             return;
         }
 
-        console.log(`⏰ Found ${result.rows.length} post(s) to publish.`);
+        log('info', 'cron.publish_due', { count: result.rows.length });
         const publishedIds: string[] = [];
         let claimed = 0;
 
@@ -305,12 +356,14 @@ router.get('/cron/publish', async (req, res) => {
             );
 
             if ((claim.rowCount ?? 0) === 0) {
-                console.log(`⏰ Post ${post.id} was claimed by another run — skipping.`);
+                log('info', 'cron.publish_already_claimed', { post_id: post.id });
                 continue;
             }
 
             claimed++;
-            console.log(`⏰ Processing scheduled post ${post.id} (${post.platform} - ${post.post_type})...`);
+            log('info', 'cron.publish_claimed', {
+                post_id: post.id, platform: post.platform, post_type: post.post_type,
+            });
 
             try {
                 let fbId: string | null = null;
@@ -325,7 +378,7 @@ router.get('/cron/publish', async (req, res) => {
                     if (!post.facebook_page_id) {
                         throw new Error('Facebook Page ID is missing for this creator.');
                     }
-                    console.log(`⏰ Publishing to Facebook Page ${post.facebook_page_id}...`);
+                    log('info', 'publish.facebook_start', { post_id: post.id });
                     const fbRes = await publishFacebookPost(
                         post.facebook_page_id,
                         post.post_type,
@@ -334,7 +387,7 @@ router.get('/cron/publish', async (req, res) => {
                         token
                     );
                     fbId = fbRes.id || fbRes.post_id;
-                    console.log(`⏰ Published to Facebook. Post ID: ${fbId}`);
+                    log('info', 'publish.facebook_done', { post_id: post.id, fb_post_id: fbId });
                 }
 
                 // 2. Publish to Instagram
@@ -345,7 +398,7 @@ router.get('/cron/publish', async (req, res) => {
                     if (!post.media_url) {
                         throw new Error('Instagram requires a media URL to publish.');
                     }
-                    console.log(`⏰ Publishing to Instagram Account ${post.instagram_page_id}...`);
+                    log('info', 'publish.instagram_start', { post_id: post.id });
                     const igRes = await publishInstagramPost(
                         post.instagram_page_id,
                         post.post_type,
@@ -355,7 +408,7 @@ router.get('/cron/publish', async (req, res) => {
                         post.cover_url
                     );
                     igId = igRes.id;
-                    console.log(`⏰ Published to Instagram. Media ID: ${igId}`);
+                    log('info', 'publish.instagram_done', { post_id: post.id, ig_media_id: igId });
                 }
 
                 // Format published ID string
@@ -378,7 +431,7 @@ router.get('/cron/publish', async (req, res) => {
                 publishedIds.push(post.id);
 
             } catch (err: any) {
-                console.error(`❌ Failed to publish scheduled post ${post.id}:`, err.message);
+                log('error', 'cron.publish_failed', { post_id: post.id, ...describeError(err) });
                 await pool.query(
                     `UPDATE scheduled_posts 
                      SET status = 'FAILED', error_log = $1 
@@ -395,7 +448,7 @@ router.get('/cron/publish', async (req, res) => {
         });
 
     } catch (err: any) {
-        console.error('❌ Scheduler Cron Error:', err);
+        log('error', 'cron.publish_error', describeError(err));
         res.status(500).json({ error: 'Cron publisher failed.' });
     }
 });
@@ -435,30 +488,25 @@ router.get('/uploads/:id', async (req, res) => {
             return;
         }
 
-        const result = await pool.query(
-            'SELECT mime_type, data FROM media_uploads WHERE id = $1',
-            [id]
-        );
+        const media = await getMediaStore().get(id);
 
-        if (result.rows.length === 0) {
+        if (!media) {
             res.status(404).send('Not Found');
             return;
         }
 
-        const row = result.rows[0];
-
         // Rows predating the upload allowlist can hold any string, and this origin also serves
         // the dashboard — an echoed text/html would be same-origin script. Serve anything
         // unrecognised as an opaque download instead.
-        const contentType = ALLOWED_MIME_TYPES.has(row.mime_type) ? row.mime_type : 'application/octet-stream';
+        const contentType = ALLOWED_MIME_TYPES.has(media.mimeType) ? media.mimeType : 'application/octet-stream';
 
         res.setHeader('Content-Type', contentType);
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Disposition', 'inline');
         res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-        res.send(row.data);
+        res.send(media.data);
     } catch (err) {
-        console.error('File stream error:', err);
+        log('error', 'media.serve_failed', describeError(err));
         res.status(500).send('Internal Server Error');
     }
 });
@@ -590,7 +638,7 @@ router.get('/interactions/export', async (req, res) => {
         res.setHeader('Content-Disposition', 'attachment; filename=interactions_export.csv');
         res.status(200).send(csv);
     } catch (err) {
-        console.error('Export Error:', err);
+        log('error', 'api.export_failed', describeError(err));
         res.status(500).json({ error: 'Failed to export interactions.' });
     }
 });
@@ -637,7 +685,7 @@ router.get('/auth/me', async (req, res) => {
             tenants,
         });
     } catch (err) {
-        console.error('Session Identity Error:', err);
+        log('error', 'api.session_identity_failed', describeError(err));
         res.status(500).json({ error: 'Failed to read session identity.' });
     }
 });
@@ -678,7 +726,7 @@ router.post('/auth/switch-tenant', async (req, res) => {
         });
         res.json({ token, expiresIn: '24h', tenantId });
     } catch (err) {
-        console.error('Switch Tenant Error:', err);
+        log('error', 'api.switch_tenant_failed', describeError(err));
         res.status(500).json({ error: 'Failed to switch tenant.' });
     }
 });
@@ -738,7 +786,7 @@ router.get('/stats', async (req, res) => {
             facebookCount: facebook.rows[0].count,
         });
     } catch (err) {
-        console.error('Stats Error:', err);
+        log('error', 'api.stats_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch stats.' });
     }
 });
@@ -774,7 +822,7 @@ router.get('/stats/hourly', async (req, res) => {
         `, [getTenantId(req), String(days)]);
         res.json(result.rows);
     } catch (err) {
-        console.error('Hourly Stats Error:', err);
+        log('error', 'api.stats_hourly_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch hourly stats.' });
     }
 });
@@ -797,7 +845,7 @@ router.get('/stats/daily', async (req, res) => {
         `, [getTenantId(req), String(days)]);
         res.json(result.rows);
     } catch (err) {
-        console.error('Daily Stats Error:', err);
+        log('error', 'api.stats_daily_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch daily stats.' });
     }
 });
@@ -820,7 +868,7 @@ router.get('/campaigns', async (req, res) => {
         `, [getTenantId(req)]);
         res.json(result.rows);
     } catch (err) {
-        console.error('Campaigns Error:', err);
+        log('error', 'api.campaigns_list_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch campaigns.' });
     }
 });
@@ -847,7 +895,7 @@ router.post('/campaigns', async (req, res) => {
 
         res.status(201).json(result.rows[0]);
     } catch (err) {
-        console.error('Create Campaign Error:', err);
+        log('error', 'api.campaign_create_failed', describeError(err));
         res.status(500).json({ error: 'Failed to create campaign.' });
     }
 });
@@ -889,7 +937,7 @@ router.put('/campaigns/:id', async (req, res) => {
         }
         res.json(result.rows[0]);
     } catch (err) {
-        console.error('Update Campaign Error:', err);
+        log('error', 'api.campaign_update_failed', describeError(err));
         res.status(500).json({ error: 'Failed to update campaign.' });
     }
 });
@@ -916,7 +964,7 @@ router.delete('/campaigns/:id', async (req, res) => {
         }
         res.json({ message: 'Campaign deleted.', id: result.rows[0].id });
     } catch (err) {
-        console.error('Delete Campaign Error:', err);
+        log('error', 'api.campaign_delete_failed', describeError(err));
         res.status(500).json({ error: 'Failed to delete campaign.' });
     }
 });
@@ -941,7 +989,7 @@ router.get('/stats/campaigns', async (req, res) => {
         `, [getTenantId(req)]);
         res.json(result.rows);
     } catch (err) {
-        console.error('Campaign Stats Error:', err);
+        log('error', 'api.campaign_stats_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch campaign stats.' });
     }
 });
@@ -1021,7 +1069,7 @@ router.get('/interactions', async (req, res) => {
             }
         });
     } catch (err) {
-        console.error('Interactions Error:', err);
+        log('error', 'api.interactions_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch interactions.' });
     }
 });
@@ -1046,7 +1094,7 @@ async function recordTokenStatus(
             [status, error, creatorId]
         );
     } catch (err) {
-        console.warn('⚠️ Could not record token status:', (err as Error).message);
+        log('warn', 'token.status_record_failed', { message: (err as Error).message });
     }
 }
 
@@ -1102,7 +1150,7 @@ router.get('/settings/token/status', async (req, res) => {
             });
         }
     } catch (err) {
-        console.error('Token Status Error:', err);
+        log('error', 'token.status_failed', describeError(err));
         res.status(500).json({ error: 'Failed to check token status.' });
     }
 });
@@ -1131,10 +1179,10 @@ router.post('/settings/token', async (req, res) => {
                 });
                 if (extendRes.data && extendRes.data.access_token) {
                     token = extendRes.data.access_token;
-                    console.log('Successfully extended token to a never-expiring token.');
+                    log('info', 'token.extended');
                 }
             } catch (extendErr: any) {
-                console.log('Token extension skipped or failed:', extendErr.response?.data?.error?.message || extendErr.message);
+                log('warn', 'token.extend_skipped', describeError(extendErr));
                 // Continue with the original token if extension fails
             }
         }
@@ -1169,7 +1217,7 @@ router.post('/settings/token', async (req, res) => {
         try {
             encryptedToken = encryptSecret(token);
         } catch (keyErr) {
-            console.error('Token Encryption Error:', keyErr);
+            log('error', 'token.encryption_failed', describeError(keyErr));
             res.status(500).json({
                 error: 'TOKEN_ENCRYPTION_KEY is not configured. Generate one with `openssl rand -hex 32` and set it before saving a token.'
             });
@@ -1201,7 +1249,7 @@ router.post('/settings/token', async (req, res) => {
             scopes: data.scopes || [],
         });
     } catch (err: any) {
-        console.error('Token Update Error:', err);
+        log('error', 'token.update_failed', describeError(err));
         res.status(500).json({ error: err.response?.data?.error?.message || 'Failed to update token.' });
     }
 });
@@ -1243,7 +1291,7 @@ router.post('/settings/token/extend', async (req, res) => {
             try {
                 encryptedToken = encryptSecret(newToken);
             } catch (keyErr) {
-                console.error('Token Encryption Error:', keyErr);
+                log('error', 'token.encryption_failed', describeError(keyErr));
                 res.status(500).json({
                     error: 'TOKEN_ENCRYPTION_KEY is not configured. Generate one with `openssl rand -hex 32` and set it before saving a token.'
                 });
@@ -1263,7 +1311,7 @@ router.post('/settings/token/extend', async (req, res) => {
             res.status(400).json({ error: 'Failed to obtain an extended token from Meta.' });
         }
     } catch (err: any) {
-        console.error('Token Extend Error:', err.response?.data || err.message);
+        log('error', 'token.extend_failed', describeError(err));
         res.status(500).json({ error: err.response?.data?.error?.message || 'Failed to extend token.' });
     }
 });
@@ -1284,7 +1332,7 @@ router.get('/creators', async (req, res) => {
         );
         res.json(result.rows);
     } catch (err) {
-        console.error('Creators Error:', err);
+        log('error', 'api.creators_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch creators.' });
     }
 });
@@ -1299,7 +1347,7 @@ router.get('/posts/scheduled', async (req, res) => {
         );
         res.json(result.rows);
     } catch (err) {
-        console.error('Fetch Scheduled Posts Error:', err);
+        log('error', 'api.scheduled_list_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch scheduled posts.' });
     }
 });
@@ -1341,7 +1389,7 @@ router.post('/posts/scheduled', async (req, res) => {
         const newPost = result.rows[0];
 
         if (publish_now) {
-            console.log(`🚀 Immediate publishing requested for scheduled post ${newPost.id}...`);
+            log('info', 'publish.immediate_requested', { post_id: newPost.id });
 
             const token = creator.page_access_token;
 
@@ -1390,7 +1438,7 @@ router.post('/posts/scheduled', async (req, res) => {
                 res.status(201).json(finalRes.rows[0]);
                 return;
             } catch (publishErr: any) {
-                console.error('❌ Immediate publish failed:', publishErr.message);
+                log('error', 'publish.immediate_failed', { post_id: newPost.id, ...describeError(publishErr) });
                 const finalRes = await pool.query(
                     `UPDATE scheduled_posts
                      SET status = 'FAILED', error_log = $1
@@ -1410,7 +1458,7 @@ router.post('/posts/scheduled', async (req, res) => {
 
         res.status(201).json(newPost);
     } catch (err) {
-        console.error('Create Scheduled Post Error:', err);
+        log('error', 'api.scheduled_create_failed', describeError(err));
         res.status(500).json({ error: 'Failed to create scheduled post.' });
     }
 });
@@ -1446,7 +1494,7 @@ router.put('/posts/scheduled/:id', async (req, res) => {
         }
         res.json(result.rows[0]);
     } catch (err) {
-        console.error('Update Scheduled Post Error:', err);
+        log('error', 'api.scheduled_update_failed', describeError(err));
         res.status(500).json({ error: 'Failed to update scheduled post.' });
     }
 });
@@ -1472,7 +1520,7 @@ router.delete('/posts/scheduled/:id', async (req, res) => {
         }
         res.json({ message: 'Scheduled post deleted.', id });
     } catch (err) {
-        console.error('Delete Scheduled Post Error:', err);
+        log('error', 'api.scheduled_delete_failed', describeError(err));
         res.status(500).json({ error: 'Failed to delete scheduled post.' });
     }
 });
@@ -1517,7 +1565,7 @@ router.get('/posts/live', async (req, res) => {
                         });
                     });
                 }).catch(err => {
-                    console.warn('⚠️ Failed to fetch live Facebook posts:', err.message);
+                    log('warn', 'api.live_posts_facebook_failed', describeError(err));
                 })
             );
         }
@@ -1544,7 +1592,7 @@ router.get('/posts/live', async (req, res) => {
                         });
                     });
                 }).catch(err => {
-                    console.warn('⚠️ Failed to fetch live Instagram posts:', err.message);
+                    log('warn', 'api.live_posts_instagram_failed', describeError(err));
                 })
             );
         }
@@ -1556,7 +1604,7 @@ router.get('/posts/live', async (req, res) => {
 
         res.json(livePosts);
     } catch (err) {
-        console.error('Fetch Live Posts Error:', err);
+        log('error', 'api.live_posts_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch live posts from Meta.' });
     }
 });
@@ -1598,20 +1646,22 @@ router.post('/upload', async (req, res) => {
             return;
         }
 
-        // Insert into database
+        // Through the store rather than straight to SQL, so that moving the bytes to object
+        // storage is a change to `getMediaStore()` and nothing else.
+        //
         // `creator_id` arrived with v12. The row is still served unauthenticated by UUID —
         // Meta cURLs it — so this is attribution and cleanup-on-delete, not access control.
-        const result = await pool.query(
-            'INSERT INTO media_uploads (creator_id, filename, mime_type, data) VALUES ($1, $2, $3, $4) RETURNING id',
-            [getTenantId(req), filename, mime_type, buffer]
-        );
+        const store = getMediaStore();
+        const { id: newUploadId } = await store.put({
+            creatorId: getTenantId(req),
+            filename,
+            mimeType: mime_type,
+            data: buffer,
+        });
 
-        const newUploadId = result.rows[0].id;
-        
-        // Construct URL using req.get('host')
         const protocol = req.headers['x-forwarded-proto'] || 'http';
         const host = req.get('host');
-        const publicUrl = `${protocol}://${host}/api/uploads/${newUploadId}`;
+        const publicUrl = store.publicUrl(newUploadId, `${protocol}://${host}`);
 
         res.status(201).json({
             id: newUploadId,
@@ -1619,7 +1669,7 @@ router.post('/upload', async (req, res) => {
             filename
         });
     } catch (err) {
-        console.error('Upload handling error:', err);
+        log('error', 'media.upload_failed', describeError(err));
         res.status(500).json({ error: 'Failed to handle file upload.' });
     }
 });
@@ -1660,7 +1710,7 @@ router.get('/conversations', async (req, res) => {
             }
         });
     } catch (err) {
-        console.error('Fetch Conversations Error:', err);
+        log('error', 'api.conversations_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch conversations.' });
     }
 });
@@ -1692,7 +1742,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
         );
         res.json(messages.rows);
     } catch (err) {
-        console.error('Fetch Messages Error:', err);
+        log('error', 'api.messages_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch message history.' });
     }
 });
@@ -1732,7 +1782,9 @@ router.post('/conversations/:id/messages', async (req, res) => {
         const conv = convRes.rows[0];
 
         // Send message to Instagram
-        console.log(`✉️ Manual response to ${conv.instagram_user_id}: "${text}"`);
+        // Length, not content: this line used to put the operator's message body — and by
+        // implication the private conversation it belongs to — into the log stream.
+        log('info', 'inbox.manual_reply', { conversation_id: conv.id, chars: text.length });
         const metaPayload = { text };
         // Selected straight from `creators`, so it has not passed through the tenant service.
         await sendDirectMessage(conv.instagram_user_id, metaPayload, decryptSecret(conv.page_access_token));
@@ -1751,7 +1803,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
 
         res.json({ success: true, message: 'Message sent manually. Bot is paused for this thread.' });
     } catch (err: any) {
-        console.error('Manual Send Error:', err);
+        log('error', 'api.manual_send_failed', describeError(err));
         res.status(500).json({ error: err.message || 'Failed to send message.' });
     }
 });
@@ -1783,7 +1835,7 @@ router.put('/conversations/:id/toggle-bot', async (req, res) => {
 
         res.json(result.rows[0]);
     } catch (err) {
-        console.error('Toggle Bot Error:', err);
+        log('error', 'api.toggle_bot_failed', describeError(err));
         res.status(500).json({ error: 'Failed to toggle bot.' });
     }
 });
@@ -1808,7 +1860,7 @@ router.get('/settings/ai', async (req, res) => {
 
         res.json(agentRes.rows[0]);
     } catch (err) {
-        console.error('Get AI Settings Error:', err);
+        log('error', 'api.ai_settings_read_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch AI settings.' });
     }
 });
@@ -1852,7 +1904,7 @@ router.post('/settings/ai', async (req, res) => {
 
         res.json(result.rows[0]);
     } catch (err) {
-        console.error('Update AI Settings Error:', err);
+        log('error', 'api.ai_settings_update_failed', describeError(err));
         res.status(500).json({ error: 'Failed to update AI settings.' });
     }
 });
@@ -1887,7 +1939,7 @@ router.post('/settings/ai/test', async (req, res) => {
 
         res.json(aiRes);
     } catch (err: any) {
-        console.error('AI Test Error:', err);
+        log('error', 'api.ai_test_failed', describeError(err));
         res.status(500).json({ error: err.message || 'Simulation call failed.' });
     }
 });
@@ -1918,7 +1970,7 @@ router.get('/settings/webhook-token', async (req, res) => {
     } catch (err: any) {
         // `err.message` here is Postgres driver text — it names tables and columns to anyone
         // who can reach the endpoint. Keep the detail in the logs.
-        console.error('Read Verify Token Error:', err);
+        log('error', 'api.verify_token_read_failed', describeError(err));
         res.status(500).json({ error: 'Failed to read verify token.' });
     }
 });
@@ -1962,7 +2014,7 @@ router.post('/settings/webhook-token', async (req, res) => {
             message: 'Verify token saved. Paste the same value into Meta\u2019s webhook configuration — it works immediately, no redeploy needed.',
         });
     } catch (err: any) {
-        console.error('Save Verify Token Error:', err);
+        log('error', 'api.verify_token_save_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save verify token.' });
     }
 });

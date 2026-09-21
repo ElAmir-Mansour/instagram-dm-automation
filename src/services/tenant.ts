@@ -12,14 +12,28 @@
  * follows.
  */
 import { pool } from '../config/db.js';
+import { queryOne, queryRows } from '../db/query.js';
+import type { CreatorRow, UserRow } from '../db/rows.js';
 import { decryptSecret } from '../config/crypto.js';
+import { log } from '../utils/log.js';
 
+/**
+ * A creator row, as the column-list API below returns it.
+ *
+ * Everything past `page_access_token` is optional because these functions take an explicit
+ * column list and most callers do not ask for them — `is_active` in particular is selected
+ * by exactly one route (the token-status check) and by none of the webhook paths. It was
+ * declared required here, which was simply untrue: `pool.query` returns `any`, so the lie
+ * typechecked, and `creator.is_active` on the webhook path would have been `undefined` while
+ * the compiler insisted it was a boolean. Adding row types to this module is what surfaced
+ * it. The four required fields are the ones every default column list includes.
+ */
 export interface Creator {
     id: string;
     instagram_page_id: string | null;
     facebook_page_id: string | null;
     page_access_token: string;
-    is_active: boolean;
+    is_active?: boolean;
     webhook_verify_token?: string | null;
 }
 
@@ -36,12 +50,12 @@ const CACHE_MS = 30_000;
 export async function getActiveCreatorId(): Promise<string | null> {
     if (cachedId && Date.now() - cachedId.at < CACHE_MS) return cachedId.value;
 
-    const res = await pool.query(
+    const row = await queryOne<Pick<CreatorRow, 'id'>>(
         `SELECT id FROM creators WHERE is_active = true ORDER BY created_at LIMIT 1`
     );
-    if (res.rows.length === 0) return null;
+    if (!row) return null;
 
-    cachedId = { value: res.rows[0].id, at: Date.now() };
+    cachedId = { value: row.id, at: Date.now() };
     return cachedId.value;
 }
 
@@ -99,7 +113,11 @@ export async function getCreatorByPageId(...pageIds: (string | undefined)[]): Pr
     const ids = pageIds.filter((id): id is string => Boolean(id));
     if (ids.length === 0) return null;
 
-    const res = await pool.query(
+    // The one query on the webhook's critical path. Typed to exactly the columns selected,
+    // so adding a field to `Creator` without adding it here is a compile error rather than
+    // an `undefined` that reaches the Meta API as a missing page id.
+    type Row = Pick<CreatorRow, 'id' | 'instagram_page_id' | 'facebook_page_id' | 'page_access_token'>;
+    const row = await queryOne<Row>(
         `SELECT id, instagram_page_id, facebook_page_id, page_access_token
            FROM creators
           WHERE is_active = true
@@ -110,7 +128,7 @@ export async function getCreatorByPageId(...pageIds: (string | undefined)[]): Pr
     );
     // Decrypted here rather than at the two webhook call sites, so the comment and DM
     // pipelines keep working unchanged the moment a token is first written encrypted.
-    return withDecryptedToken<Creator>(res.rows[0]);
+    return withDecryptedToken<Creator>(row ?? undefined);
 }
 
 /** Drop the cached id — call after any write that could change which creator is active. */
@@ -225,11 +243,11 @@ export async function requireLiveSession(req: Request, res: Response, next: Next
     }
 
     try {
-        const userRes = await pool.query(
+        const user = await queryOne<Pick<UserRow, 'token_version' | 'is_active'>>(
             'SELECT token_version, is_active FROM users WHERE id = $1',
             [session.userId]
         );
-        const validity = checkSessionValidity(session, userRes.rows[0]);
+        const validity = checkSessionValidity(session, user);
         if (!validity.ok) {
             res.status(401).json({
                 error: validity.reason === 'disabled'
@@ -241,7 +259,7 @@ export async function requireLiveSession(req: Request, res: Response, next: Next
     } catch (err) {
         // Fail closed. A database that cannot confirm the session is live is not a reason to
         // assume it is.
-        console.error('[tenant] session validity check failed:', err);
+        log('error', 'auth.session_check_failed', { message: (err as Error)?.message });
         res.status(503).json({ error: 'Could not verify the session — try again.' });
         return;
     }
@@ -311,15 +329,14 @@ export async function listTenantsForSession(
     session: { userId: string | null; role: string }
 ): Promise<TenantSummary[]> {
     if (session.role === 'platform_admin') {
-        const res = await pool.query(
+        return queryRows<TenantSummary>(
             `SELECT id, name, instagram_page_id, facebook_page_id, token_status
                FROM creators WHERE is_active = true ORDER BY name NULLS LAST, created_at`
         );
-        return res.rows;
     }
     if (!session.userId) return [];
 
-    const res = await pool.query(
+    return queryRows<TenantSummary>(
         `SELECT c.id, c.name, c.instagram_page_id, c.facebook_page_id, c.token_status
            FROM creators c
            JOIN memberships m ON m.creator_id = c.id
@@ -327,5 +344,4 @@ export async function listTenantsForSession(
           ORDER BY c.name NULLS LAST, c.created_at`,
         [session.userId]
     );
-    return res.rows;
 }

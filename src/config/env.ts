@@ -1,6 +1,12 @@
 /**
  * Environment Variable Validator
  * Fails fast at startup if required configuration is missing.
+ *
+ * The one place `console.error` is used deliberately rather than `src/utils/log.ts`. This
+ * runs before anything is serving, there is no request to correlate against, and its actual
+ * audience is a person reading a terminal after `npm run start:dev` — a multi-line checklist
+ * of what to put in `.env` is the right output there, and a JSON line is not. The structured
+ * counterpart is `startup.validation_failed`, emitted by the caller in src/index.ts.
  */
 
 const REQUIRED_VARS = [

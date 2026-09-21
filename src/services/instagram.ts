@@ -1,4 +1,5 @@
 import { metaHttp, withRetry } from './http.js';
+import { log } from '../utils/log.js';
 
 export const API_VERSION = 'v21.0';
 
@@ -295,7 +296,7 @@ export async function publishInstagramPost(
 
     try {
         // Step 1: Create media container
-        console.log(`[IG Publish] Step 1: Creating container for type ${type}...`);
+        log('info', 'publish.container_creating', { post_type: type });
         const createRes = await withRetry(
             () => metaHttp.post(createUrl, createPayload, {
                 headers: { Authorization: `Bearer ${accessToken}` }
@@ -303,11 +304,10 @@ export async function publishInstagramPost(
             { label: `ig-create-container[${type}]` }
         );
         const containerId = createRes.data.id;
-        console.log(`[IG Publish] Container created: ${containerId}`);
+        log('info', 'publish.container_created', { container_id: containerId });
 
         if (type !== 'image') {
             // Check and poll status for video, reel, story to make sure processing is complete
-            console.log(`[IG Publish] Polling status for container ${containerId}...`);
             const startedAt = Date.now();
             const deadline = startedAt + pollBudgetMs;
             let status = 'IN_PROGRESS';
@@ -325,7 +325,9 @@ export async function publishInstagramPost(
                 status = statusRes.data.status_code;
                 statusDetail = statusRes.data.status || '';
                 const msLeft = Math.max(0, deadline - Date.now());
-                console.log(`[IG Publish] Container status: ${status} (Detail: ${statusDetail}) (${msLeft}ms left)`);
+                log('debug', 'publish.container_status', {
+                    container_id: containerId, status, detail: statusDetail, ms_left: msLeft,
+                });
 
                 if (status === 'ERROR' || status === 'EXPIRED') {
                     throw new Error(`Instagram media processing failed with status: ${status}. Detail: ${statusDetail}`);
@@ -345,7 +347,7 @@ export async function publishInstagramPost(
         }
 
         // Step 2: Publish container
-        console.log(`[IG Publish] Step 2: Publishing container ${containerId}...`);
+        log('info', 'publish.container_publishing', { container_id: containerId });
         const publishUrl = `${GRAPH_BASE}/${instagramId}/media_publish`;
 
         let publishRes;
@@ -368,7 +370,10 @@ export async function publishInstagramPost(
                 // images, which skip it entirely. withRetry rightly refuses to retry a 400, so
                 // this specific case is ridden out here and the two budgets compose.
                 if ((metaCode === 9007 || metaCode === 100) && attempt < CONTAINER_NOT_READY_RETRIES) {
-                    console.log(`[IG Publish] Container not ready (Code: ${metaCode}), retrying publish in ${CONTAINER_NOT_READY_DELAY_MS}ms...`);
+                    log('warn', 'publish.container_not_ready', {
+                        container_id: containerId, meta_code: metaCode,
+                        delay_ms: CONTAINER_NOT_READY_DELAY_MS,
+                    });
                     await sleep(CONTAINER_NOT_READY_DELAY_MS);
                     continue;
                 }
@@ -376,7 +381,7 @@ export async function publishInstagramPost(
             }
         }
 
-        console.log(`[IG Publish] Success! Published post ID: ${publishRes?.data?.id}`);
+        log('info', 'publish.instagram_success', { ig_media_id: publishRes?.data?.id });
         return publishRes?.data; // returns { id: "media_id" }
     } catch (error: any) {
         // The timeout carries the container id and last known status, which is what lets the

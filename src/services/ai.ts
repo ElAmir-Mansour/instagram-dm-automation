@@ -1,10 +1,10 @@
 import axios from 'axios';
-import { pool } from '../config/db.js';
+import { queryOne, queryRows } from '../db/query.js';
+import type { AiAgentRow, MessageRow } from '../db/rows.js';
+import { log } from '../utils/log.js';
 
-interface MessageRow {
-    direction: 'inbound' | 'outbound';
-    text: string;
-}
+/** The two columns the history window actually needs. */
+type HistoryRow = Pick<MessageRow, 'direction' | 'text'>;
 
 /**
  * `ai_agents.model` is dashboard-settable and gets interpolated straight into the request
@@ -40,7 +40,7 @@ const GEMINI_TIMEOUT_MS = 30_000;
 function resolveModel(configured: unknown): string {
     if (typeof configured === 'string' && SUPPORTED_MODELS.has(configured)) return configured;
     if (configured) {
-        console.warn(`⚠️ Unrecognised Gemini model "${configured}" configured; using ${DEFAULT_MODEL}.`);
+        log('warn', 'ai.unknown_model', { configured, fallback: DEFAULT_MODEL });
     }
     return DEFAULT_MODEL;
 }
@@ -182,12 +182,12 @@ export async function generateAiResponse(
     //    disabled agent returned zero rows and was indistinguishable from an unconfigured one.
     //    The `|| default` below then answered the customer anyway, with a generic persona and
     //    an empty knowledge base — the toggle changed who replied, not whether anyone did.
-    const agentRes = await pool.query(
+    type AgentRow = Pick<AiAgentRow, 'is_active' | 'system_prompt' | 'knowledge_base' | 'model' | 'temperature'>;
+    const stored = await queryOne<AgentRow>(
         `SELECT is_active, system_prompt, knowledge_base, model, temperature
            FROM ai_agents WHERE creator_id = $1`,
         [creatorId]
     );
-    const stored = agentRes.rows[0];
 
     // `overrides` means this is the dashboard's test sandbox, not a real customer. Testing a
     // prompt before switching the agent on is the whole point of that box, so the disabled
@@ -196,7 +196,7 @@ export async function generateAiResponse(
     const isSandbox = overrides !== undefined;
 
     if (stored && stored.is_active === false && !isSandbox) {
-        console.log(`🤖 AI agent is disabled for creator ${creatorId} — not replying.`);
+        log('debug', 'ai.disabled', { creator_id: creatorId });
         return null;
     }
 
@@ -209,7 +209,7 @@ export async function generateAiResponse(
     };
 
     // 2. Fetch recent conversation history
-    const historyRes = await pool.query(
+    const historyRows = await queryRows<HistoryRow>(
         `SELECT direction, text
          FROM messages
          WHERE conversation_id = $1
@@ -219,7 +219,7 @@ export async function generateAiResponse(
     );
 
     // Order chronological
-    const history: MessageRow[] = historyRes.rows.reverse();
+    const history: HistoryRow[] = historyRows.reverse();
 
     // 3. Format Contents for Gemini REST API
     const contents: any[] = [];
@@ -251,7 +251,6 @@ export async function generateAiResponse(
     // the agent improvising about prices and course contents — back into 0.7.
     const temperature = Number.isFinite(agent.temperature) ? agent.temperature : DEFAULT_TEMPERATURE;
 
-    console.log(`🤖 Querying Gemini model (${modelName})...`);
 
     try {
         const payload = {
@@ -274,6 +273,23 @@ export async function generateAiResponse(
             timeout: GEMINI_TIMEOUT_MS
         });
         const rawJsonText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        // Token counts are the product's dominant marginal cost and the only way to see it
+        // is to record them per call. Arabic runs ~2-2.5x more tokens per character than
+        // English, and the system prompt plus the whole knowledge base is resent every time,
+        // so `prompt_tokens` here is mostly the static prefix — which is precisely the number
+        // that tells you whether context caching is worth turning on.
+        const usage = response.data?.usageMetadata;
+        if (usage) {
+            log('info', 'ai.usage', {
+                model: modelName,
+                prompt_tokens: usage.promptTokenCount,
+                output_tokens: usage.candidatesTokenCount,
+                total_tokens: usage.totalTokenCount,
+                cached_tokens: usage.cachedContentTokenCount ?? 0,
+                history_turns: contents.length,
+            });
+        }
 
         if (!rawJsonText) {
             // Usually a safety block: candidates come back empty with a finishReason. Worth
@@ -299,7 +315,12 @@ export async function generateAiResponse(
         // therefore the API key — out of the log line.
         const metaError = err.response?.data?.error;
         const status = err.response?.status;
-        console.error(`❌ Gemini API Error${status ? ` (HTTP ${status})` : ''}:`, metaError || err.message);
+        log('error', 'ai.request_failed', {
+            model: modelName,
+            http_status: status,
+            gemini_status: metaError?.status,
+            message: metaError?.message ?? err.message,
+        });
 
         throw new Error(
             `Gemini request failed${status ? ` [HTTP ${status}]` : ''}: ${metaError?.message || err.message}`
