@@ -142,6 +142,7 @@ const JobsPage = {
         `);
 
         UI.icons(container);
+        Motion.announce(t('jobs.count', { count: rows.length }));
     },
 
     // ─── One job, read tolerantly ────────────────────────────────────────────

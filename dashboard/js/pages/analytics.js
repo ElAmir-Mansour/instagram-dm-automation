@@ -21,6 +21,26 @@ const AnalyticsPage = {
      */
     _seq: 0,
 
+    /**
+     * Success-rate thresholds — named so they are not a magic number buried
+     * in a conditional. Same bands as overview.js's stat tile (kept as a
+     * separate copy, not a shared import: this dashboard has no bundler, and
+     * page modules are plain globals injected as independent <script> tags,
+     * so a top-level const here would collide with one of the same name
+     * loaded from another page module in the same session).
+     */
+    SUCCESS_RATE_DANGER_MAX: 70,
+    SUCCESS_RATE_WARNING_MAX: 90,
+
+    /** text-success / text-warning / text-danger for a 0–100 rate, or '' if unknown. */
+    successRateClass(rate) {
+        const n = Number(rate);
+        if (!Number.isFinite(n)) return '';
+        if (n <= this.SUCCESS_RATE_DANGER_MAX) return 'text-danger';
+        if (n <= this.SUCCESS_RATE_WARNING_MAX) return 'text-warning';
+        return 'text-success';
+    },
+
     destroy() {
         this._seq++;
         // No chart instances to destroy any more: the charts are SVG strings written
@@ -89,7 +109,7 @@ const AnalyticsPage = {
                         <span class="stat-label">${t('analytics.successRate')}</span>
                         <span class="stat-icon"><i data-lucide="trending-up" aria-hidden="true"></i></span>
                     </div>
-                    <p class="stat-value">${UI.formatPercent(stats.successRate)}</p>
+                    <p class="stat-value ${html.raw(this.successRateClass(stats.successRate))}">${UI.formatPercent(stats.successRate)}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
@@ -150,10 +170,7 @@ const AnalyticsPage = {
                                 </tbody>
                             </table>
                         ` : html`
-                            <div class="empty-state">
-                                <i data-lucide="award" aria-hidden="true"></i>
-                                <p>${t('analytics.noCampaignData')}</p>
-                            </div>
+                            ${Admin.emptyState('award', t('analytics.noCampaignDataTitle'), t('analytics.noCampaignData'))}
                         `}
                     </div>
                 </div>

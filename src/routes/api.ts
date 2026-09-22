@@ -23,7 +23,7 @@ import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/he
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
 import { queryOne } from '../db/query.js';
-import type { UserRow } from '../db/rows.js';
+import type { UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
@@ -415,6 +415,170 @@ export interface PublishSweepResult {
 }
 
 /**
+ * The `scheduled_posts` columns `attemptPublish` needs — a `Pick<>` of `ScheduledPostRow`, per
+ * the convention in `src/db/rows.ts`: it says exactly what the function reads. Both real
+ * callers select more than this and simply pass the wider row through, which is fine — a
+ * wider object always satisfies a narrower parameter type.
+ */
+type PublishTarget = Pick<
+    ScheduledPostRow,
+    'id' | 'platform' | 'post_type' | 'caption' | 'media_url' | 'cover_url' | 'published_post_id'
+>;
+
+/**
+ * The creator fields `attemptPublish` needs to reach Meta. `id` is nullable here — unlike
+ * `CreatorRow.id` — because `publishDuePosts()`'s join never selects `creators.id` on its own,
+ * only `scheduled_posts.creator_id` (via `s.*`), and that FK is itself nullable in the schema.
+ * `page_access_token` is still encrypted; `attemptPublish` is what decrypts it.
+ */
+type PublishCreator = {
+    id: string | null;
+    page_access_token: string;
+    instagram_page_id: string | null;
+    facebook_page_id: string | null;
+};
+
+/**
+ * Thrown by `attemptPublish` when a platform publish fails, after it has already written the
+ * partial-aware FAILED row. Carries `fbId`/`igId` — whatever DID go live before the failure —
+ * so a caller does not have to re-derive them for its own logging or HTTP response, plus
+ * `code`/`response` lifted off the original Graph/axios error so a caller's `describeError()`
+ * still surfaces `meta_code`/`meta_message`/`http_status` exactly as it did when that error
+ * reached the log line directly, before this wrapper existed.
+ */
+export class PublishAttemptError extends Error {
+    fbId: string | null;
+    igId: string | null;
+    code?: unknown;
+    response?: unknown;
+
+    constructor(message: string, fbId: string | null, igId: string | null, original?: unknown) {
+        super(message);
+        this.name = 'PublishAttemptError';
+        this.fbId = fbId;
+        this.igId = igId;
+        if (original instanceof Error) {
+            const anyOriginal = original as unknown as Record<string, unknown>;
+            if (anyOriginal['code'] !== undefined) this.code = anyOriginal['code'];
+            if (anyOriginal['response'] !== undefined) this.response = anyOriginal['response'];
+        }
+    }
+}
+
+/**
+ * Publish whatever platforms a post is still missing, and record the outcome.
+ *
+ * Extracted from `publishDuePosts()`'s loop body so `POST /posts/scheduled/:id/publish-now`
+ * can share it instead of re-implementing it — re-implementing it is exactly how the
+ * create-with-`publish_now` branch went wrong: it started `fbId`/`igId` at `null`
+ * unconditionally, with no knowledge of what the ORIGINAL row had already published, so a
+ * second "Publish now" click on a `platform: 'both'` post where Facebook had already succeeded
+ * republished Facebook too. Same pattern as `publishDuePosts` itself, which was "Extracted from
+ * `/api/cron/publish` so that `/api/jobs/drain` can call it too" — one more caller.
+ *
+ * Callers must claim the row first (flip it to `PUBLISHING`, typically with an atomic
+ * `UPDATE ... WHERE status IN (...)`) — this function has no way to know which claim query is
+ * right, because the two current callers claim differently: a sweep of every due row vs. one
+ * row scoped to a tenant. It DOES own the terminal write: `PUBLISHED` with both ids on full
+ * success, or `FAILED` with whatever partial id already went live, so the next attempt — cron
+ * or manual — skips that platform instead of republishing it.
+ */
+export async function attemptPublish(
+    post: PublishTarget,
+    creator: PublishCreator
+): Promise<{ fbId: string | null; igId: string | null }> {
+    // Anything a previous attempt already got live. Re-publishing it would duplicate a real
+    // post on a real account, which cannot be undone from here.
+    const already = publishedPlatforms(post.published_post_id);
+    let fbId: string | null = already.fb;
+    let igId: string | null = already.ig;
+    const postType = post.post_type as 'image' | 'video' | 'reel' | 'story';
+
+    try {
+        const token = decryptSecret(creator.page_access_token);
+
+        // 1. Publish to Facebook
+        if ((post.platform === 'facebook' || post.platform === 'both') && !fbId) {
+            if (!creator.facebook_page_id) {
+                throw new Error('Facebook Page ID is missing for this creator.');
+            }
+            log('info', 'publish.facebook_start', { post_id: post.id });
+            const fbRes = await publishFacebookPost(
+                creator.facebook_page_id,
+                postType,
+                post.caption || '',
+                post.media_url,
+                token
+            );
+            fbId = fbRes.id || fbRes.post_id;
+            log('info', 'publish.facebook_done', { post_id: post.id, fb_post_id: fbId });
+        } else if (fbId) {
+            log('info', 'publish.facebook_skipped_already_live', {
+                post_id: post.id, fb_post_id: fbId,
+            });
+        }
+
+        // 2. Publish to Instagram
+        if ((post.platform === 'instagram' || post.platform === 'both') && !igId) {
+            if (!creator.instagram_page_id) {
+                throw new Error('Instagram Account ID is missing for this creator.');
+            }
+            if (!post.media_url) {
+                throw new Error('Instagram requires a media URL to publish.');
+            }
+            log('info', 'publish.instagram_start', { post_id: post.id });
+            const igRes = await publishInstagramPost(
+                creator.instagram_page_id,
+                postType,
+                post.caption || '',
+                post.media_url,
+                token,
+                // `cover_url` is the reason a reel does not get a black tile in the
+                // profile grid. It survives create, edit and publish-now.
+                post.cover_url
+            );
+            igId = igRes.id;
+            log('info', 'publish.instagram_done', { post_id: post.id, ig_media_id: igId });
+        } else if (igId) {
+            log('info', 'publish.instagram_skipped_already_live', {
+                post_id: post.id, ig_media_id: igId,
+            });
+        }
+
+        await pool.query(
+            `UPDATE scheduled_posts
+             SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL
+             WHERE id = $2`,
+            [formatPublishedIds(fbId, igId), post.id]
+        );
+
+        return { fbId, igId };
+    } catch (err: any) {
+        // A dead token stops every publish, not just this one.
+        if (creator.id) await noteMetaFailure(creator.id, err);
+
+        // The partial case, stated plainly. The status stays FAILED — the dashboard filters
+        // on that vocabulary and this is genuinely not a finished post — but
+        // `published_post_id` now keeps whatever did go live, so the next attempt skips it
+        // instead of posting it twice, and the error names what is already public so the
+        // operator is not hunting for a Facebook post they were told failed.
+        const partial = formatPublishedIds(fbId, igId);
+        const message = partial
+            ? `Partially published (${partial}) — the rest failed: ${err.message}`
+            : err.message;
+
+        await pool.query(
+            `UPDATE scheduled_posts
+             SET status = 'FAILED', error_log = $1, published_post_id = $2
+             WHERE id = $3`,
+            [message, partial || null, post.id]
+        );
+
+        throw new PublishAttemptError(message, fbId, igId, err);
+    }
+}
+
+/**
  * Claim and publish every scheduled post that is due.
  *
  * Extracted from `/api/cron/publish` so that `/api/jobs/drain` can call it too. That is the
@@ -474,104 +638,24 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
             post_id: post.id, platform: post.platform, post_type: post.post_type,
         });
 
-        // Anything a previous attempt already got live. Re-publishing it would duplicate
-        // a real post on a real account, which cannot be undone from here.
-        const already = publishedPlatforms(post.published_post_id);
-        let fbId: string | null = already.fb;
-        let igId: string | null = already.ig;
-
         try {
-            // Read straight off the joined creator row, so it has not been through the
-            // tenant service's decryption — do it here.
-            const token = decryptSecret(post.page_access_token);
-
-            // 1. Publish to Facebook
-            if ((post.platform === 'facebook' || post.platform === 'both') && !fbId) {
-                if (!post.facebook_page_id) {
-                    throw new Error('Facebook Page ID is missing for this creator.');
-                }
-                log('info', 'publish.facebook_start', { post_id: post.id });
-                const fbRes = await publishFacebookPost(
-                    post.facebook_page_id,
-                    post.post_type,
-                    post.caption || '',
-                    post.media_url,
-                    token
-                );
-                fbId = fbRes.id || fbRes.post_id;
-                log('info', 'publish.facebook_done', { post_id: post.id, fb_post_id: fbId });
-            } else if (fbId) {
-                log('info', 'publish.facebook_skipped_already_live', {
-                    post_id: post.id, fb_post_id: fbId,
-                });
-            }
-
-            // 2. Publish to Instagram
-            if ((post.platform === 'instagram' || post.platform === 'both') && !igId) {
-                if (!post.instagram_page_id) {
-                    throw new Error('Instagram Account ID is missing for this creator.');
-                }
-                if (!post.media_url) {
-                    throw new Error('Instagram requires a media URL to publish.');
-                }
-                log('info', 'publish.instagram_start', { post_id: post.id });
-                const igRes = await publishInstagramPost(
-                    post.instagram_page_id,
-                    post.post_type,
-                    post.caption || '',
-                    post.media_url,
-                    token,
-                    // `cover_url` is the reason a reel does not get a black tile in the
-                    // profile grid. It survives create, edit and publish-now; this is the
-                    // fourth path and the one that runs unattended.
-                    post.cover_url
-                );
-                igId = igRes.id;
-                log('info', 'publish.instagram_done', { post_id: post.id, ig_media_id: igId });
-            } else if (igId) {
-                log('info', 'publish.instagram_skipped_already_live', {
-                    post_id: post.id, ig_media_id: igId,
-                });
-            }
-
-            await pool.query(
-                `UPDATE scheduled_posts
-                 SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL
-                 WHERE id = $2`,
-                [formatPublishedIds(fbId, igId), post.id]
-            );
-
+            await attemptPublish(post, {
+                id: post.creator_id,
+                page_access_token: post.page_access_token,
+                instagram_page_id: post.instagram_page_id,
+                facebook_page_id: post.facebook_page_id,
+            });
             publishedIds.push(post.id);
-
         } catch (err: any) {
+            // attemptPublish has already written the FAILED row — with whatever partial id
+            // already went live, so the next attempt skips it — and called noteMetaFailure.
+            // This is the cron-specific log line on top of that.
             log('error', 'cron.publish_failed', {
                 post_id: post.id,
-                fb_post_id: fbId,
-                ig_media_id: igId,
+                fb_post_id: err instanceof PublishAttemptError ? err.fbId : null,
+                ig_media_id: err instanceof PublishAttemptError ? err.igId : null,
                 ...describeError(err),
             });
-
-            // A dead token stops every publish, not just this one. `creator_id` is
-            // nullable on this table, and a null would be a query that matches nothing.
-            if (post.creator_id) await noteMetaFailure(post.creator_id, err);
-
-            // The partial case, stated plainly. The status stays FAILED — the dashboard
-            // filters on that vocabulary and this is genuinely not a finished post — but
-            // `published_post_id` now keeps whatever did go live, so the next attempt
-            // skips it instead of posting it twice, and the error names what is already
-            // public so the operator is not hunting for a Facebook post they were told
-            // failed.
-            const partial = formatPublishedIds(fbId, igId);
-            const message = partial
-                ? `Partially published (${partial}) — the rest failed: ${err.message}`
-                : err.message;
-
-            await pool.query(
-                `UPDATE scheduled_posts
-                 SET status = 'FAILED', error_log = $1, published_post_id = $2
-                 WHERE id = $3`,
-                [message, partial || null, post.id]
-            );
         }
     }
 
@@ -2018,6 +2102,111 @@ router.delete('/posts/scheduled/:id', async (req, res) => {
     } catch (err) {
         log('error', 'api.scheduled_delete_failed', describeError(err));
         res.status(500).json({ error: 'Failed to delete scheduled post.' });
+    }
+});
+
+/**
+ * Retry (or fast-forward) one scheduled post from the dashboard's "Publish now" button.
+ *
+ * This is the fix for a real production incident: the button used to call
+ * `POST /posts/scheduled` with `publish_now: true` — the CREATE path — which starts
+ * `fbId`/`igId` at `null` with no memory of the row it was retrying. For a `platform: 'both'`
+ * post where Facebook had already succeeded and Instagram had timed out, clicking the button
+ * again published Facebook a second time. This route shares `attemptPublish` with
+ * `publishDuePosts()` instead, so a platform already recorded in `published_post_id` is
+ * skipped here exactly as it is in the cron sweep — see the doc comment on
+ * `publishedPlatforms()` above for the full incident.
+ *
+ * The claim accepts `PENDING` (publish early, before the cron would have reached it) or
+ * `FAILED` (retry) — never `PUBLISHING` (another attempt is already in flight) or `PUBLISHED`
+ * (nothing left to do). Scoped to this tenant's own row, the same `creator_id =
+ * getTenantId(req)` convention as the PUT/DELETE handlers on this resource above.
+ */
+router.post('/posts/scheduled/:id/publish-now', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+
+        const creatorId = getTenantId(req);
+
+        // The same atomic claim publishDuePosts() uses, narrowed to one id and one tenant
+        // instead of "every row due now", and widened to also accept FAILED — retrying a
+        // failed publish is the whole point of this endpoint. The creator join happens in the
+        // same statement, on the row the claim just returned, rather than as a second
+        // creator-scoped query.
+        const claim = await pool.query(
+            `WITH claimed AS (
+                UPDATE scheduled_posts
+                   SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
+                 WHERE id = $1 AND creator_id = $2 AND status IN ('PENDING', 'FAILED')
+             RETURNING *
+            )
+            SELECT claimed.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id
+              FROM claimed
+              JOIN creators c ON c.id = claimed.creator_id`,
+            [id, creatorId]
+        );
+
+        if (claim.rows.length === 0) {
+            // Distinguish "no such row" from "exists but is not claimable right now" (already
+            // publishing from a concurrent click, or already published) — a flat 404 for both
+            // would send the operator looking for a post that is not missing, it is just done.
+            const existing = await pool.query(
+                'SELECT status FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
+                [id, creatorId]
+            );
+            if (existing.rows.length === 0) {
+                res.status(404).json({ error: 'Scheduled post not found.' });
+                return;
+            }
+            res.status(409).json({
+                error: `Cannot publish now — this post is already ${existing.rows[0].status}.`,
+            });
+            return;
+        }
+
+        const post = claim.rows[0];
+        log('info', 'publish.now_requested', { post_id: post.id });
+
+        try {
+            await attemptPublish(post, {
+                id: post.creator_id,
+                page_access_token: post.page_access_token,
+                instagram_page_id: post.instagram_page_id,
+                facebook_page_id: post.facebook_page_id,
+            });
+        } catch (err: any) {
+            log('error', 'publish.now_failed', {
+                post_id: post.id,
+                fb_post_id: err instanceof PublishAttemptError ? err.fbId : null,
+                ig_media_id: err instanceof PublishAttemptError ? err.igId : null,
+                ...describeError(err),
+            });
+
+            // Re-read rather than trust the claimed row's now-stale PUBLISHING status —
+            // attemptPublish already wrote the real outcome. Same reasoning as the
+            // create-time publish_now branch: a 2xx for a row that is actually FAILED read as
+            // success to every caller. This mirrors that branch's 502 shape exactly, down to
+            // the field names, so the dashboard's existing publishFailure() parser needs no
+            // changes to understand it.
+            const failedRow = await pool.query('SELECT * FROM scheduled_posts WHERE id = $1', [post.id]);
+            res.status(502).json({
+                ...failedRow.rows[0],
+                status: 'FAILED',
+                error: err.message,
+            });
+            return;
+        }
+
+        const finalRow = await pool.query('SELECT * FROM scheduled_posts WHERE id = $1', [post.id]);
+        res.status(200).json(finalRow.rows[0]);
+    } catch (err) {
+        log('error', 'api.publish_now_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to publish this post.' });
     }
 });
 

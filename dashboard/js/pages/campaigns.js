@@ -98,11 +98,9 @@ const CampaignsPage = {
             <input type="file" id="csv-file-input" accept=".csv" class="hidden" data-change="campaigns:handleCSVSelect">
 
             ${campaigns.length === 0 ? html`
-                <div class="empty-state surface">
-                    <i data-lucide="megaphone" aria-hidden="true"></i>
-                    <h3>${t('campaigns.emptyTitle')}</h3>
-                    <p>${t('campaigns.emptyBody')}</p>
-                    <div class="row gap-3 row--center row--wrap">
+                <div class="surface pad-5">
+                    ${Admin.emptyState('megaphone', t('campaigns.emptyTitle'), t('campaigns.emptyBody'))}
+                    <div class="row gap-3 row--center row--wrap mbs-4">
                         <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:triggerCSVSelect">
                             <i data-lucide="upload" aria-hidden="true"></i> ${t('campaigns.import')}
                         </button>
@@ -310,6 +308,56 @@ const CampaignsPage = {
     },
 
     /**
+     * Does this keyword collide with a keyword ALREADY used by another
+     * campaign? `this.campaigns` holds every other campaign (populated in
+     * render()), so this needs no extra fetch — the page already has 100% of
+     * the data needed to catch this.
+     *
+     * Matching in production is substring-based (src/utils/arabic.ts): if this
+     * keyword and another campaign's keyword are in a substring relationship —
+     * in EITHER direction, including an exact duplicate — any comment
+     * containing the longer one necessarily contains the shorter one too, so
+     * both campaigns fire on the same comment with no way to know which DM
+     * template the customer actually gets. That is the same hazard the bulk
+     * importer can create at scale: many similar CSV rows, each becoming its
+     * own campaign.
+     *
+     * Excludes the campaign identified by `excludeId` (the one being edited,
+     * if any — a campaign's own keyword must not collide with itself) and,
+     * like the corpus check above, does not flag a plain morphological
+     * inflection of the same word (كورس/كورسات from two DIFFERENT campaigns
+     * is still a real collision, but a campaign's own "كورس" next to another
+     * campaign's own unrelated "بايثون" obviously is not — the exception only
+     * ever suppresses same-root pairs, exactly as it does in keywordRisk()).
+     *
+     * Returns up to 4 { campaign, keyword } hits, mirroring keywordRisk()'s
+     * own cap on COMMON_WORDS examples.
+     */
+    campaignCollisions(keyword, excludeId) {
+        const normalized = UI.normalizeArabic(keyword);
+        if (!normalized) return [];
+
+        const hits = [];
+        for (const c of this.campaigns) {
+            if (excludeId !== undefined && excludeId !== null && String(c.id) === String(excludeId)) continue;
+
+            for (const other of this.splitKeywords(c.trigger_keyword)) {
+                const nOther = UI.normalizeArabic(other);
+                if (!nOther) continue;
+
+                const exact = nOther === normalized;
+                const otherContainsThis = !exact && nOther.includes(normalized) && !this.isMorphologicalVariant(nOther, normalized);
+                const thisContainsOther = !exact && normalized.includes(nOther) && !this.isMorphologicalVariant(normalized, nOther);
+                if (!exact && !otherContainsThis && !thisContainsOther) continue;
+
+                hits.push({ campaign: c, keyword: other });
+                if (hits.length === 4) return hits;
+            }
+        }
+        return hits;
+    },
+
+    /**
      * What this keyword will also fire on. Computed on every keystroke, so the
      * warning appears at the moment of the decision rather than after the
      * campaign has been live for a week.
@@ -318,20 +366,24 @@ const CampaignsPage = {
      * because the container and the static explanation must NOT be rebuilt —
      * see renderMatchInspector() and inspect() below.
      */
-    matchVerdict(value) {
+    matchVerdict(value, excludeId) {
         const keywords = this.splitKeywords(value);
         const seen = new Set();
         const duplicates = [];
         const risks = [];
+        const collisions = [];
 
         keywords.forEach((k) => {
             const n = UI.normalizeArabic(k);
             if (seen.has(n)) duplicates.push(k); else seen.add(n);
             const risk = this.keywordRisk(k);
             if (risk.risky) risks.push({ keyword: k, ...risk });
+            this.campaignCollisions(k, excludeId).forEach((hit) => {
+                collisions.push({ keyword: k, other: hit.keyword });
+            });
         });
 
-        const hasProblem = risks.length > 0 || duplicates.length > 0;
+        const hasProblem = risks.length > 0 || duplicates.length > 0 || collisions.length > 0;
 
         return {
             hasProblem,
@@ -340,6 +392,9 @@ const CampaignsPage = {
                 ${!hasProblem && keywords.length > 0 ? html`<p class="text-success">${t('campaigns.match.safe')}</p>` : ''}
                 ${hasProblem ? html`
                     <ul class="match-risk-list">
+                        ${collisions.map((c) => html`
+                            <li dir="auto">${t('campaigns.match.collision', { keyword: c.keyword, other: c.other })}</li>
+                        `)}
                         ${risks.map((r) => html`
                             <li dir="auto">
                                 ${r.reason === 'examples'
@@ -370,8 +425,8 @@ const CampaignsPage = {
      * announced is the verdict and not the paragraph about how matching works,
      * repeated on every keystroke.
      */
-    renderMatchInspector(value) {
-        const { state, hasProblem, verdict } = this.matchVerdict(value);
+    renderMatchInspector(value, excludeId) {
+        const { state, hasProblem, verdict } = this.matchVerdict(value, excludeId);
         return html`
             <div class="match-inspector ${html.raw(state)}" id="match-inspector">
                 <h4 id="match-inspector-heading">
@@ -400,12 +455,12 @@ const CampaignsPage = {
      * between two keystrokes. The verdict still appears while the operator is
      * looking at the field, which was the whole point of it.
      */
-    inspect(value) {
+    inspect(value, excludeId) {
         const host = document.getElementById('match-inspector');
         const verdictHost = document.getElementById('match-inspector-verdict');
         if (!host || !verdictHost) return;
 
-        const { state, hasProblem, verdict } = this.matchVerdict(value);
+        const { state, hasProblem, verdict } = this.matchVerdict(value, excludeId);
 
         // Only the CONTENTS of the permanent live region are written. The
         // region itself, the heading and the explanation stay put — replacing
@@ -428,9 +483,14 @@ const CampaignsPage = {
 
     inspectKeywords(input) {
         if (!this._inspectDebounced) {
-            this._inspectDebounced = Motion.debounce((value) => this.inspect(value), 140);
+            this._inspectDebounced = Motion.debounce((value, excludeId) => this.inspect(value, excludeId), 140);
         }
-        this._inspectDebounced(input.value);
+        // `input.form` is the standard DOM link from a field to its owning
+        // <form>. The create form carries no data-id (nothing to exclude);
+        // the edit form's data-id (set in showEditModal()) is how "the
+        // campaign being edited" is told apart from every other campaign.
+        const excludeId = input.form ? input.form.dataset.id : undefined;
+        this._inspectDebounced(input.value, excludeId);
     },
 
     // ─── Modals ──────────────────────────────────────────────────────────────
@@ -445,7 +505,7 @@ const CampaignsPage = {
         `;
     },
 
-    keywordField(value) {
+    keywordField(value, excludeId) {
         return html`
             <div class="form-group">
                 <label class="form-label" for="campaign-trigger">${t('campaigns.keywords')}</label>
@@ -454,7 +514,7 @@ const CampaignsPage = {
                        aria-describedby="campaign-trigger-hint"
                        data-input="campaigns:inspectKeywords" data-guard-dirty required>
                 <p class="form-hint" id="campaign-trigger-hint">${t('campaigns.keywordsHint')}</p>
-                ${this.renderMatchInspector(value || '')}
+                ${this.renderMatchInspector(value || '', excludeId)}
             </div>
         `;
     },
@@ -517,7 +577,7 @@ const CampaignsPage = {
         UI.showModal(html`
             ${this.modalHeader(t('campaigns.editTitle'))}
             <form id="campaign-form" data-submit="campaigns:handleEdit" data-id="${c.id}">
-                ${this.keywordField(c.trigger_keyword)}
+                ${this.keywordField(c.trigger_keyword, c.id)}
                 <div class="form-group">
                     <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
                     <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto" lang="ar"
@@ -791,11 +851,14 @@ const CampaignsPage = {
                 }
 
                 const courseMap = {};
+                // Neither skip below used to be counted or shown, so a CSV
+                // with a few malformed rows imported silently short.
+                let skippedRows = 0;
                 for (let i = 1; i < rows.length; i++) {
                     const row = rows[i];
-                    if (row.length < 10) continue;
+                    if (row.length < 10) { skippedRows++; continue; }
                     const courseId = row[0].trim();
-                    if (!courseId) continue;
+                    if (!courseId) { skippedRows++; continue; }
 
                     const redemptions = parseInt(row[3], 10) || 0;
                     if (!courseMap[courseId] || redemptions > courseMap[courseId].redemptions) {
@@ -816,6 +879,10 @@ const CampaignsPage = {
                 if (uniqueCourses.length === 0) {
                     UI.toast(t('campaigns.bulk.noCourses'), 'error');
                     return;
+                }
+
+                if (skippedRows > 0) {
+                    UI.toast(t('campaigns.bulk.rowsSkipped', { count: skippedRows }), 'error');
                 }
 
                 this.showBulkImportModal(uniqueCourses);

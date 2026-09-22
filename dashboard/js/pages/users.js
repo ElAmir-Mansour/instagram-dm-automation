@@ -247,6 +247,33 @@ const UsersPage = {
         const next = select.value === 'platform_admin' ? 'platform_admin' : 'user';
         if (next === previous) return Promise.resolve();
 
+        // Promoting to platform_admin hands over every tenant and this whole
+        // administration screen from a single dropdown selection — strictly
+        // more consequential than disabling an account, which already confirms
+        // below. The select has already moved, so this is a confirmation, not
+        // a gate: saying no puts it back where it was. Demoting away from
+        // platform_admin is left ungated, same as switching an account back ON.
+        if (next === 'platform_admin') {
+            const email = Admin.pick(u, 'email') || '';
+            select.value = previous;
+            Admin.confirm({
+                title: t('users.promoteTitle'),
+                body: t('users.promoteBody', { email }),
+                hint: t('users.promoteHint'),
+                confirmLabel: t('users.promoteCta'),
+                confirmIcon: 'shield',
+                onConfirm: () => this.applyRoleChange(select, id, next, previous),
+            });
+            return Promise.resolve();
+        }
+
+        return this.applyRoleChange(select, id, next, previous);
+    },
+
+    applyRoleChange(select, id, next, previous) {
+        const u = this.users.find((x) => String(this.id(x)) === String(id));
+        if (!u) return Promise.resolve();
+
         select.disabled = true;
         return Motion.optimistic({
             apply: () => { u.role = next; },
@@ -375,8 +402,8 @@ const UsersPage = {
     async handleCreate(form, event) {
         event.preventDefault();
         const data = new FormData(form);
-        const submit = form.querySelector('button[type="submit"]');
-        if (submit) submit.disabled = true;
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // already in flight
         try {
             const payload = {
                 email: (data.get('email') || '').toString().trim(),
@@ -390,7 +417,7 @@ const UsersPage = {
             UI.toast(t('users.created'));
             await this.render();
         } catch (err) {
-            if (submit) submit.disabled = false;
+            restore();
             UI.toast((err && err.message) || t('users.createFailed'), 'error');
         }
     },
@@ -438,8 +465,8 @@ const UsersPage = {
         const data = new FormData(form);
         const creatorId = (data.get('creator_id') || '').toString();
         if (!creatorId) return;
-        const submit = form.querySelector('button[type="submit"]');
-        if (submit) submit.disabled = true;
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // already in flight
         try {
             await API.createUserMembership(id, {
                 creator_id: creatorId,
@@ -449,7 +476,7 @@ const UsersPage = {
             UI.toast(t('users.granted'));
             await this.render();
         } catch (err) {
-            if (submit) submit.disabled = false;
+            restore();
             UI.toast((err && err.message) || t('users.grantFailed'), 'error');
         }
     },
@@ -510,14 +537,14 @@ const UsersPage = {
             UI.toast(t('password.tooShort'), 'error');
             return;
         }
-        const submit = form.querySelector('button[type="submit"]');
-        if (submit) submit.disabled = true;
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // already in flight
         try {
             await API.setAdminUserPassword(id, password);
             UI.closeModal();
             UI.toast(t('users.passwordSet'));
         } catch (err) {
-            if (submit) submit.disabled = false;
+            restore();
             UI.toast((err && err.message) || t('users.passwordSetFailed'), 'error');
         }
     },

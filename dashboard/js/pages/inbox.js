@@ -778,15 +778,21 @@ const InboxPage = {
         event.preventDefault();
         const id = form.dataset.id;
         const input = document.getElementById('chat-input-text');
-        const button = form.querySelector('button[type="submit"]');
         const text = input ? input.value.trim() : '';
         if (!text) return;
+
+        // The only double-submit guard in the dashboard (see components.js).
+        // It only touches the submit button — the textarea stays enabled per
+        // the note above — and no label is passed because this button is
+        // icon-only (aria-label, no visible text), matching the login
+        // button's own icon-only spinner call in app.js.
+        const restore = UI.formBusy(form);
+        if (!restore) return; // already in flight
 
         const list = document.getElementById('chat-messages-container');
         const key = `pending:${++this._pendingSeq}`;
 
-        if (input) input.value = '';
-        if (button) button.disabled = true;
+        input.value = '';
 
         if (list) {
             // The bubble used to be appended only `if (this.messagesPainted)`,
@@ -831,7 +837,7 @@ const InboxPage = {
             if (input && !input.value) input.value = text;
             UI.toast(err.message || t('inbox.sendFailed'), 'error');
         } finally {
-            if (button) button.disabled = false;
+            restore();
             if (input) input.focus();
         }
     },

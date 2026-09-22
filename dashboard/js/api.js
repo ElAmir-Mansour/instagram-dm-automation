@@ -273,6 +273,13 @@ const API = {
     createScheduledPost: (data) => API.request('/posts/scheduled', { method: 'POST', body: JSON.stringify(data) }),
     updateScheduledPost: (id, data) => API.request(`/posts/scheduled/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteScheduledPost: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    /**
+     * Republish an existing queue row in place — claims it server-side (PENDING or FAILED
+     * only) and skips whatever platform is already recorded in `published_post_id`, instead
+     * of the old create-a-new-row-with-publish_now dance that had no memory of what the
+     * ORIGINAL row had already published.
+     */
+    publishExistingNow: (id) => API.request(`/posts/scheduled/${encodeURIComponent(id)}/publish-now`, { method: 'POST' }),
     getLivePosts: () => API.request('/posts/live'),
     uploadMedia: (data) => API.request('/upload', { method: 'POST', body: JSON.stringify(data) }),
 

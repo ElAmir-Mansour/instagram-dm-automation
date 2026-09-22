@@ -83,6 +83,7 @@ const OperationsPage = {
 
         UI.icons(container);
         Admin.applyMeters(container);
+        Motion.announce(t('ops.count', { count: tenants.length }));
     },
 
     // ─── Tenants ─────────────────────────────────────────────────────────────

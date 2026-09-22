@@ -285,10 +285,11 @@ const AiSettingsPage = {
 
     async saveSettings(form, event) {
         event.preventDefault();
-        const btn = document.getElementById('save-settings-btn');
-        const original = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = UI.buttonSpinner(t('common.saving'));
+        // The only double-submit guard in the dashboard (see components.js);
+        // this form is never replaced on success, so restore() runs in
+        // `finally` rather than being skipped on the happy path.
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // already in flight
 
         const payload = {
             is_active: document.getElementById('ai-active-toggle').checked,
@@ -312,9 +313,7 @@ const AiSettingsPage = {
             console.error('Save Settings Error:', err);
             UI.toast(err.message || t('ai.saveFailed'), 'error');
         } finally {
-            btn.disabled = false;
-            btn.innerHTML = original;
-            UI.icons(btn);
+            restore();
         }
     },
 

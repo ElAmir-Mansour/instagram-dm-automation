@@ -253,7 +253,7 @@ bdi { unicode-bidi: isolate; }
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
 }
-.logo-mark svg { width: 19px; height: 19px; color: #fff; }
+.logo-mark svg { width: 19px; height: 19px; color: var(--text-on-accent); }
 .sidebar-brand { font-weight: var(--fw-bold); font-size: var(--fs-300); color: var(--text-strong); }
 
 .sidebar-nav {
@@ -406,7 +406,8 @@ bdi { unicode-bidi: isolate; }
 .chip-select:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .chip-select svg { width: 15px; height: 15px; color: var(--text-muted); flex-shrink: 0; }
 .chip-select select {
-    background: transparent; border: none; outline: none;
+    background: transparent; border: none;
+    outline: 2px solid transparent; /* not `none`: still renders in forced-colors mode */
     color: var(--text-strong);
     font-size: var(--fs-100); font-weight: var(--fw-semibold);
     padding-block: var(--space-2);
@@ -691,12 +692,6 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
 }
 .label-optional { font-weight: var(--fw-regular); color: var(--text-muted); font-size: var(--fs-100); }
 .field, .field-textarea, .select {
-    /* appearance:none stripped the native arrow; the padding gutter was already reserved. */
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right var(--space-3) center;
-    background-size: 16px 16px;
-
     width: 100%;
     padding: var(--space-3);
     min-height: var(--tap-target);
@@ -717,7 +712,16 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
 }
 .field-textarea { min-height: 110px; resize: vertical; line-height: var(--lh-loose); }
 .field-mono { font-family: var(--font-mono); font-size: var(--fs-100); word-break: break-all; }
-.select { appearance: none; cursor: pointer; padding-inline-end: var(--space-6); }
+.select {
+    appearance: none; cursor: pointer; padding-inline-end: var(--space-6);
+    /* Scoped to .select only: .field/.field-textarea share the base rule above and must not
+       show a dropdown chevron. This used to live on the shared rule, where its own
+       `background: var(--surface-sunken)` shorthand immediately reset it back to none. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right var(--space-3) center;
+    background-size: 16px 16px;
+}
 .form-hint { font-size: var(--fs-100); color: var(--text-muted); margin-block-start: var(--space-2); line-height: var(--lh-normal); }
 .form-actions { margin-block-start: var(--space-5); display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .field-row { display: flex; gap: var(--space-2); align-items: stretch; }
@@ -753,7 +757,7 @@ input[type='checkbox'] { accent-color: var(--accent); inline-size: 24px; block-s
 }
 /* Physical exception 1/3: the knob travels toward the inline end. */
 .switch input:checked + .switch-track { background: var(--accent); border-color: var(--accent); }
-.switch input:checked + .switch-track::before { transform: translateX(20px); background: #fff; }
+.switch input:checked + .switch-track::before { transform: translateX(20px); background: var(--text-on-accent); }
 html[dir='rtl'] .switch input:checked + .switch-track::before { transform: translateX(-20px); }
 /* A 46x26 control with a 44px hit area. */
 .switch-track::after { content: ''; position: absolute; inset-block: -9px; inset-inline: 0; }
@@ -1066,7 +1070,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     margin-block-end: var(--space-4);
     box-shadow: var(--elev-glow);
 }
-.login-mark svg { width: 30px; height: 30px; color: #fff; }
+.login-mark svg { width: 30px; height: 30px; color: var(--text-on-accent); }
 .login-title { font-size: var(--fs-600); color: var(--text-strong); }
 .login-subtitle { color: var(--text-muted); font-size: var(--fs-200); margin-block-start: var(--space-2); }
 .login-form { display: flex; flex-direction: column; gap: var(--space-4); text-align: start; }
@@ -1511,7 +1515,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 }
 .bubble-outbound {
     background: var(--gradient-brand);
-    color: #fff;
+    color: var(--text-on-accent);
     border-start-end-radius: var(--radius-xs);
 }
 /* `opacity: 0.7` measured 3.02:1 on the outbound gradient. An explicit mix is contrast you
@@ -1538,7 +1542,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     font-size: var(--fs-200);
     line-height: var(--lh-normal);
     resize: none;
-    outline: none;
+    outline: 2px solid transparent; /* not `none`: still renders in forced-colors mode */
     min-height: var(--tap-target);
     max-height: 140px;
     unicode-bidi: plaintext;
@@ -1634,7 +1638,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     unicode-bidi: plaintext;
     overflow-wrap: anywhere;
 }
-.bubble-user { background: var(--gradient-brand); color: #fff; border-start-end-radius: var(--radius-xs); }
+.bubble-user { background: var(--gradient-brand); color: var(--text-on-accent); border-start-end-radius: var(--radius-xs); }
 .bubble-bot {
     /* A tint, not glass: a bubble sits IN the thread, and blurring the messages
        behind each bubble is both wrong and expensive at scroll. */
@@ -1995,6 +1999,16 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     }
     html[dir='rtl'] .sidebar { transform: translateX(100%); }
     .sidebar.open { transform: none; }
+    /* Below .sidebar's z-index:50, above page content. Created and toggled by app.js —
+       the drawer had no scrim, no Escape-to-close and no click-outside-to-close, unlike
+       every other overlay in the app (the modal already has all three). */
+    .sidebar-backdrop {
+        position: fixed; inset: 0; z-index: 40;
+        background: rgb(0 0 0 / 40%);
+        opacity: 0; pointer-events: none;
+        transition: opacity var(--motion-fast) var(--ease-standard);
+    }
+    .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
     .main-content { margin-inline-start: 0; }
     .menu-button { display: inline-flex; }
     .page-container { padding: var(--space-4); }

@@ -209,13 +209,13 @@ const PostsPage = {
 
         if (this.posts.length === 0) {
             return html`
-                <div class="empty-state surface">
-                    <i data-lucide="calendar-days" aria-hidden="true"></i>
-                    <h3>${t('posts.emptyQueueTitle')}</h3>
-                    <p>${t('posts.emptyQueueBody')}</p>
-                    <button type="button" class="btn btn-primary btn-sm" data-action="posts:showCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
-                    </button>
+                <div class="surface pad-5 stack gap-3">
+                    ${Admin.emptyState('calendar-days', t('posts.emptyQueueTitle'), t('posts.emptyQueueBody'))}
+                    <div class="row row--center">
+                        <button type="button" class="btn btn-primary btn-sm" data-action="posts:showCreateModal">
+                            <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
+                        </button>
+                    </div>
                 </div>
             `;
         }
@@ -270,7 +270,7 @@ const PostsPage = {
                 ${mediaUrl ? html`
                     <div class="post-media-frame">
                         ${isVideo
-                            ? html`<video src="${mediaUrl}" poster="${coverUrl}" muted loop
+                            ? html`<video src="${mediaUrl}" poster="${coverUrl}" muted controls
                                           aria-label="${t('posts.mediaPreview')}"></video>`
                             : html`<img src="${mediaUrl}" alt="${t('posts.mediaPreview')}">`}
                     </div>
@@ -368,14 +368,14 @@ const PostsPage = {
              * answer it.
              */
             return html`
-                <div class="empty-state surface">
-                    <i data-lucide="alert-circle" aria-hidden="true"></i>
-                    <h3>${t('posts.emptyLiveTitle')}</h3>
-                    <p>${t('posts.liveEmptyCaveat')}</p>
-                    <button type="button" class="btn btn-secondary btn-sm"
-                            data-action="app:navigate" data-target="settings">
-                        <i data-lucide="key-round" aria-hidden="true"></i> ${t('overview.openSettings')}
-                    </button>
+                <div class="surface pad-5 stack gap-3">
+                    ${Admin.emptyState('alert-circle', t('posts.emptyLiveTitle'), t('posts.liveEmptyCaveat'))}
+                    <div class="row row--center">
+                        <button type="button" class="btn btn-secondary btn-sm"
+                                data-action="app:navigate" data-target="settings">
+                            <i data-lucide="key-round" aria-hidden="true"></i> ${t('overview.openSettings')}
+                        </button>
+                    </div>
                 </div>
             `;
         }
@@ -890,11 +890,31 @@ const PostsPage = {
     },
 
     /**
-     * Republish an existing row immediately. The original is deleted ONLY after
-     * the new one actually published — deleting unconditionally used to destroy
-     * the creator's schedule row on every failed publish.
+     * Ask first. Until now this was the one truly irreversible, customer-facing action on
+     * this screen with zero confirmation — it posts to a live account — while deleting a
+     * queue row, strictly less consequential, already confirmed below. Same `Admin.confirm`
+     * pattern as `deletePost`, two functions down.
      */
-    async publishNow(id) {
+    publishNow(id) {
+        Admin.confirm({
+            title: t('posts.publishNow'),
+            body: t('posts.publishNowToggle'),
+            hint: t('posts.deleteHint'),
+            confirmLabel: t('posts.publishNow'),
+            confirmIcon: 'send',
+            onConfirm: () => PostsPage.publishNowConfirmed(id),
+        });
+    },
+
+    /**
+     * The confirmation has already been given. `POST /posts/scheduled/:id/publish-now` claims
+     * the row, runs it through the same `attemptPublish()` the cron sweep uses, and updates it
+     * in place — so unlike the old create-a-new-row-then-delete-the-old-one dance, a platform
+     * already recorded in `published_post_id` (e.g. Facebook, if Instagram was the one that
+     * timed out last time) is skipped server-side. A second click cannot duplicate a post that
+     * already went live.
+     */
+    async publishNowConfirmed(id) {
         const post = this.posts.find((p) => p.id === id);
         if (!post) return;
 
@@ -914,31 +934,12 @@ const PostsPage = {
         this.publishError = null;
 
         try {
-            const result = await API.createScheduledPost({
-                platform: post.platform,
-                // Legacy 'reel' rows publish as 'video' — identical on both platforms.
-                post_type: post.post_type === 'reel' ? 'video' : post.post_type,
-                caption: post.caption,
-                media_url: post.media_url,
-                cover_url: post.cover_url || null, // was dropped on republish
-                scheduled_time: new Date().toISOString(),
-                publish_now: true,
-            });
+            const result = await API.publishExistingNow(id);
 
             const failure = this.publishFailure(result, null);
             if (failure) {
                 this.publishError = { message: failure };
                 UI.toast(t('posts.publishFailedToast'), 'error');
-                await this.render();
-                return;
-            }
-
-            // Only now is it safe to remove the original queue entry.
-            try {
-                await API.deleteScheduledPost(id);
-            } catch (cleanupErr) {
-                console.warn('Published, but the original queue row could not be removed:', cleanupErr);
-                UI.toast(t('posts.publishedNotRemoved'), 'error');
                 await this.render();
                 return;
             }

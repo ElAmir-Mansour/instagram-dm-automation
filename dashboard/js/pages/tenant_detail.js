@@ -42,7 +42,7 @@ const TenantDetailPage = {
                     ${Admin.emptyState('help-circle', t('tenantDetail.noIdTitle'), t('tenantDetail.noIdBody'))}
                     <div class="row row--center">
                         <button type="button" class="btn btn-secondary" data-action="app:navigate" data-target="tenants">
-                            <i data-lucide="arrow-right" aria-hidden="true"></i> ${t('tenantDetail.backToTenants')}
+                            <i data-lucide="arrow-left" aria-hidden="true"></i> ${t('tenantDetail.backToTenants')}
                         </button>
                     </div>
                 </div>
@@ -69,7 +69,7 @@ const TenantDetailPage = {
                         ${Admin.emptyState('search-x', t('tenantDetail.goneTitle'), t('tenantDetail.goneBody'))}
                         <div class="row row--center">
                             <button type="button" class="btn btn-secondary" data-action="app:navigate" data-target="tenants">
-                                <i data-lucide="arrow-right" aria-hidden="true"></i> ${t('tenantDetail.backToTenants')}
+                                <i data-lucide="arrow-left" aria-hidden="true"></i> ${t('tenantDetail.backToTenants')}
                             </button>
                         </div>
                     </div>
@@ -101,7 +101,7 @@ const TenantDetailPage = {
         container.innerHTML = esc(html`
             <div class="page-toolbar">
                 <button type="button" class="btn btn-ghost btn-sm" data-action="app:navigate" data-target="tenants">
-                    <i data-lucide="arrow-right" aria-hidden="true"></i> ${t('tenantDetail.backToTenants')}
+                    <i data-lucide="arrow-left" aria-hidden="true"></i> ${t('tenantDetail.backToTenants')}
                 </button>
                 <div class="toolbar-actions">
                     <button type="button" class="btn btn-secondary btn-sm" data-action="tenantDetail:render">
@@ -151,6 +151,11 @@ const TenantDetailPage = {
 
         UI.icons(container);
         Admin.applyMeters(container);
+        // Nothing said the page's own data had landed — see CLAUDE.md's WCAG
+        // 4.1.3 note on the other admin list pages. No natural count here
+        // (this is one tenant, not a list), so this mirrors settings.js's
+        // no-count announcement instead.
+        Motion.announce(`${t('nav.tenant_detail')} — ${t('common.loaded')}`);
     },
 
     dayOrDash(value) {
@@ -354,8 +359,9 @@ const TenantDetailPage = {
     },
 
     async saveConnection(payload) {
-        const submit = document.querySelector('#tenant-connection-form button[type="submit"]');
-        if (submit) submit.disabled = true;
+        const form = document.getElementById('tenant-connection-form');
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // already in flight
 
         try {
             const result = await API.updateAdminTenant(this.tenantId, payload);
@@ -364,7 +370,7 @@ const TenantDetailPage = {
             await App.refreshSession();
             await this.render();
         } catch (err) {
-            if (submit) submit.disabled = false;
+            restore();
             // 409 = another tenant already claims this page id. Naming that is
             // the difference between a fixable mistake and a dead end.
             const message = Admin.describeWriteError(err, 'tenantDetail.connectionFailed');

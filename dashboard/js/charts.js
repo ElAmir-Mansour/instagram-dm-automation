@@ -82,6 +82,27 @@ const Charts = {
      * Deliberately NOT a scale with a y-axis. The question this answers is "did
      * anything happen, and when", and for that a reader needs to see gaps. A
      * line chart interpolates across them and invents a trend.
+     *
+     * The X axis is a relative coordinate space — CELL/GAP are proportions, not
+     * pixels — stretched to fill the card's real width via
+     * `preserveAspectRatio="none"` (see splitBar below). `width="100%"` alone
+     * used to do nothing here: with the SVG's own `height` fixed and already
+     * equal to the viewBox height, the default `meet` locks the scale at 1 on
+     * that already-satisfied axis, so the strip rendered at its tiny native
+     * size, centered in a lot of empty card. The Y axis is never stretched —
+     * SVG height always equals viewBox height — so it stays literal pixels.
+     *
+     * That split is also why the day labels below are plain HTML and not SVG
+     * `<text>`: glyphs inside a non-uniformly scaled viewBox stretch right
+     * along with the rects, which reads as visibly distorted type the moment
+     * the card is wider than the viewBox's own units. A `<div>` row outside
+     * the `<svg>` has no such problem, and lines up with the cells above it
+     * because both split the same width into the same number of equal shares.
+     *
+     * At most 8 labels are ever drawn, evenly spaced and always including the
+     * most recent day — this same builder also renders a 30-day strip
+     * (`analytics.chart30`), and a label under every one of 30 cells would be
+     * overlapping noise, not information.
      */
     dayStrip(days, options) {
         const opts = options || {};
@@ -93,37 +114,62 @@ const Charts = {
         const ordered = I18N.isRtl() ? [...days].reverse() : [...days];
         const peak = Math.max(1, ...days.map((d) => (d.sent || 0) + (d.failed || 0)));
 
-        const CELL = 26, GAP = 5, H = 54, FOOT = 4;
-        const width = ordered.length * CELL + (ordered.length - 1) * GAP;
+        // CELL/GAP are proportions (see the class comment above). GAP is even
+        // so a cell's x stays a whole number — cosmetic, but it keeps the
+        // geometry easy to reason about (and to test).
+        const CELL = 26, GAP = 6, SLOT = CELL + GAP;
+        const BAR_H = 52, TOP_SLIVER = 4, FOOT_MIN = 4;
+        const width = ordered.length * SLOT;
         const sent = Charts.token('--success', '#34c759');
         const failed = Charts.token('--danger', '#ff3b30');
         const empty = Charts.token('--surface-glass', 'rgba(255,255,255,0.08)');
+        // A hairline outline so an empty day reads as a deliberate, bounded
+        // slot rather than a near-invisible smudge on a mostly-empty week.
+        const emptyLine = Charts.token('--border-subtle', 'rgba(255,255,255,0.12)');
+        const sentLabel = opts.sentHeader || 'Sent';
+        const failedLabel = opts.failedHeader || 'Failed';
 
         const cells = ordered.map((d, i) => {
             const total = (d.sent || 0) + (d.failed || 0);
-            const x = i * (CELL + GAP);
+            const x = i * SLOT + GAP / 2;
+            const dayLabel = UI.formatDayShort(d.day);
             // A floor on opacity: a day with one event must not be invisible.
             const intensity = total === 0 ? 0 : 0.28 + 0.72 * (total / peak);
             const failH = total > 0 && d.failed > 0
-                ? Math.max(FOOT, Math.round((H - 14) * (d.failed / total)))
+                ? Math.max(FOOT_MIN, Math.round((BAR_H - TOP_SLIVER) * (d.failed / total)))
                 : 0;
+            // A native tooltip on hover, with exact numbers — the one thing the
+            // sr-only table below cannot offer a sighted mouse user.
+            const tip = `${dayLabel}: ${UI.formatNumber(d.sent || 0)} ${sentLabel}, ${UI.formatNumber(d.failed || 0)} ${failedLabel}`;
             return html`
                 <g>
-                    <rect x="${x}" y="0" width="${CELL}" height="${H - 10}" rx="7"
+                    <title>${tip}</title>
+                    <rect x="${x}" y="0" width="${CELL}" height="${BAR_H}" rx="7"
                           fill="${total === 0 ? empty : sent}"
-                          fill-opacity="${total === 0 ? 1 : intensity.toFixed(3)}"></rect>
-                    ${failH > 0 ? html`<rect x="${x}" y="${H - 10 - failH}" width="${CELL}" height="${failH}" rx="7"
+                          fill-opacity="${total === 0 ? 1 : intensity.toFixed(3)}"
+                          stroke="${total === 0 ? emptyLine : 'none'}"
+                          stroke-width="${total === 0 ? 1 : 0}"></rect>
+                    ${failH > 0 ? html`<rect x="${x}" y="${BAR_H - failH}" width="${CELL}" height="${failH}" rx="7"
                           fill="${failed}" fill-opacity="0.85"></rect>` : ''}
                 </g>`;
         });
 
+        // Thin the labels once there are more than 8 days rather than cramming
+        // one under every cell — see the class comment above.
+        const labelStep = Math.max(1, Math.ceil(ordered.length / 8));
+        const labels = ordered.map((d, i) => {
+            const show = i % labelStep === 0 || i === ordered.length - 1;
+            return html`<span style="flex:1 1 0%;min-width:0;overflow:visible;white-space:nowrap;text-align:center;font-size:var(--fs-100, 12px);color:var(--text-muted, #aeaeb2);">${show ? UI.formatDayShort(d.day) : ''}</span>`;
+        });
+
         return html`
             <div class="chart-strip" dir="ltr">
-                <svg viewBox="0 0 ${width} ${H}" width="100%" height="${H}"
-                     preserveAspectRatio="xMidYMid meet" role="img"
+                <svg viewBox="0 0 ${width} ${BAR_H}" width="100%" height="${BAR_H}"
+                     preserveAspectRatio="none" role="img"
                      aria-label="${opts.label || ''}" focusable="false">
                     ${cells}
                 </svg>
+                <div style="display:flex;margin-top:6px" aria-hidden="true">${labels}</div>
             </div>
             ${Charts._srTable(
                 opts.label || '',
@@ -171,7 +217,7 @@ const Charts = {
                             <span class="chart-dot" style="background: ${Charts.token(p.token, p.fallback || '#888')}"></span>
                             <span class="chart-split-label">${p.label}</span>
                             <span class="chart-split-value">${UI.formatNumber(p.value)}</span>
-                            <span class="chart-split-pct">${UI.formatPercent(Number(p.value) / total)}</span>
+                            <span class="chart-split-pct">${UI.formatPercent(Math.round((Number(p.value) / total) * 100))}</span>
                         </li>`)}
                 </ul>
             </div>
@@ -193,11 +239,16 @@ const Charts = {
         const nums = (values || []).map(Number).filter((n) => Number.isFinite(n));
         if (nums.length < 3) return Charts._empty(opts.emptyMessage || '');
 
+        // Most recent nearest the reading edge, exactly like dayStrip. Unused by
+        // any page today, but wrong-by-default here is a trap for whichever page
+        // adopts it first.
+        const ordered = I18N.isRtl() ? [...nums].reverse() : nums;
+
         const W = 240, H = 44, PAD = 3;
         const max = Math.max(...nums), min = Math.min(...nums);
         const span = max - min || 1;
-        const pts = nums.map((n, i) => {
-            const x = PAD + (i / (nums.length - 1)) * (W - PAD * 2);
+        const pts = ordered.map((n, i) => {
+            const x = PAD + (i / (ordered.length - 1)) * (W - PAD * 2);
             const y = H - PAD - ((n - min) / span) * (H - PAD * 2);
             return `${x.toFixed(2)},${y.toFixed(2)}`;
         });
