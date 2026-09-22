@@ -466,29 +466,82 @@
            It carries all four public pages plus the dashboard and the repo, so
            every page can reach every other page from the bottom as well as the
            top. It sits inside each page's own .shell, which is why it has no
-           max-width of its own: it inherits the column it belongs to. */
+           max-width of its own: it inherits the column it belongs to.
+
+           IT USED TO BE ONE ROW OF SIX LINKS AND ONE LEGAL LINE. That was the
+           right content and not enough of a footer: on four pages, at the end of
+           two of them that a visitor reaches from Meta's own settings link, the
+           thing at the bottom of the page was thinner than the bar at the top.
+           It now carries a masthead — the wordmark again, and one line saying
+           what this is — three named groups of links, and the legal line, with a
+           hairline between each of the three. The wordmark's repeat is the point:
+           the bottom of the page should say whose page it is.
+
+           Every rule below is scoped under .pagefoot rather than written as a
+           bare class, and that is load-bearing: ".pagefoot a" is (0,1,1) and
+           would otherwise beat ".foot-mark" at (0,1,0) on display and
+           alignment, so the wordmark would silently lose its column layout to
+           the link rule sitting above it. */
         .pagefoot {
             margin-block-start: var(--space-7);
-            padding-block: var(--space-5) var(--space-7);
+            padding-block: var(--space-6) var(--space-7);
             border-block-start: 1px solid var(--border-subtle);
             font-size: var(--nav-ui);
             line-height: 1.75;
             color: var(--text-muted);
         }
-        /* Flex with a gap rather than "·" glyphs between the links. The glyphs
-           wrapped as their own items: at 375px the row broke after a separator,
-           leaving a lone "·" hanging at the end of the first line. A gap cannot
-           do that, and the decorative characters leave the accessibility tree at
-           the same time. */
-        .pagefoot nav {
-            display: flex;
-            flex-wrap: wrap;
-            column-gap: var(--space-5);
-            margin-block-end: var(--space-3);
+        .pagefoot .foot-top { margin-block-end: var(--space-5); }
+        .pagefoot .foot-mark {
+            display: inline-flex;
+            flex-direction: column;
+            justify-content: center;
+            min-block-size: var(--tap-target);
+            margin-block-end: var(--space-2);
+            font-size: 1rem;
+            font-weight: var(--fw-semibold);
+            line-height: 1.25;
+            color: var(--text-strong);
+            text-decoration: none;
+        }
+        .pagefoot .foot-mark .latin {
+            font-family: var(--font-latin);
+            font-size: 0.75rem;
+            font-weight: var(--fw-regular);
+            letter-spacing: 0.01em;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+        .pagefoot .foot-what { max-width: 54ch; }
+
+        /* max-content columns rather than fractions: three groups of short
+           labels stretched across a 70rem page read as three stranded lists.
+           justify-content is logical, so "start" is the right edge in Arabic
+           and the left in English with no [dir] rule. */
+        .pagefoot .foot-cols {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(9rem, max-content));
+            justify-content: start;
+            gap: var(--space-4) var(--space-7);
+            padding-block: var(--space-5);
+            border-block-start: 1px solid var(--border-subtle);
+            border-block-end: 1px solid var(--border-subtle);
+        }
+        .pagefoot .foot-cols nav { display: flex; flex-direction: column; }
+        /* A <p>, not an <h*>: these four pages have four different heading
+           outlines and a privacy policy does not need three more h2s under its
+           footer. aria-labelledby can point at any element, so the group still
+           has a programmatic name. */
+        .pagefoot .foot-h {
+            margin: 0 0 var(--space-1);
+            font-size: var(--nav-ui);
+            font-weight: var(--fw-semibold);
+            line-height: var(--nav-lh);
+            color: var(--text-strong);
         }
         .pagefoot a {
             display: inline-flex;
             align-items: center;
+            align-self: start;
             min-height: var(--tap-target);
             font-size: var(--nav-ui);
         }
@@ -497,6 +550,7 @@
             font-weight: var(--fw-semibold);
         }
         .pagefoot p { max-width: 70ch; margin: 0; }
+        .pagefoot .foot-legal { margin-block-start: var(--space-5); }
 
         /* ─── The language filter ──────────────────────────────────────────────
            No attribute (JavaScript off or failed) = both languages visible,
@@ -1079,19 +1133,49 @@
              nor sign-in, and /privacy and /data-deletion reached only each
              other.
 
+             THE STRUCTURE IS NEW. The same links used to be one flat row above
+             one legal line — the correct content in a footer too thin to carry
+             it, at the bottom of two documents a visitor reaches from Meta's
+             own settings link. They are now three named groups under a
+             masthead, with the wordmark repeated so the bottom of the page
+             says whose page it is. /privacy and /data-deletion sit together
+             under "Policies", which is also what replaced the four-card
+             "Where to go next" grid that used to duplicate this footer on the
+             landing page.
+
              THE ONE INTENDED DIFFERENCE between the four copies is
              `aria-current="page"` on this page's own link.
              ═══════════════════════════════════════════════════════════════════ -->
         <footer class="pagefoot">
-            <nav aria-label="روابط الموقع · Site">
-                <a href="/"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
-                <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
-                <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
-                <a href="/privacy" aria-current="page"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
-                <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
-                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
-            </nav>
-            <p>
+            <div class="foot-top">
+                <a class="foot-mark" href="/">
+                    <bdi lang="ar" dir="rtl">أوتوريبلاي برو</bdi>
+                    <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
+                </a>
+                <p class="foot-what">
+                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة، على إنستجرام وفيسبوك، بالعربية أولاً.</bdi>
+                    <bdi class="t-en" lang="en" dir="ltr">A comment becomes a private conversation, on Instagram and Facebook, Arabic-first.</bdi>
+                </p>
+            </div>
+
+            <div class="foot-cols">
+                <nav aria-labelledby="foot-h-product">
+                    <p class="foot-h" id="foot-h-product"><bdi class="t-ar" lang="ar">المنتج</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Product</bdi></p>
+                    <a href="/"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
+                    <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
+                </nav>
+                <nav aria-labelledby="foot-h-policies">
+                    <p class="foot-h" id="foot-h-policies"><bdi class="t-ar" lang="ar">السياسات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Policies</bdi></p>
+                    <a href="/privacy" aria-current="page"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
+                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
+                </nav>
+                <nav aria-labelledby="foot-h-source">
+                    <p class="foot-h" id="foot-h-source"><bdi class="t-ar" lang="ar">المصدر</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source</bdi></p>
+                    <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
+                </nav>
+            </div>
+            <p class="foot-legal">
                 <!-- These two were plain <span>s with no lang or dir on three of
                      the four pages. Inside an RTL page an English sentence's
                      final full stop is a neutral character, so it was reordered

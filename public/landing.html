@@ -140,6 +140,75 @@
   for this change and nothing here depends on it.
 
   ═══════════════════════════════════════════════════════════════════════════
+  WHAT CHANGED ON 2026-09-22 — the refinement below the fold
+  ═══════════════════════════════════════════════════════════════════════════
+
+  The rebuild above fixed the first screen and stopped there. Rendered at
+  1280px and read end to end, everything under the hero was still wrong in
+  eight specific ways, and none of them were about the words. Not one claim
+  changed in this pass; every edit is structure, ground or colour.
+
+  1. THERE WAS NO CLOSE. The page ended on a four-card "where to go next" grid
+     and then the footer — a menu, handed to a reader who had just finished the
+     argument. There is now a closing CTA panel: the same two buttons as the
+     hero, an accent glow behind them, and the honest third option (run it
+     yourself, MIT, on GitHub) as a quiet line rather than a third button. It
+     is the strongest moment on the page after the hero and it is the last one.
+     The four cards are gone: they were equal-weight tiles, which is the
+     grid-of-clones tell, and they were navigation, which the footer now does
+     properly.
+
+  2. THE RHYTHM WAS NOT RHYTHM. Measured off the rendered PNG as runs of rows
+     containing no edge at all — pure background — the six transitions came out
+     121, 139, 144, 159, 129 and 170px. The 128px band was correct; what nobody
+     had subtracted was the trailing padding on the last row of a <dl>, which
+     added an unaccounted 16 or 24 to half the gaps. Every section that used to
+     end in that padding now ends at a border box instead, --lp-band came down
+     to 112, and the same measurement now reads 105, 123, 128, 122, 111, 111.
+     The remaining spread is half-leading above and below a line of text, which
+     is not something CSS can subtract without text-box-trim.
+
+  3. THE LOWER HALF WAS MONOCHROME. Below the hero there was essentially no
+     chromatic surface for 2,500px. Accent is now present as FILL and GLOW and
+     still never as body text: the loop's rail is an accent-to-hairline
+     gradient, its numbered nodes carry a halo, the normalisation demo has a
+     glow behind the word it funnels to, the constants card has an accent bar
+     along its top edge, the four things being sold carry accent check marks,
+     and the closing panel has a glow of its own.
+
+  4. "WHAT YOU PAY FOR" WAS TWO ORPHAN PARAGRAPHS — two text blocks side by
+     side with 170px of empty page above and below and no frame of any kind.
+     Same words, now in one panel with a rule between the halves, with the
+     four things being sold as four list items, because the sentence already
+     named four things.
+
+  5. THE 180 / 24 / 8 FIGURES WERE IN THE WRONG SECTION and looked wrong in it.
+     They were the boldest numbers on the page and they sat under "what this
+     does not promise", so the page's most prominent figures were attached to
+     its most negative framing — and they were the one flat, ringless,
+     shadowless block on a page of elevated cards. They are constants read out
+     of the source that describe how the thing works, so they now close the
+     section that describes how the thing works, as one card rather than three
+     tiles.
+
+  6. See 1.
+
+  7. THE FOOTER WAS ONE ROW OF LINKS AND ONE LEGAL LINE. It is on all four
+     public pages now, including two that a visitor reaches from Meta's own
+     settings link, and it was thinner than the bar at the top. It carries a
+     masthead with the wordmark, three named groups and the legal line. That
+     block is SHARED, so the change was applied byte-identically to all four
+     pages and the hashes re-checked; /privacy and /data-deletion had not one
+     word of their <main> touched.
+
+  8. THE REFUSALS WERE THE PLAINEST BLOCK ON THE PAGE — three hairline rows of
+     dense grey text, and they are the block that earns the rest of it. Every
+     word stays. They now sit in a sunken panel, so the register visibly
+     shifts: this is the terms and it looks like the terms. --surface-sunken is
+     a ground `npm run check:contrast` already models, which is why it is the
+     ground and not a hand-mixed tint. Still no amber, still no warning stripe.
+
+  ═══════════════════════════════════════════════════════════════════════════
 
   EVERY CLAIM BELOW EXISTS IN THE CODE. The evidence, per claim:
 
@@ -244,9 +313,11 @@
       that by implying a window exists.
     · No customer count, no testimonial, no logo wall, no "trusted by".
       Nothing has been sold yet; DESIGN.md §6 rules out invented metrics. The
-      three figures in "What this does not promise" are CONSTANTS READ OUT OF
-      THE SOURCE — 180, 24 and 8 — not usage, not growth, not anything that
-      would need a customer to exist.
+      three figures at the end of "what is in the dashboard" are CONSTANTS READ
+      OUT OF THE SOURCE — 180, 24 and 8 — not usage, not growth, not anything
+      that would need a customer to exist. They sat under "What this does not
+      promise" until 2026-09-22; see the refinement note above for why they
+      moved, and note that moving them changed no word of what they say.
     · No prices. They live on /pricing, which is where the operator's
       unfilled placeholders already are — duplicating them would give this
       page a second set to forget.
@@ -258,13 +329,32 @@
   literal fallbacks. public/privacy.html's `var(--x, #4f46e5)` fallbacks are
   the pre-HIG indigo palette and have already drifted from tokens.css, which
   is a second palette hiding in a fallback. Every text/ground pair used here
-  is one `npm run check:contrast` already measures, with two exceptions that
-  the guard's SURFACE_STACKS does not model and that were therefore computed
-  by hand against tokens.css and are recorded here:
+  is one `npm run check:contrast` already measures, with the exceptions below
+  that the guard's SURFACE_STACKS does not model — it knows nothing about a
+  decorative glow layer between a panel and its text, nor about
+  --surface-glass sitting on --surface-sunken — and that were therefore
+  computed by hand against tokens.css with the guard's own arithmetic
+  (composite every translucent layer down to the canvas, then WCAG) and are
+  recorded here:
       --accent-text on --accent-soft on --surface-raised on --surface-page
-          5.99:1 dark · 6.44:1 light
+          5.99:1 dark · 6.44:1 light   (the MIT chip, the normalised keyword)
       --text-on-accent on --accent (the outgoing DM bubble)
           4.70:1 dark · 4.70:1 light
+  Added 2026-09-22, all measured AT THE GLOW'S PEAK ALPHA, which is the worst
+  case and is where the headline sits:
+      CTA panel = --accent-ring × --lp-glow over --surface-raised over the page
+          --text-strong  11.01 dark · 13.60 light
+          --text-default  7.88 dark ·  9.17 light
+          --text-muted    5.42 dark ·  4.84 light   (the .cta-foot line)
+          --accent-text   5.34 dark ·  6.11 light   (its GitHub link)
+      --accent-text on --accent-soft over the .norm glow
+          5.01 dark · 5.75 light
+      --text-default on --surface-glass over the .norm glow (the variants)
+          6.87 dark · 8.82 light
+      --text-muted on --surface-glass on --surface-sunken (the refusal marks,
+      a graphic, so the floor is 3:1 rather than 4.5:1)
+          7.19 dark · 4.59 light
+  The tightest of all of them is 4.84:1, in light, and the floor is 4.5.
   The one non-text colour is the heart glyph, --danger as a fill: 4.47:1 dark
   and 3.45:1 light against the card, both clear of the 3:1 floor for a
   meaningful graphic. The decorative layers — the radial glow and the grain —
@@ -328,10 +418,21 @@
             --lp-track: 0;
             --lp-fw-display: 600;   /* Arabic display weight. Latin drops to 500. */
 
-            /* Rhythm. 64 → 128px, which is the measured spacing between
-               sections on the reference pages; --space-8 (64) was the old
-               value and is the bottom of that range, not the middle. */
-            --lp-band: clamp(4rem, 2.2rem + 7.5vw, 8rem);
+            /* Rhythm. 64 → 112px. The previous ceiling was 128 and the problem
+               was never the number, it was that the number was not what the
+               page actually measured: three of the six section transitions came
+               out at 144, 152 and 170px of empty background because the last
+               row of a <dl> carries its own bottom padding and nothing
+               subtracted it. Measured from the rendered PNG — runs of rows that
+               are a single flat colour — the lower half read 129 / 144 / 159 /
+               170. That is not rhythm, it is four different gaps.
+               --lp-band is now the ONLY thing between two sections. Every
+               section that used to end in a <dl>'s trailing padding now ends at
+               a border box instead — the constants are a card, the refusals are
+               a panel — so there is nothing left to add an unaccounted 16 or 24
+               to the gap. 112px of it is enough once the space has something on
+               either side of it. */
+            --lp-band: clamp(4rem, 2.6rem + 5.5vw, 7rem);
             --lp-max: 70rem;
             /* One gutter for the shell AND the sticky bar, so the wordmark
                stays on the same vertical as the content under it. Fluid,
@@ -878,7 +979,12 @@
             inset-inline-start: calc(var(--space-6) / 2 - 1px);
             inset-block: 0;
             inline-size: 2px;
-            background: var(--border-strong);
+            /* Accent at the node, fading to the plain hairline before the next
+               one. A vertical gradient is the one direction that needs no
+               :dir() rule — gradients do not mirror, and "down" is "down" in
+               both. Colour here is a FILL, which is the only way the lower half
+               of this page is allowed to carry any. */
+            background: linear-gradient(to bottom, var(--accent-ring), var(--border-strong) 58%);
         }
         /* Nothing dangles past the last node. */
         .beat:last-child::before { display: none; }
@@ -901,7 +1007,13 @@
             font-variant-numeric: tabular-nums;
             background: var(--accent-soft);
             color: var(--accent-text);
-            box-shadow: inset 0 0 0 1px var(--accent-ring), 0 0 0 6px var(--surface-page);
+            /* The opaque 6px ring punches the node out of the rail; the halo is
+               declared AFTER it so it paints behind and only the part beyond
+               6px shows. Declared before, the ring would cover all of it. */
+            box-shadow:
+                inset 0 0 0 1px var(--accent-ring),
+                0 0 0 6px var(--surface-page),
+                0 6px 18px -2px var(--accent-ring);
         }
         .beat h3 { margin-block-start: 0.15rem; }
         .beat p { margin: 0; max-width: 58ch; }
@@ -948,6 +1060,9 @@
            in src/utils/arabic.ts. Start-aligned, not centred: centred Arabic
            body copy is a Latin habit that does not transfer. */
         .norm {
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
             padding: clamp(var(--space-5), 3vw, var(--space-6));
             display: grid;
             gap: var(--space-5);
@@ -958,6 +1073,23 @@
                nothing between them — which does not read as a funnel, it reads
                as two unrelated things. */
             max-inline-size: 46rem;
+        }
+        /* The funnel ends on the normalised word, and the light collects there.
+           inset-inline-END, because the target is the last cell in both
+           directions — third column in LTR, third-from-the-right in RTL — and a
+           radial gradient positioned inside the paint would have stayed on the
+           English side in Arabic. */
+        .norm::before {
+            content: '';
+            position: absolute;
+            z-index: -1;
+            inset-block-start: -40%;
+            inset-inline-end: -12%;
+            inline-size: min(55%, 24rem);
+            aspect-ratio: 1;
+            border-radius: 50%;
+            background: radial-gradient(closest-side, var(--accent-ring), transparent 72%);
+            opacity: calc(var(--lp-glow) * 0.65);
         }
         @media (min-width: 48rem) {
             .norm { grid-template-columns: minmax(0, 1fr) auto minmax(0, auto); }
@@ -1070,29 +1202,108 @@
            The MIT statement, which used to be the third block of the hero —
            so the first thing after the headline was a caveat styled like a
            warning. It is honest and it belongs on the page; it does not belong
-           in the first screen. */
-        .pays { display: grid; gap: var(--space-5); align-items: start; }
-        @media (min-width: 52rem) { .pays { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-7); } }
+           in the first screen.
+
+           It also did not belong in TWO UNFRAMED PARAGRAPHS, which is what it
+           was until now: a pair of text blocks floating side by side with 170px
+           of empty page above and below them and no card, no rule and no
+           structure of any kind. The words are unchanged. They now sit in one
+           panel with a rule between the halves, and the four things being sold
+           are four list items instead of one sentence — because the sentence
+           already named four things. */
+        .pays {
+            display: grid;
+            gap: var(--space-5);
+            align-items: start;
+            padding: clamp(var(--space-5), 3.5vw, var(--space-7));
+        }
         .pays p { margin: 0 0 var(--space-4); }
         .pays > div > :last-child { margin-block-end: 0; }
+        @media (min-width: 52rem) {
+            .pays { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-7); }
+            /* The rule between the halves is a border on the SECOND pane's
+               inline-start edge, so it lands between them in both directions
+               from one declaration and there is no :dir() rule to keep true. */
+            .pays > div + div {
+                border-inline-start: 1px solid var(--border-subtle);
+                padding-inline-start: var(--space-7);
+            }
+        }
+        @media (max-width: 51.999rem) {
+            .pays > div + div {
+                border-block-start: 1px solid var(--border-subtle);
+                padding-block-start: var(--space-5);
+            }
+        }
+        /* A label, not a heading. The section already has its h2 and these two
+           are the halves of one answer, not two new topics — an <h3> here would
+           put them in the document outline as if they were. */
+        .pane-label {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            margin: 0 0 var(--space-4);
+            font-size: var(--lp-micro);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-ui);
+            color: var(--text-muted);
+        }
+        .pane-label .lic {
+            padding: 0.1rem var(--space-3);
+            border-radius: var(--radius-pill);
+            background: var(--accent-soft);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
+            color: var(--accent-text);
+            font-family: var(--font-latin);
+            font-weight: var(--fw-bold);
+            letter-spacing: 0;
+        }
+        .sold { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-3); }
+        /* The list is a grid, so its gap does nothing for the sentence AFTER
+           it — that line sat flush against the last item with no space at all. */
+        .sold + p { margin-block-start: var(--space-5); }
+        .sold li { display: flex; align-items: flex-start; gap: var(--space-3); color: var(--text-default); }
+        /* Not the label colour. An icon row painted in the same grey as the text
+           beside it is the single most reliable way to make a list look like
+           clip art; these take the accent, as the hero's receipts do. */
+        .sold svg {
+            flex: none;
+            inline-size: 1.05rem;
+            block-size: 1.05rem;
+            margin-block-start: 0.4em;
+            color: var(--accent-text);
+        }
 
-        /* ─── What this does not promise ───────────────────────────────────────
-           The counterweight to the hero, and the reason a reader can trust the
-           rest of the page. No warning stripe: these are not warnings, they
-           are the terms, and colouring them amber reads as an apology. */
+        /* ─── The three constants ──────────────────────────────────────────────
+           180, 24 and 8 are read out of the source — rateLimiter.ts
+           DEFAULT_HOURLY_LIMIT and canDmRecipient's 24-hour window, ai.ts
+           HISTORY_WINDOW. They used to sit under the heading "What this does
+           not promise", which made the three boldest numbers on the whole page
+           the punchline of its most negative section. They are not refusals: a
+           cap that holds an account under Meta's own ceiling, one automated
+           message per person per day, and eight messages of context are
+           descriptions of how the thing works, and they now sit with the rest
+           of that description.
+
+           They were also the one flat block on a page of elevated cards —
+           --surface-glass with no ring, no lift and no shadow, three of them in
+           a row. Now: one card, hairlines between the cells instead of gaps,
+           and a single accent fill along the top edge. */
         .figures {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-            gap: var(--space-4);
-            margin: 0 0 var(--space-6);
+            grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+            gap: 0;
+            margin: var(--space-5) 0 0;
             padding: 0;
-        }
-        .figures > div {
-            padding: var(--space-4) var(--space-5);
             border-radius: var(--radius-lg);
-            background: var(--surface-glass);
-            box-shadow: inset 0 1px 0 0 var(--lp-lift), inset 0 0 0 1px var(--border-subtle);
+            background: var(--surface-raised);
+            /* The inset accent bar has to be declared BEFORE the elevation, or
+               the hairline ring inside --lp-elev-card paints over it. */
+            box-shadow: inset 0 2px 0 0 var(--accent-ring), var(--lp-elev-card);
+            overflow: hidden;
         }
+        .figures > div { padding: var(--space-5); }
+        .figures > div + div { border-inline-start: 1px solid var(--border-subtle); }
         .figures dt {
             font-family: var(--font-latin);
             font-size: var(--lp-h2);
@@ -1116,62 +1327,141 @@
             color: var(--text-muted);
         }
 
-        .limits { max-width: 62ch; }
+        /* ─── What this does not promise ───────────────────────────────────────
+           The counterweight to the hero, and the reason a reader can trust the
+           rest of the page. Every word of it stays; it was the presentation
+           that was wrong. Three hairline rows of dense grey text on the page's
+           own background was the plainest block on the page, and it is the
+           block that earns the rest of it.
+
+           It now sits in a SUNKEN panel, so the register visibly shifts: this
+           is the terms, and it looks like the terms. --surface-sunken is one of
+           the stacks `npm run check:contrast` already models, which is exactly
+           why it is the ground here and not a hand-mixed tint that nothing
+           measures. Still no warning stripe and still no amber — these are not
+           warnings, and colouring them as warnings reads as an apology. */
+        .terms {
+            padding: clamp(var(--space-5), 4vw, var(--space-7));
+            border-radius: var(--radius-xl);
+            background: var(--surface-sunken);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+        }
+        .terms > :last-child { margin-block-end: 0; }
+        .limits { margin: 0; max-width: 62ch; }
         .limits > div {
             padding-block: var(--space-5);
             border-block-start: 1px solid var(--border-subtle);
         }
+        .limits > div:last-child { padding-block-end: 0; }
         .limits dt {
+            display: flex;
+            /* flex-start, not center: two of these labels wrap to two lines at
+               375px and a centred mark then floats beside the middle of the
+               label instead of the start of it. */
+            align-items: flex-start;
+            gap: var(--space-3);
             font-size: 1rem;
             font-weight: var(--fw-semibold);
             line-height: var(--lp-lh-head);
             color: var(--text-strong);
             margin-block-end: var(--space-2);
         }
-        .limits dd { margin: 0; font-size: inherit; line-height: var(--lp-lh-body); color: var(--text-muted); }
-
-        /* ─── Where to go next ─────────────────────────────────────────────────
-           /privacy and /data-deletion are the URLs Meta links to from the app's
-           own settings, so they get a card here as well as a footer link — a
-           visitor who lands on the bare domain must be able to reach them
-           without knowing the paths. */
-        .next {
+        /* A minus inside a circle — the one "not this" mark that is identical
+           under mirroring. A slash is not: a diagonal glyph in an RTL document
+           leans the wrong way unless it is flipped, and a mark that has to be
+           flipped is a mark that will one day not be. */
+        .limits .mark {
+            flex: none;
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
-            gap: var(--space-3);
+            place-items: center;
+            inline-size: 1.5rem;
+            block-size: 1.5rem;
+            border-radius: 50%;
+            background: var(--surface-glass);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-muted);
+        }
+        .limits .mark svg { inline-size: 0.85rem; block-size: 0.85rem; }
+        .limits dd {
             margin: 0;
-            padding: 0;
-            list-style: none;
+            /* Hangs under the label's text, not under its mark. */
+            padding-inline-start: calc(1.5rem + var(--space-3));
+            font-size: inherit;
+            line-height: var(--lp-lh-body);
+            color: var(--text-muted);
         }
-        .nextcard {
-            display: flex;
-            flex-direction: column;
-            gap: var(--space-1);
-            height: 100%;
-            padding: var(--space-4) var(--space-5);
-            color: var(--text-strong);
-            text-decoration: none;
-            transition: background var(--lp-t-hover) var(--lp-ease-quad),
-                        box-shadow var(--lp-t-hover) var(--lp-ease-quad),
-                        transform var(--lp-t-hover) var(--lp-ease-out);
-        }
-        .nextcard:hover {
-            background: var(--surface-overlay);
-            color: var(--text-strong);
+
+        /* ─── The closing CTA ──────────────────────────────────────────────────
+           THE PAGE HAD NO CLOSE. It ended on a four-card navigation grid —
+           "Where to go next" — and then the footer, so a reader who had just
+           been convinced was handed a menu instead of a button, and the four
+           cards were four equal-weight tiles, which is the exact grid-of-clones
+           tell the rest of this page was rebuilt to avoid. They were also pure
+           navigation, duplicating a footer that now carries the same five
+           destinations in named groups.
+
+           This replaces them: one panel, the same two buttons as the hero, an
+           accent fill behind them, and the honest third option — run it
+           yourself — as a quiet line rather than a third button competing with
+           the two that matter. It is deliberately the strongest visual moment
+           on the page after the hero, and deliberately the last one. */
+        .cta {
+            position: relative;
+            isolation: isolate;
+            overflow: hidden;
+            padding: clamp(var(--space-6), 5vw, calc(var(--space-7) + var(--space-5)));
+            border-radius: var(--radius-xl);
+            background: var(--surface-raised);
             box-shadow: var(--lp-elev-lifted);
-            transform: translateY(-2px);
         }
-        .nextcard .title {
-            font-size: 1rem;
-            font-weight: var(--fw-semibold);
-            line-height: var(--lp-lh-head);
-            color: var(--text-strong);
+        /* The glow, contained by the panel and positioned with
+           inset-inline-start rather than baked into the gradient: a radial
+           gradient does NOT mirror under dir=rtl, and the glow belongs behind
+           the headline, which starts at the right in Arabic and the left in
+           English. Same reasoning as .ambient, one scope down. */
+        .cta::before {
+            content: '';
+            position: absolute;
+            z-index: -1;
+            inset-block-start: -58%;
+            inset-inline-start: -8%;
+            inline-size: min(62%, 34rem);
+            aspect-ratio: 1;
+            border-radius: 50%;
+            background: radial-gradient(closest-side, var(--accent-ring), transparent 72%);
+            opacity: var(--lp-glow);
         }
-        .nextcard .why {
+        .cta h2 { margin-block-end: var(--space-3); max-width: 20ch; }
+        .cta .lede { max-width: 52ch; margin-block-end: 0; }
+        /* Wide: copy at the reading start, buttons at the reading end, both on
+           the same optical line. Stacked, the panel is 1080px of card with
+           300px of text at one edge of it and the rest empty — which is the
+           same "unfinished layout" fault this change is here to remove. */
+        @media (min-width: 52rem) {
+            .cta {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto;
+                align-items: center;
+                column-gap: var(--space-7);
+            }
+            .cta-copy { grid-column: 1; }
+            .cta .cta-row { grid-column: 2; margin-block-start: 0; }
+            .cta-foot { grid-column: 1 / -1; }
+        }
+        .cta-foot {
+            margin: var(--space-6) 0 0;
+            padding-block-start: var(--space-5);
+            border-block-start: 1px solid var(--border-subtle);
             font-size: var(--lp-ui);
             line-height: var(--lp-lh-ui);
             color: var(--text-muted);
         }
+
+        /* The line under a section heading. A bigger bottom margin than an
+           ordinary paragraph, so the gap between the heading group and the
+           content is larger than any gap inside either of them — which is the
+           rule that makes a group read as a group. */
+        .lead { margin-block-end: var(--space-6); }
 
         /* ─── Footer ───────────────────────────────────────────────────────── */
         .divider {
@@ -1235,22 +1525,27 @@
             .beat-num { inline-size: var(--space-5); block-size: var(--space-5); font-size: var(--lp-micro); }
             .norm { padding: var(--space-4); }
             .duo .card { padding: var(--space-4); }
-            /* Three stacked tiles spend ~340px of a 812px screen on three
+            /* Three stacked tiles spend ~340px of an 812px screen on three
                numbers. As rows — the figure held at the start, the sentence
                beside it — it is half that, the numbers line up on one edge
-               under tabular-nums, and it reads as the spec list it is. */
-            .figures { grid-template-columns: 1fr; gap: 0; }
+               under tabular-nums, and it reads as the spec list it is. The card
+               itself stays: it is one object at every width, and turning it
+               back into three bare rows on a phone was how it came to look
+               unfinished there in the first place. */
+            .figures { grid-template-columns: 1fr; }
             .figures > div {
                 display: flex;
                 align-items: baseline;
                 gap: var(--space-4);
-                padding: var(--space-4) 0;
-                border-radius: 0;
-                background: none;
-                box-shadow: none;
+                padding: var(--space-4) var(--space-5);
+            }
+            .figures > div + div {
+                border-inline-start: 0;
                 border-block-start: 1px solid var(--border-subtle);
             }
             .figures dt { flex: none; min-inline-size: 3.5ch; margin-block-end: 0; }
+            .terms { padding: var(--space-5) var(--space-4); }
+            .cta { padding: var(--space-6) var(--space-5); }
         }
         /* ═══════════════════════════════════════════════════════════════════
            SHARED SITE CHROME · CSS
@@ -1515,29 +1810,82 @@
            It carries all four public pages plus the dashboard and the repo, so
            every page can reach every other page from the bottom as well as the
            top. It sits inside each page's own .shell, which is why it has no
-           max-width of its own: it inherits the column it belongs to. */
+           max-width of its own: it inherits the column it belongs to.
+
+           IT USED TO BE ONE ROW OF SIX LINKS AND ONE LEGAL LINE. That was the
+           right content and not enough of a footer: on four pages, at the end of
+           two of them that a visitor reaches from Meta's own settings link, the
+           thing at the bottom of the page was thinner than the bar at the top.
+           It now carries a masthead — the wordmark again, and one line saying
+           what this is — three named groups of links, and the legal line, with a
+           hairline between each of the three. The wordmark's repeat is the point:
+           the bottom of the page should say whose page it is.
+
+           Every rule below is scoped under .pagefoot rather than written as a
+           bare class, and that is load-bearing: ".pagefoot a" is (0,1,1) and
+           would otherwise beat ".foot-mark" at (0,1,0) on display and
+           alignment, so the wordmark would silently lose its column layout to
+           the link rule sitting above it. */
         .pagefoot {
             margin-block-start: var(--space-7);
-            padding-block: var(--space-5) var(--space-7);
+            padding-block: var(--space-6) var(--space-7);
             border-block-start: 1px solid var(--border-subtle);
             font-size: var(--nav-ui);
             line-height: 1.75;
             color: var(--text-muted);
         }
-        /* Flex with a gap rather than "·" glyphs between the links. The glyphs
-           wrapped as their own items: at 375px the row broke after a separator,
-           leaving a lone "·" hanging at the end of the first line. A gap cannot
-           do that, and the decorative characters leave the accessibility tree at
-           the same time. */
-        .pagefoot nav {
-            display: flex;
-            flex-wrap: wrap;
-            column-gap: var(--space-5);
-            margin-block-end: var(--space-3);
+        .pagefoot .foot-top { margin-block-end: var(--space-5); }
+        .pagefoot .foot-mark {
+            display: inline-flex;
+            flex-direction: column;
+            justify-content: center;
+            min-block-size: var(--tap-target);
+            margin-block-end: var(--space-2);
+            font-size: 1rem;
+            font-weight: var(--fw-semibold);
+            line-height: 1.25;
+            color: var(--text-strong);
+            text-decoration: none;
+        }
+        .pagefoot .foot-mark .latin {
+            font-family: var(--font-latin);
+            font-size: 0.75rem;
+            font-weight: var(--fw-regular);
+            letter-spacing: 0.01em;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+        .pagefoot .foot-what { max-width: 54ch; }
+
+        /* max-content columns rather than fractions: three groups of short
+           labels stretched across a 70rem page read as three stranded lists.
+           justify-content is logical, so "start" is the right edge in Arabic
+           and the left in English with no [dir] rule. */
+        .pagefoot .foot-cols {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(9rem, max-content));
+            justify-content: start;
+            gap: var(--space-4) var(--space-7);
+            padding-block: var(--space-5);
+            border-block-start: 1px solid var(--border-subtle);
+            border-block-end: 1px solid var(--border-subtle);
+        }
+        .pagefoot .foot-cols nav { display: flex; flex-direction: column; }
+        /* A <p>, not an <h*>: these four pages have four different heading
+           outlines and a privacy policy does not need three more h2s under its
+           footer. aria-labelledby can point at any element, so the group still
+           has a programmatic name. */
+        .pagefoot .foot-h {
+            margin: 0 0 var(--space-1);
+            font-size: var(--nav-ui);
+            font-weight: var(--fw-semibold);
+            line-height: var(--nav-lh);
+            color: var(--text-strong);
         }
         .pagefoot a {
             display: inline-flex;
             align-items: center;
+            align-self: start;
             min-height: var(--tap-target);
             font-size: var(--nav-ui);
         }
@@ -1546,6 +1894,7 @@
             font-weight: var(--fw-semibold);
         }
         .pagefoot p { max-width: 70ch; margin: 0; }
+        .pagefoot .foot-legal { margin-block-start: var(--space-5); }
 
         /* ─── The language filter ──────────────────────────────────────────────
            No attribute (JavaScript off or failed) = both languages visible,
@@ -1734,7 +2083,7 @@
                 <!-- ─── The loop ─────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="loop-ar">
                     <h2 id="loop-ar">ماذا يحدث حين يعلّق أحدهم</h2>
-                    <p class="prose">ثلاث خطوات، والأولى وحدها من العميل. الباقي يجري من تلقاء نفسه:</p>
+                    <p class="prose lead">ثلاث خطوات، والأولى وحدها من العميل. الباقي يجري من تلقاء نفسه:</p>
 
                     <ol class="loop">
                         <li class="beat">
@@ -1794,7 +2143,7 @@
                 <!-- ─── Arabic matching ──────────────────────────────────── -->
                 <section class="band" aria-labelledby="arabic-ar">
                     <h2 id="arabic-ar">العربية هنا ليست ترجمة</h2>
-                    <p class="prose">
+                    <p class="prose lead">
                         الناس لا تكتب الكلمة نفسها مرتين بالطريقة نفسها. هذه أربع كتابات لكلمة
                         واحدة، وكلها تُطابق كلمة مفتاحية واحدة:
                     </p>
@@ -1878,34 +2227,13 @@
                             </dd>
                         </div>
                     </dl>
-                </section>
 
-                <!-- ─── What you pay for ─────────────────────────────────── -->
-                <section class="band" aria-labelledby="open-ar">
-                    <h2 id="open-ar">ما الذي تدفع مقابله</h2>
-                    <div class="pays">
-                        <div>
-                            <p>
-                                <strong>البرنامج نفسه مفتوح المصدر برخصة
-                                <bdi lang="en" dir="ltr">MIT</bdi></strong>، ويمكنك تنزيله
-                                وتشغيله على خادمك مجاناً من
-                                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع العلني</a>.
-                            </p>
-                        </div>
-                        <div>
-                            <p>
-                                ما يُباع هنا ليس الكود: هو ربط الحساب بواجهة ميتا، والإعداد،
-                                والمتابعة، ووجود مَن يُصلح العطل حين يقع. التفاصيل في
-                                <a href="/pricing">صفحة الأسعار</a>.
-                            </p>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- ─── Limits ───────────────────────────────────────────── -->
-                <section class="band" aria-labelledby="limits-ar">
-                    <h2 id="limits-ar">وما الذي لا نَعِد به</h2>
-
+                    <!-- The three constants, moved here from "what this does
+                         not promise". They are read out of the source and they
+                         describe how the thing works; under that heading they
+                         were the three boldest numbers on the page attached to
+                         its most negative framing. -->
+                    <p class="prose lead">وثلاثة أرقام ثابتة في البرنامج نفسه:</p>
                     <dl class="figures">
                         <div>
                             <dt>180</dt>
@@ -1920,66 +2248,112 @@
                             <dd>رسائل من المحادثة يقرأها الذكاء الاصطناعي قبل أن يردّ.</dd>
                         </div>
                     </dl>
-
-                    <dl class="limits">
-                        <div>
-                            <dt>لا دقيقة محدَّدة للنشر</dt>
-                            <dd>
-                                المنشور المجدول يدخل طابوراً يُفرَّغ على فترات، لا على الدقيقة. إن
-                                كان توقيت النشر بالدقيقة يهمّك، فهذا ليس ما يفعله البرنامج اليوم.
-                            </dd>
-                        </div>
-                        <div>
-                            <dt>لا ضمان لوقت التشغيل ولا للتسليم</dt>
-                            <dd>
-                                ميتا قد تُبطئ الإرسال أو ترفضه في أي لحظة، ولا شيء في البرنامج
-                                يستطيع أن يَعِد بغير ذلك. ما نَعِد به أن الحدث يُسجَّل قبل الردّ
-                                على ميتا، وأن ما فشل يُعاد عدداً محدوداً من المحاولات ثم يتوقف
-                                ويبقى مكتوباً لمراجعته.
-                            </dd>
-                        </div>
-                        <div>
-                            <dt>ما يُحفَظ ومدّته مكتوبان في سياسة الخصوصية</dt>
-                            <dd>
-                                نص الرسائل الخاصة يُحفَظ ليظهر في صندوق الوارد، وهذا ظاهر لك في
-                                المنتج نفسه. أما بقية ما يُحفَظ، ومدّة بقائه، وكيف يُحذف، فمكتوب في
-                                <a href="/privacy">سياسة الخصوصية</a> وفي
-                                <a href="/data-deletion">صفحة حذف البيانات</a>، وهما المرجع. هذه
-                                الصفحة لا تختصرهما عمداً: الاختصار نسخة ثانية يجب إبقاؤها صحيحة.
-                            </dd>
-                        </div>
-                    </dl>
                 </section>
 
-                <!-- ─── Onward ───────────────────────────────────────────── -->
-                <section class="band" aria-labelledby="next-ar">
-                    <h2 id="next-ar">إلى أين بعد ذلك</h2>
-                    <ul class="next">
-                        <li>
-                            <a class="card nextcard" href="/pricing">
-                                <span class="title">الأسعار</span>
-                                <span class="why">الباقات الثلاث، وما يتغيّر بينها فعلاً</span>
-                            </a>
-                        </li>
-                        <li>
-                            <a class="card nextcard" href="/dashboard">
-                                <span class="title">لوحة التحكم</span>
-                                <span class="why">تسجيل الدخول لمن لديه حساب مربوط</span>
-                            </a>
-                        </li>
-                        <li>
-                            <a class="card nextcard" href="/privacy">
-                                <span class="title">سياسة الخصوصية</span>
-                                <span class="why">ما يُجمع، وأين يذهب، وكم يبقى</span>
-                            </a>
-                        </li>
-                        <li>
-                            <a class="card nextcard" href="/data-deletion">
-                                <span class="title">حذف بياناتك</span>
-                                <span class="why">كيف تطلب حذف بياناتك، وماذا يُحذف</span>
-                            </a>
-                        </li>
-                    </ul>
+                <!-- ─── What you pay for ─────────────────────────────────── -->
+                <section class="band" aria-labelledby="open-ar">
+                    <h2 id="open-ar">ما الذي تدفع مقابله</h2>
+                    <div class="card pays">
+                        <div>
+                            <p class="pane-label">مفتوح المصدر<bdi class="lic" lang="en" dir="ltr">MIT</bdi></p>
+                            <p>
+                                <strong>البرنامج نفسه مفتوح المصدر برخصة
+                                <bdi lang="en" dir="ltr">MIT</bdi></strong>، ويمكنك تنزيله
+                                وتشغيله على خادمك مجاناً من
+                                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع العلني</a>.
+                            </p>
+                        </div>
+                        <div>
+                            <p class="pane-label">ما يُباع هنا ليس الكود</p>
+                            <!-- Same sentence as before, split at its own commas:
+                                 it already named four things. -->
+                            <ul class="sold">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    ربط الحساب بواجهة ميتا
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    الإعداد
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    المتابعة
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    وجود مَن يُصلح العطل حين يقع
+                                </li>
+                            </ul>
+                            <p>التفاصيل في <a href="/pricing">صفحة الأسعار</a>.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ─── Limits ───────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="limits-ar">
+                    <div class="terms">
+                        <h2 id="limits-ar">وما الذي لا نَعِد به</h2>
+                        <dl class="limits">
+                            <div>
+                                <dt>
+                                    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+                                    لا دقيقة محدَّدة للنشر
+                                </dt>
+                                <dd>
+                                    المنشور المجدول يدخل طابوراً يُفرَّغ على فترات، لا على الدقيقة. إن
+                                    كان توقيت النشر بالدقيقة يهمّك، فهذا ليس ما يفعله البرنامج اليوم.
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>
+                                    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+                                    لا ضمان لوقت التشغيل ولا للتسليم
+                                </dt>
+                                <dd>
+                                    ميتا قد تُبطئ الإرسال أو ترفضه في أي لحظة، ولا شيء في البرنامج
+                                    يستطيع أن يَعِد بغير ذلك. ما نَعِد به أن الحدث يُسجَّل قبل الردّ
+                                    على ميتا، وأن ما فشل يُعاد عدداً محدوداً من المحاولات ثم يتوقف
+                                    ويبقى مكتوباً لمراجعته.
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>
+                                    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+                                    ما يُحفَظ ومدّته مكتوبان في سياسة الخصوصية
+                                </dt>
+                                <dd>
+                                    نص الرسائل الخاصة يُحفَظ ليظهر في صندوق الوارد، وهذا ظاهر لك في
+                                    المنتج نفسه. أما بقية ما يُحفَظ، ومدّة بقائه، وكيف يُحذف، فمكتوب في
+                                    <a href="/privacy">سياسة الخصوصية</a> وفي
+                                    <a href="/data-deletion">صفحة حذف البيانات</a>، وهما المرجع. هذه
+                                    الصفحة لا تختصرهما عمداً: الاختصار نسخة ثانية يجب إبقاؤها صحيحة.
+                                </dd>
+                            </div>
+                        </dl>
+                    </div>
+                </section>
+
+                <!-- ─── The close ────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="cta-ar">
+                    <div class="cta">
+                        <div class="cta-copy">
+                            <h2 id="cta-ar">ابدأ من تعليق واحد</h2>
+                            <p class="lede">
+                                الباقات الثلاث وما يتغيّر بينها فعلاً على صفحة الأسعار. ولمن حسابه
+                                مربوط بالفعل، لوحة التحكم من هنا.
+                            </p>
+                        </div>
+                        <div class="cta-row">
+                            <a class="btn btn-primary" href="/pricing">اطّلع على الباقات</a>
+                            <a class="btn btn-secondary" href="/dashboard">تسجيل الدخول</a>
+                        </div>
+                        <p class="cta-foot">
+                            أو شغّله بنفسك: الكود كلّه مفتوح برخصة
+                            <bdi lang="en" dir="ltr">MIT</bdi> على
+                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">GitHub</bdi></a>.
+                        </p>
+                    </div>
                 </section>
             </article>
 
@@ -2034,7 +2408,7 @@
                 <!-- ─── The loop ─────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="loop-en">
                     <h2 id="loop-en">What happens when someone comments</h2>
-                    <p class="prose">Three steps, and the first is the only one the customer does. The rest runs on its own:</p>
+                    <p class="prose lead">Three steps, and the first is the only one the customer does. The rest runs on its own:</p>
 
                     <ol class="loop">
                         <li class="beat">
@@ -2099,7 +2473,7 @@
                 <!-- ─── Arabic matching ──────────────────────────────────── -->
                 <section class="band" aria-labelledby="arabic-en">
                     <h2 id="arabic-en">Arabic here is not a translation</h2>
-                    <p class="prose">
+                    <p class="prose lead">
                         People do not write the same word the same way twice. These are four
                         different spellings of one word, and all four match the keyword
                         <bdi class="ar" lang="ar" dir="rtl"><strong>هدية</strong></bdi>
@@ -2197,35 +2571,13 @@
                             </dd>
                         </div>
                     </dl>
-                </section>
 
-                <!-- ─── What you pay for ─────────────────────────────────── -->
-                <section class="band" aria-labelledby="open-en">
-                    <h2 id="open-en">What you are paying for</h2>
-                    <div class="pays">
-                        <div>
-                            <p>
-                                <strong>The software itself is open source under the MIT
-                                licence</strong>, and you can download it and run it on your own
-                                server for free from
-                                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">the public repository</a>.
-                            </p>
-                        </div>
-                        <div>
-                            <p>
-                                What is sold here is not the code: it is connecting the account to
-                                Meta, the setup, the follow-up, and having someone who fixes it
-                                when it breaks. The detail is on the
-                                <a href="/pricing">pricing page</a>.
-                            </p>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- ─── Limits ───────────────────────────────────────────── -->
-                <section class="band" aria-labelledby="limits-en">
-                    <h2 id="limits-en">What this does not promise</h2>
-
+                    <!-- The three constants, moved here from "what this does
+                         not promise". They are read out of the source and they
+                         describe how the thing works; under that heading they
+                         were the three boldest numbers on the page attached to
+                         its most negative framing. -->
+                    <p class="prose lead">And three numbers fixed in the software itself:</p>
                     <dl class="figures">
                         <div>
                             <dt>180</dt>
@@ -2240,70 +2592,116 @@
                             <dd>messages of the thread the AI reads before it answers.</dd>
                         </div>
                     </dl>
-
-                    <dl class="limits">
-                        <div>
-                            <dt>No exact publishing minute</dt>
-                            <dd>
-                                A scheduled post joins a queue that is drained on an interval, not
-                                on the minute. If minute-level timing matters to you, this is not
-                                what the software does today.
-                            </dd>
-                        </div>
-                        <div>
-                            <dt>No uptime or delivery guarantee</dt>
-                            <dd>
-                                Meta can throttle or refuse a send at any moment, and nothing in
-                                the software can promise otherwise. What it does promise is that
-                                the event is written down before Meta is acknowledged, and that a
-                                failure is retried a limited number of times before it stops and
-                                is left on record to be looked at.
-                            </dd>
-                        </div>
-                        <div>
-                            <dt>What is kept, and for how long, is in the privacy policy</dt>
-                            <dd>
-                                Direct-message text is stored so it can appear in your inbox,
-                                which you can see in the product itself. What else is kept, how
-                                long it stays and how to have it deleted is in the
-                                <a href="/privacy">privacy policy</a> and on the
-                                <a href="/data-deletion">data deletion page</a>, which are the
-                                authoritative statement. This page deliberately does not
-                                summarise them: a summary is a second version to keep true.
-                            </dd>
-                        </div>
-                    </dl>
                 </section>
 
-                <!-- ─── Onward ───────────────────────────────────────────── -->
-                <section class="band" aria-labelledby="next-en">
-                    <h2 id="next-en">Where to go next</h2>
-                    <ul class="next">
-                        <li>
-                            <a class="card nextcard" href="/pricing">
-                                <span class="title">Pricing</span>
-                                <span class="why">The three plans, and what actually changes between them</span>
-                            </a>
-                        </li>
-                        <li>
-                            <a class="card nextcard" href="/dashboard">
-                                <span class="title">Dashboard</span>
-                                <span class="why">Sign in, for accounts that are already connected</span>
-                            </a>
-                        </li>
-                        <li>
-                            <a class="card nextcard" href="/privacy">
-                                <span class="title">Privacy policy</span>
-                                <span class="why">What is collected, where it goes, how long it stays</span>
-                            </a>
-                        </li>
-                        <li>
-                            <a class="card nextcard" href="/data-deletion">
-                                <span class="title">Delete your data</span>
-                                <span class="why">How to request deletion, and what is deleted</span>
-                            </a>
-                        </li>
-                    </ul>
+                <!-- ─── What you pay for ─────────────────────────────────── -->
+                <section class="band" aria-labelledby="open-en">
+                    <h2 id="open-en">What you are paying for</h2>
+                    <div class="card pays">
+                        <div>
+                            <p class="pane-label">Open source<bdi class="lic" lang="en" dir="ltr">MIT</bdi></p>
+                            <p>
+                                <strong>The software itself is open source under the MIT
+                                licence</strong>, and you can download it and run it on your own
+                                server for free from
+                                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">the public repository</a>.
+                            </p>
+                        </div>
+                        <div>
+                            <p class="pane-label">What is sold here is not the code</p>
+                            <!-- Same sentence as before, split at its own commas:
+                                 it already named four things. -->
+                            <ul class="sold">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Connecting the account to Meta
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    The setup
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    The follow-up
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Having someone who fixes it when it breaks
+                                </li>
+                            </ul>
+                            <p>The detail is on the <a href="/pricing">pricing page</a>.</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- ─── Limits ───────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="limits-en">
+                    <div class="terms">
+                        <h2 id="limits-en">What this does not promise</h2>
+                        <dl class="limits">
+                            <div>
+                                <dt>
+                                    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+                                    No exact publishing minute
+                                </dt>
+                                <dd>
+                                    A scheduled post joins a queue that is drained on an interval, not
+                                    on the minute. If minute-level timing matters to you, this is not
+                                    what the software does today.
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>
+                                    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+                                    No uptime or delivery guarantee
+                                </dt>
+                                <dd>
+                                    Meta can throttle or refuse a send at any moment, and nothing in
+                                    the software can promise otherwise. What it does promise is that
+                                    the event is written down before Meta is acknowledged, and that a
+                                    failure is retried a limited number of times before it stops and
+                                    is left on record to be looked at.
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>
+                                    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+                                    What is kept, and for how long, is in the privacy policy
+                                </dt>
+                                <dd>
+                                    Direct-message text is stored so it can appear in your inbox,
+                                    which you can see in the product itself. What else is kept, how
+                                    long it stays and how to have it deleted is in the
+                                    <a href="/privacy">privacy policy</a> and on the
+                                    <a href="/data-deletion">data deletion page</a>, which are the
+                                    authoritative statement. This page deliberately does not
+                                    summarise them: a summary is a second version to keep true.
+                                </dd>
+                            </div>
+                        </dl>
+                    </div>
+                </section>
+
+                <!-- ─── The close ────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="cta-en">
+                    <div class="cta">
+                        <div class="cta-copy">
+                            <h2 id="cta-en">Start with one comment</h2>
+                            <p class="lede">
+                                The three plans, and what actually changes between them, are on the
+                                pricing page. If your account is already connected, the dashboard is
+                                here.
+                            </p>
+                        </div>
+                        <div class="cta-row">
+                            <a class="btn btn-primary" href="/pricing">See the plans</a>
+                            <a class="btn btn-secondary" href="/dashboard">Sign in</a>
+                        </div>
+                        <p class="cta-foot">
+                            Or run it yourself: all of it is MIT-licensed on
+                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">GitHub</a>.
+                        </p>
+                    </div>
                 </section>
             </article>
 
@@ -2322,19 +2720,49 @@
              nor sign-in, and /privacy and /data-deletion reached only each
              other.
 
+             THE STRUCTURE IS NEW. The same links used to be one flat row above
+             one legal line — the correct content in a footer too thin to carry
+             it, at the bottom of two documents a visitor reaches from Meta's
+             own settings link. They are now three named groups under a
+             masthead, with the wordmark repeated so the bottom of the page
+             says whose page it is. /privacy and /data-deletion sit together
+             under "Policies", which is also what replaced the four-card
+             "Where to go next" grid that used to duplicate this footer on the
+             landing page.
+
              THE ONE INTENDED DIFFERENCE between the four copies is
              `aria-current="page"` on this page's own link.
              ═══════════════════════════════════════════════════════════════════ -->
         <footer class="pagefoot">
-            <nav aria-label="روابط الموقع · Site">
-                <a href="/" aria-current="page"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
-                <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
-                <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
-                <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
-                <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
-                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
-            </nav>
-            <p>
+            <div class="foot-top">
+                <a class="foot-mark" href="/">
+                    <bdi lang="ar" dir="rtl">أوتوريبلاي برو</bdi>
+                    <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
+                </a>
+                <p class="foot-what">
+                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة، على إنستجرام وفيسبوك، بالعربية أولاً.</bdi>
+                    <bdi class="t-en" lang="en" dir="ltr">A comment becomes a private conversation, on Instagram and Facebook, Arabic-first.</bdi>
+                </p>
+            </div>
+
+            <div class="foot-cols">
+                <nav aria-labelledby="foot-h-product">
+                    <p class="foot-h" id="foot-h-product"><bdi class="t-ar" lang="ar">المنتج</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Product</bdi></p>
+                    <a href="/" aria-current="page"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
+                    <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
+                </nav>
+                <nav aria-labelledby="foot-h-policies">
+                    <p class="foot-h" id="foot-h-policies"><bdi class="t-ar" lang="ar">السياسات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Policies</bdi></p>
+                    <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
+                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
+                </nav>
+                <nav aria-labelledby="foot-h-source">
+                    <p class="foot-h" id="foot-h-source"><bdi class="t-ar" lang="ar">المصدر</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source</bdi></p>
+                    <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
+                </nav>
+            </div>
+            <p class="foot-legal">
                 <!-- These two were plain <span>s with no lang or dir on three of
                      the four pages. Inside an RTL page an English sentence's
                      final full stop is a neutral character, so it was reordered
