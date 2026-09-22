@@ -10,6 +10,7 @@ dashboard at `/dashboard`.
 **Operating it:** [`RUNBOOK.md`](RUNBOOK.md) — the procedures, symptom-first.
 **Proving it works end to end:** [`VERIFYING.md`](VERIFYING.md).
 **Why it is shaped this way:** [`ARCHITECTURE.md`](ARCHITECTURE.md).
+**What actually happens, hop by hop:** [`FLOWS.md`](FLOWS.md).
 
 ---
 
@@ -178,7 +179,7 @@ flow, queue, publishing, rate limits, schema and storage. Exits `0` healthy, `1`
 
 ```bash
 npm run typecheck    # tsc --noEmit
-npm test             # 417 tests, node:test via tsx
+npm test             # 449 tests across 86 suites, node:test via tsx
 ```
 
 CI (`.github/workflows/ci.yml`) runs typecheck, tests, and `node --check` over `dashboard/` —
@@ -188,6 +189,10 @@ page.
 ---
 
 ## API reference
+
+This is the surface. For what happens *behind* a route — the webhook pipeline, the publish
+sweep, the auth chain — [`FLOWS.md`](FLOWS.md) walks each one hop by hop with a `file:line` at
+every step.
 
 Unauthenticated:
 
@@ -244,8 +249,10 @@ Platform admin only (returns **404** to everyone else — the surface does not a
    multiplies the real send rate by however many instances are warm.
 2. **Work after the response can be frozen.** The webhook therefore writes every event to the
    `jobs` table *before* answering Meta, then drains within a budget. Anything unfinished stays
-   `pending` instead of being silently lost — but with no external drainer provisioned it can
-   wait for the next delivery, or up to 24h for the daily cron.
+   `pending` instead of being silently lost, and `.github/workflows/drain.yml` calls
+   `/api/jobs/drain` on a schedule so it does not wait for the next delivery. GitHub throttles
+   scheduled workflows, so treat that interval as "frequent but not punctual"; the daily Vercel
+   cron is the backstop that bounds the worst case at 24h.
 3. **Token type matters.** Use PAGE tokens for API calls, not USER tokens.
 4. **24-hour messaging window.** Meta only allows messaging within 24 hours of a user
    interaction.

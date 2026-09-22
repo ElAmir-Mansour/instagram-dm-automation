@@ -3,7 +3,7 @@
 **Status:** everything described below as "landed on this branch" is now on `main`. The
 hardening, tenancy, architecture, admin-API and admin-UI branches have all merged; the branch
 names survive in the prose because they are how the decisions were made, not where the code
-is. Last reconciled against `main` on 2026-09-21 with 417 tests passing.
+is. Last reconciled against `main` on 2026-09-22 with 449 tests across 86 suites passing.
 **Audience:** whoever implements the next stage. Written to be actionable, not admired.
 
 > This file lives at the repository root rather than in `docs/` because `docs/` is gitignored
@@ -15,7 +15,7 @@ is. Last reconciled against `main` on 2026-09-21 with 417 tests passing.
 
 The codebase is in far better shape than its history suggests. The hardening and tenancy
 passes did real work: the webhook is decomposed, tenant resolution is centralised, tokens are
-encrypted, migrations have a ledger, and 417 tests exist where there were none — including,
+encrypted, migrations have a ledger, and 449 tests exist where there were none — including,
 as of 2026-09-21, the dashboard's XSS defence, which had none. The remaining
 problems are almost all **architectural rather than defective** — the code does what it says,
 but the shape it is in cannot survive the next order of magnitude.
@@ -50,7 +50,7 @@ Being specific, because "it's fine" and "it looks fine" are different claims.
 
 **`src/services/matching.ts`** is the model the rest of the codebase should follow. It is a
 pure function over rows, the webhook passes a query result straight in, and
-`matching.test.ts` exercises 14 cases including the ordering rules and the
+`matching.test.ts` exercises 21 cases including the ordering rules and the
 Arabic-Indic-digit case that would silently break discount campaigns. The keyword-matching
 logic can be changed with confidence. Nothing else in the repo has that property to the same
 degree.
@@ -85,7 +85,7 @@ Concretely: the module-level cache at `tenant.ts:41` (`cachedId`, 30s TTL) is pe
 state in a system whose whole premise is that instances are ephemeral and plural. It is
 correct today only because there is one active creator.
 
-**`src/routes/api.ts` is 2,022 lines and is not a module, it is a namespace.** Auth, cron,
+**`src/routes/api.ts` is 2,735 lines and is not a module, it is a namespace.** Auth, cron,
 uploads, CSV export, stats, campaign CRUD, token management, the scheduler, the inbox, AI
 settings and the webhook verify token all live in one file with one router. The mount-order
 comments (`api.ts:648-741`) are load-bearing: `requireAuth`, then `requireLiveSession`, then
@@ -170,6 +170,9 @@ Write the intent down, *then* acknowledge:
 verify signature → enqueue each event to `jobs` → res.sendStatus(200) → drain inline (budgeted)
 ```
 
+> This document says *why* the pipeline is shaped this way. For the same path hop by hop with a
+> `file:line` at every step, see [`FLOWS.md`](FLOWS.md).
+
 - `planJobs` (`webhook/router.ts:46`) is a pure function from one webhook body to a list of
   jobs. It cannot throw on a malformed body — tested against seven malformed shapes — because
   it runs before Meta is acknowledged and an exception there is a 500, and a 500 is a
@@ -182,18 +185,36 @@ verify signature → enqueue each event to `jobs` → res.sendStatus(200) → dr
 
 The worst case moves from *silently lost forever* to *still pending*. That is the whole point.
 
-### 2.3 What is still missing, and it is one thing
+### 2.3 The scheduled drainer — landed 2026-09-22, with a caveat
 
-**There is no scheduled drainer.** `GET /api/jobs/drain` exists and is the correct shape, but
-`vercel.json` can only schedule one cron a day on the Hobby plan. So today a stranded job
-waits for the next webhook delivery (usually seconds, on an active account) or for the daily
-cron (worst case 24h).
+This section used to read *"there is no scheduled drainer… the highest-value single action
+available."* There is one now, and it cost nothing, exactly as predicted.
 
-That is bounded and vastly better than the previous unbounded loss, but it is not finished.
-The fix requires no code: point any external scheduler at
-`GET /api/jobs/drain` with `Authorization: Bearer $CRON_SECRET` every minute. QStash's free
-tier, a GitHub Actions schedule, or cron-job.org all do this. **This is the highest-value
-single action available and it costs nothing.**
+`.github/workflows/drain.yml` calls `GET /api/jobs/drain` on a `*/5` schedule with
+`Authorization: Bearer $CRON_SECRET`. The workflow itself had existed for some time and had
+**never once succeeded**: `CRON_SECRET` was never added as a repository secret, so every
+scheduled run failed in its first few seconds — which reads as "configured" in the Actions tab
+while doing nothing at all. Adding the secret (`gh secret set CRON_SECRET`) was the entire fix;
+nothing about the workflow changed.
+
+**The caveat, and it is worth stating because the number in the cron expression is not the
+number you get.** GitHub does not guarantee schedule punctuality — it throttles scheduled
+workflows under load, and on this repository the observed delivery has been far coarser than
+`*/5`: the runs preceding the fix landed at roughly 2.5-to-5-hour intervals, not five minutes.
+So the honest description of the current drain interval is **"somewhere between 5 minutes and a
+few hours, unpredictably"**, which is still the difference between a queue and a backlog
+compared with once every 24 hours — but it is not the minute-accurate scheduling the dashboard's
+time picker implies. The workflow's own header says as much (`.github/workflows/drain.yml:12-23`).
+
+A second, finer-grained caller exists and is currently switched off: `heroku-worker/worker.mjs`
+polls the same endpoint every 60 s from a worker dyno. It was built, deployed and verified
+working, then scaled to zero once the free schedule was fixed and made its ~$7/mo unnecessary.
+Scaling it back up is a one-line change and is the answer if the GitHub cadence proves too
+coarse. A dedicated cron service with 1-minute granularity is the other drop-in: same URL, same
+bearer token, no code change.
+
+Either way the daily Vercel cron remains the backstop, so the worst case is bounded at 24h
+rather than unbounded loss — which was always the point of the queue.
 
 ### 2.4 The cron and `scheduled_time`
 
@@ -268,9 +289,10 @@ The queue helps here too: fewer long-lived handlers holding connections while aw
 
 ### 3.4 Smaller data-layer notes
 
-- **No single artifact describes the live schema.** `schema.sql` plus twelve migrations plus
-  whatever was applied by hand. The migration ledger fixes *forward* drift but does not
-  reconstruct the present. Dumping the live schema to `schema/current.sql` in CI would.
+- **No single artifact describes the live schema.** `schema.sql` plus fourteen migrations
+  (v2-v15, `src/config/*.sql`) plus whatever was applied by hand. The migration ledger fixes
+  *forward* drift but does not reconstruct the present. Dumping the live schema to
+  `schema/current.sql` in CI would.
 - `interactions` has no index on `(creator_id, timestamp DESC)`, which is the dashboard's main
   query shape. `idx_interactions_creator` exists but is single-column.
 - `jobs` (v13) will accumulate `done` rows. The indexes are partial to keep the hot path fast,
@@ -533,21 +555,24 @@ and stage watcher (`scripts/diagnose.mjs`, `scripts/watch.mjs`) that RUNBOOK.md 
 
 ### Stage 1 — turn on what already exists *(hours, no code)*
 
-1. ~~Apply migration v13.~~ **Done** — all 14 migrations are applied and unmodified, verified
-   against the ledger on 2026-09-21.
+1. ~~Apply migration v13.~~ **Done** — all 15 ledger entries (`schema.sql` plus v2-v15, the list
+   in `src/config/migrations.ts`) are applied and unmodified, verified against the ledger.
 2. Set `RAW_PAYLOAD_RETENTION_DAYS=30`. **Still unset.** Amended from 90: the published
    `/data-deletion` page commits to 30 days, and the page is the promise. Until this is set the
    sweep is a no-op and that promise is untrue (ADR-5, RUNBOOK.md §7).
 3. Verify `DATABASE_URL` uses Supabase's pooler port (6543), and lower `db.ts` `max` to 2-3.
    **The pooler half is done** — production connects through the Supabase pooler on 6543,
    confirmed 2026-09-21. The `max` half is not.
-4. Point an external scheduler at `GET /api/jobs/drain` every minute with the `CRON_SECRET`
-   bearer token. **Still not done.**
+4. ~~Point an external scheduler at `GET /api/jobs/drain` with the `CRON_SECRET` bearer token.~~
+   **Done, 2026-09-22.** `.github/workflows/drain.yml` on a `*/5` schedule, free. The workflow
+   already existed and had never authenticated; adding `CRON_SECRET` as a repository secret was
+   the whole fix. Note GitHub's throttling means the real interval is coarser than `*/5` — see
+   §2.3 — so "bounded and frequent" is the accurate claim, not "every five minutes".
 
-**Unblocks:** genuine durability (not just opportunism); bounded job latency; the data-layer
-and privacy fixes. Step 4 is the highest value-per-effort action available anywhere in this
-document, and it remains outstanding — which is why the queue is still accurately described as
-opportunistic rather than durable.
+**Unblocks:** genuine durability rather than opportunism; bounded job latency; the data-layer
+and privacy fixes. Step 4 was the highest value-per-effort action available anywhere in this
+document, and it has now landed — so the queue is drained on a schedule rather than only when
+the next webhook happens to arrive. Steps 2 and 3 remain outstanding.
 
 ### Stage 2 — move scheduled publishing onto the queue *(1-2 days)*
 
