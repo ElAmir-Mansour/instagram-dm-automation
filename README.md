@@ -179,7 +179,7 @@ flow, queue, publishing, rate limits, schema and storage. Exits `0` healthy, `1`
 
 ```bash
 npm run typecheck    # tsc --noEmit
-npm test             # 449 tests across 86 suites, node:test via tsx
+npm test             # 548 tests across 110 suites, node:test via tsx
 ```
 
 CI (`.github/workflows/ci.yml`) runs typecheck, tests, and `node --check` over `dashboard/` —

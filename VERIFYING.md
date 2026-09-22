@@ -1,7 +1,7 @@
 # Verifying AutoReply Pro against a real Meta event
 
 The pipeline was split into modules, given a durable job queue, moved the 200 to before the
-work, wired rate limiting and added an AI disclosure prefix. 449 unit tests cover the pieces.
+work, wired rate limiting and added an AI disclosure prefix. 548 unit tests cover the pieces.
 None of that proves the deployed system handles a real Instagram comment, and as of
 2026-09-21 the live database shows **zero jobs, zero interactions and zero messages since the
 last migration** — so the refactor is currently unverified in production.

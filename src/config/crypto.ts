@@ -98,7 +98,12 @@ export function verifyPassword(password: string, stored: string): Promise<boolea
 
         const expected = Buffer.from(hashB64, 'base64url');
         crypto.scrypt(
-            password, Buffer.from(saltB64, 'base64url'), expected.length, SCRYPT_PARAMS,
+            // Derive a FIXED length, never `expected.length`. scrypt's positional keylen wins
+            // over the one in the options object, so deriving `expected.length` made `derived`
+            // always match and left the guard below unreachable — and because scrypt ends in a
+            // single PBKDF2 pass, a short output is a byte-exact prefix of a long one, so a
+            // truncated stored digest still verified. The work factor was set by the database.
+            password, Buffer.from(saltB64, 'base64url'), SCRYPT_PARAMS.keylen, SCRYPT_PARAMS,
             (err, derived) => {
                 if (err || derived.length !== expected.length) return resolve(false);
                 resolve(crypto.timingSafeEqual(derived, expected));

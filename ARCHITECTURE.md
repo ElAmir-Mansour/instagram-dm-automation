@@ -3,7 +3,7 @@
 **Status:** everything described below as "landed on this branch" is now on `main`. The
 hardening, tenancy, architecture, admin-API and admin-UI branches have all merged; the branch
 names survive in the prose because they are how the decisions were made, not where the code
-is. Last reconciled against `main` on 2026-09-22 with 449 tests across 86 suites passing.
+is. Last reconciled against `main` on 2026-09-22 with 548 tests across 110 suites passing.
 **Audience:** whoever implements the next stage. Written to be actionable, not admired.
 
 > This file lives at the repository root rather than in `docs/` because `docs/` is gitignored
@@ -15,7 +15,7 @@ is. Last reconciled against `main` on 2026-09-22 with 449 tests across 86 suites
 
 The codebase is in far better shape than its history suggests. The hardening and tenancy
 passes did real work: the webhook is decomposed, tenant resolution is centralised, tokens are
-encrypted, migrations have a ledger, and 449 tests exist where there were none — including,
+encrypted, migrations have a ledger, and 548 tests exist where there were none — including,
 as of 2026-09-21, the dashboard's XSS defence, which had none. The remaining
 problems are almost all **architectural rather than defective** — the code does what it says,
 but the shape it is in cannot survive the next order of magnitude.
