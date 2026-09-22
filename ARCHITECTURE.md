@@ -206,9 +206,15 @@ few hours, unpredictably"**, which is still the difference between a queue and a
 compared with once every 24 hours — but it is not the minute-accurate scheduling the dashboard's
 time picker implies. The workflow's own header says as much (`.github/workflows/drain.yml:12-23`).
 
-A second, finer-grained caller exists and is currently switched off: `heroku-worker/worker.mjs`
-polls the same endpoint every 60 s from a worker dyno. It was built, deployed and verified
-working, then scaled to zero on the belief that the free schedule had been fixed and made its
+**A second, finer-grained caller is now the one that actually runs: `heroku-worker/worker.mjs`**
+(scaled to 1 on 2026-09-22).
+It polls the same endpoint every 60 s from a worker dyno, and since `/api/jobs/drain` is the
+caller that runs `publishDuePosts()`, this is what publishes scheduled posts near the minute
+the operator asked for. Verified by measurement, not by the dyno count: three probe jobs
+inserted straight into the queue were claimed after **15 s, 26 s and 61 s** — the 0-60 s spread
+a 60 s poll produces depending where the insert lands in the cycle.
+
+It had previously been scaled to zero on the belief that the free schedule had been fixed and made its
 ~$7/mo unnecessary. **That belief is unverified.** As of 2026-09-22 no scheduled run has ever
 succeeded: all four failed on the missing secret, and the only green run in the workflow's
 entire history is the manual `workflow_dispatch` fired 15 s after the secret was set. So the

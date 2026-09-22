@@ -634,17 +634,36 @@ const PostsPage = {
      * change: set it to `true`. `publishWindow()` and the copy already carry
      * both regimes, so nothing else moves.
      */
-    FREQUENT_SWEEP: false,
+    FREQUENT_SWEEP: true,
 
     /**
      * The tail on a frequent sweep, used only when `FREQUENT_SWEEP` is true.
      *
-     * 15 minutes rather than 5 because GitHub Actions explicitly does not
-     * promise schedule punctuality — runs are throttled under load and are
-     * routinely several minutes late — so the number the operator sees should
-     * be the slow end of "every ~5-15 minutes", not the flattering end.
+     * 5 minutes, and the figure is measured rather than quoted. The sweep that
+     * actually runs is the Heroku worker (`heroku-worker/worker.mjs`), which
+     * polls `GET /api/jobs/drain` — the endpoint that calls `publishDuePosts()`
+     * — on a fixed 60s interval. Three probe jobs inserted straight into the
+     * queue on 2026-09-22 were claimed after 15s, 26s and 61s: exactly the 0-60s
+     * spread a 60s poll produces depending on where the insert lands in the
+     * cycle.
+     *
+     * So the poll costs at most ~60s, and publishing itself costs up to ~75s
+     * more when Instagram has to process a video container
+     * (`instagram.ts` polls the container). ~2.5 minutes is the realistic worst
+     * case; 5 minutes is double that, which is the right side to be wrong on.
+     *
+     * NOT 15 minutes any more. That number was the slow end of GitHub Actions'
+     * "every ~5-15 minutes", and GitHub is not what runs this — its scheduled
+     * runs have never once succeeded. If the worker is ever scaled back to zero
+     * (`heroku ps:scale worker=0`), `FREQUENT_SWEEP` goes back to false; the
+     * daily cron is the only other caller.
      */
-    FREQUENT_SWEEP_LAG_MS: 15 * 60 * 1000,
+    FREQUENT_SWEEP_LAG_MS: 5 * 60 * 1000,
+
+    /** The tail as whole minutes, for the copy. Single source of truth with the constant above. */
+    sweepLagMinutes() {
+        return Math.round(this.FREQUENT_SWEEP_LAG_MS / 60000);
+    },
 
     /**
      * When a post requested at `iso` will actually publish.
@@ -710,8 +729,11 @@ const PostsPage = {
         const when = UI.formatDateTime(win.from);
         if (win.frequent) {
             return win.isPast
-                ? t('posts.schedule.pastExpected')
-                : t('posts.schedule.expected', { when });
+                // The number in the copy comes FROM the constant. It used to be
+                // written into the translation string, so changing the tail left
+                // the screen quoting the old figure.
+                ? t('posts.schedule.pastExpected', { minutes: this.sweepLagMinutes() })
+                : t('posts.schedule.expected', { when, minutes: this.sweepLagMinutes() });
         }
         return win.isPast
             ? t('posts.schedule.pastExpectedDaily', { when })

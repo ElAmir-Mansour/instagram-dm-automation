@@ -40,6 +40,7 @@ interface PublishWindow { isPast: boolean; from: Date; until: Date; frequent: bo
 interface PostsApi {
     FREQUENT_SWEEP: boolean;
     FREQUENT_SWEEP_LAG_MS: number;
+    sweepLagMinutes(): number;
     publishWindow(iso: unknown, now?: number): PublishWindow | null;
     publishWindowText(win: PublishWindow | null): string;
     scheduleNoteText(localValue: string): string;
@@ -220,21 +221,38 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
     // how a test passes at 09:00 and fails at midnight.
     const NOW = Date.parse('2026-09-22T09:00:00.000Z');
 
-    it('is in the DAILY regime, because the frequent sweep has never run', () => {
-        // The load-bearing assertion in this file. `publishDuePosts()` has two
-        // callers: the GitHub Actions drain (whose schedule has produced five
-        // runs ever, every one of them either a failure or a manual dispatch)
-        // and the Vercel cron, once a day at 00:00 UTC. `drainInline()` runs
-        // after every webhook but drains the job queue only.
+    // The daily cron is now the FALLBACK, not the live regime — it is what runs
+    // if the worker is scaled back to zero. These tests still have to hold, so
+    // they ask for that regime rather than inheriting whatever the module ships.
+    const dailyRegime = (): { Posts: Loaded['Posts'] } => {
+        const { Posts: P } = load();
+        P.FREQUENT_SWEEP = false;
+        return { Posts: P };
+    };
+
+    it('is in the FREQUENT regime, because a 60s worker is now measurably running', () => {
+        // The load-bearing assertion in this file, and it has been both values.
         //
-        // This flipped to `true` once on the strength of FLOWS.md and drain.yml
-        // describing the INTENT, and the screen then told operators their post
-        // would go out in ~15 minutes when it would actually wait for midnight.
-        // The constant carries the two checks that would justify flipping it.
-        assert.equal(Posts.FREQUENT_SWEEP, false);
+        // `publishDuePosts()` has two callers: `GET /api/jobs/drain` and the
+        // Vercel cron at 00:00 UTC. For a long time only the daily one ran —
+        // the GitHub Actions schedule backing the first has never produced a
+        // single successful run — so this was `false`, and it was correct.
+        //
+        // On 2026-09-22 the Heroku worker was scaled to 1. It polls
+        // `/api/jobs/drain` every 60s, which is the caller that sweeps posts.
+        // Proven, not assumed: three probe jobs inserted directly into the
+        // queue were claimed after 15s, 26s and 61s — the 0-60s spread a 60s
+        // poll produces depending on where the insert lands in its cycle.
+        //
+        // Flip back to `false` if `heroku ps:scale worker=0` is ever run. The
+        // earlier mistake was flipping this to `true` from FLOWS.md describing
+        // the INTENT; measure the sweep, do not read about it.
+        assert.equal(Posts.FREQUENT_SWEEP, true);
+        assert.equal(Posts.FREQUENT_SWEEP_LAG_MS, 5 * 60 * 1000);
     });
 
     it('a future time publishes at the next 00:00 UTC, not at that time', () => {
+        const { Posts } = dailyRegime();
         const win = Posts.publishWindow('2026-09-22T14:35:00.000Z', NOW);
         assert.ok(win);
         assert.equal(win.isPast, false);
@@ -246,12 +264,14 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
         // 23:59 on the 22nd publishes on the 23rd's run, not the 22nd's, which
         // has already happened. `UI.nextCronRun` is strict about this and the
         // screen depends on it.
+        const { Posts } = dailyRegime();
         const win = Posts.publishWindow('2026-09-22T23:59:00.000Z', NOW);
         assert.ok(win);
         assert.equal(win.from.toISOString(), '2026-09-23T00:00:00.000Z');
     });
 
     it('collapses the window to an instant, because a daily cron has no spread', () => {
+        const { Posts } = dailyRegime();
         const win = Posts.publishWindow('2026-09-22T14:35:00.000Z', NOW);
         assert.ok(win);
         assert.equal(win.until.getTime(), win.from.getTime());
@@ -260,6 +280,7 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
     it('counts an overdue post from NOW, not from the time that has passed', () => {
         // A run that happened yesterday tells the operator nothing about when
         // the post in front of them will go out.
+        const { Posts } = dailyRegime();
         const win = Posts.publishWindow('2026-09-20T08:00:00.000Z', NOW);
         assert.ok(win);
         assert.equal(win.isPast, true);
@@ -271,21 +292,37 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
         // the same function, a different claim — with the 15-minute tail being
         // the slow end of "every ~5-15 minutes" rather than the flattering end.
         const { Posts: P } = load();
-        P.FREQUENT_SWEEP = true;
-        try {
-            const win = P.publishWindow('2026-09-22T14:35:00.000Z', NOW);
-            assert.ok(win);
-            assert.equal(win.frequent, true);
-            assert.equal(win.from.toISOString(), '2026-09-22T14:35:00.000Z');
-            assert.equal(P.FREQUENT_SWEEP_LAG_MS, 15 * 60 * 1000);
-            assert.equal(win.until.getTime() - win.from.getTime(), 15 * 60 * 1000);
-            // And an overdue post is measured from now, in both regimes.
+
+        // Live regime: the post goes out at about the time asked for, plus a tail.
+        const win = P.publishWindow('2026-09-22T14:35:00.000Z', NOW);
+        assert.ok(win);
+        assert.equal(win.frequent, true);
+        assert.equal(win.from.toISOString(), '2026-09-22T14:35:00.000Z');
+        assert.equal(win.until.getTime() - win.from.getTime(), 5 * 60 * 1000);
+
+        // Fallback regime: the same input, the same function, a different claim.
+        P.FREQUENT_SWEEP = false;
+        const daily = P.publishWindow('2026-09-22T14:35:00.000Z', NOW);
+        assert.ok(daily);
+        assert.equal(daily.frequent, false);
+        assert.equal(daily.from.toISOString(), '2026-09-23T00:00:00.000Z');
+        assert.equal(daily.until.getTime(), daily.from.getTime());
+
+        // An overdue post is recognised as past in BOTH regimes, and in both it
+        // is measured forward from NOW rather than from the time that lapsed.
+        // Where it lands still differs, and that difference is the regime:
+        // frequent publishes on the next sweep, i.e. now; daily waits for the
+        // next 00:00 UTC. Asserting NOW for both was wrong, and the daily branch
+        // caught it.
+        for (const [frequent, expectedFrom] of [
+            [true, NOW],
+            [false, Date.parse('2026-09-23T00:00:00.000Z')],
+        ] as [boolean, number][]) {
+            P.FREQUENT_SWEEP = frequent;
             const late = P.publishWindow('2026-09-20T08:00:00.000Z', NOW);
             assert.ok(late);
-            assert.equal(late.isPast, true);
-            assert.equal(late.from.getTime(), NOW);
-        } finally {
-            P.FREQUENT_SWEEP = false;
+            assert.equal(late.isPast, true, `overdue must be past when frequent=${frequent}`);
+            assert.equal(late.from.getTime(), expectedFrom, `overdue lands wrong when frequent=${frequent}`);
         }
     });
 
@@ -350,29 +387,76 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
         // So each note is pinned against the key it is supposed to come from,
         // rendered with the instant `publishWindow` actually computed. The
         // `notEqual` is the one that fails on a collapse.
-        const { Posts: P, UI, t } = load();
-        const local = '2020-01-01T10:00';
-        const win = P.publishWindow(vmFromLocal(UI, local));
-        assert.ok(win);
-        assert.equal(win.isPast, true);
+        //
+        // Run in BOTH regimes: the branch is what is under test, and it has to
+        // be right whichever caller is sweeping. Pinning one regime is how this
+        // test went stale the moment the worker was switched on.
+        for (const frequent of [false, true]) {
+            const { Posts: P, UI, t } = load();
+            P.FREQUENT_SWEEP = frequent;
+            const local = '2020-01-01T10:00';
+            const win = P.publishWindow(vmFromLocal(UI, local));
+            assert.ok(win);
+            assert.equal(win.isPast, true);
 
-        const when = UI.formatDateTime(win.from);
-        const note = P.scheduleNoteText(local);
-        assert.equal(note, t('posts.schedule.pastExpectedDaily', { when }));
-        assert.notEqual(note, t('posts.schedule.expectedDaily', { when }));
+            const when = UI.formatDateTime(win.from);
+            const minutes = P.sweepLagMinutes();
+            const pastKey = frequent ? 'posts.schedule.pastExpected' : 'posts.schedule.pastExpectedDaily';
+            const fwdKey = frequent ? 'posts.schedule.expected' : 'posts.schedule.expectedDaily';
+            const note = P.scheduleNoteText(local);
+            assert.equal(note, t(pastKey, { when, minutes }), `past wording, frequent=${frequent}`);
+            assert.notEqual(note, t(fwdKey, { when, minutes }), `must not use forward wording, frequent=${frequent}`);
+        }
     });
 
     it('uses the forward wording for a future time', () => {
+        for (const frequent of [false, true]) {
+            const { Posts: P, UI, t } = load();
+            P.FREQUENT_SWEEP = frequent;
+            const local = '2027-01-01T10:00';
+            const win = P.publishWindow(vmFromLocal(UI, local));
+            assert.ok(win);
+            assert.equal(win.isPast, false);
+
+            const when = UI.formatDateTime(win.from);
+            const minutes = P.sweepLagMinutes();
+            const fwdKey = frequent ? 'posts.schedule.expected' : 'posts.schedule.expectedDaily';
+            const pastKey = frequent ? 'posts.schedule.pastExpected' : 'posts.schedule.pastExpectedDaily';
+            const note = P.scheduleNoteText(local);
+            assert.equal(note, t(fwdKey, { when, minutes }), `forward wording, frequent=${frequent}`);
+            assert.notEqual(note, t(pastKey, { when, minutes }), `must not use past wording, frequent=${frequent}`);
+        }
+    });
+
+    it('takes the minutes in the copy FROM the constant, not from a second copy of it', () => {
+        // The tail used to be written into the translation string as a literal
+        // "15 minutes" while `FREQUENT_SWEEP_LAG_MS` held the real value. The two
+        // could drift silently, and did: the constant moved to 5 and every test
+        // still passed while the screen went on saying 15.
+        //
+        // Pinning the CURRENT number would not catch that — the string and the
+        // constant would simply be wrong together. So this moves the constant to
+        // a value nothing else in the file uses and asserts the sentence follows.
         const { Posts: P, UI, t } = load();
+        P.FREQUENT_SWEEP = true;
+        P.FREQUENT_SWEEP_LAG_MS = 7 * 60 * 1000;
+
+        assert.equal(P.sweepLagMinutes(), 7, 'the helper must derive from the constant');
+
         const local = '2027-01-01T10:00';
         const win = P.publishWindow(vmFromLocal(UI, local));
         assert.ok(win);
-        assert.equal(win.isPast, false);
-
-        const when = UI.formatDateTime(win.from);
         const note = P.scheduleNoteText(local);
-        assert.equal(note, t('posts.schedule.expectedDaily', { when }));
-        assert.notEqual(note, t('posts.schedule.pastExpectedDaily', { when }));
+        assert.equal(
+            note,
+            t('posts.schedule.expected', { when: UI.formatDateTime(win.from), minutes: 7 }),
+            'the rendered note must carry the constant\'s value'
+        );
+        assert.ok(note.includes('7'), `the sentence must name 7 minutes, got: ${note}`);
+        assert.ok(!note.includes('15'), `a stale hardcoded 15 is still in the copy: ${note}`);
+
+        // And the window itself moves with it, so copy and behaviour cannot part.
+        assert.equal(win.until.getTime() - win.from.getTime(), 7 * 60 * 1000);
     });
 
     it('names the run the post will go out on, whichever regime is active', () => {
