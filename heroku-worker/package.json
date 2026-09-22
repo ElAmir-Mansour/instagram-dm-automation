@@ -1,0 +1,12 @@
+{
+  "name": "autoreply-pro-drain-worker",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Polls GET /api/jobs/drain on a fixed interval — see worker.mjs for why this exists.",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "start": "node worker.mjs"
+  }
+}
