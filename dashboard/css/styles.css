@@ -1896,6 +1896,50 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .role-chip { display: inline-block; padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); font-size: var(--fs-100); font-weight: var(--fw-semibold); background: var(--surface-glass-hover); color: var(--text-default); }
 .role-chip.role-admin { background: var(--accent-soft); color: var(--accent-text); }
 
+/* ─── In-tenant roles ────────────────────────────────────────────────────────
+   Three tiers that now decide what a request may do (src/services/tenant.ts).
+   The chip is used on the Users screen, on the tenant detail screen, and in the
+   top bar — the one header use is styled here rather than with the chrome so
+   the whole vocabulary reads in one place.
+
+   Owner is DELIBERATELY the plain neutral chip. It is the default every
+   membership already holds, so colouring it would put a coloured badge on every
+   row in the product and say nothing; the two restricted tiers are the ones
+   worth a second look, and only those two carry a tint. */
+.tenant-role-chip {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-pill);
+    font-size: var(--fs-100);
+    font-weight: var(--fw-semibold);
+    background: var(--surface-glass-hover);
+    color: var(--text-default);
+    white-space: nowrap;
+}
+.tenant-role-chip svg { width: 12px; height: 12px; }
+.tenant-role-operator { background: var(--info-soft); color: var(--info-text); }
+.tenant-role-viewer { background: var(--warning-soft); color: var(--warning-text); }
+
+/* The header badge. Present only when the role restricts you — see
+   App.renderRoleBadge() — so it is never the decorative always-on indicator
+   DESIGN.md rules out. */
+.tenant-role { display: flex; align-items: center; }
+
+.role-legend { display: flex; flex-direction: column; gap: var(--space-2); margin-block-start: var(--space-3); }
+.role-legend-row { display: flex; align-items: flex-start; gap: var(--space-3); }
+.role-legend-row dt { flex: 0 0 auto; }
+.role-legend-row dd { font-size: var(--fs-100); color: var(--text-muted); }
+
+/* A tenant switched off holds its due posts rather than publishing them, and
+   this is where the operator is standing when they switch it off. */
+.tenant-held-note {
+    display: flex; align-items: center; gap: var(--space-1);
+    margin-block-start: var(--space-1);
+    font-size: var(--fs-100);
+    color: var(--warning-text);
+}
+.tenant-held-note svg { width: 12px; height: 12px; flex: 0 0 auto; }
+
 /* ─── First-run setup ────────────────────────────────────────────────────── */
 .app.setup-mode .sidebar-nav { display: none; }
 .setup-screen { padding: var(--space-6); max-width: 680px; margin-inline: auto; text-align: center; }
@@ -1921,6 +1965,41 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 }
 .setup-steps code { color: var(--text-strong); overflow-wrap: anywhere; }
 .setup-note { margin-block-start: var(--space-4); font-size: var(--fs-200); color: var(--text-muted); }
+
+/* Two stages, because two of these steps happen somewhere this product cannot
+   reach. There is no OAuth connect flow — that needs Advanced Access from Meta
+   — so the page access token and the webhook subscription are obtained by hand
+   in Meta's console, and a setup screen that does not say so leaves the
+   operator waiting for a button that is never going to appear. */
+.setup-stage {
+    margin-block: var(--space-5);
+    padding: var(--space-4);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-glass);
+    text-align: start;
+}
+.setup-stage-title {
+    display: flex; align-items: center; gap: var(--space-2);
+    font-size: var(--fs-300);
+    font-weight: var(--fw-semibold);
+    color: var(--text-strong);
+}
+.setup-stage-title svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.setup-stage-note { margin-block-start: var(--space-2); font-size: var(--fs-100); color: var(--text-muted); }
+.setup-stage .setup-steps { margin-block: var(--space-4) 0; max-width: none; }
+.setup-stage .setup-steps li { list-style: decimal; }
+.setup-detail { display: block; margin-block-start: var(--space-1); font-size: var(--fs-100); color: var(--text-muted); }
+.setup-value {
+    display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+    margin-block-start: var(--space-2);
+}
+.setup-value code {
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-xs);
+    background: var(--surface-sunken);
+    overflow-wrap: anywhere;
+}
 
 /* ─── Bulk import modal ──────────────────────────────────────────────────── */
 .bulk-scroll { max-height: 56vh; overflow-y: auto; padding-block: var(--space-3); display: flex; flex-direction: column; gap: var(--space-4); }
@@ -2083,6 +2162,27 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .user-memberships { padding-block-start: var(--space-4); border-block-start: 1px solid var(--border-subtle); }
 .membership-list { display: flex; flex-direction: column; gap: var(--space-2); }
 .membership-item { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+/* The tenant name takes the slack so the role picker and the revoke button keep
+   a predictable size as names get longer. */
+.membership-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.membership-role { flex: 0 0 auto; width: auto; min-width: 8.5rem; }
+.select-sm { min-height: var(--tap-target); padding-block: var(--space-1); font-size: var(--fs-100); }
+
+/* Who can reach one tenant. The data was already in the tenant-detail payload
+   and nothing rendered it; now that the membership role decides something, it
+   is the answer to "who can rotate this client's page token". */
+.member-list { display: flex; flex-direction: column; gap: var(--space-2); }
+.member-item {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: var(--space-3); flex-wrap: wrap;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-glass);
+}
+.member-item-off { opacity: 0.62; }
+.member-email { font-size: var(--fs-200); color: var(--text-strong); overflow-wrap: anywhere; min-width: 0; }
+.member-tags { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .user-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
 
 /* ─── Jobs ──────────────────────────────────────────────────────────────── */
@@ -2267,6 +2367,16 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     .hazard-item { align-items: stretch; }
     .hazard-item .btn { width: 100%; }
 
+    /* A membership row is a name, a role picker and a revoke button. Below this
+       the three cannot share a line without the picker shrinking past its own
+       longest option, so the picker takes the full width on its own line. */
+    .membership-name { flex: 1 1 100%; }
+    .membership-role { flex: 1 1 auto; width: 100%; min-width: 0; }
+
+    .member-item { align-items: flex-start; }
+    .setup-stage { padding: var(--space-3); }
+    .setup-stage .setup-steps { padding-inline-start: var(--space-4); }
+
     /* The tenants table gains two row actions (inspect, re-check), so it needs
        more room before it scrolls; the count/refresh row and the filters must
        not share a flex line. */
@@ -2283,6 +2393,12 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 @media (max-width: 400px) {
     .page-prelude { padding: var(--space-3) var(--space-3) 0; }
     .ops-card-actions, .user-card-actions { flex-direction: column; align-items: stretch; }
+    /* At 375px the top bar holds a title, a role badge and the language toggle.
+       The badge keeps its colour and its icon and drops the word — it is a
+       pointer to an explanation, not the explanation. */
+    .tenant-role-chip { padding-inline: var(--space-2); }
+    .tenant-role .tenant-role-chip span:not(.sr-only) { display: none; }
+    .role-legend-row { flex-direction: column; gap: var(--space-1); }
 }
 
 html[dir='rtl'] .select { background-position: left var(--space-3) center; }

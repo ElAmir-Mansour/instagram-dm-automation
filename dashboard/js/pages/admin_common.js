@@ -456,6 +456,60 @@ const Admin = {
         `;
     },
 
+    // ─── In-tenant roles ─────────────────────────────────────────────────────
+    //
+    // `memberships.role` was stored, shown here and written to the audit log for
+    // four migrations while nothing read it — the grant form even said so, in
+    // as many words: "a label only — access is the membership itself". It is an
+    // authorization decision now (src/services/tenant.ts), so the vocabulary
+    // lives in ONE place and both the Users screen and the tenant detail screen
+    // read it from here. Two screens describing the same permission differently
+    // is how somebody grants the wrong one.
+
+    /** Most privileged first, which is the order the grant form offers them in. */
+    TENANT_ROLES: ['owner', 'operator', 'viewer'],
+
+    /**
+     * A stored role as one of the three. Mirrors `normalizeTenantRole` on the
+     * server, including the direction it fails in: anything unrecognised — the
+     * legacy 'member' the old grant form wrote, a blank, a value from a newer
+     * build — is an OWNER, because that is the access every one of those rows
+     * actually has. A UI that guessed "restricted" would show a downgrade that
+     * has not happened.
+     */
+    tenantRole(raw) {
+        return raw === 'operator' || raw === 'viewer' ? raw : 'owner';
+    },
+
+    /** The chip: the role, and on hover what it may do. */
+    roleChip(raw) {
+        const role = this.tenantRole(raw);
+        return html`<span class="tenant-role-chip tenant-role-${html.raw(role)}"
+                          title="${t(`roles.${role}.what`)}">${t(`roles.${role}`)}</span>`;
+    },
+
+    /** The `<option>` list for a role picker, with `selected` on the current one. */
+    roleOptions(current) {
+        const role = this.tenantRole(current);
+        return this.TENANT_ROLES.map((value) => html`
+            <option value="${value}" ${value === role ? html.raw('selected') : ''}>${t(`roles.${value}`)}</option>
+        `);
+    },
+
+    /** The three sentences under a role picker — what each tier actually gets. */
+    roleLegend() {
+        return html`
+            <dl class="role-legend">
+                ${this.TENANT_ROLES.map((role) => html`
+                    <div class="role-legend-row">
+                        <dt>${Admin.roleChip(role)}</dt>
+                        <dd>${t(`roles.${role}.what`)}</dd>
+                    </div>
+                `)}
+            </dl>
+        `;
+    },
+
     /**
      * The message for a PATCH that collided with another tenant. The server
      * answers 409; "Request failed (409)" tells the operator nothing, and this

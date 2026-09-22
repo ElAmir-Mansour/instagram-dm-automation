@@ -197,12 +197,28 @@ const UsersPage = {
     },
 
     renderMembership(userId, email, m) {
-        const label = m.role
-            ? t('users.membershipChip', { name: m.name, role: this.membershipRoleLabel(m.role) })
-            : String(m.name);
+        // The role is editable in place. It used to be a word inside a chip,
+        // and the form that set it said outright that it was "a label only" —
+        // which was true, and is the whole reason a viewer could delete
+        // campaigns. Now that it decides something, changing it has to be
+        // possible without revoking the membership and granting it again.
+        //
+        // The revoke control is deliberately NOT `UI.button`: that helper always
+        // writes `.btn`, whose padding and min-height fight `.icon-btn`'s fixed
+        // 44x44 box, and the two backgrounds would resolve by source order
+        // rather than by intent. The primitive is for real buttons; an
+        // icon-only control is its own component here and stays one.
+        const roleId = `membership-role-${userId}-${m.id}`;
         return html`
             <li class="membership-item">
-                <span class="chip" dir="auto">${label}</span>
+                <span class="chip membership-name" dir="auto">${m.name}</span>
+                <label class="sr-only" for="${roleId}">${t('users.membershipRoleFor', { name: m.name })}</label>
+                <select class="select select-sm membership-role" id="${roleId}"
+                        data-change="users:changeMembershipRole"
+                        data-id="${userId}" data-creator="${m.id}" data-name="${m.name}"
+                        ${m.id ? '' : html.raw('disabled')}>
+                    ${Admin.roleOptions(m.role)}
+                </select>
                 <button type="button" class="icon-btn icon-btn-danger"
                         data-action="users:confirmRevokeMembership"
                         data-id="${userId}" data-creator="${m.id}" data-email="${email}" data-name="${m.name}"
@@ -215,10 +231,62 @@ const UsersPage = {
         `;
     },
 
-    membershipRoleLabel(role) {
-        const key = `users.role${String(role).charAt(0).toUpperCase()}${String(role).slice(1)}`;
-        const label = t(key);
-        return label === key ? String(role) : label;
+    /**
+     * Change one membership's role.
+     *
+     * The grant endpoint is an upsert (`ON CONFLICT … DO UPDATE SET role`), so
+     * re-granting IS the edit — there is no separate PATCH to add and no second
+     * server-side path that could disagree with the first about the vocabulary.
+     *
+     * Restricting somebody confirms; widening does not. That asymmetry is the
+     * same one `changeRole` above already makes for platform_admin, and it
+     * points the other way here for the same reason: the dangerous direction is
+     * the one whose consequence is invisible until the person it happened to
+     * tries to do their job.
+     */
+    changeMembershipRole(select) {
+        const { id, creator, name } = select.dataset;
+        const u = this.users.find((x) => String(this.id(x)) === String(id));
+        if (!u || !creator) return Promise.resolve();
+
+        const membership = this.memberships(u).find((m) => String(m.id) === String(creator));
+        const previous = Admin.tenantRole(membership && membership.role);
+        const next = Admin.tenantRole(select.value);
+        if (next === previous) return Promise.resolve();
+
+        const email = Admin.pick(u, 'email') || '';
+        const restricting = Admin.TENANT_ROLES.indexOf(next) > Admin.TENANT_ROLES.indexOf(previous);
+        if (!restricting) return this.applyMembershipRole(select, id, creator, next, previous);
+
+        select.value = previous;
+        Admin.confirm({
+            title: t('users.membershipRoleTitle'),
+            body: t('users.membershipRoleBody', {
+                email, name: name || '—', role: t(`roles.${next}`),
+            }),
+            hint: t(`roles.${next}.what`),
+            confirmLabel: t('users.membershipRoleCta'),
+            confirmIcon: 'shield',
+            onConfirm: () => this.applyMembershipRole(select, id, creator, next, previous),
+        });
+        return Promise.resolve();
+    },
+
+    applyMembershipRole(select, id, creator, next, previous) {
+        select.disabled = true;
+        select.value = next;
+        return API.createUserMembership(id, { creator_id: creator, role: next })
+            .then(async () => {
+                UI.toast(t('users.membershipRoleSaved', { role: t(`roles.${next}`) }));
+                await this.render();
+                return true;
+            })
+            .catch((err) => {
+                select.disabled = false;
+                select.value = previous;
+                UI.toast(this.describeUserError(err, 'users.membershipRoleFailed'), 'error');
+                return null;
+            });
     },
 
     // ─── Errors ──────────────────────────────────────────────────────────────
@@ -444,10 +512,10 @@ const UsersPage = {
                 <div class="form-group">
                     <label class="form-label" for="membership-role">${t('users.membershipRole')}</label>
                     <select class="select" id="membership-role" name="role" aria-describedby="membership-role-hint">
-                        <option value="owner" selected>${t('users.roleOwner')}</option>
-                        <option value="member">${t('users.roleMember')}</option>
+                        ${Admin.roleOptions('owner')}
                     </select>
                     <p class="form-hint" id="membership-role-hint">${t('users.membershipHint')}</p>
+                    ${Admin.roleLegend()}
                 </div>
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
@@ -618,6 +686,7 @@ UI.registerActions('users', {
     showMembershipModal: (el) => Admin.report(UsersPage.showMembershipModal(el.dataset.id)),
     handleMembership: (el, e) => Admin.report(UsersPage.handleMembership(el, e)),
     confirmRevokeMembership: (el) => UsersPage.confirmRevokeMembership(el),
+    changeMembershipRole: (el) => Admin.report(UsersPage.changeMembershipRole(el)),
     showPasswordModal: (el) => UsersPage.showPasswordModal(el),
     handlePassword: (el, e) => Admin.report(UsersPage.handlePassword(el, e)),
     confirmRevoke: (el) => UsersPage.confirmRevoke(el),

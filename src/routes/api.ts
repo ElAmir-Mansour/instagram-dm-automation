@@ -11,7 +11,8 @@ import { sendDirectMessage, publishFacebookPost, publishInstagramPost, API_VERSI
 import { generateAiResponse } from '../services/ai.js';
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
-    assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache
+    assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache,
+    requireTenantRole
 } from '../services/tenant.js';
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from '../config/crypto.js';
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
@@ -407,11 +408,71 @@ export function unsupportedPlatformCombination(platform: unknown, postType: unkn
     return null;
 }
 
+/**
+ * The same check, for an edit rather than a create.
+ *
+ * `PUT /posts/scheduled/:id` had no equivalent of the create-time guard, so the exact
+ * combination that guard exists to refuse could be assembled in two steps: create an
+ * `instagram` + `story` post, then change it to `platform: 'both'`. The edit was accepted and
+ * the failure arrived at the cron, in a log nobody reads, instead of in the form, in front of
+ * the person who could fix it.
+ *
+ * The check has to run against the EFFECTIVE combination, which is why this exists as its own
+ * function rather than as a second call to the one above: the UPDATE is a row of
+ * `COALESCE($n, column)`, so a PUT that sends only `platform` still has a `post_type` — the
+ * one already on the row. Checking the body alone would let exactly the two-step edit through
+ * that the bug is made of.
+ */
+export function unsupportedAfterEdit(
+    patch: { platform?: unknown; post_type?: unknown },
+    current: { platform: unknown; post_type: unknown }
+): string | null {
+    // `??`, matching COALESCE: null and undefined both mean "leave it alone", and anything
+    // else — including a value the create-time guard would also refuse — is the new value.
+    return unsupportedPlatformCombination(
+        patch.platform ?? current.platform,
+        patch.post_type ?? current.post_type
+    );
+}
+
+/**
+ * Split the due-posts query into what may publish and what must be held.
+ *
+ * Extracted so the rule can be exercised without a database, because the rule is the entire
+ * bug: the join that feeds it had no `is_active` filter, while the webhook path has always had
+ * one (`getCreatorByPageId`). Switching a tenant off therefore stopped their auto-replies and
+ * left their scheduler running — posts kept going out on live Instagram and Facebook accounts
+ * belonging to a client the operator had deliberately disconnected.
+ *
+ * `is_active === true` rather than a truthiness test on purpose. The column is `NOT NULL`, but
+ * this function is fed `pool.query` rows, which are `any`: a query that forgets to select the
+ * column would hand every row `undefined`, and a truthy test would then hold EVERY tenant's
+ * posts — failing in the safe direction, but silently and completely. An explicit comparison
+ * makes that mistake visible the first time it happens instead of at the next publish.
+ */
+export function splitDueByTenantActivity<T extends { creator_id?: string | null; is_active?: boolean }>(
+    rows: T[]
+): { due: T[]; held: T[] } {
+    const due: T[] = [];
+    const held: T[] = [];
+    for (const row of rows) (row.is_active === true ? due : held).push(row);
+    return { due, held };
+}
+
 /** What one publish sweep did. */
 export interface PublishSweepResult {
     due: number;
     claimed: number;
     published: string[];
+    /**
+     * Posts that came due for a tenant whose `is_active` is false. Held, not published and
+     * not cancelled — the rows stay `PENDING`, so re-enabling the tenant resumes them.
+     *
+     * Reported rather than merely filtered, because a number that only ever appears as an
+     * absence is a number nobody sees. This is the field the drain and cron responses carry,
+     * and it is the reason `cron.publish_held_inactive` is a `warn` and not a `debug`.
+     */
+    heldForInactiveTenant: number;
 }
 
 /**
@@ -596,27 +657,51 @@ export async function attemptPublish(
  * It does NOT do the daily maintenance (stale-claim release, attempt-cap abandonment, rate
  * limit pruning, the retention sweep). Those stay on the daily cron: they are housekeeping
  * measured in days, and running the retention sweep every five minutes would be churn.
+ *
+ * ── Disabled tenants ──
+ * This join had no `is_active` filter, while the webhook path has always had one
+ * (`getCreatorByPageId`). So switching a tenant off — for non-payment, at their request, or
+ * because their token is compromised — stopped their auto-replies and left their scheduler
+ * running: posts kept going out on live Instagram and Facebook accounts under the name of a
+ * client the operator had deliberately disconnected.
+ *
+ * Due posts for an inactive tenant are now **held**: skipped, left `PENDING`, counted and
+ * logged. Held rather than cancelled because `is_active` is routinely temporary — the
+ * dashboard's switch is a pause, not a delete — and a post that silently became FAILED while
+ * an account was suspended would have to be rebuilt by hand afterwards. Re-enabling the
+ * tenant simply lets the next sweep pick them up, which is what an operator flipping that
+ * switch back on expects.
  */
 export async function publishDuePosts(): Promise<PublishSweepResult> {
-    // Find pending posts due for publishing
+    // `c.is_active` is selected rather than filtered on, so the held rows can be counted and
+    // reported. Filtering in SQL would make them invisible, which is the failure mode this
+    // whole change is about: the old query's silence looked exactly like "nothing was due".
     const result = await pool.query(`
-        SELECT s.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id
+        SELECT s.*, c.page_access_token, c.instagram_page_id, c.facebook_page_id, c.is_active
         FROM scheduled_posts s
         JOIN creators c ON c.id = s.creator_id
         WHERE s.status = 'PENDING' AND s.scheduled_time <= NOW()
         ORDER BY s.scheduled_time ASC
     `);
 
-    if (result.rows.length === 0) {
-        log('info', 'cron.publish_none_due');
-        return { due: 0, claimed: 0, published: [] };
+    const { due, held } = splitDueByTenantActivity(result.rows);
+    if (held.length > 0) {
+        log('warn', 'cron.publish_held_inactive', {
+            count: held.length,
+            creator_ids: [...new Set(held.map((row) => row.creator_id))],
+        });
     }
 
-    log('info', 'cron.publish_due', { count: result.rows.length });
+    if (due.length === 0) {
+        log('info', 'cron.publish_none_due');
+        return { due: 0, claimed: 0, published: [], heldForInactiveTenant: held.length };
+    }
+
+    log('info', 'cron.publish_due', { count: due.length });
     const publishedIds: string[] = [];
     let claimed = 0;
 
-    for (const post of result.rows) {
+    for (const post of due) {
         // Claim atomically. The old SELECT-then-UPDATE let two concurrent cron hits both
         // read the row as PENDING and both publish it — a duplicate reel on the live
         // account, which cannot be undone from here.
@@ -659,7 +744,7 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
         }
     }
 
-    return { due: result.rows.length, claimed, published: publishedIds };
+    return { due: due.length, claimed, published: publishedIds, heldForInactiveTenant: held.length };
 }
 
 
@@ -712,12 +797,18 @@ router.get('/cron/publish', async (req, res) => {
         await drainWorker();
 
         const publishSweep = await publishDuePosts();
+        // `heldForInactiveTenant` rides on both branches: "nothing to publish" is exactly the
+        // answer that would otherwise hide a disabled tenant's whole backlog.
+        const held = publishSweep.heldForInactiveTenant > 0
+            ? { heldForInactiveTenant: publishSweep.heldForInactiveTenant }
+            : {};
         res.json(publishSweep.due === 0
-            ? { message: 'No pending posts to publish.' }
+            ? { message: 'No pending posts to publish.', ...held }
             : {
                 message: 'Publishing sequence complete.',
                 processed: publishSweep.claimed,
                 published: publishSweep.published,
+                ...held,
             });
 
     } catch (err: any) {
@@ -951,10 +1042,19 @@ router.get('/auth/me', async (req, res) => {
         const tenantId = session.tenantId
             ?? (session.role === 'platform_admin' ? await getActiveCreatorId() : tenants[0]?.id ?? null);
 
+        // The in-tenant role, said once and plainly, so the dashboard does not have to
+        // re-derive it from the list on every screen. Unknown (a tenant that is not in the
+        // list, e.g. one that has been switched off) resolves the same way the server does:
+        // owner for a platform_admin, and otherwise null, which the dashboard reads as "do
+        // not hide anything" — the UI hides affordances, the API is what refuses.
+        const tenantRole = tenants.find((t) => t.id === tenantId)?.role
+            ?? (session.role === 'platform_admin' ? 'owner' : null);
+
         res.json({
             userId: session.userId,
             role: session.role,
             tenantId,
+            tenantRole,
             tenants,
         });
     } catch (err) {
@@ -1121,6 +1221,27 @@ router.post('/auth/password', async (req, res) => {
 // silent fallback is the bug this whole layer exists to remove — which is why it is safe to
 // call inline inside a query.
 router.use(resolveTenant);
+
+// ─── In-tenant role guards ──────────────────────────────────────────────────
+//
+// `resolveTenant` above has already decided that this session may act as this tenant, and has
+// put the role it acts with on the request. These two say what each route needs.
+//
+//   canOperate  — spends the tenant's reach: campaigns, scheduled posts, uploads, outbound
+//                 DMs, the bot switch, the AI persona. Refused for a `viewer`.
+//   canAdminister — changes the Meta connection: the page access token and the webhook verify
+//                 token. Refused for anything but an `owner`.
+//
+// Nothing here gates a GET. A membership is already a decision to let somebody see the
+// account, and hiding rows by role would mean a second, parallel set of filters on every read
+// query — more surface, and a viewer who cannot see what they are being asked about.
+// `GET /settings/webhook-token` is the one read that touches a secret, and it has always
+// returned a masked preview rather than the value.
+//
+// Read-only by design, so deliberately NOT gated: /interactions/export/token mints a
+// short-lived token for an export of rows the caller can already read on screen.
+const canOperate = requireTenantRole('operator');
+const canAdminister = requireTenantRole('owner');
 
 // ─── Health ─────────────────────────────────────────────────────────────────
 //
@@ -1341,7 +1462,7 @@ function readMatchMode(body: any): { ok: true; value?: string } | { ok: false; e
     return { ok: true, value: body.match_mode };
 }
 
-router.post('/campaigns', async (req, res) => {
+router.post('/campaigns', canOperate, async (req, res) => {
     try {
         const { trigger_keyword, dm_template, public_reply_template, post_id, is_active } = req.body;
 
@@ -1379,7 +1500,7 @@ router.post('/campaigns', async (req, res) => {
     }
 });
 
-router.put('/campaigns/:id', async (req, res) => {
+router.put('/campaigns/:id', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
         const { trigger_keyword, dm_template, public_reply_template, post_id, is_active } = req.body;
@@ -1435,7 +1556,7 @@ router.put('/campaigns/:id', async (req, res) => {
     }
 });
 
-router.delete('/campaigns/:id', async (req, res) => {
+router.delete('/campaigns/:id', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -1665,7 +1786,7 @@ router.get('/settings/token/status', async (req, res) => {
     }
 });
 
-router.post('/settings/token', async (req, res) => {
+router.post('/settings/token', canAdminister, async (req, res) => {
     try {
         let { token } = req.body;
 
@@ -1788,7 +1909,7 @@ router.post('/settings/token', async (req, res) => {
  * expiry dates never reached a column and `token_status` could only change as a side effect of
  * somebody happening to open a page. This one is the explicit action, and it persists.
  */
-router.post('/settings/token/recheck', async (req, res) => {
+router.post('/settings/token/recheck', canOperate, async (req, res) => {
     try {
         const creatorId = getTenantId(req);
         const result = await recheckTenantToken(creatorId);
@@ -1816,7 +1937,7 @@ router.post('/settings/token/recheck', async (req, res) => {
     }
 });
 
-router.post('/settings/token/extend', async (req, res) => {
+router.post('/settings/token/extend', canAdminister, async (req, res) => {
     try {
         const appId = process.env.META_APP_ID;
         const appSecret = process.env.META_APP_SECRET;
@@ -1922,7 +2043,7 @@ router.get('/posts/scheduled', async (req, res) => {
     }
 });
 
-router.post('/posts/scheduled', async (req, res) => {
+router.post('/posts/scheduled', canOperate, async (req, res) => {
     try {
         const { platform, post_type, caption, media_url, scheduled_time, publish_now, cover_url } = req.body;
 
@@ -2057,13 +2178,39 @@ router.post('/posts/scheduled', async (req, res) => {
     }
 });
 
-router.put('/posts/scheduled/:id', async (req, res) => {
+router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
         const { platform, post_type, caption, media_url, scheduled_time, cover_url } = req.body;
 
         if (!isUuid(id)) {
             res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+
+        const tenantId = getTenantId(req);
+
+        // The create-time guard exists so a story scheduled to `both` is refused by the form
+        // rather than by the cron at 00:00 UTC. The edit path had no equivalent, so the exact
+        // combination it refuses could be assembled in two steps: create an instagram+story
+        // post, then change it to `both`. That edit was accepted, and the failure arrived a
+        // day later in a log nobody reads.
+        //
+        // The guard has to run against the EFFECTIVE combination, not the body: every column
+        // below is `COALESCE($n, column)`, so a PUT sending only `platform` still has a
+        // post_type, and it is the one already on the row. Read it first.
+        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type'>>(
+            'SELECT platform, post_type FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
+            [id, tenantId]
+        );
+        if (!current) {
+            res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+
+        const unsupported = unsupportedAfterEdit({ platform, post_type }, current);
+        if (unsupported) {
+            res.status(400).json({ error: unsupported });
             return;
         }
 
@@ -2079,7 +2226,7 @@ router.put('/posts/scheduled/:id', async (req, res) => {
                  cover_url = COALESCE($6, cover_url),
                  status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
              WHERE id = $7 AND creator_id = $8 RETURNING *`,
-            [platform, post_type, caption, media_url, scheduled_time, cover_url, id, getTenantId(req)]
+            [platform, post_type, caption, media_url, scheduled_time, cover_url, id, tenantId]
         );
 
         if (result.rows.length === 0) {
@@ -2093,7 +2240,7 @@ router.put('/posts/scheduled/:id', async (req, res) => {
     }
 });
 
-router.delete('/posts/scheduled/:id', async (req, res) => {
+router.delete('/posts/scheduled/:id', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -2136,7 +2283,7 @@ router.delete('/posts/scheduled/:id', async (req, res) => {
  * (nothing left to do). Scoped to this tenant's own row, the same `creator_id =
  * getTenantId(req)` convention as the PUT/DELETE handlers on this resource above.
  */
-router.post('/posts/scheduled/:id/publish-now', async (req, res) => {
+router.post('/posts/scheduled/:id/publish-now', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -2308,7 +2455,7 @@ router.get('/posts/live', async (req, res) => {
     }
 });
 
-router.post('/upload', async (req, res) => {
+router.post('/upload', canOperate, async (req, res) => {
     try {
         const { filename, mime_type, base64_data } = req.body;
 
@@ -2451,7 +2598,7 @@ router.get('/conversations/:id/messages', async (req, res) => {
     }
 });
 
-router.post('/conversations/:id/messages', async (req, res) => {
+router.post('/conversations/:id/messages', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
         const { text } = req.body;
@@ -2512,7 +2659,7 @@ router.post('/conversations/:id/messages', async (req, res) => {
     }
 });
 
-router.put('/conversations/:id/toggle-bot', async (req, res) => {
+router.put('/conversations/:id/toggle-bot', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
         const { is_bot_active } = req.body;
@@ -2569,7 +2716,7 @@ router.get('/settings/ai', async (req, res) => {
     }
 });
 
-router.post('/settings/ai', async (req, res) => {
+router.post('/settings/ai', canOperate, async (req, res) => {
     try {
         const { system_prompt, knowledge_base, model, temperature, is_active } = req.body;
 
@@ -2613,7 +2760,7 @@ router.post('/settings/ai', async (req, res) => {
     }
 });
 
-router.post('/settings/ai/test', async (req, res) => {
+router.post('/settings/ai/test', canOperate, async (req, res) => {
     try {
         const { system_prompt, knowledge_base, user_message } = req.body;
 
@@ -2679,7 +2826,7 @@ router.get('/settings/webhook-token', async (req, res) => {
     }
 });
 
-router.post('/settings/webhook-token', async (req, res) => {
+router.post('/settings/webhook-token', canAdminister, async (req, res) => {
     try {
         const raw = req.body?.token;
         if (typeof raw !== 'string') {

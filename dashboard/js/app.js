@@ -67,7 +67,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '6.6',
+    ASSET_VERSION: '6.7',
 
     _modules: Object.create(null),
 
@@ -449,12 +449,19 @@ const App = {
                 userId: (me && me.userId) || null,
                 role: (me && me.role) || 'user',
                 tenantId: (me && me.tenantId) || null,
+                // The role INSIDE the current tenant, which is a different axis from
+                // `role` above: that one is platform_admin vs user, this one is
+                // owner/operator/viewer. Null means the server did not say, and the
+                // dashboard then hides nothing — the API is what refuses, and a UI
+                // that guesses "restricted" would take affordances away from people
+                // who still have them.
+                tenantRole: (me && me.tenantRole) || null,
                 tenants: (me && Array.isArray(me.tenants)) ? me.tenants : [],
                 available: true,
             };
         } catch (err) {
             if (err && err.status === 401) return false;
-            this.session = { userId: null, role: null, tenantId: null, tenants: [], available: false };
+            this.session = { userId: null, role: null, tenantId: null, tenantRole: null, tenants: [], available: false };
         }
         return true;
     },
@@ -509,6 +516,7 @@ const App = {
         if (app) app.classList.toggle('setup-mode', this.needsSetup());
 
         this.renderTenantSwitcher();
+        this.renderRoleBadge();
 
         // #app has just come out of `hidden`, so this is the first point at
         // which the nav has a measurable box. Placed, not animated.
@@ -531,14 +539,79 @@ const App = {
         }
 
         const currentId = this.session.tenantId;
+        // A tenant switched off (or a membership revoked) mid-session leaves the
+        // session naming a tenant the list no longer contains. Without a matching
+        // option the browser selects the FIRST one, so the switcher would quietly
+        // claim you are acting as a tenant you are not — and clicking it would be
+        // a no-op, because switchTenant() returns early on an unchanged id.
+        const orphaned = !tenants.some((tenant) => String(tenant.id) === String(currentId));
+
         wrap.innerHTML = esc(html`
             <i data-lucide="building-2" aria-hidden="true"></i>
             <label class="sr-only" for="tenant-select">${t('app.tenant')}</label>
             <select id="tenant-select" data-change="app:switchTenantFromSelect">
+                ${orphaned ? html`
+                    <option value="${currentId}" selected disabled>${t('tenants.unavailable')}</option>
+                ` : ''}
                 ${tenants.map((tenant) => html`
                     <option value="${tenant.id}" ${String(tenant.id) === String(currentId) ? html.raw('selected') : ''}>${tenant.name || tenant.id}</option>
                 `)}
             </select>
+        `);
+        wrap.classList.remove('hidden');
+        UI.icons(wrap);
+    },
+
+    /**
+     * The role this session holds inside the current tenant.
+     *
+     * `owner` when the server did not say. Deliberately optimistic: the UI hides
+     * affordances, the API refuses, and a dashboard that guessed "restricted"
+     * would take buttons away from people who still have them — which is the
+     * lockout this whole change is written to avoid, just wearing a different hat.
+     */
+    tenantRole() {
+        const role = this.session && this.session.tenantRole;
+        return role === 'operator' || role === 'viewer' ? role : 'owner';
+    },
+
+    /** May this session run the account — campaigns, posts, inbox, AI agent? */
+    canOperate() {
+        return this.tenantRole() !== 'viewer';
+    },
+
+    /** May this session change the Meta connection — the tokens? */
+    canAdminister() {
+        return this.tenantRole() === 'owner';
+    },
+
+    /**
+     * Show the role, but only when it constrains you.
+     *
+     * An always-present "Owner" badge is exactly the decorative status indicator
+     * DESIGN.md §6 rules out — it is true on every screen and therefore says
+     * nothing. A badge that appears only for an operator or a viewer is the
+     * opposite: it is the answer to "why did that button just refuse me", sitting
+     * next to the buttons in question.
+     */
+    renderRoleBadge() {
+        const wrap = document.getElementById('tenant-role');
+        if (!wrap) return;
+
+        const role = this.tenantRole();
+        if (!this.session || !this.session.available || role === 'owner' || this.needsSetup()) {
+            wrap.classList.add('hidden');
+            wrap.innerHTML = '';
+            return;
+        }
+
+        const icon = role === 'viewer' ? 'eye' : 'sliders-horizontal';
+        wrap.innerHTML = esc(html`
+            <span class="tenant-role-chip tenant-role-${html.raw(role)}"
+                  title="${t(`roles.${role}.what`)}">
+                <i data-lucide="${icon}" aria-hidden="true"></i>
+                <span class="sr-only">${t('roles.yours')}: </span>${t(`roles.${role}`)}
+            </span>
         `);
         wrap.classList.remove('hidden');
         UI.icons(wrap);
@@ -630,20 +703,84 @@ const App = {
                 <h2>${t('setup.heading')}</h2>
                 <p>${t('setup.body')}</p>
                 ${admin ? html`
-                    <ol class="setup-steps">
-                        <li>${t('setup.step1')}</li>
-                        <li>${t('setup.step2')}</li>
-                        <li>${t('setup.step3')} <code>${UI.ltr(webhookUrl)}</code></li>
-                    </ol>
-                    <button type="button" class="btn btn-primary" data-action="tenants:showFirstRunCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> ${t('setup.cta')}
-                    </button>
+                    <div class="setup-stage">
+                        <h3 class="setup-stage-title">
+                            <i data-lucide="external-link" aria-hidden="true"></i>
+                            ${t('setup.metaTitle')}
+                        </h3>
+                        <p class="setup-stage-note">${t('setup.metaWhy')}</p>
+                        <ol class="setup-steps">
+                            <li>
+                                <strong>${t('setup.metaStep1')}</strong>
+                                <span class="setup-detail">${t('setup.metaStep1Detail')}</span>
+                            </li>
+                            <li>
+                                <strong>${t('setup.metaStep2')}</strong>
+                                <span class="setup-detail">${t('setup.metaStep2Detail')}</span>
+                                <span class="setup-value">
+                                    <code dir="ltr">${UI.ltr(webhookUrl)}</code>
+                                    ${UI.button({
+                                        variant: 'ghost', size: 'sm', icon: 'copy',
+                                        ariaLabel: t('setup.copyUrl'), title: t('setup.copyUrl'),
+                                        action: 'app:copyValue', data: { copy: webhookUrl },
+                                    })}
+                                </span>
+                            </li>
+                            <li>
+                                <strong>${t('setup.metaStep3')}</strong>
+                                <span class="setup-detail">${t('setup.metaStep3Detail')}</span>
+                            </li>
+                        </ol>
+                    </div>
+
+                    <div class="setup-stage">
+                        <h3 class="setup-stage-title">
+                            <i data-lucide="app-window" aria-hidden="true"></i>
+                            ${t('setup.hereTitle')}
+                        </h3>
+                        <ol class="setup-steps">
+                            <li>
+                                <strong>${t('setup.hereStep1')}</strong>
+                                <span class="setup-detail">${t('setup.hereStep1Detail')}</span>
+                            </li>
+                            <li>
+                                <strong>${t('setup.hereStep2')}</strong>
+                                <span class="setup-detail">${t('setup.hereStep2Detail')}</span>
+                            </li>
+                        </ol>
+                    </div>
+
+                    ${UI.button({
+                        variant: 'primary', icon: 'plus', label: t('setup.cta'),
+                        action: 'tenants:showFirstRunCreateModal',
+                    })}
                 ` : html`
                     <p class="setup-note">${t('setup.noAccess')}</p>
                 `}
             </div>
         `);
         UI.icons(container);
+    },
+
+    /**
+     * Copy a value a person has to paste somewhere else entirely.
+     *
+     * Only used where the destination is outside this product — Meta's webhook
+     * configuration — which is exactly where retyping is both most likely and
+     * most expensive: one wrong character in a callback URL or a verify token
+     * fails with `Callback verification failed: HTTP 403` and names nothing.
+     */
+    async copyValue(btn) {
+        const value = btn && btn.dataset ? btn.dataset.copy : '';
+        if (!value) return;
+        try {
+            await navigator.clipboard.writeText(value);
+            UI.toast(t('setup.copied'));
+        } catch {
+            // Clipboard access is refused outside a secure context and in some
+            // embedded browsers. Say so rather than appearing to have worked.
+            UI.toast(t('setup.copyFailed'), 'error');
+        }
     },
 
     /** Give the outgoing page a chance to stop timers and listeners. */
@@ -959,6 +1096,9 @@ UI.registerActions('app', {
     },
     switchTenantFromSelect(el) {
         App.switchTenant(el.value);
+    },
+    copyValue(el) {
+        App.copyValue(el);
     },
     showPasswordModal() {
         App.showPasswordModal();

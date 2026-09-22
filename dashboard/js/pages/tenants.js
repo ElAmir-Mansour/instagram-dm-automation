@@ -155,8 +155,14 @@ const TenantsPage = {
                     <div class="tenant-name-cell">
                         <span class="tenant-name" dir="auto">${name}</span>
                         ${isCurrent ? html`<span class="chip chip-accent">${t('tenants.current')}</span>` : ''}
-                        ${isActive ? '' : html`<span class="chip">${t('tenants.inactive')}</span>`}
+                        ${isActive ? '' : html`<span class="chip" title="${t('tenants.inactiveWhat')}">${t('tenants.inactive')}</span>`}
                     </div>
+                    ${isActive || !scheduled ? '' : html`
+                        <p class="tenant-held-note">
+                            <i data-lucide="pause" aria-hidden="true"></i>
+                            ${t('tenants.heldPosts', { count: UI.formatNumber(scheduled) })}
+                        </p>
+                    `}
                     <div class="tenant-page-ids">
                         <span>IG ${UI.ltr(igId || '—')}</span>
                         <span>FB ${UI.ltr(fbId || '—')}</span>

@@ -25,7 +25,8 @@ import { metaHttp } from '../services/http.js';
 import type { Creator } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    handleMessagingEvent, needsDisclosure, normalizeDm, resolveDmPageId,
+    dmPromptText, handleMessagingEvent, needsDisclosure, normalizeDm, resolveDmPageId,
+    STORY_MENTION_TEXT,
 } from './messaging.js';
 
 let restoreSink: (() => void) | undefined;
@@ -216,6 +217,8 @@ interface Scenario {
     agent?: Record<string, unknown> | null;
     creatorQuotaCount?: number;
     appQuotaCount?: number;
+    /** Rows the conversation-history SELECT returns, oldest last as the query orders them. */
+    history?: Record<string, unknown>[];
     /** What Gemini answers with, or throws. */
     gemini?: () => Promise<any>;
     /** What the Send API answers with, or throws. */
@@ -244,13 +247,14 @@ async function runDm(
     scenario: Scenario = {},
     options?: { lastAttempt: boolean },
     entryId = 'ig-page-1'
-): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; error: any }> {
+): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; error: any }> {
     const {
         creator = CREATOR,
         conversation = { id: 'conv-1', is_bot_active: true, ai_disclosed_at: null },
         inboundInsert = [{ id: 'msg-1' }],
         resumeClaim = [],
         agent = { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: 'gemini-2.5-flash', temperature: 0.7 },
+        history = [],
         creatorQuotaCount = 1,
         appQuotaCount = 1,
         gemini = geminiSaying({ message_type: 'text', text: 'أهلاً بك' }),
@@ -259,6 +263,9 @@ async function runDm(
 
     const executed: Executed[] = [];
     const sends: Sent[] = [];
+    // The request body Gemini was actually handed. Recorded because one bug in this file is
+    // only visible in the payload: a story mention used to append an empty `user` part.
+    const geminiPayloads: any[] = [];
     let geminiCalls = 0;
 
     // First match wins, so the specific patterns come before the general ones.
@@ -272,7 +279,7 @@ async function runDm(
         [/SET handled_at = NOW\(\)/, { rowCount: 1 }],
         [/SET reply_claimed_at = NULL WHERE/, { rowCount: 1 }],
         [/FROM ai_agents/, { rows: agent ? [agent] : [] }],
-        [/SELECT direction, text/, { rows: [] }],
+        [/SELECT direction, text/, { rows: history }],
         [/INSERT INTO messages/, { rowCount: 1 }],   // the outbound row; no RETURNING
         [/INSERT INTO rate_limit_counters/, { rows: [{ count: creatorQuotaCount }] }],
         [/INSERT INTO app_rate_limit_counters/, { rows: [{ count: appQuotaCount }] }],
@@ -291,8 +298,9 @@ async function runDm(
         const { rows = [], rowCount } = route[1];
         return { rows, rowCount: rowCount ?? rows.length };
     };
-    (axios as any).post = async () => {
+    (axios as any).post = async (_url: string, payload: any) => {
         geminiCalls++;
+        geminiPayloads.push(payload);
         return gemini();
     };
     (metaHttp as any).post = async (url: string, body: any) => {
@@ -313,7 +321,7 @@ async function runDm(
         else process.env.GEMINI_API_KEY = originalKey;
     }
 
-    return { executed, sends, geminiCalls, error };
+    return { executed, sends, geminiCalls, geminiPayloads, error };
 }
 
 const textEvent = (over: Record<string, unknown> = {}) => ({
@@ -641,5 +649,105 @@ describe('handleMessagingEvent — transient versus permanent failure', () => {
         assert.equal(error, null);
         assert.equal(ranMarkHandled(executed), true);
         assert.equal(ranRelease(executed), false);
+    });
+});
+
+
+// ─── What Gemini is told the person said ────────────────────────────────────────────────
+
+describe('dmPromptText', () => {
+    it('describes a story mention instead of saying nothing', () => {
+        // The bug: `claimInbound` stored '[Story Mention]' while `generateAiResponse` was
+        // handed `dm.text || dm.payload`, which for a pure story mention is ''. src/services/
+        // ai.ts decides whether the current message is already in the history it just read by
+        // comparing the stored text against the string it was passed — so those two
+        // disagreeing meant it ALWAYS appended a turn, and the turn it appended was empty.
+        const dm = {
+            senderId: 'u', text: '', payload: '', isStoryMention: true, metaMessageId: 'mid-1',
+        };
+
+        assert.equal(dmPromptText(dm), STORY_MENTION_TEXT);
+    });
+
+    it("carries a quick reply's payload, which used to be stored as an empty bubble", () => {
+        const dm = {
+            senderId: 'u', text: '', payload: 'COURSES', isStoryMention: false, metaMessageId: 'mid-1',
+        };
+
+        assert.equal(dmPromptText(dm), 'COURSES');
+    });
+
+    it('prefers what the person actually typed', () => {
+        const dm = {
+            senderId: 'u', text: 'كم السعر؟', payload: 'PRICE', isStoryMention: true, metaMessageId: 'mid-1',
+        };
+
+        assert.equal(dmPromptText(dm), 'كم السعر؟');
+    });
+
+    it('is never empty for anything normalizeDm agrees to return', () => {
+        // The invariant that matters: normalizeDm returns null unless there is text, a payload
+        // or a story mention, and each of those three produces a non-empty prompt here. So no
+        // reachable DM can arrive at Gemini as an empty part.
+        const events = [
+            { sender: { id: 'u' }, message: { mid: 'm', text: 'hi' } },
+            { sender: { id: 'u' }, message: { mid: 'm', quick_reply: { payload: 'P' } } },
+            { sender: { id: 'u' }, postback: { mid: 'm', title: 'T', payload: 'P' } },
+            { sender: { id: 'u' }, message: { mid: 'm', attachments: [{ type: 'story_mention' }] } },
+        ];
+
+        for (const event of events) {
+            const dm = normalizeDm(event);
+            assert.ok(dm, `normalizeDm should accept ${JSON.stringify(event)}`);
+            assert.notEqual(dmPromptText(dm!), '', JSON.stringify(event));
+        }
+    });
+});
+
+describe('handleMessagingEvent — what reaches Gemini', () => {
+    const storyMentionEvent = {
+        sender: { id: 'user-1' },
+        recipient: { id: 'ig-page-1' },
+        message: { mid: 'mid-story', attachments: [{ type: 'story_mention' }] },
+    };
+
+    it('never sends an empty part for a pure story mention', async () => {
+        // With the row already in history — which it always is, because claimInbound writes it
+        // before the AI call — the old code produced TWO consecutive `user` turns, the second
+        // one empty. An empty part is at best a wasted turn and at worst a 400 from the API.
+        const { geminiPayloads } = await runDm(storyMentionEvent, {
+            history: [{ direction: 'inbound', text: STORY_MENTION_TEXT }],
+        });
+
+        assert.equal(geminiPayloads.length, 1);
+        const parts = geminiPayloads[0].contents.flatMap((c: any) => c.parts);
+        assert.deepEqual(parts.map((part: any) => part.text), [STORY_MENTION_TEXT]);
+    });
+
+    it('stores and sends the same string, so the history check can succeed', async () => {
+        // The mechanism, asserted directly: the `text` column claimInbound writes and the
+        // argument generateAiResponse receives are now the same value by construction.
+        const { executed, geminiPayloads } = await runDm(storyMentionEvent, {
+            history: [{ direction: 'inbound', text: STORY_MENTION_TEXT }],
+        });
+
+        const insert = executed.find((e) => /ON CONFLICT \(meta_message_id\)/.test(e.sql));
+        assert.ok(insert, 'the inbound row must be written');
+        const storedText = insert!.params[3];
+        const sentTexts = geminiPayloads[0].contents
+            .flatMap((c: any) => c.parts).map((part: any) => part.text);
+
+        assert.equal(storedText, STORY_MENTION_TEXT);
+        assert.ok(sentTexts.includes(storedText));
+    });
+
+    it('still answers a story mention rather than dropping it', async () => {
+        // The fix must not turn a bug into a silence: a story mention is a person waiting.
+        const { sends, error } = await runDm(storyMentionEvent, {
+            history: [{ direction: 'inbound', text: STORY_MENTION_TEXT }],
+        });
+
+        assert.equal(error, null);
+        assert.equal(sends.length, 1);
     });
 });

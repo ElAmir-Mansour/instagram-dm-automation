@@ -225,6 +225,39 @@ describe('user validation', () => {
     });
 });
 
+describe('membership role validation', () => {
+    it('refuses a role outside the vocabulary', async () => {
+        // `role` used to be stored verbatim, because nothing read it. It is an authorization
+        // decision now, and `normalizeTenantRole` resolves anything it does not recognise to
+        // `owner` — so a typo would silently grant everything to the person an operator was
+        // deliberately restricting. Failing open is right for existing data and wrong for a
+        // value somebody is typing right now.
+        // `'viewer '` is deliberately absent: surrounding whitespace is trimmed, the same
+        // leniency every other string field here applies to a pasted value. Case is NOT,
+        // because 'Owner' is a different string and guessing at intent is how a restriction
+        // becomes a grant.
+        for (const role of ['member', 'admin', 'Owner', 'read-only', 42, {}]) {
+            const reply = await call('POST', `/users/${UUID}/memberships`, {
+                session: ADMIN, body: { creator_id: UUID, role },
+            });
+
+            assert.equal(reply.status, 400, `role ${JSON.stringify(role)}`);
+            assert.match(reply.body.error, /owner, operator, viewer/);
+        }
+    });
+
+    it('still defaults to owner when no role is named', async () => {
+        // The grant call that existed before roles meant anything sent no role at all, and it
+        // must keep granting exactly what it granted then. Reaching SQL — which this suite has
+        // no database for — is the pass condition: the refusals above all answer before it.
+        const reply = await call('POST', `/users/${UUID}/memberships`, {
+            session: ADMIN, body: { creator_id: UUID },
+        });
+
+        assert.notEqual(reply.status, 400, 'an unspecified role is not a validation failure');
+    });
+});
+
 describe('job validation', () => {
     it('rejects an unknown status filter and lists the real ones', async () => {
         const reply = await call('GET', '/jobs', { session: ADMIN, query: { status: 'broken' } });

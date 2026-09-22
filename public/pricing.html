@@ -112,7 +112,7 @@
          No webfont: --font-ui is the -apple-system stack, so nothing is
          downloaded. Keep this ?v= pinned to ASSET_VERSION in
          dashboard/js/app.js — scripts/check-asset-version.mjs enforces it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=6.6">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=6.7">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -950,8 +950,10 @@
                     <summary>ماذا يُخزَّن من بيانات مَن يراسلني؟</summary>
                     <div>
                         <p>
-                            نصّ الرسائل الخاصة يُخزَّن ليظهر لك في صندوق الوارد؛ نصّ التعليقات
-                            لا يُخزَّن. التفصيل الكامل — وما يُرسَل إلى جوجل لتوليد الردّ — في
+                            نصّ الرسائل الخاصة يُخزَّن ليظهر لك في صندوق الوارد. أمّا التعليق
+                            الوارد فيُحفَظ نصّه مؤقتاً في طابور المعالجة إلى أن يُنفَّذ، ولا
+                            يُنسَخ إلى سجلّ النشاط — الذي يحفظ اسم صاحب التعليق والمنشور فقط.
+                            التفصيل الكامل — وما يُرسَل إلى جوجل لتوليد الردّ — في
                             <a href="/privacy">سياسة الخصوصية</a>، وطريقة الحذف في
                             <a href="/data-deletion">صفحة حذف البيانات</a>.
                         </p>
@@ -1352,9 +1354,11 @@
                     <summary>What is stored about the people who message me?</summary>
                     <div>
                         <p>
-                            Direct-message text is stored so it can appear in your inbox;
-                            comment text is not stored. The full detail — including what is sent
-                            to Google to generate a reply — is in the
+                            Direct-message text is stored so it can appear in your inbox. An
+                            incoming comment's text is held in the processing queue until the
+                            reply is sent, and is not copied into the activity log — which keeps
+                            only who commented and on which post. The full detail — including
+                            what is sent to Google to generate a reply — is in the
                             <a href="/privacy">privacy policy</a>, and the deletion procedure is
                             on the <a href="/data-deletion">data deletion page</a>.
                         </p>

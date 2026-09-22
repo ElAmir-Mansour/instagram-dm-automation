@@ -41,6 +41,7 @@ const APP = 'dashboard/js/app.js';
  * in the previous palette while the dashboard rendered in the current one.
  */
 const SHARED_ASSET_PAGES = [
+    'public/landing.html',
     'public/privacy.html',
     'public/data-deletion.html',
     'public/pricing.html',

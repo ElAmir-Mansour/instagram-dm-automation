@@ -62,7 +62,10 @@ describe('compareSchema', () => {
     it('names the missing migration, in apply order', () => {
         const state = compareSchema(EXPECTED_MIGRATIONS.slice(0, -1));
 
-        assert.deepEqual(state.pending, ['migration_v15_admin.sql']);
+        // Derived, not spelled out: naming the newest file here means every migration after
+        // this one fails a test that is not about it, and the fix is to retype a filename —
+        // which is exactly the edit somebody makes without reading what it asserted.
+        assert.deepEqual(state.pending, [EXPECTED_MIGRATIONS[EXPECTED_MIGRATIONS.length - 1]]);
         assert.equal(state.applied, EXPECTED_MIGRATIONS.length - 1);
     });
 
