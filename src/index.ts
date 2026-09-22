@@ -107,6 +107,13 @@ app.get('/data-deletion', (_req, res) => {
     res.sendFile(path.join(__dirname, '../public/data-deletion.html'));
 });
 
+// Pricing — the public sales page. Bilingual in one file for the same reason the two pages
+// above are: `public/**` has no static handler, so anything not named by a route here is
+// unreachable in production.
+app.get('/pricing', (_req, res) => {
+    res.sendFile(path.join(__dirname, '../public/pricing.html'));
+});
+
 // ─── Health Check ───────────────────────────────────────────────────────────
 
 app.get('/health', async (_req, res) => {
