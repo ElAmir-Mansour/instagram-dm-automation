@@ -1,0 +1,1480 @@
+<!DOCTYPE html>
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  AutoReply Pro — Pricing  ·  الأسعار
+  ═══════════════════════════════════════════════════════════════════════════
+
+  WHY THIS PAGE IS BILINGUAL IN ONE FILE, not two.
+  `/pricing` is served by a single hardcoded Express route (src/index.ts, next
+  to /privacy and /data-deletion) and `public/**` has no static handler, so a
+  second file (pricing-ar.html) would be unreachable in production. Both
+  languages therefore live here. Without JavaScript both are shown, each with
+  its own lang/dir; with it, the switch in the header filters to one and
+  updates <html lang dir>, exactly as dashboard/js/i18n.js does
+  (applyDocument()). Same mechanism as public/privacy.html.
+
+  EVERY FEATURE CLAIMED BELOW EXISTS IN THE CODE. The evidence, per claim:
+
+    comment → keyword → DM, plus an optional public reply and a like
+        src/webhook/comments.ts (sendPrivateReply, sendPublicReply, likeComment)
+    Arabic normalisation: hamza, teh marbuta, yeh, diacritics, tatweel
+        src/utils/arabic.ts (normalizeArabic); substring vs word matching via
+        keywordMatches + src/services/matching.ts
+    per-post or global campaign targeting
+        src/services/matching.ts (bySpecificity, post_id)
+    AI DM replies with the tenant's own prompt and knowledge base
+        src/services/ai.ts (system_prompt, knowledge_base, HISTORY_WINDOW = 8)
+    quick replies and carousels
+        src/services/ai.ts (AiResponse.message_type)
+    the automated-service disclosure Meta requires
+        src/webhook/messaging.ts (needsDisclosure / applyDisclosure)
+    inbox, manual reply, pause the bot on one thread
+        src/routes/api.ts /conversations, /conversations/:id/messages,
+        /conversations/:id/toggle-bot
+    scheduling to Instagram, Facebook or both
+        src/routes/api.ts /posts/scheduled; src/services/instagram.ts
+        (publishInstagramPost, publishFacebookPost)
+    analytics and CSV export
+        src/routes/api.ts /stats, /stats/hourly, /stats/daily,
+        /stats/campaigns, /interactions/export
+    send-rate protection: 180/hour per account, 1 automated DM per person/24h
+        src/utils/rateLimiter.ts (DEFAULT_HOURLY_LIMIT, canDmRecipient)
+    several accounts under one login
+        src/services/tenant.ts (listTenantsForSession) + memberships
+        (src/config/migration_v12_tenancy.sql)
+    Meta token encrypted at rest
+        src/config/crypto.ts (AES-256-GCM)
+    erasure of a follower's data on request
+        src/routes/admin.ts /erasure/preview, /erasure (audited, in one
+        transaction — src/services/audit.ts)
+    open source, MIT
+        LICENSE, README.md
+
+  THINGS DELIBERATELY NOT CLAIMED, and why — do not "improve" the page by
+  adding them back:
+    · No minute-accurate publishing time. The drain runs every ~5-15 minutes
+      (.github/workflows/drain.yml says so in its own header) and
+      ARCHITECTURE.md §2.4 calls the UI's minute-level promise "a genuine
+      product lie". The page promises a queue, not a clock.
+    · No retention-window tier. RAW_PAYLOAD_RETENTION_DAYS is app-wide, not
+      per tenant, and ARCHITECTURE.md §7 Stage 1 records it as still unset in
+      production. Selling a retention window would repeat a promise that is
+      not currently true. /privacy states what actually happens.
+    · No uptime, delivery or response-time guarantee. Nothing in the code
+      backs one, and Meta can throttle or refuse a send at any time.
+    · No comparison to any competitor. There is no sourced competitor
+      research in this repo, and an unverifiable claim about someone else's
+      product does not belong on a public page.
+    · No "most popular" badge on a tier. DESIGN.md §6 rules out invented
+      metrics, and nothing has been sold yet.
+    · No per-tier feature gating. The product has no feature flags — anyone
+      with a dashboard login gets every dashboard feature. Pretending
+      otherwise would be unenforceable as well as untrue, so the matrix shows
+      the in-product rows included on every tier, and differentiates on the
+      three things that are real: accounts, people, and the work we do.
+
+  OWNER: THINGS ONLY YOU CAN SUPPLY — marked in the page with
+  [غير مُحدَّد بعد] / [not yet supplied] and listed again at the end of each
+  language section. Do not let them ship unfilled:
+    1. The three prices, the currency, and the billing period.
+    2. What a connected account beyond the tier's count costs on Agency.
+    3. The support channel (email, WhatsApp, Instagram handle) and the
+       response time you are willing to commit to.
+    4. The cadence of the campaign review on Growth and Agency (monthly?
+       quarterly?), and the notice period for cancelling.
+    5. Whether onboarding is charged separately, and the current lead time —
+       connecting an account is manual and depends on Meta's permissions
+       (ARCHITECTURE.md §6.2, CLAUDE.md "If this becomes a SaaS").
+
+  NOTE ON COLOUR: this page cites tokens with no literal fallbacks, unlike
+  public/privacy.html. That page's `var(--x, #4f46e5)` fallbacks are the
+  pre-HIG indigo palette and have already drifted from tokens.css (--accent is
+  #0071e3 now), which is a second palette hiding in a fallback. Every pair
+  used here — text-default/muted/strong on surface-page and surface-raised,
+  accent-text for links, text-on-accent on accent — is one `npm run
+  check:contrast` already measures for the dashboard.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Both schemes are real here: the page consumes the app's tokens, which
+         carry a full light theme as a peer of dark. -->
+    <meta name="color-scheme" content="dark light">
+    <title>الأسعار · Pricing — AutoReply Pro</title>
+    <meta name="description" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية — AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
+
+    <!-- One design system in this repo, not three. Same file the dashboard,
+         /privacy and dashboard/eid.html load, so the sales page and the
+         product cannot drift apart. Same origin, and allowed by the CSP that
+         src/routes/api.ts sets on this route.
+         No webfont: --font-ui is the -apple-system stack, so nothing is
+         downloaded. Keep this ?v= pinned to ASSET_VERSION in
+         dashboard/js/app.js — scripts/check-asset-version.mjs enforces it. -->
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=6.4">
+
+    <style>
+        /* ─── Page ─────────────────────────────────────────────────────────── */
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: var(--font-ui);
+            font-size: var(--fs-300);
+            line-height: var(--lh-normal);
+            background: var(--surface-page);
+            /* The ambient gradient, but deliberately NOT
+               `background-attachment: fixed`: iOS Safari does not honour it,
+               and on a ~6000px page carrying both languages it is a
+               full-viewport repaint on every scroll frame under several
+               backdrop-filter layers. tokens.css sets the gradient's extreme
+               stop to --surface-page in both themes, so the contrast the guard
+               measures holds whichever way it is painted. */
+            background-image: var(--surface-ambient);
+            color: var(--text-default);
+            -webkit-text-size-adjust: 100%;
+        }
+
+        /* ─── Screen-reader-only text ──────────────────────────────────────────
+           styles.css is not loaded here, so the matrix's "included" /
+           "not included" labels need their own utility. A bare ✓ announces as
+           "check mark", which does not say which column it belongs to. */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* ─── Skip link ────────────────────────────────────────────────────── */
+        .skip {
+            position: absolute;
+            inset-inline-start: var(--space-4);
+            top: var(--space-2);
+            z-index: 10;
+            padding: var(--space-2) var(--space-4);
+            border-radius: var(--radius-sm);
+            background: var(--surface-solid);
+            color: var(--text-strong);
+            border: 1px solid var(--border-strong);
+            text-decoration: none;
+            font-weight: var(--fw-semibold);
+            transform: translateY(-200%);
+        }
+        .skip:focus { transform: translateY(0); }
+
+        /* ─── Chrome ───────────────────────────────────────────────────────── */
+        .shell {
+            width: 100%;
+            max-width: 64rem;
+            margin: 0 auto;
+            padding: var(--space-5) var(--space-4) var(--space-8);
+        }
+
+        .masthead {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-3);
+            padding-block: var(--space-4);
+            margin-bottom: var(--space-6);
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .wordmark {
+            font-size: var(--fs-400);
+            font-weight: var(--fw-bold);
+            color: var(--text-strong);
+            line-height: var(--lh-tight);
+        }
+        .wordmark .latin {
+            display: block;
+            font-family: var(--font-latin);
+            font-size: var(--fs-100);
+            font-weight: var(--fw-regular);
+            color: var(--text-muted);
+        }
+
+        /* ─── Language switch ──────────────────────────────────────────────────
+           Two real buttons, 44px tall, with aria-pressed. Autonyms only, so
+           neither label needs translating. */
+        .langswitch {
+            display: flex;
+            gap: var(--space-1);
+            padding: var(--space-1);
+            border-radius: var(--radius-pill);
+            background: var(--surface-glass);
+            border: 1px solid var(--border-subtle);
+        }
+        .langswitch button {
+            min-height: var(--tap-target);
+            min-width: var(--tap-target);
+            padding-inline: var(--space-4);
+            border: 0;
+            border-radius: var(--radius-pill);
+            background: transparent;
+            color: var(--text-default);
+            font-family: inherit;
+            font-size: var(--fs-200);
+            font-weight: var(--fw-semibold);
+            cursor: pointer;
+            transition: background var(--motion-fast) var(--ease-standard);
+        }
+        .langswitch button:hover { background: var(--surface-glass-hover); }
+        .langswitch button[aria-pressed='true'] {
+            background: var(--accent-soft);
+            color: var(--accent-text);
+        }
+
+        /* styles.css is not loaded here, so the focus ring is this page's job.
+           The solid outline stays under the glow, because box-shadow is dropped
+           entirely in forced-colors mode (DESIGN.md §4). */
+        .skip:focus-visible,
+        .langswitch button:focus-visible,
+        summary:focus-visible,
+        .scroller:focus-visible,
+        a:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+            border-radius: var(--radius-xs);
+        }
+
+        /* ─── Document body ────────────────────────────────────────────────── */
+        .doc[lang='en'] { font-family: var(--font-latin); }
+
+        h1 {
+            font-size: var(--fs-700);
+            line-height: var(--lh-tight);
+            font-weight: var(--fw-bold);
+            color: var(--text-strong);
+            margin: 0 0 var(--space-3);
+        }
+        h2 {
+            font-size: var(--fs-500);
+            line-height: var(--lh-tight);
+            font-weight: var(--fw-semibold);
+            color: var(--text-strong);
+            margin: var(--space-7) 0 var(--space-3);
+        }
+        h3 {
+            font-size: var(--fs-400);
+            line-height: var(--lh-tight);
+            font-weight: var(--fw-semibold);
+            color: var(--text-strong);
+            margin: 0 0 var(--space-1);
+        }
+        p, ul, ol { margin: 0 0 var(--space-4); }
+        ul, ol { padding-inline-start: var(--space-5); }
+        li { margin-bottom: var(--space-2); }
+        strong { color: var(--text-strong); font-weight: var(--fw-semibold); }
+
+        a { color: var(--accent-text); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+        a:hover { color: var(--accent-hover); }
+
+        .lede {
+            font-size: var(--fs-400);
+            color: var(--text-default);
+            max-width: var(--measure);
+            margin-bottom: var(--space-4);
+        }
+        .prose { max-width: var(--measure); }
+
+        /* Latin runs inside Arabic prose — product names, table names. */
+        code, .code {
+            font-family: var(--font-mono);
+            font-size: 0.9em;
+            direction: ltr;
+            unicode-bidi: isolate;
+            padding: 0.1em 0.35em;
+            border-radius: var(--radius-xs);
+            background: var(--surface-glass);
+            border: 1px solid var(--border-subtle);
+        }
+
+        /* ─── Tier cards ───────────────────────────────────────────────────────
+           Glass over the canvas, per DESIGN.md §1: --surface-raised is
+           translucent and only resolves to a colour once composited, so it
+           carries the blur that makes it read as a surface. */
+        .tiers {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+            gap: var(--space-4);
+            margin: 0 0 var(--space-6);
+        }
+        .tier {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-3);
+            padding: var(--space-5);
+            border-radius: var(--radius-lg);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            border: 1px solid var(--border-subtle);
+            box-shadow: var(--elev-2);
+        }
+        .tier .who {
+            font-size: var(--fs-200);
+            color: var(--text-muted);
+            margin: 0;
+        }
+        .tier ul {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            font-size: var(--fs-200);
+        }
+        .tier ul li {
+            padding-inline-start: var(--space-5);
+            position: relative;
+        }
+        .tier ul li::before {
+            content: '';
+            position: absolute;
+            inset-inline-start: 0;
+            top: 0.75em;
+            width: 6px;
+            height: 6px;
+            border-radius: var(--radius-pill);
+            background: var(--accent);
+        }
+        .tier .cta {
+            margin-top: auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: var(--tap-target);
+            padding-inline: var(--space-5);
+            border-radius: var(--radius-sm);
+            background: var(--accent);
+            color: var(--text-on-accent);
+            font-weight: var(--fw-semibold);
+            font-size: var(--fs-200);
+            text-decoration: none;
+            transition: background var(--motion-fast) var(--ease-standard);
+        }
+        .tier .cta:hover { background: var(--accent-hover); color: var(--text-on-accent); }
+
+        /* The price. A visible gap is better than a plausible invention — the
+           same judgement public/privacy.html makes about the contact address. */
+        .price {
+            font-size: var(--fs-600);
+            font-weight: var(--fw-bold);
+            color: var(--text-strong);
+            line-height: var(--lh-tight);
+            margin: 0;
+        }
+        .price .placeholder {
+            display: inline-block;
+            font-family: var(--font-mono);
+            font-size: var(--fs-300);
+            font-weight: var(--fw-regular);
+            color: var(--warning-text);
+            background: var(--warning-soft);
+            border: 1px dashed var(--warning);
+            border-radius: var(--radius-sm);
+            padding: var(--space-1) var(--space-3);
+        }
+        .price .per {
+            display: block;
+            font-size: var(--fs-100);
+            font-weight: var(--fw-regular);
+            color: var(--text-muted);
+        }
+
+        /* ─── The comparison matrix ────────────────────────────────────────────
+           A real table: caption, column headers, row headers, and a row-group
+           header per section. The wrapper is a focusable, labelled region so a
+           keyboard user can scroll it at 375px without a pointer. */
+        .scroller {
+            overflow-x: auto;
+            margin: 0 0 var(--space-3);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-subtle);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+        }
+        /* `table-layout: fixed` because the row labels are long Arabic phrases
+           and auto layout gave the first column ~70% of the width — at 375px
+           that pushed all three tier columns off-screen, so the table opened
+           showing nothing but labels. Fixed layout plus a first-column width
+           keeps at least one tier column in view at rest, and the rest is a
+           short scroll inside the region below. */
+        table {
+            width: 100%;
+            min-width: 30rem;
+            table-layout: fixed;
+            border-collapse: collapse;
+            font-size: var(--fs-200);
+        }
+        thead th:first-child { width: 46%; }
+        caption {
+            text-align: start;
+            padding: var(--space-4) var(--space-4) var(--space-2);
+            color: var(--text-muted);
+            font-size: var(--fs-200);
+        }
+        th, td {
+            padding: var(--space-3) var(--space-4);
+            text-align: start;
+            border-top: 1px solid var(--border-subtle);
+            vertical-align: top;
+        }
+        thead th {
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+            border-top: 0;
+            white-space: nowrap;
+        }
+        tbody th[scope='row'] {
+            font-weight: var(--fw-regular);
+            color: var(--text-default);
+        }
+        /* The row label stays put while the tier columns scroll. At 375px the
+           table is ~200px wider than its region, and a ✓ whose label has
+           scrolled out of view says nothing. Sticky cells must be opaque —
+           everything else on the page is glass, and --surface-solid is the
+           token that exists for "must render predictably" (DESIGN.md §1). */
+        thead th:first-child,
+        tbody th[scope='row'] {
+            position: sticky;
+            inset-inline-start: 0;
+            z-index: 1;
+            background: var(--surface-solid);
+        }
+        thead th:first-child { z-index: 2; }
+        /* The hairline against the scrolling columns. It is an inset shadow
+           rather than a border because border-collapse: collapse does not carry
+           a sticky cell's own border — and it is duplicated per direction
+           because box-shadow offsets have no logical form. Selected on the
+           article's own dir, which the markup always sets. */
+        [dir='rtl'] thead th:first-child,
+        [dir='rtl'] tbody th[scope='row'] { box-shadow: 1px 0 0 0 var(--border-subtle) inset; }
+        [dir='ltr'] thead th:first-child,
+        [dir='ltr'] tbody th[scope='row'] { box-shadow: -1px 0 0 0 var(--border-subtle) inset; }
+        th[scope='rowgroup'] {
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+            background: var(--surface-glass);
+        }
+        td { color: var(--text-default); }
+        .yes { color: var(--success-text); font-weight: var(--fw-semibold); }
+        .no { color: var(--text-muted); }
+        .tablenote {
+            font-size: var(--fs-200);
+            color: var(--text-muted);
+            max-width: var(--measure);
+        }
+
+        /* ─── Callout and honest-limits panel ──────────────────────────────── */
+        .callout {
+            padding: var(--space-4) var(--space-5);
+            margin: 0 0 var(--space-5);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-subtle);
+            border-inline-start: 3px solid var(--accent);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            max-width: var(--measure);
+        }
+        .callout > :last-child { margin-bottom: 0; }
+
+        /* ─── FAQ ──────────────────────────────────────────────────────────────
+           <details> so the answers are readable with JavaScript off — and every
+           answer is in the DOM for search and for find-in-page. */
+        .faq {
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-subtle);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            margin-bottom: var(--space-3);
+            max-width: var(--measure);
+        }
+        summary {
+            cursor: pointer;
+            list-style-position: inside;
+            padding: var(--space-3) var(--space-4);
+            min-height: var(--tap-target);
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+        }
+        .faq > div {
+            padding: 0 var(--space-4) var(--space-3);
+            color: var(--text-default);
+        }
+        .faq > div > :last-child { margin-bottom: 0; }
+
+        /* ─── Contact ──────────────────────────────────────────────────────── */
+        .contact {
+            padding: var(--space-5);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-subtle);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            box-shadow: var(--elev-2);
+            max-width: var(--measure);
+        }
+        .contact > :last-child { margin-bottom: 0; }
+
+        /* Placeholders the operator must fill. Marked to be impossible to miss
+           rather than quietly plausible — an invented price would be worse than
+           a visible gap. */
+        .todo {
+            padding: var(--space-4) var(--space-5);
+            margin: var(--space-6) 0 0;
+            border-radius: var(--radius-md);
+            border: 1px dashed var(--warning);
+            background: var(--warning-soft);
+            color: var(--text-default);
+            font-size: var(--fs-200);
+        }
+        .todo strong { color: var(--warning-text); }
+        .todo > :last-child { margin-bottom: 0; }
+
+        .divider {
+            height: 1px;
+            border: 0;
+            margin: var(--space-8) 0;
+            background: var(--border-strong);
+        }
+
+        .pagefoot {
+            margin-top: var(--space-7);
+            padding-top: var(--space-4);
+            border-top: 1px solid var(--border-subtle);
+            font-size: var(--fs-100);
+            color: var(--text-muted);
+        }
+        .pagefoot a { display: inline-block; min-height: var(--tap-target); line-height: var(--tap-target); }
+        .pagefoot .sep { padding-inline: var(--space-2); }
+
+        /* ─── The language filter ──────────────────────────────────────────────
+           No attribute (JS off or failed) = both languages visible, which is the
+           correct degradation: a price nobody can read is worse than a page
+           twice as long. */
+        html[data-lang='ar'] [data-doc-lang='en'],
+        html[data-lang='ar'] .t-en,
+        html[data-lang='en'] [data-doc-lang='ar'],
+        html[data-lang='en'] .t-ar { display: none; }
+        html[data-lang='ar'] .divider,
+        html[data-lang='en'] .divider { display: none; }
+        html[data-lang='ar'] .t-sep,
+        html[data-lang='en'] .t-sep { display: none; }
+
+        /* tokens.css already collapses --motion-* to 1ms under this preference.
+           Restated so the promise holds even if that stylesheet fails to load
+           and the transitions above fall back to their initial values. */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                transition-duration: 1ms !important;
+                animation-duration: 1ms !important;
+            }
+        }
+
+        @media (max-width: 40rem) {
+            .shell { padding-inline: var(--space-4); }
+            h1 { font-size: var(--fs-600); }
+            h2 { font-size: var(--fs-400); }
+            .masthead { justify-content: flex-start; }
+            .tier { padding: var(--space-4); }
+            th, td { padding: var(--space-3); }
+        }
+    </style>
+
+    <script>
+        /* Resolve the language before first paint so the page never shows the
+           wrong script for a frame. Mirrors dashboard/js/i18n.js: stored choice,
+           then the browser's own languages, then Arabic. */
+        (function () {
+            var lang = null;
+            try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
+            if (lang !== 'ar' && lang !== 'en') {
+                lang = null;
+                try {
+                    var prefs = navigator.languages || [navigator.language || ''];
+                    for (var i = 0; i < prefs.length; i++) {
+                        var code = String(prefs[i] || '').toLowerCase().split('-')[0];
+                        if (code === 'ar' || code === 'en') { lang = code; break; }
+                    }
+                } catch (e) { /* no navigator language information */ }
+            }
+            lang = lang || 'ar';
+            var root = document.documentElement;
+            root.setAttribute('data-lang', lang);
+            root.lang = lang;
+            root.dir = lang === 'ar' ? 'rtl' : 'ltr';
+        })();
+    </script>
+</head>
+<body>
+    <a class="skip" href="#content"><span class="t-ar">تخطَّ إلى المحتوى</span><span class="t-sep"> · </span><span class="t-en">Skip to content</span></a>
+
+    <div class="shell">
+        <header class="masthead">
+            <div class="wordmark">
+                أوتوريبلاي برو
+                <span class="latin" lang="en" dir="ltr">AutoReply Pro</span>
+            </div>
+            <nav class="langswitch" aria-label="اللغة · Language">
+                <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
+                <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
+            </nav>
+        </header>
+
+        <main id="content">
+
+            <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
+            <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
+                <h1>الأسعار</h1>
+                <p class="lede">
+                    خدمة مُدارة: نربط حسابك على إنستجرام وفيسبوك، ونُعِدّ الحملات والردود معك،
+                    ونتابع التشغيل. الواجهة عربية واتجاهها من اليمين إلى اليسار بشكل أصلي، لا
+                    ترجمة فوق تصميم إنجليزي.
+                </p>
+
+                <div class="callout">
+                    <p>
+                        <strong>البرنامج نفسه مفتوح المصدر برخصة MIT</strong>، ويمكنك تنزيله
+                        وتشغيله على خادمك مجاناً من
+                        <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع العلني</a>.
+                        ما تدفع مقابله هنا ليس الكود: هو ربط الحساب بواجهة ميتا، والإعداد،
+                        والمتابعة، ووجود مَن يُصلح العطل حين يقع.
+                    </p>
+                </div>
+
+                <h2 id="plans-ar">الباقات الثلاث</h2>
+
+                <div class="tiers">
+                    <section class="tier" aria-labelledby="tier-starter-ar">
+                        <h3 id="tier-starter-ar">البداية</h3>
+                        <p class="who">لصاحب حساب واحد يبيع من خلاله.</p>
+                        <p class="price">
+                            <span class="placeholder">[غير مُحدَّد بعد]</span>
+                            <span class="per">السعر والعملة ومدة الاشتراك يحددها مُشغّل الخدمة</span>
+                        </p>
+                        <ul>
+                            <li>حساب واحد مربوط (إنستجرام وصفحة فيسبوك المرتبطة به)</li>
+                            <li>دخول واحد إلى لوحة التحكم</li>
+                            <li>كل ميزات المنتج، بلا استثناء</li>
+                            <li>الإعداد والربط بميتا نقوم به عنك</li>
+                        </ul>
+                        <a class="cta" href="#contact-ar">تواصل معنا</a>
+                    </section>
+
+                    <section class="tier" aria-labelledby="tier-growth-ar">
+                        <h3 id="tier-growth-ar">النمو</h3>
+                        <p class="who">لمَن يدير أكثر من علامة أو أكثر من فرع.</p>
+                        <p class="price">
+                            <span class="placeholder">[غير مُحدَّد بعد]</span>
+                            <span class="per">السعر والعملة ومدة الاشتراك يحددها مُشغّل الخدمة</span>
+                        </p>
+                        <ul>
+                            <li>حتى ثلاثة حسابات مربوطة</li>
+                            <li>حتى ثلاثة مستخدمين، والتنقّل بين الحسابات من دخول واحد</li>
+                            <li>كل ميزات المنتج، بلا استثناء</li>
+                            <li>مراجعة دورية للحملات ولتوجيه الذكاء الاصطناعي معك</li>
+                        </ul>
+                        <a class="cta" href="#contact-ar">تواصل معنا</a>
+                    </section>
+
+                    <section class="tier" aria-labelledby="tier-agency-ar">
+                        <h3 id="tier-agency-ar">الوكالات</h3>
+                        <p class="who">لوكالة تدير حسابات عملائها.</p>
+                        <p class="price">
+                            <span class="placeholder">[غير مُحدَّد بعد]</span>
+                            <span class="per">السعر الأساسي وسعر كل حساب إضافي يحددهما مُشغّل الخدمة</span>
+                        </p>
+                        <ul>
+                            <li>أكثر من ثلاثة حسابات، والسعر بحسب العدد</li>
+                            <li>دخول منفصل لكل عميل، وإلغاؤه عند انتهاء التعاقد</li>
+                            <li>كل ميزات المنتج، بلا استثناء</li>
+                            <li>تنفيذ طلبات حذف بيانات المتابعين نيابةً عنك</li>
+                        </ul>
+                        <a class="cta" href="#contact-ar">تواصل معنا</a>
+                    </section>
+                </div>
+
+                <h2 id="matrix-ar">ما الذي يتغيّر بين الباقات</h2>
+                <p class="prose">
+                    الفرق بين الباقات هو <strong>عدد الحسابات، وعدد الأشخاص، ومقدار العمل الذي
+                    نقوم به معك</strong> — لا الميزات. المنتج لا يحتوي على أي قفل بحسب الباقة:
+                    مَن يملك دخولاً إلى لوحة التحكم يرى كل ما فيها.
+                </p>
+
+                <div class="scroller" tabindex="0" role="region" aria-labelledby="matrix-ar">
+                    <table>
+                        <caption>مقارنة الباقات: «✓» مشمول، و«—» غير مشمول.</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">البند</th>
+                                <th scope="col">البداية</th>
+                                <th scope="col">النمو</th>
+                                <th scope="col">الوكالات</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">الحسابات والدخول</th></tr>
+                            <tr>
+                                <th scope="row">حسابات مربوطة (إنستجرام + صفحة فيسبوك)</th>
+                                <td>1</td>
+                                <td>حتى 3</td>
+                                <td>أكثر من 3</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">مستخدمو لوحة التحكم</th>
+                                <td>1</td>
+                                <td>حتى 3</td>
+                                <td>بحسب الاتفاق</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">التنقّل بين الحسابات من دخول واحد</th>
+                                <td><span class="no" aria-hidden="true">—</span><span class="sr-only">غير مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">التعليقات</th></tr>
+                            <tr>
+                                <th scope="row">حملات «تعليق ← رسالة خاصة» بكلمة مفتاحية</th>
+                                <td colspan="3">بلا حدّ في البرنامج</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">ردّ عام تحت التعليق، وإعجاب به</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">مطابقة عربية: الهمزات والتاء المربوطة والياء والتشكيل والتطويل</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">مطابقة «جزء من الكلمة» أو «كلمة كاملة» لكل حملة</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">استهداف منشور بعينه أو كل المنشورات</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">الرسائل الخاصة</th></tr>
+                            <tr>
+                                <th scope="row">ردود بالذكاء الاصطناعي بتوجيهك أنت وقاعدة معرفتك</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">ردود سريعة وبطاقات داخل الرسالة</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">إفصاح «هذه خدمة آلية» كما تشترط ميتا</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">صندوق وارد موحّد، وردّ يدوي، وإيقاف الآلي لمحادثة بعينها</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">النشر والتقارير</th></tr>
+                            <tr>
+                                <th scope="row">جدولة منشورات: صور وفيديو وريلز، لإنستجرام أو فيسبوك أو لكليهما</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">إحصاءات: الإجمالي، وبالساعة، وباليوم، ولكل حملة</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">تصدير سجلّ التفاعلات إلى ملف CSV</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">التشغيل والدعم</th></tr>
+                            <tr>
+                                <th scope="row">إعداد التطبيق وربط الحساب بميتا</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">تشفير رمز وصول ميتا قبل تخزينه</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">تنفيذ طلبات حذف بيانات المتابعين</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">مراجعة دورية للحملات وللتوجيه معك</th>
+                                <td><span class="no" aria-hidden="true">—</span><span class="sr-only">غير مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">قناة الدعم وزمن الاستجابة</th>
+                                <td colspan="3"><span class="code">[غير مُحدَّد بعد]</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">حدود لا تتغيّر بتغيّر الباقة</th></tr>
+                            <tr>
+                                <th scope="row">سقف الإرسال الآلي لكل حساب</th>
+                                <td colspan="3">180 رسالة في الساعة</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">رسالة آلية واحدة لكل شخص خلال 24 ساعة</th>
+                                <td colspan="3"><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مطبَّق في كل الباقات</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">نافذة الردّ التي تسمح بها ميتا</th>
+                                <td colspan="3">24 ساعة من آخر تفاعل من الشخص</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <p class="tablenote">
+                    أعداد الحسابات والمستخدمين أعلاه <strong>حدود اتفاق، لا حدود يفرضها
+                    البرنامج</strong>: نحن مَن ينشئ الحسابات، فنلتزم بما اتفقنا عليه. أمّا سقف
+                    الإرسال ونافذة الـ 24 ساعة فمن ميتا ومن حماية الإرسال داخل التطبيق، وهي
+                    نفسها في كل الباقات ولا تُشترى زيادتها.
+                </p>
+
+                <h2 id="limits-ar">ما لا نَعِد به</h2>
+                <ul class="prose">
+                    <li>
+                        <strong>لا تسجيل ذاتي ولا دفع على هذه الصفحة.</strong> ربط الحساب يتم
+                        يدوياً، لأن أذونات ميتا تُمنح لكل حساب على حدة، والفوترة تجري بيننا
+                        مباشرة.
+                    </li>
+                    <li>
+                        <strong>لسنا شريكاً لميتا ولا معتمدين منها.</strong> إنستجرام وفيسبوك
+                        علامتان تجاريتان مملوكتان لشركة Meta، ولا علاقة لها بهذه الأداة.
+                    </li>
+                    <li>
+                        <strong>لا ضمان لتسليم كل رسالة.</strong> ميتا قد تُبطئ الإرسال أو
+                        ترفضه، وسقف الإرسال على مستوى التطبيق مشترك بين كل الحسابات التي
+                        نشغّلها: حساب واحد عليه إقبال مفاجئ قد يُضيّق على غيره.
+                    </li>
+                    <li>
+                        <strong>لا نَعِد بزمن نشر دقيق للمنشورات المجدولة.</strong> النشر يجري
+                        من طابور يعمل على فترات، لا في اللحظة المحددة بالثانية.
+                    </li>
+                    <li>
+                        <strong>الردود يكتبها نموذج لغوي وقد يُخطئ.</strong> لذلك يمكنك إيقاف
+                        الردّ الآلي على أي محادثة والردّ بنفسك من صندوق الوارد.
+                    </li>
+                </ul>
+
+                <h2 id="faq-ar">أسئلة متكرّرة</h2>
+
+                <details class="faq">
+                    <summary>هل أستطيع الاشتراك الآن بنفسي؟</summary>
+                    <div>
+                        <p>
+                            لا. ربط حساب جديد يتطلّب أذونات من ميتا تُمنح لكل حساب على حدة،
+                            ولذلك لم نبنِ تسجيلاً ذاتياً. تواصل معنا، ونخبرك بالمدة المتوقعة
+                            قبل أي التزام.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>ما الذي أحتاجه قبل البدء؟</summary>
+                    <div>
+                        <p>
+                            حساب إنستجرام احترافي (أعمال أو صانع محتوى) مرتبط بصفحة على فيسبوك،
+                            وصلاحية إدارية عليهما. هذا شرط من ميتا لا منّا: واجهتها لا تسمح
+                            بالردّ الآلي على حساب شخصي.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>هل يعرف المتابع أنه يتحدّث إلى خدمة آلية؟</summary>
+                    <div>
+                        <p>
+                            نعم. أول رسالة في المحادثة — ومرة أخرى بعد انقطاع طويل — تُخبره
+                            بذلك، كما تشترط سياسة ميتا. أمّا الردود العامة تحت التعليقات فلا
+                            يكتبها الذكاء الاصطناعي أصلاً؛ هي نصّ تكتبه أنت في الحملة.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>ماذا يُخزَّن من بيانات مَن يراسلني؟</summary>
+                    <div>
+                        <p>
+                            نصّ الرسائل الخاصة يُخزَّن ليظهر لك في صندوق الوارد؛ نصّ التعليقات
+                            لا يُخزَّن. التفصيل الكامل — وما يُرسَل إلى جوجل لتوليد الردّ — في
+                            <a href="/privacy">سياسة الخصوصية</a>، وطريقة الحذف في
+                            <a href="/data-deletion">صفحة حذف البيانات</a>.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>كم رسالة آلية يمكن إرسالها؟</summary>
+                    <div>
+                        <p>
+                            حتى 180 رسالة في الساعة لكل حساب — وهو سقف نضعه تحت حدّ ميتا
+                            (نحو 200) لتفادي الإيقاف — ورسالة آلية واحدة لكل شخص خلال 24 ساعة.
+                            الرقمان نفسهما في كل الباقات.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>هل يمكنني تشغيله بنفسي بدل الاشتراك؟</summary>
+                    <div>
+                        <p>
+                            نعم. الكود مفتوح المصدر برخصة MIT، وخطوات التشغيل الذاتي في
+                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع</a>.
+                            ستحتاج حينها إلى تطبيق خاص بك لدى ميتا، وقاعدة بيانات، ومفتاح
+                            Gemini، وإلى متابعة كل ذلك بنفسك.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>ماذا يحدث لو توقّف الربط؟</summary>
+                    <div>
+                        <p>
+                            تعرض لوحة التحكم حالة رمز الوصول، ويمكن إعادة فحصه منها. الأحداث
+                            الواردة من ميتا تُكتب في قاعدة البيانات قبل أن نُبلغها بالاستلام،
+                            ويُعاد تنفيذ ما يفشل — فالانقطاع القصير لا يعني ضياع التفاعلات.
+                        </p>
+                    </div>
+                </details>
+
+                <h2 id="contact-ar">للتواصل</h2>
+                <div class="contact">
+                    <p>
+                        اكتب لنا بما تريده: عدد الحسابات، ونوع النشاط، وما تريد أتمتته. نردّ
+                        بالسعر والمدة المتوقعة للربط قبل أي التزام.
+                    </p>
+                    <ul>
+                        <li>البريد أو واتساب أو حساب إنستجرام: <span class="code">[غير مُحدَّد بعد]</span></li>
+                        <li>
+                            للأسئلة التقنية:
+                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني</a>
+                            — وهو علني، فلا تكتب فيه معلومات شخصية.
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="todo">
+                    <p><strong>ملاحظة تحريرية — على مُشغّل الخدمة إكمالها قبل النشر:</strong></p>
+                    <ul>
+                        <li>أسعار الباقات الثلاث، والعملة، ومدة الاشتراك.</li>
+                        <li>سعر الحساب الإضافي في باقة الوكالات.</li>
+                        <li>قناة الدعم وزمن الاستجابة الذي تقبل الالتزام به.</li>
+                        <li>دورية «المراجعة الدورية»، ومدة الإشعار قبل الإلغاء.</li>
+                        <li>هل يُحتسب الإعداد الأولي بأجر منفصل؟ وما المدة المتوقعة للربط اليوم؟</li>
+                    </ul>
+                    <p>
+                        لم يُذكر في هذه الصفحة أي ضمان لزمن الاستجابة أو لنسبة التشغيل أو
+                        لتسليم الرسائل، لأن شيئاً من ذلك غير موجود في الكود ولا يصحّ اختراعه.
+                    </p>
+                </div>
+            </article>
+
+            <hr class="divider">
+
+            <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
+            <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
+                <h1>Pricing</h1>
+                <p class="lede">
+                    A managed service: we connect your Instagram and Facebook account, set up
+                    the campaigns and replies with you, and keep it running. The interface is
+                    Arabic and right-to-left natively — not a translation laid over an English
+                    layout.
+                </p>
+
+                <div class="callout">
+                    <p>
+                        <strong>The software itself is open source under the MIT licence</strong>
+                        and you can run it on your own server for free, from the
+                        <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">public repository</a>.
+                        What you pay for here is not the code: it is getting the account
+                        connected to Meta's API, the setup, the monitoring, and someone to fix
+                        it when it breaks.
+                    </p>
+                </div>
+
+                <h2 id="plans-en">The three plans</h2>
+
+                <div class="tiers">
+                    <section class="tier" aria-labelledby="tier-starter-en">
+                        <h3 id="tier-starter-en">Starter</h3>
+                        <p class="who">For one account you sell through.</p>
+                        <p class="price">
+                            <span class="placeholder">[not yet supplied]</span>
+                            <span class="per">Price, currency and billing period are set by the operator</span>
+                        </p>
+                        <ul>
+                            <li>One connected account (Instagram plus its linked Facebook Page)</li>
+                            <li>One dashboard login</li>
+                            <li>Every feature in the product, without exception</li>
+                            <li>Setup and the Meta connection done for you</li>
+                        </ul>
+                        <a class="cta" href="#contact-en">Get in touch</a>
+                    </section>
+
+                    <section class="tier" aria-labelledby="tier-growth-en">
+                        <h3 id="tier-growth-en">Growth</h3>
+                        <p class="who">For more than one brand or branch.</p>
+                        <p class="price">
+                            <span class="placeholder">[not yet supplied]</span>
+                            <span class="per">Price, currency and billing period are set by the operator</span>
+                        </p>
+                        <ul>
+                            <li>Up to three connected accounts</li>
+                            <li>Up to three users, switching between accounts from one login</li>
+                            <li>Every feature in the product, without exception</li>
+                            <li>A regular review of your campaigns and AI instructions with you</li>
+                        </ul>
+                        <a class="cta" href="#contact-en">Get in touch</a>
+                    </section>
+
+                    <section class="tier" aria-labelledby="tier-agency-en">
+                        <h3 id="tier-agency-en">Agency</h3>
+                        <p class="who">For an agency running client accounts.</p>
+                        <p class="price">
+                            <span class="placeholder">[not yet supplied]</span>
+                            <span class="per">Base price and per-extra-account price are set by the operator</span>
+                        </p>
+                        <ul>
+                            <li>More than three accounts, priced by how many</li>
+                            <li>A separate login per client, revoked when the contract ends</li>
+                            <li>Every feature in the product, without exception</li>
+                            <li>Follower data-deletion requests carried out for you</li>
+                        </ul>
+                        <a class="cta" href="#contact-en">Get in touch</a>
+                    </section>
+                </div>
+
+                <h2 id="matrix-en">What actually changes between plans</h2>
+                <p class="prose">
+                    The difference between the plans is <strong>how many accounts, how many
+                    people, and how much work we do with you</strong> — not which features you
+                    get. The product has no per-plan locks: anyone with a dashboard login sees
+                    everything in it.
+                </p>
+
+                <div class="scroller" tabindex="0" role="region" aria-labelledby="matrix-en">
+                    <table>
+                        <caption>The plans compared: "✓" included, "—" not included.</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Item</th>
+                                <th scope="col">Starter</th>
+                                <th scope="col">Growth</th>
+                                <th scope="col">Agency</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">Accounts and access</th></tr>
+                            <tr>
+                                <th scope="row">Connected accounts (Instagram + Facebook Page)</th>
+                                <td>1</td>
+                                <td>Up to 3</td>
+                                <td>More than 3</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Dashboard users</th>
+                                <td>1</td>
+                                <td>Up to 3</td>
+                                <td>By agreement</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Switch between accounts from one login</th>
+                                <td><span class="no" aria-hidden="true">—</span><span class="sr-only">Not included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">Comments</th></tr>
+                            <tr>
+                                <th scope="row">Keyword-triggered comment-to-DM campaigns</th>
+                                <td colspan="3">No limit in the software</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Public reply under the comment, and a like</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Arabic matching: hamza forms, teh marbuta, yeh, diacritics, tatweel</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Substring or whole-word matching, per campaign</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Target one post or every post</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">Direct messages</th></tr>
+                            <tr>
+                                <th scope="row">AI replies using your own instructions and knowledge base</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Quick replies and carousels inside the message</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">The automated-service disclosure Meta requires</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Shared inbox, manual replies, and pausing the bot on one thread</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">Publishing and reporting</th></tr>
+                            <tr>
+                                <th scope="row">Scheduled posts: images, video and reels, to Instagram, Facebook or both</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Statistics: totals, by hour, by day, and per campaign</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">CSV export of the interaction log</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">Running it, and support</th></tr>
+                            <tr>
+                                <th scope="row">App setup and connecting the account to Meta</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Meta access token encrypted before it is stored</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Follower data-deletion requests carried out</th>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">A regular review of campaigns and instructions with you</th>
+                                <td><span class="no" aria-hidden="true">—</span><span class="sr-only">Not included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">Support channel and response time</th>
+                                <td colspan="3"><span class="code">[not yet supplied]</span></td>
+                            </tr>
+                        </tbody>
+
+                        <tbody>
+                            <tr><th scope="rowgroup" colspan="4">Limits that do not change with the plan</th></tr>
+                            <tr>
+                                <th scope="row">Automated send ceiling, per account</th>
+                                <td colspan="3">180 messages per hour</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">One automated DM per person per 24 hours</th>
+                                <td colspan="3"><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Enforced on every plan</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row">The reply window Meta allows</th>
+                                <td colspan="3">24 hours from that person's last interaction</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <p class="tablenote">
+                    The account and user counts above are <strong>limits of the agreement, not
+                    limits the software enforces</strong>: we create the accounts, so we hold to
+                    what was agreed. The send ceiling and the 24-hour window are different —
+                    they come from Meta and from the app's own send protection, they are the
+                    same on every plan, and more of them cannot be bought.
+                </p>
+
+                <h2 id="limits-en">What we do not promise</h2>
+                <ul class="prose">
+                    <li>
+                        <strong>No self-serve signup and no payment on this page.</strong>
+                        Connecting an account is manual, because Meta grants its permissions per
+                        account, and invoicing happens directly between us.
+                    </li>
+                    <li>
+                        <strong>We are not a Meta partner and are not endorsed by Meta.</strong>
+                        Instagram and Facebook are trademarks of Meta, which has nothing to do
+                        with this tool.
+                    </li>
+                    <li>
+                        <strong>No guarantee that every message is delivered.</strong> Meta can
+                        throttle or refuse a send, and the app-level send ceiling is shared
+                        across every account we run: one account having a sudden rush can
+                        squeeze the others.
+                    </li>
+                    <li>
+                        <strong>No exact publishing time for scheduled posts.</strong> They
+                        publish from a queue that runs at intervals, not on the second.
+                    </li>
+                    <li>
+                        <strong>Replies are written by a language model and can be wrong.</strong>
+                        That is why you can pause the automated reply on any conversation and
+                        answer it yourself from the inbox.
+                    </li>
+                </ul>
+
+                <h2 id="faq-en">Common questions</h2>
+
+                <details class="faq">
+                    <summary>Can I sign up right now, by myself?</summary>
+                    <div>
+                        <p>
+                            No. Connecting a new account needs permissions Meta grants per
+                            account, which is why no self-serve signup exists. Get in touch and
+                            we will tell you the expected timeline before you commit to
+                            anything.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>What do I need before we start?</summary>
+                    <div>
+                        <p>
+                            A professional Instagram account (business or creator) linked to a
+                            Facebook Page, and admin rights on both. That is Meta's requirement
+                            rather than ours: its API does not allow automated replies on a
+                            personal account.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>Does the follower know they are talking to an automated service?</summary>
+                    <div>
+                        <p>
+                            Yes. The first message in a thread — and another after a long gap —
+                            says so, as Meta's policy requires. Public replies under comments
+                            are not written by AI at all; they are text you write on the
+                            campaign.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>What is stored about the people who message me?</summary>
+                    <div>
+                        <p>
+                            Direct-message text is stored so it can appear in your inbox;
+                            comment text is not stored. The full detail — including what is sent
+                            to Google to generate a reply — is in the
+                            <a href="/privacy">privacy policy</a>, and the deletion procedure is
+                            on the <a href="/data-deletion">data deletion page</a>.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>How many automated messages can be sent?</summary>
+                    <div>
+                        <p>
+                            Up to 180 an hour per account — a ceiling we hold below Meta's own
+                            (around 200) to avoid being cut off — and one automated DM per
+                            person per 24 hours. Both numbers are the same on every plan.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>Can I run it myself instead of subscribing?</summary>
+                    <div>
+                        <p>
+                            Yes. The code is open source under the MIT licence and the
+                            self-hosting steps are in the
+                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">repository</a>.
+                            You would need your own Meta app, a database, a Gemini key, and to
+                            keep an eye on all of it yourself.
+                        </p>
+                    </div>
+                </details>
+
+                <details class="faq">
+                    <summary>What happens if the connection breaks?</summary>
+                    <div>
+                        <p>
+                            The dashboard shows the access token's status and can re-check it.
+                            Events from Meta are written to the database before Meta is
+                            acknowledged, and anything that fails is retried — so a short outage
+                            does not mean lost interactions.
+                        </p>
+                    </div>
+                </details>
+
+                <h2 id="contact-en">Get in touch</h2>
+                <div class="contact">
+                    <p>
+                        Tell us what you need: how many accounts, what the business does, and
+                        what you want automated. We reply with a price and the expected time to
+                        get connected, before you commit to anything.
+                    </p>
+                    <ul>
+                        <li>Email, WhatsApp or Instagram: <span class="code">[not yet supplied]</span></li>
+                        <li>
+                            For technical questions:
+                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">the public issue tracker</a>
+                            — it is public, so do not put personal information in it.
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="todo">
+                    <p><strong>Editorial note — for the operator to complete before publishing:</strong></p>
+                    <ul>
+                        <li>The three prices, the currency, and the billing period.</li>
+                        <li>The price of an extra account on the Agency plan.</li>
+                        <li>The support channel and the response time you are willing to commit to.</li>
+                        <li>How often the "regular review" happens, and the notice period for cancelling.</li>
+                        <li>Whether initial setup is charged separately, and the lead time to get connected today.</li>
+                    </ul>
+                    <p>
+                        No response-time, uptime or delivery guarantee is stated anywhere on this
+                        page, because none of them exists in the code and none may be invented.
+                    </p>
+                </div>
+            </article>
+
+        </main>
+
+        <footer class="pagefoot">
+            <p>
+                <a href="/privacy"><span class="t-ar">سياسة الخصوصية</span><span class="t-sep"> · </span><span class="t-en">Privacy policy</span></a>
+                <span class="sep">·</span>
+                <a href="/data-deletion"><span class="t-ar">حذف بياناتك</span><span class="t-sep"> · </span><span class="t-en">Delete your data</span></a>
+            </p>
+            <p>
+                <span class="t-ar">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة Meta، ولا ترتبط هذه الأداة بها.</span>
+                <span class="t-en">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</span>
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        /* The switch. Sets the attribute the CSS filters on, keeps <html lang dir>
+           honest, and remembers the choice under the same key the dashboard uses
+           so a visitor is not asked twice. */
+        (function () {
+            var root = document.documentElement;
+            var buttons = document.querySelectorAll('[data-set-lang]');
+
+            function apply(lang) {
+                root.setAttribute('data-lang', lang);
+                root.lang = lang;
+                root.dir = lang === 'ar' ? 'rtl' : 'ltr';
+                for (var i = 0; i < buttons.length; i++) {
+                    buttons[i].setAttribute(
+                        'aria-pressed',
+                        buttons[i].getAttribute('data-set-lang') === lang ? 'true' : 'false'
+                    );
+                }
+                try { localStorage.setItem('dashboard_lang', lang); } catch (e) { /* private mode */ }
+            }
+
+            for (var i = 0; i < buttons.length; i++) {
+                buttons[i].addEventListener('click', function () {
+                    apply(this.getAttribute('data-set-lang'));
+                });
+            }
+
+            /* The head script already chose; reflect it on the buttons. */
+            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+        })();
+    </script>
+</body>
+</html>

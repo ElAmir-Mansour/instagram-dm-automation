@@ -1,7 +1,7 @@
 # Verifying AutoReply Pro against a real Meta event
 
 The pipeline was split into modules, given a durable job queue, moved the 200 to before the
-work, wired rate limiting and added an AI disclosure prefix. 281 unit tests cover the pieces.
+work, wired rate limiting and added an AI disclosure prefix. 548 unit tests cover the pieces.
 None of that proves the deployed system handles a real Instagram comment, and as of
 2026-09-21 the live database shows **zero jobs, zero interactions and zero messages since the
 last migration** — so the refactor is currently unverified in production.
@@ -183,9 +183,14 @@ Healthy result — two warnings from step 1 have flipped:
 ```
 
 If `queue` now reports jobs `pending` with an age over 15 minutes, the inline drain is not
-keeping up and nothing else is calling the drain endpoint: the Vercel cron runs **once daily**
-(Hobby-plan limit). Point an external scheduler (QStash, GitHub Actions, cron-job.org) at
-`GET /api/jobs/drain` every minute, with the `CRON_SECRET` bearer.
+keeping up and the scheduled drain has not caught them either. Two things call
+`GET /api/jobs/drain`: `.github/workflows/drain.yml` on a `*/5` schedule (check it with
+`gh run list --workflow=drain.yml --limit 5` — a run that fails in under 10 seconds means
+`CRON_SECRET` is missing or wrong), and the Vercel cron **once daily** as the backstop
+(Hobby-plan limit). GitHub throttles scheduled workflows heavily, so a gap of hours between
+runs is normal rather than broken. If the interval genuinely matters, scale the Heroku worker
+up (`heroku ps:scale worker=1 -a autoreply-pro-worker`, 60s polling) or point any 1-minute cron
+service at the same URL with the same bearer.
 
 ## Step 9 — Idempotency, if you want it proven
 

@@ -33,7 +33,7 @@ const DISCLOSURE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
  */
 const REPLY_CLAIM_VISIBILITY_SECONDS = 300;
 
-interface NormalizedDm {
+export interface NormalizedDm {
     senderId: string;
     text: string;
     payload: string;
@@ -45,8 +45,11 @@ interface NormalizedDm {
 /**
  * Flatten the three shapes a messaging event arrives in (plain message, quick reply,
  * postback) into one. Returns null for events with nothing to reply to.
+ *
+ * Exported for src/webhook/messaging.test.ts. It is pure, and the alternative is a test that
+ * reaches it only through the whole database-and-Gemini pipeline.
  */
-function normalizeDm(event: any): NormalizedDm | null {
+export function normalizeDm(event: any): NormalizedDm | null {
     const senderId = event?.sender?.id;
 
     let text: string = event?.message?.text || '';
@@ -104,15 +107,18 @@ function normalizeDm(event: any): NormalizedDm | null {
  * Page id through — the DM path never did, so every Facebook Messenger reply went to `/me`.
  * There is no `field === 'feed'` marker on a messaging event, so the signal is the page id
  * the event is addressed to.
+ *
+ * Exported for src/webhook/messaging.test.ts.
  */
-function resolveDmPageId(creator: Creator, addressedTo: (string | undefined)[]): string | undefined {
+export function resolveDmPageId(creator: Creator, addressedTo: (string | undefined)[]): string | undefined {
     if (!creator.facebook_page_id) return undefined;
     return addressedTo.some((id) => id && id === creator.facebook_page_id)
         ? creator.facebook_page_id
         : undefined;
 }
 
-function needsDisclosure(disclosedAt: string | Date | null | undefined): boolean {
+/** Exported for src/webhook/messaging.test.ts. */
+export function needsDisclosure(disclosedAt: string | Date | null | undefined): boolean {
     if (!disclosedAt) return true;
     const at = disclosedAt instanceof Date ? disclosedAt.getTime() : Date.parse(disclosedAt);
     if (Number.isNaN(at)) return true;
