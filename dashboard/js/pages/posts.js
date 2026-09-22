@@ -3,12 +3,14 @@
  *
  * ─── Two honesty problems this screen had ───────────────────────────────────
  *
- * 1. THE MINUTE WAS A LIE, AND THEN THE CORRECTION BECAME ONE. `vercel.json`
- *    runs one cron a day at 00:00 UTC (a Hobby-plan limit), so a
- *    `datetime-local` accepting 14:35 promised something the backend could not
- *    deliver, and this screen was changed to show the next 00:00 UTC instead.
- *    That answer is now itself wrong — see `publishWindow()` below. The field
- *    stays either way; what it says underneath is recomputed live.
+ * 1. THE MINUTE IS A LIE. `vercel.json` runs one cron a day at 00:00 UTC (a
+ *    Hobby-plan limit) and it is the only thing that publishes anything today,
+ *    so a `datetime-local` accepting 14:35 promises what the backend cannot
+ *    deliver. The field stays — the API takes a full ISO timestamp and the date
+ *    genuinely matters — but underneath it the form computes and shows the run
+ *    the post will ACTUALLY go out on, live, as the operator picks a time.
+ *    `publishWindow()` below carries that, and the evidence for it; a frequent
+ *    sweep has been claimed by two documents and has never once run.
  *
  * 2. THE THUMBNAIL WAS A FOOTNOTE. `cover_url` is supported end to end, and
  *    without it Instagram thumbnails a reel from frame 0 — a black tile for
@@ -322,9 +324,7 @@ const PostsPage = {
                     <p class="post-card-meta">
                         <i data-lucide="calendar-clock" aria-hidden="true"></i>
                         <span class="${pendingWindow.isPast ? html.raw('text-warning') : ''}">
-                            ${pendingWindow.isPast
-                                ? t('posts.schedule.pastExpected')
-                                : t('posts.schedule.expected', { when: UI.formatDateTime(pendingWindow.from) })}
+                            ${this.publishWindowText(pendingWindow)}
                         </span>
                     </p>
                 ` : ''}
@@ -563,9 +563,10 @@ const PostsPage = {
     },
 
     /**
-     * The scheduling block. `scheduleNote()` is recomputed on every change of
-     * the time field, so the operator watches "actually publishes" stay on the
-     * same 00:00 UTC run while they nudge the minutes.
+     * The scheduling block. `scheduleNoteText()` is recomputed on every change
+     * of the time field, so the operator watches the answer stay on the same
+     * 00:00 UTC run while they nudge the minutes — which is the point: seeing
+     * it NOT move is what teaches that the minute is not what counts.
      */
     scheduleFields(value) {
         return html`
@@ -585,68 +586,140 @@ const PostsPage = {
     },
 
     /**
-     * How long after the requested time a post actually goes out.
+     * ── IS THERE A FREQUENT PUBLISH SWEEP? MEASURE, DO NOT READ. ──
      *
-     * This screen used to answer that question with `UI.nextCronRun()` — the
-     * next 00:00 UTC — because for a long time that was the truth: `vercel.json`
-     * registers one cron a day on the Hobby plan and it was the only thing
-     * calling the publish sweep.
+     * `publishDuePosts()` has exactly two callers (`src/routes/api.ts:352` and
+     * `:714`). The first is inside `GET /api/jobs/drain`, which only the GitHub
+     * Actions schedule calls; the second is inside `GET /api/cron/publish`,
+     * which is the Vercel cron — once a day at 00:00 UTC, a Hobby-plan limit.
+     * `drainInline()` runs after every webhook but drains the JOB QUEUE only; it
+     * does not publish posts. So if the GitHub schedule is not running, the
+     * daily cron is the only thing that publishes anything.
      *
-     * It is not the truth any more, and the direction of the error matters.
-     * `GET /api/jobs/drain` calls the SAME `publishDuePosts()` sweep
-     * (`src/routes/api.ts:352`), and `.github/workflows/drain.yml` has been
-     * calling that endpoint on a five-minute cron since 2026-09-22. So a post
-     * asked for at 09:00 goes out at about 09:00 — while this screen was still
-     * telling the operator it would appear at 03:00 the following morning, an
-     * overstatement of up to 24 hours. Being wrong in that direction is not the
-     * harmless half: it invites the operator to schedule a day early, or to give
-     * up on scheduling and publish by hand.
+     * It is not running. Measured 2026-09-22:
+     *
+     *     $ gh run list --workflow=drain.yml
+     *     11:32:21Z  workflow_dispatch  success   <- the only green run, ever
+     *     09:51:08Z  schedule           failure
+     *     05:05:12Z  schedule           failure
+     *     00:18:36Z  schedule           failure
+     *     21:49:25Z  schedule           failure   (2026-09-21)
+     *
+     * Five runs in the workflow's whole history. Every `schedule` run has
+     * failed, they landed 2.5-5 hours apart rather than every five minutes, and
+     * in the 117 minutes after `CRON_SECRET` was finally set — which fixed the
+     * failures — not one scheduled run fired, against ~23 expected at a
+     * five-minute cron. The single success is a manual `workflow_dispatch`.
+     * That proves the endpoint and the secret; it does not prove the schedule.
+     *
+     * This constant was briefly `true`, on the strength of FLOWS.md §3.2 and
+     * `drain.yml`'s own header saying "every ~5-15 minutes". Both describe the
+     * INTENT. Reading intent as behaviour put "publishes within ~15 minutes" in
+     * front of an operator whose post would not go out until the next midnight
+     * — wrong by up to 24 hours in the direction where someone schedules an
+     * evening post, watches the window lapse, and concludes the product is
+     * broken. The conservative answer being wrong costs an early publish; the
+     * optimistic one costs trust.
+     *
+     * ── TO FLIP THIS, CHECK ONE OF THESE FIRST ──
+     *
+     *   1. `gh run list --workflow=drain.yml` shows a green row whose trigger is
+     *      literally `schedule` (not `workflow_dispatch` — a manual run proves
+     *      only that someone pressed the button).
+     *   2. `heroku ps:scale worker=1 -a autoreply-pro-worker` has been run; the
+     *      dyno polls the same endpoint every 60s. It is at 0 today. Confirm
+     *      with `heroku ps -a autoreply-pro-worker`.
+     *
+     * Either one makes the frequent figure correct. Then this is a one-line
+     * change: set it to `true`. `publishWindow()` and the copy already carry
+     * both regimes, so nothing else moves.
+     */
+    FREQUENT_SWEEP: false,
+
+    /**
+     * The tail on a frequent sweep, used only when `FREQUENT_SWEEP` is true.
      *
      * 15 minutes rather than 5 because GitHub Actions explicitly does not
      * promise schedule punctuality — runs are throttled under load and are
-     * routinely several minutes late. `drain.yml`'s own header says so and
-     * FLOWS.md §3.2 puts the honest figure at "every ~5-15 minutes", so the
-     * number the operator is shown is the slow end of that, not the fast one.
-     *
-     * The daily cron has not gone anywhere; it is now the BACKSTOP rather than
-     * the schedule, which is what the static line under the field says. Worst
-     * case is still bounded at the next 00:00 UTC, and that is worth stating —
-     * it just is not the expected case.
+     * routinely several minutes late — so the number the operator sees should
+     * be the slow end of "every ~5-15 minutes", not the flattering end.
      */
-    SWEEP_LAG_MS: 15 * 60 * 1000,
+    FREQUENT_SWEEP_LAG_MS: 15 * 60 * 1000,
 
     /**
      * When a post requested at `iso` will actually publish.
      *
      * Pure, and separated from the copy for exactly that reason: this is the
      * claim the screen makes to the operator about their own posting schedule,
-     * and `src/dashboard/schedule.test.ts` pins it rather than trusting a
-     * reading of the template it is interpolated into.
+     * and `src/dashboard/screens.test.ts` pins it rather than trusting a reading
+     * of the template it is interpolated into.
+     *
+     * Two regimes, chosen by `FREQUENT_SWEEP` above:
+     *
+     *   - daily (today) — the Vercel cron fires at a known INSTANT, so there is
+     *     no spread to express and the window collapses to a point: `until`
+     *     equals `from`. `UI.nextCronRun()` computes that instant and is reused
+     *     rather than reimplemented here.
+     *   - frequent — the post goes out at about the requested time, with a tail.
      *
      * @param {string|Date|null} iso   the requested time
      * @param {number} [now]           epoch ms, injectable so the test has a clock
-     * @returns {{ isPast: boolean, from: Date, until: Date }|null}
+     * @returns {{ isPast: boolean, from: Date, until: Date, frequent: boolean }|null}
      */
     publishWindow(iso, now) {
         if (!iso) return null;
         const requested = iso instanceof Date ? iso : new Date(iso);
         if (Number.isNaN(requested.getTime())) return null;
         const at = typeof now === 'number' ? now : Date.now();
+
         // A time already past does not publish in the past: it publishes on the
-        // next sweep, which is counted from now rather than from the requested
-        // instant. Without this an overdue post claimed a window that had
-        // already closed.
+        // next run, counted from NOW rather than from the requested instant.
+        // Without this an overdue post claimed a moment that had already gone.
         const isPast = requested.getTime() <= at;
-        const from = isPast ? new Date(at) : requested;
-        return { isPast, from, until: new Date(from.getTime() + this.SWEEP_LAG_MS) };
+        const after = isPast ? new Date(at) : requested;
+
+        if (!this.FREQUENT_SWEEP) {
+            const run = UI.nextCronRun(after);
+            return { isPast, from: run, until: run, frequent: false };
+        }
+        return {
+            isPast,
+            from: after,
+            until: new Date(after.getTime() + this.FREQUENT_SWEEP_LAG_MS),
+            frequent: true,
+        };
+    },
+
+    /**
+     * The window as a sentence. The ONE place a window becomes copy.
+     *
+     * Two callers — the note under the form field and the line on each queued
+     * card — and they used to each pick their own key. They promptly diverged:
+     * the note was corrected to the daily reality while the card went on
+     * promising "within about 15 minutes" for the same post. That is the same
+     * failure as the three hand-copied reset lists in inbox.js, so it gets the
+     * same treatment.
+     *
+     * Four keys, not two: the regime decides which pair is used, so flipping
+     * `FREQUENT_SWEEP` needs no edit here. The `isPast` split survives both —
+     * "that time has already passed" is the line that stops the operator
+     * waiting for something queued behind a run they have already missed.
+     */
+    publishWindowText(win) {
+        if (!win) return '';
+        const when = UI.formatDateTime(win.from);
+        if (win.frequent) {
+            return win.isPast
+                ? t('posts.schedule.pastExpected')
+                : t('posts.schedule.expected', { when });
+        }
+        return win.isPast
+            ? t('posts.schedule.pastExpectedDaily', { when })
+            : t('posts.schedule.expectedDaily', { when });
     },
 
     scheduleNoteText(localValue) {
-        const window = this.publishWindow(UI.fromLocalInputValue(localValue));
-        if (!window) return '';
-        return window.isPast
-            ? t('posts.schedule.pastExpected')
-            : t('posts.schedule.expected', { when: UI.formatDateTime(window.from) });
+        return this.publishWindowText(this.publishWindow(UI.fromLocalInputValue(localValue)));
     },
 
     refreshScheduleNote() {

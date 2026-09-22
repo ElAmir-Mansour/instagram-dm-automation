@@ -297,7 +297,7 @@ I18N.strings = {
         'overview.alert.overduePosts_few': '{count} منشورات تجاوزت موعدها',
         'overview.alert.overduePosts_many': '{count} منشوراً تجاوزت موعدها',
         'overview.alert.overduePosts_other': '{count} منشور تجاوز موعده',
-        'overview.alert.overduePostsBody': 'يفترض أن يلتقطها الفحص خلال 15 دقيقة تقريباً؛ إن بقيت متأخرة بعد ذلك فالأرجح أن المُجدوِل متوقف — انشرها يدوياً من صفحة الجدولة.',
+        'overview.alert.overduePostsBody': 'المُجدوِل يعمل مرة واحدة يومياً عند 00:00 بتوقيت UTC، فهي تنتظر التشغيل القادم. إن كنت لا تريد الانتظار فانشرها الآن من صفحة الجدولة.',
         'overview.alert.failedPosts_one': 'منشور واحد فشل نشره',
         'overview.alert.failedPosts_two': 'منشوران فشل نشرهما',
         'overview.alert.failedPosts_few': '{count} منشورات فشل نشرها',
@@ -489,7 +489,10 @@ I18N.strings = {
 
         // Scheduling honesty
         'posts.schedule.label': 'موعد النشر المطلوب',
-        'posts.schedule.truth': 'المُجدوِل يفحص الطابور كل 5 إلى 15 دقيقة، فالمنشور يخرج بعد الوقت الذي تختاره بقليل لا في دقيقته بالضبط. وإن تأخّر هذا الفحص فهناك تشغيل يومي مضمون عند 00:00 بتوقيت UTC يلتقطه.',
+        'posts.schedule.truth': 'المُجدوِل يعمل مرة واحدة يومياً عند 00:00 بتوقيت UTC، فالدقيقة التي تختارها ليست وعداً يستطيع الخادم الوفاء به — التاريخ هو ما يُحتسب، والمنشور يخرج في أول تشغيل بعد الموعد الذي اخترته.',
+        'posts.schedule.expectedDaily': 'سيُنشر في التشغيل اليومي التالي بعد موعدك: {when}',
+        'posts.schedule.pastExpectedDaily': 'هذا الموعد مضى — سيُنشر في التشغيل اليومي التالي: {when}',
+        // Used only when PostsPage.FREQUENT_SWEEP is true; see the constant.
         'posts.schedule.expected': 'متوقع النشر: {when} — خلال 15 دقيقة تقريباً',
         'posts.schedule.pastExpected': 'هذا الموعد مضى — سيُنشر في الفحص القادم، خلال 15 دقيقة تقريباً.',
         'posts.schedule.unreadable': 'تعذّرت قراءة الموعد. اختر التاريخ والوقت من جديد.',
@@ -1302,7 +1305,7 @@ I18N.strings = {
         'overview.alert.tokenExpiringBody': 'Extend it to a never-expiring token in Settings.',
         'overview.alert.overduePosts_one': '1 post is past its time',
         'overview.alert.overduePosts_other': '{count} posts are past their time',
-        'overview.alert.overduePostsBody': 'The sweep should take these within about 15 minutes. Still overdue after that means the scheduler has stalled — publish them by hand from the scheduler.',
+        'overview.alert.overduePostsBody': 'The scheduler runs once a day at 00:00 UTC, so these are waiting for the next run. Publish now from the scheduler if you do not want to wait.',
         'overview.alert.failedPosts_one': '1 post failed to publish',
         'overview.alert.failedPosts_other': '{count} posts failed to publish',
         'overview.alert.failedPostsBody': 'They are still queued — fix the media and publish again.',
@@ -1466,7 +1469,10 @@ I18N.strings = {
         'posts.cover.frameZero': 'Frame 0',
 
         'posts.schedule.label': 'Requested publish time',
-        'posts.schedule.truth': 'The scheduler sweeps the queue every 5 to 15 minutes, so a post goes out shortly after the time you pick rather than on the exact minute. If that sweep is delayed, a guaranteed daily run at 00:00 UTC catches it.',
+        'posts.schedule.truth': 'The scheduler runs once a day at 00:00 UTC, so the minute you pick is not a promise the backend can keep — the date is what counts, and the post goes out on the first run after the time you chose.',
+        'posts.schedule.expectedDaily': 'Publishes on the next daily run after your time: {when}',
+        'posts.schedule.pastExpectedDaily': 'That time has already passed — it will go out on the next daily run: {when}',
+        // Used only when PostsPage.FREQUENT_SWEEP is true; see the constant.
         'posts.schedule.expected': 'Expected to publish: {when} — within about 15 minutes',
         'posts.schedule.pastExpected': 'That time has already passed — it will go out on the next sweep, within about 15 minutes.',
         'posts.schedule.unreadable': 'That scheduled time could not be read. Pick a date and time again.',

@@ -6,11 +6,14 @@
  * check:
  *
  * 1. `PostsPage.publishWindow` — WHEN a scheduled post goes out. This is the
- *    number the operator plans their day around, and it has now been wrong
- *    twice in opposite directions: first the minute picker promised precision
- *    the daily cron could not keep, then the correction to "next 00:00 UTC"
- *    outlived the five-minute drain that made it false. Nothing caught either,
- *    because a plausible timestamp looks exactly like a correct one.
+ *    number the operator plans their day around, and it has been wrong twice in
+ *    opposite directions: first the minute picker promised precision the daily
+ *    cron could not keep, then a "publishes within ~15 minutes" written from
+ *    FLOWS.md's description of a drain schedule that has never actually run.
+ *    Nothing caught either, because a plausible timestamp looks exactly like a
+ *    correct one. The second was the worse mistake — an optimistic answer makes
+ *    the operator watch a window lapse and conclude the product is broken — and
+ *    it came from reading documented intent as measured behaviour.
  *
  * 2. `ActivityPage.hasFilters` — whether zero rows means "nothing happened" or
  *    "your own filter is hiding it". The two render different copy and only one
@@ -32,12 +35,15 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import vm from 'node:vm';
 
-interface PublishWindow { isPast: boolean; from: Date; until: Date }
+interface PublishWindow { isPast: boolean; from: Date; until: Date; frequent: boolean }
 
 interface PostsApi {
-    SWEEP_LAG_MS: number;
+    FREQUENT_SWEEP: boolean;
+    FREQUENT_SWEEP_LAG_MS: number;
     publishWindow(iso: unknown, now?: number): PublishWindow | null;
+    publishWindowText(win: PublishWindow | null): string;
     scheduleNoteText(localValue: string): string;
+    renderScheduledCard(post: Record<string, unknown>): { toString(): string };
 }
 
 interface ActivityApi {
@@ -109,6 +115,7 @@ function fakeEl(id: string): FakeEl {
 interface UiApi {
     formatDateTime(iso: unknown): string;
     fromLocalInputValue(value: string): string | null;
+    toLocalInputValue(iso: unknown): string;
 }
 
 /** The page's own local-time parser, so the test cannot disagree with it. */
@@ -116,9 +123,12 @@ function vmFromLocal(UI: UiApi, local: string): string | null {
     return UI.fromLocalInputValue(local);
 }
 
+type Translate = (key: string, params?: Record<string, unknown>) => string;
+
 interface Loaded {
     Posts: PostsApi;
     UI: UiApi;
+    t: Translate;
     Activity: ActivityApi;
     Inbox: InboxApi;
     Ai: AiApi;
@@ -187,11 +197,11 @@ function load(): Loaded {
         vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     }
 
-    const { PostsPage, ActivityPage, InboxPage, AiSettingsPage, UI } = vm.runInContext(
-        '({ PostsPage, ActivityPage, InboxPage, AiSettingsPage, UI })', ctx
+    const { PostsPage, ActivityPage, InboxPage, AiSettingsPage, UI, t } = vm.runInContext(
+        '({ PostsPage, ActivityPage, InboxPage, AiSettingsPage, UI, t })', ctx
     ) as {
         PostsPage: PostsApi; ActivityPage: ActivityApi; InboxPage: InboxApi;
-        AiSettingsPage: AiApi; UI: UiApi;
+        AiSettingsPage: AiApi; UI: UiApi; t: Translate;
     };
 
     // loadData() writes markup and is not what these tests are about; the FACT
@@ -199,7 +209,7 @@ function load(): Loaded {
     const loads: number[] = [];
     ActivityPage.loadData = (): unknown => { loads.push(ActivityPage.currentPage); return undefined; };
 
-    return { Posts: PostsPage, UI, Activity: ActivityPage, Inbox: InboxPage, Ai: AiSettingsPage, dom, api, loads };
+    return { Posts: PostsPage, UI, t, Activity: ActivityPage, Inbox: InboxPage, Ai: AiSettingsPage, dom, api, loads };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -210,41 +220,107 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
     // how a test passes at 09:00 and fails at midnight.
     const NOW = Date.parse('2026-09-22T09:00:00.000Z');
 
-    it('a future time publishes AT that time, not at the next midnight UTC', () => {
-        // This is the whole point. The screen used to answer 00:00 the next day
-        // for anything after midnight — up to 24 hours late — because the daily
-        // Vercel cron was once the only caller of the publish sweep. The drain
-        // workflow now calls the same sweep every ~5-15 minutes.
+    it('is in the DAILY regime, because the frequent sweep has never run', () => {
+        // The load-bearing assertion in this file. `publishDuePosts()` has two
+        // callers: the GitHub Actions drain (whose schedule has produced five
+        // runs ever, every one of them either a failure or a manual dispatch)
+        // and the Vercel cron, once a day at 00:00 UTC. `drainInline()` runs
+        // after every webhook but drains the job queue only.
+        //
+        // This flipped to `true` once on the strength of FLOWS.md and drain.yml
+        // describing the INTENT, and the screen then told operators their post
+        // would go out in ~15 minutes when it would actually wait for midnight.
+        // The constant carries the two checks that would justify flipping it.
+        assert.equal(Posts.FREQUENT_SWEEP, false);
+    });
+
+    it('a future time publishes at the next 00:00 UTC, not at that time', () => {
         const win = Posts.publishWindow('2026-09-22T14:35:00.000Z', NOW);
         assert.ok(win);
         assert.equal(win.isPast, false);
-        assert.equal(win.from.toISOString(), '2026-09-22T14:35:00.000Z');
+        assert.equal(win.frequent, false);
+        assert.equal(win.from.toISOString(), '2026-09-23T00:00:00.000Z');
     });
 
-    it('closes the window 15 minutes later, the slow end of the sweep', () => {
-        // 15 and not 5: GitHub Actions does not promise schedule punctuality and
-        // throttles under load (FLOWS.md §3.2, drain.yml's own header). Quoting
-        // the fast end would make the screen late more often than not.
-        assert.equal(Posts.SWEEP_LAG_MS, 15 * 60 * 1000);
+    it('a time before midnight still waits for the NEXT midnight, not the last one', () => {
+        // 23:59 on the 22nd publishes on the 23rd's run, not the 22nd's, which
+        // has already happened. `UI.nextCronRun` is strict about this and the
+        // screen depends on it.
+        const win = Posts.publishWindow('2026-09-22T23:59:00.000Z', NOW);
+        assert.ok(win);
+        assert.equal(win.from.toISOString(), '2026-09-23T00:00:00.000Z');
+    });
+
+    it('collapses the window to an instant, because a daily cron has no spread', () => {
         const win = Posts.publishWindow('2026-09-22T14:35:00.000Z', NOW);
         assert.ok(win);
-        assert.equal(win.until.getTime() - win.from.getTime(), 15 * 60 * 1000);
+        assert.equal(win.until.getTime(), win.from.getTime());
     });
 
     it('counts an overdue post from NOW, not from the time that has passed', () => {
-        // A window that closed yesterday tells the operator nothing about when
-        // the post they are looking at will go out.
+        // A run that happened yesterday tells the operator nothing about when
+        // the post in front of them will go out.
         const win = Posts.publishWindow('2026-09-20T08:00:00.000Z', NOW);
         assert.ok(win);
         assert.equal(win.isPast, true);
-        assert.equal(win.from.getTime(), NOW);
-        assert.equal(win.until.getTime(), NOW + 15 * 60 * 1000);
+        assert.equal(win.from.toISOString(), '2026-09-23T00:00:00.000Z');
+    });
+
+    it('switches regime, and only the regime, when FREQUENT_SWEEP flips', () => {
+        // The flip has to be one line. This asserts that it is: the same input,
+        // the same function, a different claim — with the 15-minute tail being
+        // the slow end of "every ~5-15 minutes" rather than the flattering end.
+        const { Posts: P } = load();
+        P.FREQUENT_SWEEP = true;
+        try {
+            const win = P.publishWindow('2026-09-22T14:35:00.000Z', NOW);
+            assert.ok(win);
+            assert.equal(win.frequent, true);
+            assert.equal(win.from.toISOString(), '2026-09-22T14:35:00.000Z');
+            assert.equal(P.FREQUENT_SWEEP_LAG_MS, 15 * 60 * 1000);
+            assert.equal(win.until.getTime() - win.from.getTime(), 15 * 60 * 1000);
+            // And an overdue post is measured from now, in both regimes.
+            const late = P.publishWindow('2026-09-20T08:00:00.000Z', NOW);
+            assert.ok(late);
+            assert.equal(late.isPast, true);
+            assert.equal(late.from.getTime(), NOW);
+        } finally {
+            P.FREQUENT_SWEEP = false;
+        }
     });
 
     it('treats the current instant as past, so it is never a window of zero', () => {
         const win = Posts.publishWindow(new Date(NOW).toISOString(), NOW);
         assert.ok(win);
         assert.equal(win.isPast, true);
+    });
+
+    it('the queue card and the form field say the same thing about the same post', () => {
+        // They did not. `scheduleNoteText` was corrected to the daily reality
+        // while `renderScheduledCard` kept its own copy of the branch and went
+        // on promising "within about 15 minutes" for the very same post — two
+        // answers, one screen. Both now go through `publishWindowText`, and this
+        // is what stops them drifting apart again.
+        const { Posts: P, UI } = load();
+        const iso = '2027-03-04T18:20:00.000Z';
+        const win = P.publishWindow(iso, NOW);
+        assert.ok(win);
+
+        // The REAL card markup, not the shared helper called twice — asserting
+        // `publishWindowText` agrees with itself is what the first version of
+        // this test did, and a card that had gone back to building its own
+        // sentence sailed straight through it.
+        const card = String(P.renderScheduledCard({
+            id: 9, platform: 'instagram', post_type: 'image', status: 'PENDING',
+            scheduled_time: iso, caption: 'c',
+        }));
+        const fieldText = P.scheduleNoteText(UI.toLocalInputValue(iso));
+
+        assert.ok(fieldText.length > 0);
+        assert.ok(
+            card.includes(fieldText),
+            `the card does not carry the sentence the form field shows.\n  field: ${fieldText}`
+        );
     });
 
     it('returns null rather than an Invalid Date for anything unparseable', () => {
@@ -264,32 +340,58 @@ describe('PostsPage.publishWindow — when a scheduled post actually goes out', 
         assert.equal(win.isPast, false);
     });
 
-    it('says something different for a past time than for a future one', () => {
-        // The two branches must not collapse into one string: "already passed"
-        // is the line that stops the operator waiting for a post that is going
-        // out right now.
-        const future = Posts.scheduleNoteText('2027-01-01T10:00');
-        const past = Posts.scheduleNoteText('2020-01-01T10:00');
-        assert.ok(future.length > 0);
-        assert.ok(past.length > 0);
-        assert.notEqual(future, past);
-    });
-
-    it('names the requested time in the note, not a midnight the operator did not pick', () => {
-        // The regression this guards is the specific one that shipped: the note
-        // quoted `nextCronRun()` — always 00:00 — so whatever time was chosen,
-        // the sentence underneath said midnight. Asserting that the formatted
-        // requested time is IN the note is what tells those two apart, and it
-        // survives any rewording of the copy around it.
-        const { Posts: P, UI } = load();
-        const local = '2027-01-01T10:35';
+    it('uses the overdue wording for a past time, not merely a different timestamp', () => {
+        // The first version of this compared the future note to the past note
+        // and asserted they differed — which a mutation collapsing both branches
+        // into the FUTURE string passed anyway, because the two still carried
+        // different `{when}` values. The strings differed for a reason that had
+        // nothing to do with the branch under test.
+        //
+        // So each note is pinned against the key it is supposed to come from,
+        // rendered with the instant `publishWindow` actually computed. The
+        // `notEqual` is the one that fails on a collapse.
+        const { Posts: P, UI, t } = load();
+        const local = '2020-01-01T10:00';
         const win = P.publishWindow(vmFromLocal(UI, local));
         assert.ok(win);
+        assert.equal(win.isPast, true);
+
+        const when = UI.formatDateTime(win.from);
         const note = P.scheduleNoteText(local);
-        assert.ok(
-            note.includes(UI.formatDateTime(win.from)),
-            `expected the note to name ${UI.formatDateTime(win.from)}; got: ${note}`
-        );
+        assert.equal(note, t('posts.schedule.pastExpectedDaily', { when }));
+        assert.notEqual(note, t('posts.schedule.expectedDaily', { when }));
+    });
+
+    it('uses the forward wording for a future time', () => {
+        const { Posts: P, UI, t } = load();
+        const local = '2027-01-01T10:00';
+        const win = P.publishWindow(vmFromLocal(UI, local));
+        assert.ok(win);
+        assert.equal(win.isPast, false);
+
+        const when = UI.formatDateTime(win.from);
+        const note = P.scheduleNoteText(local);
+        assert.equal(note, t('posts.schedule.expectedDaily', { when }));
+        assert.notEqual(note, t('posts.schedule.pastExpectedDaily', { when }));
+    });
+
+    it('names the run the post will go out on, whichever regime is active', () => {
+        // The note must quote the same instant `publishWindow` computed, not a
+        // second opinion — this is the seam where a correct function and a lying
+        // sentence could coexist, which is exactly what happened when the copy
+        // said "~15 minutes" while the backend published at midnight.
+        for (const frequent of [false, true]) {
+            const { Posts: P, UI } = load();
+            P.FREQUENT_SWEEP = frequent;
+            const local = '2027-01-01T10:35';
+            const win = P.publishWindow(vmFromLocal(UI, local));
+            assert.ok(win);
+            const note = P.scheduleNoteText(local);
+            assert.ok(
+                note.includes(UI.formatDateTime(win.from)),
+                `frequent=${frequent}: expected the note to name ${UI.formatDateTime(win.from)}; got: ${note}`
+            );
+        }
     });
 });
 
