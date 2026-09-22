@@ -208,9 +208,15 @@ time picker implies. The workflow's own header says as much (`.github/workflows/
 
 A second, finer-grained caller exists and is currently switched off: `heroku-worker/worker.mjs`
 polls the same endpoint every 60 s from a worker dyno. It was built, deployed and verified
-working, then scaled to zero once the free schedule was fixed and made its ~$7/mo unnecessary.
-Scaling it back up is a one-line change and is the answer if the GitHub cadence proves too
-coarse. A dedicated cron service with 1-minute granularity is the other drop-in: same URL, same
+working, then scaled to zero on the belief that the free schedule had been fixed and made its
+~$7/mo unnecessary. **That belief is unverified.** As of 2026-09-22 no scheduled run has ever
+succeeded: all four failed on the missing secret, and the only green run in the workflow's
+entire history is the manual `workflow_dispatch` fired 15 s after the secret was set. So the
+secret and the endpoint are proven; the *schedule* is not, and nothing has fired in the 74
+minutes since. Treat the queue as drained by Vercel's daily cron plus the inline post-webhook
+drain until a green row whose trigger is `schedule` actually appears.
+Scaling the worker back up is a one-line change and is the answer if the GitHub cadence proves
+too coarse — on current evidence it already has. A dedicated cron service with 1-minute granularity is the other drop-in: same URL, same
 bearer token, no code change.
 
 Either way the daily Vercel cron remains the backstop, so the worst case is bounded at 24h
