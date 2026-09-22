@@ -33,6 +33,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v14_functionality.sql',
     'migration_v15_admin.sql',
     'migration_v16_membership_roles.sql',
+    'migration_v17_ledger_rls.sql',
 ] as const;
 
 export interface SchemaState {

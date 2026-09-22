@@ -57,6 +57,15 @@ async function main() {
             applied_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )`);
 
+    // Deny-by-default, immediately — this table is created here rather than by a
+    // migration, which is exactly why migration_v11's RLS sweep never covered it
+    // and Supabase flagged it as publicly accessible. On a fresh database the
+    // ALTER in migration_v17 runs moments later anyway; this line is what stops
+    // the gap existing at all, including for anyone who creates the ledger and
+    // never gets as far as applying v17. Owners bypass RLS, so the runner below
+    // is unaffected. Idempotent.
+    await pool.query('ALTER TABLE schema_migrations ENABLE ROW LEVEL SECURITY');
+
     const applied = new Map(
         (await pool.query('SELECT filename, checksum FROM schema_migrations')).rows
             .map((r) => [r.filename, r.checksum])
