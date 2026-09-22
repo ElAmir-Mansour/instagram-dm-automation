@@ -31,7 +31,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { pool } from '../config/db.js';
 import { encryptSecret, hashPassword, isEncrypted } from '../config/crypto.js';
 import { describeError, log } from '../utils/log.js';
-import { invalidateTenantCache } from '../services/tenant.js';
+import { invalidateTenantCache, isTenantRole, TENANT_ROLES } from '../services/tenant.js';
 import { DEFAULT_HOURLY_LIMIT } from '../utils/rateLimiter.js';
 import {
     actorFromSession, AUDIT_ACTIONS, clampAuditLimit, isAuditAction, listAudit, writeAudit,
@@ -995,11 +995,26 @@ router.post('/users/:id/memberships', async (req, res) => {
             return;
         }
 
+        // `role` used to be stored verbatim — any string at all — because nothing read it.
+        // It is an authorization decision now (src/services/tenant.ts), and an unrecognised
+        // value resolves to `owner`: a typo would silently grant everything to somebody an
+        // operator was deliberately restricting. So it is a 400, and v16 puts the same list
+        // on the column as a CHECK constraint.
+        const membershipRole = role === undefined || role === null || role === ''
+            ? 'owner'
+            : typeof role === 'string' ? role.trim() : role;
+        if (!isTenantRole(membershipRole)) {
+            res.status(400).json({
+                error: `role must be one of: ${TENANT_ROLES.join(', ')}.`,
+            });
+            return;
+        }
+
         const result = await pool.query(
             `INSERT INTO memberships (user_id, creator_id, role) VALUES ($1, $2, $3)
              ON CONFLICT (user_id, creator_id) DO UPDATE SET role = EXCLUDED.role
              RETURNING user_id, creator_id, role, created_at`,
-            [id, creator_id, typeof role === 'string' && role.trim() ? role.trim() : 'owner']
+            [id, creator_id, membershipRole]
         );
 
         await audit(req, AUDIT_ACTIONS.membershipGrant, 'membership', `${id}:${creator_id}`, {
