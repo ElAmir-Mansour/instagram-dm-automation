@@ -43,6 +43,7 @@ const APP = 'dashboard/js/app.js';
 const SHARED_ASSET_PAGES = [
     'public/privacy.html',
     'public/data-deletion.html',
+    'public/pricing.html',
     'dashboard/eid.html',
 ];
 
