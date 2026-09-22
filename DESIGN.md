@@ -183,7 +183,7 @@ covering every role a dashboard needs:
    logical properties, the auto-escaping template — all built and tested. "Easier components"
    would buy components that already exist.
 3. **No build step is why a deploy is 20 seconds** and why there is no build to break.
-4. 449 tests and 16 page modules is verified work a rewrite discards.
+4. 548 tests and 16 page modules is verified work a rewrite discards.
 
 **What would change the answer**: a second developer joining, or needing a library's
 accessibility work for free. Not component convenience. If it ever happens, the honest

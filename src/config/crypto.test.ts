@@ -156,35 +156,37 @@ describe('hashPassword / verifyPassword', () => {
         assert.equal(await verifyPassword('anything', null as unknown as string), false);
     });
 
-    it('FINDING: accepts a truncated stored digest — the length guard cannot fire', async () => {
-        // This documents a defect rather than endorsing it, so that fixing it turns this red
-        // and whoever fixes it sees why the test was here.
+    it('rejects a stored digest that is not the full derived length', async () => {
+        // This was a real defect, fixed alongside this test. `verifyPassword` used to derive
+        // `expected.length` bytes — the length of whatever sat in the database — instead of the
+        // fixed `SCRYPT_PARAMS.keylen`. scrypt's positional keylen argument wins over the one in
+        // the options object, so `derived` always came back exactly as long as `expected` and the
+        // `derived.length !== expected.length` guard was unreachable. scrypt finishes with a
+        // single PBKDF2 pass, so a shorter output is a byte-exact PREFIX of a longer one — which
+        // is why a truncated digest still matched the correct password.
         //
-        // `verifyPassword` derives `expected.length` bytes — the length of whatever is *in the
-        // database* — rather than the fixed `SCRYPT_PARAMS.keylen`. The positional argument
-        // wins over `keylen` in the options object (verified against Node 22), so `derived`
-        // always comes back exactly as long as `expected` and the
-        // `derived.length !== expected.length` guard below it is unreachable. scrypt finishes
-        // with one PBKDF2 pass, so a shorter output is a byte-exact prefix of a longer one —
-        // which is what makes a truncated digest still match.
-        //
-        // The consequence is that the work an attacker must do is set by the stored value: a
-        // digest cut to a single byte accepts roughly one password in 256. That needs write
-        // access to `users.password_hash` to exploit, so it is not urgent — but it is the
-        // exact scenario the length check was written to refuse, and it refuses nothing.
+        // The consequence was that the attacker's work factor was set by the stored value: a
+        // digest cut to one byte would accept roughly one password in 256. Exploiting it needed
+        // write access to `users.password_hash`, so it was a weakness rather than an open door —
+        // but it is exactly what the length check existed to refuse, and it refused nothing.
         const stored = await hashPassword('pw');
         const [, salt, digest] = stored.split(':');
         const raw = Buffer.from(digest!, 'base64url');
 
-        const truncated = raw.subarray(0, 32).toString('base64url');
-        assert.equal(
-            await verifyPassword('pw', `scrypt:${salt}:${truncated}`),
-            true,
-            'if this is now false the defect is fixed — delete this test and keep the one below'
-        );
+        // Truncated at several lengths: each is a valid prefix, so only the length check stops it.
+        for (const len of [1, 16, 32, 63]) {
+            const truncated = raw.subarray(0, len).toString('base64url');
+            assert.equal(
+                await verifyPassword('pw', `scrypt:${salt}:${truncated}`),
+                false,
+                `a ${len}-byte stored digest must be refused, not treated as the whole hash`
+            );
+        }
 
-        // A wrong password is still rejected at full length, which is why this is a weakness
-        // and not an open door.
+        // An over-long digest is refused too, and the correct password still works untouched.
+        const padded = Buffer.concat([raw, Buffer.alloc(8)]).toString('base64url');
+        assert.equal(await verifyPassword('pw', `scrypt:${salt}:${padded}`), false);
+        assert.equal(await verifyPassword('pw', stored), true);
         assert.equal(await verifyPassword('wrong', stored), false);
     });
 

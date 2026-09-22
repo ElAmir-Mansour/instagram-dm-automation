@@ -761,10 +761,10 @@ in the public repo's history (`src/config/env.ts:45-49`).
 
 ```bash
 npm run typecheck    # tsc --noEmit
-npm test             # 449 unit tests, node:test via tsx
+npm test             # 548 unit tests, node:test via tsx
 ```
 
-Both pass on `main` as of 2026-09-22 (449 tests, 86 suites, 0 failures). CI also runs four
+Both pass on `main` as of 2026-09-22 (548 tests, 110 suites, 0 failures). CI also runs four
 content guards — `check:assets`, `check:icons`, `check:contrast` and `check:i18n` — each added
 after a failure that nothing else could see. There is **no build
 step**: TypeScript runs through `ts-node/esm` locally and `@vercel/node` in production. The
