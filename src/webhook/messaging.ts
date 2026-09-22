@@ -42,6 +42,32 @@ export interface NormalizedDm {
     metaMessageId: string | null;
 }
 
+/** What a story mention says, in the absence of any text the person actually typed. */
+export const STORY_MENTION_TEXT = '[Story Mention]';
+
+/**
+ * The one string that stands for "what this person said", for BOTH the stored row and the
+ * Gemini call.
+ *
+ * The two used to be computed separately and could disagree, and for a pure story mention
+ * they always did: the row stored `'[Story Mention]'` while `generateAiResponse` was handed
+ * `dm.text || dm.payload`, which is `''`. That matters because of how `src/services/ai.ts`
+ * decides whether the current message is already in the history it just read — it compares
+ * the last stored row's text against the string it was passed, and appends a turn when they
+ * differ. With the two disagreeing it always differed, so every story mention sent Gemini a
+ * trailing `{ role: 'user', parts: [{ text: '' }] }`: an empty turn after a `user` turn that
+ * already existed, which is at best a wasted part and at worst a 400 from the API.
+ *
+ * A quick reply with no accompanying text had the same shape from the other side — the row
+ * stored `''` while the payload went to Gemini — so the payload is folded in here too and the
+ * inbox stops showing an empty bubble for a button somebody pressed.
+ *
+ * Exported so the test can assert the two call sites cannot drift apart again.
+ */
+export function dmPromptText(dm: NormalizedDm): string {
+    return dm.text || dm.payload || (dm.isStoryMention ? STORY_MENTION_TEXT : '');
+}
+
 /**
  * Flatten the three shapes a messaging event arrives in (plain message, quick reply,
  * postback) into one. Returns null for events with nothing to reply to.
@@ -187,7 +213,7 @@ async function claimInbound(
             conversationId,
             creatorId,
             dm.isStoryMention ? 'story_mention' : 'text',
-            dm.text || (dm.isStoryMention ? '[Story Mention]' : ''),
+            dmPromptText(dm),
             dm.payload || null,
             JSON.stringify(event),
             dm.metaMessageId,
@@ -309,7 +335,9 @@ async function processDm(
         // Query Gemini. Timed, because this is both the dominant marginal cost of the product
         // and the reason the webhook cannot finish inside Meta's timeout.
         const startedAt = Date.now();
-        const aiRes = await generateAiResponse(conversationId, dm.text || dm.payload, creator.id);
+        // `dmPromptText(dm)`, not `dm.text || dm.payload` — the same string `claimInbound`
+        // stored, so ai.ts's "is this message already in the history" check can succeed.
+        const aiRes = await generateAiResponse(conversationId, dmPromptText(dm), creator.id);
         log('info', 'ai.replied', {
             creator_id: creator.id,
             duration_ms: Date.now() - startedAt,

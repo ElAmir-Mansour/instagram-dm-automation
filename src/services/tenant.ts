@@ -144,12 +144,31 @@ export function invalidateTenantCache(): void {
 
 import type { Request, Response, NextFunction } from 'express';
 
+declare global {
+    // eslint-disable-next-line @typescript-eslint/no-namespace
+    namespace Express {
+        interface Request {
+            /**
+             * The role this session holds INSIDE `session.tenantId`, resolved once by
+             * `resolveTenant`. Distinct from `session.role`, which is the platform-wide
+             * `platform_admin` / `user` split.
+             */
+            tenantRole?: TenantRole;
+        }
+    }
+}
+
 export interface TenantSummary {
     id: string;
     name: string | null;
     instagram_page_id: string | null;
     facebook_page_id: string | null;
     token_status: string | null;
+    /**
+     * The session's role in this tenant, as `normalizeTenantRole` resolves it. `owner` for a
+     * platform_admin, who reaches every tenant without a membership row.
+     */
+    role: TenantRole;
 }
 
 /**
@@ -167,11 +186,23 @@ export function getTenantId(req: Request): string {
 
 /** The membership lookup, separated out so the decision logic above it can be tested. */
 async function hasMembershipInDb(userId: string, tenantId: string): Promise<boolean> {
+    return (await membershipRoleInDb(userId, tenantId)) !== null;
+}
+
+/**
+ * The same lookup, returning the stored role instead of a boolean.
+ *
+ * `null` means there is no membership row at all — which is the only thing that denies
+ * access. A row always has a role (`NOT NULL DEFAULT 'owner'` since v12), but it may hold a
+ * value this build has never heard of, which is what `normalizeTenantRole` is for.
+ */
+async function membershipRoleInDb(userId: string, tenantId: string): Promise<string | null> {
     const res = await pool.query(
-        `SELECT 1 FROM memberships WHERE user_id = $1 AND creator_id = $2 LIMIT 1`,
+        `SELECT role FROM memberships WHERE user_id = $1 AND creator_id = $2 LIMIT 1`,
         [userId, tenantId]
     );
-    return res.rows.length > 0;
+    if (res.rows.length === 0) return null;
+    return typeof res.rows[0]?.role === 'string' ? res.rows[0].role : '';
 }
 
 /**
@@ -193,6 +224,184 @@ export async function assertTenantAccess(
     if (!session.userId) return false;
 
     return hasMembership(session.userId, session.tenantId);
+}
+
+// ─── In-tenant roles ────────────────────────────────────────────────────────────────────
+//
+// `memberships.role` has existed since v12 with `DEFAULT 'owner'`. It was stored, shown on the
+// Users page, written into the audit log — and never read by any authorization decision.
+// `assertTenantAccess` above answers on membership EXISTENCE, so a person granted as a
+// "member" could delete campaigns, rotate the Meta page token and publish to the live
+// account. The only role split the app actually enforced was platform_admin vs user.
+//
+// Three tiers, chosen because each maps to a distinction somebody would really draw:
+//
+//   owner     the Meta connection itself — the page access token, the webhook verify token.
+//             Break these and the tenant goes dark; they are also the credentials that let
+//             you post as the business anywhere, so they are the account-holder's, not the
+//             agency's.
+//   operator  runs the account day to day: campaigns, scheduled posts, the inbox, the AI
+//             persona. Everything that spends the tenant's reach but not its credentials.
+//   viewer    reads. Stats, campaigns, posts, the inbox, activity — no writes at all.
+//
+// Two tiers would have forced "can publish" and "can rotate the token" to be the same
+// permission, which is the exact pairing a marketing freelancer makes uncomfortable. Five
+// would be invented distinctions nobody asked for.
+//
+// ── Nobody loses access on deploy ──
+// Read `normalizeTenantRole` before changing anything here. The restriction is opt-in in the
+// strongest sense available: a role this build does not recognise — including every row that
+// exists today, all of which are 'owner', and the 'member' value the old grant form could
+// write — resolves to `owner`, i.e. to exactly the access it has now. Restricting somebody is
+// an explicit act by an operator who picks 'operator' or 'viewer' from the grant form. This
+// mirrors how `match_mode` was introduced in v14: the new behaviour exists, the default is
+// still yesterday's.
+
+export type TenantRole = 'owner' | 'operator' | 'viewer';
+
+/** The vocabulary, most privileged first — the order the grant form lists them in. */
+export const TENANT_ROLES: readonly TenantRole[] = ['owner', 'operator', 'viewer'];
+
+/** Higher is more. Compared with `>=`, so a guard names the MINIMUM it needs. */
+const TENANT_ROLE_RANK: Record<TenantRole, number> = { viewer: 0, operator: 1, owner: 2 };
+
+export function isTenantRole(value: unknown): value is TenantRole {
+    return typeof value === 'string' && (TENANT_ROLES as readonly string[]).includes(value);
+}
+
+/**
+ * A stored `memberships.role` as an effective role. **Fails open, deliberately.**
+ *
+ * Only the two restricted values are honoured; everything else — 'owner', the legacy 'member'
+ * the old grant form offered, an empty string, a typo, a value some future build writes and
+ * this one is rolled back behind — becomes `owner`, which is the access every one of those
+ * rows has today.
+ *
+ * Failing closed here would be the outage: this function runs against production data that
+ * was written when the column meant nothing, and the first request after deploy would refuse
+ * an operator their own campaigns. A guard that denies more than it was asked to is not the
+ * safe direction when the alternative is a documented, auditable, opt-in downgrade.
+ */
+export function normalizeTenantRole(raw: unknown): TenantRole {
+    if (raw === 'operator' || raw === 'viewer') return raw;
+    return 'owner';
+}
+
+/** Does `role` reach `minimum`? */
+export function tenantRoleAllows(role: TenantRole, minimum: TenantRole): boolean {
+    return TENANT_ROLE_RANK[role] >= TENANT_ROLE_RANK[minimum];
+}
+
+export interface TenantAccess {
+    allowed: boolean;
+    /** The role this session acts with inside the tenant. Meaningless when `allowed` is false. */
+    role: TenantRole;
+}
+
+/**
+ * `assertTenantAccess`, plus the role the session carries inside the tenant.
+ *
+ * Kept as a second function rather than folded into the first because the two answer
+ * different questions: `assertTenantAccess` is asked about a tenant the session is *not* in
+ * (the switcher, `POST /auth/switch-tenant`), where there is no in-tenant role to carry yet.
+ * This one is asked about the tenant the request is acting as, and its answer is stashed on
+ * the request so the whole chain costs one membership query, not one per guard.
+ *
+ * `platform_admin` resolves to `owner` unconditionally — the same bypass `assertTenantAccess`
+ * already grants, said out loud — and so does the legacy shared-password session, which has
+ * no user row to hold a membership at all.
+ */
+export async function resolveTenantAccess(
+    session: { userId: string | null; role: string; tenantId: string | null },
+    membershipRole: (userId: string, tenantId: string) => Promise<string | null> = membershipRoleInDb
+): Promise<TenantAccess> {
+    if (!session.tenantId) return { allowed: false, role: 'viewer' };
+    if (session.role === 'platform_admin') return { allowed: true, role: 'owner' };
+    if (!session.userId) return { allowed: false, role: 'viewer' };
+
+    const stored = await membershipRole(session.userId, session.tenantId);
+    if (stored === null) return { allowed: false, role: 'viewer' };
+    return { allowed: true, role: normalizeTenantRole(stored) };
+}
+
+/** The machine-readable code on a refusal, so the dashboard need not match on prose. */
+export const INSUFFICIENT_ROLE_CODE = 'INSUFFICIENT_TENANT_ROLE';
+
+/** What each tier may do, in one sentence, for the refusal body. */
+const ROLE_REFUSAL: Record<TenantRole, string> = {
+    owner: 'Only an owner of this account can change the Meta connection — the page access token and the webhook verify token.',
+    operator: 'This is a read-only membership. Ask an owner of this account for operator access to change campaigns, posts, the inbox or the AI agent.',
+    viewer: 'This membership cannot act on this account.',
+};
+
+/**
+ * Express middleware factory: require at least `minimum` inside the tenant.
+ *
+ * Mount it **below** `resolveTenant`, which is what puts `req.tenantRole` there; it composes
+ * as `requireAuth` → `requireLiveSession` → `resolveTenant` → `requireTenantRole('operator')`.
+ * If `req.tenantRole` is somehow absent it resolves the role itself rather than guessing in
+ * either direction — that path costs one query and cannot be reached from the router as
+ * mounted today.
+ *
+ * **403, not 404.** The 404-instead-of-403 convention elsewhere in this app hides the
+ * existence of a tenant from somebody who is not in it. That reasoning does not apply here:
+ * the caller is a member, they already see the account, and telling them "your role cannot do
+ * this" discloses nothing they did not know while a 404 would send them hunting for a row
+ * that is right there.
+ */
+export interface TenantRoleGuard {
+    (req: Request, res: Response, next: NextFunction): Promise<void>;
+    /**
+     * The minimum this guard enforces, readable off the mounted middleware.
+     *
+     * This is what lets `src/routes/api.test.ts` assert the actual router stack — that every
+     * mutating route below `resolveTenant` carries a guard, and which one — rather than
+     * asserting that a function exists somewhere. A guard nobody mounted is the failure this
+     * whole change is about; a test that cannot see the mount cannot catch it.
+     */
+    readonly minimumRole: TenantRole;
+}
+
+export function requireTenantRole(minimum: TenantRole): TenantRoleGuard {
+    const guard = async function tenantRoleGuard(req: Request, res: Response, next: NextFunction): Promise<void> {
+        const session = req.session;
+        if (!session) {
+            res.status(401).json({ error: 'Unauthorized.' });
+            return;
+        }
+
+        let role = req.tenantRole;
+        if (!role) {
+            const access = await resolveTenantAccess(session);
+            if (!access.allowed) {
+                res.status(404).json({ error: 'Not found.' });
+                return;
+            }
+            role = access.role;
+            req.tenantRole = role;
+        }
+
+        if (tenantRoleAllows(role, minimum)) {
+            next();
+            return;
+        }
+
+        log('warn', 'auth.tenant_role_refused', {
+            user_id: session.userId,
+            tenant_id: session.tenantId,
+            role,
+            required: minimum,
+            path: req.originalUrl,
+        });
+        res.status(403).json({
+            error: ROLE_REFUSAL[minimum],
+            code: INSUFFICIENT_ROLE_CODE,
+            role,
+            requiredRole: minimum,
+        });
+    };
+
+    return Object.assign(guard, { minimumRole: minimum });
 }
 
 export interface SessionValidity {
@@ -292,11 +501,15 @@ export async function resolveTenant(req: Request, res: Response, next: NextFunct
         return;
     }
 
-    if (!(await assertTenantAccess(session))) {
+    // One membership query answers both questions — may this session act as this tenant, and
+    // with what role. Stashed on the request so every `requireTenantRole` below costs nothing.
+    const access = await resolveTenantAccess(session);
+    if (!access.allowed) {
         // Deliberately 404, not 403: confirming a tenant exists is itself a disclosure.
         res.status(404).json({ error: 'Not found.' });
         return;
     }
+    req.tenantRole = access.role;
 
     next();
 }
@@ -337,24 +550,33 @@ export function interactionsOwnedBy(n: number): string {
 // reaches messages through a conversation, and ownership is checked on the conversation, which
 // does carry a reliable `creator_id`.
 
-/** Tenants this session may act as — the tenant switcher's data source. */
+/**
+ * Tenants this session may act as — the tenant switcher's data source.
+ *
+ * Each row carries the role the session holds there, because that is the only place the
+ * dashboard can learn it: the session token predates in-tenant roles and carries only the
+ * platform-wide one, and re-deriving it per screen would mean a membership query per page.
+ * A `platform_admin` is an `owner` everywhere, which is what `resolveTenantAccess` decides.
+ */
 export async function listTenantsForSession(
     session: { userId: string | null; role: string }
 ): Promise<TenantSummary[]> {
     if (session.role === 'platform_admin') {
-        return queryRows<TenantSummary>(
+        const rows = await queryRows<Omit<TenantSummary, 'role'>>(
             `SELECT id, name, instagram_page_id, facebook_page_id, token_status
                FROM creators WHERE is_active = true ORDER BY name NULLS LAST, created_at`
         );
+        return rows.map((row) => ({ ...row, role: 'owner' as TenantRole }));
     }
     if (!session.userId) return [];
 
-    return queryRows<TenantSummary>(
-        `SELECT c.id, c.name, c.instagram_page_id, c.facebook_page_id, c.token_status
+    const rows = await queryRows<Omit<TenantSummary, 'role'> & { role: string }>(
+        `SELECT c.id, c.name, c.instagram_page_id, c.facebook_page_id, c.token_status, m.role
            FROM creators c
            JOIN memberships m ON m.creator_id = c.id
           WHERE m.user_id = $1 AND c.is_active = true
           ORDER BY c.name NULLS LAST, c.created_at`,
         [session.userId]
     );
+    return rows.map((row) => ({ ...row, role: normalizeTenantRole(row.role) }));
 }
