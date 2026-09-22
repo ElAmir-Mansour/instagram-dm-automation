@@ -5,6 +5,10 @@ For the person who operates this, at 2am, when something is wrong.
 Every procedure below is: the symptom, what to run, what healthy looks like, and what to do
 when it isn't. Claims are cited to `file:line` so you can check them rather than trust them.
 
+This document works backwards from a symptom. When you need the forward direction — every hop a
+comment, DM, publish, login or job actually takes, in order — see [`FLOWS.md`](FLOWS.md); its
+final table indexes every point where a flow can silently do nothing.
+
 **Ground rule.** Two scripts are safe to run at any time and cannot write:
 `scripts/diagnose.mjs` and `scripts/watch.mjs` both hold a session with
 `default_transaction_read_only = on`, verified on connect, and neither prints a token,
@@ -14,8 +18,8 @@ Two things are **never** "just a test", because both act on the live accounts:
 
 | Endpoint | What it actually does |
 |---|---|
-| `GET /api/cron/publish` | Publishes every `PENDING` post whose `scheduled_time` has passed (`src/routes/api.ts:385-391`). Six posts are pending today. |
-| `GET /api/jobs/drain` | Runs real handlers — sends real DMs and real public replies (`src/routes/api.ts:276-286`). |
+| `GET /api/cron/publish` | Publishes every `PENDING` post whose `scheduled_time` has passed (`publishDuePosts`, `src/routes/api.ts:600`; route at `:666`). Six posts were pending when this was written. |
+| `GET /api/jobs/drain` | Runs real handlers — sends real DMs and real public replies (`src/routes/api.ts:328`). |
 
 ---
 
@@ -52,7 +56,7 @@ meaningless:
 | `job ... has been "running" since ...` | A claim went stale — an invocation died mid-flight. See §5. |
 
 Known-good baseline as of 2026-09-21: `verdict DEGRADED — 6 warning(s), nothing critical`,
-all 14 migrations applied, token PAGE/valid/never-expires with all 12 required scopes,
+all migrations applied, token PAGE/valid/never-expires with all 12 required scopes,
 storage 11% of the 500MB tier. `DEGRADED` is the normal resting state of this deployment,
 not an incident.
 
@@ -63,8 +67,13 @@ stopped arriving" look identical from inside the database — this is the single
 in the project to diagnose, and the reason every other check exists
 (`scripts/diagnose.mjs:29-33`).
 
-The `jobs` table is what breaks the tie. Every verified delivery is written to `jobs` *before*
-the 200 goes back to Meta, matched or not (`src/index.ts:226-242`), so:
+The `jobs` table is what breaks the tie. Every verified **comment** delivery is written to `jobs`
+*before* the 200 goes back to Meta, matched or not (`src/index.ts:231-250`), so:
+
+> Note the asymmetry: `entry.changes` elements are enqueued unconditionally, but `entry.messaging`
+> events are filtered first — echoes, read watermarks and delivery receipts never become jobs at
+> all (`isActionableMessagingEvent`, `src/webhook/router.ts:64`). So an empty `jobs` table rules
+> out comment traffic; it does not by itself rule out DM traffic that was all receipts.
 
 > **An empty `jobs` table is the one thing "nothing matched" cannot explain.**
 > (`scripts/diagnose.mjs:580-586`)
@@ -221,17 +230,16 @@ re-authorising the app and re-exchanging the token (§3.3), not pasting the same
 
 ### 3.1 What actually refreshes `token_status`
 
-`creators.token_status` is not polled. Exactly five things write it:
+`creators.token_status` is not polled. These are the things that write it:
 
 | Writer | Trigger |
 |---|---|
-| `src/routes/api.ts:1238` | someone opens the dashboard token page (`GET /api/settings/token/status`) |
-| `src/routes/api.ts:1376` | someone saves a token |
-| `src/routes/api.ts:1449` | someone runs the token extend flow |
-| `src/services/tokenHealth.ts:58` | **a real Meta send failed with code 190** |
-| `src/routes/admin.ts:152` | a tenant is created (sets `'unknown'`) |
+| `recordTokenStatus` (`src/routes/api.ts:1579`) | someone opens the dashboard token page, saves a token, or runs the extend flow — three routes, one helper |
+| `persistInspection` (`src/services/tokenHealth.ts:284`) | a deliberate re-check asks Meta and records the answer, including `POST /api/admin/tenants/:id/recheck-token` |
+| `noteMetaFailure` (`src/services/tokenHealth.ts:49`) | **a real Meta send failed with code 190** |
+| `src/routes/admin.ts` (tenant create / PATCH) | a tenant is created (sets `'unknown'`), or an admin updates one |
 
-The fourth is the one that matters and it is new: every Meta send path calls `noteMetaFailure`
+The third is the one that matters and it is new: every Meta send path calls `noteMetaFailure`
 in its catch block, so a token Meta revoked on Friday now flips the row the first time a send
 fails, rather than reading `valid` until somebody happens to look
 (`src/services/tokenHealth.ts:1-18`). It is deliberately narrow — it does not flip on a
@@ -250,7 +258,7 @@ you run it.
 `creators.page_access_token` is stored as `enc:v1:<iv>:<tag>:<ciphertext>`, AES-256-GCM, with
 the key in `TOKEN_ENCRYPTION_KEY` (`src/config/crypto.ts:42-49`). Decryption happens in one
 place, `withDecryptedToken` in `src/services/tenant.ts:70-76`, plus the publish cron which
-reads off a joined row and decrypts inline (`src/routes/api.ts:434`).
+reads off a joined row and decrypts inline (`attemptPublish`, `src/routes/api.ts:498`).
 
 Two operational consequences:
 
@@ -274,7 +282,7 @@ repo (`src/config/crypto.ts:4-8`).
 3. `node scripts/exchange-token.mjs <short-lived-user-token>` — exchanges via `/me/accounts`
    for a permanent PAGE token. Starting from a Page token instead only ever gets you 60 days.
 4. Paste it into the dashboard Settings page. That encrypts it on write and sets
-   `token_status = 'valid'` (`src/routes/api.ts:1449`).
+   `token_status = 'valid'` (`recordTokenStatus`, `src/routes/api.ts:1579`).
 5. `node scripts/diagnose.mjs` — expect `token is PAGE, valid, never expires, all 12 required
    scopes present`. The 12 required scopes are listed at `scripts/diagnose.mjs:89-104`; the
    live token carries 13.
@@ -296,41 +304,48 @@ of counts by status. Today: `PENDING=6  PUBLISHED=10`.
 
 ### 4.1 It is probably the cron granularity
 
-The Vercel cron runs **once daily at 00:00 UTC** — a Hobby-plan limit
-(`vercel.json` `crons`). So `scheduled_time` is effectively **day-granular** no matter what the
-minute-precision UI implies. A post scheduled for 14:30 publishes at the next 00:00 UTC run.
-This is the expected behaviour, not a fault. §5.1 is the fix.
+The Vercel cron runs **once daily at 00:00 UTC** — a Hobby-plan limit (`vercel.json` `crons`) —
+but it is no longer the only thing that publishes. `GET /api/jobs/drain` calls
+`publishDuePosts()` too (`src/routes/api.ts:352`), and that endpoint is on the GitHub Actions
+schedule, so a post scheduled for 14:30 goes out on the next drain rather than waiting for
+midnight UTC.
+
+What that buys is "within the drain interval", not minute accuracy. GitHub throttles scheduled
+workflows, so the real gap varies from minutes to hours — see §5.1. A post that is late by an
+hour is expected behaviour, not a fault; a post still `PENDING` the next day means the drain is
+not running at all, and §5.1 says how to check.
 
 ### 4.2 Stranded claims
 
 A publish claims its row atomically by flipping `PENDING → PUBLISHING`
-(`src/routes/api.ts:407-413`). If the invocation dies mid-publish the row stays `PUBLISHING`
+(`src/routes/api.ts:623-629`). If the invocation dies mid-publish the row stays `PUBLISHING`
 forever, so each cron run first releases claims older than 15 minutes with attempts left
-(`src/routes/api.ts:344-354`), and fails anything past 5 attempts with an explanatory
-`error_log` (`src/routes/api.ts:357-364`).
+(`src/routes/api.ts:674-681`), and fails anything past 5 attempts with an explanatory
+`error_log` (`src/routes/api.ts:687-694`).
 
 If you see rows sitting in `PUBLISHING`, the cron has not run since they were claimed. Running
 `GET /api/cron/publish` will release them — **and publish everything else that is due.**
 
 ### 4.3 The partial-publish case — read this before retrying
 
-On `platform = 'both'`, **Facebook publishes first** (`src/routes/api.ts:437`), Instagram
-second (`:458`). A Facebook success followed by an Instagram failure records the row as
-`FAILED` **while the Facebook post is live**.
+On `platform = 'both'`, **Facebook publishes first** (`attemptPublish`,
+`src/routes/api.ts:501`), Instagram second (`:522`). A Facebook success followed by an
+Instagram failure records the row as `FAILED` **while the Facebook post is live**.
 
 Editing a scheduled post flips `FAILED → PENDING`:
 
 ```sql
 status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
 ```
-(`src/routes/api.ts:1656`)
+(`src/routes/api.ts:2080`)
 
 Historically that republished it and **duplicated the Facebook post on the live account**.
 That is fixed, but understand *how*, because the fix is what you are relying on:
 `published_post_id` now retains whatever did go live, as `FB:<id>`, `IG:<id>` or
-`FB:<id> | IG:<id>` (`src/routes/api.ts:304-317`, written on the failure path at `:512-522`),
-and the next attempt reads it back and skips the platform that is already public
-(`:427-429`, `:451-455`, `:479-483`). The `error_log` also names what is live:
+`FB:<id> | IG:<id>` (`publishedPlatforms` / `formatPublishedIds`,
+`src/routes/api.ts:378` and `:386`, written on the failure path at `:565-575`), and the next
+attempt parses it back and skips the platform that is already public (`:492-494`, and the
+`&& !fbId` / `&& !igId` guards at `:501` and `:522`). The `error_log` also names what is live:
 `Partially published (FB:123) — the rest failed: <reason>`.
 
 So: **before retrying a `FAILED` post, read `published_post_id` and `error_log`.** If
@@ -339,20 +354,24 @@ So: **before retrying a `FAILED` post, read `published_post_id` and `error_log`.
 
 `FAILED` is also the status for a partial success, deliberately, because the dashboard filters
 on that vocabulary and a half-published post is not a finished post
-(`src/routes/api.ts:506-511`).
+(`src/routes/api.ts:560-575`).
 
-### 4.4 Two combinations that cannot work
+### 4.4 Two combinations to know about
 
 - `post_type: 'story'` with `platform: 'facebook'` or `'both'` is rejected at create time —
   Facebook Page stories need a `/photo_stories` + `/video_stories` upload that is not
-  implemented (`src/routes/api.ts:329-333`).
-- For cross-posting a video, `post_type` must be **`video`**, not `reel`. `publishFacebookPost`
-  does not handle `reel` and falls through to a text-only feed post with no media. `video` maps
-  correctly to both `/videos` on Facebook and a `REELS` container on Instagram.
+  implemented (`unsupportedPlatformCombination`, `src/routes/api.ts:403`, called at `:1937`).
+  `publishFacebookPost` also throws on it rather than degrading, because a degraded publish
+  still returns a post id and is recorded as a success (`src/services/instagram.ts:285-290`).
+- For cross-posting a video, prefer **`video`** over `reel`. This entry used to say
+  `publishFacebookPost` "does not handle `reel` and falls through to a text-only feed post" —
+  **that is no longer true**: `reel` and `video` are the same asset to Facebook and both now
+  publish through `/videos` (`src/services/instagram.ts:299-305`). `video` remains the value to
+  use because it is what the dashboard offers, and legacy `reel` rows are mapped onto it.
 
 Also always set `cover_url`, or Instagram takes frame 0 as the thumbnail and any video fading
-up from black gets a black tile in the profile grid. The cron passes it through
-(`src/routes/api.ts:475`).
+up from black gets a black tile in the profile grid. `attemptPublish` passes it through
+(`src/routes/api.ts:538`).
 
 ---
 
@@ -372,27 +391,50 @@ node scripts/diagnose.mjs        # read the `queue` section
 | `job … has been "running" since …` | claim >300s | The invocation holding it died. It is reapable. (`scripts/diagnose.mjs:75`, `src/jobs/runner.ts:26`) |
 | `job … exhausted its retries` | `attempts >= max_attempts` | Permanent. Read the printed error; retrying will not help. |
 
-### 5.1 The highest-value thing you can do
+### 5.1 What drains the queue, and how to check it is still doing so
 
-> **Point an external scheduler at `GET /api/jobs/drain` every minute, with the `CRON_SECRET`
-> bearer.**
+Three things can call `GET /api/jobs/drain`. Two are live:
+
+| Caller | Interval | State |
+|---|---|---|
+| `.github/workflows/drain.yml` | `*/5`, throttled by GitHub — see below | **active** |
+| Vercel cron → `GET /api/cron/publish`, which calls `drainWorker()` (`src/routes/api.ts:712`) | once daily, 00:00 UTC | **active**, the backstop |
+| `heroku-worker/worker.mjs` | 60s | **scaled to zero** (~$7/mo when on) |
+
+Check the GitHub one first, because its failure mode is silent:
+
+```bash
+gh run list --workflow=drain.yml --limit 5
+```
+
+A run that **fails in under ~10 seconds** means `CRON_SECRET` is not set as a repository secret,
+or does not match production. That is not hypothetical: the workflow existed for a long time and
+had *never once succeeded* for exactly that reason, which reads as "configured" at a glance
+because a red row in a tab nobody opens looks the same as no rows at all. Fix with
+`gh secret set CRON_SECRET`.
+
+**Do not expect five-minute punctuality.** GitHub throttles scheduled workflows and explicitly
+does not guarantee them; observed delivery on this repository has been hours apart, not minutes
+(`.github/workflows/drain.yml:12-23` says so in the workflow itself). Frequent-but-irregular is
+the honest description. If the interval genuinely matters — minute-accurate scheduled posts,
+say — scale the Heroku worker back up:
+
+```bash
+heroku ps:scale worker=1 -a autoreply-pro-worker
+```
+
+To drain by hand:
 
 ```bash
 curl -fsS -H "Authorization: Bearer $CRON_SECRET" \
   https://msg-response-auto.vercel.app/api/jobs/drain
 ```
 
-Nothing else changes the architecture as much for as little. Today the queue is **opportunistic,
-not durable**: work is drained inside whichever webhook invocation happens to arrive next
-(`src/index.ts:247`), and the only scheduled backstop is the once-daily Vercel cron
-(`src/routes/api.ts:378-382`). A job claimed and then frozen sits at `running` until something
-reaps it, and with no external scheduler that is **up to 24 hours** for a comment the app could
-have finished seconds later (`src/jobs/drain.ts:43-49`).
-
-QStash, GitHub Actions, cron-job.org or an uptime pinger all work. It is idempotent and safe to
-call concurrently: the claim guards on `AND status = 'pending'` in the `UPDATE`, so two
-overlapping drains split the work rather than both running the same job — which would be a
-duplicate DM to a real person (`src/jobs/queue.ts:87-92`).
+Safe to run at any time, and safe to overlap with the schedules: the claim guards on
+`AND status = 'pending'` in the `UPDATE`, so two concurrent drains split the work rather than
+both running the same job — which would be a duplicate DM to a real person
+(`src/jobs/queue.ts`, `PostgresJobQueue.claim`). It is **not** `FOR UPDATE SKIP LOCKED`, and
+cannot be: Postgres rejects that alongside a window function.
 
 A healthy response is JSON: `{"claimed":N,"succeeded":N,"failed":0,"budgetExhausted":false,"reaped":0}`.
 `budgetExhausted: true` just means it stopped on its time budget with work left — the next call
@@ -460,9 +502,13 @@ npm run migrate            # apply it
 Both read `.env` via `node --env-file=.env` (`package.json`). Healthy status output:
 
 ```
-applied: 14
+applied: 15
 pending: none
 ```
+
+15, not 14: the ledger counts `schema.sql` plus the fourteen `src/config/migration_v*.sql`
+files (v2 through v15). The canonical list is `EXPECTED_MIGRATIONS` in
+`src/config/migrations.ts`, and `migrations.test.ts` fails if it drifts from what is on disk.
 
 Healthy apply output is one `applying <file> ... ok` line per file, then
 `All migrations applied.`
@@ -531,7 +577,7 @@ minimum accepted is 7; a misconfigured value disables pruning rather than fallin
 default, and logs `retention.misconfigured` (`src/services/retention.ts:83-93`, `:107-112`).
 The sweep runs once daily from the publish cron and converges rather than clearing one batch a
 day — up to 20 passes of 5,000 rows (`src/services/retention.ts:190-222`,
-`src/routes/api.ts:373`).
+`src/routes/api.ts:703`).
 
 > **Fixed 2026-09-21.** `.env.example` used to declare `RAW_PAYLOAD_RETENTION_DAYS` twice —
 > empty in one block and `30` in another, with contradictory advice (90 vs 30) — so which one
@@ -715,10 +761,10 @@ in the public repo's history (`src/config/env.ts:45-49`).
 
 ```bash
 npm run typecheck    # tsc --noEmit
-npm test             # 281 unit tests, node:test via tsx
+npm test             # 449 unit tests, node:test via tsx
 ```
 
-Both pass on `main` as of 2026-09-21 (417 tests, 80 suites, 0 failures). CI also runs four
+Both pass on `main` as of 2026-09-22 (449 tests, 86 suites, 0 failures). CI also runs four
 content guards — `check:assets`, `check:icons`, `check:contrast` and `check:i18n` — each added
 after a failure that nothing else could see. There is **no build
 step**: TypeScript runs through `ts-node/esm` locally and `@vercel/node` in production. The
