@@ -140,6 +140,25 @@ describe('dayStrip', () => {
         const out = s(Charts.dayStrip(DAYS));
         assert.ok(!out.includes('fill=""'), 'a fallback literal must be used');
     });
+
+    it('caps its own width instead of stretching a handful of cells to fill the card', () => {
+        // The regression this guards: /api/stats/daily used to return a row only for a day
+        // that had activity, so a week with two real days sent dayStrip an array of length 2.
+        // preserveAspectRatio="none" then stretched those two cells to fill the whole card —
+        // two giant pills instead of seven modest cells. The endpoint now zero-fills every
+        // day, but the cap stays as the thing that makes a short array safe regardless.
+        const sparse = s(Charts.dayStrip([
+            { day: '2026-09-20', sent: 5, failed: 0 },
+            { day: '2026-09-21', sent: 2, failed: 3 },
+        ]));
+        const maxWidth = Number(sparse.match(/max-width:(\d+)px/)?.[1]);
+        assert.ok(Number.isFinite(maxWidth), 'expected a max-width style on the strip');
+        // Proportional to cell count, not a flat cap — seven cells must be allowed more room
+        // than two, or a full week would be squeezed as tightly as a two-day stub.
+        const full = s(Charts.dayStrip(DAYS));
+        const maxWidthFull = Number(full.match(/max-width:(\d+)px/)?.[1]);
+        assert.ok(maxWidth < maxWidthFull, `2-cell cap (${maxWidth}) should be smaller than 3-cell cap (${maxWidthFull})`);
+    });
 });
 
 describe('splitBar', () => {

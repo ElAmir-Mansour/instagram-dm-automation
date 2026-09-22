@@ -1263,17 +1263,31 @@ router.get('/stats/hourly', async (req, res) => {
 router.get('/stats/daily', async (req, res) => {
     try {
         const days = clampDays(req.query.days, 30);
+        // `generate_series` first, interactions LEFT JOINed onto it — a day with nothing
+        // still gets a row. The plain GROUP BY this replaced only emitted a row for a day
+        // that had at least one interaction, so `dayStrip` (charts.js) never received the
+        // empty days it exists to show as empty cells; it drew exactly as many cells as
+        // there were rows, however few. Stretched to fill a wide chart card, two real days
+        // out of a claimed seven rendered as two giant bars instead of seven modest ones.
+        // The tenant filter has to live in the JOIN's own ON clause, not a WHERE clause —
+        // WHERE runs after the LEFT JOIN and would null out every date that matched no
+        // interaction, undoing the zero-fill entirely.
         const result = await pool.query(`
             SELECT
-                DATE_TRUNC('day', i.timestamp)::date as day,
-                COUNT(*) FILTER (WHERE i.status = 'SENT')::int as sent,
-                COUNT(*) FILTER (WHERE i.status = 'FAILED')::int as failed
-            FROM interactions i
-            WHERE ${interactionsOwnedBy(1)}
-              AND i.timestamp > NOW() - ($2::text || ' days')::interval
-            GROUP BY day
-            ORDER BY day ASC
-        `, [getTenantId(req), String(days)]);
+                gs.day::date as day,
+                COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent,
+                COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed
+            FROM generate_series(
+                CURRENT_DATE::timestamp - make_interval(days => $2::int - 1),
+                CURRENT_DATE::timestamp,
+                '1 day'::interval
+            ) AS gs(day)
+            LEFT JOIN interactions i
+                ON DATE_TRUNC('day', i.timestamp)::date = gs.day::date
+               AND ${interactionsOwnedBy(1)}
+            GROUP BY gs.day
+            ORDER BY gs.day ASC
+        `, [getTenantId(req), days]);
         res.json(result.rows);
     } catch (err) {
         log('error', 'api.stats_daily_failed', describeError(err));

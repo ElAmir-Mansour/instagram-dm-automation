@@ -103,6 +103,14 @@ const Charts = {
      * most recent day — this same builder also renders a 30-day strip
      * (`analytics.chart30`), and a label under every one of 30 cells would be
      * overlapping noise, not information.
+     *
+     * The strip's own max-width is capped at a fixed size per cell (see
+     * MAX_SLOT_PX below), so filling the card cannot turn a handful of cells
+     * into giant pills — it did exactly that in production once, when
+     * `/api/stats/daily` only returned rows for days with activity: two real
+     * days stretched to fill a whole week's width. That is now also fixed at
+     * the data layer (the endpoint zero-fills every day), but the cap stays
+     * as the thing that keeps a cell a cell no matter how sparse the input is.
      */
     dayStrip(days, options) {
         const opts = options || {};
@@ -120,6 +128,15 @@ const Charts = {
         const CELL = 26, GAP = 6, SLOT = CELL + GAP;
         const BAR_H = 52, TOP_SLIVER = 4, FOOT_MIN = 4;
         const width = ordered.length * SLOT;
+        // `preserveAspectRatio="none"` below fills the card's real width — the fix for cells
+        // that used to render at a tiny fixed size. Uncapped, that stretch is proportional to
+        // 1 / cell count: a week with only two non-empty days (2 rows, since the caller may
+        // not zero-fill every day) stretched those two cells into giant pills rather than
+        // seven modest ones. Capping the STRIP's own width, not each cell, keeps every cell
+        // the same size regardless of how many there are — narrow strips still fill their
+        // card, and a strip with few cells just leaves margin instead of ballooning.
+        const MAX_SLOT_PX = 56;
+        const maxWidthPx = ordered.length * MAX_SLOT_PX;
         const sent = Charts.token('--success', '#34c759');
         const failed = Charts.token('--danger', '#ff3b30');
         const empty = Charts.token('--surface-glass', 'rgba(255,255,255,0.08)');
@@ -163,7 +180,7 @@ const Charts = {
         });
 
         return html`
-            <div class="chart-strip" dir="ltr">
+            <div class="chart-strip" dir="ltr" style="max-width:${maxWidthPx}px">
                 <svg viewBox="0 0 ${width} ${BAR_H}" width="100%" height="${BAR_H}"
                      preserveAspectRatio="none" role="img"
                      aria-label="${opts.label || ''}" focusable="false">
