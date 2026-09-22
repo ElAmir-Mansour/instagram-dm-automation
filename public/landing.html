@@ -1,0 +1,1467 @@
+<!DOCTYPE html>
+<!--
+  ═══════════════════════════════════════════════════════════════════════════
+  AutoReply Pro — Landing  ·  الصفحة الرئيسية
+  ═══════════════════════════════════════════════════════════════════════════
+
+  WHY THIS PAGE EXISTS.
+  `https://msg-response-auto.vercel.app/` returned 404. There was no root route
+  in src/index.ts at all: /pricing, /privacy, /data-deletion and /dashboard all
+  worked, and the bare domain — the URL a prospect is handed, and the one a
+  visitor reaches by trimming the path off /privacy, which is what Meta links
+  to from the app's own settings — served nothing. This is the front door, and
+  its job is to route people onward to those four places.
+
+  WHY IT IS BILINGUAL IN ONE FILE, not two.
+  `/` is served by a single hardcoded Express route (src/index.ts, beside
+  /privacy, /data-deletion and /pricing) and `public/**` has no static handler,
+  so a second file (landing-ar.html) would be unreachable in production. Both
+  languages therefore live here. Without JavaScript both are shown, each with
+  its own lang/dir; with it, the switch in the header filters to one and
+  updates <html lang dir>, exactly as dashboard/js/i18n.js does
+  (applyDocument()). Same mechanism as public/pricing.html and
+  public/privacy.html.
+
+  EVERY CLAIM BELOW EXISTS IN THE CODE. The evidence, per claim:
+
+    a keyword comment triggers a private DM, a public reply and a like
+        src/webhook/comments.ts — sendPrivateReply (:309), likeComment (:379,
+        unconditional and best-effort inside try/catch), sendPublicReply
+        (:386-394, only when the campaign has a public_reply_template, and a
+        failure is logged without changing the interaction's SENT status)
+    a campaign can be scoped to one post or to the whole account, and the
+    most specific one wins
+        src/services/matching.ts — bySpecificity(), post_id
+    keywords are a comma-separated list, any one of which is enough
+        src/services/matching.ts — matchCampaign() docblock
+    Arabic normalisation: hamza, teh marbuta, yeh/alef maksura, diacritics,
+    tatweel
+        src/utils/arabic.ts — normalizeArabic()
+    word-vs-substring matching, chosen per campaign
+        src/utils/arabic.ts — KeywordMatchMode, keywordMatches(); the `تم`
+        inside `اهتمام` example is that file's own worked example
+    AI DM replies using the operator's prompt and knowledge base, over the
+    last 8 messages of the thread
+        src/services/ai.ts — system_prompt, knowledge_base, HISTORY_WINDOW = 8
+    the automated-service disclosure Meta requires
+        src/webhook/messaging.ts — needsDisclosure() / applyDisclosure()
+    unified inbox, manual reply, per-conversation AI pause
+        src/routes/api.ts — /conversations, /conversations/:id/messages,
+        /conversations/:id/toggle-bot
+    scheduling images and video to Instagram, Facebook or both; video becomes
+    a REELS container on Instagram and posts to the feed as well
+        src/routes/api.ts /posts/scheduled; src/services/instagram.ts
+        publishInstagramPost (media_type: 'REELS', share_to_feed: true) and
+        publishFacebookPost
+    stats and CSV export
+        src/routes/api.ts — /stats, /stats/hourly, /stats/daily,
+        /stats/campaigns, /interactions/export
+    180 automated DMs/hour per account, under Meta's ~200; one automated DM
+    per person per 24h
+        src/utils/rateLimiter.ts — DEFAULT_HOURLY_LIMIT = 180 and its
+        docblock ("Conservative buffer under Meta's ~200/hr automation
+        ceiling"), canDmRecipient()
+    comment text is never stored; DM text is, so the inbox can show it
+        src/webhook/comments.ts — the INSERT INTO interactions (:166) writes
+        campaign_id, creator_id, comment_id, sender_username, post_id, status,
+        platform, and no comment body
+    Latin digits on purpose
+        DESIGN.md §5
+    open source, MIT, self-hostable
+        LICENSE, README.md
+
+  THINGS DELIBERATELY NOT CLAIMED, and why — do not "improve" the page by
+  adding them back. This page holds exactly the line public/pricing.html drew:
+    · No time-to-delivery for the DM. The webhook queues the event and drains
+      it inline only as far as its budget allows (CLAUDE.md, "The queue exists
+      now"); anything left over waits for the next drain, which is a ~5-minute
+      GitHub Actions schedule. "Instant" or "within seconds" would be a claim
+      nothing enforces, so the page says "privately, not in the comments" and
+      says nothing about when.
+    · No minute-accurate publishing. ARCHITECTURE.md §2.4 calls the UI's
+      minute-level promise "a genuine product lie". The page promises a
+      queue, not a clock, and says so out loud in "What this does not
+      promise".
+    · No uptime, delivery or response-time guarantee. Nothing in the code
+      backs one and Meta can throttle or refuse a send at any time.
+    · No customer count, no testimonial, no logo wall, no "trusted by".
+      Nothing has been sold yet; DESIGN.md §6 rules out invented metrics.
+    · No prices. They live on /pricing, which is where the operator's
+      unfilled placeholders already are — duplicating them would give this
+      page a second set to forget.
+    · No claim of affiliation with Meta. Their platform terms forbid a third
+      party implying "an endorsement or partnership of any kind", which is
+      why the footer disclaims it explicitly (DESIGN.md §3).
+
+  NOTE ON COLOUR: like public/pricing.html, this page cites tokens with no
+  literal fallbacks. public/privacy.html's `var(--x, #4f46e5)` fallbacks are
+  the pre-HIG indigo palette and have already drifted from tokens.css, which
+  is a second palette hiding in a fallback. Every text/ground pair used here
+  is one `npm run check:contrast` already measures, with two exceptions that
+  the guard's SURFACE_STACKS does not model and that were therefore computed
+  by hand against tokens.css and are recorded here:
+      --accent-text on --accent-soft on --surface-raised on --surface-page
+          5.99:1 dark · 6.44:1 light
+      --accent-text on --accent-soft on --surface-glass on --surface-raised
+      on --surface-page   (the "public reply" tag inside a mock)
+          4.81:1 dark · 5.80:1 light
+  The one non-text colour is the heart glyph, --danger as a fill: 4.47:1 dark
+  and 3.45:1 light against the card, both clear of the 3:1 floor for a
+  meaningful graphic.
+  ═══════════════════════════════════════════════════════════════════════════
+-->
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Both schemes are real here: the page consumes the app's tokens, which
+         carry a full light theme as a peer of dark. -->
+    <meta name="color-scheme" content="dark light">
+    <title>أوتوريبلاي برو — من تعليق إلى محادثة · AutoReply Pro</title>
+    <meta name="description" content="أوتوريبلاي برو: يردّ تلقائياً على تعليقات إنستجرام وفيسبوك برسالة خاصة، ويجيب عن الرسائل بالذكاء الاصطناعي، وينشر المجدول — بالعربية أولاً. AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, then answers the conversation with AI.">
+
+    <!-- One design system in this repo, not three. Same file the dashboard,
+         /pricing, /privacy and dashboard/eid.html load, so the front door and
+         the product cannot drift apart. Same origin, and allowed by the CSP
+         that src/routes/api.ts sets on this route.
+         No webfont: --font-ui is the -apple-system stack, so nothing is
+         downloaded. Keep this ?v= pinned to ASSET_VERSION in
+         dashboard/js/app.js — scripts/check-asset-version.mjs enforces it, and
+         public/landing.html is in its SHARED_ASSET_PAGES list. -->
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=6.5">
+
+    <style>
+        /* ─── Page ─────────────────────────────────────────────────────────── */
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: var(--font-ui);
+            font-size: var(--fs-300);
+            line-height: var(--lh-normal);
+            background: var(--surface-page);
+            /* The ambient gradient, but deliberately NOT
+               `background-attachment: fixed`, for the reason pricing.html
+               records: iOS Safari does not honour it, and a full-viewport
+               repaint under several backdrop-filter layers is expensive on
+               every scroll frame. tokens.css sets the gradient's extreme stop
+               to --surface-page in both themes, so the flat value the contrast
+               guard measures stays the worst case. */
+            background-image: var(--surface-ambient);
+            color: var(--text-default);
+            -webkit-text-size-adjust: 100%;
+        }
+
+        /* ─── Screen-reader-only text ──────────────────────────────────────────
+           styles.css is not loaded here, so this page brings its own. Used for
+           the mock conversation's role labels, which are obvious to a sighted
+           reader from position and colour and to nobody else. */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* ─── Skip link ────────────────────────────────────────────────────── */
+        .skip {
+            position: absolute;
+            inset-inline-start: var(--space-4);
+            top: var(--space-2);
+            z-index: 10;
+            padding: var(--space-2) var(--space-4);
+            border-radius: var(--radius-sm);
+            background: var(--surface-solid);
+            color: var(--text-strong);
+            border: 1px solid var(--border-strong);
+            text-decoration: none;
+            font-weight: var(--fw-semibold);
+            transform: translateY(-200%);
+        }
+        .skip:focus { transform: translateY(0); }
+
+        /* ─── Chrome ───────────────────────────────────────────────────────── */
+        .shell {
+            width: 100%;
+            max-width: 64rem;
+            margin: 0 auto;
+            padding: var(--space-5) var(--space-4) var(--space-8);
+        }
+
+        .masthead {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-3);
+            padding-block: var(--space-4);
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .wordmark {
+            font-size: var(--fs-400);
+            font-weight: var(--fw-bold);
+            color: var(--text-strong);
+            line-height: var(--lh-tight);
+        }
+        .wordmark .latin {
+            display: block;
+            font-family: var(--font-latin);
+            font-size: var(--fs-100);
+            font-weight: var(--fw-regular);
+            color: var(--text-muted);
+        }
+
+        /* The header's own nav and the language switch travel together, so they
+           wrap as one block under the wordmark rather than splitting across
+           two ragged rows at ~430px. */
+        .headtools {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: var(--space-2);
+        }
+
+        .headnav {
+            display: flex;
+            gap: var(--space-1);
+        }
+        .headnav a {
+            display: inline-flex;
+            align-items: center;
+            min-height: var(--tap-target);
+            padding-inline: var(--space-3);
+            border-radius: var(--radius-sm);
+            color: var(--text-default);
+            font-size: var(--fs-200);
+            font-weight: var(--fw-medium);
+            text-decoration: none;
+            transition: background var(--motion-fast) var(--ease-standard);
+        }
+        .headnav a:hover {
+            background: var(--surface-glass);
+            color: var(--text-strong);
+        }
+
+        /* ─── Language switch ──────────────────────────────────────────────────
+           Two real buttons, 44px tall, with aria-pressed. Autonyms only, so
+           neither label needs translating. */
+        .langswitch {
+            display: flex;
+            gap: var(--space-1);
+            padding: var(--space-1);
+            border-radius: var(--radius-pill);
+            background: var(--surface-glass);
+            border: 1px solid var(--border-subtle);
+        }
+        .langswitch button {
+            min-height: var(--tap-target);
+            min-width: var(--tap-target);
+            padding-inline: var(--space-4);
+            border: 0;
+            border-radius: var(--radius-pill);
+            background: transparent;
+            color: var(--text-default);
+            font-family: inherit;
+            font-size: var(--fs-200);
+            font-weight: var(--fw-semibold);
+            cursor: pointer;
+            transition: background var(--motion-fast) var(--ease-standard);
+        }
+        .langswitch button:hover { background: var(--surface-glass-hover); }
+        .langswitch button[aria-pressed='true'] {
+            background: var(--accent-soft);
+            color: var(--accent-text);
+        }
+
+        /* styles.css is not loaded here, so the focus ring is this page's job.
+           The solid outline stays under the glow, because box-shadow is dropped
+           entirely in forced-colors mode (DESIGN.md §4). */
+        .skip:focus-visible,
+        .langswitch button:focus-visible,
+        a:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px;
+            border-radius: var(--radius-xs);
+            box-shadow: 0 0 0 4px var(--accent-ring);
+        }
+
+        /* ─── Document body ────────────────────────────────────────────────── */
+        .doc[lang='en'] { font-family: var(--font-latin); }
+
+        h1 {
+            font-size: var(--fs-700);
+            line-height: var(--lh-tight);
+            font-weight: var(--fw-bold);
+            color: var(--text-strong);
+            margin: 0 0 var(--space-4);
+            max-width: 18ch;
+        }
+        h2 {
+            font-size: var(--fs-500);
+            line-height: var(--lh-tight);
+            font-weight: var(--fw-semibold);
+            color: var(--text-strong);
+            margin: 0 0 var(--space-3);
+        }
+        h3 {
+            font-size: var(--fs-400);
+            line-height: var(--lh-tight);
+            font-weight: var(--fw-semibold);
+            color: var(--text-strong);
+            margin: 0 0 var(--space-2);
+        }
+        p { margin: 0 0 var(--space-4); }
+        strong { color: var(--text-strong); font-weight: var(--fw-semibold); }
+
+        a { color: var(--accent-text); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+        a:hover { color: var(--accent-hover); }
+
+        .prose { max-width: var(--measure); }
+
+        /* Arabic runs inside the English document — the normalisation examples
+           are the subject matter there, so they cannot be translated away. */
+        .ar {
+            font-family: var(--font-ui);
+            direction: rtl;
+            unicode-bidi: isolate;
+        }
+
+        /* Latin runs inside Arabic prose. */
+        .code {
+            font-family: var(--font-mono);
+            font-size: 0.9em;
+            direction: ltr;
+            unicode-bidi: isolate;
+            padding: 0.1em 0.35em;
+            border-radius: var(--radius-xs);
+            background: var(--surface-glass);
+            border: 1px solid var(--border-subtle);
+        }
+
+        /* A section's rhythm is one rule, so the page cannot develop five
+           different gaps between five bands. */
+        .band { margin-block: var(--space-8) 0; }
+        .band > p:last-child { margin-bottom: 0; }
+
+        /* ─── Hero ─────────────────────────────────────────────────────────── */
+        .hero { padding-block: var(--space-8) 0; }
+        .hero .lede {
+            font-size: var(--fs-400);
+            color: var(--text-default);
+            max-width: var(--measure);
+            margin-bottom: var(--space-4);
+        }
+        .hero .sub {
+            color: var(--text-muted);
+            max-width: var(--measure);
+            margin-bottom: var(--space-5);
+        }
+
+        .cta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--space-3);
+            margin-bottom: var(--space-5);
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: var(--tap-target);
+            padding-inline: var(--space-5);
+            border-radius: var(--radius-sm);
+            font-size: var(--fs-300);
+            font-weight: var(--fw-semibold);
+            text-decoration: none;
+            transition: background var(--motion-fast) var(--ease-standard);
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: var(--text-on-accent);
+            box-shadow: var(--elev-1);
+        }
+        .btn-primary:hover { background: var(--accent-hover); color: var(--text-on-accent); }
+        .btn-secondary {
+            background: var(--surface-glass);
+            color: var(--text-strong);
+            border: 1px solid var(--border-strong);
+        }
+        .btn-secondary:hover { background: var(--surface-glass-hover); color: var(--text-strong); }
+
+        /* The honesty that /pricing leads with, said once here so the first
+           screen is not a sales pitch the second screen contradicts. */
+        .hero-note {
+            max-width: var(--measure);
+            padding: var(--space-4) var(--space-5);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-subtle);
+            border-inline-start: 3px solid var(--accent);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            font-size: var(--fs-200);
+        }
+        .hero-note > :last-child { margin-bottom: 0; }
+
+        /* ─── The loop ─────────────────────────────────────────────────────────
+           The product's one concrete mechanism, shown rather than described.
+           An <ol> because it genuinely is a sequence: with CSS off it still
+           reads 1, 2, 3 in order, and a screen reader announces "list of 3". */
+        .loop {
+            list-style: none;
+            margin: 0 0 var(--space-4);
+            padding: 0;
+            display: grid;
+            gap: var(--space-4);
+        }
+        .step {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-3);
+            padding: var(--space-5);
+            border-radius: var(--radius-lg);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            border: 1px solid var(--border-subtle);
+            box-shadow: var(--elev-2);
+        }
+        .step-head {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+        }
+        .step-num {
+            flex: none;
+            width: 2rem;
+            height: 2rem;
+            border-radius: var(--radius-pill);
+            background: var(--accent-soft);
+            color: var(--accent-text);
+            /* Latin digits on purpose: DESIGN.md §5. The Arabic-Indic forms
+               CLDR would give ar-SA are not what this product uses anywhere. */
+            font-family: var(--font-latin);
+            font-size: var(--fs-200);
+            font-weight: var(--fw-bold);
+            display: grid;
+            place-items: center;
+        }
+        .step h3 { margin: 0; }
+        .step .step-body {
+            font-size: var(--fs-200);
+            color: var(--text-default);
+            margin: 0;
+        }
+
+        /* ─── The mock conversation ────────────────────────────────────────────
+           A tint, not glass: DESIGN.md §1 is explicit that a chat bubble is
+           --surface-glass, and blurring the page behind every bubble is both
+           wrong and expensive. This sits INSIDE a glass card, which is the
+           stack the contrast guard models as
+           ['surface-glass', 'surface-raised', 'surface-page']. */
+        .mock {
+            display: grid;
+            gap: var(--space-3);
+            padding: var(--space-3);
+            border-radius: var(--radius-md);
+            background: var(--surface-glass);
+            border: 1px solid var(--border-subtle);
+            /* The three cards are one grid row, so they are all as tall as the
+               tallest — and measured at 1280px that left 130px of dead space
+               under the shortest mock, which reads as a layout bug rather than
+               as breathing room. Pushing the mock down puts the slack between
+               the sentence and the picture, and lands all three mocks on one
+               baseline. */
+            margin-block-start: auto;
+        }
+        .mock-line {
+            display: flex;
+            align-items: flex-start;
+            gap: var(--space-2);
+        }
+        .avatar {
+            flex: none;
+            width: 1.75rem;
+            height: 1.75rem;
+            border-radius: var(--radius-pill);
+            background: var(--surface-glass-hover);
+            color: var(--text-muted);
+            font-size: var(--fs-100);
+            font-weight: var(--fw-semibold);
+            display: grid;
+            place-items: center;
+        }
+        .avatar-brand {
+            background: var(--accent-soft);
+            color: var(--accent-text);
+        }
+        .mock-name {
+            margin: 0 0 var(--space-1);
+            font-size: var(--fs-100);
+            color: var(--text-muted);
+            line-height: var(--lh-tight);
+        }
+        .mock-text {
+            margin: 0;
+            font-size: var(--fs-200);
+            color: var(--text-strong);
+            line-height: var(--lh-tight);
+        }
+        .tag {
+            display: inline-block;
+            margin-inline-start: var(--space-1);
+            padding: 0.05em 0.5em;
+            border-radius: var(--radius-pill);
+            background: var(--accent-soft);
+            color: var(--accent-text);
+            font-size: var(--fs-100);
+            font-weight: var(--fw-semibold);
+        }
+        /* The keyword, called out inside the comment so the reader can see what
+           actually fired the campaign.
+
+           The negative inline margin very nearly cancels the padding, so the
+           tint bleeds around the word without taking up space in the line. It
+           is here because the padded version pushed the question mark visibly
+           away from the word it belongs to — "السعر ؟" and "price ?" — in both
+           languages at once. */
+        .kw {
+            border-radius: var(--radius-xs);
+            background: var(--accent-soft);
+            color: var(--accent-text);
+            padding: 0.1em 0.25em;
+            margin-inline: -0.15em;
+            font-weight: var(--fw-semibold);
+        }
+
+        .bubble {
+            margin: 0;
+            margin-inline-start: var(--space-6);
+            padding: var(--space-3) var(--space-4);
+            border-radius: var(--radius-md);
+            /* The outgoing corner, in logical terms so it points at the right
+               edge in both directions. */
+            border-end-end-radius: var(--radius-xs);
+            background: var(--accent);
+            color: var(--text-on-accent);
+            font-size: var(--fs-200);
+            line-height: var(--lh-tight);
+        }
+        .bubble-note {
+            margin: 0;
+            font-size: var(--fs-100);
+            color: var(--text-muted);
+            line-height: var(--lh-tight);
+        }
+
+        .mock-meta {
+            display: flex;
+            align-items: center;
+            gap: var(--space-2);
+            margin: 0;
+            font-size: var(--fs-100);
+            color: var(--text-muted);
+        }
+        /* Inline SVG rather than a CSS-drawn heart: the two-rotated-lobes trick
+           needs physical offsets, which flip wrong under dir="rtl" and leave a
+           broken shape. An inline path has no direction at all. */
+        .heart {
+            flex: none;
+            width: 0.875rem;
+            height: 0.875rem;
+            color: var(--danger);
+        }
+
+        /* On a wide screen the three steps sit side by side with a hairline
+           bridging the gap. `inset-inline-end` puts that hairline on whichever
+           side the NEXT card is on, so it is correct in both directions with
+           one rule — no [dir] override. */
+        @media (min-width: 56rem) {
+            .loop { grid-template-columns: repeat(3, 1fr); align-items: stretch; }
+            .step:not(:last-child)::after {
+                content: '';
+                position: absolute;
+                inset-block-start: calc(var(--space-5) + 1rem - 1px);
+                inset-inline-end: calc(var(--space-4) * -1);
+                width: var(--space-4);
+                height: 2px;
+                background: var(--border-strong);
+            }
+        }
+
+        /* ─── Feature cards ────────────────────────────────────────────────── */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+            gap: var(--space-4);
+            margin-bottom: var(--space-4);
+        }
+        .feature {
+            padding: var(--space-5);
+            border-radius: var(--radius-lg);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            border: 1px solid var(--border-subtle);
+            box-shadow: var(--elev-2);
+        }
+        .feature p {
+            margin: 0;
+            font-size: var(--fs-200);
+            color: var(--text-default);
+        }
+
+        /* ─── The normalisation demo ───────────────────────────────────────────
+           Four spellings a real customer types, and the one keyword they all
+           reduce to. Every variant here was checked against normalizeArabic()
+           in src/utils/arabic.ts. */
+        .norm {
+            padding: var(--space-5);
+            border-radius: var(--radius-lg);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            border: 1px solid var(--border-subtle);
+            box-shadow: var(--elev-2);
+            margin-bottom: var(--space-4);
+        }
+        .variants {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: var(--space-2);
+            margin: 0 0 var(--space-3);
+            padding: 0;
+            list-style: none;
+        }
+        .variants li {
+            padding: var(--space-2) var(--space-4);
+            border-radius: var(--radius-sm);
+            background: var(--surface-glass);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-strong);
+            font-size: var(--fs-300);
+        }
+        .norm-arrow {
+            margin: 0 0 var(--space-3);
+            text-align: center;
+            font-size: var(--fs-100);
+            color: var(--text-muted);
+        }
+        /* A downward triangle, which is the one arrow direction that means the
+           same thing in RTL and LTR, drawn with logical border properties. */
+        .norm-arrow::before {
+            content: '';
+            display: block;
+            width: 0;
+            height: 0;
+            margin: 0 auto var(--space-1);
+            border-inline: 5px solid transparent;
+            border-block-start: 6px solid var(--text-muted);
+        }
+        .norm-target {
+            margin: 0;
+            text-align: center;
+            font-size: var(--fs-500);
+            font-weight: var(--fw-bold);
+            color: var(--accent-text);
+            line-height: var(--lh-tight);
+        }
+
+        /* ─── What this does not promise ───────────────────────────────────────
+           The counterweight to the hero, and the reason a reader can trust the
+           rest of the page. Warning-coloured on the leading edge only: the body
+           is --text-default on a measured ground. */
+        .limits {
+            padding: var(--space-5);
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-subtle);
+            border-inline-start: 3px solid var(--warning);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            max-width: var(--measure);
+        }
+        .limits dl { margin: 0; }
+        .limits dt {
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+            font-size: var(--fs-200);
+        }
+        .limits dd {
+            margin: 0 0 var(--space-4);
+            padding: 0;
+            font-size: var(--fs-200);
+            color: var(--text-default);
+        }
+        .limits dd:last-child { margin-bottom: 0; }
+
+        /* ─── Where to go next ─────────────────────────────────────────────────
+           /privacy and /data-deletion are the URLs Meta links to from the app's
+           own settings, so they get a card here as well as a footer link — a
+           visitor who lands on the bare domain must be able to reach them
+           without knowing the paths. */
+        .next {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+            gap: var(--space-3);
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+        .nextcard {
+            display: block;
+            height: 100%;
+            padding: var(--space-4) var(--space-5);
+            border-radius: var(--radius-md);
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-strong);
+            text-decoration: none;
+            transition: background var(--motion-fast) var(--ease-standard);
+        }
+        .nextcard:hover {
+            background: var(--surface-overlay);
+            color: var(--text-strong);
+        }
+        .nextcard .title {
+            display: block;
+            font-size: var(--fs-400);
+            font-weight: var(--fw-semibold);
+            color: var(--text-strong);
+            line-height: var(--lh-tight);
+            margin-bottom: var(--space-1);
+        }
+        .nextcard .why {
+            display: block;
+            font-size: var(--fs-200);
+            color: var(--text-muted);
+            line-height: var(--lh-tight);
+        }
+
+        .divider {
+            height: 1px;
+            border: 0;
+            margin: var(--space-8) 0;
+            background: var(--border-strong);
+        }
+
+        .pagefoot {
+            margin-top: var(--space-8);
+            padding-top: var(--space-4);
+            border-top: 1px solid var(--border-subtle);
+            font-size: var(--fs-100);
+            color: var(--text-muted);
+        }
+        /* Flex with a gap rather than "·" glyphs between the links. The glyphs
+           wrapped as their own items: at 375px the row broke after a separator,
+           leaving a lone "·" hanging at the end of the first line. The gap
+           cannot do that, and four decorative characters leave the
+           accessibility tree at the same time. */
+        .pagefoot nav {
+            display: flex;
+            flex-wrap: wrap;
+            column-gap: var(--space-5);
+            margin-bottom: var(--space-2);
+        }
+        .pagefoot a { display: inline-block; min-height: var(--tap-target); line-height: var(--tap-target); }
+        .pagefoot p { max-width: var(--measure); }
+
+        /* ─── The language filter ──────────────────────────────────────────────
+           No attribute (JS off or failed) = both languages visible, which is
+           the correct degradation: a page twice as long beats a page nobody can
+           read. */
+        html[data-lang='ar'] [data-doc-lang='en'],
+        html[data-lang='ar'] .t-en,
+        html[data-lang='en'] [data-doc-lang='ar'],
+        html[data-lang='en'] .t-ar { display: none; }
+        html[data-lang='ar'] .divider,
+        html[data-lang='en'] .divider { display: none; }
+        html[data-lang='ar'] .t-sep,
+        html[data-lang='en'] .t-sep { display: none; }
+
+        /* tokens.css already collapses --motion-* to 1ms under this preference.
+           Restated so the promise holds even if that stylesheet fails to load
+           and the transitions above fall back to their initial values. */
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                transition-duration: 1ms !important;
+                animation-duration: 1ms !important;
+            }
+        }
+
+        @media (max-width: 40rem) {
+            .shell { padding-inline: var(--space-4); }
+            h1 { font-size: var(--fs-600); }
+            h2 { font-size: var(--fs-400); }
+            .hero .lede { font-size: var(--fs-300); }
+            .masthead { justify-content: flex-start; }
+            .step, .feature, .norm, .limits { padding: var(--space-4); }
+            .btn { flex: 1 1 100%; }
+        }
+    </style>
+
+    <script>
+        /* Resolve the language before first paint so the page never shows the
+           wrong script for a frame. Mirrors dashboard/js/i18n.js: stored choice,
+           then the browser's own languages, then Arabic. */
+        (function () {
+            var lang = null;
+            try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
+            if (lang !== 'ar' && lang !== 'en') {
+                lang = null;
+                try {
+                    var prefs = navigator.languages || [navigator.language || ''];
+                    for (var i = 0; i < prefs.length; i++) {
+                        var code = String(prefs[i] || '').toLowerCase().split('-')[0];
+                        if (code === 'ar' || code === 'en') { lang = code; break; }
+                    }
+                } catch (e) { /* no navigator language information */ }
+            }
+            lang = lang || 'ar';
+            var root = document.documentElement;
+            root.setAttribute('data-lang', lang);
+            root.lang = lang;
+            root.dir = lang === 'ar' ? 'rtl' : 'ltr';
+        })();
+    </script>
+</head>
+<body>
+    <a class="skip" href="#content"><span class="t-ar">تخطَّ إلى المحتوى</span><span class="t-sep"> · </span><span class="t-en">Skip to content</span></a>
+
+    <div class="shell">
+        <header class="masthead">
+            <div class="wordmark">
+                أوتوريبلاي برو
+                <span class="latin" lang="en" dir="ltr">AutoReply Pro</span>
+            </div>
+            <div class="headtools">
+                <nav class="headnav" aria-label="روابط الموقع · Site">
+                    <a href="/pricing"><span class="t-ar">الأسعار</span><span class="t-sep"> · </span><span class="t-en">Pricing</span></a>
+                    <a href="/dashboard"><span class="t-ar">تسجيل الدخول</span><span class="t-sep"> · </span><span class="t-en">Sign in</span></a>
+                </nav>
+                <nav class="langswitch" aria-label="اللغة · Language">
+                    <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
+                    <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
+                </nav>
+            </div>
+        </header>
+
+        <main id="content">
+
+            <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
+            <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
+
+                <!-- ─── Hero ─────────────────────────────────────────────── -->
+                <section class="hero" aria-labelledby="hero-ar">
+                    <h1 id="hero-ar">من تعليق إلى محادثة خاصة</h1>
+                    <p class="lede">
+                        أوتوريبلاي برو يتابع تعليقات حسابك على إنستجرام وفيسبوك. وحين يكتب أحدهم
+                        كلمةً تختارها أنت، تصله <strong>رسالة خاصة</strong>، ويُنشَر
+                        <strong>ردٌّ عام</strong> تحت تعليقه، ويُسجَّل <strong>إعجابٌ</strong> به.
+                    </p>
+                    <p class="sub">
+                        وما يأتي بعدها من رسائل يتولّاه الذكاء الاصطناعي بتعليماتك أنت ومعلومات
+                        نشاطك — أو تتولّاه بنفسك من صندوق الوارد، وتوقف الردّ الآلي في محادثة
+                        بعينها متى شئت.
+                    </p>
+
+                    <div class="cta-row">
+                        <a class="btn btn-primary" href="/pricing">اطّلع على الباقات والأسعار</a>
+                        <a class="btn btn-secondary" href="/dashboard">تسجيل الدخول إلى لوحة التحكم</a>
+                    </div>
+
+                    <div class="hero-note">
+                        <p>
+                            <strong>البرنامج نفسه مفتوح المصدر برخصة MIT</strong>، ويمكنك تنزيله
+                            وتشغيله على خادمك مجاناً من
+                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع العلني</a>.
+                            ما يُباع هنا ليس الكود: هو ربط الحساب بواجهة ميتا، والإعداد، والمتابعة،
+                            ووجود مَن يُصلح العطل حين يقع. التفاصيل في
+                            <a href="/pricing">صفحة الأسعار</a>.
+                        </p>
+                    </div>
+                </section>
+
+                <!-- ─── The loop ─────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="loop-ar">
+                    <h2 id="loop-ar">ماذا يحدث حين يعلّق أحدهم</h2>
+                    <p class="prose">
+                        ثلاث خطوات، والأولى هي كل ما يفعله العميل. الباقي يجري من تلقاء نفسه:
+                    </p>
+
+                    <ol class="loop">
+                        <li class="step">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">1</span>
+                                <h3>يعلّق بكلمتك المفتاحية</h3>
+                            </div>
+                            <p class="step-body">
+                                أنت تحدّد الكلمات في الحملة — أكثر من كلمة إن شئت — وتختار: على
+                                منشور بعينه، أم على كل منشورات الحساب.
+                            </p>
+                            <div class="mock">
+                                <div class="mock-line">
+                                    <span class="avatar" aria-hidden="true">ن</span>
+                                    <div>
+                                        <p class="mock-name"><span class="sr-only">تعليق من</span>نورة</p>
+                                        <p class="mock-text" dir="auto">كم <span class="kw">السعر</span>؟ وهل فيه توصيل؟</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </li>
+
+                        <li class="step">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">2</span>
+                                <h3>تصله رسالة خاصة</h3>
+                            </div>
+                            <p class="step-body">
+                                الرسالة التي كتبتها في الحملة، تُرسَل إليه على الخاص — لا في
+                                التعليقات، حيث يقرأها الجميع ولا يردّ عليها أحد.
+                            </p>
+                            <div class="mock">
+                                <p class="mock-name"><span class="sr-only">رسالة خاصة صادرة من حسابك</span>الرسائل الخاصة</p>
+                                <p class="bubble">أهلاً! هذي تفاصيل الأسعار والتوصيل.</p>
+                                <p class="bubble-note">
+                                    ومعها عبارة تُفصح أنها خدمة آلية، كما تشترط ميتا.
+                                </p>
+                            </div>
+                        </li>
+
+                        <li class="step">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">3</span>
+                                <h3>ويُردّ على تعليقه علناً</h3>
+                            </div>
+                            <p class="step-body">
+                                ردٌّ عام تحت تعليقه يخبره أن يفتح رسائله، وإعجابٌ بالتعليق. الردّ
+                                العام اختياري وتكتبه في الحملة؛ والإعجاب يُحاوَل دائماً.
+                            </p>
+                            <div class="mock">
+                                <div class="mock-line">
+                                    <span class="avatar avatar-brand" aria-hidden="true">ح</span>
+                                    <div>
+                                        <p class="mock-name">حسابك<span class="tag">ردّ عام</span></p>
+                                        <p class="mock-text">أرسلنا لكِ التفاصيل في الرسائل الخاصة</p>
+                                    </div>
+                                </div>
+                                <p class="mock-meta">
+                                    <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
+                                    إعجاب بالتعليق
+                                </p>
+                            </div>
+                        </li>
+                    </ol>
+
+                    <p class="prose">
+                        إن رفضت ميتا الردّ العام أو الإعجاب — صلاحية ناقصة، أو تعليق حُذف — تبقى
+                        الرسالة الخاصة مُرسَلة، ويظهر سبب الرفض في سجلّ التفاعل.
+                    </p>
+                </section>
+
+                <!-- ─── Features ─────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="does-ar">
+                    <h2 id="does-ar">وما الذي في لوحة التحكم</h2>
+
+                    <div class="features">
+                        <section class="feature" aria-labelledby="f1-ar">
+                            <h3 id="f1-ar">حملات الكلمات المفتاحية</h3>
+                            <p>
+                                لكل حملة كلماتها، ورسالتها الخاصة، وردّها العام. حملة مربوطة
+                                بمنشور بعينه تسبق الحملة العامة على الكلمة نفسها، فلا تتنازع اثنتان
+                                على تعليق واحد.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f2-ar">
+                            <h3 id="f2-ar">ردود الذكاء الاصطناعي</h3>
+                            <p>
+                                الرسائل الواردة يجيب عنها نموذج ذكاء اصطناعي بتعليماتك أنت وبقاعدة
+                                معلومات تكتبها عن نشاطك، قارئاً آخر ثماني رسائل من المحادثة حتى
+                                يفهم السياق. ويستطيع أن يردّ بأزرار سريعة أو ببطاقات متتابعة.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f3-ar">
+                            <h3 id="f3-ar">صندوق وارد موحّد</h3>
+                            <p>
+                                محادثات إنستجرام وفيسبوك في مكان واحد. تقرأ، وتردّ بنفسك، وتوقف
+                                الردّ الآلي في محادثة واحدة دون أن تُعطّله في غيرها.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f4-ar">
+                            <h3 id="f4-ar">جدولة المنشورات</h3>
+                            <p>
+                                صور ومقاطع فيديو، إلى إنستجرام أو فيسبوك أو كليهما من إدخال واحد.
+                                والفيديو يُنشر على إنستجرام ريلز ويظهر في الصفحة الرئيسية أيضاً، لا
+                                في تبويب الريلز وحده.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f5-ar">
+                            <h3 id="f5-ar">مطابقة عربية حقيقية</h3>
+                            <p>
+                                الهمزات والتاء المربوطة والألف المقصورة والتشكيل والتطويل — كلها
+                                تُوحَّد قبل المقارنة، فلا تضيع عليك مبيعة لأن العميل كتب الكلمة
+                                بإملاء آخر. التفصيل في الفقرة التالية.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f6-ar">
+                            <h3 id="f6-ar">أرقام تستطيع تصديرها</h3>
+                            <p>
+                                عدد التعليقات والرسائل والنسب، بالساعة وباليوم وبالحملة، وتصدير
+                                التفاعلات إلى ملف CSV تفتحه في أي برنامج جداول.
+                            </p>
+                        </section>
+                    </div>
+                </section>
+
+                <!-- ─── Arabic matching ──────────────────────────────────── -->
+                <section class="band" aria-labelledby="arabic-ar">
+                    <h2 id="arabic-ar">العربية هنا ليست ترجمة</h2>
+                    <p class="prose">
+                        الناس لا تكتب الكلمة نفسها مرتين بالطريقة نفسها. هذه أربع كتابات مختلفة
+                        لكلمة واحدة، وكلها تُطابق الكلمة المفتاحية <strong>«هدية»</strong>:
+                    </p>
+
+                    <div class="norm">
+                        <ul class="variants">
+                            <li>هديه</li>
+                            <li>هديـــة</li>
+                            <li>هديّة</li>
+                            <li>الهدية</li>
+                        </ul>
+                        <p class="norm-arrow">تُوحَّد جميعها إلى</p>
+                        <p class="norm-target">هدية</p>
+                    </div>
+
+                    <p class="prose">
+                        نُوحِّد الهمزات (أ إ آ ← ا)، والتاء المربوطة (ة ← ه)، والألف المقصورة
+                        (ى ← ي)، ونحذف التشكيل والتطويل، قبل أن نقارن. وللكلمات القصيرة خطرٌ
+                        معروف: «تم» تقع داخل «اهتمام» و«تمام»، فلكل حملة وضع مطابقة تختاره —
+                        داخل الكلمة، أو كلمة كاملة.
+                    </p>
+                    <p class="prose">
+                        واللوحة نفسها من اليمين إلى اليسار أصلاً، لا تصميم إنجليزي صُبّت فيه
+                        العربية. والأرقام لاتينية عن قصد، لأنها تُقارَن وتُنسخ مقابل لوحات ميتا
+                        نفسها.
+                    </p>
+                </section>
+
+                <!-- ─── Limits ───────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="limits-ar">
+                    <h2 id="limits-ar">وما الذي لا نَعِد به</h2>
+                    <div class="limits">
+                        <dl>
+                            <dt>لا دقيقة محدَّدة للنشر</dt>
+                            <dd>
+                                المنشور المجدول يدخل طابوراً يُفرَّغ على فترات، لا على الدقيقة. إن
+                                كان توقيت النشر بالدقيقة يهمّك، فهذا ليس ما يفعله البرنامج اليوم.
+                            </dd>
+
+                            <dt>لا ضمان لوقت التشغيل ولا للتسليم</dt>
+                            <dd>
+                                ميتا قد تُبطئ الإرسال أو ترفضه في أي لحظة، ولا شيء في البرنامج
+                                يستطيع أن يَعِد بغير ذلك. ما نَعِد به أن الحدث يُسجَّل قبل الردّ
+                                على ميتا، وأن ما فشل يُعاد.
+                            </dd>
+
+                            <dt>حدود الإرسال حقيقية</dt>
+                            <dd>
+                                حتى 180 رسالة تلقائية في الساعة لكل حساب — سقفٌ نُبقيه دون سقف ميتا
+                                نفسها (نحو 200) كي لا يُقطع عنك الإرسال — ورسالة تلقائية واحدة لكل
+                                شخص كل 24 ساعة.
+                            </dd>
+
+                            <dt>نص التعليقات لا يُخزَّن</dt>
+                            <dd>
+                                يُحفَظ معرّف التعليق واسم صاحبه، لا نصّه. أما نص الرسائل الخاصة
+                                فيُحفَظ ليظهر في صندوق الوارد. التفصيل كاملاً في
+                                <a href="/privacy">سياسة الخصوصية</a>، وطريقة الحذف في
+                                <a href="/data-deletion">صفحة حذف البيانات</a>.
+                            </dd>
+                        </dl>
+                    </div>
+                </section>
+
+                <!-- ─── Onward ───────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="next-ar">
+                    <h2 id="next-ar">إلى أين بعد ذلك</h2>
+                    <ul class="next">
+                        <li>
+                            <a class="nextcard" href="/pricing">
+                                <span class="title">الأسعار</span>
+                                <span class="why">الباقات الثلاث، وما يتغيّر بينها فعلاً</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a class="nextcard" href="/dashboard">
+                                <span class="title">لوحة التحكم</span>
+                                <span class="why">تسجيل الدخول لمن لديه حساب مربوط</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a class="nextcard" href="/privacy">
+                                <span class="title">سياسة الخصوصية</span>
+                                <span class="why">ما يُجمع، وأين يذهب، وكم يبقى</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a class="nextcard" href="/data-deletion">
+                                <span class="title">حذف بياناتك</span>
+                                <span class="why">كيف تطلب حذف بياناتك، وماذا يُحذف</span>
+                            </a>
+                        </li>
+                    </ul>
+                </section>
+            </article>
+
+            <hr class="divider">
+
+            <!-- ══════════════════════════ ENGLISH ═════════════════════════ -->
+            <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
+
+                <!-- ─── Hero ─────────────────────────────────────────────── -->
+                <section class="hero" aria-labelledby="hero-en">
+                    <h1 id="hero-en">A comment becomes a conversation</h1>
+                    <p class="lede">
+                        AutoReply Pro watches the comments on your Instagram and Facebook
+                        accounts. When someone writes a keyword you chose, they get a
+                        <strong>private message</strong>, a <strong>public reply</strong> appears
+                        under their comment, and the comment gets a <strong>like</strong>.
+                    </p>
+                    <p class="sub">
+                        Whatever they write next is answered by AI using your own instructions and
+                        your own knowledge base — or by you, from a shared inbox, where you can
+                        pause the bot on a single conversation.
+                    </p>
+
+                    <div class="cta-row">
+                        <a class="btn btn-primary" href="/pricing">See the plans and pricing</a>
+                        <a class="btn btn-secondary" href="/dashboard">Sign in to the dashboard</a>
+                    </div>
+
+                    <div class="hero-note">
+                        <p>
+                            <strong>The software itself is open source under the MIT licence</strong>,
+                            and you can download it and run it on your own server for free from
+                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">the public repository</a>.
+                            What is sold here is not the code: it is connecting the account to
+                            Meta, the setup, the follow-up, and having someone who fixes it when
+                            it breaks. The detail is on the <a href="/pricing">pricing page</a>.
+                        </p>
+                    </div>
+                </section>
+
+                <!-- ─── The loop ─────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="loop-en">
+                    <h2 id="loop-en">What happens when someone comments</h2>
+                    <p class="prose">
+                        Three steps, and the first is the only one the customer does. The rest
+                        runs on its own:
+                    </p>
+
+                    <ol class="loop">
+                        <li class="step">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">1</span>
+                                <h3>They comment your keyword</h3>
+                            </div>
+                            <p class="step-body">
+                                You set the keywords on the campaign — several if you want — and
+                                choose whether it fires on one specific post or on anything the
+                                account publishes.
+                            </p>
+                            <div class="mock">
+                                <div class="mock-line">
+                                    <span class="avatar" aria-hidden="true">N</span>
+                                    <div>
+                                        <p class="mock-name"><span class="sr-only">Comment from</span>Noura</p>
+                                        <p class="mock-text" dir="auto">How much is the <span class="kw">price</span>? Do you deliver?</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </li>
+
+                        <li class="step">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">2</span>
+                                <h3>They get a private message</h3>
+                            </div>
+                            <p class="step-body">
+                                The message you wrote on the campaign, sent to them privately —
+                                not in the comments, where everyone reads it and nobody replies.
+                            </p>
+                            <div class="mock">
+                                <p class="mock-name"><span class="sr-only">Private message sent from your account</span>Direct messages</p>
+                                <p class="bubble">Hi! Here are the prices and the delivery options.</p>
+                                <p class="bubble-note">
+                                    It carries the automated-service disclosure Meta requires.
+                                </p>
+                            </div>
+                        </li>
+
+                        <li class="step">
+                            <div class="step-head">
+                                <span class="step-num" aria-hidden="true">3</span>
+                                <h3>And their comment gets answered</h3>
+                            </div>
+                            <p class="step-body">
+                                A public reply under the comment telling them to check their
+                                messages, and a like on the comment. The public reply is optional
+                                and you write it on the campaign; the like is always attempted.
+                            </p>
+                            <div class="mock">
+                                <div class="mock-line">
+                                    <span class="avatar avatar-brand" aria-hidden="true">Y</span>
+                                    <div>
+                                        <p class="mock-name">Your account<span class="tag">public reply</span></p>
+                                        <p class="mock-text">Just sent you the details in your messages</p>
+                                    </div>
+                                </div>
+                                <p class="mock-meta">
+                                    <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
+                                    Comment liked
+                                </p>
+                            </div>
+                        </li>
+                    </ol>
+
+                    <p class="prose">
+                        If Meta refuses the public reply or the like — a missing permission, or a
+                        comment that was deleted — the private message still goes out, and the
+                        reason is recorded on the interaction.
+                    </p>
+                </section>
+
+                <!-- ─── Features ─────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="does-en">
+                    <h2 id="does-en">And what is in the dashboard</h2>
+
+                    <div class="features">
+                        <section class="feature" aria-labelledby="f1-en">
+                            <h3 id="f1-en">Keyword campaigns</h3>
+                            <p>
+                                Each campaign has its own keywords, its own private message and its
+                                own public reply. A campaign tied to one post beats a general one
+                                on the same keyword, so two campaigns never fight over a comment.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f2-en">
+                            <h3 id="f2-en">AI replies to messages</h3>
+                            <p>
+                                Incoming messages are answered by an AI model using your own
+                                instructions and a knowledge base you write about your business,
+                                reading the last eight messages of the thread for context. It can
+                                reply with quick-reply buttons or a card carousel.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f3-en">
+                            <h3 id="f3-en">One shared inbox</h3>
+                            <p>
+                                Instagram and Facebook conversations in one place. Read them, reply
+                                yourself, and pause the bot on a single conversation without
+                                turning it off anywhere else.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f4-en">
+                            <h3 id="f4-en">Scheduled posts</h3>
+                            <p>
+                                Images and video, to Instagram or Facebook or both from one entry.
+                                Video publishes to Instagram as a reel and appears in the main feed
+                                too, not only in the Reels tab.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f5-en">
+                            <h3 id="f5-en">Arabic matching that works</h3>
+                            <p>
+                                Hamza forms, teh marbuta, alef maksura, diacritics and tatweel are
+                                all normalised before matching, so you do not lose a sale because
+                                the customer spelled the word another way. Detail below.
+                            </p>
+                        </section>
+
+                        <section class="feature" aria-labelledby="f6-en">
+                            <h3 id="f6-en">Numbers you can export</h3>
+                            <p>
+                                Comments, messages and conversion, by hour, by day and by campaign
+                                — and an interaction export as CSV that opens in any spreadsheet.
+                            </p>
+                        </section>
+                    </div>
+                </section>
+
+                <!-- ─── Arabic matching ──────────────────────────────────── -->
+                <section class="band" aria-labelledby="arabic-en">
+                    <h2 id="arabic-en">Arabic here is not a translation</h2>
+                    <p class="prose">
+                        People do not write the same word the same way twice. These are four
+                        different spellings of one word, and all four match the keyword
+                        <strong class="ar" lang="ar" dir="rtl">هدية</strong> (<em>hadiyya</em>,
+                        a gift):
+                    </p>
+
+                    <div class="norm" lang="ar" dir="rtl">
+                        <ul class="variants">
+                            <li>هديه</li>
+                            <li>هديـــة</li>
+                            <li>هديّة</li>
+                            <li>الهدية</li>
+                        </ul>
+                        <p class="norm-arrow" lang="en" dir="ltr">all normalise to</p>
+                        <p class="norm-target">هدية</p>
+                    </div>
+
+                    <p class="prose">
+                        Hamza forms collapse to a bare alef, teh marbuta to heh, alef maksura to
+                        yeh, and diacritics and tatweel are stripped, before anything is compared.
+                        Short keywords carry a known danger —
+                        <span class="ar" lang="ar" dir="rtl">تم</span> sits inside
+                        <span class="ar" lang="ar" dir="rtl">اهتمام</span> and
+                        <span class="ar" lang="ar" dir="rtl">تمام</span> — so every campaign picks
+                        its own matching mode: anywhere in the text, or whole word only.
+                    </p>
+                    <p class="prose">
+                        The dashboard itself is right-to-left by default rather than an English
+                        layout with Arabic poured into it. Digits stay Latin on purpose, because
+                        they are compared and copied against Meta's own dashboards.
+                    </p>
+                </section>
+
+                <!-- ─── Limits ───────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="limits-en">
+                    <h2 id="limits-en">What this does not promise</h2>
+                    <div class="limits">
+                        <dl>
+                            <dt>No exact publishing minute</dt>
+                            <dd>
+                                A scheduled post joins a queue that is drained on an interval, not
+                                on the minute. If minute-level timing matters to you, this is not
+                                what the software does today.
+                            </dd>
+
+                            <dt>No uptime or delivery guarantee</dt>
+                            <dd>
+                                Meta can throttle or refuse a send at any moment, and nothing in
+                                the software can promise otherwise. What it does promise is that
+                                the event is written down before Meta is acknowledged, and that
+                                whatever fails is retried.
+                            </dd>
+
+                            <dt>The sending limits are real</dt>
+                            <dd>
+                                Up to 180 automated messages an hour per account — a ceiling held
+                                below Meta's own (around 200) so you are not cut off — and one
+                                automated message per person per 24 hours.
+                            </dd>
+
+                            <dt>Comment text is never stored</dt>
+                            <dd>
+                                The comment's id and its author's username are kept; its text is
+                                not. Direct-message text is kept, so it can appear in your inbox.
+                                The full detail is in the <a href="/privacy">privacy policy</a>,
+                                and the deletion procedure is on the
+                                <a href="/data-deletion">data deletion page</a>.
+                            </dd>
+                        </dl>
+                    </div>
+                </section>
+
+                <!-- ─── Onward ───────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="next-en">
+                    <h2 id="next-en">Where to go next</h2>
+                    <ul class="next">
+                        <li>
+                            <a class="nextcard" href="/pricing">
+                                <span class="title">Pricing</span>
+                                <span class="why">The three plans, and what actually changes between them</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a class="nextcard" href="/dashboard">
+                                <span class="title">Dashboard</span>
+                                <span class="why">Sign in, for accounts that are already connected</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a class="nextcard" href="/privacy">
+                                <span class="title">Privacy policy</span>
+                                <span class="why">What is collected, where it goes, how long it stays</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a class="nextcard" href="/data-deletion">
+                                <span class="title">Delete your data</span>
+                                <span class="why">How to request deletion, and what is deleted</span>
+                            </a>
+                        </li>
+                    </ul>
+                </section>
+            </article>
+
+        </main>
+
+        <footer class="pagefoot">
+            <nav aria-label="روابط الصفحة · Page links">
+                <a href="/pricing"><span class="t-ar">الأسعار</span><span class="t-sep"> · </span><span class="t-en">Pricing</span></a>
+                <a href="/dashboard"><span class="t-ar">لوحة التحكم</span><span class="t-sep"> · </span><span class="t-en">Dashboard</span></a>
+                <a href="/privacy"><span class="t-ar">سياسة الخصوصية</span><span class="t-sep"> · </span><span class="t-en">Privacy policy</span></a>
+                <a href="/data-deletion"><span class="t-ar">حذف بياناتك</span><span class="t-sep"> · </span><span class="t-en">Delete your data</span></a>
+                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><span class="t-ar">الكود على GitHub</span><span class="t-sep"> · </span><span class="t-en">Source on GitHub</span></a>
+            </nav>
+            <p>
+                <span class="t-ar">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة Meta، ولا ترتبط هذه الأداة بها.</span>
+                <span class="t-en">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</span>
+            </p>
+        </footer>
+    </div>
+
+    <script>
+        /* The switch. Sets the attribute the CSS filters on, keeps <html lang dir>
+           honest, and remembers the choice under the same key the dashboard uses
+           so a visitor is not asked twice. */
+        (function () {
+            var root = document.documentElement;
+            var buttons = document.querySelectorAll('[data-set-lang]');
+
+            function apply(lang) {
+                root.setAttribute('data-lang', lang);
+                root.lang = lang;
+                root.dir = lang === 'ar' ? 'rtl' : 'ltr';
+                for (var i = 0; i < buttons.length; i++) {
+                    buttons[i].setAttribute(
+                        'aria-pressed',
+                        buttons[i].getAttribute('data-set-lang') === lang ? 'true' : 'false'
+                    );
+                }
+                try { localStorage.setItem('dashboard_lang', lang); } catch (e) { /* private mode */ }
+            }
+
+            for (var i = 0; i < buttons.length; i++) {
+                buttons[i].addEventListener('click', function () {
+                    apply(this.getAttribute('data-set-lang'));
+                });
+            }
+
+            /* The head script already chose; reflect it on the buttons. */
+            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+        })();
+    </script>
+</body>
+</html>
