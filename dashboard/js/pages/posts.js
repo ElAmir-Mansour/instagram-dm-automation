@@ -3,12 +3,14 @@
  *
  * ─── Two honesty problems this screen had ───────────────────────────────────
  *
- * 1. THE MINUTE IS A LIE. `vercel.json` runs the publish cron once a day at
- *    00:00 UTC (a Hobby-plan limit), so a `datetime-local` field that accepts
- *    14:35 is promising something the backend cannot deliver. The field stays
- *    — the API takes a full ISO timestamp and the date genuinely matters — but
- *    next to it the form now computes and shows the instant the post will
- *    ACTUALLY go out, live, as the operator picks a time.
+ * 1. THE MINUTE IS A LIE. `vercel.json` runs one cron a day at 00:00 UTC (a
+ *    Hobby-plan limit) and it is the only thing that publishes anything today,
+ *    so a `datetime-local` accepting 14:35 promises what the backend cannot
+ *    deliver. The field stays — the API takes a full ISO timestamp and the date
+ *    genuinely matters — but underneath it the form computes and shows the run
+ *    the post will ACTUALLY go out on, live, as the operator picks a time.
+ *    `publishWindow()` below carries that, and the evidence for it; a frequent
+ *    sweep has been claimed by two documents and has never once run.
  *
  * 2. THE THUMBNAIL WAS A FOOTNOTE. `cover_url` is supported end to end, and
  *    without it Instagram thumbnails a reel from frame 0 — a black tile for
@@ -128,24 +130,14 @@ const PostsPage = {
                      keys did nothing. Two segmented BUTTONS with aria-pressed
                      is what this control actually is. -->
                 <div class="segmented" role="group" aria-label="${t('nav.posts')}">
-                    <button type="button" id="posts-tab-scheduled"
-                            aria-pressed="${this.activeTab === 'scheduled' ? 'true' : 'false'}"
-                            class="btn btn-sm ${this.activeTab === 'scheduled' ? 'btn-primary' : 'btn-ghost'}"
-                            data-action="posts:switchTab" data-tab="scheduled">
-                        <i data-lucide="calendar" aria-hidden="true"></i> ${t('posts.tabQueue')}
-                    </button>
-                    <button type="button" id="posts-tab-live"
-                            aria-pressed="${this.activeTab === 'live' ? 'true' : 'false'}"
-                            class="btn btn-sm ${this.activeTab === 'live' ? 'btn-primary' : 'btn-ghost'}"
-                            data-action="posts:switchTab" data-tab="live">
-                        <i data-lucide="instagram" aria-hidden="true"></i> ${t('posts.tabLive')}
-                    </button>
+                    ${this.tabButton('scheduled', 'calendar', t('posts.tabQueue'))}
+                    ${this.tabButton('live', 'instagram', t('posts.tabLive'))}
                 </div>
                 <div class="toolbar-actions">
-                    <button type="button" class="btn btn-primary btn-sm" id="posts-new"
-                            data-action="posts:showCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
-                    </button>
+                    ${UI.button({
+                        variant: 'primary', size: 'sm', icon: 'plus', label: t('posts.new'),
+                        action: 'posts:showCreateModal', id: 'posts-new',
+                    })}
                 </div>
             </div>
 
@@ -167,6 +159,34 @@ const PostsPage = {
         if (errorHost) {
             UI.renderError(errorHost, JSON.parse(errorHost.dataset.errorOptions), () => this.render());
         }
+    },
+
+    /**
+     * One half of the segmented control.
+     *
+     * Written once rather than twice because the two halves have to stay in
+     * step: the selected one is primary and the other is ghost, and `aria-pressed`
+     * has to agree with that on BOTH — a segmented control where only the active
+     * half carries the state is announced as one pressed toggle beside one
+     * ordinary button, which is not what it is.
+     *
+     * Deliberately NOT `UI.button`. The factory has no `aria-pressed` option,
+     * and routing one through its `data` map emits `data-aria-pressed` — a
+     * silently inert attribute that would have undone the fix this control
+     * already carries. A primitive that does not cover a case is a reason to
+     * write the markup, not a reason to launder the attribute through the
+     * nearest option that compiles.
+     */
+    tabButton(tab, icon, label) {
+        const active = this.activeTab === tab;
+        return html`
+            <button type="button" id="posts-tab-${tab}"
+                    aria-pressed="${active ? 'true' : 'false'}"
+                    class="btn btn-sm ${active ? html.raw('btn-primary') : html.raw('btn-ghost')}"
+                    data-action="posts:switchTab" data-tab="${tab}">
+                <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
+            </button>
+        `;
     },
 
     renderPublishErrorPanel() {
@@ -212,9 +232,10 @@ const PostsPage = {
                 <div class="surface pad-5 stack gap-3">
                     ${Admin.emptyState('calendar-days', t('posts.emptyQueueTitle'), t('posts.emptyQueueBody'))}
                     <div class="row row--center">
-                        <button type="button" class="btn btn-primary btn-sm" data-action="posts:showCreateModal">
-                            <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
-                        </button>
+                        ${UI.button({
+                            variant: 'primary', size: 'sm', icon: 'plus', label: t('posts.new'),
+                            action: 'posts:showCreateModal',
+                        })}
                     </div>
                 </div>
             `;
@@ -245,6 +266,9 @@ const PostsPage = {
         const coverUrl = safeUrl(post.cover_url);
         const isVideo = post.post_type === 'video' || post.post_type === 'reel';
         const typeLabel = this.typeLabel(post.post_type);
+        // Only a PENDING row has a publish still ahead of it. An overdue one
+        // reads `isPast`, which is the state the operator has to act on.
+        const pendingWindow = isPending ? this.publishWindow(post.scheduled_time) : null;
 
         return html`
             <!-- An <article> with no accessible name is announced as "article".
@@ -296,14 +320,12 @@ const PostsPage = {
                     <i data-lucide="clock" aria-hidden="true"></i>
                     <span>${t('posts.scheduledAt', { when: UI.formatDateTime(post.scheduled_time) })}</span>
                 </p>
-                ${isPending ? html`
+                ${isPending && pendingWindow ? html`
                     <p class="post-card-meta">
                         <i data-lucide="calendar-clock" aria-hidden="true"></i>
-                        <span>${t('posts.schedule.actual', {
-                            when: UI.formatDateTime(UI.nextCronRun(
-                                new Date(post.scheduled_time) > new Date() ? post.scheduled_time : new Date()
-                            )),
-                        })}</span>
+                        <span class="${pendingWindow.isPast ? html.raw('text-warning') : ''}">
+                            ${this.publishWindowText(pendingWindow)}
+                        </span>
                     </p>
                 ` : ''}
 
@@ -321,22 +343,27 @@ const PostsPage = {
                     ${isPending || isFailed ? html`
                         <!-- Stable keys across the re-render, so closeModal()
                              can put focus back on this card's own button. -->
-                        <button type="button" class="btn btn-primary btn-sm" data-action="posts:publishNow"
-                                data-id="${post.id}" data-focus-key="post-publish-${post.id}">
-                            <i data-lucide="send" aria-hidden="true"></i> ${t('posts.publishNow')}
-                        </button>
-                        <button type="button" class="btn btn-secondary btn-sm" data-action="posts:showEditModal"
-                                data-id="${post.id}" data-focus-key="post-edit-${post.id}">
-                            <i data-lucide="pencil" aria-hidden="true"></i> ${t('common.edit')}
-                        </button>
-                        <button type="button" class="btn btn-danger btn-sm" data-action="posts:deletePost"
-                                data-id="${post.id}" data-focus-key="post-delete-${post.id}">
-                            <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
-                        </button>
+                        ${UI.button({
+                            variant: 'primary', size: 'sm', icon: 'send', label: t('posts.publishNow'),
+                            action: 'posts:publishNow', data: { id: post.id },
+                            focusKey: `post-publish-${post.id}`,
+                        })}
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'pencil', label: t('common.edit'),
+                            action: 'posts:showEditModal', data: { id: post.id },
+                            focusKey: `post-edit-${post.id}`,
+                        })}
+                        ${UI.button({
+                            variant: 'danger', size: 'sm', icon: 'trash-2', label: t('common.delete'),
+                            action: 'posts:deletePost', data: { id: post.id },
+                            focusKey: `post-delete-${post.id}`,
+                        })}
                     ` : html`
-                        <button type="button" class="btn btn-secondary btn-sm btn-full" data-action="posts:deletePost" data-id="${post.id}">
-                            <i data-lucide="trash-2" aria-hidden="true"></i> ${t('posts.deleteLog')}
-                        </button>
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', full: true,
+                            icon: 'trash-2', label: t('posts.deleteLog'),
+                            action: 'posts:deletePost', data: { id: post.id },
+                        })}
                     `}
                 </div>
             </article>
@@ -371,10 +398,11 @@ const PostsPage = {
                 <div class="surface pad-5 stack gap-3">
                     ${Admin.emptyState('alert-circle', t('posts.emptyLiveTitle'), t('posts.liveEmptyCaveat'))}
                     <div class="row row--center">
-                        <button type="button" class="btn btn-secondary btn-sm"
-                                data-action="app:navigate" data-target="settings">
-                            <i data-lucide="key-round" aria-hidden="true"></i> ${t('overview.openSettings')}
-                        </button>
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'key-round',
+                            label: t('overview.openSettings'),
+                            action: 'app:navigate', data: { target: 'settings' },
+                        })}
                     </div>
                 </div>
             `;
@@ -535,9 +563,10 @@ const PostsPage = {
     },
 
     /**
-     * The scheduling block. `scheduleNote()` is recomputed on every change of
-     * the time field, so the operator watches "actually publishes" stay on the
-     * same 00:00 UTC run while they nudge the minutes.
+     * The scheduling block. `scheduleNoteText()` is recomputed on every change
+     * of the time field, so the operator watches the answer stay on the same
+     * 00:00 UTC run while they nudge the minutes — which is the point: seeing
+     * it NOT move is what teaches that the minute is not what counts.
      */
     scheduleFields(value) {
         return html`
@@ -556,25 +585,150 @@ const PostsPage = {
         `;
     },
 
+    /**
+     * ── IS THERE A FREQUENT PUBLISH SWEEP? MEASURE, DO NOT READ. ──
+     *
+     * `publishDuePosts()` has exactly two callers (`src/routes/api.ts:352` and
+     * `:714`). The first is inside `GET /api/jobs/drain`, which only the GitHub
+     * Actions schedule calls; the second is inside `GET /api/cron/publish`,
+     * which is the Vercel cron — once a day at 00:00 UTC, a Hobby-plan limit.
+     * `drainInline()` runs after every webhook but drains the JOB QUEUE only; it
+     * does not publish posts. So if the GitHub schedule is not running, the
+     * daily cron is the only thing that publishes anything.
+     *
+     * It is not running. Measured 2026-09-22:
+     *
+     *     $ gh run list --workflow=drain.yml
+     *     11:32:21Z  workflow_dispatch  success   <- the only green run, ever
+     *     09:51:08Z  schedule           failure
+     *     05:05:12Z  schedule           failure
+     *     00:18:36Z  schedule           failure
+     *     21:49:25Z  schedule           failure   (2026-09-21)
+     *
+     * Five runs in the workflow's whole history. Every `schedule` run has
+     * failed, they landed 2.5-5 hours apart rather than every five minutes, and
+     * in the 117 minutes after `CRON_SECRET` was finally set — which fixed the
+     * failures — not one scheduled run fired, against ~23 expected at a
+     * five-minute cron. The single success is a manual `workflow_dispatch`.
+     * That proves the endpoint and the secret; it does not prove the schedule.
+     *
+     * This constant was briefly `true`, on the strength of FLOWS.md §3.2 and
+     * `drain.yml`'s own header saying "every ~5-15 minutes". Both describe the
+     * INTENT. Reading intent as behaviour put "publishes within ~15 minutes" in
+     * front of an operator whose post would not go out until the next midnight
+     * — wrong by up to 24 hours in the direction where someone schedules an
+     * evening post, watches the window lapse, and concludes the product is
+     * broken. The conservative answer being wrong costs an early publish; the
+     * optimistic one costs trust.
+     *
+     * ── TO FLIP THIS, CHECK ONE OF THESE FIRST ──
+     *
+     *   1. `gh run list --workflow=drain.yml` shows a green row whose trigger is
+     *      literally `schedule` (not `workflow_dispatch` — a manual run proves
+     *      only that someone pressed the button).
+     *   2. `heroku ps:scale worker=1 -a autoreply-pro-worker` has been run; the
+     *      dyno polls the same endpoint every 60s. It is at 0 today. Confirm
+     *      with `heroku ps -a autoreply-pro-worker`.
+     *
+     * Either one makes the frequent figure correct. Then this is a one-line
+     * change: set it to `true`. `publishWindow()` and the copy already carry
+     * both regimes, so nothing else moves.
+     */
+    FREQUENT_SWEEP: false,
+
+    /**
+     * The tail on a frequent sweep, used only when `FREQUENT_SWEEP` is true.
+     *
+     * 15 minutes rather than 5 because GitHub Actions explicitly does not
+     * promise schedule punctuality — runs are throttled under load and are
+     * routinely several minutes late — so the number the operator sees should
+     * be the slow end of "every ~5-15 minutes", not the flattering end.
+     */
+    FREQUENT_SWEEP_LAG_MS: 15 * 60 * 1000,
+
+    /**
+     * When a post requested at `iso` will actually publish.
+     *
+     * Pure, and separated from the copy for exactly that reason: this is the
+     * claim the screen makes to the operator about their own posting schedule,
+     * and `src/dashboard/screens.test.ts` pins it rather than trusting a reading
+     * of the template it is interpolated into.
+     *
+     * Two regimes, chosen by `FREQUENT_SWEEP` above:
+     *
+     *   - daily (today) — the Vercel cron fires at a known INSTANT, so there is
+     *     no spread to express and the window collapses to a point: `until`
+     *     equals `from`. `UI.nextCronRun()` computes that instant and is reused
+     *     rather than reimplemented here.
+     *   - frequent — the post goes out at about the requested time, with a tail.
+     *
+     * @param {string|Date|null} iso   the requested time
+     * @param {number} [now]           epoch ms, injectable so the test has a clock
+     * @returns {{ isPast: boolean, from: Date, until: Date, frequent: boolean }|null}
+     */
+    publishWindow(iso, now) {
+        if (!iso) return null;
+        const requested = iso instanceof Date ? iso : new Date(iso);
+        if (Number.isNaN(requested.getTime())) return null;
+        const at = typeof now === 'number' ? now : Date.now();
+
+        // A time already past does not publish in the past: it publishes on the
+        // next run, counted from NOW rather than from the requested instant.
+        // Without this an overdue post claimed a moment that had already gone.
+        const isPast = requested.getTime() <= at;
+        const after = isPast ? new Date(at) : requested;
+
+        if (!this.FREQUENT_SWEEP) {
+            const run = UI.nextCronRun(after);
+            return { isPast, from: run, until: run, frequent: false };
+        }
+        return {
+            isPast,
+            from: after,
+            until: new Date(after.getTime() + this.FREQUENT_SWEEP_LAG_MS),
+            frequent: true,
+        };
+    },
+
+    /**
+     * The window as a sentence. The ONE place a window becomes copy.
+     *
+     * Two callers — the note under the form field and the line on each queued
+     * card — and they used to each pick their own key. They promptly diverged:
+     * the note was corrected to the daily reality while the card went on
+     * promising "within about 15 minutes" for the same post. That is the same
+     * failure as the three hand-copied reset lists in inbox.js, so it gets the
+     * same treatment.
+     *
+     * Four keys, not two: the regime decides which pair is used, so flipping
+     * `FREQUENT_SWEEP` needs no edit here. The `isPast` split survives both —
+     * "that time has already passed" is the line that stops the operator
+     * waiting for something queued behind a run they have already missed.
+     */
+    publishWindowText(win) {
+        if (!win) return '';
+        const when = UI.formatDateTime(win.from);
+        if (win.frequent) {
+            return win.isPast
+                ? t('posts.schedule.pastExpected')
+                : t('posts.schedule.expected', { when });
+        }
+        return win.isPast
+            ? t('posts.schedule.pastExpectedDaily', { when })
+            : t('posts.schedule.expectedDaily', { when });
+    },
+
     scheduleNoteText(localValue) {
-        const iso = UI.fromLocalInputValue(localValue);
-        if (!iso) return '';
-        const requested = new Date(iso);
-        const isPast = requested.getTime() <= Date.now();
-        const run = UI.nextCronRun(isPast ? new Date() : requested);
-        return isPast
-            ? `${t('posts.schedule.pastWarning')} ${t('posts.schedule.actual', { when: UI.formatDateTime(run) })}`
-            : t('posts.schedule.actual', { when: UI.formatDateTime(run) });
+        return this.publishWindowText(this.publishWindow(UI.fromLocalInputValue(localValue)));
     },
 
     refreshScheduleNote() {
         const input = document.getElementById('post-scheduled-time');
         const note = document.getElementById('schedule-actual');
         if (!input || !note) return;
-        const iso = UI.fromLocalInputValue(input.value);
-        const isPast = iso ? new Date(iso).getTime() <= Date.now() : false;
+        const window = this.publishWindow(UI.fromLocalInputValue(input.value));
         note.textContent = this.scheduleNoteText(input.value);
-        note.classList.toggle('is-warning', isPast);
+        note.classList.toggle('is-warning', !!(window && window.isPast));
     },
 
     modalHeader(title) {
@@ -628,16 +782,18 @@ const PostsPage = {
                     <span class="switch-label">${t('posts.publishNowToggle')}</span>
                 </div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                    <button type="submit" class="btn btn-primary" id="schedule-submit-btn">
-                        <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.scheduleBtn')}
-                    </button>
+                    ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                    ${UI.button({
+                        variant: 'primary', type: 'submit', icon: 'plus',
+                        label: t('posts.scheduleBtn'), id: 'schedule-submit-btn',
+                    })}
                 </div>
             </form>
         `);
 
         // Apply the platform/type matrix on open — it used to run only on change,
         // so a Facebook post could show Instagram-only types until you touched it.
+        this._uploadsInFlight = 0;
         this.applyPlatformMatrix();
     },
 
@@ -677,12 +833,17 @@ const PostsPage = {
                 ${this.mediaFields({ ...post, post_type: postType })}
                 ${this.scheduleFields(defaultTime)}
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> ${t('common.saveChanges')}</button>
+                    ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                    ${UI.button({
+                        variant: 'primary', type: 'submit', icon: 'check', label: t('common.saveChanges'),
+                    })}
                 </div>
             </form>
         `);
 
+        // A count left over from a modal closed mid-upload would hold this
+        // form's submit button disabled with nothing on screen explaining it.
+        this._uploadsInFlight = 0;
         this.applyPlatformMatrix();
     },
 
@@ -821,11 +982,14 @@ const PostsPage = {
             return;
         }
 
-        const btn = form.querySelector('button[type="submit"]');
-        if (btn.disabled) return; // already in flight
-        const originalHtml = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = UI.buttonSpinner();
+        // Was the one hand-rolled busy state left on this screen: no `aria-busy`,
+        // and `buttonSpinner()` with no argument relabels the button "Loading",
+        // so "Schedule" and "Publish now" — which `toggleScheduleTime` has just
+        // been keeping accurate — both became the same meaningless word at the
+        // moment the operator most needs to know which of the two they pressed.
+        // `formBusy` keeps whichever label is on it and restores it exactly.
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // already in flight
 
         try {
             const result = await API.createScheduledPost(payload);
@@ -836,9 +1000,7 @@ const PostsPage = {
                 // misleading message in this UI. Keep the modal open, show the real error.
                 this.publishError = { message: failure };
                 this.showFormError(failure);
-                btn.disabled = false;
-                btn.innerHTML = originalHtml;
-                UI.icons(btn);
+                restore();
                 await this.render();
                 return;
             }
@@ -853,9 +1015,7 @@ const PostsPage = {
             const failure = this.publishFailure(null, err);
             if (publishNow) this.publishError = { message: failure };
             this.showFormError(failure);
-            btn.disabled = false;
-            btn.innerHTML = originalHtml;
-            UI.icons(btn);
+            restore();
             if (publishNow) await this.render();
         }
     },
@@ -1003,6 +1163,41 @@ const PostsPage = {
     },
 
     // ─── Uploads ─────────────────────────────────────────────────────────────
+    /**
+     * How many uploads are in flight for the open modal.
+     *
+     * An upload is a `FileReader` pass plus a base64 POST of up to 3.2MB, which
+     * on a phone connection is not instant — and nothing stopped the operator
+     * submitting the form in the middle of it. The best case was the browser's
+     * own "please fill out this field" bubble on a media URL that was seconds
+     * from arriving; the worse case, on a Facebook text post where media is not
+     * required, was a post scheduled with no media at all while the progress
+     * spinner was still turning.
+     *
+     * A count rather than a flag because the media file and the cover file are
+     * two independent inputs that can both be uploading at once, and the first
+     * to finish must not unlock the form while the second is still going.
+     */
+    _uploadsInFlight: 0,
+
+    /**
+     * Hold the submit button while media is uploading, and say why.
+     *
+     * Not `UI.formBusy`: this is not a submission in flight, the button must
+     * come back to its own label rather than a spinner, and `formBusy`'s
+     * already-in-flight contract would fight the counter.
+     */
+    setUploadBusy(delta) {
+        this._uploadsInFlight = Math.max(0, this._uploadsInFlight + delta);
+        const form = document.getElementById('post-schedule-form');
+        const btn = form && form.querySelector('button[type="submit"]');
+        if (!btn) return;
+        const busy = this._uploadsInFlight > 0;
+        btn.disabled = busy;
+        if (busy) btn.setAttribute('title', t('posts.uploadWaitHint'));
+        else btn.removeAttribute('title');
+    },
+
     async handleFileUpload(input) {
         const target = input.dataset.target === 'cover' ? 'cover' : 'media';
         const file = input.files && input.files[0];
@@ -1022,6 +1217,12 @@ const PostsPage = {
 
         if (progress) progress.classList.add('is-active');
         if (target === 'media' && preview) preview.classList.remove('is-visible');
+        this.setUploadBusy(1);
+
+        const done = () => {
+            if (progress) progress.classList.remove('is-active');
+            this.setUploadBusy(-1);
+        };
 
         const reader = new FileReader();
         reader.onload = async (e) => {
@@ -1032,21 +1233,29 @@ const PostsPage = {
                     base64_data: e.target.result,
                 });
 
-                if (urlInput) urlInput.value = res.url;
-                if (progress) progress.classList.remove('is-active');
+                // The modal can be closed mid-upload, which detaches this input
+                // — writing the URL into it then loses the upload silently and
+                // the toast claims success for a field nobody will ever see.
+                if (!urlInput || !urlInput.isConnected) {
+                    done();
+                    return;
+                }
+                urlInput.value = res.url;
+                done();
 
                 if (target === 'media') this.showMediaPreview(res.url, file.type.startsWith('video/'));
                 this.refreshCoverPreview();
                 UI.toast(t('posts.uploadDone'));
             } catch (err) {
                 UI.toast(t('posts.uploadFailed', { message: err.message }), 'error');
-                if (progress) progress.classList.remove('is-active');
+                done();
                 input.value = '';
             }
         };
         reader.onerror = () => {
             UI.toast(t('posts.readFailed'), 'error');
-            if (progress) progress.classList.remove('is-active');
+            done();
+            input.value = '';
         };
         reader.readAsDataURL(file);
     },

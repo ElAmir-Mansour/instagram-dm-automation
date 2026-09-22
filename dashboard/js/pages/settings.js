@@ -126,10 +126,11 @@ const SettingsPage = {
                                     </span>
                                 ` : ''}
                             </p>
-                            <button type="button" class="btn btn-secondary btn-sm" id="settings-extend"
-                                    data-action="settings:extendToken">
-                                <i data-lucide="refresh-cw" aria-hidden="true"></i> ${t('settings.extend')}
-                            </button>
+                            ${UI.button({
+                                variant: 'secondary', size: 'sm', icon: 'refresh-cw',
+                                label: t('settings.extend'),
+                                action: 'settings:extendToken', id: 'settings-extend',
+                            })}
                         </div>
                     ` : html`
                         <p class="token-info mbe-4">${t('settings.expiresNever')}</p>
@@ -148,12 +149,24 @@ const SettingsPage = {
                         <label class="form-label" for="settings-token-input">${t('settings.updateToken')}</label>
                         <p class="form-hint mbe-3">${t('settings.updateTokenHint')}</p>
                         <form id="token-form" data-submit="settings:handleTokenUpdate">
+                            <!-- autocomplete/spellcheck off, matching the webhook
+                                 field below and the confirm dialog's echo input.
+                                 This one carried a live, never-expiring Meta Page
+                                 Access Token in a plain spellchecked textarea:
+                                 browsers with enhanced spell check send field
+                                 contents to a remote service, and autofill will
+                                 happily remember and re-offer a 200-character
+                                 credential. The value is the one thing on this
+                                 screen that must not leave the page by any route
+                                 but the submit. -->
                             <textarea class="field-textarea field-mono" id="settings-token-input" name="token" dir="ltr"
+                                      autocomplete="off" spellcheck="false" autocapitalize="off"
                                       placeholder="${t('settings.tokenPlaceholder')}" required></textarea>
                             <div class="form-actions">
-                                <button type="submit" class="btn btn-primary btn-sm" id="settings-token-submit">
-                                    <i data-lucide="key" aria-hidden="true"></i> ${t('settings.validateSave')}
-                                </button>
+                                ${UI.button({
+                                    variant: 'primary', size: 'sm', type: 'submit', icon: 'key',
+                                    label: t('settings.validateSave'), id: 'settings-token-submit',
+                                })}
                             </div>
                         </form>
                     </div>
@@ -171,9 +184,10 @@ const SettingsPage = {
                                 <span class="inline-error-hint">${t('settings.webhookUnknownHint')}</span>
                             </div>
                         </div>
-                        <button type="button" class="btn btn-secondary btn-sm mbe-4" data-action="settings:render">
-                            <i data-lucide="rotate-cw" aria-hidden="true"></i> ${t('common.retry')}
-                        </button>
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', className: 'mbe-4',
+                            icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render',
+                        })}
                     ` : html`
                         <div class="token-status">
                             <span class="status-pill ${webhookToken.configuredInDatabase ? html.raw('sent') : html.raw('failed')}">
@@ -199,9 +213,10 @@ const SettingsPage = {
                             <!-- Stable id: after a successful save the page
                                  re-renders and this button is destroyed, so it
                                  is what restoreFocus() re-finds. -->
-                            <button type="submit" class="btn btn-primary btn-sm" id="settings-webhook-submit">
-                                <i data-lucide="shield-check" aria-hidden="true"></i> ${t('settings.webhookSave')}
-                            </button>
+                            ${UI.button({
+                                variant: 'primary', size: 'sm', type: 'submit', icon: 'shield-check',
+                                label: t('settings.webhookSave'), id: 'settings-webhook-submit',
+                            })}
                         </div>
                     </form>
                 </div>
@@ -318,7 +333,7 @@ const SettingsPage = {
      * issues a new one.
      */
     extendToken(btn) {
-        if (btn.disabled) return;
+        if (!btn || btn.disabled) return;
         Admin.confirm({
             title: t('settings.extendTitle'),
             body: t('settings.extendConfirm'),
@@ -331,13 +346,16 @@ const SettingsPage = {
     },
 
     async extendTokenConfirmed(btn) {
-        if (btn.disabled) return;
-
-        // Same reason as the two forms: disabling it blurs it.
+        // Same reason as the two forms: disabling it blurs it, so the token is
+        // taken first. `UI.actionBusy` replaces the hand-rolled version, which
+        // set no `aria-busy` and called `buttonSpinner()` with no argument —
+        // that falls back to "Loading", so the button both changed its label to
+        // something meaningless and grew wide enough to shove the expiry line
+        // beside it sideways. actionBusy keeps the button's own name for
+        // assistive technology and pins the width it already had.
         const focus = UI.captureFocus(document.getElementById('page-container'));
-        const originalHtml = btn.innerHTML;
-        btn.innerHTML = UI.buttonSpinner();
-        btn.disabled = true;
+        const restore = UI.actionBusy(btn);
+        if (!restore) return; // already in flight
 
         try {
             await API.request('/settings/token/extend', { method: 'POST' });
@@ -347,9 +365,7 @@ const SettingsPage = {
         } catch (err) {
             console.error(err);
             UI.toast(err.message || t('settings.extendFailed'), 'error');
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-            UI.icons(btn);
+            restore();
         }
     },
 };

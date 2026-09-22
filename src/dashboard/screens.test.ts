@@ -1,0 +1,537 @@
+/**
+ * The operator screens' logic, as opposed to their markup.
+ *
+ * Four things in `dashboard/js/pages/` decide something rather than render
+ * something, and each one is a claim the product makes that a screenshot cannot
+ * check:
+ *
+ * 1. `PostsPage.publishWindow` — WHEN a scheduled post goes out. This is the
+ *    number the operator plans their day around, and it has been wrong twice in
+ *    opposite directions: first the minute picker promised precision the daily
+ *    cron could not keep, then a "publishes within ~15 minutes" written from
+ *    FLOWS.md's description of a drain schedule that has never actually run.
+ *    Nothing caught either, because a plausible timestamp looks exactly like a
+ *    correct one. The second was the worse mistake — an optimistic answer makes
+ *    the operator watch a window lapse and conclude the product is broken — and
+ *    it came from reading documented intent as measured behaviour.
+ *
+ * 2. `ActivityPage.hasFilters` — whether zero rows means "nothing happened" or
+ *    "your own filter is hiding it". The two render different copy and only one
+ *    of them offers a way out, so the predicate is the whole distinction.
+ *
+ * 3. `InboxPage.resetViewState` — which fields survive leaving the screen. The
+ *    bug this replaces was one field missing from one of three hand-copied
+ *    lists, which is the failure mode a list has.
+ *
+ * 4. `AiSettingsPage.loadSettings` — whether Save is usable after a failed load
+ *    and a successful retry. It was not: the failure path disabled the button
+ *    and no path ever turned it back on.
+ *
+ * Loaded the same way as escaping.test.ts, charts.test.ts and buttons.test.ts:
+ * the REAL dashboard files in a `node:vm` context, so these test what ships.
+ */
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { describe, it } from 'node:test';
+import vm from 'node:vm';
+
+interface PublishWindow { isPast: boolean; from: Date; until: Date; frequent: boolean }
+
+interface PostsApi {
+    FREQUENT_SWEEP: boolean;
+    FREQUENT_SWEEP_LAG_MS: number;
+    publishWindow(iso: unknown, now?: number): PublishWindow | null;
+    publishWindowText(win: PublishWindow | null): string;
+    scheduleNoteText(localValue: string): string;
+    renderScheduledCard(post: Record<string, unknown>): { toString(): string };
+}
+
+interface ActivityApi {
+    currentStatus: string;
+    currentSearch: string;
+    currentPlatform: string;
+    currentCampaignId: string;
+    currentPage: number;
+    hasFilters(): boolean;
+    clearFilters(): void;
+    loadData(container?: unknown): unknown;
+}
+
+interface InboxApi {
+    searchTerm: string;
+    threads: unknown[];
+    selectedConversationId: string | null;
+    messagesPainted: boolean;
+    lastMessageStamp: string | null;
+    pendingBotState: Map<unknown, unknown>;
+    renderedMessageIds: Set<unknown>;
+    resetViewState(): void;
+    destroy(): void;
+    resetTenantState(): void;
+    visibleThreads(): Array<Record<string, unknown>>;
+}
+
+interface AiApi {
+    loadSettings(): Promise<void>;
+}
+
+interface FakeEl {
+    id: string;
+    value: string;
+    checked: boolean;
+    disabled: boolean;
+    innerHTML: string;
+    textContent: string;
+    classList: { toggle(name: string, on?: boolean): void; add(n: string): void; remove(n: string): void; contains(): boolean };
+    setAttribute(n: string, v: string): void;
+    removeAttribute(n: string): void;
+    getAttribute(n: string): string | null;
+    focus(): void;
+    // `UI.renderError` writes into the host and then looks for its own Retry
+    // button, so an element that cannot be queried is not a usable stub.
+    querySelector(): null;
+    querySelectorAll(): never[];
+}
+
+function fakeEl(id: string): FakeEl {
+    const attrs = new Map<string, string>();
+    return {
+        id,
+        value: '',
+        checked: false,
+        disabled: false,
+        innerHTML: '',
+        textContent: '',
+        classList: { toggle: () => {}, add: () => {}, remove: () => {}, contains: () => false },
+        setAttribute: (n, v) => { attrs.set(n, String(v)); },
+        removeAttribute: (n) => { attrs.delete(n); },
+        getAttribute: (n) => (attrs.has(n) ? (attrs.get(n) as string) : null),
+        focus: () => {},
+        querySelector: () => null,
+        querySelectorAll: () => [],
+    };
+}
+
+interface UiApi {
+    formatDateTime(iso: unknown): string;
+    fromLocalInputValue(value: string): string | null;
+    toLocalInputValue(iso: unknown): string;
+}
+
+/** The page's own local-time parser, so the test cannot disagree with it. */
+function vmFromLocal(UI: UiApi, local: string): string | null {
+    return UI.fromLocalInputValue(local);
+}
+
+type Translate = (key: string, params?: Record<string, unknown>) => string;
+
+interface Loaded {
+    Posts: PostsApi;
+    UI: UiApi;
+    t: Translate;
+    Activity: ActivityApi;
+    Inbox: InboxApi;
+    Ai: AiApi;
+    dom: Map<string, FakeEl>;
+    /** Stubbed API responses, per method name. */
+    api: Record<string, (...args: unknown[]) => unknown>;
+    /** Every loadData() call the page made, so a re-fetch is observable. */
+    loads: number[];
+}
+
+function load(): Loaded {
+    const noop = (): void => {};
+    const dom = new Map<string, FakeEl>();
+    const stubEl = {
+        addEventListener: noop, removeEventListener: noop,
+        querySelectorAll: () => [], querySelector: () => null,
+        appendChild: noop, setAttribute: noop, getAttribute: () => null,
+        removeAttribute: noop,
+        classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+        style: {}, dataset: {}, focus: noop, remove: noop, closest: () => null,
+        contains: () => false, children: [], innerHTML: '',
+    };
+    const api: Record<string, (...args: unknown[]) => unknown> = {};
+
+    const ctx: Record<string, unknown> = {
+        document: {
+            ...stubEl,
+            createElement: () => ({ ...stubEl }),
+            body: { ...stubEl }, head: { ...stubEl },
+            documentElement: { ...stubEl, lang: 'ar', dir: 'rtl' },
+            getElementById: (id: string) => dom.get(id) ?? null,
+            activeElement: null,
+            visibilityState: 'visible',
+        },
+        window: {
+            addEventListener: noop, removeEventListener: noop,
+            matchMedia: () => ({ matches: false, addEventListener: noop }),
+            location: { hash: '' },
+        },
+        Intl, console, setTimeout, clearTimeout, setInterval, clearInterval,
+        requestAnimationFrame: (f: () => void) => f(),
+        navigator: { language: 'ar' },
+        CSS: { escape: (v: string) => String(v) },
+        // The pages reach for these; none is under test here.
+        API: new Proxy(api, {
+            get: (target, prop: string) => (prop in target
+                ? target[prop]
+                : () => Promise.reject(new Error(`API.${prop} not stubbed`))),
+        }),
+        Admin: { emptyState: () => '', confirm: noop },
+        App: { currentTheme: () => 'auto', navigate: noop },
+    };
+    ctx.globalThis = ctx;
+    vm.createContext(ctx);
+
+    for (const f of [
+        'dashboard/js/components.js',
+        'dashboard/js/i18n.js',
+        'dashboard/js/motion.js',
+        'dashboard/js/charts.js',
+        'dashboard/js/pages/posts.js',
+        'dashboard/js/pages/activity.js',
+        'dashboard/js/pages/inbox.js',
+        'dashboard/js/pages/ai_settings.js',
+    ]) {
+        vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
+    }
+
+    const { PostsPage, ActivityPage, InboxPage, AiSettingsPage, UI, t } = vm.runInContext(
+        '({ PostsPage, ActivityPage, InboxPage, AiSettingsPage, UI, t })', ctx
+    ) as {
+        PostsPage: PostsApi; ActivityPage: ActivityApi; InboxPage: InboxApi;
+        AiSettingsPage: AiApi; UI: UiApi; t: Translate;
+    };
+
+    // loadData() writes markup and is not what these tests are about; the FACT
+    // that it was called is.
+    const loads: number[] = [];
+    ActivityPage.loadData = (): unknown => { loads.push(ActivityPage.currentPage); return undefined; };
+
+    return { Posts: PostsPage, UI, t, Activity: ActivityPage, Inbox: InboxPage, Ai: AiSettingsPage, dom, api, loads };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('PostsPage.publishWindow — when a scheduled post actually goes out', () => {
+    const { Posts } = load();
+    // A fixed clock. Real `Date.now()` in an assertion about a time window is
+    // how a test passes at 09:00 and fails at midnight.
+    const NOW = Date.parse('2026-09-22T09:00:00.000Z');
+
+    it('is in the DAILY regime, because the frequent sweep has never run', () => {
+        // The load-bearing assertion in this file. `publishDuePosts()` has two
+        // callers: the GitHub Actions drain (whose schedule has produced five
+        // runs ever, every one of them either a failure or a manual dispatch)
+        // and the Vercel cron, once a day at 00:00 UTC. `drainInline()` runs
+        // after every webhook but drains the job queue only.
+        //
+        // This flipped to `true` once on the strength of FLOWS.md and drain.yml
+        // describing the INTENT, and the screen then told operators their post
+        // would go out in ~15 minutes when it would actually wait for midnight.
+        // The constant carries the two checks that would justify flipping it.
+        assert.equal(Posts.FREQUENT_SWEEP, false);
+    });
+
+    it('a future time publishes at the next 00:00 UTC, not at that time', () => {
+        const win = Posts.publishWindow('2026-09-22T14:35:00.000Z', NOW);
+        assert.ok(win);
+        assert.equal(win.isPast, false);
+        assert.equal(win.frequent, false);
+        assert.equal(win.from.toISOString(), '2026-09-23T00:00:00.000Z');
+    });
+
+    it('a time before midnight still waits for the NEXT midnight, not the last one', () => {
+        // 23:59 on the 22nd publishes on the 23rd's run, not the 22nd's, which
+        // has already happened. `UI.nextCronRun` is strict about this and the
+        // screen depends on it.
+        const win = Posts.publishWindow('2026-09-22T23:59:00.000Z', NOW);
+        assert.ok(win);
+        assert.equal(win.from.toISOString(), '2026-09-23T00:00:00.000Z');
+    });
+
+    it('collapses the window to an instant, because a daily cron has no spread', () => {
+        const win = Posts.publishWindow('2026-09-22T14:35:00.000Z', NOW);
+        assert.ok(win);
+        assert.equal(win.until.getTime(), win.from.getTime());
+    });
+
+    it('counts an overdue post from NOW, not from the time that has passed', () => {
+        // A run that happened yesterday tells the operator nothing about when
+        // the post in front of them will go out.
+        const win = Posts.publishWindow('2026-09-20T08:00:00.000Z', NOW);
+        assert.ok(win);
+        assert.equal(win.isPast, true);
+        assert.equal(win.from.toISOString(), '2026-09-23T00:00:00.000Z');
+    });
+
+    it('switches regime, and only the regime, when FREQUENT_SWEEP flips', () => {
+        // The flip has to be one line. This asserts that it is: the same input,
+        // the same function, a different claim — with the 15-minute tail being
+        // the slow end of "every ~5-15 minutes" rather than the flattering end.
+        const { Posts: P } = load();
+        P.FREQUENT_SWEEP = true;
+        try {
+            const win = P.publishWindow('2026-09-22T14:35:00.000Z', NOW);
+            assert.ok(win);
+            assert.equal(win.frequent, true);
+            assert.equal(win.from.toISOString(), '2026-09-22T14:35:00.000Z');
+            assert.equal(P.FREQUENT_SWEEP_LAG_MS, 15 * 60 * 1000);
+            assert.equal(win.until.getTime() - win.from.getTime(), 15 * 60 * 1000);
+            // And an overdue post is measured from now, in both regimes.
+            const late = P.publishWindow('2026-09-20T08:00:00.000Z', NOW);
+            assert.ok(late);
+            assert.equal(late.isPast, true);
+            assert.equal(late.from.getTime(), NOW);
+        } finally {
+            P.FREQUENT_SWEEP = false;
+        }
+    });
+
+    it('treats the current instant as past, so it is never a window of zero', () => {
+        const win = Posts.publishWindow(new Date(NOW).toISOString(), NOW);
+        assert.ok(win);
+        assert.equal(win.isPast, true);
+    });
+
+    it('the queue card and the form field say the same thing about the same post', () => {
+        // They did not. `scheduleNoteText` was corrected to the daily reality
+        // while `renderScheduledCard` kept its own copy of the branch and went
+        // on promising "within about 15 minutes" for the very same post — two
+        // answers, one screen. Both now go through `publishWindowText`, and this
+        // is what stops them drifting apart again.
+        const { Posts: P, UI } = load();
+        const iso = '2027-03-04T18:20:00.000Z';
+        const win = P.publishWindow(iso, NOW);
+        assert.ok(win);
+
+        // The REAL card markup, not the shared helper called twice — asserting
+        // `publishWindowText` agrees with itself is what the first version of
+        // this test did, and a card that had gone back to building its own
+        // sentence sailed straight through it.
+        const card = String(P.renderScheduledCard({
+            id: 9, platform: 'instagram', post_type: 'image', status: 'PENDING',
+            scheduled_time: iso, caption: 'c',
+        }));
+        const fieldText = P.scheduleNoteText(UI.toLocalInputValue(iso));
+
+        assert.ok(fieldText.length > 0);
+        assert.ok(
+            card.includes(fieldText),
+            `the card does not carry the sentence the form field shows.\n  field: ${fieldText}`
+        );
+    });
+
+    it('returns null rather than an Invalid Date for anything unparseable', () => {
+        // The caller renders this straight into the form. `Invalid Date` reaching
+        // Intl throws inside a template literal, which is past the try/catch and
+        // blanks the modal — the exact shape of the pagination crash in
+        // activity.js that this project has already been bitten by.
+        for (const bad of [null, undefined, '', 'not a date', {}]) {
+            assert.equal(Posts.publishWindow(bad, NOW), null, `expected null for ${JSON.stringify(bad)}`);
+        }
+    });
+
+    it('accepts a Date as readily as an ISO string', () => {
+        // renderScheduledCard passes whatever the API row holds.
+        const win = Posts.publishWindow(new Date('2026-09-23T10:00:00.000Z'), NOW);
+        assert.ok(win);
+        assert.equal(win.isPast, false);
+    });
+
+    it('uses the overdue wording for a past time, not merely a different timestamp', () => {
+        // The first version of this compared the future note to the past note
+        // and asserted they differed — which a mutation collapsing both branches
+        // into the FUTURE string passed anyway, because the two still carried
+        // different `{when}` values. The strings differed for a reason that had
+        // nothing to do with the branch under test.
+        //
+        // So each note is pinned against the key it is supposed to come from,
+        // rendered with the instant `publishWindow` actually computed. The
+        // `notEqual` is the one that fails on a collapse.
+        const { Posts: P, UI, t } = load();
+        const local = '2020-01-01T10:00';
+        const win = P.publishWindow(vmFromLocal(UI, local));
+        assert.ok(win);
+        assert.equal(win.isPast, true);
+
+        const when = UI.formatDateTime(win.from);
+        const note = P.scheduleNoteText(local);
+        assert.equal(note, t('posts.schedule.pastExpectedDaily', { when }));
+        assert.notEqual(note, t('posts.schedule.expectedDaily', { when }));
+    });
+
+    it('uses the forward wording for a future time', () => {
+        const { Posts: P, UI, t } = load();
+        const local = '2027-01-01T10:00';
+        const win = P.publishWindow(vmFromLocal(UI, local));
+        assert.ok(win);
+        assert.equal(win.isPast, false);
+
+        const when = UI.formatDateTime(win.from);
+        const note = P.scheduleNoteText(local);
+        assert.equal(note, t('posts.schedule.expectedDaily', { when }));
+        assert.notEqual(note, t('posts.schedule.pastExpectedDaily', { when }));
+    });
+
+    it('names the run the post will go out on, whichever regime is active', () => {
+        // The note must quote the same instant `publishWindow` computed, not a
+        // second opinion — this is the seam where a correct function and a lying
+        // sentence could coexist, which is exactly what happened when the copy
+        // said "~15 minutes" while the backend published at midnight.
+        for (const frequent of [false, true]) {
+            const { Posts: P, UI } = load();
+            P.FREQUENT_SWEEP = frequent;
+            const local = '2027-01-01T10:35';
+            const win = P.publishWindow(vmFromLocal(UI, local));
+            assert.ok(win);
+            const note = P.scheduleNoteText(local);
+            assert.ok(
+                note.includes(UI.formatDateTime(win.from)),
+                `frequent=${frequent}: expected the note to name ${UI.formatDateTime(win.from)}; got: ${note}`
+            );
+        }
+    });
+});
+
+describe('ActivityPage.hasFilters — "nothing happened" vs "you filtered it out"', () => {
+    it('is false with nothing set', () => {
+        const { Activity } = load();
+        assert.equal(Activity.hasFilters(), false);
+    });
+
+    it('is true for any one of the four filters on its own', () => {
+        // Each is an independent way to empty the table, and missing one means
+        // that case renders the wrong empty state with no way out.
+        for (const field of ['currentStatus', 'currentSearch', 'currentPlatform', 'currentCampaignId'] as const) {
+            const { Activity } = load();
+            Activity[field] = 'x';
+            assert.equal(Activity.hasFilters(), true, `${field} alone must count as filtered`);
+        }
+    });
+
+    it('ignores the page number, which is not a filter', () => {
+        const { Activity } = load();
+        Activity.currentPage = 4;
+        assert.equal(Activity.hasFilters(), false);
+    });
+
+    it('clearFilters drops all four and returns to page one', () => {
+        const { Activity, loads } = load();
+        Activity.currentStatus = 'FAILED';
+        Activity.currentSearch = 'sara';
+        Activity.currentPlatform = 'instagram';
+        Activity.currentCampaignId = '7';
+        Activity.currentPage = 5;
+
+        Activity.clearFilters();
+
+        assert.equal(Activity.hasFilters(), false);
+        // Page one, not page five: page five of the unfiltered log is not where
+        // the operator was, and may not exist.
+        assert.equal(Activity.currentPage, 1);
+        assert.deepEqual(loads, [1], 'clearing must re-fetch exactly once');
+    });
+
+    it('does nothing at all when there is nothing to clear', () => {
+        // The button is not rendered in this state, but a stale delegated click
+        // must not fire a pointless request.
+        const { Activity, loads } = load();
+        Activity.clearFilters();
+        assert.deepEqual(loads, []);
+    });
+});
+
+describe('InboxPage.resetViewState — what a returning operator inherits', () => {
+    it('clears the search term, which is the field that used to survive', () => {
+        const { Inbox } = load();
+        Inbox.searchTerm = 'sara';
+        Inbox.resetViewState();
+        assert.equal(Inbox.searchTerm, '');
+    });
+
+    it('is applied by destroy() and by a tenant switch alike', () => {
+        // The bug was three hand-copied lists that had drifted. Both entry
+        // points must land on the same state.
+        for (const method of ['destroy', 'resetTenantState'] as const) {
+            const { Inbox } = load();
+            Inbox.searchTerm = 'sara';
+            Inbox.selectedConversationId = 'c1';
+            Inbox.messagesPainted = true;
+            Inbox.lastMessageStamp = '2026-09-22T09:00:00Z';
+            Inbox.pendingBotState.set('c1', true);
+            Inbox.renderedMessageIds.add('m1');
+            Inbox.threads = [{ id: 'c1' }];
+
+            Inbox[method]();
+
+            assert.equal(Inbox.searchTerm, '', `${method} must clear searchTerm`);
+            assert.equal(Inbox.selectedConversationId, null, `${method} must clear the open thread`);
+            assert.equal(Inbox.messagesPainted, false, `${method} must clear messagesPainted`);
+            assert.equal(Inbox.lastMessageStamp, null, `${method} must clear lastMessageStamp`);
+            assert.equal(Inbox.pendingBotState.size, 0, `${method} must clear pendingBotState`);
+            assert.equal(Inbox.renderedMessageIds.size, 0, `${method} must clear renderedMessageIds`);
+            // `.length`, not deepEqual: the array is built inside the vm realm,
+            // so its prototype is not this realm's Array and a strict deep
+            // comparison against `[]` fails on identity rather than contents.
+            assert.equal(Inbox.threads.length, 0, `${method} must drop the thread list`);
+        }
+    });
+
+    it('a stale term really would have hidden conversations', () => {
+        // Why the reset matters, stated as the behaviour rather than the field:
+        // the filter is applied to the list whether or not the box shows it.
+        const { Inbox } = load();
+        Inbox.threads = [
+            { id: '1', username: 'sara_dev', last_message_text: 'hello' },
+            { id: '2', username: 'omar', last_message_text: 'كم السعر' },
+        ];
+        Inbox.searchTerm = 'sara';
+        assert.equal(Inbox.visibleThreads().length, 1);
+
+        Inbox.resetViewState();
+        assert.equal(Inbox.visibleThreads().length, 2);
+    });
+});
+
+describe('AiSettingsPage — Save survives a failed load followed by a retry', () => {
+    const ids = [
+        'ai-active-toggle', 'system-prompt-text', 'knowledge-base-text',
+        'model-selector', 'temp-slider', 'temp-value', 'save-settings-btn',
+        'ai-settings-error',
+    ];
+
+    it('disables Save when the load fails, so an empty form cannot overwrite a real prompt', async () => {
+        const { Ai, dom, api } = load();
+        ids.forEach((id) => dom.set(id, fakeEl(id)));
+        api.getAiSettings = () => Promise.reject(new Error('502'));
+
+        await Ai.loadSettings();
+
+        assert.equal(dom.get('save-settings-btn')!.disabled, true);
+    });
+
+    it('re-enables Save when a retry succeeds', async () => {
+        // The regression: nothing turned it back on, so a single blip left the
+        // operator looking at their real system prompt above a dead button with
+        // no way out but a full page reload.
+        const { Ai, dom, api } = load();
+        ids.forEach((id) => dom.set(id, fakeEl(id)));
+
+        let attempt = 0;
+        api.getAiSettings = () => {
+            attempt += 1;
+            return attempt === 1
+                ? Promise.reject(new Error('502'))
+                : Promise.resolve({ is_active: true, system_prompt: 'p', knowledge_base: 'k', temperature: 0.7 });
+        };
+
+        await Ai.loadSettings();
+        assert.equal(dom.get('save-settings-btn')!.disabled, true, 'precondition: the first load failed');
+
+        await Ai.loadSettings();
+        assert.equal(dom.get('save-settings-btn')!.disabled, false, 'a successful retry must make Save usable again');
+        assert.equal(dom.get('system-prompt-text')!.value, 'p', 'and the form must actually hold the loaded prompt');
+    });
+});

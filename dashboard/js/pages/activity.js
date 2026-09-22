@@ -31,6 +31,36 @@ const ActivityPage = {
     },
 
     /**
+     * Is anything narrowing the log right now?
+     *
+     * Four filters sit above this table and all four persist across a page
+     * step, a navigation away and back, and a browser refresh of the same hash.
+     * When they combined to zero rows the table said "No interactions found." —
+     * the same sentence a genuinely quiet account gets — so the operator's own
+     * campaign filter from ten minutes ago read as "the automation has stopped
+     * working". The inbox already tells its two empties apart (`noMatch` vs
+     * `noThreads`); this is the same distinction, plus the way out.
+     *
+     * Kept as a predicate rather than inlined four times because the empty
+     * message, the Clear button and the test all have to agree on what
+     * "filtered" means.
+     */
+    hasFilters() {
+        return !!(this.currentStatus || this.currentSearch || this.currentPlatform || this.currentCampaignId);
+    },
+
+    /** Drop every filter and go back to page one. */
+    clearFilters() {
+        if (!this.hasFilters()) return;
+        this.currentStatus = '';
+        this.currentSearch = '';
+        this.currentPlatform = '';
+        this.currentCampaignId = '';
+        this.currentPage = 1;
+        this.loadData();
+    },
+
+    /**
      * Tenant switch: page number and search are stale, and currentCampaignId is
      * a row id that does not exist in the new tenant — leaving it filters the
      * log down to nothing with no visible reason.
@@ -117,6 +147,11 @@ const ActivityPage = {
         const total = Number(pagination.total) || 0;
         const page = Number(pagination.page) || this.currentPage;
         const totalPages = Number(pagination.totalPages) || 0;
+        const filtered = this.hasFilters();
+        // Zero rows because of the filter bar is a different fact from zero rows
+        // because nothing has happened, and only one of them is the operator's
+        // to fix. See hasFilters().
+        const emptyMessage = filtered ? t('activity.noneFiltered') : t('activity.none');
 
         container.innerHTML = esc(html`
             <div class="table-card surface">
@@ -156,12 +191,33 @@ const ActivityPage = {
                         </select>
                     </div>
 
+                    <!-- Two children, not three. Below 768px the stylesheet gives
+                         a direct .row child of .table-header space-between, so a
+                         bare count + Clear + Export wraps with the count pinned
+                         left, Export pinned right and Clear dropped onto a line of
+                         its own between them. Grouping the buttons makes the row
+                         [count][actions], which wraps as a unit at 375px. -->
                     <div class="row gap-3 row--wrap">
-                        <span class="text-meta">${t('activity.results', { count: UI.formatNumber(total) })}</span>
-                        <button type="button" class="btn btn-secondary btn-sm" data-action="activity:handleExport">
-                            <i data-lucide="download" aria-hidden="true"></i>
-                            <span>${t('activity.export')}</span>
-                        </button>
+                        <span class="text-meta">${filtered
+                            ? t('activity.resultsFiltered', { count: UI.formatNumber(total) })
+                            : t('activity.results', { count: UI.formatNumber(total) })}</span>
+                        <span class="row gap-2 row--wrap">
+                            <!-- Only rendered while something is actually narrowing
+                                 the log. A permanently-present "Clear filters" on an
+                                 unfiltered table is a control that does nothing, and
+                                 its absence is itself the signal that the list in
+                                 front of you is complete. -->
+                            ${filtered ? UI.button({
+                                variant: 'ghost', size: 'sm', icon: 'filter-x',
+                                label: t('activity.clearFilters'),
+                                action: 'activity:clearFilters', id: 'activity-clear-filters',
+                            }) : ''}
+                            ${UI.button({
+                                variant: 'secondary', size: 'sm', icon: 'download',
+                                label: t('activity.export'),
+                                action: 'activity:handleExport', id: 'activity-export',
+                            })}
+                        </span>
                     </div>
                 </div>
 
@@ -196,7 +252,7 @@ const ActivityPage = {
                                 </tr>
                             `)}
                             ${rows.length === 0
-                                ? html`<tr><td colspan="6" class="table-empty-cell">${t('activity.none')}</td></tr>`
+                                ? html`<tr><td colspan="6" class="table-empty-cell">${emptyMessage}</td></tr>`
                                 : ''}
                         </tbody>
                     </table>
@@ -219,7 +275,7 @@ const ActivityPage = {
                             <p class="text-meta">${UI.formatDate(i.timestamp)}</p>
                         </article>
                     `)}
-                    ${rows.length === 0 ? html`<p class="table-empty-cell">${t('activity.none')}</p>` : ''}
+                    ${rows.length === 0 ? html`<p class="table-empty-cell">${emptyMessage}</p>` : ''}
                 </div>
 
                 ${totalPages > 1 ? html`
@@ -257,13 +313,28 @@ const ActivityPage = {
                 this.currentPage = 1;
                 this.loadData();
             });
+            // `type="search"` draws a native clear (×) in every engine that
+            // supports it, and pressing it fires `search`, not Enter — so the
+            // control that looks exactly like "cancel this filter" silently
+            // did nothing and the operator was left with a box that had
+            // visibly been emptied and a table that was still filtered.
+            search.addEventListener('search', (e) => {
+                if (e.target.value === this.currentSearch) return;
+                this.currentSearch = e.target.value;
+                this.currentPage = 1;
+                this.loadData();
+            });
         }
 
         // Back onto whatever was in use before the rebuild. Stepping to the
         // last page disables Next, so the fallback is the other page button
-        // rather than <body>.
-        const fallback = focus && focus.key === 'activity-next' ? 'activity-prev'
-            : focus && focus.key === 'activity-prev' ? 'activity-next' : null;
+        // rather than <body> — and clearing the filters removes the Clear
+        // button itself, so that one falls back to the search box, which is
+        // both always present and where the operator is going next anyway.
+        const key = focus && focus.key;
+        const fallback = key === 'activity-next' ? 'activity-prev'
+            : key === 'activity-prev' ? 'activity-next'
+            : key === 'activity-clear-filters' ? 'activity-search' : null;
         UI.restoreFocus(focus, fallback);
 
         // Motion.busy() said "loading"; nothing said the rows had landed.
@@ -289,9 +360,13 @@ const ActivityPage = {
     },
 
     async handleExport(btn) {
-        const original = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = UI.buttonSpinner(t('activity.exporting'));
+        // Was hand-rolled, and the hand-rolled version set no `aria-busy`, so
+        // the spinner was visible and nothing else. `UI.actionBusy` returns null
+        // on a second click, which is the double-export guard: this endpoint
+        // streams the whole filtered log and a cold start makes the button look
+        // completely idle for seconds.
+        const restore = UI.actionBusy(btn, t('activity.exporting'));
+        if (!restore) return;
         try {
             const params = {};
             if (this.currentStatus) params.status = this.currentStatus;
@@ -302,9 +377,7 @@ const ActivityPage = {
         } catch (err) {
             UI.toast(err.message || t('activity.exportFailed'), 'error');
         } finally {
-            btn.disabled = false;
-            btn.innerHTML = original;
-            UI.icons(btn);
+            restore();
         }
     },
 
@@ -318,6 +391,7 @@ UI.registerActions('activity', {
     handleFilter: (el) => ActivityPage.handleFilter(el.value),
     handlePlatformFilter: (el) => ActivityPage.handlePlatformFilter(el.value),
     handleCampaignFilter: (el) => ActivityPage.handleCampaignFilter(el.value),
+    clearFilters: () => ActivityPage.clearFilters(),
     handleExport: (el) => ActivityPage.handleExport(el),
     goToPage: (el) => ActivityPage.goToPage(parseInt(el.dataset.page, 10)),
 });

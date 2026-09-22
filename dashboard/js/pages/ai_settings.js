@@ -175,10 +175,10 @@ const AiSettingsPage = {
                         </div>
 
                         <div class="form-actions">
-                            <button type="submit" id="save-settings-btn" class="btn btn-primary">
-                                <i data-lucide="check" aria-hidden="true"></i>
-                                <span>${t('common.saveChanges')}</span>
-                            </button>
+                            ${UI.button({
+                                variant: 'primary', type: 'submit', icon: 'check',
+                                label: t('common.saveChanges'), id: 'save-settings-btn',
+                            })}
                         </div>
                     </form>
                 </section>
@@ -207,9 +207,10 @@ const AiSettingsPage = {
                                 <label class="sr-only" for="sandbox-user-input">${t('ai.sandboxLabel')}</label>
                                 <input type="text" class="field" id="sandbox-user-input" dir="auto"
                                        placeholder="${t('ai.sandboxPlaceholder')}">
-                                <button type="submit" id="sandbox-btn" class="btn btn-primary" aria-label="${t('ai.sandboxSend')}">
-                                    <i data-lucide="send" aria-hidden="true"></i>
-                                </button>
+                                ${UI.button({
+                                    variant: 'primary', type: 'submit', icon: 'send',
+                                    ariaLabel: t('ai.sandboxSend'), id: 'sandbox-btn',
+                                })}
                             </form>
                         </div>
                     </div>
@@ -232,6 +233,15 @@ const AiSettingsPage = {
             const model = document.getElementById('model-selector');
             const slider = document.getElementById('temp-slider');
             if (!toggle || !prompt || !knowledge || !model || !slider) return;
+
+            // The catch below disables Save so an empty form cannot be written
+            // over a real prompt — and nothing ever turned it back on. A failed
+            // load followed by a successful Retry therefore left the operator
+            // looking at their actual system prompt above a dead Save button,
+            // with no way out but a full page reload. Re-enabling belongs here,
+            // with the fill that makes the form safe to submit again.
+            const saveBtn = document.getElementById('save-settings-btn');
+            if (saveBtn) saveBtn.disabled = false;
 
             toggle.checked = settings.is_active !== false;
             prompt.value = settings.system_prompt || '';
@@ -317,14 +327,36 @@ const AiSettingsPage = {
         }
     },
 
+    /**
+     * Run one message through the current (unsaved) prompt.
+     *
+     * Two things were wrong with how this handled being in flight.
+     *
+     * The submit BUTTON was never disabled — only the text field was — so a
+     * second click sent a second request and appended a second "waiting" bubble
+     * that the first response then orphaned, because the reply handler only
+     * removes the loader it created itself. `UI.formBusy` is the guard the rest
+     * of the dashboard uses and returning null is the double-click no-op. The
+     * empty label is deliberate: this button is icon-only with its name in
+     * `aria-label`, exactly like the inbox composer's.
+     *
+     * And disabling the input blurred it, because disabling the focused element
+     * drops focus to `<body>`; the `finally` then pulled focus back, so every
+     * test bounced the operator out of the page and back in. The field stays
+     * enabled — the same rule the inbox composer is written to, for the same
+     * reason — and focus is only restored when the round trip is what took it
+     * away.
+     */
     async sendSandboxTest(form, event) {
         event.preventDefault();
         const input = document.getElementById('sandbox-user-input');
         const query = input.value.trim();
         if (!query) return;
 
+        const restore = UI.formBusy(form, '');
+        if (!restore) return; // already in flight
+
         input.value = '';
-        input.disabled = true;
 
         const container = document.getElementById('sandbox-messages-container');
         const welcome = container.querySelector('.sandbox-welcome');
@@ -392,8 +424,15 @@ const AiSettingsPage = {
             `));
             container.scrollTop = container.scrollHeight;
         } finally {
-            input.disabled = false;
-            input.focus();
+            restore();
+            // Focus is only reclaimed when the busy button dropped it on the
+            // floor — submitting by clicking Send disables the focused button,
+            // which sends focus to <body>. Tabbing to the prompt textarea while
+            // the model thinks is a perfectly ordinary thing to do, and yanking
+            // the caret out of it a second later is not, so anything still
+            // focused is left alone.
+            const lost = !document.activeElement || document.activeElement === document.body;
+            if (lost && input && typeof input.focus === 'function') input.focus();
         }
     },
 
