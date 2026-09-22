@@ -89,6 +89,15 @@ app.use('/api', apiRouter);
 
 // ─── Static Pages ───────────────────────────────────────────────────────────
 
+// The landing page. Until this existed the bare domain 404'd — /pricing, /privacy,
+// /data-deletion and /dashboard all worked, and the one URL a prospect is actually handed,
+// or reaches by trimming the path off the /privacy link in Meta's app settings, served
+// nothing. Bilingual in one file for the same reason the pages below are: `public/**` has no
+// static handler, so anything not named by a route here is unreachable in production.
+app.get('/', (_req, res) => {
+    res.sendFile(path.join(__dirname, '../public/landing.html'));
+});
+
 // Privacy Policy (required by Meta App Review)
 app.get('/privacy', (_req, res) => {
     res.sendFile(path.join(__dirname, '../public/privacy.html'));
