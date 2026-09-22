@@ -61,10 +61,18 @@
         src/utils/rateLimiter.ts — DEFAULT_HOURLY_LIMIT = 180 and its
         docblock ("Conservative buffer under Meta's ~200/hr automation
         ceiling"), canDmRecipient()
-    comment text is never stored; DM text is, so the inbox can show it
-        src/webhook/comments.ts — the INSERT INTO interactions (:166) writes
-        campaign_id, creator_id, comment_id, sender_username, post_id, status,
-        platform, and no comment body
+    DM text is stored so the inbox can show it
+        src/config/schema_migration_v2.sql:22 — messages.text TEXT NOT NULL,
+        read back by /api/conversations/:id/messages. NOTE the page says this
+        and NOTHING ELSE about retention; see the refusals below.
+    a failed public reply is recorded on the interaction
+        src/webhook/comments.ts:415 — UPDATE interactions SET error_log. The
+        like is NOT: its catch block (:381) only calls log('warn', …) and
+        writes nothing, which is why the page names only the public reply.
+    a failure is retried a limited number of times
+        src/jobs/queue.ts:186-205 — a job with attempts left goes back to
+        pending; one at max_attempts (default 3) becomes permanently 'failed'.
+        "retried" without the bound would have been untrue of the second case.
     Latin digits on purpose
         DESIGN.md §5
     open source, MIT, self-hostable
@@ -84,6 +92,30 @@
       promise".
     · No uptime, delivery or response-time guarantee. Nothing in the code
       backs one and Meta can throttle or refuse a send at any time.
+    · NO CLAIM THAT COMMENT TEXT IS NOT STORED. An earlier draft of this page
+      said so, citing the INSERT INTO interactions at comments.ts:166 — which
+      writes an id and a username and no body, and is a correct reading of that
+      one statement and of the interactions schema. It is still the wrong
+      conclusion, because the comment never reaches that INSERT unexamined:
+      webhook/router.ts:102 enqueues `payload: { change, entryId }` — the whole
+      Meta change object — BEFORE anything is processed, and
+      migration_v13_jobs.sql:29-30 names the path to the body in its own
+      comment (`payload->'value'->>'text'`). jobs/queue.ts pruneCompleted
+      deletes ONLY `status = 'done'`, after DONE_JOB_RETENTION_DAYS = 7; its
+      docblock and retention.ts both say failed rows are never touched, and
+      pending, running and cancelled are not swept either. So a comment whose
+      job failed keeps its text indefinitely. Do not restore the claim in any
+      narrower form unless the narrower form is verifiable end to end — the
+      page now points at /privacy instead of paraphrasing it.
+      (public/pricing.html:1356 still carries the same sentence. That file is
+      owned by another change; this note is here so the next person to read
+      both does not "fix" this page to match it.)
+    · No retention window for anything. RAW_PAYLOAD_RETENTION_DAYS is opt-in,
+      is a no-op while unset, and ARCHITECTURE.md §7 Stage 1 records it as
+      still unset in production — so messages.raw_payload, which is the full
+      Meta event, is currently kept without bound. /pricing refused to sell a
+      retention tier for exactly this reason and this page must not undercut
+      that by implying a window exists.
     · No customer count, no testimonial, no logo wall, no "trusted by".
       Nothing has been sold yet; DESIGN.md §6 rules out invented metrics.
     · No prices. They live on /pricing, which is where the operator's
@@ -965,7 +997,7 @@
 
                     <p class="prose">
                         إن رفضت ميتا الردّ العام أو الإعجاب — صلاحية ناقصة، أو تعليق حُذف — تبقى
-                        الرسالة الخاصة مُرسَلة، ويظهر سبب الرفض في سجلّ التفاعل.
+                        الرسالة الخاصة مُرسَلة، ويُسجَّل سبب فشل الردّ العام على التفاعل نفسه.
                     </p>
                 </section>
 
@@ -1075,7 +1107,8 @@
                             <dd>
                                 ميتا قد تُبطئ الإرسال أو ترفضه في أي لحظة، ولا شيء في البرنامج
                                 يستطيع أن يَعِد بغير ذلك. ما نَعِد به أن الحدث يُسجَّل قبل الردّ
-                                على ميتا، وأن ما فشل يُعاد.
+                                على ميتا، وأن ما فشل يُعاد عدداً محدوداً من المحاولات ثم يتوقف
+                                ويبقى مكتوباً لمراجعته.
                             </dd>
 
                             <dt>حدود الإرسال حقيقية</dt>
@@ -1085,12 +1118,13 @@
                                 شخص كل 24 ساعة.
                             </dd>
 
-                            <dt>نص التعليقات لا يُخزَّن</dt>
+                            <dt>ما يُحفَظ ومدّته مكتوبان في سياسة الخصوصية</dt>
                             <dd>
-                                يُحفَظ معرّف التعليق واسم صاحبه، لا نصّه. أما نص الرسائل الخاصة
-                                فيُحفَظ ليظهر في صندوق الوارد. التفصيل كاملاً في
-                                <a href="/privacy">سياسة الخصوصية</a>، وطريقة الحذف في
-                                <a href="/data-deletion">صفحة حذف البيانات</a>.
+                                نص الرسائل الخاصة يُحفَظ ليظهر في صندوق الوارد، وهذا ظاهر لك في
+                                المنتج نفسه. أما بقية ما يُحفَظ، ومدّة بقائه، وكيف يُحذف، فمكتوب في
+                                <a href="/privacy">سياسة الخصوصية</a> وفي
+                                <a href="/data-deletion">صفحة حذف البيانات</a>، وهما المرجع. هذه
+                                الصفحة لا تختصرهما عمداً: الاختصار نسخة ثانية يجب إبقاؤها صحيحة.
                             </dd>
                         </dl>
                     </div>
@@ -1242,7 +1276,7 @@
                     <p class="prose">
                         If Meta refuses the public reply or the like — a missing permission, or a
                         comment that was deleted — the private message still goes out, and the
-                        reason is recorded on the interaction.
+                        reason a public reply failed is recorded on the interaction.
                     </p>
                 </section>
 
@@ -1360,8 +1394,9 @@
                             <dd>
                                 Meta can throttle or refuse a send at any moment, and nothing in
                                 the software can promise otherwise. What it does promise is that
-                                the event is written down before Meta is acknowledged, and that
-                                whatever fails is retried.
+                                the event is written down before Meta is acknowledged, and that a
+                                failure is retried a limited number of times before it stops and
+                                is left on record to be looked at.
                             </dd>
 
                             <dt>The sending limits are real</dt>
@@ -1371,13 +1406,15 @@
                                 automated message per person per 24 hours.
                             </dd>
 
-                            <dt>Comment text is never stored</dt>
+                            <dt>What is kept, and for how long, is in the privacy policy</dt>
                             <dd>
-                                The comment's id and its author's username are kept; its text is
-                                not. Direct-message text is kept, so it can appear in your inbox.
-                                The full detail is in the <a href="/privacy">privacy policy</a>,
-                                and the deletion procedure is on the
-                                <a href="/data-deletion">data deletion page</a>.
+                                Direct-message text is stored so it can appear in your inbox,
+                                which you can see in the product itself. What else is kept, how
+                                long it stays and how to have it deleted is in the
+                                <a href="/privacy">privacy policy</a> and on the
+                                <a href="/data-deletion">data deletion page</a>, which are the
+                                authoritative statement. This page deliberately does not
+                                summarise them: a summary is a second version to keep true.
                             </dd>
                         </dl>
                     </div>
