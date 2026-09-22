@@ -41,6 +41,9 @@ const App = {
     /** Bumped on every navigate() so a slow module load cannot land late. */
     _navSeq: 0,
 
+    /** The scrim behind the mobile nav drawer — created once in init(). */
+    _sidebarBackdrop: null,
+
     pages: {
         overview: { src: 'overview', page: () => OverviewPage },
         campaigns: { src: 'campaigns', page: () => CampaignsPage },
@@ -64,7 +67,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '6.2',
+    ASSET_VERSION: '6.3',
 
     _modules: Object.create(null),
 
@@ -186,12 +189,44 @@ const App = {
             this.showLogin();
         });
 
-        // Mobile menu
+        // Mobile menu — the sidebar becomes a fixed-position drawer at
+        // ≤860px (see the `@media (max-width: 860px)` block in styles.css).
+        // It gets the same dismiss contract UI.showModal already gives the
+        // modal — a scrim, Escape-to-close, click-outside-to-close — plain
+        // functions here rather than a class, to match this file's style.
+        // The backdrop is created here, once, rather than added to
+        // index.html: it exists only for this code to toggle.
         const menuBtn = document.getElementById('mobile-menu-btn');
+        const sidebar = document.getElementById('sidebar');
+        const backdrop = document.createElement('div');
+        backdrop.className = 'sidebar-backdrop';
+        document.body.appendChild(backdrop);
+        this._sidebarBackdrop = backdrop;
+
         menuBtn.addEventListener('click', () => {
-            const sidebar = document.getElementById('sidebar');
-            const open = sidebar.classList.toggle('open');
-            menuBtn.setAttribute('aria-expanded', String(open));
+            if (sidebar.classList.contains('open')) this.closeMobileDrawer(false);
+            else this.openMobileDrawer();
+        });
+
+        // Click-outside-to-close: the scrim is the only thing behind the
+        // drawer at this width, so any click on it is the operator asking to
+        // dismiss — same contract as the modal overlay's click handler.
+        backdrop.addEventListener('click', () => this.closeMobileDrawer(true));
+
+        // Escape closes the drawer — but only when it is actually open, and
+        // only when a modal is not ALSO open. UI.showModal adds its own
+        // Escape handler for the modal's lifetime (added in showModal,
+        // removed in closeModal); rather than lean on registration order
+        // between the two document-level listeners, this one simply steps
+        // aside whenever the modal overlay is visible and lets the modal's
+        // own handler own the key.
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            if (!sidebar.classList.contains('open')) return;
+            const modalOverlay = document.getElementById('modal-overlay');
+            if (modalOverlay && !modalOverlay.classList.contains('hidden')) return;
+            e.preventDefault();
+            this.closeMobileDrawer(true);
         });
 
         // Hash router — refresh lands on the same page, Back moves between pages
@@ -207,6 +242,43 @@ const App = {
         } else {
             this.showLogin();
         }
+    },
+
+    // ─── Mobile nav drawer ───────────────────────────────────────────────────
+    /**
+     * Open the drawer and move focus inside it. Without this the hamburger
+     * button keeps focus once the panel it controls is visible, and Tab from
+     * there skips straight past the now-visible nav into page content.
+     * Mirrors UI.showModal's initial-focus rule: prefer the first genuinely
+     * usable item, falling back to the container itself.
+     */
+    openMobileDrawer() {
+        const sidebar = document.getElementById('sidebar');
+        const menuBtn = document.getElementById('mobile-menu-btn');
+        if (!sidebar || !menuBtn) return;
+        sidebar.classList.add('open');
+        if (this._sidebarBackdrop) this._sidebarBackdrop.classList.add('open');
+        menuBtn.setAttribute('aria-expanded', 'true');
+        const nav = document.getElementById('sidebar-nav');
+        const target = (nav && nav.querySelector('.nav-item[data-page]')) || sidebar;
+        if (typeof target.focus === 'function') target.focus();
+    },
+
+    /**
+     * Close the drawer. `returnFocus` is false for the close that happens as
+     * a SIDE EFFECT of navigating — the operator's focus is headed to the
+     * page they just picked, not back to the button that opened the drawer —
+     * and true for every close the operator asks for directly: the backdrop
+     * and Escape.
+     */
+    closeMobileDrawer(returnFocus) {
+        const sidebar = document.getElementById('sidebar');
+        const menuBtn = document.getElementById('mobile-menu-btn');
+        if (!sidebar) return;
+        sidebar.classList.remove('open');
+        if (this._sidebarBackdrop) this._sidebarBackdrop.classList.remove('open');
+        if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+        if (returnFocus && menuBtn) menuBtn.focus();
     },
 
     // ─── Language & theme ────────────────────────────────────────────────────
@@ -706,10 +778,10 @@ const App = {
             document.getElementById('page-title').textContent = this.title(page);
             document.getElementById('page-subtitle').textContent = this.subtitle(page);
 
-            const sidebar = document.getElementById('sidebar');
-            sidebar.classList.remove('open');
-            const menuBtn = document.getElementById('mobile-menu-btn');
-            if (menuBtn) menuBtn.setAttribute('aria-expanded', 'false');
+            // A nav-item click already reaches here through the router: same
+            // dismissal the backdrop and Escape use, but the operator's focus
+            // is headed to the page they picked, not back to the hamburger.
+            this.closeMobileDrawer(false);
 
             // Inside the transition, so a modal left open does not survive a
             // frame of the new page. closeModal() restores focus to whatever

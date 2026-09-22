@@ -312,6 +312,20 @@ I18N.strings = {
         'overview.alert.waitingHumansBody': 'الردّ الآلي متوقف في هذه المحادثات.',
         'overview.alert.noCampaigns': 'لا توجد حملة نشطة',
         'overview.alert.noCampaignsBody': 'التعليقات ستصل ولن يردّ عليها شيء.',
+        // Trailing 7-day send success rate — catches a bad week that "failed
+        // today" alone can miss on any day that is not one of the bad ones.
+        'overview.alert.lowSuccessRate': 'نسبة النجاح خلال آخر 7 أيام {rate} فقط',
+        'overview.alert.lowSuccessRateBody': '{failed} من {total} رسالة فشلت خلال هذه الفترة — أعلى من المعتاد. افتح سجل النشاط لمعرفة السبب.',
+        // Honest "couldn't verify" states — a rejected fetch used to
+        // contribute zero alerts, which looks identical to "everything's fine".
+        'overview.alert.tokenUnknown': 'تعذّر التحقق من حالة رمز الوصول',
+        'overview.alert.tokenUnknownBody': 'تعذّر الاتصال بالخادم للتأكد — قد يكون انقطاعاً مؤقتاً في الشبكة، وليس بالضرورة رمزاً معطوباً.',
+        'overview.alert.postsUnknown': 'تعذّر التحقق من حالة المنشورات المجدولة',
+        'overview.alert.postsUnknownBody': 'لم نتمكن من معرفة إن كان هناك منشور متأخر أو فاشل الآن. راجع صفحة الجدولة مباشرة.',
+        'overview.alert.threadsUnknown': 'تعذّر التحقق من المحادثات المنتظرة',
+        'overview.alert.threadsUnknownBody': 'لم نتمكن من معرفة إن كانت هناك محادثة بانتظار ردّ يدوي. راجع صندوق الرسائل مباشرة.',
+        'overview.alert.trendUnknown': 'تعذّر التحقق من نشاط آخر 7 أيام',
+        'overview.alert.trendUnknownBody': 'لم نتمكن من حساب نسبة النجاح خلال الأسبوع الماضي. راجع سجل النشاط مباشرة.',
         'overview.openActivity': 'افتح سجل النشاط',
         'overview.openPosts': 'افتح الجدولة',
         'overview.openInbox': 'افتح الرسائل',
@@ -341,6 +355,7 @@ I18N.strings = {
         'overview.chart.stripLegend': 'كل مربع يوم واحد. كثافة اللون = عدد الرسائل، والشريط الأحمر أسفله = ما فشل منها.',
         'overview.chart.status': 'توزيع الحالات',
         'overview.recent': 'آخر التفاعلات',
+        'overview.recentErrorTitle': 'تعذّر تحميل آخر التفاعلات',
 
         'table.user': 'المستخدم',
         'table.keyword': 'الكلمة المفتاحية',
@@ -398,6 +413,10 @@ I18N.strings = {
         'campaigns.match.riskGeneric': '«{keyword}» قصيرة جداً ({length} حرف) — ستُطابِق داخل كلمات أطول كثيرة.',
         'campaigns.match.advice': 'استخدم كلمة أطول أو عبارة من كلمتين لتفادي التشغيل الخاطئ.',
         'campaigns.match.duplicate': '«{keyword}» مكرّرة في هذه الحملة.',
+        // Cross-campaign collision: this keyword and another campaign's own
+        // keyword are in a substring relationship, so one comment can fire
+        // both campaigns with no way to know which DM the customer gets.
+        'campaigns.match.collision': '«{keyword}» تتطابق أيضاً مع كلمة حملة أخرى «{other}» — قد يُشغِّل التعليق نفسه الحملتين معاً.',
 
         // Bulk import
         'campaigns.bulk.title': 'استيراد حملات ({count})',
@@ -416,6 +435,13 @@ I18N.strings = {
         'campaigns.bulk.noCourses': 'لم يُعثر على كورسات صالحة في الملف.',
         'campaigns.bulk.parseError': 'خطأ في قراءة الملف: {message}',
         'campaigns.bulk.selectRow': 'تضمين هذا الكورس',
+        // Rows the CSV parser dropped silently before — too few columns, or
+        // no course id — now counted and named instead of just vanishing.
+        'campaigns.bulk.rowsSkipped_one': 'تم تجاهل صف واحد لتنسيقه غير المتوقع.',
+        'campaigns.bulk.rowsSkipped_two': 'تم تجاهل صفّين لتنسيقهما غير المتوقع.',
+        'campaigns.bulk.rowsSkipped_few': 'تم تجاهل {count} صفوف لتنسيقها غير المتوقع.',
+        'campaigns.bulk.rowsSkipped_many': 'تم تجاهل {count} صفاً لتنسيقها غير المتوقع.',
+        'campaigns.bulk.rowsSkipped_other': 'تم تجاهل {count} صف لتنسيقها غير المتوقع.',
 
         // ─── Posts scheduler ────────────────────────────────────────────────
         'posts.tabQueue': 'طابور الجدولة',
@@ -560,7 +586,8 @@ I18N.strings = {
         'analytics.topCampaigns': 'أفضل الحملات أداءً',
         'analytics.platformSplit': 'التوزيع بين المنصتين',
         'analytics.matches': 'مرات التشغيل',
-        'analytics.noCampaignData': 'لا توجد بيانات أداء للحملات بعد.',
+        'analytics.noCampaignDataTitle': 'لا توجد بيانات أداء بعد',
+        'analytics.noCampaignData': 'ستظهر هنا بمجرد أن تبدأ الحملات بتسجيل تفاعلات.',
         'analytics.errorTitle': 'تعذّر تحميل التحليلات',
         'analytics.hits': 'تفاعل',
         'analytics.share': '{count} ({percent}٪)',
@@ -973,6 +1000,10 @@ I18N.strings = {
         'users.roleFailed': 'تعذّر تغيير الصلاحية. أعد المحاولة.',
         'users.roleNowAdmin': 'صار مشرف منصة.',
         'users.roleNowUser': 'صار مستخدماً عادياً.',
+        'users.promoteTitle': 'ترقية إلى مشرف منصة؟',
+        'users.promoteBody': 'منح {email} صلاحية مشرف منصة.',
+        'users.promoteHint': 'سيصل فوراً إلى كل الحسابات في المنصة وإلى صفحات الإدارة هذه. يمكن التراجع لاحقاً بإعادة الصلاحية إلى «مستخدم».',
+        'users.promoteCta': 'رقِّ الحساب',
         'users.activeFailed': 'تعذّر تغيير حالة الحساب. أعد المحاولة.',
         'users.lastAdmin': 'هذا آخر مشرف منصة، ولا يمكن إزالة صلاحيته: لن يبقى أحد يستطيع إدارة الحسابات أو المستخدمين. أنشئ مشرفاً آخر أولاً ثم أعد المحاولة.',
         'users.disableTitle': 'إيقاف هذا الحساب؟',
@@ -1275,6 +1306,16 @@ I18N.strings = {
         'overview.alert.waitingHumansBody': 'Auto-replies are paused in those threads.',
         'overview.alert.noCampaigns': 'No campaign is active',
         'overview.alert.noCampaignsBody': 'Comments will arrive and nothing will answer them.',
+        'overview.alert.lowSuccessRate': 'Success rate over the last 7 days is only {rate}',
+        'overview.alert.lowSuccessRateBody': '{failed} of {total} messages failed in that period — higher than usual. Open the activity log to see why.',
+        'overview.alert.tokenUnknown': "Couldn't verify the access token",
+        'overview.alert.tokenUnknownBody': "Couldn't reach the server to check — this may just be a temporary network issue, not a broken token.",
+        'overview.alert.postsUnknown': "Couldn't verify the scheduled posts",
+        'overview.alert.postsUnknownBody': 'Could not tell whether a post is overdue or failed right now. Check the scheduler directly.',
+        'overview.alert.threadsUnknown': "Couldn't verify waiting conversations",
+        'overview.alert.threadsUnknownBody': 'Could not tell whether a conversation is waiting for a manual reply. Check the inbox directly.',
+        'overview.alert.trendUnknown': "Couldn't verify the last 7 days of activity",
+        'overview.alert.trendUnknownBody': "Could not compute last week's success rate. Check the activity log directly.",
         'overview.openActivity': 'Open activity log',
         'overview.openPosts': 'Open scheduler',
         'overview.openInbox': 'Open inbox',
@@ -1304,6 +1345,7 @@ I18N.strings = {
         'overview.chart.stripLegend': 'Each square is one day. Colour depth is volume; the red foot is what failed.',
         'overview.chart.status': 'Status breakdown',
         'overview.recent': 'Recent activity',
+        'overview.recentErrorTitle': "Couldn't load recent activity",
 
         'table.user': 'User',
         'table.keyword': 'Keyword',
@@ -1355,6 +1397,7 @@ I18N.strings = {
         'campaigns.match.riskGeneric': '“{keyword}” is very short ({length} characters) — it will match inside many longer words.',
         'campaigns.match.advice': 'Use a longer keyword or a two-word phrase to avoid false triggers.',
         'campaigns.match.duplicate': '“{keyword}” is listed twice in this campaign.',
+        'campaigns.match.collision': '“{keyword}” also matches another campaign’s keyword “{other}” — the same comment could trigger both.',
 
         'campaigns.bulk.title': 'Bulk import campaigns ({count})',
         'campaigns.bulk.intro': 'We found {count} courses in the CSV. Known courses come with prepared keywords and messages; the rest are generated.',
@@ -1372,6 +1415,8 @@ I18N.strings = {
         'campaigns.bulk.noCourses': 'No valid courses found in the CSV.',
         'campaigns.bulk.parseError': 'Error parsing CSV: {message}',
         'campaigns.bulk.selectRow': 'Include this course',
+        'campaigns.bulk.rowsSkipped_one': '1 row skipped — unexpected format.',
+        'campaigns.bulk.rowsSkipped_other': '{count} rows skipped — unexpected format.',
 
         'posts.tabQueue': 'Scheduled queue',
         'posts.tabLive': 'Published feed',
@@ -1510,7 +1555,8 @@ I18N.strings = {
         'analytics.topCampaigns': 'Top performing campaigns',
         'analytics.platformSplit': 'Platform distribution',
         'analytics.matches': 'Triggers',
-        'analytics.noCampaignData': 'No campaign performance data yet.',
+        'analytics.noCampaignDataTitle': 'No performance data yet',
+        'analytics.noCampaignData': "It will appear here once campaigns start recording interactions.",
         'analytics.errorTitle': 'Could not load analytics',
         'analytics.hits': 'hits',
         'analytics.share': '{count} ({percent}%)',
@@ -1887,6 +1933,10 @@ I18N.strings = {
         'users.roleFailed': 'Could not change the role. Retry.',
         'users.roleNowAdmin': 'Now a platform admin.',
         'users.roleNowUser': 'Now an ordinary user.',
+        'users.promoteTitle': 'Promote to platform admin?',
+        'users.promoteBody': 'Grant {email} platform-admin rights.',
+        'users.promoteHint': 'They gain immediate access to every tenant on the platform and to these administration pages. This can be reversed later by setting the role back to “user”.',
+        'users.promoteCta': 'Promote account',
         'users.activeFailed': 'Could not change the account state. Retry.',
         'users.lastAdmin': 'That is the last platform admin, and their role cannot be removed: nobody would be able to administer tenants or users. Create another admin first, then retry.',
         'users.disableTitle': 'Disable this account?',

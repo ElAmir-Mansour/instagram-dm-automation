@@ -123,6 +123,8 @@ const AuditPage = {
         `);
 
         UI.icons(container);
+        UI.revealClipped(container);
+        Motion.announce(t('audit.count', { count: rows.length }));
     },
 
     read(e) {
@@ -186,7 +188,12 @@ const AuditPage = {
                 <td>${entry.actor ? UI.ltr(entry.actor) : html`<span class="text-meta">${t('audit.actorUnknown')}</span>`}</td>
                 <td>${this.actionBadge(entry.action)}</td>
                 <td class="cell-id">${this.targetCell(entry)}</td>
-                <td class="audit-detail" dir="auto" title="${detail}">${detail || html`<span class="text-meta">—</span>`}</td>
+                <!-- .audit-detail clips with overflow:hidden/ellipsis and the
+                     title tooltip that carries the rest is mouse-only. The full
+                     string is already in the DOM, so the cell is also made
+                     focusable when genuinely clipped — measured after paint by
+                     revealClipped() — mirroring activity.js's error column. -->
+                <td class="audit-detail" dir="auto" title="${detail}" data-clip-focus>${detail || html`<span class="text-meta">—</span>`}</td>
             </tr>
         `;
     },

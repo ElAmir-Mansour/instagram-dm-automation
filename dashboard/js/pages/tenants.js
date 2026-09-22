@@ -290,7 +290,7 @@ const TenantsPage = {
                 <div class="form-group">
                     <label class="form-label" for="tenant-token">${t('tenants.pageToken')}</label>
                     <textarea class="field-textarea field-mono" id="tenant-token" name="page_access_token" dir="ltr"
-                              autocomplete="off" spellcheck="false"
+                              autocomplete="off" spellcheck="false" data-guard-dirty
                               placeholder="${t('settings.tokenPlaceholder')}" required></textarea>
                     <p class="form-hint">${t('tenants.pageTokenHint')}</p>
                 </div>
@@ -325,8 +325,8 @@ const TenantsPage = {
         if (verifyToken) payload.webhook_verify_token = verifyToken;
         if (!payload.name || !payload.instagram_page_id || !payload.page_access_token) return;
 
-        const submit = form.querySelector('button[type="submit"]');
-        if (submit) submit.disabled = true;
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // already in flight
 
         try {
             await API.createAdminTenant(payload);
@@ -339,7 +339,7 @@ const TenantsPage = {
                 this.render();
             }
         } catch (err) {
-            if (submit) submit.disabled = false;
+            restore();
             UI.toast(err.message || t('tenants.createFailed'), 'error');
         }
     },

@@ -177,6 +177,7 @@ const ErasurePage = {
                 </section>
             `);
             UI.icons(host);
+            Motion.announce(t('erasure.noneTitle'));
             return;
         }
 
@@ -251,6 +252,10 @@ const ErasurePage = {
         `);
 
         UI.icons(host);
+        // The row-count table just replaced the loader silently — this is the
+        // count the operator is about to permanently delete, so it is worth
+        // announcing on its own, not just leaving it to be read visually.
+        Motion.announce(t('erasure.warnTitle', { count: total }));
     },
 
     cancelPreview() {

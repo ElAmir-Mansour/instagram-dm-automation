@@ -35,6 +35,31 @@ const OverviewPage = {
     /** Guards a fill against landing after the operator has navigated away. */
     _seq: 0,
 
+    /**
+     * Success-rate thresholds — named so they are not a magic number buried
+     * in a conditional. `SUCCESS_RATE_*` colour the all-time `stats.successRate`
+     * stat tile (below `DANGER_MAX` → danger, up to `WARNING_MAX` → warning,
+     * above → success — same text-success/text-warning/text-danger classes the
+     * per-campaign table in analytics.js already uses).
+     *
+     * `TRAILING_SUCCESS_RATE_ALERT_MIN` is deliberately a separate number: it
+     * gates the 7-day-window alert in buildAlerts(), not the stat tile. An
+     * all-time rate is diluted by a long history and can look calm through a
+     * genuinely bad week — see buildAlerts() below.
+     */
+    SUCCESS_RATE_DANGER_MAX: 70,
+    SUCCESS_RATE_WARNING_MAX: 90,
+    TRAILING_SUCCESS_RATE_ALERT_MIN: 85,
+
+    /** text-success / text-warning / text-danger for a 0–100 rate, or '' if unknown. */
+    successRateClass(rate) {
+        const n = Number(rate);
+        if (!Number.isFinite(n)) return '';
+        if (n <= this.SUCCESS_RATE_DANGER_MAX) return 'text-danger';
+        if (n <= this.SUCCESS_RATE_WARNING_MAX) return 'text-warning';
+        return 'text-success';
+    },
+
     destroy() {
         this._seq++;
         // No chart instances to destroy any more: the charts are SVG strings written
@@ -155,20 +180,19 @@ const OverviewPage = {
         // ── Region 4: the recent-activity table ────────────────────────────
         recentP.then((recentRes) => {
             if (!live()) return;
-            const host = this.region('recent');
-            if (!host) return;
-            const rows = (recentRes.status === 'fulfilled' && recentRes.value && recentRes.value.data) || [];
-            host.innerHTML = esc(this.renderRecent(rows));
-            UI.icons(host);
+            this.fillRecent(recentRes);
         });
 
-        // ── Region 1: the briefing, once its five sources have answered ────
-        Promise.all([statsP, failedP, tokenP, postsP, threadsP]).then(
-            ([statsRes, failedRes, tokenRes, postsRes, threadsRes]) => {
+        // ── Region 1: the briefing, once its six sources have answered ─────
+        // dailyP joins the wait here too: buildAlerts() now reads it for the
+        // trailing 7-day rate, and it was already being fetched in the same
+        // tick for the chart below, so this adds no extra round trip.
+        Promise.all([statsP, failedP, tokenP, postsP, threadsP, dailyP]).then(
+            ([statsRes, failedRes, tokenRes, postsRes, threadsRes, dailyRes]) => {
                 if (!live()) return;
                 const host = this.region('briefing');
                 if (!host || statsRes.status !== 'fulfilled') return;
-                const alerts = this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes);
+                const alerts = this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes, dailyRes);
                 host.innerHTML = esc(this.renderBriefing(alerts));
                 UI.icons(host);
 
@@ -225,6 +249,46 @@ const OverviewPage = {
         `;
     },
 
+    /**
+     * Fills the recent-activity region from a settled `getInteractions()`
+     * result. A rejection used to fall back to `[]` — the same empty state a
+     * genuinely quiet account shows — so a broken request and a quiet day
+     * were indistinguishable. Branches on `.status` the way the stats/briefing
+     * region above already does, and gives a real error panel with retry.
+     */
+    fillRecent(recentRes) {
+        const host = this.region('recent');
+        if (!host) return;
+
+        if (recentRes.status === 'rejected') {
+            const err = recentRes.reason || new Error(t('error.unexpected'));
+            UI.renderError(host, {
+                title: t('overview.recentErrorTitle'),
+                message: err.message,
+                hint: err.isNetworkError ? t('error.network') : '',
+            }, () => this.reloadRecent());
+            return;
+        }
+
+        const rows = (recentRes.value && recentRes.value.data) || [];
+        host.innerHTML = esc(this.renderRecent(rows));
+        UI.icons(host);
+    },
+
+    /** Retries just the recent-activity region — not the whole page. */
+    reloadRecent() {
+        const seq = this._seq;
+        const live = () => seq === this._seq && !!document.getElementById('page-container');
+        const host = this.region('recent');
+        if (host) {
+            host.innerHTML = esc(Motion.tableCard(8, [t('table.user'), t('table.keyword'), t('table.status'), t('table.time')]));
+        }
+        this._settle(API.getInteractions({ limit: 8 })).then((recentRes) => {
+            if (!live()) return;
+            this.fillRecent(recentRes);
+        });
+    },
+
     // ─── Briefing ────────────────────────────────────────────────────────────
 
     /**
@@ -233,7 +297,7 @@ const OverviewPage = {
      * everything, a failed DM already lost a customer, an overdue post is just
      * late.
      */
-    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes) {
+    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes) {
         const alerts = [];
         const startOfToday = new Date();
         startOfToday.setHours(0, 0, 0, 0);
@@ -259,6 +323,16 @@ const OverviewPage = {
                     });
                 }
             }
+        } else if (tokenRes.status === 'rejected') {
+            // Honest uncertainty, not silence: a rejected fetch used to
+            // contribute zero alerts, which looks identical to "token is
+            // fine". Same target as the confirmed-bad case, different copy.
+            alerts.push({
+                level: 'warning', icon: 'help-circle',
+                title: t('overview.alert.tokenUnknown'),
+                body: t('overview.alert.tokenUnknownBody'),
+                action: t('overview.openSettings'), target: 'settings',
+            });
         }
 
         // 2. DMs that failed today. /interactions has no date filter, so the
@@ -278,7 +352,38 @@ const OverviewPage = {
             }
         }
 
-        // 3. The publishing queue.
+        // 3. The trailing 7-day send success rate — "failed today" is zero on
+        //    any day that is not one of the bad ones, so a week that was 39%
+        //    failure overall can sail through check #2 on 5 days out of 7.
+        //    Reads the SAME daily series the chart below already fetches
+        //    (dailyP), so this costs no extra request.
+        if (dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value)) {
+            const trailingSent = dailyRes.value.reduce((sum, d) => sum + (Number(d.sent) || 0), 0);
+            const trailingFailed = dailyRes.value.reduce((sum, d) => sum + (Number(d.failed) || 0), 0);
+            const trailingTotal = trailingSent + trailingFailed;
+            if (trailingTotal > 0) {
+                const rate = Math.round((trailingSent / trailingTotal) * 100);
+                if (rate < this.TRAILING_SUCCESS_RATE_ALERT_MIN) {
+                    alerts.push({
+                        level: 'danger', icon: 'trending-down',
+                        title: t('overview.alert.lowSuccessRate', { rate: UI.formatPercent(rate) }),
+                        body: t('overview.alert.lowSuccessRateBody', {
+                            failed: UI.formatNumber(trailingFailed), total: UI.formatNumber(trailingTotal),
+                        }),
+                        action: t('overview.openActivity'), target: 'activity',
+                    });
+                }
+            }
+        } else if (dailyRes.status === 'rejected') {
+            alerts.push({
+                level: 'warning', icon: 'help-circle',
+                title: t('overview.alert.trendUnknown'),
+                body: t('overview.alert.trendUnknownBody'),
+                action: t('overview.openActivity'), target: 'activity',
+            });
+        }
+
+        // 4. The publishing queue.
         if (postsRes.status === 'fulfilled' && Array.isArray(postsRes.value)) {
             const posts = postsRes.value;
             const now = Date.now();
@@ -303,9 +408,16 @@ const OverviewPage = {
                     action: t('overview.openPosts'), target: 'posts',
                 });
             }
+        } else if (postsRes.status === 'rejected') {
+            alerts.push({
+                level: 'warning', icon: 'help-circle',
+                title: t('overview.alert.postsUnknown'),
+                body: t('overview.alert.postsUnknownBody'),
+                action: t('overview.openPosts'), target: 'posts',
+            });
         }
 
-        // 4. Conversations where the AI is off and the customer spoke last —
+        // 5. Conversations where the AI is off and the customer spoke last —
         //    nobody is going to answer these unless a human does.
         if (threadsRes.status === 'fulfilled' && threadsRes.value) {
             const waiting = ((threadsRes.value.data) || []).filter((thread) => (
@@ -319,9 +431,16 @@ const OverviewPage = {
                     action: t('overview.openInbox'), target: 'inbox',
                 });
             }
+        } else if (threadsRes.status === 'rejected') {
+            alerts.push({
+                level: 'warning', icon: 'help-circle',
+                title: t('overview.alert.threadsUnknown'),
+                body: t('overview.alert.threadsUnknownBody'),
+                action: t('overview.openInbox'), target: 'inbox',
+            });
         }
 
-        // 5. Nothing is armed at all.
+        // 6. Nothing is armed at all.
         if (Number(stats.activeCampaigns) === 0) {
             alerts.push({
                 level: 'info', icon: 'megaphone-off',
@@ -386,7 +505,7 @@ const OverviewPage = {
                         <span class="stat-label">${t('overview.stat.successRate')}</span>
                         <span class="stat-icon"><i data-lucide="check-circle" aria-hidden="true"></i></span>
                     </div>
-                    <p class="stat-value">${UI.formatPercent(stats.successRate)}</p>
+                    <p class="stat-value ${html.raw(this.successRateClass(stats.successRate))}">${UI.formatPercent(stats.successRate)}</p>
                     <p class="stat-sub">${t('overview.stat.successRateSub', {
                         sent: UI.formatNumber(stats.sent), failed: UI.formatNumber(stats.failed),
                     })}</p>
