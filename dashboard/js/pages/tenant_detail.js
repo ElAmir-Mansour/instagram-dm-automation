@@ -146,6 +146,7 @@ const TenantDetailPage = {
             </section>
 
             ${this.renderHealth(row)}
+            ${this.renderMembers(row)}
             ${this.renderConnection(row)}
         `);
 
@@ -235,6 +236,58 @@ const TenantDetailPage = {
      * every future subscription change while existing webhooks keep working —
      * the exact failure that already cost this project hours.
      */
+    /**
+     * Who can reach this tenant, and with what.
+     *
+     * `GET /api/admin/tenants/:id` has always returned `members` — email, platform
+     * role and membership role for everybody joined to this tenant — and nothing
+     * rendered it. That was tolerable while the membership role was decorative.
+     * It is an authorization decision now, so "who can rotate this client's page
+     * token" is a question this screen has to be able to answer, and the answer
+     * was already in the payload.
+     */
+    renderMembers(row) {
+        const members = Array.isArray(Admin.pick(row, 'members')) ? Admin.pick(row, 'members') : [];
+
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('tenantDetail.members')}</h2>
+                <div class="surface pad-5">
+                    ${members.length === 0
+                        ? Admin.emptyState('users', t('tenantDetail.noMembers'), t('tenantDetail.noMembersBody'))
+                        : html`
+                            <ul class="member-list">
+                                ${members.map((m) => this.renderMember(m))}
+                            </ul>
+                            <p class="form-hint mbs-4">${t('tenantDetail.membersHint')}</p>
+                        `}
+                </div>
+            </section>
+        `;
+    },
+
+    renderMember(m) {
+        const email = Admin.pick(m, 'email') || '—';
+        const isAdmin = Admin.pick(m, 'role') === 'platform_admin';
+        const isActive = Admin.pick(m, 'isActive', 'is_active') !== false;
+        const membershipRole = Admin.pick(m, 'membershipRole', 'membership_role');
+
+        return html`
+            <li class="member-item ${isActive ? '' : html.raw('member-item-off')}">
+                <span class="member-email">${UI.ltr(email)}</span>
+                <span class="member-tags">
+                    ${isAdmin
+                        // A platform admin reaches every tenant as an owner whatever their
+                        // membership says, so showing the membership role beside them would
+                        // be a number that is not the one in force.
+                        ? html`<span class="role-chip role-admin" title="${t('tenantDetail.adminOverride')}">${t('users.admin')}</span>`
+                        : Admin.roleChip(membershipRole)}
+                    ${isActive ? '' : html`<span class="chip chip-danger">${t('users.disabledChip')}</span>`}
+                </span>
+            </li>
+        `;
+    },
+
     renderConnection(row) {
         const igId = Admin.pick(row, 'instagram_page_id', 'instagramPageId') || '';
         const fbId = Admin.pick(row, 'facebook_page_id', 'facebookPageId') || '';

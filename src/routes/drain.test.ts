@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import { composeDrainResponse } from './api.js';
 
 const JOBS = { claimed: 2, succeeded: 2, failed: 0, budgetExhausted: false, reaped: 0 };
-const PUBLISH = { due: 1, claimed: 1, published: ['post-1'] };
+const PUBLISH = { due: 1, claimed: 1, published: ['post-1'], heldForInactiveTenant: 0 };
 
 describe('drain response shaping', () => {
     it('reports both outcomes when both halves succeed', () => {
