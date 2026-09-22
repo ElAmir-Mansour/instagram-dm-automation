@@ -118,34 +118,13 @@
         /* ─── Page ─────────────────────────────────────────────────────────── */
         * { box-sizing: border-box; }
 
-        /* ─── Cross-document view transitions ──────────────────────────────────
-           Clicking "Pricing" from here was a hard navigation: white flash, full
-           repaint, the reader loses their place. `navigation: auto` makes the
-           browser cross-fade between the two documents instead. It is opt-in on
-           BOTH ends — this rule exists in landing.html and pricing.html, and the
-           transition only runs when the origin matches, which it does.
-
-           Progressive enhancement in the strictest sense: a browser without it
-           navigates exactly as before. Nothing is hidden waiting on it, so there
-           is no state to strand.
-
-           Reduced motion is handled by killing the animation rather than the
-           transition. Disabling `@view-transition` itself would be the obvious
-           move, but the at-rule is evaluated at navigation time and support for
-           it inside `@media` is inconsistent; zeroing the animations is what
-           every engine honours. The navigation still completes instantly. */
-        @view-transition { navigation: auto; }
+        /* `@view-transition` moved into the SHARED SITE CHROME block at the end
+           of this <style>: it has to be declared on every page you can navigate
+           to or from, and there are four of those now, not two. */
 
         /* The tier CTAs jump to #contact in the same document. */
         html { scroll-behavior: smooth; }
         @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-
-        @media (prefers-reduced-motion: reduce) {
-            ::view-transition-group(*),
-            ::view-transition-old(*),
-            ::view-transition-new(*) { animation: none !important; }
-        }
-
 
         body {
             margin: 0;
@@ -156,10 +135,9 @@
             /* The ambient gradient, but deliberately NOT
                `background-attachment: fixed`: iOS Safari does not honour it,
                and on a ~6000px page carrying both languages it is a
-               full-viewport repaint on every scroll frame under several
-               backdrop-filter layers. tokens.css sets the gradient's extreme
-               stop to --surface-page in both themes, so the contrast the guard
-               measures holds whichever way it is painted. */
+               full-viewport repaint on every scroll frame. tokens.css sets the
+               gradient's extreme stop to --surface-page in both themes, so the
+               contrast the guard measures holds whichever way it is painted. */
             background-image: var(--surface-ambient);
             color: var(--text-default);
             -webkit-text-size-adjust: 100%;
@@ -181,24 +159,16 @@
             border: 0;
         }
 
-        /* ─── Skip link ────────────────────────────────────────────────────── */
-        .skip {
-            position: absolute;
-            inset-inline-start: var(--space-4);
-            top: var(--space-2);
-            z-index: 10;
-            padding: var(--space-2) var(--space-4);
-            border-radius: var(--radius-sm);
-            background: var(--surface-solid);
-            color: var(--text-strong);
-            border: 1px solid var(--border-strong);
-            text-decoration: none;
-            font-weight: var(--fw-semibold);
-            transform: translateY(-200%);
-        }
-        .skip:focus { transform: translateY(0); }
-
         /* ─── Chrome ───────────────────────────────────────────────────────── */
+        /* The two values the SHARED SITE CHROME block at the end of this <style>
+           reads, so the full-bleed sticky bar lines its wordmark up with the
+           column below it. Page facts, not shared ones: the four public pages
+           have four different columns. */
+        :root {
+            --page-max: 64rem;
+            --page-gutter: var(--space-4);
+        }
+
         .shell {
             width: 100%;
             max-width: 64rem;
@@ -206,67 +176,11 @@
             padding: var(--space-5) var(--space-4) var(--space-8);
         }
 
-        .masthead {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            justify-content: space-between;
-            gap: var(--space-3);
-            padding-block: var(--space-4);
-            margin-bottom: var(--space-6);
-            border-bottom: 1px solid var(--border-subtle);
-        }
-
-        .wordmark {
-            font-size: var(--fs-400);
-            font-weight: var(--fw-bold);
-            color: var(--text-strong);
-            line-height: var(--lh-tight);
-        }
-        .wordmark .latin {
-            display: block;
-            font-family: var(--font-latin);
-            font-size: var(--fs-100);
-            font-weight: var(--fw-regular);
-            color: var(--text-muted);
-        }
-
-        /* ─── Language switch ──────────────────────────────────────────────────
-           Two real buttons, 44px tall, with aria-pressed. Autonyms only, so
-           neither label needs translating. */
-        .langswitch {
-            display: flex;
-            gap: var(--space-1);
-            padding: var(--space-1);
-            border-radius: var(--radius-pill);
-            background: var(--surface-glass);
-            border: 1px solid var(--border-subtle);
-        }
-        .langswitch button {
-            min-height: var(--tap-target);
-            min-width: var(--tap-target);
-            padding-inline: var(--space-4);
-            border: 0;
-            border-radius: var(--radius-pill);
-            background: transparent;
-            color: var(--text-default);
-            font-family: inherit;
-            font-size: var(--fs-200);
-            font-weight: var(--fw-semibold);
-            cursor: pointer;
-            transition: background var(--motion-fast) var(--ease-standard);
-        }
-        .langswitch button:hover { background: var(--surface-glass-hover); }
-        .langswitch button[aria-pressed='true'] {
-            background: var(--accent-soft);
-            color: var(--accent-text);
-        }
-
-        /* styles.css is not loaded here, so the focus ring is this page's job.
-           The solid outline stays under the glow, because box-shadow is dropped
-           entirely in forced-colors mode (DESIGN.md §4). */
-        .skip:focus-visible,
-        .langswitch button:focus-visible,
+        /* The old .masthead is gone: the bar is full-bleed and sticky now, so it
+           sits OUTSIDE .shell. .skip, .wordmark, .headnav and .langswitch live in
+           the SHARED SITE CHROME block at the end of this <style>, byte-identical
+           with the other three public pages. The page keeps its own focus ring for
+           the elements that block does not own. */
         summary:focus-visible,
         .scroller:focus-visible,
         a:focus-visible {
@@ -329,8 +243,17 @@
 
         /* ─── Tier cards ───────────────────────────────────────────────────────
            Glass over the canvas, per DESIGN.md §1: --surface-raised is
-           translucent and only resolves to a colour once composited, so it
-           carries the blur that makes it read as a surface. */
+           translucent and only resolves to a colour once composited.
+
+           It used to carry `backdrop-filter: blur()` as well, and so did the
+           matrix, the callout, the FAQ and the contact panel — five blurred
+           layers, every one of them under a paragraph of body text. They are
+           gone. What sits behind them is --surface-ambient, a smooth radial
+           gradient, and blurring a smooth gradient returns the same gradient:
+           the five filters cost a composited layer each on every scroll frame
+           and bought a difference nothing can see. The one backdrop-filter on
+           this page is now the sticky bar, which is the only surface with
+           moving content behind it. */
         .tiers {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
@@ -344,8 +267,6 @@
             padding: var(--space-5);
             border-radius: var(--radius-lg);
             background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
             border: 1px solid var(--border-subtle);
             box-shadow: var(--elev-2);
         }
@@ -424,12 +345,24 @@
            keyboard user can scroll it at 375px without a pointer. */
         .scroller {
             overflow-x: auto;
+            /* NOT decoration, and not optional. The matrix is 480px wide inside a
+               343px region at 375px, and `overflow-x: auto` alone did not stop
+               that leftward RTL overflow reaching the ROOT scroller: with it
+               alone, documentElement.scrollWidth measures 435 against a 375
+               viewport — the whole phone page scrolls sideways.
+
+               The bug was already here. It was masked by the backdrop-filter
+               this rule used to carry, which incidentally made the element a
+               containment boundary; taking the blur off body text uncovered it.
+               Measured all four ways at 375px: plain 435, with the old blur back
+               375, with `contain: paint` 375, with `isolation: isolate` 435 —
+               so the mechanism is containment, not stacking, and `contain:
+               paint` is the declaration that says what is actually meant. */
+            contain: paint;
             margin: 0 0 var(--space-3);
             border-radius: var(--radius-lg);
             border: 1px solid var(--border-subtle);
             background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
         }
         /* `table-layout: fixed` because the row labels are long Arabic phrases
            and auto layout gave the first column ~70% of the width — at 375px
@@ -511,8 +444,6 @@
             border: 1px solid var(--border-subtle);
             border-inline-start: 3px solid var(--accent);
             background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
             max-width: var(--measure);
         }
         .callout > :last-child { margin-bottom: 0; }
@@ -524,8 +455,6 @@
             border-radius: var(--radius-md);
             border: 1px solid var(--border-subtle);
             background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
             margin-bottom: var(--space-3);
             max-width: var(--measure);
         }
@@ -549,8 +478,6 @@
             border-radius: var(--radius-lg);
             border: 1px solid var(--border-subtle);
             background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
             box-shadow: var(--elev-2);
             max-width: var(--measure);
         }
@@ -578,28 +505,8 @@
             background: var(--border-strong);
         }
 
-        .pagefoot {
-            margin-top: var(--space-7);
-            padding-top: var(--space-4);
-            border-top: 1px solid var(--border-subtle);
-            font-size: var(--fs-100);
-            color: var(--text-muted);
-        }
-        .pagefoot a { display: inline-block; min-height: var(--tap-target); line-height: var(--tap-target); }
-        .pagefoot .sep { padding-inline: var(--space-2); }
-
-        /* ─── The language filter ──────────────────────────────────────────────
-           No attribute (JS off or failed) = both languages visible, which is the
-           correct degradation: a price nobody can read is worse than a page
-           twice as long. */
-        html[data-lang='ar'] [data-doc-lang='en'],
-        html[data-lang='ar'] .t-en,
-        html[data-lang='en'] [data-doc-lang='ar'],
-        html[data-lang='en'] .t-ar { display: none; }
-        html[data-lang='ar'] .divider,
-        html[data-lang='en'] .divider { display: none; }
-        html[data-lang='ar'] .t-sep,
-        html[data-lang='en'] .t-sep { display: none; }
+        /* .pagefoot and the .t-* language filter now live in the SHARED SITE
+           CHROME block at the end of this <style>. */
 
         /* tokens.css already collapses --motion-* to 1ms under this preference.
            Restated so the promise holds even if that stylesheet fails to load
@@ -615,9 +522,355 @@
             .shell { padding-inline: var(--space-4); }
             h1 { font-size: var(--fs-600); }
             h2 { font-size: var(--fs-400); }
-            .masthead { justify-content: flex-start; }
             .tier { padding: var(--space-4); }
             th, td { padding: var(--space-3); }
+        }
+        /* ═══════════════════════════════════════════════════════════════════
+           SHARED SITE CHROME · CSS
+           ═══════════════════════════════════════════════════════════════════
+
+           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES:
+           landing.html, pricing.html, privacy.html and data-deletion.html.
+
+           There is no build step and no templating in this project — the four
+           pages are standalone files behind four hardcoded Express routes in
+           src/index.ts, and public/** has no static handler — so the only way
+           to share chrome is to duplicate it. It is duplicated DELIBERATELY
+           and character for character, which is what makes drift findable:
+           diff the block between any two of the four files and identical is
+           the expected result. Change one copy and you have to change all
+           four. The markers around it exist so a diff can be taken
+           mechanically.
+
+           WHY IT IS LAST IN EVERY <style>. It owns .skip, .topbar, .wordmark,
+           .headtools, .headnav, .langswitch, .pagefoot and the .t-* language
+           filter outright, and it has to win on all four pages regardless of
+           what each page declares above it. Every page-local rule for those
+           selectors was deleted rather than left to lose the cascade quietly.
+
+           IT READS EXACTLY TWO THINGS from the page it is pasted into:
+           --page-max and --page-gutter, the width and gutter of that page's
+           content column. The four columns genuinely differ (70rem, 64rem,
+           52rem, 52rem) and a full-bleed bar whose wordmark does not sit on
+           the same vertical as the text beneath it looks like an accident.
+           Both have fallbacks, so the block still renders correctly on a page
+           that forgets to declare them.
+
+           NO var() LITERAL FALLBACKS HERE, unlike the rest of privacy.html and
+           data-deletion.html. The literals those two carry are the pre-HIG
+           indigo palette and have already drifted from tokens.css (--accent is
+           #0071e3 now, not #4f46e5). A second palette hiding inside a fallback
+           is worse than an unstyled bar, and four copies of one would be four
+           times worse. */
+        :root {
+            --nav-h: 3.5rem;    /* the bar's own height, and the scroll-margin every
+                                   in-page anchor now needs to clear it */
+            --nav-ui: 0.875rem; /* 14 — chrome type on all four pages */
+            --nav-lh: 1.5;      /* explicit everywhere, including on <button>: `normal`
+                                   swings between 1.11 and 2.11 across Arabic faces, so
+                                   an unset line-height is a different bar per platform */
+            --nav-t: 160ms;
+            --nav-ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+        }
+        /* The block's own escape hatch. All four pages happen to carry a blanket
+           reduced-motion reset of their own, and measurement confirms the chrome
+           collapses to 1ms on every one of them — but this block declares the
+           duration, so this block has to be the thing that retracts it. A shared
+           component that depends on its host for an accessibility promise keeps
+           that promise only until it is pasted somewhere new. */
+        @media (prefers-reduced-motion: reduce) {
+            :root { --nav-t: 1ms; }
+        }
+
+        /* ─── Cross-document view transitions ──────────────────────────────────
+           Moving between these four pages was a hard navigation: white flash,
+           full repaint, the reader loses their place — and on a site whose whole
+           point is that the same bar is present on every page, a flash between
+           them is the one thing that says it is NOT the same bar.
+
+           `navigation: auto` makes the browser cross-fade the two documents
+           instead. It is opt-in on BOTH ends, which is why it lives in this
+           shared block: with it on only some of the four, only some of the
+           twelve possible moves between them transition.
+
+           Progressive enhancement in the strictest sense: a browser without it
+           navigates exactly as before. Nothing is hidden waiting on it, so there
+           is no state to strand.
+
+           Reduced motion is handled by killing the animation rather than the
+           transition. Disabling `@view-transition` itself would be the obvious
+           move, but the at-rule is evaluated at navigation time and support for
+           it inside `@media` is inconsistent; zeroing the animations is what
+           every engine honours. The navigation still completes instantly. */
+        @view-transition { navigation: auto; }
+
+        @media (prefers-reduced-motion: reduce) {
+            ::view-transition-group(*),
+            ::view-transition-old(*),
+            ::view-transition-new(*) { animation: none !important; }
+        }
+
+        /* Every in-page anchor has to clear the sticky bar. Without this the
+           heading you jump to — including #content, which the skip link is the
+           only way to reach — lands underneath it. */
+        [id] { scroll-margin-block-start: calc(var(--nav-h) + var(--space-5)); }
+
+        /* ─── Skip link ───────────────────────────────────────────────────── */
+        .skip {
+            position: absolute;
+            inset-inline-start: var(--space-4);
+            inset-block-start: var(--space-2);
+            z-index: 40;
+            padding: var(--space-2) var(--space-4);
+            border-radius: var(--radius-sm);
+            background: var(--surface-solid);
+            color: var(--text-strong);
+            border: 1px solid var(--border-strong);
+            text-decoration: none;
+            font-weight: var(--fw-semibold);
+            line-height: var(--nav-lh);
+            transform: translateY(-250%);
+        }
+        .skip:focus { transform: translateY(0); }
+
+        /* ─── The bar ──────────────────────────────────────────────────────────
+           Sticky on all four pages. It used to be sticky on none of them, and
+           /privacy and /data-deletion are long documents — a visitor who
+           arrives from Meta's own settings link, reads to the bottom and wants
+           the product had nothing on screen to click.
+
+           THE PAGE'S ONE backdrop-filter, and the only element on any of the
+           four that earns one: it is the only surface with moving content
+           behind it. Never under body text — a blur under a paragraph costs a
+           composited layer per scroll frame and buys nothing. */
+        .topbar {
+            position: sticky;
+            inset-block-start: 0;
+            z-index: 30;
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+            backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+            border-block-end: 1px solid var(--border-subtle);
+        }
+        .topbar-in {
+            max-width: var(--page-max, 64rem);
+            margin-inline: auto;
+            padding-inline: var(--page-gutter, var(--space-4));
+            padding-block: var(--space-2);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            /* The safety net, not the plan. The bar fits on one row at 375px in
+               both languages (measured below); wrapping is what happens with
+               JavaScript off, where every label carries BOTH languages at once.
+               Two rows is a graceful outcome. A horizontally scrolling page is
+               not, and that is what nowrap would have given. */
+            flex-wrap: wrap;
+            gap: var(--space-3);
+            min-height: var(--nav-h);
+        }
+
+        /* The wordmark is a link, so it is a target: it measured 36.8px tall
+           before the min-block-size, which is under the 44px floor. Inline
+           links inside paragraphs are left alone deliberately — WCAG 2.5.8
+           exempts a target that is "in a sentence or block of text". */
+        .wordmark {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-block-size: var(--tap-target);
+            font-size: 1rem;
+            font-weight: var(--fw-semibold);
+            color: var(--text-strong);
+            line-height: 1.25;
+            text-decoration: none;
+        }
+        .wordmark .latin {
+            font-family: var(--font-latin);
+            font-size: 0.75rem;
+            font-weight: var(--fw-regular);
+            letter-spacing: 0.01em;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .headtools {
+            display: flex;
+            align-items: center;
+            gap: var(--space-2);
+        }
+        .headnav { display: flex; gap: var(--space-1); }
+        .headnav a {
+            display: inline-flex;
+            align-items: center;
+            min-height: var(--tap-target);
+            padding-inline: var(--space-3);
+            border-radius: var(--radius-sm);
+            color: var(--text-default);
+            font-size: var(--nav-ui);
+            font-weight: var(--fw-medium);
+            line-height: var(--nav-lh);
+            white-space: nowrap;
+            text-decoration: none;
+            transition: background var(--nav-t) var(--nav-ease),
+                        color var(--nav-t) var(--nav-ease);
+        }
+        .headnav a:hover { background: var(--surface-glass); color: var(--text-strong); }
+
+        /* "You are here". aria-current is the real attribute rather than a
+           class, so the styling and what a screen reader announces cannot
+           disagree — and it is also the selector, so there is nothing to keep
+           in sync. Deliberately not colour alone: weight and a filled pill too.
+
+           The wordmark carries aria-current on landing.html — it links to `/`
+           and that page IS `/` — but it gets no style of its own here. It is
+           already --text-strong at semibold, the heaviest thing in the bar, so
+           a rule would compute to exactly what it already is. Dead CSS that
+           looks like a feature is worse than no CSS. On landing the visible
+           marker is the footer's Home link. */
+        .headnav a[aria-current='page'] {
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+            background: var(--accent-soft);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
+        }
+
+        /* Two real buttons, 44px tall, with aria-pressed. Autonyms only, so
+           neither label needs translating. */
+        .langswitch {
+            display: flex;
+            gap: 2px;
+            padding: 3px;
+            border-radius: var(--radius-pill);
+            background: var(--surface-glass);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+        }
+        .langswitch button {
+            min-height: var(--tap-target);
+            min-width: 3.25rem;
+            padding-inline: var(--space-3);
+            border: 0;
+            border-radius: var(--radius-pill);
+            background: transparent;
+            color: var(--text-default);
+            font-family: inherit;
+            font-size: var(--nav-ui);
+            font-weight: var(--fw-semibold);
+            line-height: var(--nav-lh);
+            letter-spacing: 0;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: background var(--nav-t) var(--nav-ease),
+                        color var(--nav-t) var(--nav-ease);
+        }
+        .langswitch button:hover { background: var(--surface-glass-hover); }
+        .langswitch button[aria-pressed='true'] {
+            background: var(--accent-soft);
+            color: var(--accent-text);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
+        }
+
+        /* styles.css is not loaded on any of these pages, so the focus ring is
+           the page's own job. The solid outline stays under the glow, because
+           box-shadow is dropped entirely in forced-colors mode (DESIGN.md §4). */
+        .skip:focus-visible,
+        .wordmark:focus-visible,
+        .headnav a:focus-visible,
+        .langswitch button:focus-visible,
+        .pagefoot a:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
+            border-radius: var(--radius-sm);
+            box-shadow: 0 0 0 5px var(--accent-ring);
+        }
+
+        /* ─── The footer ───────────────────────────────────────────────────────
+           It carries all four public pages plus the dashboard and the repo, so
+           every page can reach every other page from the bottom as well as the
+           top. It sits inside each page's own .shell, which is why it has no
+           max-width of its own: it inherits the column it belongs to. */
+        .pagefoot {
+            margin-block-start: var(--space-7);
+            padding-block: var(--space-5) var(--space-7);
+            border-block-start: 1px solid var(--border-subtle);
+            font-size: var(--nav-ui);
+            line-height: 1.75;
+            color: var(--text-muted);
+        }
+        /* Flex with a gap rather than "·" glyphs between the links. The glyphs
+           wrapped as their own items: at 375px the row broke after a separator,
+           leaving a lone "·" hanging at the end of the first line. A gap cannot
+           do that, and the decorative characters leave the accessibility tree at
+           the same time. */
+        .pagefoot nav {
+            display: flex;
+            flex-wrap: wrap;
+            column-gap: var(--space-5);
+            margin-block-end: var(--space-3);
+        }
+        .pagefoot a {
+            display: inline-flex;
+            align-items: center;
+            min-height: var(--tap-target);
+            font-size: var(--nav-ui);
+        }
+        .pagefoot a[aria-current='page'] {
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+        }
+        .pagefoot p { max-width: 70ch; margin: 0; }
+
+        /* ─── The language filter ──────────────────────────────────────────────
+           No attribute (JavaScript off or failed) = both languages visible,
+           which is the correct degradation: a page twice as long beats a page
+           nobody can read. The chrome degrades the same way — every label in
+           the bar and the footer then reads "الأسعار · Pricing", which is still
+           a working link. */
+        html[data-lang='ar'] [data-doc-lang='en'],
+        html[data-lang='ar'] .t-en,
+        html[data-lang='en'] [data-doc-lang='ar'],
+        html[data-lang='en'] .t-ar { display: none; }
+        html[data-lang='ar'] .divider,
+        html[data-lang='en'] .divider { display: none; }
+        html[data-lang='ar'] .t-sep,
+        html[data-lang='en'] .t-sep { display: none; }
+        /* The separator's own spaces are not enough. `.headnav a` and
+           `.pagefoot a` are inline-flex, and a flex container drops
+           whitespace-only text between its items and collapses the spaces at
+           each item's edge — so with JavaScript off, where the separator is the
+           only thing visible between the two languages, "الأسعار · Pricing"
+           rendered "الأسعار·Pricing". A margin survives flex. */
+        .t-sep { margin-inline: 0.3em; }
+
+        /* ─── The bar at 375px ─────────────────────────────────────────────────
+           375px is a design target, not a fallback, and the bar is the one
+           thing on every page that has to survive it. Arabic runs 20–40% longer
+           than the English, so Arabic is what has to fit.
+
+           landing.html used to solve this with `.headnav { display: none }`
+           below 40rem — which deleted Pricing and Sign in on every phone, i.e.
+           on most of the traffic this product is for. The bar is squeezed
+           instead: smaller gaps, tighter link padding, and the language buttons
+           down to their own text width.
+
+           Measured at 375px, one row in both languages, and ENGLISH is the tight
+           one here rather than Arabic — "Pricing" and "Sign in" set 8px wider
+           than الأسعار and الدخول at the same size. The row came to 380px against
+           a 375px viewport before `.headnav a` dropped to a 4px inline padding,
+           and 365px after. 320px still wraps to two rows, which is the right
+           outcome at a width that narrow and is why flex-wrap is on. */
+        @media (max-width: 30rem) {
+            .topbar-in {
+                gap: var(--space-2);
+                padding-inline: var(--space-3);
+            }
+            .headtools { gap: var(--space-1); }
+            /* .headnav keeps its 4px gap. Closing it to 0 fits, but with the
+               link padding also at 4px the two labels end up 8px apart, and at
+               14px that reads as one run of text rather than two links. */
+            .headnav a { padding-inline: var(--space-1); }
+            .langswitch { gap: 1px; padding: 2px; }
+            .langswitch button { min-width: 0; padding-inline: var(--space-2); }
         }
     </style>
 
@@ -647,20 +900,60 @@
     </script>
 </head>
 <body>
-    <a class="skip" href="#content"><span class="t-ar">تخطَّ إلى المحتوى</span><span class="t-sep"> · </span><span class="t-en">Skip to content</span></a>
 
-    <div class="shell">
-        <header class="masthead">
-            <div class="wordmark">
-                أوتوريبلاي برو
-                <span class="latin" lang="en" dir="ltr">AutoReply Pro</span>
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         SHARED SITE CHROME · NAVBAR
+         ═══════════════════════════════════════════════════════════════════════
+         MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES: landing.html,
+         pricing.html, privacy.html and data-deletion.html. No build step, no
+         templating — see the CSS block of the same name at the end of <style>
+         for why the four copies exist and what to do when one of them changes.
+
+         THE ONE INTENDED DIFFERENCE between the four copies is
+         `aria-current="page"` on the link that points at the page you are
+         reading. On landing.html that is the wordmark; on pricing.html the
+         Pricing link. /privacy and /data-deletion are not destinations in the
+         bar, so on those two pages nothing here carries it — their footer link
+         does instead. Anything else that differs is drift.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- The skip link is part of the chrome, so it is part of this block. It was
+         three different strings before: landing.html isolated both labels in
+         <bdi>, the other three wrapped them in <span>, which is a real bug and
+         not a cosmetic one — an English sentence inside an RTL document has its
+         final punctuation reordered to the wrong end of the line, which is how
+         the footer used to render ".by Meta". -->
+    <a class="skip" href="#content"><bdi class="t-ar" lang="ar">تخطَّ إلى المحتوى</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Skip to content</bdi></a>
+
+    <header class="topbar">
+        <div class="topbar-in">
+            <!-- The wordmark goes to `/`, which is the universal convention and
+                 was the single largest hole in this site: not one of the four
+                 pages linked to the home page at all. /privacy and
+                 /data-deletion pointed only at each other — a two-page
+                 cul-de-sac — and /privacy is the URL Meta links to from the
+                 app's own settings, so a visitor who arrived from Meta, read
+                 the policy and wanted the product had nowhere to go. -->
+            <a class="wordmark" href="/">
+                <bdi lang="ar" dir="rtl">أوتوريبلاي برو</bdi>
+                <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
+            </a>
+            <div class="headtools">
+                <nav class="headnav" aria-label="روابط الموقع · Site">
+                    <a href="/pricing" aria-current="page"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <!-- "الدخول" rather than "تسجيل الدخول": the bar has to hold
+                         a wordmark, two links and a language switch inside
+                         375px, and the footer carries the full "لوحة التحكم"
+                         for the same destination. -->
+                    <a href="/dashboard"><bdi class="t-ar" lang="ar">الدخول</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Sign in</bdi></a>
+                </nav>
+                <nav class="langswitch" aria-label="اللغة · Language">
+                    <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
+                    <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
+                </nav>
             </div>
-            <nav class="langswitch" aria-label="اللغة · Language">
-                <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
-                <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
-            </nav>
-        </header>
-
+        </div>
+    </header>
+    <div class="shell">
         <main id="content">
 
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
@@ -1465,15 +1758,41 @@
 
         </main>
 
+        <!-- ═══════════════════════════════════════════════════════════════════
+             SHARED SITE CHROME · FOOTER
+             ═══════════════════════════════════════════════════════════════════
+             MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES, on the same
+             terms as the navbar above and the CSS block at the end of <style>.
+
+             It carries every public page plus the dashboard and the repo, so
+             the navigation graph is complete from the bottom of any page as
+             well as from the top: four pages, and from each of them all three
+             others plus /dashboard. Before this, /pricing reached neither home
+             nor sign-in, and /privacy and /data-deletion reached only each
+             other.
+
+             THE ONE INTENDED DIFFERENCE between the four copies is
+             `aria-current="page"` on this page's own link.
+             ═══════════════════════════════════════════════════════════════════ -->
         <footer class="pagefoot">
+            <nav aria-label="روابط الموقع · Site">
+                <a href="/"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
+                <a href="/pricing" aria-current="page"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
+                <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
+                <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
+                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
+            </nav>
             <p>
-                <a href="/privacy"><span class="t-ar">سياسة الخصوصية</span><span class="t-sep"> · </span><span class="t-en">Privacy policy</span></a>
-                <span class="sep">·</span>
-                <a href="/data-deletion"><span class="t-ar">حذف بياناتك</span><span class="t-sep"> · </span><span class="t-en">Delete your data</span></a>
-            </p>
-            <p>
-                <span class="t-ar">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة Meta، ولا ترتبط هذه الأداة بها.</span>
-                <span class="t-en">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</span>
+                <!-- These two were plain <span>s with no lang or dir on three of
+                     the four pages. Inside an RTL page an English sentence's
+                     final full stop is a neutral character, so it was reordered
+                     to the other end of the line and the footer rendered
+                     ".by Meta". <bdi> is an isolate AND an element, which is why
+                     it is used here rather than unicode-bidi: isolate, which the
+                     W3C notes may be ignored. -->
+                <bdi class="t-ar" lang="ar" dir="rtl">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة <bdi lang="en" dir="ltr">Meta</bdi>، ولا ترتبط هذه الأداة بها.</bdi>
+                <bdi class="t-en" lang="en" dir="ltr">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</bdi>
             </p>
         </footer>
     </div>
