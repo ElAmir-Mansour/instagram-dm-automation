@@ -22,6 +22,125 @@
   (applyDocument()). Same mechanism as public/pricing.html and
   public/privacy.html.
 
+  ═══════════════════════════════════════════════════════════════════════════
+  WHY THE PAGE LOOKS LIKE THIS — the 2026-09-22 rebuild
+  ═══════════════════════════════════════════════════════════════════════════
+
+  The first version of this page was correct and unattractive: it read as
+  styled documentation rather than as a product page, and the owner said so.
+  The specific, measurable faults were: a 36px H1 where every reference hero
+  measures 46–96px; zero product visuals on the whole page; ~75 words of hero
+  copy in three stacked blocks, the third of which was a bordered caveat about
+  the MIT licence; a completely flat background; single-layer pure-black
+  shadows that are invisible on #161617; six identically-shaped feature cards
+  in a row; 64px of rhythm between sections; and `--lh-tight: 1.45` — a
+  paragraph line-height — applied to headings.
+
+  What changed, and why:
+
+  TYPE. The page now carries its own display scale (`--lp-*`, defined below and
+  NOT in tokens.css, because the dashboard has no use for a 72px step and
+  every file under dashboard/ is version-pinned). H1 is a clamp from 40px to
+  72px. Weight is 500 for Latin display and 600 for Arabic — the two findings
+  point in opposite directions and both are real: Latin display type at 700+
+  reads as amateur, Arabic display type at 400 reads as unfinished. IBM Plex
+  Sans Arabic, the reference Arabic face, ships no weight above 700 at all, so
+  `font-synthesis-weight: none` is set globally: a weight the face does not
+  have now falls back visibly instead of being smeared into a fake bold.
+
+  LETTER-SPACING IS ZERO ON ARABIC, and this is not a style preference.
+  Measured in Chrome: `letter-spacing: 10px` on ببب, ددد and مرحبا moves
+  nothing at all — 0px delta in every case. On `مرحبا بك في تطبيقنا` it adds
+  exactly 30px, which is the three word spaces. Arabic letter-spacing is a
+  WORD-space multiplier. A negative display tracking value therefore does not
+  tighten Arabic letters; it silently pulls Arabic WORDS together. All tracking
+  on this page is scoped to `.doc[lang='en']`.
+
+  LINE-HEIGHT IS SET EXPLICITLY ON EVERYTHING, including buttons. `normal`
+  swings between 1.11 and 2.11 across Arabic faces, so an unset line-height is
+  a different layout per platform. Arabic values are looser than Latin at every
+  step (display 1.30 vs 1.05, body 1.75 vs 1.60) because Arabic occupies 22–46%
+  more vertical space than Latin at the same size, and 29–61% more once
+  tashkeel is present — which this page's copy uses.
+
+  DEPTH. Elevation is now translucent white layered over one base, not lighter
+  greys: every card carries `inset 0 1px 0 var(--lp-lift)` — a top-edge light
+  hairline — plus a hairline ring and three hue-matched shadow layers with
+  falling opacity and blur at roughly twice the Y offset. The old `--elev-1`
+  (`0 1px 2px rgba(0,0,0,.32)`) is pure black and single-layer, which is
+  invisible against a #161617 page. A radial accent glow and a 346-byte inline
+  SVG grain sit behind the hero; both are positioned with `inset-inline-start`
+  rather than baked into the gradient, because gradients do NOT mirror in RTL
+  and the glow belongs behind the headline, which starts at the right.
+
+  GLASS IS USED EXACTLY ONCE, on the sticky header. The previous version
+  applied `backdrop-filter: blur(20px) saturate(180%)` to every card, note,
+  tile and link on the page — six stacked blur layers repainting on every
+  scroll frame, for an effect that only reads as glass when something is
+  moving behind it. Cards are now a translucent surface without a blur, which
+  composites to exactly the colour `npm run check:contrast` already models.
+
+  ONE MOTION MOMENT. Only the three beats of the loop reveal on scroll, via
+  `animation-timeline: view()`, guarded by `@supports` AND
+  `prefers-reduced-motion: no-preference`. The finished state is the DEFAULT
+  and the animation is authored additively, because the blanket reduced-motion
+  reset does not reset `animation-timeline` — an element animated from
+  `opacity: 0` by a scroll timeline stays stranded at 0 forever under that
+  reset unless `animation-timeline: auto !important` is also set. It is, below.
+  Reveal distance is 14px; the 100px AOS default is the tell.
+
+  THE ONE EMOJI ON THE PAGE IS DELIBERATE, and is not an icon. "Emoji as
+  icons" is the loudest single amateur tell and there are none here — every
+  glyph that acts as an icon is an inline <svg>. The 🤖 in the second beat is
+  inside quotation marks because it is a QUOTATION: it is the first character
+  of src/webhook/meta-payload.ts:87, and the strip above it says "the line the
+  software adds". Dropping it would make the page misquote its own product by
+  one character, which is a worse fault than the one it would avoid. If the
+  emoji should not be there, the fix is in meta-payload.ts.
+
+  BIDI. Every Latin run inside Arabic prose, and every Arabic run inside
+  English prose, is wrapped in <bdi> — the semantic element, not
+  `unicode-bidi: isolate`, which the W3C notes is non-semantic and may be
+  ignored. The old footer rendered ".by Meta" because a full English sentence
+  sat in an RTL container with no dir; the language spans are now <bdi> with
+  explicit lang and dir.
+
+  THE FONT DECISION, and why it went the way it did.
+  The reference Arabic face is IBM Plex Sans Arabic (SIL OFL 1.1; the Saudi DGA
+  design system specifies it). It was downloaded and subset here with the
+  correct unicode ranges — including U+0030-0039, because Google's `arabic`
+  subset carries Arabic-Indic digits and NO Western ones, which would make
+  every number on the page fall back to a different face mid-sentence — and the
+  correct layout features (init, medi, fina, isol, rlig, ccmp, mark, mkmk,
+  without which the letters stop joining). The result measured 39.2 KB at
+  weight 400 and 42.2 KB at 600.
+
+  It is not shipped, because there is nowhere to put it. `vercel.json` routes
+  `/(.*)` to `src/index.ts` with no filesystem handler ahead of it, so nothing
+  under `public/` is reachable — verified against production, where
+  `/landing.html` and `/pricing.html` both return 404 while `/` and `/pricing`
+  return 200. The only remaining delivery route is a `data:` URI inlined into
+  this file, which the CSP does allow (`font-src 'self' data:`). Measured, that
+  is 108.6 KB of base64 — 82.3 KB after gzip — added to the critical path of
+  every single request, with no cache reuse, because it cannot be a separate
+  cacheable file. IBM ships no variable cut of Plex Sans Arabic, so it is two
+  full statics or nothing.
+
+  So the page uses the system stack, which is also what tokens.css, the
+  dashboard, /pricing and /privacy all use — a landing page in a different face
+  from the product it links into is the "two design systems in one repo"
+  problem that tokens.css was written to end. The cost of that choice is paid
+  in full above: every line-height explicit, synthesis off, Arabic body at 17px
+  rather than 16px, tracking scoped to Latin.
+
+  To reverse it, one line in src/index.ts:
+      app.use('/assets', express.static(path.join(__dirname, '../public/assets')));
+  After that the font is a 39 KB cacheable request, the arithmetic flips, and
+  self-hosting Plex Arabic becomes the better answer. That line is out of scope
+  for this change and nothing here depends on it.
+
+  ═══════════════════════════════════════════════════════════════════════════
+
   EVERY CLAIM BELOW EXISTS IN THE CODE. The evidence, per claim:
 
     a keyword comment triggers a private DM, a public reply and a like
@@ -43,8 +162,11 @@
     AI DM replies using the operator's prompt and knowledge base, over the
     last 8 messages of the thread
         src/services/ai.ts — system_prompt, knowledge_base, HISTORY_WINDOW = 8
-    the automated-service disclosure Meta requires
-        src/webhook/messaging.ts — needsDisclosure() / applyDisclosure()
+    the automated-service disclosure Meta requires, on the FIRST AI reply in a
+    conversation
+        src/webhook/messaging.ts — needsDisclosure() (:147, true when never
+        disclosed or disclosed more than 7 days ago) / applyDisclosure (:396),
+        and src/webhook/meta-payload.ts:87 for the literal line the page quotes
     unified inbox, manual reply, per-conversation AI pause
         src/routes/api.ts — /conversations, /conversations/:id/messages,
         /conversations/:id/toggle-bot
@@ -78,14 +200,21 @@
     open source, MIT, self-hostable
         LICENSE, README.md
 
+  ONE CLAIM WAS MOVED BECAUSE IT WAS IN THE WRONG PLACE. The previous version
+  attached the automated-service disclosure to step 2, the campaign private
+  reply. It does not carry one: src/webhook/comments.ts sends
+  `matchedCampaign.dm_template` straight through and the string "disclosure"
+  does not appear in that file at all. `applyDisclosure` is called from exactly
+  one site, src/webhook/messaging.ts:396, which is the AI reply path. The claim
+  is now made where it is true, and only there.
+
   THINGS DELIBERATELY NOT CLAIMED, and why — do not "improve" the page by
   adding them back. This page holds exactly the line public/pricing.html drew:
     · No time-to-delivery for the DM. The webhook queues the event and drains
       it inline only as far as its budget allows (CLAUDE.md, "The queue exists
-      now"); anything left over waits for the next drain, which is a ~5-minute
-      GitHub Actions schedule. "Instant" or "within seconds" would be a claim
-      nothing enforces, so the page says "privately, not in the comments" and
-      says nothing about when.
+      now"); anything left over waits for the next drain. "Instant" or "within
+      seconds" would be a claim nothing enforces, so the page says "privately,
+      not in the comments" and says nothing about when.
     · No minute-accurate publishing. ARCHITECTURE.md §2.4 calls the UI's
       minute-level promise "a genuine product lie". The page promises a
       queue, not a clock, and says so out loud in "What this does not
@@ -107,9 +236,6 @@
       job failed keeps its text indefinitely. Do not restore the claim in any
       narrower form unless the narrower form is verifiable end to end — the
       page now points at /privacy instead of paraphrasing it.
-      (public/pricing.html:1356 still carries the same sentence. That file is
-      owned by another change; this note is here so the next person to read
-      both does not "fix" this page to match it.)
     · No retention window for anything. RAW_PAYLOAD_RETENTION_DAYS is opt-in,
       is a no-op while unset, and ARCHITECTURE.md §7 Stage 1 records it as
       still unset in production — so messages.raw_payload, which is the full
@@ -117,7 +243,10 @@
       retention tier for exactly this reason and this page must not undercut
       that by implying a window exists.
     · No customer count, no testimonial, no logo wall, no "trusted by".
-      Nothing has been sold yet; DESIGN.md §6 rules out invented metrics.
+      Nothing has been sold yet; DESIGN.md §6 rules out invented metrics. The
+      three figures in "What this does not promise" are CONSTANTS READ OUT OF
+      THE SOURCE — 180, 24 and 8 — not usage, not growth, not anything that
+      would need a customer to exist.
     · No prices. They live on /pricing, which is where the operator's
       unfilled placeholders already are — duplicating them would give this
       page a second set to forget.
@@ -134,12 +263,13 @@
   by hand against tokens.css and are recorded here:
       --accent-text on --accent-soft on --surface-raised on --surface-page
           5.99:1 dark · 6.44:1 light
-      --accent-text on --accent-soft on --surface-glass on --surface-raised
-      on --surface-page   (the "public reply" tag inside a mock)
-          4.81:1 dark · 5.80:1 light
+      --text-on-accent on --accent (the outgoing DM bubble)
+          4.70:1 dark · 4.70:1 light
   The one non-text colour is the heart glyph, --danger as a fill: 4.47:1 dark
   and 3.45:1 light against the card, both clear of the 3:1 floor for a
-  meaningful graphic.
+  meaningful graphic. The decorative layers — the radial glow and the grain —
+  carry no text and sit behind everything; the glow's own stops are drawn from
+  --accent-ring, so they cannot drift from the accent.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -157,31 +287,206 @@
          the product cannot drift apart. Same origin, and allowed by the CSP
          that src/routes/api.ts sets on this route.
          No webfont: --font-ui is the -apple-system stack, so nothing is
-         downloaded. Keep this ?v= pinned to ASSET_VERSION in
-         dashboard/js/app.js — scripts/check-asset-version.mjs enforces it, and
-         public/landing.html is in its SHARED_ASSET_PAGES list. -->
+         downloaded. See "THE FONT DECISION" in the header comment for why the
+         Plex Arabic subset was measured and then not shipped.
+         Keep this ?v= pinned to ASSET_VERSION in dashboard/js/app.js —
+         scripts/check-asset-version.mjs enforces it, and public/landing.html
+         is in its SHARED_ASSET_PAGES list. -->
     <link rel="stylesheet" href="/dashboard/css/tokens.css?v=6.9">
 
     <style>
-        /* ─── Page ─────────────────────────────────────────────────────────── */
+        /* ═══════════════════════════════════════════════════════════════════
+           Page-local tokens  (--lp-*)
+           ═══════════════════════════════════════════════════════════════════
+           These are NOT in tokens.css on purpose. Two reasons: the dashboard
+           has no use for a 72px display step or a page-band rhythm, and every
+           file under dashboard/ is covered by the ASSET_VERSION bump check, so
+           a marketing-only token would force a cache-version bump on a change
+           that touches no dashboard asset. Everything semantic — colour,
+           radius, spacing, tap target — still comes from tokens.css. */
+        :root {
+            /* Type. Utopia-style clamps: a fluid ramp with real endpoints
+               rather than a media-query step, so 375px and 1440px are both
+               designed rather than one being the leftovers of the other. */
+            --lp-display: clamp(2.5rem, 1.7958rem + 3.0047vw, 4.5rem);   /* 40 → 72 */
+            --lp-h2:      clamp(1.75rem, 1.3538rem + 1.6901vw, 2.875rem);/* 28 → 46 */
+            --lp-h3:      clamp(1.125rem, 1.0369rem + 0.3756vw, 1.375rem);/* 18 → 22 */
+            --lp-lede:    clamp(1.0625rem, 0.9744rem + 0.3756vw, 1.3125rem);/* 17 → 21 */
+            --lp-ui:      0.875rem;   /* 14 — chrome, labels, captions */
+            --lp-micro:   0.75rem;    /* 12 — the floor */
+
+            /* Line-height. Arabic defaults; .doc[lang='en'] tightens all four.
+               Nothing on this page is allowed to inherit `normal`. */
+            --lp-lh-display: 1.3;
+            --lp-lh-head:    1.35;
+            --lp-lh-body:    1.75;
+            --lp-lh-ui:      1.5;
+
+            /* Tracking. ZERO for Arabic — see the header comment; a negative
+               value does not tighten Arabic letters, it pulls Arabic words
+               together. Latin overrides this on .doc[lang='en']. */
+            --lp-track: 0;
+            --lp-fw-display: 600;   /* Arabic display weight. Latin drops to 500. */
+
+            /* Rhythm. 64 → 128px, which is the measured spacing between
+               sections on the reference pages; --space-8 (64) was the old
+               value and is the bottom of that range, not the middle. */
+            --lp-band: clamp(4rem, 2.2rem + 7.5vw, 8rem);
+            --lp-max: 70rem;
+            --lp-bar: 3.75rem;      /* sticky header height, for scroll-margin */
+            /* One gutter for the shell AND the sticky bar, so the wordmark
+               stays on the same vertical as the content under it. Fluid,
+               because a flat 16px that is right at 375px leaves a tablet's
+               text almost touching the bezel. */
+            --lp-gutter: clamp(var(--space-4), 2.5vw, var(--space-6));
+
+            /* Depth — dark. Elevation is translucent white over one base:
+               a top-edge light hairline, a ring, then three hue-matched
+               shadow layers with falling opacity and blur ≈ 2× the Y offset. */
+            --lp-lift: rgba(255, 255, 255, 0.10);
+            --lp-elev-card:
+                inset 0 1px 0 0 var(--lp-lift),
+                0 0 0 1px var(--border-subtle),
+                0 1px 2px    hsl(222 50% 2% / 0.36),
+                0 6px 12px  -4px hsl(222 50% 2% / 0.28),
+                0 18px 36px -12px hsl(222 50% 2% / 0.24);
+            --lp-elev-lifted:
+                inset 0 1px 0 0 var(--lp-lift),
+                0 0 0 1px var(--border-strong),
+                0 2px 4px    hsl(222 50% 2% / 0.38),
+                0 10px 20px -6px hsl(222 50% 2% / 0.32),
+                0 26px 52px -16px hsl(222 50% 2% / 0.28);
+            --lp-elev-btn:
+                inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
+                0 1px 2px  hsl(211 90% 12% / 0.40),
+                0 6px 12px -4px hsl(211 90% 12% / 0.30);
+
+            /* The ambient layers. --accent-ring is rgba(accent, 0.35), so this
+               multiplier IS the glow's peak alpha: 0.8 × 0.35 = 0.28 in dark
+               and 0.46 × 0.35 = 0.16 in light, which are the two values the
+               reference radials measure at. Drawing the glow from the ring
+               token rather than a literal means it cannot drift from --accent. */
+            --lp-glow: 0.8;
+            --lp-grain: 0.16;
+            --lp-grain-blend: overlay;
+
+            /* Motion. Four curves, which is the ceiling before a page starts
+               to feel like four different products. */
+            --lp-ease-out:  cubic-bezier(0.25, 1, 0.5, 1);
+            --lp-ease-quad: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            --lp-t-press: 90ms;
+            --lp-t-hover: 160ms;
+        }
+
+        /* Light is a peer, not an afterthought — and the same selector
+           tokens.css uses, so the two can never disagree about which theme is
+           active. Glass inverts, the glow halves, the grain goes to multiply
+           at a third the alpha (an overlay grain on a near-white page reads as
+           dirt), and the shadows become real instead of decorative. */
+        @media (prefers-color-scheme: light) {
+            :root:not([data-theme='dark']) {
+                --lp-lift: rgba(255, 255, 255, 0.90);
+                --lp-elev-card:
+                    inset 0 1px 0 0 var(--lp-lift),
+                    0 0 0 1px var(--border-subtle),
+                    0 1px 2px    hsl(222 32% 40% / 0.10),
+                    0 6px 12px  -4px hsl(222 32% 40% / 0.08),
+                    0 18px 36px -12px hsl(222 32% 40% / 0.07);
+                --lp-elev-lifted:
+                    inset 0 1px 0 0 var(--lp-lift),
+                    0 0 0 1px var(--border-strong),
+                    0 2px 4px    hsl(222 32% 40% / 0.12),
+                    0 10px 20px -6px hsl(222 32% 40% / 0.10),
+                    0 26px 52px -16px hsl(222 32% 40% / 0.09);
+                --lp-elev-btn:
+                    inset 0 1px 0 0 rgba(255, 255, 255, 0.28),
+                    0 1px 2px  hsl(211 60% 30% / 0.22),
+                    0 6px 12px -4px hsl(211 60% 30% / 0.16);
+                --lp-glow: 0.46;
+                --lp-grain: 0.05;
+                --lp-grain-blend: multiply;
+            }
+        }
+
+        /* ─── Base ─────────────────────────────────────────────────────────── */
         * { box-sizing: border-box; }
+
+        html { scroll-behavior: smooth; }
+        @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
         body {
             margin: 0;
             font-family: var(--font-ui);
-            font-size: var(--fs-300);
-            line-height: var(--lh-normal);
+            font-size: 1rem;
+            line-height: var(--lp-lh-body);
+            letter-spacing: var(--lp-track);
+            /* A weight the face does not actually have should look wrong, not
+               blurry: IBM Plex Sans Arabic stops at 700 and several production
+               Arabic sites ask it for 900, which browsers smear. */
+            font-synthesis-weight: none;
             background: var(--surface-page);
-            /* The ambient gradient, but deliberately NOT
-               `background-attachment: fixed`, for the reason pricing.html
-               records: iOS Safari does not honour it, and a full-viewport
-               repaint under several backdrop-filter layers is expensive on
-               every scroll frame. tokens.css sets the gradient's extreme stop
-               to --surface-page in both themes, so the flat value the contrast
-               guard measures stays the worst case. */
-            background-image: var(--surface-ambient);
             color: var(--text-default);
             -webkit-text-size-adjust: 100%;
+            accent-color: var(--accent);
+            /* Deliberately NO `overflow-x: hidden`. It was here for the glow,
+               which bleeds past the viewport — but .ambient clips its own
+               child, so nothing needed it, and a blanket overflow-x: hidden
+               HIDES a real horizontal overflow instead of preventing one.
+               Measured at 320/375/390/414/768/1024/1440: scrollWidth equals
+               clientWidth at every width, with no element wider than the
+               viewport. */
+        }
+
+        ::selection { background: var(--accent-soft); color: var(--text-strong); }
+
+        /* ─── The ambient layers ───────────────────────────────────────────────
+           A radial accent glow and a grain sheet, both fixed behind everything.
+           They are positioned with inset-inline-start rather than baked into
+           the gradient because gradients do NOT mirror under dir=rtl: in an
+           RTL hero the headline starts at the right, so the glow must too, and
+           `radial-gradient(at top left)` would stay top-left in both. */
+        .ambient {
+            /* Absolute and one viewport tall, not fixed: a fixed glow follows
+               the scroll down the whole page, which reads as a cheap effect
+               and puts an accent wash behind the refusals. Anchored to the top
+               of the document it belongs to the hero and scrolls away. */
+            position: absolute;
+            inset-block-start: 0;
+            inset-inline: 0;
+            block-size: 100vh;
+            z-index: -1;
+            pointer-events: none;
+            overflow: hidden;
+            contain: layout paint;
+        }
+        .ambient::before {
+            content: '';
+            position: absolute;
+            inset-block-start: -34%;
+            inset-inline-start: -14%;
+            inline-size: min(78%, 60rem);
+            aspect-ratio: 1;
+            border-radius: 50%;
+            background: radial-gradient(closest-side, var(--accent-ring), transparent 72%);
+            opacity: var(--lp-glow);
+        }
+        /* A little over 400 bytes of feTurbulence, inline, so the background
+           has texture without a request. Masked to the top of the page: a
+           full-height grain is noise, a top-weighted one is atmosphere.
+           The feColorMatrix is not optional. feTurbulence generates
+           INDEPENDENT noise per channel, so without it the grain is coloured
+           — measured at (28,29,26) on a (22,22,23) ground, which is a green
+           cast rather than a grain. Saturate 0 makes it monochrome. */
+        .ambient::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='.55'/%3E%3C/svg%3E");
+            background-size: 120px 120px;
+            opacity: var(--lp-grain);
+            mix-blend-mode: var(--lp-grain-blend);
+            -webkit-mask-image: linear-gradient(to bottom, #000, transparent 62%);
+            mask-image: linear-gradient(to bottom, #000, transparent 62%);
         }
 
         /* ─── Screen-reader-only text ──────────────────────────────────────────
@@ -200,12 +505,25 @@
             border: 0;
         }
 
-        /* ─── Skip link ────────────────────────────────────────────────────── */
+        /* ─── Focus ────────────────────────────────────────────────────────────
+           styles.css is not loaded here, so the focus ring is this page's job.
+           The solid outline stays under the glow, because box-shadow is dropped
+           entirely in forced-colors mode (DESIGN.md §4). */
+        a:focus-visible,
+        button:focus-visible,
+        .skip:focus-visible,
+        [tabindex]:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 3px;
+            border-radius: var(--radius-sm);
+            box-shadow: 0 0 0 5px var(--accent-ring);
+        }
+
         .skip {
             position: absolute;
             inset-inline-start: var(--space-4);
-            top: var(--space-2);
-            z-index: 10;
+            inset-block-start: var(--space-2);
+            z-index: 40;
             padding: var(--space-2) var(--space-4);
             border-radius: var(--radius-sm);
             background: var(--surface-solid);
@@ -213,56 +531,65 @@
             border: 1px solid var(--border-strong);
             text-decoration: none;
             font-weight: var(--fw-semibold);
-            transform: translateY(-200%);
+            line-height: var(--lp-lh-ui);
+            transform: translateY(-250%);
         }
         .skip:focus { transform: translateY(0); }
 
-        /* ─── Chrome ───────────────────────────────────────────────────────── */
-        .shell {
-            width: 100%;
-            max-width: 64rem;
-            margin: 0 auto;
-            padding: var(--space-5) var(--space-4) var(--space-8);
+        /* ─── Sticky chrome ────────────────────────────────────────────────────
+           The page's ONE backdrop-filter. It earns it: it is the only surface
+           with moving content behind it. */
+        .topbar {
+            position: sticky;
+            inset-block-start: 0;
+            z-index: 30;
+            background: var(--surface-raised);
+            -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+            backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+            border-block-end: 1px solid var(--border-subtle);
         }
-
-        .masthead {
+        .topbar-in {
+            max-width: var(--lp-max);
+            margin-inline: auto;
+            padding: var(--space-2) var(--lp-gutter);
             display: flex;
-            flex-wrap: wrap;
             align-items: center;
             justify-content: space-between;
             gap: var(--space-3);
-            padding-block: var(--space-4);
-            border-bottom: 1px solid var(--border-subtle);
+            min-height: var(--lp-bar);
         }
 
+        /* The wordmark is a link, so it is a target: measured at 36.8px tall
+           before this, which is under the 44px floor. The inline links inside
+           paragraphs measure 17–20px and are left alone deliberately — WCAG
+           2.5.8 exempts a target that is "in a sentence or block of text", and
+           padding them to 44px would tear the paragraphs apart. */
         .wordmark {
-            font-size: var(--fs-400);
-            font-weight: var(--fw-bold);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-block-size: var(--tap-target);
+            font-size: 1rem;
+            font-weight: var(--fw-semibold);
             color: var(--text-strong);
-            line-height: var(--lh-tight);
+            line-height: 1.25;
+            text-decoration: none;
         }
         .wordmark .latin {
-            display: block;
             font-family: var(--font-latin);
-            font-size: var(--fs-100);
+            font-size: var(--lp-micro);
             font-weight: var(--fw-regular);
+            letter-spacing: 0.01em;
             color: var(--text-muted);
+            line-height: 1.4;
         }
 
-        /* The header's own nav and the language switch travel together, so they
-           wrap as one block under the wordmark rather than splitting across
-           two ragged rows at ~430px. */
         .headtools {
             display: flex;
-            flex-wrap: wrap;
             align-items: center;
             gap: var(--space-2);
         }
-
-        .headnav {
-            display: flex;
-            gap: var(--space-1);
-        }
+        .headnav { display: flex; gap: var(--space-1); }
         .headnav a {
             display: inline-flex;
             align-items: center;
@@ -270,136 +597,175 @@
             padding-inline: var(--space-3);
             border-radius: var(--radius-sm);
             color: var(--text-default);
-            font-size: var(--fs-200);
+            font-size: var(--lp-ui);
             font-weight: var(--fw-medium);
+            line-height: var(--lp-lh-ui);
             text-decoration: none;
-            transition: background var(--motion-fast) var(--ease-standard);
+            transition: background var(--lp-t-hover) var(--lp-ease-quad),
+                        color var(--lp-t-hover) var(--lp-ease-quad);
         }
-        .headnav a:hover {
-            background: var(--surface-glass);
-            color: var(--text-strong);
-        }
+        .headnav a:hover { background: var(--surface-glass); color: var(--text-strong); }
 
-        /* ─── Language switch ──────────────────────────────────────────────────
-           Two real buttons, 44px tall, with aria-pressed. Autonyms only, so
+        /* Two real buttons, 44px tall, with aria-pressed. Autonyms only, so
            neither label needs translating. */
         .langswitch {
             display: flex;
-            gap: var(--space-1);
-            padding: var(--space-1);
+            gap: 2px;
+            padding: 3px;
             border-radius: var(--radius-pill);
             background: var(--surface-glass);
-            border: 1px solid var(--border-subtle);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
         }
         .langswitch button {
             min-height: var(--tap-target);
-            min-width: var(--tap-target);
-            padding-inline: var(--space-4);
+            min-width: 3.25rem;
+            padding-inline: var(--space-3);
             border: 0;
             border-radius: var(--radius-pill);
             background: transparent;
             color: var(--text-default);
             font-family: inherit;
-            font-size: var(--fs-200);
+            font-size: var(--lp-ui);
             font-weight: var(--fw-semibold);
+            /* Explicit, because `normal` on a button swings by more than
+               half a line across Arabic faces. */
+            line-height: var(--lp-lh-ui);
+            letter-spacing: 0;
             cursor: pointer;
-            transition: background var(--motion-fast) var(--ease-standard);
+            transition: background var(--lp-t-hover) var(--lp-ease-quad),
+                        color var(--lp-t-hover) var(--lp-ease-quad);
         }
         .langswitch button:hover { background: var(--surface-glass-hover); }
         .langswitch button[aria-pressed='true'] {
             background: var(--accent-soft);
             color: var(--accent-text);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
         }
 
-        /* styles.css is not loaded here, so the focus ring is this page's job.
-           The solid outline stays under the glow, because box-shadow is dropped
-           entirely in forced-colors mode (DESIGN.md §4). */
-        .skip:focus-visible,
-        .langswitch button:focus-visible,
-        a:focus-visible {
-            outline: 2px solid var(--accent);
-            outline-offset: 2px;
-            border-radius: var(--radius-xs);
-            box-shadow: 0 0 0 4px var(--accent-ring);
+        /* ─── Layout ───────────────────────────────────────────────────────── */
+        .shell {
+            width: 100%;
+            max-width: var(--lp-max);
+            margin-inline: auto;
+            padding-inline: var(--lp-gutter);
         }
+        /* Every anchor target clears the sticky bar. Without this the heading
+           you jump to sits underneath it. */
+        [id] { scroll-margin-block-start: calc(var(--lp-bar) + var(--space-5)); }
 
-        /* ─── Document body ────────────────────────────────────────────────── */
-        .doc[lang='en'] { font-family: var(--font-latin); }
+        .band { padding-block-start: var(--lp-band); }
+        .band > :last-child { margin-block-end: 0; }
+
+        /* ─── Typography ───────────────────────────────────────────────────── */
+        .doc[lang='en'] {
+            font-family: var(--font-latin);
+            --lp-lh-display: 1.05;
+            --lp-lh-head: 1.15;
+            --lp-lh-body: 1.6;
+            --lp-track: -0.022em;
+            --lp-fw-display: 500;
+        }
+        /* Arabic at 17px where Latin sits at 16. The 10% rule is a per-face
+           question, not a universal one, but 16px is the floor for Arabic and
+           17 is the right side of it for the UI faces this stack resolves to. */
+        .doc[lang='ar'] { font-size: 1.0625rem; }
 
         h1 {
-            font-size: var(--fs-700);
-            line-height: var(--lh-tight);
-            font-weight: var(--fw-bold);
-            color: var(--text-strong);
             margin: 0 0 var(--space-4);
-            max-width: 18ch;
+            font-size: var(--lp-display);
+            line-height: var(--lp-lh-display);
+            font-weight: var(--lp-fw-display);
+            letter-spacing: var(--lp-track);
+            color: var(--text-strong);
+            text-wrap: balance;
+            max-width: 19ch;
         }
         h2 {
-            font-size: var(--fs-500);
-            line-height: var(--lh-tight);
-            font-weight: var(--fw-semibold);
+            margin: 0 0 var(--space-4);
+            font-size: var(--lp-h2);
+            line-height: var(--lp-lh-display);
+            font-weight: var(--lp-fw-display);
+            letter-spacing: var(--lp-track);
             color: var(--text-strong);
-            margin: 0 0 var(--space-3);
+            text-wrap: balance;
+            max-width: 22ch;
         }
         h3 {
-            font-size: var(--fs-400);
-            line-height: var(--lh-tight);
-            font-weight: var(--fw-semibold);
-            color: var(--text-strong);
             margin: 0 0 var(--space-2);
+            font-size: var(--lp-h3);
+            line-height: var(--lp-lh-head);
+            font-weight: var(--fw-semibold);
+            letter-spacing: 0;
+            color: var(--text-strong);
         }
-        p { margin: 0 0 var(--space-4); }
+        p { margin: 0 0 var(--space-4); line-height: var(--lp-lh-body); }
         strong { color: var(--text-strong); font-weight: var(--fw-semibold); }
+        /* Arabic has no italic. Browsers shear the outlines and slant the
+           tashkeel at the wrong angle, which reads as a rendering fault. */
+        .doc[lang='ar'] i, .doc[lang='ar'] em { font-style: normal; font-weight: var(--fw-semibold); }
 
         a { color: var(--accent-text); text-decoration-thickness: 1px; text-underline-offset: 3px; }
         a:hover { color: var(--accent-hover); }
 
-        .prose { max-width: var(--measure); }
-
-        /* Arabic runs inside the English document — the normalisation examples
-           are the subject matter there, so they cannot be translated away. */
-        .ar {
-            font-family: var(--font-ui);
-            direction: rtl;
-            unicode-bidi: isolate;
+        .prose { max-width: 62ch; }
+        .lede {
+            font-size: var(--lp-lede);
+            line-height: var(--lp-lh-body);
+            color: var(--text-default);
+            max-width: 46ch;
         }
 
-        /* Latin runs inside Arabic prose. */
+        /* Arabic runs inside the English document — the normalisation examples
+           are the subject matter there, so they cannot be translated away.
+           <bdi> carries the isolation; this only restores the face. */
+        .ar { font-family: var(--font-ui); }
+
         .code {
             font-family: var(--font-mono);
             font-size: 0.9em;
-            direction: ltr;
-            unicode-bidi: isolate;
             padding: 0.1em 0.35em;
-            border-radius: var(--radius-xs);
+            border-radius: var(--radius-sm);
             background: var(--surface-glass);
-            border: 1px solid var(--border-subtle);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
         }
 
-        /* A section's rhythm is one rule, so the page cannot develop five
-           different gaps between five bands. */
-        .band { margin-block: var(--space-8) 0; }
-        .band > p:last-child { margin-bottom: 0; }
-
-        /* ─── Hero ─────────────────────────────────────────────────────────── */
-        .hero { padding-block: var(--space-8) 0; }
-        .hero .lede {
-            font-size: var(--fs-400);
-            color: var(--text-default);
-            max-width: var(--measure);
-            margin-bottom: var(--space-4);
+        /* ─── The eyebrow ──────────────────────────────────────────────────────
+           A pill, not letterspaced small caps. Arabic is unicameral — there is
+           no caps register to borrow — and letter-spacing on Arabic widens word
+           gaps rather than letters, so the usual Latin eyebrow device has no
+           Arabic equivalent at all. Weight plus colour plus a border is what
+           production Arabic sites actually use, and it goes UP in size (14px),
+           not down to 11. */
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-2);
+            margin: 0 0 var(--space-5);
+            padding: 0.3rem var(--space-4) 0.3rem var(--space-4);
+            border-radius: var(--radius-pill);
+            background: var(--accent-soft);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
+            color: var(--accent-text);
+            font-size: var(--lp-ui);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-ui);
+            letter-spacing: 0;
+            text-transform: none;
         }
-        .hero .sub {
-            color: var(--text-muted);
-            max-width: var(--measure);
-            margin-bottom: var(--space-5);
+        .eyebrow .dot {
+            inline-size: 0.4rem;
+            block-size: 0.4rem;
+            border-radius: 50%;
+            background: currentColor;
+            flex: none;
         }
 
+        /* ─── Buttons ──────────────────────────────────────────────────────── */
         .cta-row {
             display: flex;
             flex-wrap: wrap;
             gap: var(--space-3);
-            margin-bottom: var(--space-5);
+            margin-block-start: var(--space-6);
         }
         .btn {
             display: inline-flex;
@@ -408,268 +774,311 @@
             min-height: var(--tap-target);
             padding-inline: var(--space-5);
             border-radius: var(--radius-sm);
-            font-size: var(--fs-300);
+            font-size: 1rem;
             font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-ui);
+            letter-spacing: 0;
             text-decoration: none;
-            transition: background var(--motion-fast) var(--ease-standard);
+            /* Named properties, never `all`: `transition: all` animates
+               whatever a future rule happens to add, including layout. */
+            transition: background var(--lp-t-hover) var(--lp-ease-quad),
+                        box-shadow var(--lp-t-hover) var(--lp-ease-quad),
+                        transform var(--lp-t-press) var(--lp-ease-quad);
         }
+        .btn:active { transform: translateY(1px); }
         .btn-primary {
             background: var(--accent);
             color: var(--text-on-accent);
-            box-shadow: var(--elev-1);
+            box-shadow: var(--lp-elev-btn);
         }
         .btn-primary:hover { background: var(--accent-hover); color: var(--text-on-accent); }
         .btn-secondary {
             background: var(--surface-glass);
             color: var(--text-strong);
-            border: 1px solid var(--border-strong);
+            box-shadow: inset 0 1px 0 0 var(--lp-lift), inset 0 0 0 1px var(--border-strong);
         }
         .btn-secondary:hover { background: var(--surface-glass-hover); color: var(--text-strong); }
 
-        /* The honesty that /pricing leads with, said once here so the first
-           screen is not a sales pitch the second screen contradicts. */
-        .hero-note {
-            max-width: var(--measure);
-            padding: var(--space-4) var(--space-5);
-            border-radius: var(--radius-md);
-            border: 1px solid var(--border-subtle);
-            border-inline-start: 3px solid var(--accent);
-            background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            font-size: var(--fs-200);
-        }
-        .hero-note > :last-child { margin-bottom: 0; }
-
-        /* ─── The loop ─────────────────────────────────────────────────────────
-           The product's one concrete mechanism, shown rather than described.
-           An <ol> because it genuinely is a sequence: with CSS off it still
-           reads 1, 2, 3 in order, and a screen reader announces "list of 3". */
-        .loop {
-            list-style: none;
-            margin: 0 0 var(--space-4);
-            padding: 0;
-            display: grid;
-            gap: var(--space-4);
-        }
-        .step {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            gap: var(--space-3);
-            padding: var(--space-5);
+        /* ─── Cards ────────────────────────────────────────────────────────────
+           One card recipe for the whole page. Translucent surface, top-edge
+           light hairline, hairline ring, three hue-matched shadow layers — and
+           no backdrop-filter, which is reserved for the sticky header. */
+        .card {
             border-radius: var(--radius-lg);
             background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            border: 1px solid var(--border-subtle);
-            box-shadow: var(--elev-2);
-        }
-        .step-head {
-            display: flex;
-            align-items: center;
-            gap: var(--space-3);
-        }
-        .step-num {
-            flex: none;
-            width: 2rem;
-            height: 2rem;
-            border-radius: var(--radius-pill);
-            background: var(--accent-soft);
-            color: var(--accent-text);
-            /* Latin digits on purpose: DESIGN.md §5. The Arabic-Indic forms
-               CLDR would give ar-SA are not what this product uses anywhere. */
-            font-family: var(--font-latin);
-            font-size: var(--fs-200);
-            font-weight: var(--fw-bold);
-            display: grid;
-            place-items: center;
-        }
-        .step h3 { margin: 0; }
-        .step .step-body {
-            font-size: var(--fs-200);
-            color: var(--text-default);
-            margin: 0;
+            box-shadow: var(--lp-elev-card);
         }
 
-        /* ─── The mock conversation ────────────────────────────────────────────
-           A tint, not glass: DESIGN.md §1 is explicit that a chat bubble is
-           --surface-glass, and blurring the page behind every bubble is both
-           wrong and expensive. This sits INSIDE a glass card, which is the
-           stack the contrast guard models as
-           ['surface-glass', 'surface-raised', 'surface-page']. */
-        .mock {
+        /* ─── Hero ─────────────────────────────────────────────────────────── */
+        .hero { padding-block: clamp(2.5rem, 6vw, 5rem) 0; }
+        .hero-grid {
             display: grid;
-            gap: var(--space-3);
-            padding: var(--space-3);
-            border-radius: var(--radius-md);
-            background: var(--surface-glass);
-            border: 1px solid var(--border-subtle);
-            /* The three cards are one grid row, so they are all as tall as the
-               tallest — and measured at 1280px that left 130px of dead space
-               under the shortest mock, which reads as a layout bug rather than
-               as breathing room. Pushing the mock down puts the slack between
-               the sentence and the picture, and lands all three mocks on one
-               baseline. */
-            margin-block-start: auto;
+            gap: clamp(2rem, 5vw, 3.5rem);
+            align-items: center;
         }
-        .mock-line {
+        @media (min-width: 62rem) {
+            .hero-grid { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); }
+        }
+
+        /* ─── The hero artifact ────────────────────────────────────────────────
+           The product is a backend: nothing about it is visible except what it
+           emits. So the hero shows the thing it emits — the comment that came
+           in, the message that went out, and the two marks it left in public —
+           in one frame. Not a screenshot of a dashboard, which would be a
+           picture of the part nobody buys. */
+        .artifact {
+            position: relative;
+            padding: var(--space-5);
+            display: grid;
+            gap: var(--space-4);
+            overflow: hidden;
+        }
+        /* A sheen in the leading corner. A plain gradient, no mask-composite:
+           `mask-composite: exclude` is the standard spelling and
+           `-webkit-mask-composite: xor` the other one, and a browser that
+           honours neither paints the whole card with the gradient instead of
+           just its border. The angle is flipped under :dir(rtl) because
+           gradients do not mirror. */
+        .artifact::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(145deg, rgba(255, 255, 255, 0.07), transparent 42%);
+        }
+        .artifact:dir(rtl)::before {
+            background: linear-gradient(215deg, rgba(255, 255, 255, 0.07), transparent 42%);
+        }
+        .artifact > * { position: relative; }
+
+        .artifact-label {
             display: flex;
-            align-items: flex-start;
+            align-items: center;
             gap: var(--space-2);
+            margin: 0;
+            font-size: var(--lp-micro);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-ui);
+            color: var(--text-muted);
         }
+        .artifact-label::after {
+            content: '';
+            flex: 1;
+            block-size: 1px;
+            background: var(--border-subtle);
+        }
+
+        .comment { display: flex; align-items: flex-start; gap: var(--space-3); }
         .avatar {
             flex: none;
-            width: 1.75rem;
-            height: 1.75rem;
-            border-radius: var(--radius-pill);
+            inline-size: 2.25rem;
+            block-size: 2.25rem;
+            border-radius: 50%;
             background: var(--surface-glass-hover);
             color: var(--text-muted);
-            font-size: var(--fs-100);
+            font-size: var(--lp-ui);
             font-weight: var(--fw-semibold);
+            line-height: 1;
             display: grid;
             place-items: center;
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
         }
-        .avatar-brand {
-            background: var(--accent-soft);
-            color: var(--accent-text);
-        }
-        .mock-name {
-            margin: 0 0 var(--space-1);
-            font-size: var(--fs-100);
+        .avatar-brand { background: var(--accent-soft); color: var(--accent-text); }
+        .who {
+            margin: 0 0 2px;
+            font-size: var(--lp-micro);
+            line-height: var(--lp-lh-ui);
             color: var(--text-muted);
-            line-height: var(--lh-tight);
         }
-        .mock-text {
+        .said {
             margin: 0;
-            font-size: var(--fs-200);
+            font-size: 1rem;
+            line-height: var(--lp-lh-ui);
             color: var(--text-strong);
-            line-height: var(--lh-tight);
         }
-        .tag {
-            display: inline-block;
-            margin-inline-start: var(--space-1);
-            padding: 0.05em 0.5em;
-            border-radius: var(--radius-pill);
-            background: var(--accent-soft);
-            color: var(--accent-text);
-            font-size: var(--fs-100);
-            font-weight: var(--fw-semibold);
-        }
-        /* The keyword, called out inside the comment so the reader can see what
-           actually fired the campaign.
-
-           The negative inline margin very nearly cancels the padding, so the
-           tint bleeds around the word without taking up space in the line. It
-           is here because the padded version pushed the question mark visibly
-           away from the word it belongs to — "السعر ؟" and "price ?" — in both
-           languages at once. */
+        /* The keyword, lit inside the comment so the reader can see the thing
+           that actually fired the campaign. The negative inline margin very
+           nearly cancels the padding: the padded version pushed the question
+           mark visibly away from the word it belongs to — "السعر ؟" and
+           "price ?" — in both languages at once. */
         .kw {
-            border-radius: var(--radius-xs);
+            border-radius: var(--radius-sm);
             background: var(--accent-soft);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
             color: var(--accent-text);
-            padding: 0.1em 0.25em;
-            margin-inline: -0.15em;
+            padding: 0.1em 0.3em;
+            margin-inline: -0.2em;
             font-weight: var(--fw-semibold);
         }
 
+        /* Shrink-wrapped and pushed to the inline END, which is where an
+           OUTGOING message sits in both directions — left in RTL, right in
+           LTR — and is what makes it read as a message rather than a banner.
+           As a full-width block it filled the card edge to edge. */
         .bubble {
             margin: 0;
-            margin-inline-start: var(--space-6);
+            margin-inline-start: auto;
+            inline-size: fit-content;
+            max-inline-size: min(100%, 26rem);
             padding: var(--space-3) var(--space-4);
-            border-radius: var(--radius-md);
-            /* The outgoing corner, in logical terms so it points at the right
-               edge in both directions. */
-            border-end-end-radius: var(--radius-xs);
+            border-radius: var(--radius-lg);
+            /* The outgoing corner, in logical terms so it points at the
+               trailing edge in both directions. */
+            border-end-end-radius: var(--radius-sm);
             background: var(--accent);
             color: var(--text-on-accent);
-            font-size: var(--fs-200);
-            line-height: var(--lh-tight);
-        }
-        .bubble-note {
-            margin: 0;
-            font-size: var(--fs-100);
-            color: var(--text-muted);
-            line-height: var(--lh-tight);
+            font-size: 1rem;
+            line-height: var(--lp-lh-ui);
+            box-shadow: var(--lp-elev-btn);
         }
 
-        .mock-meta {
+        .receipts {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--space-2) var(--space-4);
+            margin: 0;
+            padding: var(--space-3) 0 0;
+            list-style: none;
+            border-block-start: 1px solid var(--border-subtle);
+        }
+        .receipts li {
             display: flex;
             align-items: center;
             gap: var(--space-2);
-            margin: 0;
-            font-size: var(--fs-100);
+            font-size: var(--lp-micro);
+            line-height: var(--lp-lh-ui);
             color: var(--text-muted);
         }
-        /* Inline SVG rather than a CSS-drawn heart: the two-rotated-lobes trick
-           needs physical offsets, which flip wrong under dir="rtl" and leave a
-           broken shape. An inline path has no direction at all. */
-        .heart {
-            flex: none;
-            width: 0.875rem;
-            height: 0.875rem;
-            color: var(--danger);
-        }
+        /* Icons are not the label colour — that is the single most common way
+           an icon row reads as clip art. They are the accent, or the one
+           semantic colour that is true (the like is a like). */
+        .receipts svg { flex: none; inline-size: 0.9rem; block-size: 0.9rem; color: var(--accent-text); }
+        .receipts .heart { color: var(--danger); }
 
-        /* On a wide screen the three steps sit side by side with a hairline
-           bridging the gap. `inset-inline-end` puts that hairline on whichever
-           side the NEXT card is on, so it is correct in both directions with
-           one rule — no [dir] override. */
-        @media (min-width: 56rem) {
-            .loop { grid-template-columns: repeat(3, 1fr); align-items: stretch; }
-            .step:not(:last-child)::after {
-                content: '';
-                position: absolute;
-                inset-block-start: calc(var(--space-5) + 1rem - 1px);
-                inset-inline-end: calc(var(--space-4) * -1);
-                width: var(--space-4);
-                height: 2px;
-                background: var(--border-strong);
-            }
-        }
-
-        /* ─── Feature cards ────────────────────────────────────────────────── */
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-            gap: var(--space-4);
-            margin-bottom: var(--space-4);
-        }
-        .feature {
-            padding: var(--space-5);
-            border-radius: var(--radius-lg);
-            background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            border: 1px solid var(--border-subtle);
-            box-shadow: var(--elev-2);
-        }
-        .feature p {
+        /* ─── The loop ─────────────────────────────────────────────────────────
+           A rail, not three cards. Six identically-shaped sections in a row is
+           a machine-detectable tell and the previous page had exactly that; a
+           numbered rail is also simply truer to what this is, which is a
+           sequence rather than a menu. */
+        .loop {
+            list-style: none;
             margin: 0;
-            font-size: var(--fs-200);
-            color: var(--text-default);
+            padding: 0;
+            display: grid;
+            /* No gap: the rail has to be continuous, so the space between
+               beats is padding ON the beat and the rail runs through it. The
+               first version used `gap: var(--lp-band)` and got two faults for
+               the price of one — a rail broken into three stubs, and space
+               INSIDE a group equal to the space AROUND it, which is what makes
+               a list stop reading as a list. */
+            max-width: 52rem;
+        }
+        .beat {
+            position: relative;
+            display: grid;
+            gap: var(--space-4);
+            padding-inline-start: calc(var(--space-6) + var(--space-3));
+            padding-block-end: var(--space-7);
+        }
+        .beat:last-child { padding-block-end: 0; }
+        /* The rail itself, and the numbered node on it. inset-inline-start
+           puts both on the reading-start edge in either direction with one
+           rule and no [dir] override. */
+        .beat::before {
+            content: '';
+            position: absolute;
+            inset-inline-start: calc(var(--space-6) / 2 - 1px);
+            inset-block: 0;
+            inline-size: 2px;
+            background: var(--border-strong);
+        }
+        /* Nothing dangles past the last node. */
+        .beat:last-child::before { display: none; }
+        .beat-num {
+            position: absolute;
+            inset-inline-start: 0;
+            inset-block-start: 0;
+            inline-size: var(--space-6);
+            block-size: var(--space-6);
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            /* Latin digits on purpose: DESIGN.md §5. The Arabic-Indic forms
+               CLDR would give ar-SA are not what this product uses anywhere,
+               and they are not what Meta's own dashboards show either. */
+            font-family: var(--font-latin);
+            font-size: var(--lp-ui);
+            font-weight: var(--fw-bold);
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+            background: var(--accent-soft);
+            color: var(--accent-text);
+            box-shadow: inset 0 0 0 1px var(--accent-ring), 0 0 0 6px var(--surface-page);
+        }
+        .beat h3 { margin-block-start: 0.15rem; }
+        .beat p { margin: 0; max-width: 58ch; }
+
+        /* The concrete detail under each beat: the actual keywords, the actual
+           line the software prepends. A hairline strip, not another card — the
+           page already has cards and this is evidence, not a feature. */
+        /* Deliberately NOT a flex row. It was one, and a flex container turns
+           every element boundary inside a sentence into its own flex item: the
+           <bdi>Meta</bdi> in the third beat became a separate line item and the
+           sentence broke around it. Inline-block chips in normal flow wrap the
+           way text wraps, which is what this is. */
+        .detail {
+            margin: 0;
+            padding: var(--space-3) var(--space-4);
+            border-radius: var(--radius-sm);
+            background: var(--surface-glass);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            font-size: var(--lp-ui);
+            line-height: var(--lp-lh-body);
+            color: var(--text-muted);
+            inline-size: fit-content;
+            max-inline-size: 100%;
+        }
+        .detail .chip {
+            display: inline-block;
+            margin-inline-start: var(--space-1);
+            padding: 0.1rem var(--space-3);
+            border-radius: var(--radius-pill);
+            background: var(--surface-raised);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-strong);
+            font-weight: var(--fw-medium);
+        }
+        .detail .quoted {
+            margin-inline-start: var(--space-3);
+            color: var(--text-strong);
+            font-weight: var(--fw-medium);
         }
 
         /* ─── The normalisation demo ───────────────────────────────────────────
            Four spellings a real customer types, and the one keyword they all
            reduce to. Every variant here was checked against normalizeArabic()
-           in src/utils/arabic.ts. */
+           in src/utils/arabic.ts. Start-aligned, not centred: centred Arabic
+           body copy is a Latin habit that does not transfer. */
         .norm {
-            padding: var(--space-5);
-            border-radius: var(--radius-lg);
-            background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            border: 1px solid var(--border-subtle);
-            box-shadow: var(--elev-2);
-            margin-bottom: var(--space-4);
+            padding: clamp(var(--space-5), 3vw, var(--space-6));
+            display: grid;
+            gap: var(--space-5);
+            align-items: center;
+            margin-block-end: var(--space-6);
+            /* Capped, because at full width the four spellings sat against one
+               edge and the normalised word against the other with 400px of
+               nothing between them — which does not read as a funnel, it reads
+               as two unrelated things. */
+            max-inline-size: 46rem;
+        }
+        @media (min-width: 48rem) {
+            .norm { grid-template-columns: minmax(0, 1fr) auto minmax(0, auto); }
         }
         .variants {
             display: flex;
             flex-wrap: wrap;
-            justify-content: center;
             gap: var(--space-2);
-            margin: 0 0 var(--space-3);
+            margin: 0;
             padding: 0;
             list-style: none;
         }
@@ -677,63 +1086,161 @@
             padding: var(--space-2) var(--space-4);
             border-radius: var(--radius-sm);
             background: var(--surface-glass);
-            border: 1px solid var(--border-subtle);
-            color: var(--text-strong);
-            font-size: var(--fs-300);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-default);
+            font-size: var(--lp-lede);
+            line-height: var(--lp-lh-ui);
         }
         .norm-arrow {
-            margin: 0 0 var(--space-3);
-            text-align: center;
-            font-size: var(--fs-100);
+            margin: 0;
+            font-size: var(--lp-micro);
+            line-height: var(--lp-lh-ui);
             color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: var(--space-2);
+            white-space: nowrap;
         }
-        /* A downward triangle, which is the one arrow direction that means the
-           same thing in RTL and LTR, drawn with logical border properties. */
-        .norm-arrow::before {
+        /* A downward triangle on narrow screens, drawn with logical borders:
+           down is the one arrow direction that means the same thing in RTL and
+           LTR, so it never needs mirroring. */
+        .norm-arrow::after {
             content: '';
-            display: block;
-            width: 0;
-            height: 0;
-            margin: 0 auto var(--space-1);
+            inline-size: 0;
+            block-size: 0;
             border-inline: 5px solid transparent;
             border-block-start: 6px solid var(--text-muted);
         }
+        @media (min-width: 48rem) {
+            /* Wide: the flow is horizontal. A triangle pointing along the
+               reading direction would need a PHYSICAL border and therefore a
+               :dir() override, so the marker becomes a plain rule instead —
+               direction-neutral, one declaration, nothing to keep in sync. */
+            .norm-arrow::after { border: 0; block-size: 1px; inline-size: var(--space-5); background: var(--border-strong); }
+        }
         .norm-target {
             margin: 0;
-            text-align: center;
-            font-size: var(--fs-500);
-            font-weight: var(--fw-bold);
+            padding: var(--space-3) var(--space-5);
+            border-radius: var(--radius-lg);
+            background: var(--accent-soft);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
             color: var(--accent-text);
-            line-height: var(--lh-tight);
+            font-size: var(--lp-h2);
+            /* Pinned, not inherited from --lp-fw-display / --lp-lh-head: this
+               word is Arabic in BOTH documents, so it takes Arabic display
+               metrics even inside the English one, where those two tokens
+               resolve to the Latin 500 and 1.15. */
+            font-weight: 600;
+            line-height: 1.35;
+            letter-spacing: 0;
+            text-align: center;
         }
+
+        /* ─── Capabilities ─────────────────────────────────────────────────────
+           Two cards and four rows, not six cards. The two that carry the
+           product get weight; the four that support it get a list. Equal
+           visual weight across six items is what made the old section read as
+           a generated grid. */
+        .duo {
+            display: grid;
+            gap: var(--space-4);
+            margin-block-end: var(--space-4);
+        }
+        @media (min-width: 48rem) { .duo { grid-template-columns: 1fr 1fr; } }
+        .duo .card { padding: clamp(var(--space-5), 3vw, var(--space-6)); }
+        .duo p { margin: 0; color: var(--text-default); }
+
+        .more {
+            margin: 0;
+            padding: 0;
+            display: grid;
+        }
+        @media (min-width: 48rem) { .more { grid-template-columns: 1fr 1fr; column-gap: var(--space-6); } }
+        .more > div {
+            padding-block: var(--space-4);
+            border-block-start: 1px solid var(--border-subtle);
+        }
+        .more dt {
+            font-size: 1rem;
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-head);
+            color: var(--text-strong);
+            margin-block-end: var(--space-1);
+        }
+        /* Inherits the document's body size — 17px Arabic, 16px Latin — and
+           NOT --lp-ui. These are multi-sentence explanations, so they are body
+           copy, and 14px Arabic body is below the legible floor. They stay
+           secondary through --text-muted instead, which costs no legibility. */
+        .more dd {
+            margin: 0;
+            font-size: inherit;
+            line-height: var(--lp-lh-body);
+            color: var(--text-muted);
+        }
+
+        /* ─── What you pay for ─────────────────────────────────────────────────
+           The MIT statement, which used to be the third block of the hero —
+           so the first thing after the headline was a caveat styled like a
+           warning. It is honest and it belongs on the page; it does not belong
+           in the first screen. */
+        .pays { display: grid; gap: var(--space-5); align-items: start; }
+        @media (min-width: 52rem) { .pays { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-7); } }
+        .pays p { margin: 0 0 var(--space-4); }
+        .pays > div > :last-child { margin-block-end: 0; }
 
         /* ─── What this does not promise ───────────────────────────────────────
            The counterweight to the hero, and the reason a reader can trust the
-           rest of the page. Warning-coloured on the leading edge only: the body
-           is --text-default on a measured ground. */
-        .limits {
-            padding: var(--space-5);
-            border-radius: var(--radius-lg);
-            border: 1px solid var(--border-subtle);
-            border-inline-start: 3px solid var(--warning);
-            background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            max-width: var(--measure);
-        }
-        .limits dl { margin: 0; }
-        .limits dt {
-            color: var(--text-strong);
-            font-weight: var(--fw-semibold);
-            font-size: var(--fs-200);
-        }
-        .limits dd {
-            margin: 0 0 var(--space-4);
+           rest of the page. No warning stripe: these are not warnings, they
+           are the terms, and colouring them amber reads as an apology. */
+        .figures {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+            gap: var(--space-4);
+            margin: 0 0 var(--space-6);
             padding: 0;
-            font-size: var(--fs-200);
-            color: var(--text-default);
         }
-        .limits dd:last-child { margin-bottom: 0; }
+        .figures > div {
+            padding: var(--space-4) var(--space-5);
+            border-radius: var(--radius-lg);
+            background: var(--surface-glass);
+            box-shadow: inset 0 1px 0 0 var(--lp-lift), inset 0 0 0 1px var(--border-subtle);
+        }
+        .figures dt {
+            font-family: var(--font-latin);
+            font-size: var(--lp-h2);
+            font-weight: var(--lp-fw-display);
+            line-height: 1.1;
+            letter-spacing: var(--lp-track);
+            /* Nobody in the reference set uses tabular figures anywhere. Three
+               numbers in a row that do not line up is the kind of thing you
+               feel without seeing. */
+            font-variant-numeric: tabular-nums;
+            color: var(--text-strong);
+            margin-block-end: var(--space-2);
+        }
+        /* Body size, not --lp-ui, for the same reason .more dd and .limits dd
+           are: these are sentences in Arabic and 14px is under the floor. The
+           captions were shortened to pay for the extra height. */
+        .figures dd {
+            margin: 0;
+            font-size: inherit;
+            line-height: var(--lp-lh-body);
+            color: var(--text-muted);
+        }
+
+        .limits { max-width: 62ch; }
+        .limits > div {
+            padding-block: var(--space-5);
+            border-block-start: 1px solid var(--border-subtle);
+        }
+        .limits dt {
+            font-size: 1rem;
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-head);
+            color: var(--text-strong);
+            margin-block-end: var(--space-2);
+        }
+        .limits dd { margin: 0; font-size: inherit; line-height: var(--lp-lh-body); color: var(--text-muted); }
 
         /* ─── Where to go next ─────────────────────────────────────────────────
            /privacy and /data-deletion are the URLs Meta links to from the app's
@@ -742,56 +1249,55 @@
            without knowing the paths. */
         .next {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
             gap: var(--space-3);
             margin: 0;
             padding: 0;
             list-style: none;
         }
         .nextcard {
-            display: block;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-1);
             height: 100%;
             padding: var(--space-4) var(--space-5);
-            border-radius: var(--radius-md);
-            background: var(--surface-raised);
-            -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            backdrop-filter: blur(var(--blur-glass)) saturate(180%);
-            border: 1px solid var(--border-subtle);
             color: var(--text-strong);
             text-decoration: none;
-            transition: background var(--motion-fast) var(--ease-standard);
+            transition: background var(--lp-t-hover) var(--lp-ease-quad),
+                        box-shadow var(--lp-t-hover) var(--lp-ease-quad),
+                        transform var(--lp-t-hover) var(--lp-ease-out);
         }
         .nextcard:hover {
             background: var(--surface-overlay);
             color: var(--text-strong);
+            box-shadow: var(--lp-elev-lifted);
+            transform: translateY(-2px);
         }
         .nextcard .title {
-            display: block;
-            font-size: var(--fs-400);
+            font-size: 1rem;
             font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-head);
             color: var(--text-strong);
-            line-height: var(--lh-tight);
-            margin-bottom: var(--space-1);
         }
         .nextcard .why {
-            display: block;
-            font-size: var(--fs-200);
+            font-size: var(--lp-ui);
+            line-height: var(--lp-lh-ui);
             color: var(--text-muted);
-            line-height: var(--lh-tight);
         }
 
+        /* ─── Footer ───────────────────────────────────────────────────────── */
         .divider {
             height: 1px;
             border: 0;
-            margin: var(--space-8) 0;
+            margin-block: var(--lp-band) 0;
             background: var(--border-strong);
         }
-
         .pagefoot {
-            margin-top: var(--space-8);
-            padding-top: var(--space-4);
-            border-top: 1px solid var(--border-subtle);
-            font-size: var(--fs-100);
+            margin-block-start: var(--lp-band);
+            padding-block: var(--space-5) var(--space-7);
+            border-block-start: 1px solid var(--border-subtle);
+            font-size: var(--lp-ui);
+            line-height: var(--lp-lh-body);
             color: var(--text-muted);
         }
         /* Flex with a gap rather than "·" glyphs between the links. The glyphs
@@ -803,10 +1309,15 @@
             display: flex;
             flex-wrap: wrap;
             column-gap: var(--space-5);
-            margin-bottom: var(--space-2);
+            margin-block-end: var(--space-3);
         }
-        .pagefoot a { display: inline-block; min-height: var(--tap-target); line-height: var(--tap-target); }
-        .pagefoot p { max-width: var(--measure); }
+        .pagefoot a {
+            display: inline-flex;
+            align-items: center;
+            min-height: var(--tap-target);
+            font-size: var(--lp-ui);
+        }
+        .pagefoot p { max-width: 70ch; margin: 0; }
 
         /* ─── The language filter ──────────────────────────────────────────────
            No attribute (JS off or failed) = both languages visible, which is
@@ -820,25 +1331,83 @@
         html[data-lang='en'] .divider { display: none; }
         html[data-lang='ar'] .t-sep,
         html[data-lang='en'] .t-sep { display: none; }
+        /* The separator's own spaces are not enough. `.headnav a` and
+           `.pagefoot a` are inline-flex, and a flex container drops
+           whitespace-only text between its items and collapses the spaces at
+           each item's edge — so with JavaScript off, where the separator is
+           the only thing visible between the two languages, "الأسعار · Pricing"
+           rendered as "الأسعار·Pricing". A margin survives flex. */
+        .t-sep { margin-inline: 0.3em; }
+
+        /* ─── Motion ───────────────────────────────────────────────────────────
+           ONE reveal on the page, on the three beats of the loop. Authored
+           additively: `.beat` is fully visible by default and the animation is
+           layered on only where the timeline exists and motion is welcome.
+           Written the other way round — opacity 0 in the base rule — a browser
+           without animation-timeline (Firefox has not shipped it) would show a
+           blank section forever, and so would a browser WITH it under
+           prefers-reduced-motion, because the blanket reset below does not
+           reset animation-timeline. That is why `animation-timeline: auto` is
+           in the reset. */
+        @keyframes lp-reveal {
+            from { opacity: 0; transform: translateY(14px); filter: blur(6px); }
+            to   { opacity: 1; transform: none; filter: blur(0); }
+        }
+        @supports (animation-timeline: view()) {
+            @media (prefers-reduced-motion: no-preference) {
+                .beat {
+                    animation: lp-reveal linear both;
+                    animation-timeline: view();
+                    animation-range: entry 10% cover 30%;
+                }
+            }
+        }
 
         /* tokens.css already collapses --motion-* to 1ms under this preference.
-           Restated so the promise holds even if that stylesheet fails to load
-           and the transitions above fall back to their initial values. */
+           Restated so the promise holds even if that stylesheet fails to load,
+           and extended with the two lines everyone forgets. */
         @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after {
                 transition-duration: 1ms !important;
                 animation-duration: 1ms !important;
+                animation-iteration-count: 1 !important;
+                animation-timeline: auto !important;
             }
+            .beat { opacity: 1 !important; transform: none !important; filter: none !important; }
         }
 
+        /* ─── Narrow ───────────────────────────────────────────────────────────
+           375px is a design target, not a fallback. Arabic copy runs 20–40%
+           longer than the English, so it is the one that has to fit. */
         @media (max-width: 40rem) {
-            .shell { padding-inline: var(--space-4); }
-            h1 { font-size: var(--fs-600); }
-            h2 { font-size: var(--fs-400); }
-            .hero .lede { font-size: var(--fs-300); }
-            .masthead { justify-content: flex-start; }
-            .step, .feature, .norm, .limits { padding: var(--space-4); }
+            /* The header keeps the wordmark and the language switch. Both nav
+               links are one screen away in the hero's own buttons and again in
+               the footer, and three groups in a 375px bar is a wrapped bar. */
+            .headnav { display: none; }
+            .hero { padding-block-start: var(--space-6); }
+            .artifact { padding: var(--space-4); }
             .btn { flex: 1 1 100%; }
+            .beat { padding-inline-start: calc(var(--space-5) + var(--space-3)); }
+            .beat::before { inset-inline-start: calc(var(--space-5) / 2 - 1px); }
+            .beat-num { inline-size: var(--space-5); block-size: var(--space-5); font-size: var(--lp-micro); }
+            .norm { padding: var(--space-4); }
+            .duo .card { padding: var(--space-4); }
+            /* Three stacked tiles spend ~340px of a 812px screen on three
+               numbers. As rows — the figure held at the start, the sentence
+               beside it — it is half that, the numbers line up on one edge
+               under tabular-nums, and it reads as the spec list it is. */
+            .figures { grid-template-columns: 1fr; gap: 0; }
+            .figures > div {
+                display: flex;
+                align-items: baseline;
+                gap: var(--space-4);
+                padding: var(--space-4) 0;
+                border-radius: 0;
+                background: none;
+                box-shadow: none;
+                border-block-start: 1px solid var(--border-subtle);
+            }
+            .figures dt { flex: none; min-inline-size: 3.5ch; margin-block-end: 0; }
         }
     </style>
 
@@ -868,26 +1437,30 @@
     </script>
 </head>
 <body>
-    <a class="skip" href="#content"><span class="t-ar">تخطَّ إلى المحتوى</span><span class="t-sep"> · </span><span class="t-en">Skip to content</span></a>
+    <div class="ambient" aria-hidden="true"></div>
 
-    <div class="shell">
-        <header class="masthead">
-            <div class="wordmark">
-                أوتوريبلاي برو
-                <span class="latin" lang="en" dir="ltr">AutoReply Pro</span>
-            </div>
+    <a class="skip" href="#content"><bdi class="t-ar" lang="ar">تخطَّ إلى المحتوى</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Skip to content</bdi></a>
+
+    <header class="topbar">
+        <div class="topbar-in">
+            <a class="wordmark" href="#content">
+                <bdi lang="ar" dir="rtl">أوتوريبلاي برو</bdi>
+                <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
+            </a>
             <div class="headtools">
                 <nav class="headnav" aria-label="روابط الموقع · Site">
-                    <a href="/pricing"><span class="t-ar">الأسعار</span><span class="t-sep"> · </span><span class="t-en">Pricing</span></a>
-                    <a href="/dashboard"><span class="t-ar">تسجيل الدخول</span><span class="t-sep"> · </span><span class="t-en">Sign in</span></a>
+                    <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <a href="/dashboard"><bdi class="t-ar" lang="ar">تسجيل الدخول</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Sign in</bdi></a>
                 </nav>
                 <nav class="langswitch" aria-label="اللغة · Language">
                     <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
                     <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
                 </nav>
             </div>
-        </header>
+        </div>
+    </header>
 
+    <div class="shell">
         <main id="content">
 
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
@@ -895,180 +1468,116 @@
 
                 <!-- ─── Hero ─────────────────────────────────────────────── -->
                 <section class="hero" aria-labelledby="hero-ar">
-                    <h1 id="hero-ar">من تعليق إلى محادثة خاصة</h1>
-                    <p class="lede">
-                        أوتوريبلاي برو يتابع تعليقات حسابك على إنستجرام وفيسبوك. وحين يكتب أحدهم
-                        كلمةً تختارها أنت، تصله <strong>رسالة خاصة</strong>، ويُنشَر
-                        <strong>ردٌّ عام</strong> تحت تعليقه، ويُسجَّل <strong>إعجابٌ</strong> به.
-                    </p>
-                    <p class="sub">
-                        وما يأتي بعدها من رسائل يتولّاه الذكاء الاصطناعي بتعليماتك أنت ومعلومات
-                        نشاطك — أو تتولّاه بنفسك من صندوق الوارد، وتوقف الردّ الآلي في محادثة
-                        بعينها متى شئت.
-                    </p>
+                    <div class="hero-grid">
+                        <div>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>إنستجرام وفيسبوك · بالعربية أولاً</p>
+                            <h1 id="hero-ar">من تعليق إلى محادثة خاصة</h1>
+                            <p class="lede">
+                                كلمةٌ مفتاحية في تعليق تُرسل الرسالة الخاصة، وتنشر الردّ العام،
+                                وتسجّل الإعجاب. وما يأتي بعدها يتولّاه الذكاء الاصطناعي بتعليماتك أنت.
+                            </p>
+                            <div class="cta-row">
+                                <a class="btn btn-primary" href="/pricing">اطّلع على الباقات</a>
+                                <a class="btn btn-secondary" href="/dashboard">تسجيل الدخول</a>
+                            </div>
+                        </div>
 
-                    <div class="cta-row">
-                        <a class="btn btn-primary" href="/pricing">اطّلع على الباقات والأسعار</a>
-                        <a class="btn btn-secondary" href="/dashboard">تسجيل الدخول إلى لوحة التحكم</a>
-                    </div>
+                        <aside class="card artifact" aria-label="مثال: تعليق وما نتج عنه">
+                            <p class="artifact-label">تعليق على منشورك</p>
+                            <div class="comment">
+                                <span class="avatar" aria-hidden="true">ن</span>
+                                <div>
+                                    <p class="who"><span class="sr-only">تعليق من</span>نورة</p>
+                                    <p class="said" dir="auto">كم <span class="kw">السعر</span>؟ وهل فيه توصيل؟</p>
+                                </div>
+                            </div>
 
-                    <div class="hero-note">
-                        <p>
-                            <strong>البرنامج نفسه مفتوح المصدر برخصة MIT</strong>، ويمكنك تنزيله
-                            وتشغيله على خادمك مجاناً من
-                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع العلني</a>.
-                            ما يُباع هنا ليس الكود: هو ربط الحساب بواجهة ميتا، والإعداد، والمتابعة،
-                            ووجود مَن يُصلح العطل حين يقع. التفاصيل في
-                            <a href="/pricing">صفحة الأسعار</a>.
-                        </p>
+                            <p class="artifact-label"><span class="sr-only">رسالة خاصة صادرة من حسابك:</span>رسالة خاصة</p>
+                            <p class="bubble">أهلاً نورة! هذي تفاصيل الأسعار والتوصيل.</p>
+
+                            <ul class="receipts">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    رُدَّ على التعليق علناً
+                                </li>
+                                <li>
+                                    <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
+                                    سُجِّل إعجاب بالتعليق
+                                </li>
+                            </ul>
+                        </aside>
                     </div>
                 </section>
 
                 <!-- ─── The loop ─────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="loop-ar">
                     <h2 id="loop-ar">ماذا يحدث حين يعلّق أحدهم</h2>
-                    <p class="prose">
-                        ثلاث خطوات، والأولى هي كل ما يفعله العميل. الباقي يجري من تلقاء نفسه:
-                    </p>
+                    <p class="prose">ثلاث خطوات، والأولى وحدها من العميل. الباقي يجري من تلقاء نفسه:</p>
 
                     <ol class="loop">
-                        <li class="step">
-                            <div class="step-head">
-                                <span class="step-num" aria-hidden="true">1</span>
-                                <h3>يعلّق بكلمتك المفتاحية</h3>
-                            </div>
-                            <p class="step-body">
-                                أنت تحدّد الكلمات في الحملة — أكثر من كلمة إن شئت — وتختار: على
-                                منشور بعينه، أم على كل منشورات الحساب.
-                            </p>
-                            <div class="mock">
-                                <div class="mock-line">
-                                    <span class="avatar" aria-hidden="true">ن</span>
-                                    <div>
-                                        <p class="mock-name"><span class="sr-only">تعليق من</span>نورة</p>
-                                        <p class="mock-text" dir="auto">كم <span class="kw">السعر</span>؟ وهل فيه توصيل؟</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </li>
-
-                        <li class="step">
-                            <div class="step-head">
-                                <span class="step-num" aria-hidden="true">2</span>
-                                <h3>تصله رسالة خاصة</h3>
-                            </div>
-                            <p class="step-body">
-                                الرسالة التي كتبتها في الحملة، تُرسَل إليه على الخاص — لا في
-                                التعليقات، حيث يقرأها الجميع ولا يردّ عليها أحد.
-                            </p>
-                            <div class="mock">
-                                <p class="mock-name"><span class="sr-only">رسالة خاصة صادرة من حسابك</span>الرسائل الخاصة</p>
-                                <p class="bubble">أهلاً! هذي تفاصيل الأسعار والتوصيل.</p>
-                                <p class="bubble-note">
-                                    ومعها عبارة تُفصح أنها خدمة آلية، كما تشترط ميتا.
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">1</span>
+                            <div>
+                                <h3>المطابقة</h3>
+                                <p>
+                                    أنت تكتب الكلمات في الحملة — أكثر من كلمة إن شئت — وتختار: على
+                                    منشور بعينه، أم على كل منشورات الحساب. وحملةُ المنشور الواحد
+                                    تسبق الحملة العامة على الكلمة نفسها، فلا تتنازع اثنتان على
+                                    تعليق واحد.
                                 </p>
                             </div>
+                            <p class="detail">
+                                <span>كلمات الحملة</span>
+                                <span class="chip">السعر</span>
+                                <span class="chip">بكم</span>
+                                <span class="chip">كم سعرها</span>
+                            </p>
                         </li>
 
-                        <li class="step">
-                            <div class="step-head">
-                                <span class="step-num" aria-hidden="true">3</span>
-                                <h3>ويُردّ على تعليقه علناً</h3>
-                            </div>
-                            <p class="step-body">
-                                ردٌّ عام تحت تعليقه يخبره أن يفتح رسائله، وإعجابٌ بالتعليق. الردّ
-                                العام اختياري وتكتبه في الحملة؛ والإعجاب يُحاوَل دائماً.
-                            </p>
-                            <div class="mock">
-                                <div class="mock-line">
-                                    <span class="avatar avatar-brand" aria-hidden="true">ح</span>
-                                    <div>
-                                        <p class="mock-name">حسابك<span class="tag">ردّ عام</span></p>
-                                        <p class="mock-text">أرسلنا لكِ التفاصيل في الرسائل الخاصة</p>
-                                    </div>
-                                </div>
-                                <p class="mock-meta">
-                                    <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
-                                    إعجاب بالتعليق
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">2</span>
+                            <div>
+                                <h3>الرسالة الخاصة</h3>
+                                <p>
+                                    نصُّ الحملة يصل صاحبَ التعليق على الخاص — لا في التعليقات، حيث
+                                    يقرأها الجميع ولا يردّ عليها أحد. وإن ردّ، تولّى الذكاء
+                                    الاصطناعي بقيّة المحادثة بتعليماتك ومعلومات نشاطك، وتتصدّر أولَ
+                                    ردٍّ آليّ في المحادثة عبارةٌ تُفصح أنها خدمة آلية، كما تشترط
+                                    ميتا.
                                 </p>
                             </div>
+                            <p class="detail">
+                                <span>العبارة التي يضيفها البرنامج</span>
+                                <span class="quoted">«🤖 رد آلي من المساعد الذكي»</span>
+                            </p>
+                        </li>
+
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">3</span>
+                            <div>
+                                <h3>الأثر العام</h3>
+                                <p>
+                                    ردٌّ عام تحت التعليق يخبره أن يفتح رسائله، وإعجابٌ بالتعليق.
+                                    الردّ العام اختياري وتكتبه في الحملة، والإعجاب يُحاوَل دائماً.
+                                </p>
+                            </div>
+                            <p class="detail">
+                                إن رفضت ميتا الردّ العام — صلاحية ناقصة، أو تعليق حُذف — تبقى
+                                الرسالة الخاصة مُرسَلة، ويُسجَّل سبب الفشل على التفاعل نفسه.
+                            </p>
                         </li>
                     </ol>
-
-                    <p class="prose">
-                        إن رفضت ميتا الردّ العام أو الإعجاب — صلاحية ناقصة، أو تعليق حُذف — تبقى
-                        الرسالة الخاصة مُرسَلة، ويُسجَّل سبب فشل الردّ العام على التفاعل نفسه.
-                    </p>
-                </section>
-
-                <!-- ─── Features ─────────────────────────────────────────── -->
-                <section class="band" aria-labelledby="does-ar">
-                    <h2 id="does-ar">وما الذي في لوحة التحكم</h2>
-
-                    <div class="features">
-                        <section class="feature" aria-labelledby="f1-ar">
-                            <h3 id="f1-ar">حملات الكلمات المفتاحية</h3>
-                            <p>
-                                لكل حملة كلماتها، ورسالتها الخاصة، وردّها العام. حملة مربوطة
-                                بمنشور بعينه تسبق الحملة العامة على الكلمة نفسها، فلا تتنازع اثنتان
-                                على تعليق واحد.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f2-ar">
-                            <h3 id="f2-ar">ردود الذكاء الاصطناعي</h3>
-                            <p>
-                                الرسائل الواردة يجيب عنها نموذج ذكاء اصطناعي بتعليماتك أنت وبقاعدة
-                                معلومات تكتبها عن نشاطك، قارئاً آخر ثماني رسائل من المحادثة حتى
-                                يفهم السياق. ويستطيع أن يردّ بأزرار سريعة أو ببطاقات متتابعة.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f3-ar">
-                            <h3 id="f3-ar">صندوق وارد موحّد</h3>
-                            <p>
-                                محادثات إنستجرام وفيسبوك في مكان واحد. تقرأ، وتردّ بنفسك، وتوقف
-                                الردّ الآلي في محادثة واحدة دون أن تُعطّله في غيرها.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f4-ar">
-                            <h3 id="f4-ar">جدولة المنشورات</h3>
-                            <p>
-                                صور ومقاطع فيديو، إلى إنستجرام أو فيسبوك أو كليهما من إدخال واحد.
-                                والفيديو يُنشر على إنستجرام ريلز ويظهر في الصفحة الرئيسية أيضاً، لا
-                                في تبويب الريلز وحده.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f5-ar">
-                            <h3 id="f5-ar">مطابقة عربية حقيقية</h3>
-                            <p>
-                                الهمزات والتاء المربوطة والألف المقصورة والتشكيل والتطويل — كلها
-                                تُوحَّد قبل المقارنة، فلا تضيع عليك مبيعة لأن العميل كتب الكلمة
-                                بإملاء آخر. التفصيل في الفقرة التالية.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f6-ar">
-                            <h3 id="f6-ar">أرقام تستطيع تصديرها</h3>
-                            <p>
-                                عدد التعليقات والرسائل والنسب، بالساعة وباليوم وبالحملة، وتصدير
-                                التفاعلات إلى ملف CSV تفتحه في أي برنامج جداول.
-                            </p>
-                        </section>
-                    </div>
                 </section>
 
                 <!-- ─── Arabic matching ──────────────────────────────────── -->
                 <section class="band" aria-labelledby="arabic-ar">
                     <h2 id="arabic-ar">العربية هنا ليست ترجمة</h2>
                     <p class="prose">
-                        الناس لا تكتب الكلمة نفسها مرتين بالطريقة نفسها. هذه أربع كتابات مختلفة
-                        لكلمة واحدة، وكلها تُطابق الكلمة المفتاحية <strong>«هدية»</strong>:
+                        الناس لا تكتب الكلمة نفسها مرتين بالطريقة نفسها. هذه أربع كتابات لكلمة
+                        واحدة، وكلها تُطابق كلمة مفتاحية واحدة:
                     </p>
 
-                    <div class="norm">
+                    <div class="card norm">
                         <ul class="variants">
                             <li>هديه</li>
                             <li>هديـــة</li>
@@ -1092,17 +1601,113 @@
                     </p>
                 </section>
 
+                <!-- ─── Capabilities ─────────────────────────────────────── -->
+                <section class="band" aria-labelledby="does-ar">
+                    <h2 id="does-ar">وما الذي في لوحة التحكم</h2>
+
+                    <div class="duo">
+                        <section class="card" aria-labelledby="f1-ar">
+                            <h3 id="f1-ar">حملات الكلمات المفتاحية</h3>
+                            <p>
+                                لكل حملة كلماتها، ورسالتها الخاصة، وردّها العام. حملة مربوطة
+                                بمنشور بعينه تسبق الحملة العامة على الكلمة نفسها، فلا تتنازع
+                                اثنتان على تعليق واحد.
+                            </p>
+                        </section>
+                        <section class="card" aria-labelledby="f2-ar">
+                            <h3 id="f2-ar">ردود الذكاء الاصطناعي</h3>
+                            <p>
+                                الرسائل الواردة يجيب عنها نموذج ذكاء اصطناعي بتعليماتك أنت وبقاعدة
+                                معلومات تكتبها عن نشاطك، قارئاً آخر ثماني رسائل من المحادثة حتى
+                                يفهم السياق. ويستطيع أن يردّ بأزرار سريعة أو ببطاقات متتابعة.
+                            </p>
+                        </section>
+                    </div>
+
+                    <dl class="more">
+                        <div>
+                            <dt>صندوق وارد موحّد</dt>
+                            <dd>
+                                محادثات إنستجرام وفيسبوك في مكان واحد. تقرأ، وتردّ بنفسك، وتوقف
+                                الردّ الآلي في محادثة واحدة دون أن تُعطّله في غيرها.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>جدولة المنشورات</dt>
+                            <dd>
+                                صور ومقاطع فيديو، إلى إنستجرام أو فيسبوك أو كليهما من إدخال واحد.
+                                والفيديو يُنشر على إنستجرام ريلز ويظهر في الصفحة الرئيسية أيضاً،
+                                لا في تبويب الريلز وحده.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>مطابقة عربية حقيقية</dt>
+                            <dd>
+                                الهمزات والتاء المربوطة والألف المقصورة والتشكيل والتطويل — كلها
+                                تُوحَّد قبل المقارنة، كما في الفقرة أعلاه.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>أرقام تستطيع تصديرها</dt>
+                            <dd>
+                                عدد التعليقات والرسائل والنسب، بالساعة وباليوم وبالحملة، وتصدير
+                                التفاعلات إلى ملف <bdi lang="en" dir="ltr">CSV</bdi> تفتحه في أي
+                                برنامج جداول.
+                            </dd>
+                        </div>
+                    </dl>
+                </section>
+
+                <!-- ─── What you pay for ─────────────────────────────────── -->
+                <section class="band" aria-labelledby="open-ar">
+                    <h2 id="open-ar">ما الذي تدفع مقابله</h2>
+                    <div class="pays">
+                        <div>
+                            <p>
+                                <strong>البرنامج نفسه مفتوح المصدر برخصة
+                                <bdi lang="en" dir="ltr">MIT</bdi></strong>، ويمكنك تنزيله
+                                وتشغيله على خادمك مجاناً من
+                                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع العلني</a>.
+                            </p>
+                        </div>
+                        <div>
+                            <p>
+                                ما يُباع هنا ليس الكود: هو ربط الحساب بواجهة ميتا، والإعداد،
+                                والمتابعة، ووجود مَن يُصلح العطل حين يقع. التفاصيل في
+                                <a href="/pricing">صفحة الأسعار</a>.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- ─── Limits ───────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="limits-ar">
                     <h2 id="limits-ar">وما الذي لا نَعِد به</h2>
-                    <div class="limits">
-                        <dl>
+
+                    <dl class="figures">
+                        <div>
+                            <dt>180</dt>
+                            <dd>رسالة تلقائية في الساعة لكل حساب، تحت سقف ميتا نفسها (نحو 200).</dd>
+                        </div>
+                        <div>
+                            <dt>24</dt>
+                            <dd>ساعة بين رسالتين تلقائيتين للشخص نفسه.</dd>
+                        </div>
+                        <div>
+                            <dt>8</dt>
+                            <dd>رسائل من المحادثة يقرأها الذكاء الاصطناعي قبل أن يردّ.</dd>
+                        </div>
+                    </dl>
+
+                    <dl class="limits">
+                        <div>
                             <dt>لا دقيقة محدَّدة للنشر</dt>
                             <dd>
                                 المنشور المجدول يدخل طابوراً يُفرَّغ على فترات، لا على الدقيقة. إن
                                 كان توقيت النشر بالدقيقة يهمّك، فهذا ليس ما يفعله البرنامج اليوم.
                             </dd>
-
+                        </div>
+                        <div>
                             <dt>لا ضمان لوقت التشغيل ولا للتسليم</dt>
                             <dd>
                                 ميتا قد تُبطئ الإرسال أو ترفضه في أي لحظة، ولا شيء في البرنامج
@@ -1110,14 +1715,8 @@
                                 على ميتا، وأن ما فشل يُعاد عدداً محدوداً من المحاولات ثم يتوقف
                                 ويبقى مكتوباً لمراجعته.
                             </dd>
-
-                            <dt>حدود الإرسال حقيقية</dt>
-                            <dd>
-                                حتى 180 رسالة تلقائية في الساعة لكل حساب — سقفٌ نُبقيه دون سقف ميتا
-                                نفسها (نحو 200) كي لا يُقطع عنك الإرسال — ورسالة تلقائية واحدة لكل
-                                شخص كل 24 ساعة.
-                            </dd>
-
+                        </div>
+                        <div>
                             <dt>ما يُحفَظ ومدّته مكتوبان في سياسة الخصوصية</dt>
                             <dd>
                                 نص الرسائل الخاصة يُحفَظ ليظهر في صندوق الوارد، وهذا ظاهر لك في
@@ -1126,8 +1725,8 @@
                                 <a href="/data-deletion">صفحة حذف البيانات</a>، وهما المرجع. هذه
                                 الصفحة لا تختصرهما عمداً: الاختصار نسخة ثانية يجب إبقاؤها صحيحة.
                             </dd>
-                        </dl>
-                    </div>
+                        </div>
+                    </dl>
                 </section>
 
                 <!-- ─── Onward ───────────────────────────────────────────── -->
@@ -1135,25 +1734,25 @@
                     <h2 id="next-ar">إلى أين بعد ذلك</h2>
                     <ul class="next">
                         <li>
-                            <a class="nextcard" href="/pricing">
+                            <a class="card nextcard" href="/pricing">
                                 <span class="title">الأسعار</span>
                                 <span class="why">الباقات الثلاث، وما يتغيّر بينها فعلاً</span>
                             </a>
                         </li>
                         <li>
-                            <a class="nextcard" href="/dashboard">
+                            <a class="card nextcard" href="/dashboard">
                                 <span class="title">لوحة التحكم</span>
                                 <span class="why">تسجيل الدخول لمن لديه حساب مربوط</span>
                             </a>
                         </li>
                         <li>
-                            <a class="nextcard" href="/privacy">
+                            <a class="card nextcard" href="/privacy">
                                 <span class="title">سياسة الخصوصية</span>
                                 <span class="why">ما يُجمع، وأين يذهب، وكم يبقى</span>
                             </a>
                         </li>
                         <li>
-                            <a class="nextcard" href="/data-deletion">
+                            <a class="card nextcard" href="/data-deletion">
                                 <span class="title">حذف بياناتك</span>
                                 <span class="why">كيف تطلب حذف بياناتك، وماذا يُحذف</span>
                             </a>
@@ -1169,176 +1768,110 @@
 
                 <!-- ─── Hero ─────────────────────────────────────────────── -->
                 <section class="hero" aria-labelledby="hero-en">
-                    <h1 id="hero-en">A comment becomes a conversation</h1>
-                    <p class="lede">
-                        AutoReply Pro watches the comments on your Instagram and Facebook
-                        accounts. When someone writes a keyword you chose, they get a
-                        <strong>private message</strong>, a <strong>public reply</strong> appears
-                        under their comment, and the comment gets a <strong>like</strong>.
-                    </p>
-                    <p class="sub">
-                        Whatever they write next is answered by AI using your own instructions and
-                        your own knowledge base — or by you, from a shared inbox, where you can
-                        pause the bot on a single conversation.
-                    </p>
+                    <div class="hero-grid">
+                        <div>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Instagram and Facebook · Arabic-first</p>
+                            <h1 id="hero-en">A comment becomes a conversation</h1>
+                            <p class="lede">
+                                A keyword in a comment sends the private message, posts the public
+                                reply, and likes the comment. AI answers whatever they say next.
+                            </p>
+                            <div class="cta-row">
+                                <a class="btn btn-primary" href="/pricing">See the plans</a>
+                                <a class="btn btn-secondary" href="/dashboard">Sign in</a>
+                            </div>
+                        </div>
 
-                    <div class="cta-row">
-                        <a class="btn btn-primary" href="/pricing">See the plans and pricing</a>
-                        <a class="btn btn-secondary" href="/dashboard">Sign in to the dashboard</a>
-                    </div>
+                        <aside class="card artifact" aria-label="Example: one comment and what it produced">
+                            <p class="artifact-label">A comment on your post</p>
+                            <div class="comment">
+                                <span class="avatar" aria-hidden="true">N</span>
+                                <div>
+                                    <p class="who"><span class="sr-only">Comment from</span>Noura</p>
+                                    <p class="said" dir="auto">How much is the <span class="kw">price</span>? Do you deliver?</p>
+                                </div>
+                            </div>
 
-                    <div class="hero-note">
-                        <p>
-                            <strong>The software itself is open source under the MIT licence</strong>,
-                            and you can download it and run it on your own server for free from
-                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">the public repository</a>.
-                            What is sold here is not the code: it is connecting the account to
-                            Meta, the setup, the follow-up, and having someone who fixes it when
-                            it breaks. The detail is on the <a href="/pricing">pricing page</a>.
-                        </p>
+                            <p class="artifact-label"><span class="sr-only">Private message sent from your account:</span>Direct message</p>
+                            <p class="bubble">Hi Noura! Here are the prices and the delivery options.</p>
+
+                            <ul class="receipts">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Comment answered publicly
+                                </li>
+                                <li>
+                                    <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
+                                    Comment liked
+                                </li>
+                            </ul>
+                        </aside>
                     </div>
                 </section>
 
                 <!-- ─── The loop ─────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="loop-en">
                     <h2 id="loop-en">What happens when someone comments</h2>
-                    <p class="prose">
-                        Three steps, and the first is the only one the customer does. The rest
-                        runs on its own:
-                    </p>
+                    <p class="prose">Three steps, and the first is the only one the customer does. The rest runs on its own:</p>
 
                     <ol class="loop">
-                        <li class="step">
-                            <div class="step-head">
-                                <span class="step-num" aria-hidden="true">1</span>
-                                <h3>They comment your keyword</h3>
-                            </div>
-                            <p class="step-body">
-                                You set the keywords on the campaign — several if you want — and
-                                choose whether it fires on one specific post or on anything the
-                                account publishes.
-                            </p>
-                            <div class="mock">
-                                <div class="mock-line">
-                                    <span class="avatar" aria-hidden="true">N</span>
-                                    <div>
-                                        <p class="mock-name"><span class="sr-only">Comment from</span>Noura</p>
-                                        <p class="mock-text" dir="auto">How much is the <span class="kw">price</span>? Do you deliver?</p>
-                                    </div>
-                                </div>
-                            </div>
-                        </li>
-
-                        <li class="step">
-                            <div class="step-head">
-                                <span class="step-num" aria-hidden="true">2</span>
-                                <h3>They get a private message</h3>
-                            </div>
-                            <p class="step-body">
-                                The message you wrote on the campaign, sent to them privately —
-                                not in the comments, where everyone reads it and nobody replies.
-                            </p>
-                            <div class="mock">
-                                <p class="mock-name"><span class="sr-only">Private message sent from your account</span>Direct messages</p>
-                                <p class="bubble">Hi! Here are the prices and the delivery options.</p>
-                                <p class="bubble-note">
-                                    It carries the automated-service disclosure Meta requires.
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">1</span>
+                            <div>
+                                <h3>The match</h3>
+                                <p>
+                                    You set the keywords on the campaign — several if you want —
+                                    and choose whether it fires on one specific post or on
+                                    anything the account publishes. A campaign tied to one post
+                                    beats a general one on the same keyword, so two campaigns
+                                    never fight over a comment.
                                 </p>
                             </div>
+                            <p class="detail">
+                                <span>Campaign keywords</span>
+                                <span class="chip">price</span>
+                                <span class="chip">how much</span>
+                                <span class="chip"><bdi lang="ar" dir="rtl" class="ar">السعر</bdi></span>
+                            </p>
                         </li>
 
-                        <li class="step">
-                            <div class="step-head">
-                                <span class="step-num" aria-hidden="true">3</span>
-                                <h3>And their comment gets answered</h3>
-                            </div>
-                            <p class="step-body">
-                                A public reply under the comment telling them to check their
-                                messages, and a like on the comment. The public reply is optional
-                                and you write it on the campaign; the like is always attempted.
-                            </p>
-                            <div class="mock">
-                                <div class="mock-line">
-                                    <span class="avatar avatar-brand" aria-hidden="true">Y</span>
-                                    <div>
-                                        <p class="mock-name">Your account<span class="tag">public reply</span></p>
-                                        <p class="mock-text">Just sent you the details in your messages</p>
-                                    </div>
-                                </div>
-                                <p class="mock-meta">
-                                    <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
-                                    Comment liked
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">2</span>
+                            <div>
+                                <h3>The private message</h3>
+                                <p>
+                                    The text you wrote on the campaign reaches them privately —
+                                    not in the comments, where everyone reads it and nobody
+                                    replies. If they answer, AI takes the rest of the conversation
+                                    using your own instructions and your own knowledge base, and
+                                    the first automated reply in a conversation is headed by the
+                                    automated-service disclosure Meta requires.
                                 </p>
                             </div>
+                            <p class="detail">
+                                <span>The line the software adds</span>
+                                <span class="quoted"><bdi lang="ar" dir="rtl" class="ar">🤖 رد آلي من المساعد الذكي</bdi></span>
+                            </p>
+                        </li>
+
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">3</span>
+                            <div>
+                                <h3>The public trace</h3>
+                                <p>
+                                    A public reply under the comment telling them to check their
+                                    messages, and a like on the comment. The public reply is
+                                    optional and you write it on the campaign; the like is always
+                                    attempted.
+                                </p>
+                            </div>
+                            <p class="detail">
+                                If Meta refuses the public reply — a missing permission, or a
+                                comment that was deleted — the private message still goes out, and
+                                the reason it failed is recorded on the interaction.
+                            </p>
                         </li>
                     </ol>
-
-                    <p class="prose">
-                        If Meta refuses the public reply or the like — a missing permission, or a
-                        comment that was deleted — the private message still goes out, and the
-                        reason a public reply failed is recorded on the interaction.
-                    </p>
-                </section>
-
-                <!-- ─── Features ─────────────────────────────────────────── -->
-                <section class="band" aria-labelledby="does-en">
-                    <h2 id="does-en">And what is in the dashboard</h2>
-
-                    <div class="features">
-                        <section class="feature" aria-labelledby="f1-en">
-                            <h3 id="f1-en">Keyword campaigns</h3>
-                            <p>
-                                Each campaign has its own keywords, its own private message and its
-                                own public reply. A campaign tied to one post beats a general one
-                                on the same keyword, so two campaigns never fight over a comment.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f2-en">
-                            <h3 id="f2-en">AI replies to messages</h3>
-                            <p>
-                                Incoming messages are answered by an AI model using your own
-                                instructions and a knowledge base you write about your business,
-                                reading the last eight messages of the thread for context. It can
-                                reply with quick-reply buttons or a card carousel.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f3-en">
-                            <h3 id="f3-en">One shared inbox</h3>
-                            <p>
-                                Instagram and Facebook conversations in one place. Read them, reply
-                                yourself, and pause the bot on a single conversation without
-                                turning it off anywhere else.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f4-en">
-                            <h3 id="f4-en">Scheduled posts</h3>
-                            <p>
-                                Images and video, to Instagram or Facebook or both from one entry.
-                                Video publishes to Instagram as a reel and appears in the main feed
-                                too, not only in the Reels tab.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f5-en">
-                            <h3 id="f5-en">Arabic matching that works</h3>
-                            <p>
-                                Hamza forms, teh marbuta, alef maksura, diacritics and tatweel are
-                                all normalised before matching, so you do not lose a sale because
-                                the customer spelled the word another way. Detail below.
-                            </p>
-                        </section>
-
-                        <section class="feature" aria-labelledby="f6-en">
-                            <h3 id="f6-en">Numbers you can export</h3>
-                            <p>
-                                Comments, messages and conversion, by hour, by day and by campaign
-                                — and an interaction export as CSV that opens in any spreadsheet.
-                            </p>
-                        </section>
-                    </div>
                 </section>
 
                 <!-- ─── Arabic matching ──────────────────────────────────── -->
@@ -1347,28 +1880,35 @@
                     <p class="prose">
                         People do not write the same word the same way twice. These are four
                         different spellings of one word, and all four match the keyword
-                        <strong class="ar" lang="ar" dir="rtl">هدية</strong> (<em>hadiyya</em>,
-                        a gift):
+                        <bdi class="ar" lang="ar" dir="rtl"><strong>هدية</strong></bdi>
+                        (<em>hadiyya</em>, a gift):
                     </p>
 
-                    <div class="norm" lang="ar" dir="rtl">
+                    <!-- The container stays LTR here even though every word in
+                         it is Arabic. With dir="rtl" on the card the funnel ran
+                         right-to-left inside a left-to-right page, so an
+                         English reader met the normalised word first and the
+                         four spellings last — the demo backwards. Direction of
+                         LAYOUT follows the document; direction of each WORD is
+                         handled by <bdi>, which is what it is for. -->
+                    <div class="card norm">
                         <ul class="variants">
-                            <li>هديه</li>
-                            <li>هديـــة</li>
-                            <li>هديّة</li>
-                            <li>الهدية</li>
+                            <li><bdi class="ar" lang="ar" dir="rtl">هديه</bdi></li>
+                            <li><bdi class="ar" lang="ar" dir="rtl">هديـــة</bdi></li>
+                            <li><bdi class="ar" lang="ar" dir="rtl">هديّة</bdi></li>
+                            <li><bdi class="ar" lang="ar" dir="rtl">الهدية</bdi></li>
                         </ul>
-                        <p class="norm-arrow" lang="en" dir="ltr">all normalise to</p>
-                        <p class="norm-target">هدية</p>
+                        <p class="norm-arrow">all normalise to</p>
+                        <p class="norm-target"><bdi class="ar" lang="ar" dir="rtl">هدية</bdi></p>
                     </div>
 
                     <p class="prose">
                         Hamza forms collapse to a bare alef, teh marbuta to heh, alef maksura to
                         yeh, and diacritics and tatweel are stripped, before anything is compared.
                         Short keywords carry a known danger —
-                        <span class="ar" lang="ar" dir="rtl">تم</span> sits inside
-                        <span class="ar" lang="ar" dir="rtl">اهتمام</span> and
-                        <span class="ar" lang="ar" dir="rtl">تمام</span> — so every campaign picks
+                        <bdi class="ar" lang="ar" dir="rtl">تم</bdi> sits inside
+                        <bdi class="ar" lang="ar" dir="rtl">اهتمام</bdi> and
+                        <bdi class="ar" lang="ar" dir="rtl">تمام</bdi> — so every campaign picks
                         its own matching mode: anywhere in the text, or whole word only.
                     </p>
                     <p class="prose">
@@ -1378,18 +1918,117 @@
                     </p>
                 </section>
 
+                <!-- ─── Capabilities ─────────────────────────────────────── -->
+                <section class="band" aria-labelledby="does-en">
+                    <h2 id="does-en">And what is in the dashboard</h2>
+
+                    <div class="duo">
+                        <section class="card" aria-labelledby="f1-en">
+                            <h3 id="f1-en">Keyword campaigns</h3>
+                            <p>
+                                Each campaign has its own keywords, its own private message and
+                                its own public reply. A campaign tied to one post beats a general
+                                one on the same keyword, so two campaigns never fight over a
+                                comment.
+                            </p>
+                        </section>
+                        <section class="card" aria-labelledby="f2-en">
+                            <h3 id="f2-en">AI replies to messages</h3>
+                            <p>
+                                Incoming messages are answered by an AI model using your own
+                                instructions and a knowledge base you write about your business,
+                                reading the last eight messages of the thread for context. It can
+                                reply with quick-reply buttons or a card carousel.
+                            </p>
+                        </section>
+                    </div>
+
+                    <dl class="more">
+                        <div>
+                            <dt>One shared inbox</dt>
+                            <dd>
+                                Instagram and Facebook conversations in one place. Read them,
+                                reply yourself, and pause the bot on a single conversation without
+                                turning it off anywhere else.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Scheduled posts</dt>
+                            <dd>
+                                Images and video, to Instagram or Facebook or both from one entry.
+                                Video publishes to Instagram as a reel and appears in the main
+                                feed too, not only in the Reels tab.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Arabic matching that works</dt>
+                            <dd>
+                                Hamza forms, teh marbuta, alef maksura, diacritics and tatweel are
+                                all normalised before matching, as above.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Numbers you can export</dt>
+                            <dd>
+                                Comments, messages and conversion, by hour, by day and by campaign
+                                — and an interaction export as CSV that opens in any spreadsheet.
+                            </dd>
+                        </div>
+                    </dl>
+                </section>
+
+                <!-- ─── What you pay for ─────────────────────────────────── -->
+                <section class="band" aria-labelledby="open-en">
+                    <h2 id="open-en">What you are paying for</h2>
+                    <div class="pays">
+                        <div>
+                            <p>
+                                <strong>The software itself is open source under the MIT
+                                licence</strong>, and you can download it and run it on your own
+                                server for free from
+                                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">the public repository</a>.
+                            </p>
+                        </div>
+                        <div>
+                            <p>
+                                What is sold here is not the code: it is connecting the account to
+                                Meta, the setup, the follow-up, and having someone who fixes it
+                                when it breaks. The detail is on the
+                                <a href="/pricing">pricing page</a>.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- ─── Limits ───────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="limits-en">
                     <h2 id="limits-en">What this does not promise</h2>
-                    <div class="limits">
-                        <dl>
+
+                    <dl class="figures">
+                        <div>
+                            <dt>180</dt>
+                            <dd>automated messages an hour per account, held under Meta's own ceiling of about 200.</dd>
+                        </div>
+                        <div>
+                            <dt>24</dt>
+                            <dd>hours between two automated messages to the same person.</dd>
+                        </div>
+                        <div>
+                            <dt>8</dt>
+                            <dd>messages of the thread the AI reads before it answers.</dd>
+                        </div>
+                    </dl>
+
+                    <dl class="limits">
+                        <div>
                             <dt>No exact publishing minute</dt>
                             <dd>
                                 A scheduled post joins a queue that is drained on an interval, not
                                 on the minute. If minute-level timing matters to you, this is not
                                 what the software does today.
                             </dd>
-
+                        </div>
+                        <div>
                             <dt>No uptime or delivery guarantee</dt>
                             <dd>
                                 Meta can throttle or refuse a send at any moment, and nothing in
@@ -1398,14 +2037,8 @@
                                 failure is retried a limited number of times before it stops and
                                 is left on record to be looked at.
                             </dd>
-
-                            <dt>The sending limits are real</dt>
-                            <dd>
-                                Up to 180 automated messages an hour per account — a ceiling held
-                                below Meta's own (around 200) so you are not cut off — and one
-                                automated message per person per 24 hours.
-                            </dd>
-
+                        </div>
+                        <div>
                             <dt>What is kept, and for how long, is in the privacy policy</dt>
                             <dd>
                                 Direct-message text is stored so it can appear in your inbox,
@@ -1416,8 +2049,8 @@
                                 authoritative statement. This page deliberately does not
                                 summarise them: a summary is a second version to keep true.
                             </dd>
-                        </dl>
-                    </div>
+                        </div>
+                    </dl>
                 </section>
 
                 <!-- ─── Onward ───────────────────────────────────────────── -->
@@ -1425,25 +2058,25 @@
                     <h2 id="next-en">Where to go next</h2>
                     <ul class="next">
                         <li>
-                            <a class="nextcard" href="/pricing">
+                            <a class="card nextcard" href="/pricing">
                                 <span class="title">Pricing</span>
                                 <span class="why">The three plans, and what actually changes between them</span>
                             </a>
                         </li>
                         <li>
-                            <a class="nextcard" href="/dashboard">
+                            <a class="card nextcard" href="/dashboard">
                                 <span class="title">Dashboard</span>
                                 <span class="why">Sign in, for accounts that are already connected</span>
                             </a>
                         </li>
                         <li>
-                            <a class="nextcard" href="/privacy">
+                            <a class="card nextcard" href="/privacy">
                                 <span class="title">Privacy policy</span>
                                 <span class="why">What is collected, where it goes, how long it stays</span>
                             </a>
                         </li>
                         <li>
-                            <a class="nextcard" href="/data-deletion">
+                            <a class="card nextcard" href="/data-deletion">
                                 <span class="title">Delete your data</span>
                                 <span class="why">How to request deletion, and what is deleted</span>
                             </a>
@@ -1456,15 +2089,21 @@
 
         <footer class="pagefoot">
             <nav aria-label="روابط الصفحة · Page links">
-                <a href="/pricing"><span class="t-ar">الأسعار</span><span class="t-sep"> · </span><span class="t-en">Pricing</span></a>
-                <a href="/dashboard"><span class="t-ar">لوحة التحكم</span><span class="t-sep"> · </span><span class="t-en">Dashboard</span></a>
-                <a href="/privacy"><span class="t-ar">سياسة الخصوصية</span><span class="t-sep"> · </span><span class="t-en">Privacy policy</span></a>
-                <a href="/data-deletion"><span class="t-ar">حذف بياناتك</span><span class="t-sep"> · </span><span class="t-en">Delete your data</span></a>
-                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><span class="t-ar">الكود على GitHub</span><span class="t-sep"> · </span><span class="t-en">Source on GitHub</span></a>
+                <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
+                <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
+                <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
+                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
             </nav>
             <p>
-                <span class="t-ar">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة Meta، ولا ترتبط هذه الأداة بها.</span>
-                <span class="t-en">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</span>
+                <!-- These two were plain spans with no lang or dir. Inside an
+                     RTL page the English sentence's final full stop is a
+                     neutral character, so it was reordered to the other end of
+                     the line and the footer rendered ".by Meta". <bdi> is an
+                     isolate AND an element, which is why it is used here rather
+                     than unicode-bidi: isolate. -->
+                <bdi class="t-ar" lang="ar" dir="rtl">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة <bdi lang="en" dir="ltr">Meta</bdi>، ولا ترتبط هذه الأداة بها.</bdi>
+                <bdi class="t-en" lang="en" dir="ltr">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</bdi>
             </p>
         </footer>
     </div>
