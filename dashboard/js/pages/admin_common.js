@@ -159,6 +159,7 @@ const Admin = {
                     <p class="form-hint" id="admin-confirm-echo-hint">${t('admin.confirmEchoHint', { value: requireText })}</p>
                 </div>
             ` : ''}
+            <div id="admin-confirm-error"></div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
                 <button type="button" class="${confirmClass}" id="admin-confirm-btn"
@@ -176,17 +177,125 @@ const Admin = {
         btn.disabled = String(input.value || '').trim() !== String(input.dataset.expect || '');
     },
 
-    runConfirm() {
+    /**
+     * Run the confirmed action WITHOUT throwing the button away first.
+     *
+     * This used to be `UI.closeModal()` and then `fn()`. Closing first destroys
+     * the button the operator just pressed, which meant every confirm-gated
+     * destructive action in the product — delete campaign, delete post, publish
+     * now, cancel job, revoke a membership, revoke sessions, grant
+     * platform_admin, GDPR erasure — had *zero* in-flight feedback. The dialog
+     * vanished, nothing else changed, and the operator was left guessing for as
+     * long as the request took. On a cold start that is seconds.
+     *
+     * Worse, the failure path was a toast fired at a screen that had already
+     * moved on: "publish now" could fail and the only trace was a message four
+     * and a half seconds long, with the thing the operator had been looking at
+     * already gone.
+     *
+     * So the order is now the one `UI.closeModal`'s own docblock asks for —
+     * do the work, THEN close:
+     *
+     *   - the button goes busy and stays put, so the press is acknowledged;
+     *   - success closes the dialog;
+     *   - failure keeps it open, restores the button and puts the reason
+     *     *inside* the dialog, next to the action that produced it, with the
+     *     callback put back so the retry is one click.
+     *
+     * Escape and the close button stay live throughout: a slow request must
+     * never become a trap.
+     *
+     * ── What this must NOT break ──
+     * Some callers paint optimistically the moment they are called and rely on
+     * that paint being visible. `posts.js: deletePostConfirmed` removes the card
+     * and then returns a `Motion.optimistic` promise; `publishNowConfirmed`
+     * greys the card's buttons and flips its status pill. Both still work,
+     * because both do their painting SYNCHRONOUSLY before returning — the card
+     * disappears behind the dialog exactly as it used to, and the dialog
+     * follows a moment later. And `Motion.optimistic` resolves even on failure
+     * (it reverts and toasts internally), so those two keep their own error
+     * handling and never see the in-modal strip.
+     *
+     * `campaigns.js` is not affected at all: its delete builds its own modal
+     * with `UI.showModal` and calls `UI.closeModal()` itself.
+     *
+     * A synchronous callback — one that returns no promise — closes the dialog
+     * immediately, exactly as before. There is nothing to wait for.
+     */
+    runConfirm(el) {
+        const btn = (el && el.id === 'admin-confirm-btn') ? el : document.getElementById('admin-confirm-btn');
+        const restore = UI.actionBusy(btn);
+        // Already in flight: the second click of a double-click lands here and is
+        // a no-op, which is the whole point of `actionBusy` returning null.
+        //
+        // This guard comes FIRST, before `_pending` is even read, and that
+        // ordering is the whole fix. Read `_pending` first and the second click
+        // finds it already nulled by the first, falls into the "nothing to
+        // confirm" branch below, and closes the dialog — out from under a
+        // request that is still running. A double-click would have looked
+        // exactly like success.
+        if (restore === null) return undefined;
+
         const fn = Admin._pending;
-        Admin._pending = null;
-        UI.closeModal();
-        if (typeof fn !== 'function') return;
-        try {
-            const result = fn();
-            Admin.report(result);
-        } catch (err) {
-            UI.toast((err && err.message) || t('common.error'), 'error');
+        if (typeof fn !== 'function') {
+            UI.closeModal();
+            return undefined;
         }
+
+        Admin._pending = null;
+        Admin.clearConfirmError();
+
+        const recover = (err) => {
+            // Put the callback back so the button the operator is looking at
+            // still does what it says.
+            Admin._pending = fn;
+            restore();
+            Admin.regateConfirm();
+            Admin.showConfirmError(err);
+        };
+
+        let result;
+        try {
+            result = fn();
+        } catch (err) {
+            recover(err);
+            return undefined;
+        }
+
+        if (!result || typeof result.then !== 'function') {
+            UI.closeModal();
+            return undefined;
+        }
+
+        return result.then(() => { UI.closeModal(); }, recover);
+    },
+
+    /** Re-apply the typed-echo gate after a restore, in case the field changed. */
+    regateConfirm() {
+        const input = document.getElementById('admin-confirm-echo');
+        if (input) Admin.gateConfirm(input);
+    },
+
+    clearConfirmError() {
+        const host = document.getElementById('admin-confirm-error');
+        if (host) host.innerHTML = '';
+    },
+
+    /**
+     * The reason, inside the dialog. Falls back to a toast if the dialog is no
+     * longer there — the operator can close a slow confirm with Escape, and an
+     * error that arrives afterwards must still be said out loud rather than
+     * written to an element that no longer exists.
+     */
+    showConfirmError(err) {
+        const message = (err && err.message) || t('common.error');
+        const host = document.getElementById('admin-confirm-error');
+        if (!host) {
+            UI.toast(message, 'error');
+            return;
+        }
+        host.innerHTML = esc(UI.errorStrip(message, '', 'admin-confirm-error-strip'));
+        UI.icons(host);
     },
 
     /** The delegated dispatcher only catches synchronous throws. */
@@ -362,7 +471,8 @@ const Admin = {
 };
 
 UI.registerActions('admin', {
-    runConfirm: () => Admin.runConfirm(),
+    // The element matters now: it is the button that goes busy.
+    runConfirm: (el) => Admin.runConfirm(el),
     gateConfirm: (el) => Admin.gateConfirm(el),
 });
 

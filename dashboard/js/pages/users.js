@@ -494,11 +494,34 @@ const UsersPage = {
         });
     },
 
+    /**
+     * The membership row's OWN button goes busy, not the confirm dialog's.
+     *
+     * `Admin.runConfirm` already guards the dialog, but the dialog is not the
+     * only way back to this request: Escape closes a slow confirm, and the row
+     * underneath is still sitting there with a live unlink button. Click it
+     * again and the whole flow runs a second time against a membership the
+     * first DELETE has not finished removing. Disabling the row's button for
+     * the duration closes that path and is also the only feedback the page
+     * itself gives — until now the row looked completely untouched while the
+     * request was out.
+     *
+     * Both `data-id` (the user) and `data-creator` (the tenant) are needed to
+     * find it: one user has one button per membership, all sharing a `data-id`.
+     */
     async revokeMembership(id, creatorId) {
+        const trigger = document.querySelector(
+            `[data-action="users:confirmRevokeMembership"][data-id="${CSS.escape(String(id))}"]`
+            + `[data-creator="${CSS.escape(String(creatorId))}"]`
+        );
+        const restore = UI.actionBusy(trigger);
+        if (!restore) return; // this membership is already being revoked
+
         try {
             await API.deleteUserMembership(id, creatorId);
             UI.toast(t('users.membershipRevoked'));
         } catch (err) {
+            restore();
             UI.toast(this.describeUserError(err, 'users.membershipRevokeFailed'), 'error');
         }
         await this.render();
@@ -564,11 +587,24 @@ const UsersPage = {
         });
     },
 
+    /**
+     * Same guard as `revokeMembership`, same reason: the card's own button is
+     * the second route to a duplicate request once the dialog has been
+     * dismissed, and it was the only part of the page that could have shown
+     * the operator that anything was happening at all.
+     */
     async revokeSessions(id) {
+        const trigger = document.querySelector(
+            `[data-action="users:confirmRevoke"][data-id="${CSS.escape(String(id))}"]`
+        );
+        const restore = UI.actionBusy(trigger);
+        if (!restore) return; // this user's sessions are already being revoked
+
         try {
             await API.revokeUserSessions(id);
             UI.toast(t('users.revoked'));
         } catch (err) {
+            restore();
             UI.toast((err && err.message) || t('users.revokeFailed'), 'error');
         }
         await this.render();

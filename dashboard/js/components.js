@@ -67,6 +67,30 @@ function safeUrl(value) {
     return '';
 }
 
+/**
+ * The button vocabulary `UI.button()` may spell, as LOOKUP TABLES rather than
+ * string interpolation. `btn-${variant}` would put whatever the caller passed
+ * inside a `class` attribute; a table can only ever yield a class this
+ * stylesheet actually defines.
+ *
+ * Null-prototype on purpose: a plain `{}` answers `'constructor'` with a
+ * function, so `TABLE[o.variant] || fallback` on an object literal happily
+ * writes `class="btn function Object() { [native code] }"` for a variant read
+ * off a server payload. The prototype is the whole gap, so it is removed.
+ */
+const BUTTON_VARIANTS = Object.assign(Object.create(null), {
+    primary: 'btn-primary',
+    secondary: 'btn-secondary',
+    danger: 'btn-danger',
+    ghost: 'btn-ghost',
+});
+const BUTTON_SIZES = Object.assign(Object.create(null), { sm: 'btn-sm', md: '' });
+const BUTTON_TYPES = Object.assign(Object.create(null), {
+    button: 'button', submit: 'submit', reset: 'reset',
+});
+/** `data-*` names only: lowercase, digits and hyphens, starting with a letter. */
+const DATA_KEY = /^[a-z][a-z0-9-]*$/;
+
 const UI = {
     _modalSeq: 0,
     _lastFocus: null,
@@ -190,6 +214,167 @@ const UI = {
             btn.innerHTML = original;
             UI.icons(btn);
         };
+    },
+
+    /**
+     * `formBusy` for a button that is not a form submit.
+     *
+     * Every async `data-action` handler in this dashboard had to hand-roll this,
+     * and about nine of them simply did not: `await API.something()` straight
+     * from the click, with nothing disabled in between. On a Vercel cold start
+     * that window is seconds long and the button looks completely idle, so the
+     * operator clicks it again and two requests go out. `revokeMembership` and
+     * `revokeSessions` in users.js were the clearest cases.
+     *
+     * The contract is `formBusy`'s, deliberately, so the two are interchangeable
+     * in a reader's head:
+     *
+     *   - no element        -> a no-op restore, so callers never branch on null
+     *                          for "there was nothing to disable"
+     *   - already in flight -> **null**, and the caller MUST bail. This is the
+     *                          double-click guard; returning a restore here
+     *                          would let the second click through.
+     *   - otherwise         -> restore(), which puts the label, the icons and
+     *                          the width back exactly as they were.
+     *
+     * ── The label, and the width ──
+     * Called with no label, the button keeps its own text for assistive
+     * technology but hides it visually and shows just a spinner, and its width
+     * is pinned to what it was. Both halves of that are needed and each fixes a
+     * different thing: a spinner on its own leaves the button with NO accessible
+     * name, and a spinner beside the label makes the button ~24px wider, which
+     * shoves the rest of the row sideways at the exact moment the operator is
+     * watching it. The measured `min-inline-size` cannot stop that on its own —
+     * a minimum only prevents shrinking.
+     *
+     * Pass an explicit string (`t('common.saving')`) when the verb itself should
+     * change; that behaves exactly like `formBusy` and shows the text, so a
+     * longer verb may widen the button. Pass `''` for a bare spinner on an
+     * icon-only control that carries its name in `aria-label`.
+     */
+    actionBusy(el, label) {
+        if (!el) return () => {};
+        // `disabled` covers the caller that disabled it for its own reasons;
+        // `aria-busy` covers a second call landing on a button this already owns.
+        if (el.disabled || (el.getAttribute && el.getAttribute('aria-busy') === 'true')) return null;
+
+        const original = el.innerHTML;
+        const originalLabel = (el.textContent || '').trim();
+        const style = el.style || {};
+        const previousMinInline = style.minInlineSize || '';
+        try {
+            const width = el.offsetWidth;
+            if (width > 0) style.minInlineSize = `${width}px`;
+        } catch { /* no layout engine here; the width simply is not pinned */ }
+
+        el.disabled = true;
+        if (el.setAttribute) el.setAttribute('aria-busy', 'true');
+        const ownLabel = label === undefined;
+        el.innerHTML = UI.buttonSpinner(ownLabel ? originalLabel : label, ownLabel);
+
+        return () => {
+            el.disabled = false;
+            if (el.removeAttribute) el.removeAttribute('aria-busy');
+            style.minInlineSize = previousMinInline;
+            el.innerHTML = original;
+            UI.icons(el);
+        };
+    },
+
+    /**
+     * The one place a button's markup is built.
+     *
+     * There are 88 `class="btn btn-…"` strings hand-written across 17 distinct
+     * variant spellings in this dashboard, which is how `.btn-danger` ended up
+     * on things that delete nothing and how an icon-only button ended up
+     * without an `aria-label`. This is the seam: a call here cannot spell a
+     * variant that has no CSS, cannot forget `type="button"` (which submits the
+     * enclosing form), and cannot interpolate a value into markup unescaped.
+     *
+     *   UI.button({ variant: 'danger', icon: 'trash-2', label: t('common.delete'),
+     *               action: 'campaigns:confirmDelete', data: { id: c.id } })
+     *
+     * | option     | what it does                                               |
+     * |------------|------------------------------------------------------------|
+     * | variant    | 'primary' | 'secondary' | 'danger' | 'ghost' (default 2nd) |
+     * | size       | 'sm' for the compact row button; omit for the default      |
+     * | label      | the visible text — a VERB, per DESIGN.md                   |
+     * | icon       | a lucide name, rendered as `<i data-lucide>` before the label |
+     * | action     | the `data-action="ns:method"` this dispatches on click      |
+     * | busy       | renders the in-flight state: spinner, `aria-busy`, disabled |
+     * | disabled   | the `disabled` attribute                                   |
+     * | full       | `.btn-full` — the full-width form button                   |
+     * | type       | 'button' (default), 'submit' or 'reset'                     |
+     * | data       | extra `data-*` attributes, `{ id: 3 }` -> `data-id="3"`    |
+     * | ariaLabel  | the accessible name when there is no visible label          |
+     * | focusKey   | `data-focus-key`, so focus survives the next re-render      |
+     * | id, title, className — as named                                         |
+     *
+     * ── Escaping ──
+     * `variant`, `size` and `type` are looked up in the tables above rather than
+     * interpolated, so they can only ever be a class this stylesheet defines —
+     * a value arriving from the server cannot become `class="btn btn-x" onload=…`
+     * no matter what it says. Everything else goes through `html`, which escapes
+     * it. `html.raw` appears only on the bare boolean attributes, which are
+     * literals written here.
+     *
+     * @returns {SafeHtml}
+     */
+    button(options) {
+        const o = options || {};
+        const variantClass = BUTTON_VARIANTS[o.variant] !== undefined
+            ? BUTTON_VARIANTS[o.variant]
+            : BUTTON_VARIANTS.secondary;
+        const sizeClass = BUTTON_SIZES[o.size] || '';
+        const type = BUTTON_TYPES[o.type] || BUTTON_TYPES.button;
+
+        const classes = ['btn', variantClass, sizeClass, o.full ? 'btn-full' : '', o.className || '']
+            .filter(Boolean).join(' ');
+
+        // A busy button is disabled too. The CSS says busy implies
+        // non-interactive; the markup has to agree, or a keyboard user can
+        // still fire the action the spinner says is already running.
+        const busy = !!o.busy;
+        const disabled = busy || !!o.disabled;
+
+        const data = o.data && typeof o.data === 'object' ? o.data : {};
+        const dataAttrs = Object.keys(data)
+            .filter((key) => {
+                if (data[key] === undefined || data[key] === null) return false;
+                if (DATA_KEY.test(key)) return true;
+                // Loud, because a silently dropped `data-id` breaks the handler
+                // somewhere else entirely. `focusKey` is the usual mistake: the
+                // attribute is `data-focus-key`, so the key is too.
+                console.warn(`UI.button: ignoring data key "${key}" — data-* names are lowercase and hyphenated.`);
+                return false;
+            })
+            .map((key) => html` data-${html.raw(key)}="${data[key]}"`);
+
+        // Every entry carries its own leading space and an omitted one is '',
+        // which `esc()` drops when it walks the array — so the tag comes out with
+        // exactly the attributes that were asked for and no blank filler between
+        // them. An interpolated `''` would otherwise leave the template's own
+        // newlines and indentation inside the tag.
+        const attrs = [
+            html` type="${type}"`,
+            html` class="${classes}"`,
+            o.id ? html` id="${o.id}"` : '',
+            o.action ? html` data-action="${o.action}"` : '',
+            o.focusKey ? html` data-focus-key="${o.focusKey}"` : '',
+            o.ariaLabel ? html` aria-label="${o.ariaLabel}"` : '',
+            o.title ? html` title="${o.title}"` : '',
+            busy ? html.raw(' aria-busy="true"') : '',
+            disabled ? html.raw(' disabled') : '',
+            ...dataAttrs,
+        ];
+
+        let body;
+        if (busy) body = html.raw(UI.buttonSpinner(o.label));
+        else if (o.icon && o.label) body = html`<i data-lucide="${o.icon}" aria-hidden="true"></i> ${o.label}`;
+        else if (o.icon) body = html`<i data-lucide="${o.icon}" aria-hidden="true"></i>`;
+        else body = html`${o.label}`;
+
+        return html`<button${attrs}>${body}</button>`;
     },
 
     /**
@@ -827,9 +1012,20 @@ const UI = {
         </div>`);
     },
 
-    /** Small inline spinner used inside a button while it works. */
-    buttonSpinner(label) {
-        return esc(html`<span class="spinner spinner-sm spinner-inline"></span><span>${label || ''}</span>`);
+    /**
+     * Small inline spinner used inside a button while it works.
+     *
+     * `hideLabel` keeps the label for assistive technology but takes it out of
+     * the flex row (`.sr-only` is absolutely positioned), so the busy content is
+     * NARROWER than what it replaced. That is what lets a button hold its exact
+     * width while it works: pinning `min-inline-size` only stops a button
+     * shrinking, and a button that keeps its label and gains a spinner grows by
+     * the spinner plus the gap — about 24px of layout shift, in the direction
+     * `min-inline-size` cannot see.
+     */
+    buttonSpinner(label, hideLabel) {
+        const text = html`<span${hideLabel ? html.raw(' class="sr-only"') : ''}>${label || ''}</span>`;
+        return esc(html`<span class="spinner spinner-sm spinner-inline"></span>${text}`);
     },
 
     // ─── Delegated events (replaces inline on* attributes) ───────────────────

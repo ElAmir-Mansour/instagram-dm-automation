@@ -364,7 +364,11 @@ bdi { unicode-bidi: isolate; }
     color: var(--text-default);
     transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
-.icon-button:hover { background: var(--surface-glass-hover); color: var(--text-strong); }
+.icon-button:hover:not(:disabled) { background: var(--surface-glass-hover); color: var(--text-strong); }
+.icon-button:active:not(:disabled) { background: color-mix(in srgb, var(--text-strong) 14%, transparent); }
+/* It had no disabled state at all, so a chrome button that had been turned off
+   looked, and hovered, exactly like one that worked. */
+.icon-button:disabled { opacity: 0.35; cursor: not-allowed; }
 .icon-button svg { width: 20px; height: 20px; }
 .menu-button { display: none; }
 
@@ -539,12 +543,18 @@ bdi { unicode-bidi: isolate; }
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
 }
+/* `:not(:disabled)` on every one of these that can BE disabled. `.icon-button`
+   and `.modal-close` were the two that were not, which meant a disabled control
+   still shrank under the pointer — the one piece of feedback that says "this
+   press registered", given for a press that did nothing. Both now have real
+   `:disabled` rules further down, so leaving them unguarded would have been a
+   contradiction introduced by this change rather than one inherited. */
 .btn:active:not(:disabled),
-.icon-button:active,
+.icon-button:active:not(:disabled),
 .icon-btn:active:not(:disabled),
 .post-picker-item:active,
 .page-btn:active:not(:disabled),
-.modal-close:active,
+.modal-close:active:not(:disabled),
 .lang-toggle:active {
     transform: scale(0.97);
     transition-duration: var(--motion-fast);
@@ -628,29 +638,153 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
                 transform var(--motion-fast) var(--ease-standard);
 }
 .btn svg { width: 16px; height: 16px; flex-shrink: 0; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* The busy spinner is a <div>, not an <svg>, so it needs its own reservation or
+   the flex row squeezes it into an ellipse while the label is still beside it. */
+.btn .spinner { flex-shrink: 0; }
+/* `box-shadow: none` here is what turns the primary button's glow off when it is
+   disabled: a control that still glows reads as available. */
+.btn:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; transform: none; }
+
+/* ─── The state matrix ───────────────────────────────────────────────────────
+   Four variants x four states, and HOVER ALWAYS CHANGES COLOUR.
+   `.btn-primary:hover` used to be `transform: translateY(-1px)` and nothing
+   else, which means it said nothing at all under `prefers-reduced-motion`:
+   --motion-fast collapses to 1ms there, so the lift lands in one frame and a
+   mouse user watching for feedback sees a button that never acknowledged them.
+   Colour is the state; the lift is the flourish on top of it.
+
+   `--accent-hover` and `--accent-active` have been in tokens.css since the HIG
+   pass with exactly one consumer between them (`.username-link:hover`). They
+   are the primary button's hover and press, which is what they were named for. */
 .btn-primary {
     background: var(--gradient-brand);
     color: var(--text-on-accent);
     box-shadow: var(--elev-glow);
 }
-.btn-primary:hover:not(:disabled) { transform: translateY(-1px); }
+/* Deeper at every stop than the resting gradient (#0a7cf0 -> #0077ed at the lit
+   edge, #0064cc -> #005bb5 at the foot), so white-on-blue can only GAIN contrast
+   on hover. --accent-hover as a FLAT fill would have taken the whole face to
+   4.32:1, under the 4.5:1 floor the rest of this palette is held to. */
+.btn-primary:hover:not(:disabled) {
+    background: linear-gradient(180deg, var(--accent-hover), var(--accent) 70%, var(--accent-active));
+    transform: translateY(-1px);
+}
+/* Pressed is flat: a control being pushed in is not lit from above. This also
+   restores the shared `scale(0.97)` press, which the old hover rule was
+   silently beating — same specificity, and `:hover` was written later, so a
+   primary button was the one button in the product that did not acknowledge a
+   click. */
+.btn-primary:active:not(:disabled) {
+    background: var(--accent-active);
+    box-shadow: none;
+    transform: scale(0.97);
+}
+.btn-primary:focus-visible { box-shadow: var(--elev-glow), 0 0 0 4px var(--accent-ring); }
+
 .btn-secondary {
     background: var(--surface-glass);
     color: var(--text-strong);
     border: 1px solid var(--border-subtle);
 }
 .btn-secondary:hover:not(:disabled) { background: var(--surface-glass-hover); border-color: var(--border-strong); }
+/* One step past the hover tint, derived from --text-strong so it darkens in the
+   light theme and lightens in the dark one — which is exactly what
+   --surface-glass-hover does, just not far enough to read as a second step. */
+.btn-secondary:active:not(:disabled) {
+    background: color-mix(in srgb, var(--text-strong) 14%, transparent);
+    border-color: var(--border-strong);
+}
+.btn-secondary:focus-visible { box-shadow: 0 0 0 4px var(--accent-ring); }
+
 .btn-danger {
     background: var(--danger-soft);
     color: var(--danger-text);
     border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
 }
-.btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--danger) 22%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.btn-danger:active:not(:disabled) { background: color-mix(in srgb, var(--danger) 30%, transparent); }
+/* The one variant that must NOT take the global accent ring. Every other button
+   in the product falls through to a blue halo, and a blue halo around "delete
+   permanently" is the interface contradicting itself at the single moment the
+   operator most needs it to be consistent. 32% matches --accent-ring's alpha,
+   so the two rings have the same weight and only differ in hue. */
+.btn-danger:focus-visible,
+.icon-btn-danger:focus-visible {
+    outline-color: var(--danger);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 32%, transparent);
+}
+
 .btn-ghost { color: var(--text-default); }
 .btn-ghost:hover:not(:disabled) { background: var(--surface-glass-hover); color: var(--text-strong); }
+.btn-ghost:active:not(:disabled) {
+    background: color-mix(in srgb, var(--text-strong) 14%, transparent);
+    color: var(--text-strong);
+}
+.btn-ghost:focus-visible { box-shadow: 0 0 0 4px var(--accent-ring); }
+
 .btn-full { width: 100%; }
 .btn-sm { padding: var(--space-2) var(--space-4); font-size: var(--fs-100); }
+
+/* ─── Busy ───────────────────────────────────────────────────────────────────
+   There was no in-flight state in this stylesheet at all. The only busy
+   affordance in the product was JS swapping a button's innerHTML for
+   `UI.buttonSpinner()`, which changes the CONTENT and leaves the control
+   looking pressable — so a slow serverless cold start showed a live-looking
+   button with a spinner in it, and the operator clicked again.
+
+   `aria-busy` is the state; `.is-loading` is the same state for anything that
+   cannot carry the attribute. Both say the same thing, so both are styled here.
+
+   On non-interactivity: `UI.actionBusy`/`UI.formBusy` also set `disabled`, and a
+   DISABLED element still takes its own `cursor`, while a `pointer-events: none`
+   one hands the cursor to whatever is underneath. So the properly-driven path
+   gets `cursor: progress` and the browser's own click suppression, and
+   `pointer-events: none` is the belt for anyone who sets the class alone. */
+.btn[aria-busy='true'],
+.btn.is-loading,
+.icon-btn[aria-busy='true'],
+.icon-btn.is-loading,
+.icon-button[aria-busy='true'],
+.icon-button.is-loading {
+    cursor: progress;
+    /* Dimmed, but not to the 0.5 of :disabled — this button is working, not
+       unavailable, and the label has to stay readable while it works. */
+    opacity: 0.75;
+    /* The label is mid-swap; a drag across it selects a string that is about to
+       stop existing. */
+    user-select: none;
+}
+.btn[aria-busy='true']:not(:disabled),
+.btn.is-loading:not(:disabled),
+.icon-btn[aria-busy='true']:not(:disabled),
+.icon-btn.is-loading:not(:disabled),
+.icon-button[aria-busy='true']:not(:disabled),
+.icon-button.is-loading:not(:disabled) { pointer-events: none; }
+/* Beats `.btn:disabled` / `.icon-btn:disabled` on source order at equal
+   specificity — those are 0.5 and 0.35, which read as "switched off". */
+.btn[aria-busy='true']:disabled,
+.btn.is-loading:disabled,
+.icon-btn[aria-busy='true']:disabled,
+.icon-btn.is-loading:disabled,
+.icon-button[aria-busy='true']:disabled,
+.icon-button.is-loading:disabled { opacity: 0.75; cursor: progress; }
+/* Busy is a state, not a hover target: no lift, no press, no ring-on-hover. */
+.btn[aria-busy='true']:hover,
+.btn.is-loading:hover,
+.btn[aria-busy='true']:active,
+.btn.is-loading:active { transform: none; }
+/* `.spinner`'s own colours are --border-subtle on --accent, which is invisible
+   on a blue primary button and nearly so on a red danger one. Inside a button it
+   borrows the label's colour instead, so one spinner reads on every variant. */
+.btn .spinner,
+.icon-btn .spinner,
+.icon-button .spinner {
+    border-color: color-mix(in srgb, currentColor 25%, transparent);
+    border-top-color: currentColor;
+}
 
 /* Icon-only row actions. 44px everywhere, not only on touch: a 34px target is
    not reachable with a trackpad either. */
@@ -667,7 +801,22 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
 }
 .icon-btn svg { width: 16px; height: 16px; }
 .icon-btn:hover:not(:disabled) { color: var(--text-strong); border-color: var(--border-strong); background: var(--surface-glass-hover); }
-.icon-btn-danger:hover:not(:disabled) { color: var(--danger-text); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.icon-btn:active:not(:disabled) { background: color-mix(in srgb, var(--text-strong) 14%, transparent); }
+/* A rest state, which it did not have. `.icon-btn-danger` was a neutral grey
+   trash icon that only turned red once the pointer was already on it — so the
+   one control in a row that destroys something looked exactly like the ones
+   that do not, and a keyboard user tabbing through never saw the difference at
+   all. The destructive one now says so before it is touched. */
+.icon-btn-danger {
+    color: var(--danger-text);
+    border-color: color-mix(in srgb, var(--danger) 24%, transparent);
+}
+.icon-btn-danger:hover:not(:disabled) {
+    color: var(--danger-text);
+    background: var(--danger-soft);
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.icon-btn-danger:active:not(:disabled) { background: color-mix(in srgb, var(--danger) 24%, transparent); }
 .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .row-actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
 
@@ -986,7 +1135,12 @@ html[dir='rtl'] .switch input:checked + .switch-track::before { transform: trans
     border-radius: var(--radius-sm);
     color: var(--text-muted);
 }
-.modal-close:hover { background: var(--surface-glass-hover); color: var(--text-strong); }
+.modal-close:hover:not(:disabled) { background: var(--surface-glass-hover); color: var(--text-strong); }
+.modal-close:active:not(:disabled) { background: color-mix(in srgb, var(--text-strong) 14%, transparent); }
+/* Nothing disables the close button today, but `Admin.confirm` now keeps the
+   dialog alive while a destructive action is in flight — and a dialog that
+   cannot be dismissed mid-request is the case this exists for. */
+.modal-close:disabled { opacity: 0.35; cursor: not-allowed; }
 .modal-close svg { width: 20px; height: 20px; }
 .modal-actions {
     display: flex; justify-content: flex-end; gap: var(--space-2);
@@ -1573,6 +1727,13 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .carousel-card-body { padding: var(--space-3); display: flex; flex-direction: column; gap: var(--space-1); flex: 1; }
 .carousel-card-title { font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .carousel-card-desc { font-size: var(--fs-100); color: var(--text-muted); flex: 1; }
+/* NOT a control, despite the name — `inbox.js` renders it as a <span>. It is a
+   PICTURE of the quick-reply button Meta drew in the customer's DM, inside a
+   record of a message that has already been sent. It has no hover, press or
+   disabled state on purpose: every one of those would be the interface claiming
+   something can be clicked when nothing is listening. Same for
+   `.sandbox-card-btn` below. If either is ever promoted to a real <button>, the
+   states belong here at that point and not before. */
 .carousel-btn {
     padding: var(--space-1);
     border-radius: var(--radius-xs);
@@ -1663,6 +1824,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .sandbox-card-body { padding: var(--space-2); display: flex; flex-direction: column; gap: var(--space-1); flex: 1; }
 .sandbox-card-title { font-size: var(--fs-100); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .sandbox-card-subtitle { font-size: var(--fs-100); color: var(--text-muted); flex: 1; }
+/* A <span>, like `.carousel-btn` — see the note there. Stateless on purpose. */
 .sandbox-card-btn { padding: var(--space-1); border-radius: var(--radius-xs); background: var(--surface-glass-hover); border: 1px solid var(--border-subtle); font-size: var(--fs-100); text-align: center; color: var(--accent-text); }
 
 /* ─── Filters ────────────────────────────────────────────────────────────── */
