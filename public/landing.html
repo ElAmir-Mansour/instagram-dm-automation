@@ -411,6 +411,31 @@
         /* ─── Base ─────────────────────────────────────────────────────────── */
         * { box-sizing: border-box; }
 
+        /* ─── Cross-document view transitions ──────────────────────────────────
+           Clicking "Pricing" from here was a hard navigation: white flash, full
+           repaint, the reader loses their place. `navigation: auto` makes the
+           browser cross-fade between the two documents instead. It is opt-in on
+           BOTH ends — this rule exists in landing.html and pricing.html, and the
+           transition only runs when the origin matches, which it does.
+
+           Progressive enhancement in the strictest sense: a browser without it
+           navigates exactly as before. Nothing is hidden waiting on it, so there
+           is no state to strand.
+
+           Reduced motion is handled by killing the animation rather than the
+           transition. Disabling `@view-transition` itself would be the obvious
+           move, but the at-rule is evaluated at navigation time and support for
+           it inside `@media` is inconsistent; zeroing the animations is what
+           every engine honours. The navigation still completes instantly. */
+        @view-transition { navigation: auto; }
+
+        @media (prefers-reduced-motion: reduce) {
+            ::view-transition-group(*),
+            ::view-transition-old(*),
+            ::view-transition-new(*) { animation: none !important; }
+        }
+
+
         html { scroll-behavior: smooth; }
         @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 
