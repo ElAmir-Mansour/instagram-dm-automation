@@ -3,12 +3,12 @@
  *
  * ─── Two honesty problems this screen had ───────────────────────────────────
  *
- * 1. THE MINUTE IS A LIE. `vercel.json` runs the publish cron once a day at
- *    00:00 UTC (a Hobby-plan limit), so a `datetime-local` field that accepts
- *    14:35 is promising something the backend cannot deliver. The field stays
- *    — the API takes a full ISO timestamp and the date genuinely matters — but
- *    next to it the form now computes and shows the instant the post will
- *    ACTUALLY go out, live, as the operator picks a time.
+ * 1. THE MINUTE WAS A LIE, AND THEN THE CORRECTION BECAME ONE. `vercel.json`
+ *    runs one cron a day at 00:00 UTC (a Hobby-plan limit), so a
+ *    `datetime-local` accepting 14:35 promised something the backend could not
+ *    deliver, and this screen was changed to show the next 00:00 UTC instead.
+ *    That answer is now itself wrong — see `publishWindow()` below. The field
+ *    stays either way; what it says underneath is recomputed live.
  *
  * 2. THE THUMBNAIL WAS A FOOTNOTE. `cover_url` is supported end to end, and
  *    without it Instagram thumbnails a reel from frame 0 — a black tile for
@@ -128,24 +128,14 @@ const PostsPage = {
                      keys did nothing. Two segmented BUTTONS with aria-pressed
                      is what this control actually is. -->
                 <div class="segmented" role="group" aria-label="${t('nav.posts')}">
-                    <button type="button" id="posts-tab-scheduled"
-                            aria-pressed="${this.activeTab === 'scheduled' ? 'true' : 'false'}"
-                            class="btn btn-sm ${this.activeTab === 'scheduled' ? 'btn-primary' : 'btn-ghost'}"
-                            data-action="posts:switchTab" data-tab="scheduled">
-                        <i data-lucide="calendar" aria-hidden="true"></i> ${t('posts.tabQueue')}
-                    </button>
-                    <button type="button" id="posts-tab-live"
-                            aria-pressed="${this.activeTab === 'live' ? 'true' : 'false'}"
-                            class="btn btn-sm ${this.activeTab === 'live' ? 'btn-primary' : 'btn-ghost'}"
-                            data-action="posts:switchTab" data-tab="live">
-                        <i data-lucide="instagram" aria-hidden="true"></i> ${t('posts.tabLive')}
-                    </button>
+                    ${this.tabButton('scheduled', 'calendar', t('posts.tabQueue'))}
+                    ${this.tabButton('live', 'instagram', t('posts.tabLive'))}
                 </div>
                 <div class="toolbar-actions">
-                    <button type="button" class="btn btn-primary btn-sm" id="posts-new"
-                            data-action="posts:showCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
-                    </button>
+                    ${UI.button({
+                        variant: 'primary', size: 'sm', icon: 'plus', label: t('posts.new'),
+                        action: 'posts:showCreateModal', id: 'posts-new',
+                    })}
                 </div>
             </div>
 
@@ -167,6 +157,34 @@ const PostsPage = {
         if (errorHost) {
             UI.renderError(errorHost, JSON.parse(errorHost.dataset.errorOptions), () => this.render());
         }
+    },
+
+    /**
+     * One half of the segmented control.
+     *
+     * Written once rather than twice because the two halves have to stay in
+     * step: the selected one is primary and the other is ghost, and `aria-pressed`
+     * has to agree with that on BOTH — a segmented control where only the active
+     * half carries the state is announced as one pressed toggle beside one
+     * ordinary button, which is not what it is.
+     *
+     * Deliberately NOT `UI.button`. The factory has no `aria-pressed` option,
+     * and routing one through its `data` map emits `data-aria-pressed` — a
+     * silently inert attribute that would have undone the fix this control
+     * already carries. A primitive that does not cover a case is a reason to
+     * write the markup, not a reason to launder the attribute through the
+     * nearest option that compiles.
+     */
+    tabButton(tab, icon, label) {
+        const active = this.activeTab === tab;
+        return html`
+            <button type="button" id="posts-tab-${tab}"
+                    aria-pressed="${active ? 'true' : 'false'}"
+                    class="btn btn-sm ${active ? html.raw('btn-primary') : html.raw('btn-ghost')}"
+                    data-action="posts:switchTab" data-tab="${tab}">
+                <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
+            </button>
+        `;
     },
 
     renderPublishErrorPanel() {
@@ -212,9 +230,10 @@ const PostsPage = {
                 <div class="surface pad-5 stack gap-3">
                     ${Admin.emptyState('calendar-days', t('posts.emptyQueueTitle'), t('posts.emptyQueueBody'))}
                     <div class="row row--center">
-                        <button type="button" class="btn btn-primary btn-sm" data-action="posts:showCreateModal">
-                            <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.new')}
-                        </button>
+                        ${UI.button({
+                            variant: 'primary', size: 'sm', icon: 'plus', label: t('posts.new'),
+                            action: 'posts:showCreateModal',
+                        })}
                     </div>
                 </div>
             `;
@@ -245,6 +264,9 @@ const PostsPage = {
         const coverUrl = safeUrl(post.cover_url);
         const isVideo = post.post_type === 'video' || post.post_type === 'reel';
         const typeLabel = this.typeLabel(post.post_type);
+        // Only a PENDING row has a publish still ahead of it. An overdue one
+        // reads `isPast`, which is the state the operator has to act on.
+        const pendingWindow = isPending ? this.publishWindow(post.scheduled_time) : null;
 
         return html`
             <!-- An <article> with no accessible name is announced as "article".
@@ -296,14 +318,14 @@ const PostsPage = {
                     <i data-lucide="clock" aria-hidden="true"></i>
                     <span>${t('posts.scheduledAt', { when: UI.formatDateTime(post.scheduled_time) })}</span>
                 </p>
-                ${isPending ? html`
+                ${isPending && pendingWindow ? html`
                     <p class="post-card-meta">
                         <i data-lucide="calendar-clock" aria-hidden="true"></i>
-                        <span>${t('posts.schedule.actual', {
-                            when: UI.formatDateTime(UI.nextCronRun(
-                                new Date(post.scheduled_time) > new Date() ? post.scheduled_time : new Date()
-                            )),
-                        })}</span>
+                        <span class="${pendingWindow.isPast ? html.raw('text-warning') : ''}">
+                            ${pendingWindow.isPast
+                                ? t('posts.schedule.pastExpected')
+                                : t('posts.schedule.expected', { when: UI.formatDateTime(pendingWindow.from) })}
+                        </span>
                     </p>
                 ` : ''}
 
@@ -321,22 +343,27 @@ const PostsPage = {
                     ${isPending || isFailed ? html`
                         <!-- Stable keys across the re-render, so closeModal()
                              can put focus back on this card's own button. -->
-                        <button type="button" class="btn btn-primary btn-sm" data-action="posts:publishNow"
-                                data-id="${post.id}" data-focus-key="post-publish-${post.id}">
-                            <i data-lucide="send" aria-hidden="true"></i> ${t('posts.publishNow')}
-                        </button>
-                        <button type="button" class="btn btn-secondary btn-sm" data-action="posts:showEditModal"
-                                data-id="${post.id}" data-focus-key="post-edit-${post.id}">
-                            <i data-lucide="pencil" aria-hidden="true"></i> ${t('common.edit')}
-                        </button>
-                        <button type="button" class="btn btn-danger btn-sm" data-action="posts:deletePost"
-                                data-id="${post.id}" data-focus-key="post-delete-${post.id}">
-                            <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
-                        </button>
+                        ${UI.button({
+                            variant: 'primary', size: 'sm', icon: 'send', label: t('posts.publishNow'),
+                            action: 'posts:publishNow', data: { id: post.id },
+                            focusKey: `post-publish-${post.id}`,
+                        })}
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'pencil', label: t('common.edit'),
+                            action: 'posts:showEditModal', data: { id: post.id },
+                            focusKey: `post-edit-${post.id}`,
+                        })}
+                        ${UI.button({
+                            variant: 'danger', size: 'sm', icon: 'trash-2', label: t('common.delete'),
+                            action: 'posts:deletePost', data: { id: post.id },
+                            focusKey: `post-delete-${post.id}`,
+                        })}
                     ` : html`
-                        <button type="button" class="btn btn-secondary btn-sm btn-full" data-action="posts:deletePost" data-id="${post.id}">
-                            <i data-lucide="trash-2" aria-hidden="true"></i> ${t('posts.deleteLog')}
-                        </button>
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', full: true,
+                            icon: 'trash-2', label: t('posts.deleteLog'),
+                            action: 'posts:deletePost', data: { id: post.id },
+                        })}
                     `}
                 </div>
             </article>
@@ -371,10 +398,11 @@ const PostsPage = {
                 <div class="surface pad-5 stack gap-3">
                     ${Admin.emptyState('alert-circle', t('posts.emptyLiveTitle'), t('posts.liveEmptyCaveat'))}
                     <div class="row row--center">
-                        <button type="button" class="btn btn-secondary btn-sm"
-                                data-action="app:navigate" data-target="settings">
-                            <i data-lucide="key-round" aria-hidden="true"></i> ${t('overview.openSettings')}
-                        </button>
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'key-round',
+                            label: t('overview.openSettings'),
+                            action: 'app:navigate', data: { target: 'settings' },
+                        })}
                     </div>
                 </div>
             `;
@@ -556,25 +584,78 @@ const PostsPage = {
         `;
     },
 
+    /**
+     * How long after the requested time a post actually goes out.
+     *
+     * This screen used to answer that question with `UI.nextCronRun()` — the
+     * next 00:00 UTC — because for a long time that was the truth: `vercel.json`
+     * registers one cron a day on the Hobby plan and it was the only thing
+     * calling the publish sweep.
+     *
+     * It is not the truth any more, and the direction of the error matters.
+     * `GET /api/jobs/drain` calls the SAME `publishDuePosts()` sweep
+     * (`src/routes/api.ts:352`), and `.github/workflows/drain.yml` has been
+     * calling that endpoint on a five-minute cron since 2026-09-22. So a post
+     * asked for at 09:00 goes out at about 09:00 — while this screen was still
+     * telling the operator it would appear at 03:00 the following morning, an
+     * overstatement of up to 24 hours. Being wrong in that direction is not the
+     * harmless half: it invites the operator to schedule a day early, or to give
+     * up on scheduling and publish by hand.
+     *
+     * 15 minutes rather than 5 because GitHub Actions explicitly does not
+     * promise schedule punctuality — runs are throttled under load and are
+     * routinely several minutes late. `drain.yml`'s own header says so and
+     * FLOWS.md §3.2 puts the honest figure at "every ~5-15 minutes", so the
+     * number the operator is shown is the slow end of that, not the fast one.
+     *
+     * The daily cron has not gone anywhere; it is now the BACKSTOP rather than
+     * the schedule, which is what the static line under the field says. Worst
+     * case is still bounded at the next 00:00 UTC, and that is worth stating —
+     * it just is not the expected case.
+     */
+    SWEEP_LAG_MS: 15 * 60 * 1000,
+
+    /**
+     * When a post requested at `iso` will actually publish.
+     *
+     * Pure, and separated from the copy for exactly that reason: this is the
+     * claim the screen makes to the operator about their own posting schedule,
+     * and `src/dashboard/schedule.test.ts` pins it rather than trusting a
+     * reading of the template it is interpolated into.
+     *
+     * @param {string|Date|null} iso   the requested time
+     * @param {number} [now]           epoch ms, injectable so the test has a clock
+     * @returns {{ isPast: boolean, from: Date, until: Date }|null}
+     */
+    publishWindow(iso, now) {
+        if (!iso) return null;
+        const requested = iso instanceof Date ? iso : new Date(iso);
+        if (Number.isNaN(requested.getTime())) return null;
+        const at = typeof now === 'number' ? now : Date.now();
+        // A time already past does not publish in the past: it publishes on the
+        // next sweep, which is counted from now rather than from the requested
+        // instant. Without this an overdue post claimed a window that had
+        // already closed.
+        const isPast = requested.getTime() <= at;
+        const from = isPast ? new Date(at) : requested;
+        return { isPast, from, until: new Date(from.getTime() + this.SWEEP_LAG_MS) };
+    },
+
     scheduleNoteText(localValue) {
-        const iso = UI.fromLocalInputValue(localValue);
-        if (!iso) return '';
-        const requested = new Date(iso);
-        const isPast = requested.getTime() <= Date.now();
-        const run = UI.nextCronRun(isPast ? new Date() : requested);
-        return isPast
-            ? `${t('posts.schedule.pastWarning')} ${t('posts.schedule.actual', { when: UI.formatDateTime(run) })}`
-            : t('posts.schedule.actual', { when: UI.formatDateTime(run) });
+        const window = this.publishWindow(UI.fromLocalInputValue(localValue));
+        if (!window) return '';
+        return window.isPast
+            ? t('posts.schedule.pastExpected')
+            : t('posts.schedule.expected', { when: UI.formatDateTime(window.from) });
     },
 
     refreshScheduleNote() {
         const input = document.getElementById('post-scheduled-time');
         const note = document.getElementById('schedule-actual');
         if (!input || !note) return;
-        const iso = UI.fromLocalInputValue(input.value);
-        const isPast = iso ? new Date(iso).getTime() <= Date.now() : false;
+        const window = this.publishWindow(UI.fromLocalInputValue(input.value));
         note.textContent = this.scheduleNoteText(input.value);
-        note.classList.toggle('is-warning', isPast);
+        note.classList.toggle('is-warning', !!(window && window.isPast));
     },
 
     modalHeader(title) {
@@ -628,16 +709,18 @@ const PostsPage = {
                     <span class="switch-label">${t('posts.publishNowToggle')}</span>
                 </div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                    <button type="submit" class="btn btn-primary" id="schedule-submit-btn">
-                        <i data-lucide="plus" aria-hidden="true"></i> ${t('posts.scheduleBtn')}
-                    </button>
+                    ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                    ${UI.button({
+                        variant: 'primary', type: 'submit', icon: 'plus',
+                        label: t('posts.scheduleBtn'), id: 'schedule-submit-btn',
+                    })}
                 </div>
             </form>
         `);
 
         // Apply the platform/type matrix on open — it used to run only on change,
         // so a Facebook post could show Instagram-only types until you touched it.
+        this._uploadsInFlight = 0;
         this.applyPlatformMatrix();
     },
 
@@ -677,12 +760,17 @@ const PostsPage = {
                 ${this.mediaFields({ ...post, post_type: postType })}
                 ${this.scheduleFields(defaultTime)}
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> ${t('common.saveChanges')}</button>
+                    ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                    ${UI.button({
+                        variant: 'primary', type: 'submit', icon: 'check', label: t('common.saveChanges'),
+                    })}
                 </div>
             </form>
         `);
 
+        // A count left over from a modal closed mid-upload would hold this
+        // form's submit button disabled with nothing on screen explaining it.
+        this._uploadsInFlight = 0;
         this.applyPlatformMatrix();
     },
 
@@ -821,11 +909,14 @@ const PostsPage = {
             return;
         }
 
-        const btn = form.querySelector('button[type="submit"]');
-        if (btn.disabled) return; // already in flight
-        const originalHtml = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = UI.buttonSpinner();
+        // Was the one hand-rolled busy state left on this screen: no `aria-busy`,
+        // and `buttonSpinner()` with no argument relabels the button "Loading",
+        // so "Schedule" and "Publish now" — which `toggleScheduleTime` has just
+        // been keeping accurate — both became the same meaningless word at the
+        // moment the operator most needs to know which of the two they pressed.
+        // `formBusy` keeps whichever label is on it and restores it exactly.
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return; // already in flight
 
         try {
             const result = await API.createScheduledPost(payload);
@@ -836,9 +927,7 @@ const PostsPage = {
                 // misleading message in this UI. Keep the modal open, show the real error.
                 this.publishError = { message: failure };
                 this.showFormError(failure);
-                btn.disabled = false;
-                btn.innerHTML = originalHtml;
-                UI.icons(btn);
+                restore();
                 await this.render();
                 return;
             }
@@ -853,9 +942,7 @@ const PostsPage = {
             const failure = this.publishFailure(null, err);
             if (publishNow) this.publishError = { message: failure };
             this.showFormError(failure);
-            btn.disabled = false;
-            btn.innerHTML = originalHtml;
-            UI.icons(btn);
+            restore();
             if (publishNow) await this.render();
         }
     },
@@ -1003,6 +1090,41 @@ const PostsPage = {
     },
 
     // ─── Uploads ─────────────────────────────────────────────────────────────
+    /**
+     * How many uploads are in flight for the open modal.
+     *
+     * An upload is a `FileReader` pass plus a base64 POST of up to 3.2MB, which
+     * on a phone connection is not instant — and nothing stopped the operator
+     * submitting the form in the middle of it. The best case was the browser's
+     * own "please fill out this field" bubble on a media URL that was seconds
+     * from arriving; the worse case, on a Facebook text post where media is not
+     * required, was a post scheduled with no media at all while the progress
+     * spinner was still turning.
+     *
+     * A count rather than a flag because the media file and the cover file are
+     * two independent inputs that can both be uploading at once, and the first
+     * to finish must not unlock the form while the second is still going.
+     */
+    _uploadsInFlight: 0,
+
+    /**
+     * Hold the submit button while media is uploading, and say why.
+     *
+     * Not `UI.formBusy`: this is not a submission in flight, the button must
+     * come back to its own label rather than a spinner, and `formBusy`'s
+     * already-in-flight contract would fight the counter.
+     */
+    setUploadBusy(delta) {
+        this._uploadsInFlight = Math.max(0, this._uploadsInFlight + delta);
+        const form = document.getElementById('post-schedule-form');
+        const btn = form && form.querySelector('button[type="submit"]');
+        if (!btn) return;
+        const busy = this._uploadsInFlight > 0;
+        btn.disabled = busy;
+        if (busy) btn.setAttribute('title', t('posts.uploadWaitHint'));
+        else btn.removeAttribute('title');
+    },
+
     async handleFileUpload(input) {
         const target = input.dataset.target === 'cover' ? 'cover' : 'media';
         const file = input.files && input.files[0];
@@ -1022,6 +1144,12 @@ const PostsPage = {
 
         if (progress) progress.classList.add('is-active');
         if (target === 'media' && preview) preview.classList.remove('is-visible');
+        this.setUploadBusy(1);
+
+        const done = () => {
+            if (progress) progress.classList.remove('is-active');
+            this.setUploadBusy(-1);
+        };
 
         const reader = new FileReader();
         reader.onload = async (e) => {
@@ -1032,21 +1160,29 @@ const PostsPage = {
                     base64_data: e.target.result,
                 });
 
-                if (urlInput) urlInput.value = res.url;
-                if (progress) progress.classList.remove('is-active');
+                // The modal can be closed mid-upload, which detaches this input
+                // — writing the URL into it then loses the upload silently and
+                // the toast claims success for a field nobody will ever see.
+                if (!urlInput || !urlInput.isConnected) {
+                    done();
+                    return;
+                }
+                urlInput.value = res.url;
+                done();
 
                 if (target === 'media') this.showMediaPreview(res.url, file.type.startsWith('video/'));
                 this.refreshCoverPreview();
                 UI.toast(t('posts.uploadDone'));
             } catch (err) {
                 UI.toast(t('posts.uploadFailed', { message: err.message }), 'error');
-                if (progress) progress.classList.remove('is-active');
+                done();
                 input.value = '';
             }
         };
         reader.onerror = () => {
             UI.toast(t('posts.readFailed'), 'error');
-            if (progress) progress.classList.remove('is-active');
+            done();
+            input.value = '';
         };
         reader.readAsDataURL(file);
     },

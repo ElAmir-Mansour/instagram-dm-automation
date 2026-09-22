@@ -98,13 +98,7 @@ const InboxPage = {
         }
         Motion.clearSkeleton(container);
 
-        this.selectedConversationId = null;
-        this.chatShellThreadId = null;
-        this.renderedMessageIds = new Set();
-        this.messagesPainted = false;
-        this.pendingBotState = new Map();
-        this.lastMessageStamp = null;
-        this._pollFailures = 0;
+        this.resetViewState();
         this.markStale(false);
 
         this.loadThreads();
@@ -124,6 +118,32 @@ const InboxPage = {
     },
 
     /**
+     * Everything that belongs to a previous visit to this screen.
+     *
+     * This list was written out three times — in `render()`, in `destroy()` and
+     * in `resetTenantState()` — and the three had drifted. `searchTerm` was in
+     * none of them, and that is a bug the operator sees: `layout()` is
+     * repainted on every arrival, so `#inbox-search` comes back empty, while
+     * the TERM survived as module state. Leave the inbox having typed "sara",
+     * come back, and the list is filtered to Sara with an empty search box and
+     * nothing on screen explaining it — on the one screen where a conversation
+     * you cannot see is a customer who does not get answered.
+     *
+     * One list, three callers, so a field added here cannot be added to two of
+     * the three again.
+     */
+    resetViewState() {
+        this.selectedConversationId = null;
+        this.chatShellThreadId = null;
+        this.renderedMessageIds = new Set();
+        this.messagesPainted = false;
+        this.pendingBotState = new Map();
+        this.lastMessageStamp = null;
+        this.searchTerm = '';
+        this._pollFailures = 0;
+    },
+
+    /**
      * Called by App before navigating away AND on logout. The previous version
      * monkey-patched App.navigate, which logout never went through — so the
      * poller kept running after sign-out, 401ing and re-rendering the login
@@ -135,14 +155,8 @@ const InboxPage = {
             document.removeEventListener('visibilitychange', this.onVisibilityChange);
             this.onVisibilityChange = null;
         }
-        this.selectedConversationId = null;
-        this.chatShellThreadId = null;
-        this.renderedMessageIds = new Set();
-        this.messagesPainted = false;
-        this.pendingBotState = new Map();
-        this.lastMessageStamp = null;
+        this.resetViewState();
         this.threads = [];
-        this._pollFailures = 0;
     },
 
     /**
@@ -151,15 +165,8 @@ const InboxPage = {
      * how tenant A's conversation ends up under tenant B's name.
      */
     resetTenantState() {
-        this.selectedConversationId = null;
-        this.chatShellThreadId = null;
-        this.renderedMessageIds = new Set();
-        this.messagesPainted = false;
-        this.pendingBotState = new Map();
-        this.lastMessageStamp = null;
+        this.resetViewState();
         this.threads = [];
-        this.searchTerm = '';
-        this._pollFailures = 0;
     },
 
     startPolling() {
@@ -528,9 +535,10 @@ const InboxPage = {
                 <form id="chat-send-form" data-submit="inbox:sendMessage" data-id="${thread.id}">
                     <label class="sr-only" for="chat-input-text">${t('inbox.replyLabel')}</label>
                     <textarea id="chat-input-text" dir="auto" placeholder="${t('inbox.replyPlaceholder')}"></textarea>
-                    <button type="submit" class="btn btn-primary" aria-label="${t('inbox.sendLabel')}">
-                        <i data-lucide="send" aria-hidden="true"></i>
-                    </button>
+                    ${UI.button({
+                        variant: 'primary', type: 'submit', icon: 'send',
+                        ariaLabel: t('inbox.sendLabel'),
+                    })}
                 </form>
             </div>
         `);
@@ -838,7 +846,14 @@ const InboxPage = {
             UI.toast(err.message || t('inbox.sendFailed'), 'error');
         } finally {
             restore();
-            if (input) input.focus();
+            // `finally` runs after loadMessages() AND loadThreads(), which on a
+            // cold start is seconds after the click — long enough for the
+            // operator to have moved to the AI switch or back to the thread
+            // list. Focus is therefore only reclaimed when the busy button
+            // dropped it (disabling the focused element sends focus to
+            // <body>), not unconditionally.
+            const lost = !document.activeElement || document.activeElement === document.body;
+            if (lost && input && typeof input.focus === 'function') input.focus();
         }
     },
 };

@@ -67,27 +67,43 @@ const AnalyticsPage = {
         const seq = this._seq;
         const live = () => seq === this._seq && !!document.getElementById('page-container');
 
-        let stats;
-        let daily;
-        let campaignStats;
-        // Chart.js is fetched alongside the data rather than after it: this
-        // screen is nothing but charts, so the library is on its critical path
-        // and there is no reason for it to queue behind three requests.
-        try {
-            [stats, daily, campaignStats] = await Promise.all([
-                API.getStats(),
-                API.getDailyStats(30),
-                API.getCampaignStats(),
-            ]);
-        } catch (err) {
-            if (!live()) return;
-            gate.done();
-            UI.renderError(container, { title: t('analytics.errorTitle'), message: err.message }, () => this.render());
-            return;
-        }
+        /**
+         * `Promise.all` used to gate the whole screen on all three requests, so
+         * a 500 from `/campaign-stats` — the narrowest panel on the page, one
+         * table in the bottom-left — took the four stat tiles, the 30-day strip,
+         * the status split and the platform breakdown down with it and replaced
+         * the lot with a single error panel. Three of those four had already
+         * arrived.
+         *
+         * `allSettled` lets each panel answer for itself. The stats call is
+         * still fatal, because every tile and both charts read from it and
+         * there is genuinely no page without it; the other two degrade to their
+         * own panel and leave the rest of the screen standing. Same rule
+         * overview.js already applies region by region.
+         */
+        const [statsRes, dailyRes, campaignRes] = await Promise.allSettled([
+            API.getStats(),
+            API.getDailyStats(30),
+            API.getCampaignStats(),
+        ]);
         if (!live()) return;
         gate.done();
-        if (!live()) return;
+
+        if (statsRes.status === 'rejected') {
+            const err = statsRes.reason || new Error(t('error.unexpected'));
+            UI.renderError(container, {
+                title: t('analytics.errorTitle'),
+                message: err.message,
+                hint: err.isNetworkError ? t('error.network') : '',
+            }, () => this.render());
+            return;
+        }
+
+        const stats = statsRes.value || {};
+        const daily = dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value) ? dailyRes.value : [];
+        const dailyError = dailyRes.status === 'rejected' ? dailyRes.reason : null;
+        const campaignStats = campaignRes.status === 'fulfilled' ? campaignRes.value : null;
+        const campaignError = campaignRes.status === 'rejected' ? campaignRes.reason : null;
 
         const total = stats.totalInteractions || 0;
         const igCount = stats.instagramCount || 0;
@@ -134,6 +150,10 @@ const AnalyticsPage = {
                      headings, same classes. -->
                 <div class="chart-card surface">
                     <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chart30')}</h2></div>
+                    <!-- Filled below: the strip when the series arrived, an
+                         error panel with its own Retry when it did not. An
+                         empty strip and a failed fetch are not the same claim
+                         about the last 30 days. -->
                     <div id="analytics-strip"></div>
                 </div>
                 <div class="chart-card surface">
@@ -148,7 +168,14 @@ const AnalyticsPage = {
                         <h2 class="chart-card-title">${t('analytics.topCampaigns')}</h2>
                     </div>
                     <div class="table-wrapper">
-                        ${campaignStats && campaignStats.length > 0 ? html`
+                        ${campaignError ? html`
+                            <!-- A rejected /campaign-stats used to reach the
+                                 template as undefined and render the cheerful
+                                 "no campaign data yet" state, which tells an
+                                 operator with eight live campaigns that they
+                                 have none. Named as the failure it is. -->
+                            <div id="analytics-campaigns-error"></div>
+                        ` : campaignStats && campaignStats.length > 0 ? html`
                             <table class="data-table">
                                 <thead>
                                     <tr>
@@ -232,8 +259,26 @@ const AnalyticsPage = {
         // SVG, synchronous, no library. `this.charts` is gone with Chart.js: there
         // are no instances to keep or destroy, which also removes the teardown that
         // had to run on every navigation.
+        //
+        // Each panel is filled from its own settled result, so one failure is one
+        // error panel rather than a blank screen.
+        const campaignsErrorHost = document.getElementById('analytics-campaigns-error');
+        if (campaignsErrorHost) {
+            UI.renderError(campaignsErrorHost, {
+                title: t('analytics.campaignsErrorTitle'),
+                message: (campaignError && campaignError.message) || t('error.unexpected'),
+                hint: campaignError && campaignError.isNetworkError ? t('error.network') : '',
+            }, () => this.render());
+        }
+
         const strip = document.getElementById('analytics-strip');
-        if (strip) {
+        if (strip && dailyError) {
+            UI.renderError(strip, {
+                title: t('analytics.trendErrorTitle'),
+                message: dailyError.message || t('error.unexpected'),
+                hint: dailyError.isNetworkError ? t('error.network') : '',
+            }, () => this.render());
+        } else if (strip) {
             strip.innerHTML = esc(html`${Charts.dayStrip(daily, {
                 label: t('analytics.chart30'),
                 emptyMessage: t('analytics.noData'),

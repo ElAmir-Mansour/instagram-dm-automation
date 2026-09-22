@@ -218,9 +218,10 @@ const OverviewPage = {
                     <!-- A real heading, so the table is reachable from a
                          heading list rather than being an unnamed region. -->
                     <h2 class="table-title">${t('overview.recent')}</h2>
-                    <button type="button" class="btn btn-secondary btn-sm" data-action="app:navigate" data-target="activity">
-                        ${t('common.viewAll')}
-                    </button>
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', label: t('common.viewAll'),
+                        action: 'app:navigate', data: { target: 'activity' },
+                    })}
                 </div>
                 <div class="table-wrapper">
                     <table class="data-table">

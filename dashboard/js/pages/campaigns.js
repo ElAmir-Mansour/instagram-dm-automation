@@ -82,16 +82,16 @@ const CampaignsPage = {
                      the page <h1> and no way to reach the grid by heading. -->
                 <h2 class="page-toolbar-count">${t('campaigns.count', { count: campaigns.length })}</h2>
                 <div class="toolbar-actions">
-                    <button type="button" class="btn btn-secondary btn-sm" id="campaigns-import"
-                            data-action="campaigns:triggerCSVSelect">
-                        <i data-lucide="upload" aria-hidden="true"></i> ${t('campaigns.import')}
-                    </button>
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'upload', label: t('campaigns.import'),
+                        action: 'campaigns:triggerCSVSelect', id: 'campaigns-import',
+                    })}
                     <!-- Stable id: the modal trigger has to be findable again
                          after the re-render that follows a successful create. -->
-                    <button type="button" class="btn btn-primary btn-sm" id="campaigns-new"
-                            data-action="campaigns:showCreateModal">
-                        <i data-lucide="plus" aria-hidden="true"></i> ${t('campaigns.new')}
-                    </button>
+                    ${UI.button({
+                        variant: 'primary', size: 'sm', icon: 'plus', label: t('campaigns.new'),
+                        action: 'campaigns:showCreateModal', id: 'campaigns-new',
+                    })}
                 </div>
             </div>
             <label class="sr-only" for="csv-file-input">${t('campaigns.csvLabel')}</label>
@@ -101,13 +101,14 @@ const CampaignsPage = {
                 <div class="surface pad-5">
                     ${Admin.emptyState('megaphone', t('campaigns.emptyTitle'), t('campaigns.emptyBody'))}
                     <div class="row gap-3 row--center row--wrap mbs-4">
-                        <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:triggerCSVSelect">
-                            <i data-lucide="upload" aria-hidden="true"></i> ${t('campaigns.import')}
-                        </button>
-                        <button type="button" class="btn btn-primary btn-sm" id="campaigns-new-empty"
-                                data-action="campaigns:showCreateModal">
-                            <i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}
-                        </button>
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'upload', label: t('campaigns.import'),
+                            action: 'campaigns:triggerCSVSelect',
+                        })}
+                        ${UI.button({
+                            variant: 'primary', size: 'sm', icon: 'plus', label: t('common.create'),
+                            action: 'campaigns:showCreateModal', id: 'campaigns-new-empty',
+                        })}
                     </div>
                 </div>
             ` : html`
@@ -209,15 +210,17 @@ const CampaignsPage = {
                          rebuilt by every render, and the key is what lets
                          closeModal() find this card's Edit button again after a
                          save has re-rendered the grid. -->
-                    <button type="button" class="btn btn-secondary btn-sm" data-action="campaigns:showEditModal"
-                            data-id="${c.id}" data-focus-key="campaign-edit-${c.id}">
-                        <i data-lucide="pencil" aria-hidden="true"></i> ${t('common.edit')}
-                    </button>
-                    <button type="button" class="btn btn-danger btn-sm"
-                            data-action="campaigns:confirmDelete" data-id="${c.id}" data-keyword="${c.trigger_keyword}"
-                            data-focus-key="campaign-delete-${c.id}">
-                        <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
-                    </button>
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'pencil', label: t('common.edit'),
+                        action: 'campaigns:showEditModal', data: { id: c.id },
+                        focusKey: `campaign-edit-${c.id}`,
+                    })}
+                    ${UI.button({
+                        variant: 'danger', size: 'sm', icon: 'trash-2', label: t('common.delete'),
+                        action: 'campaigns:confirmDelete',
+                        data: { id: c.id, keyword: c.trigger_keyword },
+                        focusKey: `campaign-delete-${c.id}`,
+                    })}
                 </div>
             </article>
         `;
@@ -528,11 +531,21 @@ const CampaignsPage = {
                 <div class="field-row">
                     <input class="field" id="campaign-post-id" name="post_id" value="${value}"
                            inputmode="numeric" dir="ltr" placeholder="17841459652725922">
-                    <button type="button" class="btn btn-secondary btn-sm shrink-0" data-action="campaigns:openPostPicker">
-                        <i data-lucide="image" aria-hidden="true"></i> ${t('campaigns.pickPost')}
-                    </button>
+                    <!-- This button toggles the panel below it, which is a
+                         disclosure — and it said nothing about that. A screen
+                         reader announced "Pick a post, button", the operator
+                         pressed it, and the only feedback that a list had
+                         appeared was that the list had appeared, which is not
+                         feedback they get. aria-expanded/aria-controls are kept
+                         in step by togglePicker() below. -->
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', className: 'shrink-0',
+                        icon: 'image', label: t('campaigns.pickPost'),
+                        action: 'campaigns:openPostPicker', id: 'campaign-post-picker-btn',
+                    })}
                 </div>
-                <div id="post-picker-container" class="post-picker hidden"></div>
+                <div id="post-picker-container" class="post-picker hidden" role="group"
+                     aria-label="${t('campaigns.pickPost')}"></div>
                 <p class="form-hint">${t('campaigns.postIdHint')}</p>
             </div>
         `;
@@ -563,8 +576,8 @@ const CampaignsPage = {
                 </div>
                 ${this.postIdField('')}
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}</button>
+                    ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                    ${UI.button({ variant: 'primary', type: 'submit', icon: 'plus', label: t('common.create') })}
                 </div>
             </form>
         `);
@@ -602,8 +615,8 @@ const CampaignsPage = {
                     <span class="switch-label">${t('campaigns.toggleLabel')}</span>
                 </div>
                 <div class="modal-actions">
-                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> ${t('common.save')}</button>
+                    ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                    ${UI.button({ variant: 'primary', type: 'submit', icon: 'check', label: t('common.save') })}
                 </div>
             </form>
         `);
@@ -719,10 +732,11 @@ const CampaignsPage = {
             <p class="modal-body-text" dir="auto">${t('campaigns.deleteBody', { keyword })}</p>
             <p class="form-hint">${t('campaigns.deleteWarning')}</p>
             <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                <button type="button" class="btn btn-danger" data-action="campaigns:handleDelete" data-id="${id}">
-                    <i data-lucide="trash-2" aria-hidden="true"></i> ${t('common.delete')}
-                </button>
+                ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                ${UI.button({
+                    variant: 'danger', icon: 'trash-2', label: t('common.delete'),
+                    action: 'campaigns:handleDelete', data: { id },
+                })}
             </div>
         `);
     },
@@ -777,22 +791,31 @@ const CampaignsPage = {
     },
 
     // ─── Post picker ─────────────────────────────────────────────────────────
+    /** Keep the panel's visibility and the trigger's `aria-expanded` together. */
+    togglePicker(picker, btn, open) {
+        if (picker) picker.classList.toggle('hidden', !open);
+        if (btn && btn.setAttribute) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    },
+
     async openPostPicker(btn) {
         const picker = document.getElementById('post-picker-container');
         if (!picker) return;
 
         if (!picker.classList.contains('hidden')) {
-            picker.classList.add('hidden');
+            this.togglePicker(picker, btn, false);
             return;
         }
 
-        const original = btn.innerHTML;
-        btn.disabled = true;
-        btn.innerHTML = UI.buttonSpinner();
+        // Was hand-rolled with no `aria-busy`, and `buttonSpinner()` with no
+        // argument relabels the button "Loading" — so the control the operator
+        // just pressed lost its own name mid-request. actionBusy keeps it and
+        // no-ops a second click, which used to fire a second /posts/live.
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
 
         try {
             const livePosts = await API.getLivePosts();
-            picker.classList.remove('hidden');
+            this.togglePicker(picker, btn, true);
 
             if (!livePosts || livePosts.length === 0) {
                 picker.innerHTML = esc(html`<p class="post-picker-note">${t('campaigns.postPickerEmpty')}</p>`);
@@ -816,12 +839,10 @@ const CampaignsPage = {
                 UI.icons(picker);
             }
         } catch (err) {
-            picker.classList.remove('hidden');
+            this.togglePicker(picker, btn, true);
             picker.innerHTML = esc(html`<p class="post-picker-note is-error" dir="auto">${t('campaigns.postPickerFailed', { message: err.message })}</p>`);
         } finally {
-            btn.disabled = false;
-            btn.innerHTML = original;
-            UI.icons(btn);
+            restore();
         }
     },
 
@@ -829,7 +850,12 @@ const CampaignsPage = {
         const input = document.getElementById('campaign-post-id');
         if (input) input.value = id;
         const picker = document.getElementById('post-picker-container');
-        if (picker) picker.classList.add('hidden');
+        const btn = document.getElementById('campaign-post-picker-btn');
+        this.togglePicker(picker, btn, false);
+        // The button the operator just pressed is inside the panel that has now
+        // been hidden, so focus was about to land on <body> in the middle of a
+        // modal. The field the choice just filled in is where they are going.
+        if (input && typeof input.focus === 'function') input.focus();
     },
 
     // ─── CSV bulk import ─────────────────────────────────────────────────────
@@ -1059,10 +1085,11 @@ const CampaignsPage = {
                 `)}
             </div>
             <div class="modal-actions">
-                <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
-                <button type="button" class="btn btn-primary" data-action="campaigns:executeBulkImport">
-                    <i data-lucide="check" aria-hidden="true"></i> ${t('campaigns.bulk.importSelected')}
-                </button>
+                ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                ${UI.button({
+                    variant: 'primary', icon: 'check', label: t('campaigns.bulk.importSelected'),
+                    action: 'campaigns:executeBulkImport', id: 'bulk-import-submit',
+                })}
             </div>
         `);
     },
