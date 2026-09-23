@@ -61,12 +61,18 @@ export class TikTokInboxFullError extends Error {
     }
 }
 
-/** How many uploads this tenant has waiting in the TikTok inbox from the last 24 hours. */
+/**
+ * How many uploads this tenant has waiting in the TikTok inbox from the last 24 hours.
+ *
+ * PUBLISHING counts too: two drains running at once each saw the other's row still
+ * mid-upload, left it out, and both went ahead — six drafts went up against a limit of five
+ * on the first real run (2026-09-23). The row being published is excluded by id.
+ */
 export async function pendingInboxShares(creatorId: string, excludePostId?: string): Promise<number> {
     const rows = await queryRows<{ n: number }>(
         `SELECT COUNT(*)::int AS n FROM scheduled_posts
           WHERE creator_id = $1 AND platform = 'tiktok'
-            AND status IN ('PROCESSING', 'IN_INBOX')
+            AND status IN ('PUBLISHING', 'PROCESSING', 'IN_INBOX')
             AND claimed_at > NOW() - INTERVAL '24 hours'
             AND ($2::uuid IS NULL OR id <> $2::uuid)`,
         [creatorId, excludePostId ?? null]
