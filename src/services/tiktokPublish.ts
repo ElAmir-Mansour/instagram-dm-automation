@@ -19,13 +19,15 @@
  * All three go through `applyStatus`, whose transitions are idempotent, so they can overlap.
  */
 import { queryCount, queryRows } from '../db/query.js';
-import type { ScheduledPostRow } from '../db/rows.js';
+import type { ScheduledPostRow, TikTokPostOptions, TikTokPrivacyLevel } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
 import { getMediaStore } from './storage.js';
 import {
-    describeFailReason, fetchPublishStatus, initInboxVideoUpload, mapPublishState, planChunks,
-    tiktokHttp, uploadChunks, type TikTokPublishStatus, type TikTokWebhookEvent,
+    describeFailReason, fetchPublishStatus, initDirectVideoPost, initInboxVideoUpload, mapPublishState,
+    mp4DurationSeconds, planChunks, queryCreatorInfo, tiktokHttp, uploadChunks,
+    type TikTokPublishStatus, type TikTokWebhookEvent,
 } from './tiktok.js';
+import { getTikTokPostingFlags } from './appSettings.js';
 import {
     connectionByOpenId, deleteConnectionByOpenId, getAccessToken, noteTikTokFailure,
 } from './tiktokConnections.js';
@@ -44,7 +46,59 @@ const MAX_EXTERNAL_MEDIA_BYTES = 256 * 1024 * 1024;
 export type TikTokPublishTarget = Pick<
     ScheduledPostRow,
     'id' | 'creator_id' | 'post_type' | 'caption' | 'media_url' | 'external_publish_id'
->;
+> & { platform_options?: TikTokPostOptions | null };
+
+// ─── Direct Post options ────────────────────────────────────────────────────────────────
+
+export const TIKTOK_PRIVACY_LEVELS: readonly TikTokPrivacyLevel[] = [
+    'PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY',
+];
+
+/**
+ * Validate the composer's Direct Post choices against TikTok's Content Sharing Guidelines.
+ * Pure, so the same rules the dashboard enforces are enforced here for any caller.
+ */
+export function validateTikTokOptions(
+    raw: unknown,
+    ctx: { audited: boolean }
+): { ok: true; options: TikTokPostOptions } | { ok: false; error: string } {
+    if (!raw || typeof raw !== 'object') {
+        return { ok: false, error: 'Choose the TikTok post settings (who can see it, and your consent) first.' };
+    }
+    const r = raw as Record<string, unknown>;
+    if (r.consent !== true) {
+        return { ok: false, error: 'Tick "I agree to post this video to my TikTok account" first.' };
+    }
+    const privacy = r.privacy_level;
+    if (typeof privacy !== 'string' || !(TIKTOK_PRIVACY_LEVELS as readonly string[]).includes(privacy)) {
+        return { ok: false, error: 'Choose who can see this TikTok post.' };
+    }
+    if (!ctx.audited && privacy !== 'SELF_ONLY') {
+        return { ok: false, error: 'Until TikTok approves this app, direct posts can only be private (Only me).' };
+    }
+    const brandContent = r.brand_content === true;
+    if (brandContent && privacy === 'SELF_ONLY') {
+        return { ok: false, error: 'Branded content can’t be private — choose a wider audience or untick Branded content.' };
+    }
+    return {
+        ok: true,
+        options: {
+            mode: 'direct',
+            privacy_level: privacy as TikTokPrivacyLevel,
+            allow_comment: r.allow_comment === true,
+            allow_duet: r.allow_duet === true,
+            allow_stitch: r.allow_stitch === true,
+            brand_organic: r.brand_organic === true,
+            brand_content: brandContent,
+            is_aigc: r.is_aigc === true,
+            consent_at: new Date().toISOString(),
+        },
+    };
+}
+
+export function isDirectPost(post: { platform_options?: TikTokPostOptions | null }): boolean {
+    return post.platform_options?.mode === 'direct';
+}
 
 /**
  * TikTok: "There may be at most 5 pending shares within any 24-hour period." Whether posting or
@@ -72,6 +126,7 @@ export async function pendingInboxShares(creatorId: string, excludePostId?: stri
     const rows = await queryRows<{ n: number }>(
         `SELECT COUNT(*)::int AS n FROM scheduled_posts
           WHERE creator_id = $1 AND platform = 'tiktok'
+            AND COALESCE(platform_options->>'mode', 'inbox') = 'inbox'
             AND status IN ('PUBLISHING', 'PROCESSING', 'IN_INBOX')
             AND claimed_at > NOW() - INTERVAL '24 hours'
             AND ($2::uuid IS NULL OR id <> $2::uuid)`,
@@ -165,6 +220,46 @@ async function markFailed(postId: string, message: string): Promise<void> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The Direct Post init, with every check TikTok's guidelines ask for made against a FRESH
+ * creator_info — the one taken at scheduling time may be days old, and the creator can have
+ * changed their privacy options or switched comments off since.
+ */
+async function startDirectPost(
+    accessToken: string,
+    post: TikTokPublishTarget,
+    video: Buffer,
+    plan: ReturnType<typeof planChunks>
+) {
+    const opts = post.platform_options ?? { mode: 'direct' };
+    const [{ audited }, creator] = await Promise.all([getTikTokPostingFlags(), queryCreatorInfo(accessToken)]);
+
+    const privacy = opts.privacy_level;
+    if (!privacy) throw new Error('This TikTok post has no privacy choice — edit it and choose who can see it.');
+    if (!audited && privacy !== 'SELF_ONLY') {
+        throw new Error('Until TikTok approves this app, direct posts can only be private (Only me) — edit the post.');
+    }
+    if (creator.privacyLevelOptions.length > 0 && !creator.privacyLevelOptions.includes(privacy)) {
+        throw new Error('That privacy choice is not available for this TikTok account any more — edit the post and choose again.');
+    }
+    const seconds = mp4DurationSeconds(video);
+    if (seconds !== null && creator.maxVideoPostDurationSec > 0 && seconds > creator.maxVideoPostDurationSec + 0.5) {
+        throw new Error(`This video is ${Math.round(seconds)}s; your TikTok account allows up to ${creator.maxVideoPostDurationSec}s.`);
+    }
+
+    return initDirectVideoPost(accessToken, plan, {
+        title: post.caption ?? '',
+        privacy_level: privacy,
+        // A creator who has switched an interaction off cannot have it switched back on by us.
+        disable_comment: !opts.allow_comment || creator.commentDisabled,
+        disable_duet: !opts.allow_duet || creator.duetDisabled,
+        disable_stitch: !opts.allow_stitch || creator.stitchDisabled,
+        brand_content_toggle: opts.brand_content === true,
+        brand_organic_toggle: opts.brand_organic === true,
+        is_aigc: opts.is_aigc === true,
+    });
+}
+
 /** TikTok processed the upload and refused it. The row already carries TikTok's reason. */
 export class TikTokRejectedError extends Error {
     constructor(message: string) {
@@ -186,13 +281,19 @@ export async function publishTikTokPost(post: TikTokPublishTarget): Promise<Sche
         }
         if (!post.media_url) throw new Error('TikTok needs a video to upload.');
 
-        const pending = await pendingInboxShares(post.creator_id, post.id);
-        if (pending >= MAX_PENDING_INBOX_SHARES && !post.external_publish_id) {
-            throw new TikTokInboxFullError(pending);
+        const direct = isDirectPost(post);
+        if (!direct) {
+            const pending = await pendingInboxShares(post.creator_id, post.id);
+            if (pending >= MAX_PENDING_INBOX_SHARES && !post.external_publish_id) {
+                throw new TikTokInboxFullError(pending);
+            }
         }
 
         const { accessToken, connection } = await getAccessToken(post.creator_id);
         connectionId = connection.id;
+        if (direct && !(connection.scopes ?? []).includes('video.publish')) {
+            throw new Error('This post is set to post directly, but TikTok has not granted direct posting — reconnect TikTok in Settings.');
+        }
 
         const media = await loadMedia(post.media_url);
         if (!TIKTOK_VIDEO_MIME_TYPES.has(media.mimeType)) {
@@ -218,7 +319,9 @@ export async function publishTikTokPost(post: TikTokPublishTarget): Promise<Sche
             }
         }
 
-        const init = await initInboxVideoUpload(accessToken, plan, post.caption);
+        const init = direct
+            ? { ...(await startDirectPost(accessToken, post, media.data, plan)), captionSent: true }
+            : await initInboxVideoUpload(accessToken, plan, post.caption);
         // Written before a single byte goes up, so a crash from here on is resumable rather
         // than a second upload.
         await queryCount(
@@ -227,7 +330,7 @@ export async function publishTikTokPost(post: TikTokPublishTarget): Promise<Sche
         );
         log('info', 'tiktok.upload_started', {
             post_id: post.id, publish_id: init.publishId, bytes: plan.videoSize,
-            chunks: plan.totalChunkCount, caption_sent: init.captionSent,
+            chunks: plan.totalChunkCount, caption_sent: init.captionSent, mode: direct ? 'direct' : 'inbox',
         });
 
         await uploadChunks(init.uploadUrl, media.data, media.mimeType, plan);

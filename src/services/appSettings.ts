@@ -22,6 +22,12 @@ export const APP_SETTING_KEYS = {
     /** The exact contents of that file. */
     tiktokVerificationContent: 'tiktok.verification_content',
     /**
+     * JSON `[{ filename, content }]` — every verification file saved before the current one.
+     * TikTok hands out a new file per property (URL prefix, domain…), and saving a new one must
+     * not take the page an earlier property was verified against offline.
+     */
+    tiktokVerificationHistory: 'tiktok.verification_history',
+    /**
      * The canonical public origin, e.g. `https://msg-response-auto.vercel.app`.
      *
      * TikTok compares the OAuth `redirect_uri` byte-for-byte against the one registered in its
@@ -29,6 +35,17 @@ export const APP_SETTING_KEYS = {
      * built today — would produce a different URI on every preview deployment and fail there.
      */
     publicBaseUrl: 'app.public_base_url',
+    /**
+     * 'true' once Direct Post is switched on for the app in TikTok's portal. It decides whether
+     * Connect asks for `video.publish` — asking for a scope the app does not have fails the
+     * whole authorisation, so this cannot simply always be on.
+     */
+    tiktokDirectPostEnabled: 'tiktok.direct_post_enabled',
+    /**
+     * 'true' once TikTok has audited the app for Direct Post. Before that, TikTok forces every
+     * direct post to SELF_ONLY and requires the account itself to be private.
+     */
+    tiktokAudited: 'tiktok.audited',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -134,4 +151,56 @@ export async function getPublicBaseUrl(requestOrigin: string | null): Promise<st
     const fromEnv = process.env.PUBLIC_BASE_URL ? normaliseOrigin(process.env.PUBLIC_BASE_URL) : null;
     if (fromEnv) return fromEnv;
     return requestOrigin ? normaliseOrigin(requestOrigin) : null;
+}
+
+export interface TikTokPostingFlags {
+    directPostEnabled: boolean;
+    audited: boolean;
+}
+
+/** The two operator switches that decide how TikTok posts go out. Both default to off. */
+export async function getTikTokPostingFlags(): Promise<TikTokPostingFlags> {
+    const [direct, audited] = await Promise.all([
+        getSetting(APP_SETTING_KEYS.tiktokDirectPostEnabled),
+        getSetting(APP_SETTING_KEYS.tiktokAudited),
+    ]);
+    return { directPostEnabled: direct === 'true', audited: audited === 'true' };
+}
+
+export interface VerificationFile { filename: string; content: string }
+
+/** Every verification file to serve: the current one first, then the ones saved before it. */
+export async function getVerificationFiles(): Promise<VerificationFile[]> {
+    const [name, content, history] = await Promise.all([
+        getSetting(APP_SETTING_KEYS.tiktokVerificationFilename),
+        getSetting(APP_SETTING_KEYS.tiktokVerificationContent),
+        getSetting(APP_SETTING_KEYS.tiktokVerificationHistory),
+    ]);
+    const files: VerificationFile[] = name && content ? [{ filename: name, content }] : [];
+    try {
+        const parsed = history ? JSON.parse(history) : [];
+        if (Array.isArray(parsed)) {
+            for (const f of parsed) {
+                if (f && typeof f.filename === 'string' && typeof f.content === 'string'
+                    && !files.some((x) => x.filename === f.filename)) {
+                    files.push({ filename: f.filename, content: f.content });
+                }
+            }
+        }
+    } catch {
+        // A malformed history must not take the current file down with it.
+    }
+    return files;
+}
+
+/** Save a new current verification file, keeping the previous ones (the last ten) servable. */
+export async function saveVerificationFile(
+    next: VerificationFile | null,
+    updatedBy: string | null
+): Promise<void> {
+    const existing = await getVerificationFiles();
+    const history = existing.filter((f) => !next || f.filename !== next.filename).slice(0, 10);
+    await setSetting(APP_SETTING_KEYS.tiktokVerificationHistory, history.length ? JSON.stringify(history) : null, updatedBy);
+    await setSetting(APP_SETTING_KEYS.tiktokVerificationFilename, next?.filename ?? null, updatedBy);
+    await setSetting(APP_SETTING_KEYS.tiktokVerificationContent, next?.content ?? null, updatedBy);
 }

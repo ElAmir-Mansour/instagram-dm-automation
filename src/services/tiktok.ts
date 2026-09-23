@@ -37,6 +37,11 @@ export const TIKTOK_API_BASE = 'https://open.tiktokapis.com';
  */
 export const TIKTOK_SCOPES = ['user.info.basic', 'video.upload'] as const;
 
+/** The scopes to request: `video.publish` only once Direct Post is switched on in the portal. */
+export function tiktokScopes(directPostEnabled: boolean): string[] {
+    return directPostEnabled ? [...TIKTOK_SCOPES, 'video.publish'] : [...TIKTOK_SCOPES];
+}
+
 /**
  * Separate from `metaHttp` on purpose: a 10s timeout is right for a Graph call and wrong for
  * pushing a video, and TikTok's error envelope has nothing in common with Meta's.
@@ -98,7 +103,9 @@ const CODE_MESSAGES: Record<string, string> = {
     spam_risk_user_banned_from_posting: 'TikTok has blocked this account from posting.',
     reached_active_user_cap: 'This TikTok app has reached its daily active-user cap. Retry later.',
     unaudited_client_can_only_post_to_private_accounts:
-        'This TikTok app is not audited for Direct Post, so it can only post to private accounts.',
+        'Until TikTok approves this app, direct posts only work when your TikTok account is set to private. Switch the account to private (TikTok → Settings → Privacy), then retry.',
+    privacy_level_option_mismatch:
+        'That privacy choice is not available for this TikTok account any more — edit the post and choose again.',
     file_format_check_failed: 'TikTok rejected the file format — upload an MP4 (H.264).',
     invalid_file_upload: 'TikTok rejected the uploaded file.',
 };
@@ -408,6 +415,121 @@ export async function uploadChunks(
             throw toTikTokError(`TikTok upload (chunk ${index + 1} of ${plan.totalChunkCount})`, err);
         }
     }
+}
+
+// ─── Direct Post ────────────────────────────────────────────────────────────────────────
+
+export interface TikTokCreatorInfo {
+    nickname: string;
+    username: string;
+    avatarUrl: string | null;
+    /** What this creator may choose between. TikTok rejects anything else with privacy_level_option_mismatch. */
+    privacyLevelOptions: string[];
+    commentDisabled: boolean;
+    duetDisabled: boolean;
+    stitchDisabled: boolean;
+    maxVideoPostDurationSec: number;
+}
+
+/**
+ * `creator_info/query` — who is posting and what they may choose. TikTok's guidelines require
+ * calling this before every Direct Post and building the composer from it (nickname shown, the
+ * privacy options offered, interaction toggles disabled where the creator has disabled them).
+ */
+export async function queryCreatorInfo(accessToken: string): Promise<TikTokCreatorInfo> {
+    try {
+        const res = await withRetry(
+            () => tiktokHttp.post(`${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`, {}, {
+                headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' },
+            }),
+            { label: 'tiktok.creator_info' }
+        );
+        const d = unwrap<any>('TikTok creator info', res.data, res.status) ?? {};
+        return {
+            nickname: String(d.creator_nickname ?? ''),
+            username: String(d.creator_username ?? ''),
+            avatarUrl: typeof d.creator_avatar_url === 'string' ? d.creator_avatar_url : null,
+            privacyLevelOptions: Array.isArray(d.privacy_level_options) ? d.privacy_level_options.map(String) : [],
+            commentDisabled: d.comment_disabled === true,
+            duetDisabled: d.duet_disabled === true,
+            stitchDisabled: d.stitch_disabled === true,
+            maxVideoPostDurationSec: Number(d.max_video_post_duration_sec ?? 0),
+        };
+    } catch (err) {
+        throw toTikTokError('TikTok creator info', err);
+    }
+}
+
+export interface DirectPostInfo {
+    title: string;
+    privacy_level: string;
+    disable_comment: boolean;
+    disable_duet: boolean;
+    disable_stitch: boolean;
+    brand_content_toggle: boolean;
+    brand_organic_toggle: boolean;
+    is_aigc: boolean;
+}
+
+/**
+ * Start a Direct Post. NOT retried, for the same reason as the inbox init: a 5xx may still have
+ * created the post, and a retry would publish it twice on a live profile.
+ */
+export async function initDirectVideoPost(
+    accessToken: string,
+    plan: ChunkPlan,
+    postInfo: DirectPostInfo
+): Promise<UploadInit> {
+    try {
+        const res = await tiktokHttp.post(
+            `${TIKTOK_API_BASE}/v2/post/publish/video/init/`,
+            {
+                post_info: { ...postInfo, title: postInfo.title.slice(0, MAX_TITLE_UTF16) },
+                source_info: {
+                    source: 'FILE_UPLOAD',
+                    video_size: plan.videoSize,
+                    chunk_size: plan.chunkSize,
+                    total_chunk_count: plan.totalChunkCount,
+                },
+            },
+            { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' } }
+        );
+        const data = unwrap<{ publish_id?: string; upload_url?: string }>('TikTok post init', res.data, res.status);
+        if (!data?.publish_id || !data?.upload_url) {
+            throw new Error('TikTok post init: the response had no publish_id or upload_url.');
+        }
+        return { publishId: data.publish_id, uploadUrl: data.upload_url };
+    } catch (err) {
+        throw toTikTokError('TikTok post init', err);
+    }
+}
+
+/**
+ * A video's length in seconds, from the MP4 `mvhd` box — or null if it cannot be read.
+ *
+ * TikTok limits duration per creator (`max_video_post_duration_sec`) and rejects a longer upload
+ * only after it has been uploaded and processed. Reading the header first turns that into an
+ * immediate, readable refusal. MP4/MOV only; anything else returns null and TikTok decides.
+ */
+export function mp4DurationSeconds(buf: Buffer): number | null {
+    const at = buf.indexOf('mvhd', 0, 'latin1');
+    if (at < 4) return null;
+    const version = buf[at + 4];
+    try {
+        if (version === 0) {
+            const timescale = buf.readUInt32BE(at + 16);
+            const duration = buf.readUInt32BE(at + 20);
+            return timescale > 0 ? duration / timescale : null;
+        }
+        if (version === 1) {
+            const timescale = buf.readUInt32BE(at + 24);
+            const duration = Number(buf.readBigUInt64BE(at + 28));
+            return timescale > 0 ? duration / timescale : null;
+        }
+    } catch {
+        return null;
+    }
+    return null;
 }
 
 // ─── Status ─────────────────────────────────────────────────────────────────────────────

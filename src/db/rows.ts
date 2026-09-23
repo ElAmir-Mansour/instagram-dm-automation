@@ -173,7 +173,27 @@ export interface ScheduledPostRow {
     external_publish_id: string | null;
     /** v18. When the reconcile sweep last asked TikTok about a PROCESSING row. */
     status_checked_at: Timestamptz | null;
+    /** v19. TikTok per-post options; NULL means inbox mode. See `TikTokPostOptions`. */
+    platform_options: TikTokPostOptions | null;
     created_at: Timestamptz;
+}
+
+/**
+ * What a TikTok row carries in `platform_options` (v19). Direct Post takes every choice TikTok's
+ * editor would otherwise ask for up front, because there is no editor step.
+ */
+export type TikTokPrivacyLevel = 'PUBLIC_TO_EVERYONE' | 'MUTUAL_FOLLOW_FRIENDS' | 'FOLLOWER_OF_CREATOR' | 'SELF_ONLY';
+export interface TikTokPostOptions {
+    mode: 'direct' | 'inbox';
+    privacy_level?: TikTokPrivacyLevel;
+    allow_comment?: boolean;
+    allow_duet?: boolean;
+    allow_stitch?: boolean;
+    brand_organic?: boolean;
+    brand_content?: boolean;
+    is_aigc?: boolean;
+    /** When the creator ticked "I agree to post this" — TikTok requires express consent. */
+    consent_at?: string;
 }
 
 // ─── platform connections (v18) ─────────────────────────────────────────────────────────

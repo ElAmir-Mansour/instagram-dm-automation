@@ -10,6 +10,7 @@
  *
  *   tiktokRouter — mounted BELOW `resolveTenant`, so every route acts as the session's tenant
  *     GET  /connection     the Settings card: connected account, app readiness, inbox usage
+ *     GET  /creator-info   the composer's Direct Post panel: TikTok's live creator_info
  *     POST /connect        owner: mint a state, return TikTok's authorise URL
  *     POST /disconnect     owner: revoke and delete
  *     GET  /app-settings   platform admin: client key/secret status, URLs to register
@@ -20,13 +21,15 @@ import type { Request, Response, NextFunction } from 'express';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import {
-    APP_SETTING_KEYS, getPublicBaseUrl, getSetting, getTikTokAppConfig, maskValue, normaliseOrigin,
-    setSetting,
+    APP_SETTING_KEYS, getPublicBaseUrl, getSetting, getTikTokAppConfig, getTikTokPostingFlags, maskValue,
+    normaliseOrigin, saveVerificationFile, setSetting,
 } from '../services/appSettings.js';
-import { buildAuthorizeUrl, parseWebhookEvent, TIKTOK_SCOPES, verifyTikTokSignature } from '../services/tiktok.js';
 import {
-    completeConnection, consumeOAuthState, createOAuthState, disconnect, getConnection,
-    OAUTH_STATE_TTL_MS, summariseConnection, TikTokAccountInUseError,
+    buildAuthorizeUrl, parseWebhookEvent, queryCreatorInfo, tiktokScopes, verifyTikTokSignature,
+} from '../services/tiktok.js';
+import {
+    completeConnection, consumeOAuthState, createOAuthState, disconnect, getAccessToken, getConnection,
+    OAUTH_STATE_TTL_MS, summariseConnection, TikTokAccountInUseError, TikTokNotConnectedError,
 } from '../services/tiktokConnections.js';
 import { applyWebhookEvent, MAX_PENDING_INBOX_SHARES, pendingInboxShares } from '../services/tiktokPublish.js';
 import { describeError, log } from '../utils/log.js';
@@ -193,21 +196,65 @@ function requirePlatformAdmin(req: Request, res: Response, next: NextFunction): 
 tiktokRouter.get('/connection', async (req, res) => {
     try {
         const creatorId = getTenantId(req);
-        const [row, app, redirectUri, pending] = await Promise.all([
+        const [row, app, redirectUri, pending, flags] = await Promise.all([
             getConnection(creatorId),
             getTikTokAppConfig(),
             redirectUriFor(req),
             pendingInboxShares(creatorId),
+            getTikTokPostingFlags(),
         ]);
+        const connection = summariseConnection(row);
         res.json({
             appConfigured: Boolean(app),
             redirectUri,
-            connection: summariseConnection(row),
+            connection: {
+                ...connection,
+                directPostEnabled: flags.directPostEnabled,
+                audited: flags.audited,
+                postMode: postModeFor(connection.canDirectPost, flags.directPostEnabled),
+            },
             inbox: { pending, limit: MAX_PENDING_INBOX_SHARES },
         });
     } catch (err) {
         log('error', 'api.tiktok_connection_read_failed', describeError(err));
         res.status(500).json({ error: 'Failed to read the TikTok connection.' });
+    }
+});
+
+/** Direct only when the connection holds `video.publish` AND the operator has switched it on. */
+export function postModeFor(canDirectPost: boolean, directPostEnabled: boolean): 'direct' | 'inbox' {
+    return canDirectPost && directPostEnabled ? 'direct' : 'inbox';
+}
+
+/**
+ * The composer's Direct Post panel is built from this, live, as TikTok's guidelines require:
+ * the nickname shown, only the privacy levels this creator may use, interaction toggles greyed
+ * where the creator has disabled them, and their maximum video length.
+ */
+tiktokRouter.get('/creator-info', async (req, res) => {
+    try {
+        const creatorId = getTenantId(req);
+        const [row, flags] = await Promise.all([getConnection(creatorId), getTikTokPostingFlags()]);
+        const summary = summariseConnection(row);
+        if (!summary.connected) {
+            res.status(409).json({ error: 'TikTok is not connected — connect it in Settings first.' });
+            return;
+        }
+        const postMode = postModeFor(summary.canDirectPost, flags.directPostEnabled);
+        if (postMode === 'inbox') {
+            res.json({ postMode, audited: flags.audited, creator: null });
+            return;
+        }
+        const { accessToken } = await getAccessToken(creatorId);
+        const creator = await queryCreatorInfo(accessToken);
+        res.json({ postMode, audited: flags.audited, creator });
+    } catch (err) {
+        if (err instanceof TikTokNotConnectedError) {
+            res.status(409).json({ error: err.message });
+            return;
+        }
+        log('warn', 'api.tiktok_creator_info_failed', describeError(err));
+        res.status(502).json({ error: err instanceof Error ? err.message : 'TikTok did not answer.' });
     }
 });
 
@@ -224,8 +271,11 @@ tiktokRouter.post('/connect', canAdminister, async (req, res) => {
             return;
         }
         const state = await createOAuthState(getTenantId(req), req.session?.userId ?? null);
+        const { directPostEnabled } = await getTikTokPostingFlags();
         res.setHeader('Set-Cookie', stateCookie(state, Math.floor(OAUTH_STATE_TTL_MS / 1000)));
-        res.json({ url: buildAuthorizeUrl({ clientKey: app.clientKey, redirectUri, state, scopes: TIKTOK_SCOPES }) });
+        res.json({
+            url: buildAuthorizeUrl({ clientKey: app.clientKey, redirectUri, state, scopes: tiktokScopes(directPostEnabled) }),
+        });
     } catch (err) {
         log('error', 'api.tiktok_connect_failed', describeError(err));
         res.status(500).json({ error: 'Failed to start the TikTok connection.' });
@@ -255,13 +305,14 @@ tiktokRouter.post('/disconnect', canAdminister, async (req, res) => {
 
 tiktokRouter.get('/app-settings', requirePlatformAdmin, async (req, res) => {
     try {
-        const [dbKey, dbSecret, baseUrl, verifyName, verifyContent, app] = await Promise.all([
+        const [dbKey, dbSecret, baseUrl, verifyName, verifyContent, app, flags] = await Promise.all([
             getSetting(APP_SETTING_KEYS.tiktokClientKey),
             getSetting(APP_SETTING_KEYS.tiktokClientSecret),
             getSetting(APP_SETTING_KEYS.publicBaseUrl),
             getSetting(APP_SETTING_KEYS.tiktokVerificationFilename),
             getSetting(APP_SETTING_KEYS.tiktokVerificationContent),
             getTikTokAppConfig(),
+            getTikTokPostingFlags(),
         ]);
         const base = await getPublicBaseUrl(requestOrigin(req));
         res.json({
@@ -291,7 +342,9 @@ tiktokRouter.get('/app-settings', requirePlatformAdmin, async (req, res) => {
                 privacyUrl: `${base}/privacy`,
                 websiteUrl: `${base}/`,
             } : null,
-            scopes: TIKTOK_SCOPES,
+            scopes: tiktokScopes(flags.directPostEnabled),
+            directPostEnabled: flags.directPostEnabled,
+            audited: flags.audited,
         });
     } catch (err) {
         log('error', 'api.tiktok_app_settings_read_failed', describeError(err));
@@ -344,9 +397,17 @@ tiktokRouter.post('/app-settings', requirePlatformAdmin, async (req, res) => {
                 res.status(400).json({ error: 'Paste both the file name TikTok gave you (tiktok….txt) and its contents.' });
                 return;
             }
-            await setSetting(APP_SETTING_KEYS.tiktokVerificationFilename, name || null, updatedBy);
-            await setSetting(APP_SETTING_KEYS.tiktokVerificationContent, content || null, updatedBy);
+            await saveVerificationFile(name && content ? { filename: name, content } : null, updatedBy);
             changed.push('verification_file');
+        }
+
+        if (typeof body.directPostEnabled === 'boolean') {
+            await setSetting(APP_SETTING_KEYS.tiktokDirectPostEnabled, body.directPostEnabled ? 'true' : null, updatedBy);
+            changed.push('direct_post_enabled');
+        }
+        if (typeof body.audited === 'boolean') {
+            await setSetting(APP_SETTING_KEYS.tiktokAudited, body.audited ? 'true' : null, updatedBy);
+            changed.push('audited');
         }
 
         if (changed.length === 0) {
