@@ -1499,6 +1499,42 @@ it. A refused refresh marks the row `invalid` so Settings asks for a reconnect
 
 ---
 
+
+### 6.7 — Direct Post (v19), when the operator switches it on
+
+Inbox mode leaves privacy, interactions and disclosure to TikTok's editor. Direct Post has no
+editor step, so TikTok's Content Sharing Guidelines move those choices into our composer, and
+a scheduled row carries them in `scheduled_posts.platform_options` until it publishes.
+
+1. **Mode is decided at creation** (`src/routes/api.ts:2191`). The post is `direct` only if
+   the connection holds `video.publish` **and** app setting `tiktok.direct_post_enabled` is
+   `'true'` (`postModeFor`, `src/routes/tiktok.ts`). Otherwise it's `inbox`, and every TikTok
+   row created before v19 (`platform_options` NULL) counts as inbox.
+2. **Choices are validated** by `validateTikTokOptions` (`src/services/tiktokPublish.ts:61`):
+   - consent is required;
+   - a privacy level is required, and there is no default;
+   - only `SELF_ONLY` is allowed while `tiktok.audited` isn't `'true'`;
+   - branded content can't be `SELF_ONLY`;
+   - every toggle defaults to off;
+   - `consent_at` is stamped.
+3. **The composer's panel** is built from live `creator_info`, via `GET /api/tiktok/creator-info`
+   (`src/routes/tiktok.ts:234`).
+4. **At publish time**, `startDirectPost` (`src/services/tiktokPublish.ts:228`) re-reads
+   `creator_info` and checks everything again before anything is posted:
+   - the privacy level must still be offered;
+   - the duration comes from the MP4 `mvhd` box (`mp4DurationSeconds`,
+     `src/services/tiktok.ts:514`) and must fit the creator's maximum;
+   - SELF_ONLY is enforced while unaudited.
+
+   Interactions the creator has disabled are forced off. The call is then `/v2/post/publish/video/init/`,
+   which is not retried, because a 5xx may already have posted.
+5. **Status:** `PROCESSING_UPLOAD` → `PUBLISH_COMPLETE` → PUBLISHED, and a post id arrives only
+   for public, moderated posts. Direct rows are excluded from the 5-draft inbox count.
+
+**Unaudited** (true until TikTok approves the app): TikTok also requires the creator's
+**account** to be private at posting time, or the call fails with
+`unaudited_client_can_only_post_to_private_accounts`.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an

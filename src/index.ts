@@ -11,7 +11,7 @@ import { enqueueWebhookBody, processWebhookBody } from './webhook/router.js';
 import { drainInline } from './jobs/drain.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
 import apiRouter, { securityHeaders } from './routes/api.js';
-import { APP_SETTING_KEYS, getSetting } from './services/appSettings.js';
+import { getVerificationFiles } from './services/appSettings.js';
 
 
 // ─── Startup ────────────────────────────────────────────────────────────────
@@ -116,15 +116,14 @@ app.get('/terms', (_req, res) => {
 // that does not match the saved name is a plain 404.
 app.get(/^\/tiktok[A-Za-z0-9_-]{4,100}\.txt$/, async (req, res) => {
     try {
-        const [name, content] = await Promise.all([
-            getSetting(APP_SETTING_KEYS.tiktokVerificationFilename),
-            getSetting(APP_SETTING_KEYS.tiktokVerificationContent),
-        ]);
-        if (!name || !content || req.path !== `/${name}`) {
+        // Every file ever saved stays servable: TikTok issues one per property, and a new one
+        // must not take down the page an earlier property was verified against.
+        const file = (await getVerificationFiles()).find((f) => req.path === `/${f.filename}`);
+        if (!file) {
             res.status(404).send('Not Found');
             return;
         }
-        res.type('text/plain').send(content);
+        res.type('text/plain').send(file.content);
     } catch (err) {
         log('error', 'tiktok.verification_file_failed', describeError(err));
         res.status(404).send('Not Found');

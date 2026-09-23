@@ -15,7 +15,7 @@ import {
     buildAuthorizeUrl, describeFailReason, exchangeCode, fetchPublishStatus, initInboxVideoUpload,
     isTikTokReauthError, mapPublishState, MAX_CHUNK_BYTES, parseJsonKeepingIds, parseWebhookEvent, planChunks,
     refreshTokens, SPLIT_CHUNK_BYTES, TIKTOK_API_BASE, TikTokApiError, tiktokHttp, toTikTokError,
-    uploadChunks, verifyTikTokSignature,
+    uploadChunks, verifyTikTokSignature, queryCreatorInfo, initDirectVideoPost, mp4DurationSeconds, tiktokScopes,
 } from './tiktok.js';
 
 const MB = 1024 * 1024;
@@ -344,5 +344,79 @@ describe('parseWebhookEvent', () => {
         assert.deepEqual(parseWebhookEvent({ event: 'x', content: '{not json' })?.content, {});
         assert.equal(parseWebhookEvent({ content: '{}' }), null);
         assert.equal(parseWebhookEvent(null), null);
+    });
+});
+
+describe('Direct Post', () => {
+    it('asks for video.publish only once Direct Post is switched on in the portal', () => {
+        // Requesting a scope the app is not approved for fails the whole authorisation.
+        assert.deepEqual(tiktokScopes(false), ['user.info.basic', 'video.upload']);
+        assert.deepEqual(tiktokScopes(true), ['user.info.basic', 'video.upload', 'video.publish']);
+    });
+
+    it('maps creator_info onto what the composer needs', async () => {
+        onPost = async () => ({
+            status: 200,
+            data: {
+                data: {
+                    creator_nickname: 'ElAmir', creator_username: 'elamir', creator_avatar_url: 'https://p16/a.jpg',
+                    privacy_level_options: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'],
+                    comment_disabled: false, duet_disabled: true, stitch_disabled: false,
+                    max_video_post_duration_sec: 600,
+                },
+                error: { code: 'ok' },
+            },
+        });
+        const info = await queryCreatorInfo('act.1');
+        assert.equal(calls[0]!.url, `${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`);
+        assert.deepEqual(info, {
+            nickname: 'ElAmir', username: 'elamir', avatarUrl: 'https://p16/a.jpg',
+            privacyLevelOptions: ['PUBLIC_TO_EVERYONE', 'SELF_ONLY'],
+            commentDisabled: false, duetDisabled: true, stitchDisabled: false, maxVideoPostDurationSec: 600,
+        });
+    });
+
+    it('sends every post_info field TikTok\u2019s Direct Post takes, with a FILE_UPLOAD source', async () => {
+        onPost = async () => ({ status: 200, data: { data: { publish_id: 'v_pub_file~1', upload_url: 'https://up/1' }, error: { code: 'ok' } } });
+        const plan = planChunks(3 * MB);
+        await initDirectVideoPost('act.1', plan, {
+            title: 'تعلم #AI', privacy_level: 'SELF_ONLY', disable_comment: false, disable_duet: true,
+            disable_stitch: true, brand_content_toggle: false, brand_organic_toggle: true, is_aigc: false,
+        });
+        assert.equal(calls[0]!.url, `${TIKTOK_API_BASE}/v2/post/publish/video/init/`);
+        assert.deepEqual(calls[0]!.body.post_info, {
+            title: 'تعلم #AI', privacy_level: 'SELF_ONLY', disable_comment: false, disable_duet: true,
+            disable_stitch: true, brand_content_toggle: false, brand_organic_toggle: true, is_aigc: false,
+        });
+        assert.equal(calls[0]!.body.source_info.source, 'FILE_UPLOAD');
+    });
+
+    it('is not retried — a 5xx may already have published it on a live profile', async () => {
+        onPost = async () => { throw apiError(500, 'internal_error'); };
+        await initDirectVideoPost('act.1', planChunks(MB), {
+            title: '', privacy_level: 'SELF_ONLY', disable_comment: true, disable_duet: true,
+            disable_stitch: true, brand_content_toggle: false, brand_organic_toggle: false, is_aigc: false,
+        }).catch(() => undefined);
+        assert.equal(calls.length, 1);
+    });
+
+    it('reads a video\u2019s length from the MP4 header, both mvhd versions', () => {
+        const box = (version: number, timescale: number, duration: number) => {
+            const b = Buffer.alloc(version === 0 ? 40 : 52);
+            b.writeUInt32BE(b.length, 0);
+            b.write('mvhd', 4, 'latin1');
+            b[8] = version;
+            if (version === 0) {
+                b.writeUInt32BE(timescale, 20);
+                b.writeUInt32BE(duration, 24);
+            } else {
+                b.writeUInt32BE(timescale, 28);
+                b.writeBigUInt64BE(BigInt(duration), 32);
+            }
+            return Buffer.concat([Buffer.from('....ftypisom'), b]);
+        };
+        assert.equal(mp4DurationSeconds(box(0, 1000, 15253)), 15.253);
+        assert.equal(mp4DurationSeconds(box(1, 600, 9000)), 15);
+        assert.equal(mp4DurationSeconds(Buffer.from('not a video')), null);
     });
 });

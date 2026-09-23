@@ -32,8 +32,10 @@ import { getMediaStore } from '../services/storage.js';
 import adminRouter from './admin.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import {
-    publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError,
+    publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokOptions,
 } from '../services/tiktokPublish.js';
+import { getTikTokPostingFlags } from '../services/appSettings.js';
+import { postModeFor } from './tiktok.js';
 import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
 
 
@@ -672,7 +674,8 @@ export function isMetaPlatform(platform: unknown): platform is 'instagram' | 'fa
 }
 
 /** A claimed row, as every publishing caller selects it (`s.*` plus the creator's Meta fields). */
-type ClaimedPost = PublishTarget & Pick<ScheduledPostRow, 'creator_id' | 'external_publish_id'>;
+type ClaimedPost = PublishTarget & Pick<ScheduledPostRow, 'creator_id' | 'external_publish_id'>
+    & { platform_options?: ScheduledPostRow['platform_options'] };
 
 /**
  * Publish one row that the caller has already claimed (status PUBLISHING), whatever platform
@@ -694,6 +697,7 @@ export async function publishClaimedPost(post: ClaimedPost, creator: PublishCrea
             caption: post.caption,
             media_url: post.media_url,
             external_publish_id: post.external_publish_id ?? null,
+            platform_options: post.platform_options ?? null,
         });
     }
     await attemptPublish(post, creator);
@@ -2167,6 +2171,7 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         }
 
         const wantsTikTok = platform === 'tiktok' || alsoTikTok;
+        let tiktokOptions: ScheduledPostRow['platform_options'] = null;
         if (wantsTikTok) {
             if (!media_url) {
                 res.status(400).json({ error: 'TikTok needs a video — upload one first.' });
@@ -2178,6 +2183,21 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             if (!connection || connection.status !== 'active') {
                 res.status(409).json({ error: 'TikTok is not connected — connect it in Settings first.' });
                 return;
+            }
+            // Direct Post or inbox is decided now, not at publish time, because Direct Post
+            // needs the creator's choices and consent up front — there is no TikTok editor step
+            // in which to make them later.
+            const flags = await getTikTokPostingFlags();
+            const mode = postModeFor((connection.scopes ?? []).includes('video.publish'), flags.directPostEnabled);
+            if (mode === 'direct') {
+                const checked = validateTikTokOptions(req.body?.tiktok_options, { audited: flags.audited });
+                if (!checked.ok) {
+                    res.status(400).json({ error: checked.error });
+                    return;
+                }
+                tiktokOptions = checked.options;
+            } else {
+                tiktokOptions = { mode: 'inbox' };
             }
         }
 
@@ -2194,13 +2214,14 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             for (const target of targets) {
                 const inserted = await client.query(
                     `INSERT INTO scheduled_posts
-                         (creator_id, platform, post_type, caption, media_url, scheduled_time, status, cover_url, group_id)
-                     VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8) RETURNING *`,
+                         (creator_id, platform, post_type, caption, media_url, scheduled_time, status, cover_url, group_id, platform_options)
+                     VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9::jsonb) RETURNING *`,
                     [
                         creatorId, target, post_type, caption || null, media_url || null, when,
                         // A cover image is an Instagram/Facebook concept; TikTok picks its own.
                         target === 'tiktok' ? null : (cover_url || null),
                         groupId,
+                        target === 'tiktok' && tiktokOptions ? JSON.stringify(tiktokOptions) : null,
                     ]
                 );
                 rows.push(inserted.rows[0]);
@@ -2284,6 +2305,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
     try {
         const { id } = req.params;
         const { platform, post_type, caption, media_url, scheduled_time, cover_url } = req.body;
+        const rawTikTokOptions = req.body?.tiktok_options;
 
         if (!isUuid(id)) {
             res.status(404).json({ error: 'Scheduled post not found.' });
@@ -2322,6 +2344,18 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
             return;
         }
 
+        // New Direct Post choices for a TikTok row, validated exactly as at create time.
+        let tiktokOptionsJson: string | null = null;
+        if (rawTikTokOptions !== undefined && (platform ?? current.platform) === 'tiktok') {
+            const { audited } = await getTikTokPostingFlags();
+            const checked = validateTikTokOptions(rawTikTokOptions, { audited });
+            if (!checked.ok) {
+                res.status(400).json({ error: checked.error });
+                return;
+            }
+            tiktokOptionsJson = JSON.stringify(checked.options);
+        }
+
         // cover_url was destructured and then dropped, so editing a reel silently kept its old
         // cover — which for a video fading up from black is the black frame 0.
         const result = await pool.query(
@@ -2332,9 +2366,10 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                  media_url = COALESCE($4, media_url),
                  scheduled_time = COALESCE($5, scheduled_time)::timestamp with time zone,
                  cover_url = COALESCE($6, cover_url),
+                 platform_options = COALESCE($9::jsonb, platform_options),
                  status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
              WHERE id = $7 AND creator_id = $8 RETURNING *`,
-            [platform, post_type, caption, media_url, scheduled_time, cover_url, id, tenantId]
+            [platform, post_type, caption, media_url, scheduled_time, cover_url, id, tenantId, tiktokOptionsJson]
         );
 
         if (result.rows.length === 0) {

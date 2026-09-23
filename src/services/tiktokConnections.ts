@@ -91,6 +91,8 @@ export interface ConnectionSummary {
     avatarUrl: string | null;
     scopes: string[];
     canUpload: boolean;
+    /** Has `video.publish` — whether this connection could post directly. */
+    canDirectPost: boolean;
     accessExpiresAt: string | null;
     refreshExpiresAt: string | null;
     lastRefreshedAt: string | null;
@@ -103,7 +105,7 @@ export function summariseConnection(row: PlatformConnectionRow | null): Connecti
     if (!row) {
         return {
             connected: false, status: null, displayName: null, avatarUrl: null, scopes: [],
-            canUpload: false, accessExpiresAt: null, refreshExpiresAt: null, lastRefreshedAt: null,
+            canUpload: false, canDirectPost: false, accessExpiresAt: null, refreshExpiresAt: null, lastRefreshedAt: null,
             lastError: null, connectedAt: null,
         };
     }
@@ -114,6 +116,7 @@ export function summariseConnection(row: PlatformConnectionRow | null): Connecti
         avatarUrl: row.avatar_url,
         scopes: row.scopes ?? [],
         canUpload: (row.scopes ?? []).includes('video.upload'),
+        canDirectPost: (row.scopes ?? []).includes('video.publish'),
         accessExpiresAt: iso(row.access_expires_at),
         refreshExpiresAt: iso(row.refresh_expires_at),
         lastRefreshedAt: iso(row.last_refreshed_at),

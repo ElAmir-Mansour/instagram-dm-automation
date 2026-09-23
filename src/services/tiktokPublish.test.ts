@@ -12,7 +12,9 @@ import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import {
     applyStatus, applyWebhookEvent, MAX_PENDING_INBOX_SHARES, pendingInboxShares, uploadIdFromUrl,
+    validateTikTokOptions,
 } from './tiktokPublish.js';
+import { postModeFor } from '../routes/tiktok.js';
 import { attemptPublish, isMetaPlatform, unsupportedPlatformCombination } from '../routes/api.js';
 
 interface Statement { sql: string; params: unknown[] }
@@ -139,6 +141,8 @@ describe('pendingInboxShares', () => {
         // squeeze past the limit.
         assert.match(sql, /status IN \('PUBLISHING', 'PROCESSING', 'IN_INBOX'\)/);
         assert.match(sql, /claimed_at > NOW\(\) - INTERVAL '24 hours'/);
+        // Direct posts never sit in the inbox, so they must not use up its five slots.
+        assert.match(sql, /COALESCE\(platform_options->>'mode', 'inbox'\) = 'inbox'/);
         assert.deepEqual(statements[0]!.params, ['tenant-a', 'post-1']);
         assert.equal(MAX_PENDING_INBOX_SHARES, 5, 'TikTok: at most 5 pending shares within any 24-hour period');
     });
@@ -189,5 +193,48 @@ describe('the dispatcher fails closed on platforms it does not publish to', () =
         assert.match(unsupportedPlatformCombination('twitter', 'image')!, /Unknown platform/);
         assert.match(unsupportedPlatformCombination('tiktok', 'image')!, /must be videos/);
         assert.equal(unsupportedPlatformCombination('tiktok', 'video'), null);
+    });
+});
+
+describe('validateTikTokOptions — TikTok\u2019s Content Sharing Guidelines, server side', () => {
+    const base = { consent: true, privacy_level: 'PUBLIC_TO_EVERYONE' };
+
+    it('requires express consent', () => {
+        const r = validateTikTokOptions({ ...base, consent: false }, { audited: true });
+        assert.equal(r.ok, false);
+    });
+
+    it('requires a privacy choice — there is no default', () => {
+        assert.equal(validateTikTokOptions({ consent: true }, { audited: true }).ok, false);
+        assert.equal(validateTikTokOptions({ consent: true, privacy_level: 'EVERYBODY' }, { audited: true }).ok, false);
+    });
+
+    it('allows only SELF_ONLY until TikTok has audited the app', () => {
+        assert.equal(validateTikTokOptions(base, { audited: false }).ok, false);
+        assert.equal(validateTikTokOptions({ ...base, privacy_level: 'SELF_ONLY' }, { audited: false }).ok, true);
+    });
+
+    it('refuses branded content that is private', () => {
+        const r = validateTikTokOptions({ ...base, privacy_level: 'SELF_ONLY', brand_content: true }, { audited: true });
+        assert.equal(r.ok, false);
+    });
+
+    it('defaults every interaction and disclosure to OFF, and records when consent was given', () => {
+        const r = validateTikTokOptions(base, { audited: true });
+        assert.ok(r.ok);
+        if (!r.ok) return;
+        assert.equal(r.options.mode, 'direct');
+        assert.equal(r.options.allow_comment, false);
+        assert.equal(r.options.allow_duet, false);
+        assert.equal(r.options.allow_stitch, false);
+        assert.equal(r.options.brand_organic, false);
+        assert.equal(r.options.is_aigc, false);
+        assert.ok(r.options.consent_at && !Number.isNaN(Date.parse(r.options.consent_at)));
+    });
+
+    it('posts directly only with both the scope and the operator switch', () => {
+        assert.equal(postModeFor(true, true), 'direct');
+        assert.equal(postModeFor(true, false), 'inbox');
+        assert.equal(postModeFor(false, true), 'inbox', 'switched on, but this connection was made before — reconnect');
     });
 });
