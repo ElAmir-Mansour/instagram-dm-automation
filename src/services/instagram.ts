@@ -277,12 +277,12 @@ export async function likeComment(
  */
 export async function publishFacebookPost(
     pageId: string,
-    type: 'image' | 'video' | 'reel' | 'story',
+    type: 'image' | 'video' | 'reel' | 'story' | 'feed',
     caption: string,
     mediaUrl: string | null,
     accessToken: string
 ) {
-    if (type !== 'image' && type !== 'video' && type !== 'reel') {
+    if (type !== 'image' && type !== 'video' && type !== 'reel' && type !== 'feed') {
         // Page stories need Facebook's two-step /photo_stories + /video_stories upload, which
         // this service does not implement. Previously 'story' fell through to /feed and
         // published the caption as a bare text status, with no media and no error.
@@ -293,7 +293,12 @@ export async function publishFacebookPost(
     let url = `${GRAPH_BASE}/${pageId}/feed`;
     let payload: any = { message: caption };
 
-    if (mediaUrl && type === 'image') {
+    if (type === 'feed') {
+        // The dashboard's "text / link" type. It was offered in the composer but rejected
+        // here as unsupported, so every text post scheduled from the dashboard failed at
+        // publish time. A URL on a feed post is a link to share, not an asset to upload.
+        if (mediaUrl) payload.link = mediaUrl;
+    } else if (mediaUrl && type === 'image') {
         url = `${GRAPH_BASE}/${pageId}/photos`;
         payload = { url: mediaUrl, caption: caption };
     } else if (mediaUrl) {

@@ -939,6 +939,7 @@ html[dir='rtl'] .switch input:checked + .switch-track::before { transform: trans
 .badge-neutral { background: var(--surface-glass-hover); color: var(--text-default); }
 .badge-instagram { background: var(--brand-instagram-soft); color: var(--brand-instagram-text); }
 .badge-facebook { background: var(--brand-facebook-soft); color: var(--brand-facebook-text); }
+.badge-tiktok { background: var(--brand-tiktok-soft); color: var(--text-strong); }
 
 .status-pill {
     display: inline-flex; align-items: center; gap: var(--space-1);
@@ -1476,6 +1477,11 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .post-media-frame img, .post-media-frame video { width: 100%; height: 100%; object-fit: cover; }
 .post-card-meta { font-size: var(--fs-100); color: var(--text-muted); display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .post-card-meta svg { width: 13px; height: 13px; flex-shrink: 0; }
+/* A sentence rather than a fact: keep the icon beside the first line instead
+   of letting the wrap push the text under it. */
+.post-card-meta--note { flex-wrap: nowrap; align-items: flex-start; }
+.post-card-meta--note svg { margin-block-start: 3px; }
+.post-card-meta--note > span { min-width: 0; }
 .post-card-error {
     background: var(--danger-soft);
     border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
@@ -1563,6 +1569,47 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .schedule-truth svg { width: 16px; height: 16px; color: var(--info-text); flex-shrink: 0; margin-block-start: 2px; }
 .schedule-actual { display: block; margin-block-start: var(--space-2); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .schedule-actual.is-warning { color: var(--warning-text); }
+
+/* ─── TikTok ─────────────────────────────────────────────────────────────────
+   The composer panel and the card's "it is in your inbox" step. Same quiet
+   treatment as .schedule-truth: information, not an alarm. */
+.tiktok-panel,
+.tiktok-next {
+    display: flex; flex-direction: column; gap: var(--space-2);
+    padding: var(--space-3);
+    margin-block: var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--brand-tiktok-soft);
+    border: 1px solid var(--brand-tiktok-soft);
+    font-size: var(--fs-100);
+    color: var(--text-default);
+}
+.tiktok-panel.hidden { display: none; }
+.tiktok-panel .form-hint { margin: 0; }
+.tiktok-account,
+.tiktok-next-title { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--text-strong); }
+.tiktok-next-body { margin: 0; }
+.tiktok-account svg,
+.tiktok-next-title svg { width: 16px; height: 16px; flex-shrink: 0; }
+.tiktok-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.tiktok-avatar-lg { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.tiktok-register { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
+/* Label on its own line, then the value with its copy button beside it — the
+   values are long URLs, and a label sharing their line pushed each one onto a
+   different wrap. */
+.tiktok-register li {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center; column-gap: var(--space-2); row-gap: var(--space-1);
+}
+.tiktok-register li .form-label { grid-column: 1 / -1; margin: 0; }
+.tiktok-register code { overflow-wrap: anywhere; font-size: var(--fs-100); }
+.tiktok-app-summary {
+    display: flex; align-items: center; gap: var(--space-2);
+    cursor: pointer; list-style: none;
+}
+.tiktok-app-summary::-webkit-details-marker { display: none; }
+.tiktok-app-summary svg { width: 16px; height: 16px; transition: transform var(--motion-fast); }
+details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 
 /* ─── Inbox ──────────────────────────────────────────────────────────────── */
 .inbox-layout {

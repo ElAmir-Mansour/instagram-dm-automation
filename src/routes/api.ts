@@ -30,6 +30,11 @@ import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
 import { getMediaStore } from '../services/storage.js';
 import adminRouter from './admin.js';
+import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
+import {
+    publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError,
+} from '../services/tiktokPublish.js';
+import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
 
 
 const router = Router();
@@ -356,8 +361,12 @@ router.get('/jobs/drain', async (req, res) => {
         log('error', 'cron.publish_error', describeError(err));
     }
 
+    // TikTok answers asynchronously, so a drain also asks after uploads TikTok has not
+    // finished with. Cannot throw, and bounded to a handful of status calls.
+    const tiktok = await reconcileTikTokPosts();
+
     const { status, body } = composeDrainResponse(jobs, jobsError, publish, publishError);
-    res.status(status).json(body);
+    res.status(status).json(status === 200 ? { ...body, tiktok } : body);
 });
 
 // ─── Cron: Publish Scheduled Posts ──────────────────────────────────────────
@@ -402,8 +411,16 @@ export function formatPublishedIds(fbId: string | null, igId: string | null): st
  * log nobody reads.
  */
 export function unsupportedPlatformCombination(platform: unknown, postType: unknown): string | null {
+    if (!isMetaPlatform(platform) && platform !== 'tiktok') {
+        // Before the dispatcher failed closed, an unknown platform was accepted here and then
+        // marked PUBLISHED by the sweep without going anywhere.
+        return `Unknown platform "${String(platform)}".`;
+    }
     if (postType === 'story' && (platform === 'facebook' || platform === 'both')) {
         return 'Facebook Page stories are not supported — this service has no /photo_stories or /video_stories upload. Schedule a story for Instagram only.';
+    }
+    if (platform === 'tiktok' && postType !== 'video') {
+        return 'TikTok posts must be videos — photo posts are not supported yet.';
     }
     return null;
 }
@@ -553,9 +570,16 @@ export async function attemptPublish(
     const already = publishedPlatforms(post.published_post_id);
     let fbId: string | null = already.fb;
     let igId: string | null = already.ig;
-    const postType = post.post_type as 'image' | 'video' | 'reel' | 'story';
+    const postType = post.post_type as 'image' | 'video' | 'reel' | 'story' | 'feed';
 
     try {
+        // Fail closed. A platform this function does not publish to used to match neither
+        // branch below and fall straight through to the PUBLISHED write with an empty id — a
+        // post reported live that went nowhere. `tiktok` rows are routed elsewhere by
+        // `publishClaimedPost`; anything reaching here that is not a Meta platform is a bug.
+        if (!isMetaPlatform(post.platform)) {
+            throw new Error(`Unsupported platform "${String(post.platform)}" — nothing was published.`);
+        }
         const token = decryptSecret(creator.page_access_token);
 
         // 1. Publish to Facebook
@@ -586,6 +610,9 @@ export async function attemptPublish(
             }
             if (!post.media_url) {
                 throw new Error('Instagram requires a media URL to publish.');
+            }
+            if (postType === 'feed') {
+                throw new Error('Text posts are Facebook-only — Instagram needs an image or a video.');
             }
             log('info', 'publish.instagram_start', { post_id: post.id });
             const igRes = await publishInstagramPost(
@@ -637,6 +664,40 @@ export async function attemptPublish(
 
         throw new PublishAttemptError(message, fbId, igId, err);
     }
+}
+
+/** The platforms `attemptPublish` owns. `both` means Instagram + Facebook, never TikTok. */
+export function isMetaPlatform(platform: unknown): platform is 'instagram' | 'facebook' | 'both' {
+    return platform === 'instagram' || platform === 'facebook' || platform === 'both';
+}
+
+/** A claimed row, as every publishing caller selects it (`s.*` plus the creator's Meta fields). */
+type ClaimedPost = PublishTarget & Pick<ScheduledPostRow, 'creator_id' | 'external_publish_id'>;
+
+/**
+ * Publish one row that the caller has already claimed (status PUBLISHING), whatever platform
+ * it is for. The single dispatch point: the sweep, "Publish now" on a card, and publish-on-create
+ * all come through here, so a platform cannot be supported by one path and silently skipped by
+ * another — which is how the create path came to carry its own divergent copy of the Meta
+ * publish before this existed.
+ *
+ * Returns the status the row ended in. Throws — having written FAILED — on failure, except
+ * that a TikTok row held by TikTok's pending-draft limit is put back to PENDING and throws
+ * `TikTokInboxFullError`, which callers report as "held", not "failed".
+ */
+export async function publishClaimedPost(post: ClaimedPost, creator: PublishCreator): Promise<string> {
+    if (post.platform === 'tiktok') {
+        return publishTikTokPost({
+            id: post.id,
+            creator_id: post.creator_id,
+            post_type: post.post_type,
+            caption: post.caption,
+            media_url: post.media_url,
+            external_publish_id: post.external_publish_id ?? null,
+        });
+    }
+    await attemptPublish(post, creator);
+    return 'PUBLISHED';
 }
 
 /**
@@ -724,7 +785,7 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
         });
 
         try {
-            await attemptPublish(post, {
+            await publishClaimedPost(post, {
                 id: post.creator_id,
                 page_access_token: post.page_access_token,
                 instagram_page_id: post.instagram_page_id,
@@ -732,9 +793,14 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
             });
             publishedIds.push(post.id);
         } catch (err: any) {
-            // attemptPublish has already written the FAILED row — with whatever partial id
-            // already went live, so the next attempt skips it — and called noteMetaFailure.
-            // This is the cron-specific log line on top of that.
+            if (err instanceof TikTokInboxFullError) {
+                // Held, not failed — the row is PENDING again and goes out once a draft clears.
+                log('warn', 'cron.publish_held_tiktok_inbox', { post_id: post.id });
+                continue;
+            }
+            // The publisher has already written the FAILED row — for Meta, with whatever
+            // partial id already went live, so the next attempt skips it — and noted a dead
+            // token. This is the cron-specific log line on top of that.
             log('error', 'cron.publish_failed', {
                 post_id: post.id,
                 fb_post_id: err instanceof PublishAttemptError ? err.fbId : null,
@@ -797,6 +863,16 @@ router.get('/cron/publish', async (req, res) => {
         await drainWorker();
 
         const publishSweep = await publishDuePosts();
+
+        // TikTok housekeeping: refresh every connection (a daily health check — a revoked
+        // account is found here instead of by the next post), then settle any uploads TikTok
+        // has not reported on. Neither can throw.
+        const tiktokRefresh = await refreshAllConnections();
+        if (tiktokRefresh.refreshed > 0 || tiktokRefresh.failed > 0) {
+            log('info', 'cron.tiktok_refresh', { ...tiktokRefresh });
+        }
+        await reconcileTikTokPosts(25);
+
         // `heldForInactiveTenant` rides on both branches: "nothing to publish" is exactly the
         // answer that would otherwise hide a disabled tenant's whole backlog.
         const held = publishSweep.heldForInactiveTenant > 0
@@ -1006,6 +1082,12 @@ router.get('/interactions/export', async (req, res) => {
         res.status(500).json({ error: 'Failed to export interactions.' });
     }
 });
+
+// ─── TikTok, unauthenticated half ───────────────────────────────────────────
+// The OAuth callback and the webhook are called by TikTok, not by the dashboard, so they can
+// carry no session. Each authenticates itself (single-use state; HMAC signature). Requests for
+// any other /tiktok path fall through this router to the authenticated one below.
+router.use('/tiktok', tiktokPublicRouter);
 
 // ─── All routes below require authentication ────────────────────────────────
 router.use(requireAuth);
@@ -1221,6 +1303,9 @@ router.post('/auth/password', async (req, res) => {
 // silent fallback is the bug this whole layer exists to remove — which is why it is safe to
 // call inline inside a query.
 router.use(resolveTenant);
+
+// TikTok connection management — tenant-scoped, so below resolveTenant.
+router.use('/tiktok', tiktokRouter);
 
 // ─── In-tenant role guards ──────────────────────────────────────────────────
 //
@@ -2046,16 +2131,27 @@ router.get('/posts/scheduled', async (req, res) => {
 router.post('/posts/scheduled', canOperate, async (req, res) => {
     try {
         const { platform, post_type, caption, media_url, scheduled_time, publish_now, cover_url } = req.body;
+        // "Also send this to TikTok": creates a second row, `platform = 'tiktok'`, sharing the
+        // caption, video and time. A separate row rather than a third branch inside `both`,
+        // so the Meta publish path and its partial-success bookkeeping are untouched.
+        const alsoTikTok = req.body?.also_tiktok === true && platform !== 'tiktok';
 
         if (!platform || !post_type || !scheduled_time) {
             res.status(400).json({ error: 'platform, post_type, and scheduled_time are required.' });
             return;
         }
 
+        const when = new Date(scheduled_time);
+        if (Number.isNaN(when.getTime())) {
+            res.status(400).json({ error: 'scheduled_time is not a valid date.' });
+            return;
+        }
+
         // Rejected here rather than discovered by the cron at 00:00 UTC. A story scheduled to
         // `both` cannot work: Facebook runs first and throws, so Instagram — where it would
         // have published fine — is never reached.
-        const unsupported = unsupportedPlatformCombination(platform, post_type);
+        const unsupported = unsupportedPlatformCombination(platform, post_type)
+            ?? (alsoTikTok ? unsupportedPlatformCombination('tiktok', post_type) : null);
         if (unsupported) {
             res.status(400).json({ error: unsupported });
             return;
@@ -2070,108 +2166,114 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             return;
         }
 
-        // Insert into database
-        const result = await pool.query(
-            `INSERT INTO scheduled_posts (creator_id, platform, post_type, caption, media_url, scheduled_time, status, cover_url)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-            [
-                creatorId,
-                platform,
-                post_type,
-                caption || null,
-                media_url || null,
-                new Date(scheduled_time),
-                'PENDING',
-                cover_url || null
-            ]
-        );
-
-        const newPost = result.rows[0];
-
-        if (publish_now) {
-            log('info', 'publish.immediate_requested', { post_id: newPost.id });
-
-            const token = creator.page_access_token;
-
-            // Declared outside the try so the catch can report what already went live. They
-            // used to be scoped to the try, which is the mechanical reason a partial publish
-            // was reported as a clean failure.
-            let fbId: string | null = null;
-            let igId: string | null = null;
-
-            try {
-                // Mark as publishing
-                await pool.query("UPDATE scheduled_posts SET status = 'PUBLISHING' WHERE id = $1", [newPost.id]);
-
-                // Facebook — the cron path already checked for a missing page id; without the
-                // same check here the literal "null" went into the Graph URL and came back as
-                // an unrelated Meta error.
-                if (platform === 'facebook' || platform === 'both') {
-                    if (!creator.facebook_page_id) {
-                        throw new Error('Facebook Page ID is missing for this creator.');
-                    }
-                    const fbRes = await publishFacebookPost(creator.facebook_page_id, post_type, caption || '', media_url, token);
-                    fbId = fbRes.id || fbRes.post_id;
-                }
-
-                // Instagram
-                if (platform === 'instagram' || platform === 'both') {
-                    if (!creator.instagram_page_id) {
-                        throw new Error('Instagram Account ID is missing for this creator.');
-                    }
-                    // The cron path has always checked this; without the same check here a
-                    // missing media_url reached Meta as `image_url: undefined` and came back
-                    // as an unrelated Graph error.
-                    if (!media_url) {
-                        throw new Error('Instagram requires a media URL to publish.');
-                    }
-                    const igRes = await publishInstagramPost(creator.instagram_page_id, post_type, caption || '', media_url, token, cover_url);
-                    igId = igRes.id;
-                }
-
-                const finalRes = await pool.query(
-                    `UPDATE scheduled_posts
-                     SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL
-                     WHERE id = $2 RETURNING *`,
-                    [formatPublishedIds(fbId, igId), newPost.id]
-                );
-                res.status(201).json(finalRes.rows[0]);
+        const wantsTikTok = platform === 'tiktok' || alsoTikTok;
+        if (wantsTikTok) {
+            if (!media_url) {
+                res.status(400).json({ error: 'TikTok needs a video — upload one first.' });
                 return;
-            } catch (publishErr: any) {
-                log('error', 'publish.immediate_failed', {
-                    post_id: newPost.id, fb_post_id: fbId, ig_media_id: igId,
-                    ...describeError(publishErr),
-                });
-                await noteMetaFailure(creatorId, publishErr);
-
-                // Same partial-success problem as the cron path, and worse here because the
-                // caller is a person watching: `platform: 'both'` publishes Facebook first,
-                // so a Facebook success plus an Instagram failure used to discard the
-                // Facebook post id entirely and report a clean failure for a post that was
-                // already live.
-                const partial = formatPublishedIds(fbId, igId);
-                const message = partial
-                    ? `Partially published (${partial}) — the rest failed: ${publishErr.message}`
-                    : publishErr.message;
-
-                const finalRes = await pool.query(
-                    `UPDATE scheduled_posts
-                     SET status = 'FAILED', error_log = $1, published_post_id = $2
-                     WHERE id = $3 RETURNING *`,
-                    [message, partial || null, newPost.id]
-                );
-                // 201 for a row we just marked FAILED read as success to every caller, so a
-                // publish that Meta rejected looked identical to one that went live.
-                res.status(502).json({
-                    ...finalRes.rows[0],
-                    status: 'FAILED',
-                    error: message
-                });
+            }
+            // Said now, to the person scheduling, rather than at publish time in a card nobody
+            // is looking at.
+            const connection = await getTikTokConnection(creatorId);
+            if (!connection || connection.status !== 'active') {
+                res.status(409).json({ error: 'TikTok is not connected — connect it in Settings first.' });
                 return;
             }
         }
 
-        res.status(201).json(newPost);
+        const targets: string[] = [platform];
+        if (alsoTikTok) targets.push('tiktok');
+        const groupId = targets.length > 1 ? crypto.randomUUID() : null;
+
+        // One transaction: a Meta row whose TikTok sibling failed to insert would look to the
+        // operator like a TikTok post that silently vanished.
+        const client = await pool.connect();
+        const rows: any[] = [];
+        try {
+            await client.query('BEGIN');
+            for (const target of targets) {
+                const inserted = await client.query(
+                    `INSERT INTO scheduled_posts
+                         (creator_id, platform, post_type, caption, media_url, scheduled_time, status, cover_url, group_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8) RETURNING *`,
+                    [
+                        creatorId, target, post_type, caption || null, media_url || null, when,
+                        // A cover image is an Instagram/Facebook concept; TikTok picks its own.
+                        target === 'tiktok' ? null : (cover_url || null),
+                        groupId,
+                    ]
+                );
+                rows.push(inserted.rows[0]);
+            }
+            await client.query('COMMIT');
+        } catch (insertErr) {
+            await client.query('ROLLBACK').catch(() => undefined);
+            throw insertErr;
+        } finally {
+            client.release();
+        }
+
+        const newPost = rows[0];
+
+        if (publish_now) {
+            log('info', 'publish.immediate_requested', { post_id: newPost.id, group_id: groupId });
+
+            // Each row goes through the same claim and the same dispatcher as the sweep. This
+            // branch used to carry its own copy of the Meta publish — which set PUBLISHING
+            // without `claimed_at`, so a row whose invocation died was never reaped.
+            const outcomes: { id: string; ok: boolean; error?: string }[] = [];
+            for (const row of rows) {
+                const claim = await pool.query(
+                    `UPDATE scheduled_posts
+                        SET status = 'PUBLISHING', claimed_at = NOW(), attempts = attempts + 1
+                      WHERE id = $1 AND status = 'PENDING'
+                  RETURNING *`,
+                    [row.id]
+                );
+                const claimed = claim.rows[0];
+                if (!claimed) continue;
+                try {
+                    await publishClaimedPost(claimed, {
+                        id: creatorId,
+                        page_access_token: creator.page_access_token,
+                        instagram_page_id: creator.instagram_page_id ?? null,
+                        facebook_page_id: creator.facebook_page_id ?? null,
+                    });
+                    outcomes.push({ id: row.id, ok: true });
+                } catch (publishErr: any) {
+                    log('error', 'publish.immediate_failed', {
+                        post_id: row.id,
+                        fb_post_id: publishErr instanceof PublishAttemptError ? publishErr.fbId : null,
+                        ig_media_id: publishErr instanceof PublishAttemptError ? publishErr.igId : null,
+                        ...describeError(publishErr),
+                    });
+                    outcomes.push({ id: row.id, ok: false, error: publishErr?.message ?? String(publishErr) });
+                }
+            }
+
+            // Re-read: the publishers wrote the real outcome (PUBLISHED, FAILED, or for TikTok
+            // PROCESSING / IN_INBOX). Not `attemptPublish`'s return value, which knows nothing
+            // of the sibling row.
+            const finalRows = await pool.query(
+                'SELECT * FROM scheduled_posts WHERE id = ANY($1::uuid[]) ORDER BY platform = $2 DESC',
+                [rows.map((r) => r.id), platform]
+            );
+            const primary = finalRows.rows.find((r: any) => r.id === newPost.id) ?? newPost;
+            const group = finalRows.rows;
+            const primaryFailure = outcomes.find((o) => o.id === newPost.id && !o.ok);
+
+            // 201 for a row we just marked FAILED read as success to every caller, so a
+            // publish that Meta rejected looked identical to one that went live. The shape of
+            // the 502 is what the dashboard's publishFailure() already parses.
+            if (primaryFailure) {
+                res.status(502).json({ ...primary, status: 'FAILED', error: primaryFailure.error, group });
+                return;
+            }
+            res.status(201).json({ ...primary, group });
+            return;
+        }
+
+        res.status(201).json(rows.length > 1 ? { ...newPost, group: rows } : newPost);
     } catch (err) {
         log('error', 'api.scheduled_create_failed', describeError(err));
         res.status(500).json({ error: 'Failed to create scheduled post.' });
@@ -2199,12 +2301,18 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
         // The guard has to run against the EFFECTIVE combination, not the body: every column
         // below is `COALESCE($n, column)`, so a PUT sending only `platform` still has a
         // post_type, and it is the one already on the row. Read it first.
-        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type'>>(
-            'SELECT platform, post_type FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
+        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type' | 'status'>>(
+            'SELECT platform, post_type, status FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
             [id, tenantId]
         );
         if (!current) {
             res.status(404).json({ error: 'Scheduled post not found.' });
+            return;
+        }
+        // Once the video is with TikTok, the row describes something that already happened;
+        // editing it would change the record without changing the post.
+        if (current.status === 'PUBLISHING' || current.status === 'PROCESSING' || current.status === 'IN_INBOX') {
+            res.status(409).json({ error: `This post is already ${current.status === 'IN_INBOX' ? 'in your TikTok inbox' : 'being published'} and can no longer be edited.` });
             return;
         }
 
@@ -2334,13 +2442,18 @@ router.post('/posts/scheduled/:id/publish-now', canOperate, async (req, res) => 
         log('info', 'publish.now_requested', { post_id: post.id });
 
         try {
-            await attemptPublish(post, {
+            await publishClaimedPost(post, {
                 id: post.creator_id,
                 page_access_token: post.page_access_token,
                 instagram_page_id: post.instagram_page_id,
                 facebook_page_id: post.facebook_page_id,
             });
         } catch (err: any) {
+            if (err instanceof TikTokInboxFullError) {
+                // Not a failure: the row is PENDING again with the reason on it.
+                res.status(409).json({ error: err.message });
+                return;
+            }
             log('error', 'publish.now_failed', {
                 post_id: post.id,
                 fb_post_id: err instanceof PublishAttemptError ? err.fbId : null,

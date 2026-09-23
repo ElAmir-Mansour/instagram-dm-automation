@@ -104,6 +104,9 @@ export const AUDIT_ACTIONS = {
     settingsTokenExtend: 'settings.token_extend',
     settingsTokenRecheck: 'settings.token_recheck',
     settingsWebhookTokenWrite: 'settings.webhook_token_write',
+    tiktokConnect: 'tiktok.connect',
+    tiktokDisconnect: 'tiktok.disconnect',
+    settingsTikTokAppWrite: 'settings.tiktok_app_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

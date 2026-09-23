@@ -11,6 +11,7 @@ import { enqueueWebhookBody, processWebhookBody } from './webhook/router.js';
 import { drainInline } from './jobs/drain.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
 import apiRouter, { securityHeaders } from './routes/api.js';
+import { APP_SETTING_KEYS, getSetting } from './services/appSettings.js';
 
 
 // ─── Startup ────────────────────────────────────────────────────────────────
@@ -101,6 +102,33 @@ app.get('/', (_req, res) => {
 // Privacy Policy (required by Meta App Review)
 app.get('/privacy', (_req, res) => {
     res.sendFile(path.join(__dirname, '../public/privacy.html'));
+});
+
+// Terms of Service — TikTok requires a public terms URL (and a privacy URL) before an app can
+// be registered at all.
+app.get('/terms', (_req, res) => {
+    res.sendFile(path.join(__dirname, '../public/terms.html'));
+});
+
+// TikTok's URL-property verification: its developer portal hands out a `tiktok<token>.txt` file
+// that must be served from the site root. The name and contents are pasted into the dashboard
+// (TikTok app settings) rather than committed, so re-verifying never needs a deploy. Anything
+// that does not match the saved name is a plain 404.
+app.get(/^\/tiktok[A-Za-z0-9_-]{4,100}\.txt$/, async (req, res) => {
+    try {
+        const [name, content] = await Promise.all([
+            getSetting(APP_SETTING_KEYS.tiktokVerificationFilename),
+            getSetting(APP_SETTING_KEYS.tiktokVerificationContent),
+        ]);
+        if (!name || !content || req.path !== `/${name}`) {
+            res.status(404).send('Not Found');
+            return;
+        }
+        res.type('text/plain').send(content);
+    } catch (err) {
+        log('error', 'tiktok.verification_file_failed', describeError(err));
+        res.status(404).send('Not Found');
+    }
 });
 
 // Eid Landing Page Redirection

@@ -134,8 +134,20 @@ export interface MessageRow {
 
 // ─── scheduled posts ────────────────────────────────────────────────────────────────────
 
-export type SchedulePlatform = 'instagram' | 'facebook' | 'both';
-export type ScheduleStatus = 'PENDING' | 'PUBLISHING' | 'PUBLISHED' | 'FAILED';
+/**
+ * `both` means Instagram + Facebook — it predates TikTok and keeps that meaning. A TikTok post
+ * is always its own row (`tiktok`), linked to its Meta sibling by `group_id` (v18).
+ */
+export type SchedulePlatform = 'instagram' | 'facebook' | 'both' | 'tiktok';
+
+/**
+ * `PROCESSING` and `IN_INBOX` arrived with TikTok (v18), whose publish is asynchronous:
+ * `PROCESSING` — uploaded, TikTok still ingesting; `IN_INBOX` — delivered to the creator's
+ * TikTok inbox, where they finish the post. There is no CHECK on the column, so these are the
+ * vocabulary by convention — every reader that filters on status is listed in
+ * migration_v18_tiktok.sql.
+ */
+export type ScheduleStatus = 'PENDING' | 'PUBLISHING' | 'PROCESSING' | 'IN_INBOX' | 'PUBLISHED' | 'FAILED';
 
 export interface ScheduledPostRow {
     id: string;
@@ -155,7 +167,51 @@ export interface ScheduledPostRow {
     published_post_id: string | null;
     attempts: number;
     claimed_at: Timestamptz | null;
+    /** v18. Ties the rows one composer submission created (e.g. a `both` row and its `tiktok` sibling). */
+    group_id: string | null;
+    /** v18. TikTok's `publish_id`, written the moment the upload is initialised. */
+    external_publish_id: string | null;
+    /** v18. When the reconcile sweep last asked TikTok about a PROCESSING row. */
+    status_checked_at: Timestamptz | null;
     created_at: Timestamptz;
+}
+
+// ─── platform connections (v18) ─────────────────────────────────────────────────────────
+
+export type ConnectionPlatform = 'tiktok';
+export type ConnectionStatus = 'active' | 'invalid' | 'revoked';
+
+export interface PlatformConnectionRow {
+    id: string;
+    creator_id: string;
+    platform: ConnectionPlatform;
+    /** TikTok `open_id` — per-app, and what TikTok webhooks identify the account by. */
+    external_account_id: string;
+    display_name: string | null;
+    avatar_url: string | null;
+    scopes: string[];
+    /** `enc:v1:...`. Only ever read through src/services/tiktokConnections.ts. */
+    access_token: string | null;
+    access_expires_at: Timestamptz | null;
+    /** `enc:v1:...`. May rotate on every refresh. */
+    refresh_token: string | null;
+    refresh_expires_at: Timestamptz | null;
+    status: ConnectionStatus;
+    last_error: string | null;
+    last_refreshed_at: Timestamptz | null;
+    refresh_claimed_at: Timestamptz | null;
+    connected_by_user_id: string | null;
+    created_at: Timestamptz;
+    updated_at: Timestamptz;
+}
+
+export interface AppSettingRow {
+    key: string;
+    /** `enc:v1:...` when `is_secret`. */
+    value: string | null;
+    is_secret: boolean;
+    updated_at: Timestamptz;
+    updated_by: string | null;
 }
 
 /**

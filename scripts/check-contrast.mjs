@@ -222,7 +222,7 @@ function checkPlatformColourUsage() {
         return;
     }
     // Bare --brand-x (not -soft, not -text) used as a background, border or fill.
-    const re = /([^{}]+)\{[^}]*?(?:background|border[a-z-]*|fill)\s*:[^;}]*var\(--brand-(?:instagram|facebook)\)/g;
+    const re = /([^{}]+)\{[^}]*?(?:background|border[a-z-]*|fill)\s*:[^;}]*var\(--brand-(?:instagram|facebook|tiktok)\)/g;
     for (const m of css.matchAll(re)) {
         const selector = m[1].split('\n').pop().trim();
         const allowed = DATA_VIZ_SELECTORS.some(a => selector.includes(a));
