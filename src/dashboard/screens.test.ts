@@ -47,9 +47,55 @@ interface PostsApi {
     renderScheduledCard(post: Record<string, unknown>): { toString(): string };
     platformBadge(platform: unknown): { cls: string; icon: string; label: string };
     tiktokRowOf(result: unknown): Record<string, unknown> | null;
-    tiktokOutcomeText(status: string): string;
+    tiktokOutcomeText(status: string, mode?: string): string;
     tiktok: unknown;
     tiktokReady(): boolean;
+    // Direct Post
+    tiktokCreator: unknown;
+    _ttChoices: Record<string, unknown> | null;
+    _ttDurationSec: number | null;
+    TIKTOK_DEFAULT_CHOICES: Record<string, unknown>;
+    tiktokDirectState(creator: unknown, choices: Record<string, unknown> | null, opts?: Record<string, unknown>): DirectState;
+    validateTikTokOptions(creator: unknown, choices: Record<string, unknown> | null, opts?: Record<string, unknown>): DirectValidation;
+    tiktokDirectForm(view: DirectState): { toString(): string };
+    tiktokConsentBlock(view: DirectState): { toString(): string };
+    tiktokDeclaration(kind: string): { toString(): string };
+    renderTikTokDirect(): { toString(): string };
+    tiktokChoicesFrom(options: unknown): Record<string, unknown>;
+    attachTikTokOptions(payload: Record<string, unknown>): { message: string; field: string | null } | null;
+    tiktokPostMode(): string;
+    privacyLabel(level: string): string;
+    formatDuration(sec: number): string;
+}
+
+interface DirectState {
+    privacy: string;
+    audited: boolean;
+    privacyOptions: Array<{ value: string; disabled: boolean }>;
+    selfOnlyBlocked: boolean;
+    comment: { checked: boolean; disabled: boolean };
+    duet: { checked: boolean; disabled: boolean };
+    stitch: { checked: boolean; disabled: boolean };
+    disclose: boolean;
+    brandOrganic: boolean;
+    brandContent: boolean;
+    brandContentDisabled: boolean;
+    brandContentReason: string | null;
+    needsDisclosureChoice: boolean;
+    label: string | null;
+    declaration: string;
+    isAigc: boolean;
+    consent: boolean;
+    tooLong: boolean;
+}
+
+type DirectValidation =
+    | { ok: true; options: Record<string, unknown> }
+    | { ok: false; code: string; field: string | null; message: string };
+
+interface SettingsApi {
+    tiktokModeLabel(connection: unknown): string;
+    tiktokIntro(connection: unknown): string;
 }
 
 interface ActivityApi {
@@ -138,6 +184,7 @@ interface Loaded {
     Activity: ActivityApi;
     Inbox: InboxApi;
     Ai: AiApi;
+    Settings: SettingsApi;
     dom: Map<string, FakeEl>;
     /** Stubbed API responses, per method name. */
     api: Record<string, (...args: unknown[]) => unknown>;
@@ -199,15 +246,16 @@ function load(): Loaded {
         'dashboard/js/pages/activity.js',
         'dashboard/js/pages/inbox.js',
         'dashboard/js/pages/ai_settings.js',
+        'dashboard/js/pages/settings.js',
     ]) {
         vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     }
 
-    const { PostsPage, ActivityPage, InboxPage, AiSettingsPage, UI, t } = vm.runInContext(
-        '({ PostsPage, ActivityPage, InboxPage, AiSettingsPage, UI, t })', ctx
+    const { PostsPage, ActivityPage, InboxPage, AiSettingsPage, SettingsPage, UI, t } = vm.runInContext(
+        '({ PostsPage, ActivityPage, InboxPage, AiSettingsPage, SettingsPage, UI, t })', ctx
     ) as {
         PostsPage: PostsApi; ActivityPage: ActivityApi; InboxPage: InboxApi;
-        AiSettingsPage: AiApi; UI: UiApi; t: Translate;
+        AiSettingsPage: AiApi; SettingsPage: SettingsApi; UI: UiApi; t: Translate;
     };
 
     // loadData() writes markup and is not what these tests are about; the FACT
@@ -215,7 +263,10 @@ function load(): Loaded {
     const loads: number[] = [];
     ActivityPage.loadData = (): unknown => { loads.push(ActivityPage.currentPage); return undefined; };
 
-    return { Posts: PostsPage, UI, t, Activity: ActivityPage, Inbox: InboxPage, Ai: AiSettingsPage, dom, api, loads };
+    return {
+        Posts: PostsPage, UI, t, Activity: ActivityPage, Inbox: InboxPage, Ai: AiSettingsPage,
+        Settings: SettingsPage, dom, api, loads,
+    };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -687,5 +738,390 @@ describe('PostsPage — TikTok rows', () => {
         assert.equal(Posts.tiktokReady(), false, 'connected without video.upload is not ready');
         Posts.tiktok = { connection: { connected: true, canUpload: true } };
         assert.equal(Posts.tiktokReady(), true);
+        // A Direct Post connection holds video.publish only — that is enough.
+        Posts.tiktok = { connection: { connected: true, canUpload: false, canDirectPost: true } };
+        assert.equal(Posts.tiktokReady(), true);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * TikTok Direct Post. Every rule below is one TikTok's app audit checks against
+ * its Content Sharing Guidelines, so each is pinned on the pure state/validation
+ * helpers AND, where it is visible, on the markup the composer actually renders.
+ */
+describe('PostsPage — TikTok Direct Post composer', () => {
+    const creator = {
+        nickname: 'ElAmir',
+        username: 'elamir.ai',
+        avatarUrl: 'https://p16.tiktokcdn.com/avatar.jpg',
+        privacyLevelOptions: ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'],
+        commentDisabled: false,
+        duetDisabled: false,
+        stitchDisabled: false,
+        maxVideoPostDurationSec: 600,
+    };
+    const audited = { audited: true };
+    const publicOk = { privacy_level: 'PUBLIC_TO_EVERYONE', consent: true };
+
+    /** The `<select id="tiktok-privacy">` and its options, parsed out of the form markup. */
+    function privacySelect(markup: string): { open: string; options: Array<{ value: string; attrs: string }> } {
+        const m = markup.match(/<select[^>]*id="tiktok-privacy"[^>]*>([\s\S]*?)<\/select>/);
+        assert.ok(m, 'the privacy dropdown must be rendered');
+        const open = m[0].slice(0, m[0].indexOf('>') + 1);
+        const options = [...(m[1] ?? '').matchAll(/<option value="([^"]*)"([^>]*)>/g)]
+            .map((o) => ({ value: o[1] ?? '', attrs: o[2] ?? '' }));
+        return { open, options };
+    }
+
+    /** The opening tag of the input with this id. */
+    function inputTag(markup: string, id: string): string {
+        const m = markup.match(new RegExp(`<input[^>]*id="${id}"[^>]*>`));
+        assert.ok(m, `input #${id} must be rendered`);
+        return m[0];
+    }
+
+    const plain = (markup: string): string => markup.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+
+    it('shows which account posts: avatar, nickname and @username', () => {
+        const { Posts } = load();
+        const form = String(Posts.tiktokDirectForm(Posts.tiktokDirectState(creator, null, audited)));
+        assert.ok(form.includes('ElAmir'));
+        assert.ok(form.includes('@elamir.ai'));
+        assert.ok(form.includes('src="https://p16.tiktokcdn.com/avatar.jpg"'));
+    });
+
+    it('has NO default privacy level: an empty, selected placeholder and a required select', () => {
+        const { Posts, t } = load();
+        const state = Posts.tiktokDirectState(creator, null, audited);
+        assert.equal(state.privacy, '');
+
+        const { open, options } = privacySelect(String(Posts.tiktokDirectForm(state)));
+        assert.ok(/\brequired\b/.test(open), 'the dropdown must be required');
+        const [placeholder] = options;
+        assert.ok(placeholder);
+        assert.equal(placeholder.value, '', 'the first option is the empty placeholder');
+        assert.ok(/\bselected\b/.test(placeholder.attrs), 'and it is the one selected');
+        assert.equal(options.filter((o) => /\bselected\b/.test(o.attrs)).length, 1, 'no real level is pre-selected');
+        assert.deepEqual(options.slice(1).map((o) => o.value), creator.privacyLevelOptions);
+
+        const form = String(Posts.tiktokDirectForm(state));
+        assert.ok(form.includes(t('posts.tiktok.direct.privacyPlaceholder')));
+        // Each level carries a translated label, not TikTok's enum.
+        assert.ok(form.includes(t('posts.tiktok.privacy.selfOnly')));
+        assert.notEqual(t('posts.tiktok.privacy.selfOnly'), 'SELF_ONLY');
+
+        const v = Posts.validateTikTokOptions(creator, { consent: true }, audited);
+        assert.equal(v.ok, false);
+        assert.equal(!v.ok && v.code, 'privacyRequired');
+    });
+
+    it('starts every interaction, disclosure and AI switch OFF', () => {
+        const { Posts } = load();
+        const state = Posts.tiktokDirectState(creator, null, audited);
+        for (const k of ['comment', 'duet', 'stitch'] as const) assert.equal(state[k].checked, false, `${k} must start off`);
+        assert.equal(state.disclose, false);
+        assert.equal(state.isAigc, false);
+        assert.equal(state.consent, false);
+
+        const markup = String(Posts.tiktokDirectForm(state)) + String(Posts.tiktokConsentBlock(state));
+        assert.ok(!/\bchecked\b/.test(markup), 'nothing in the Direct Post form is pre-ticked');
+    });
+
+    it('greys out an interaction TikTok has switched off, and sends it as off whatever was saved', () => {
+        const { Posts, t } = load();
+        const locked = { ...creator, commentDisabled: true, stitchDisabled: true };
+        const state = Posts.tiktokDirectState(locked, { allow_comment: true, allow_duet: true, allow_stitch: true }, audited);
+        assert.deepEqual({ ...state.comment }, { checked: false, disabled: true });
+        assert.deepEqual({ ...state.duet }, { checked: true, disabled: false });
+
+        const form = String(Posts.tiktokDirectForm(state));
+        assert.ok(/\bdisabled\b/.test(inputTag(form, 'tiktok-allow-comment')));
+        assert.ok(!/\bdisabled\b/.test(inputTag(form, 'tiktok-allow-duet')));
+        assert.ok(form.includes('is-disabled'), 'the row is greyed');
+        assert.ok(form.includes(t('posts.tiktok.direct.interactionOff')), 'and says why');
+
+        const v = Posts.validateTikTokOptions(locked, { ...publicOk, allow_comment: true, allow_duet: true, allow_stitch: true }, audited);
+        assert.ok(v.ok);
+        assert.equal(v.ok && v.options.allow_comment, false);
+        assert.equal(v.ok && v.options.allow_duet, true);
+        assert.equal(v.ok && v.options.allow_stitch, false);
+    });
+
+    it('branded content cannot be private — in both directions', () => {
+        const { Posts, t } = load();
+
+        // Branded content ticked -> "Only me" is disabled.
+        const branded = Posts.tiktokDirectState(creator, { disclose: true, brand_content: true }, audited);
+        assert.equal(branded.brandContent, true);
+        assert.equal(branded.selfOnlyBlocked, true);
+        for (const o of branded.privacyOptions) {
+            assert.equal(o.disabled, o.value === 'SELF_ONLY', `${o.value}: only SELF_ONLY is blocked by branded content`);
+        }
+        const brandedSelect = privacySelect(String(Posts.tiktokDirectForm(branded)));
+        const selfOnly = brandedSelect.options.find((o) => o.value === 'SELF_ONLY');
+        assert.ok(selfOnly && /\bdisabled\b/.test(selfOnly.attrs));
+
+        // "Only me" selected -> Branded content is disabled, with the reason.
+        const priv = Posts.tiktokDirectState(creator, { privacy_level: 'SELF_ONLY', disclose: true }, audited);
+        assert.equal(priv.privacy, 'SELF_ONLY');
+        assert.equal(priv.brandContentDisabled, true);
+        assert.equal(priv.brandContentReason, 'private');
+        const form = String(Posts.tiktokDirectForm(priv));
+        assert.ok(/\bdisabled\b/.test(inputTag(form, 'tiktok-brand-content')));
+        assert.ok(form.includes(t('posts.tiktok.direct.brandedPrivate')));
+        assert.ok(!/\bdisabled\b/.test(inputTag(form, 'tiktok-brand-organic')), 'your-brand stays available');
+
+        // A saved row carrying both is named, not silently resolved.
+        const v = Posts.validateTikTokOptions(creator,
+            { privacy_level: 'SELF_ONLY', disclose: true, brand_content: true, consent: true }, audited);
+        assert.equal(v.ok, false);
+        assert.equal(!v.ok && v.code, 'brandedPrivate');
+    });
+
+    it('disclosure ON requires "Your brand" or "Branded content", and each maps to its own flag and label', () => {
+        const { Posts, t } = load();
+
+        const none = Posts.validateTikTokOptions(creator, { ...publicOk, disclose: true }, audited);
+        assert.equal(none.ok, false);
+        assert.equal(!none.ok && none.code, 'discloseChoose');
+        assert.equal(!none.ok && none.message, t('posts.tiktok.direct.discloseChoose'));
+        const noneState = Posts.tiktokDirectState(creator, { disclose: true }, audited);
+        assert.equal(noneState.needsDisclosureChoice, true);
+        assert.ok(String(Posts.tiktokDirectForm(noneState)).includes(t('posts.tiktok.direct.discloseChoose')),
+            'the panel says so before submit, too');
+
+        const organic = Posts.validateTikTokOptions(creator, { ...publicOk, disclose: true, brand_organic: true }, audited);
+        assert.ok(organic.ok);
+        assert.equal(organic.ok && organic.options.brand_organic, true);
+        assert.equal(organic.ok && organic.options.brand_content, false);
+        const organicState = Posts.tiktokDirectState(creator, { disclose: true, brand_organic: true }, audited);
+        assert.equal(organicState.label, 'promotional');
+        assert.ok(String(Posts.tiktokDirectForm(organicState)).includes(t('posts.tiktok.direct.labelPromotional')));
+
+        const content = Posts.validateTikTokOptions(creator, { ...publicOk, disclose: true, brand_content: true }, audited);
+        assert.ok(content.ok);
+        assert.equal(content.ok && content.options.brand_content, true);
+        assert.equal(Posts.tiktokDirectState(creator, { disclose: true, brand_content: true }, audited).label, 'paid');
+        // Both ticked is labelled Paid partnership, per TikTok.
+        assert.equal(Posts.tiktokDirectState(creator, { disclose: true, brand_organic: true, brand_content: true }, audited).label, 'paid');
+
+        // Both hints are on screen under the options.
+        const form = String(Posts.tiktokDirectForm(noneState));
+        assert.ok(form.includes(t('posts.tiktok.direct.yourBrandHint')));
+        assert.ok(form.includes(t('posts.tiktok.direct.brandedContentHint')));
+
+        // Ticks left over under a switched-off disclosure are never sent.
+        const off = Posts.validateTikTokOptions(creator, { ...publicOk, disclose: false, brand_organic: true, brand_content: true }, audited);
+        assert.ok(off.ok);
+        assert.equal(off.ok && off.options.brand_organic, false);
+        assert.equal(off.ok && off.options.brand_content, false);
+    });
+
+    it('blocks a video longer than the account may post, and only then', () => {
+        const { Posts, t } = load();
+        const over = Posts.validateTikTokOptions(creator, publicOk, { ...audited, durationSec: 600.4 });
+        assert.equal(over.ok, false);
+        assert.equal(!over.ok && over.code, 'tooLong');
+        assert.equal(!over.ok && over.field, 'post-media-url');
+        assert.equal(!over.ok && over.message, t('posts.tiktok.direct.tooLong', { duration: '10:01', max: '10:00' }));
+
+        const state = Posts.tiktokDirectState(creator, null, { ...audited, durationSec: 601 });
+        assert.equal(state.tooLong, true);
+        assert.ok(String(Posts.tiktokDirectForm(state)).includes(t('posts.tiktok.direct.tooLong', { duration: '10:01', max: '10:00' })));
+
+        assert.ok(Posts.validateTikTokOptions(creator, publicOk, { ...audited, durationSec: 600 }).ok, 'exactly the limit is fine');
+        // An unreadable length is not proof of a long video; TikTok still checks.
+        assert.ok(Posts.validateTikTokOptions(creator, publicOk, { ...audited, durationSec: null }).ok);
+
+        assert.equal(Posts.formatDuration(600), '10:00');
+        assert.equal(Posts.formatDuration(60.4), '1:01', 'rounded up, so a too-long video never reads as the limit');
+        assert.equal(Posts.formatDuration(3725), '1:02:05');
+    });
+
+    it('requires express consent, and sends consent: true only once it is given', () => {
+        const { Posts } = load();
+        const v = Posts.validateTikTokOptions(creator, { privacy_level: 'PUBLIC_TO_EVERYONE' }, audited);
+        assert.equal(v.ok, false);
+        assert.equal(!v.ok && v.code, 'consentRequired');
+        assert.equal(!v.ok && v.field, 'tiktok-consent-check');
+
+        const block = String(Posts.tiktokConsentBlock(Posts.tiktokDirectState(creator, null, audited)));
+        const tag = inputTag(block, 'tiktok-consent-check');
+        assert.ok(/\brequired\b/.test(tag));
+        assert.ok(!/\bchecked\b/.test(tag));
+
+        const ok = Posts.validateTikTokOptions(creator, publicOk, audited);
+        assert.ok(ok.ok);
+        assert.deepEqual(JSON.parse(JSON.stringify(ok.ok && ok.options)), {
+            privacy_level: 'PUBLIC_TO_EVERYONE',
+            allow_comment: false, allow_duet: false, allow_stitch: false,
+            brand_organic: false, brand_content: false, is_aigc: false,
+            consent: true,
+        });
+    });
+
+    it('an unaudited app offers only "Only me" — still with no default — and never branded content', () => {
+        const { Posts, t } = load();
+        const state = Posts.tiktokDirectState(creator, null, { audited: false });
+        assert.equal(state.privacy, '', 'no default even when only one level is possible');
+        for (const o of state.privacyOptions) {
+            assert.equal(o.disabled, o.value !== 'SELF_ONLY', `${o.value} must be ${o.value === 'SELF_ONLY' ? 'enabled' : 'disabled'}`);
+        }
+        assert.equal(state.brandContentDisabled, true);
+        assert.equal(state.brandContentReason, 'unaudited');
+        assert.equal(Posts.tiktokDirectState(creator, { disclose: true, brand_content: true }, { audited: false }).brandContent, false);
+
+        const form = String(Posts.tiktokDirectForm(state));
+        assert.ok(form.includes(t('posts.tiktok.direct.unaudited')), 'the restriction is explained');
+        assert.ok(!String(Posts.tiktokDirectForm(Posts.tiktokDirectState(creator, null, audited))).includes(t('posts.tiktok.direct.unaudited')));
+
+        const pub = Posts.validateTikTokOptions(creator, publicOk, { audited: false });
+        assert.equal(!pub.ok && pub.code, 'unauditedPrivate');
+        assert.ok(Posts.validateTikTokOptions(creator, { privacy_level: 'SELF_ONLY', consent: true }, { audited: false }).ok);
+
+        // Anything but an explicit `true` is the restrictive reading.
+        assert.equal(Posts.tiktokDirectState(creator, null, {}).audited, false);
+    });
+
+    it('the declaration switches to the Branded Content Policy when branded content is ticked', () => {
+        const { Posts, t } = load();
+        const musicLink = t('posts.tiktok.declaration.musicLink');
+        const policyLink = t('posts.tiktok.declaration.policyLink');
+        const musicUrl = 'https://www.tiktok.com/legal/page/global/music-usage-confirmation/en';
+        const policyUrl = 'https://www.tiktok.com/legal/page/global/bc-policy/en';
+
+        assert.equal(Posts.tiktokDirectState(creator, null, audited).declaration, 'music');
+        assert.equal(Posts.tiktokDirectState(creator, { disclose: true, brand_organic: true }, audited).declaration, 'music');
+        assert.equal(Posts.tiktokDirectState(creator, { disclose: true, brand_content: true }, audited).declaration, 'branded');
+
+        const music = String(Posts.tiktokDeclaration('music'));
+        assert.ok(music.includes(`<a href="${musicUrl}" target="_blank" rel="noopener noreferrer">${musicLink}</a>`));
+        assert.ok(!music.includes(policyUrl));
+        assert.equal(plain(music), t('posts.tiktok.declaration.music', { music: musicLink }));
+
+        const branded = String(Posts.tiktokDeclaration('branded'));
+        assert.ok(branded.includes(`<a href="${policyUrl}" target="_blank" rel="noopener noreferrer">${policyLink}</a>`));
+        assert.ok(branded.includes(musicUrl));
+        assert.equal(plain(branded), t('posts.tiktok.declaration.branded', { policy: policyLink, music: musicLink }));
+
+        // And the consent block — the thing above the submit button — follows the state.
+        const block = String(Posts.tiktokConsentBlock(Posts.tiktokDirectState(creator, { disclose: true, brand_content: true }, audited)));
+        assert.ok(block.includes(policyUrl));
+    });
+
+    it('sends tiktok_options only when TikTok is a target in direct mode', () => {
+        const { Posts } = load();
+        Posts.tiktok = { connection: { connected: true, canUpload: true, postMode: 'direct', audited: true } };
+        Posts.tiktokCreator = { status: 'ready', data: { postMode: 'direct', audited: true, creator } };
+        Posts._ttChoices = { ...Posts.TIKTOK_DEFAULT_CHOICES, ...publicOk, allow_duet: true };
+
+        const tiktokOnly: Record<string, unknown> = { platform: 'tiktok', post_type: 'video' };
+        assert.equal(Posts.attachTikTokOptions(tiktokOnly), null);
+        assert.equal(JSON.parse(JSON.stringify(tiktokOnly.tiktok_options)).allow_duet, true);
+
+        const also: Record<string, unknown> = { platform: 'both', post_type: 'video', also_tiktok: true };
+        assert.equal(Posts.attachTikTokOptions(also), null);
+        assert.ok(also.tiktok_options, 'the "Also send to TikTok" row carries them too');
+
+        const metaOnly: Record<string, unknown> = { platform: 'instagram', post_type: 'video' };
+        assert.equal(Posts.attachTikTokOptions(metaOnly), null);
+        assert.equal(metaOnly.tiktok_options, undefined);
+
+        // Inbox mode: nothing extra, as before.
+        const { Posts: Inbox } = load();
+        Inbox.tiktok = { connection: { connected: true, canUpload: true, postMode: 'inbox' } };
+        const inboxPost: Record<string, unknown> = { platform: 'tiktok', post_type: 'video' };
+        assert.equal(Inbox.attachTikTokOptions(inboxPost), null);
+        assert.equal(inboxPost.tiktok_options, undefined);
+
+        // The live answer wins over the page-load summary.
+        Posts.tiktokCreator = { status: 'ready', data: { postMode: 'inbox', audited: false, creator: null } };
+        assert.equal(Posts.tiktokPostMode(), 'inbox');
+    });
+
+    it('blocks submit while the creator info is loading or failed, and shows the failure with Retry', () => {
+        const { Posts, t } = load();
+        Posts.tiktok = { connection: { connected: true, canUpload: true, postMode: 'direct' } };
+
+        Posts.tiktokCreator = { status: 'loading' };
+        const blocked = Posts.attachTikTokOptions({ platform: 'tiktok' });
+        assert.ok(blocked);
+        assert.equal(blocked.message, t('posts.tiktok.direct.notReady'));
+
+        Posts.tiktokCreator = { status: 'error', error: { message: 'TikTok refused: spam_risk_too_many_posts' } };
+        const panel = String(Posts.renderTikTokDirect());
+        assert.ok(panel.includes('TikTok refused: spam_risk_too_many_posts'));
+        assert.ok(panel.includes('data-action="posts:retryTikTokCreator"'));
+        assert.ok(Posts.attachTikTokOptions({ platform: 'tiktok' }), 'an error is not a green light');
+    });
+
+    it('an edit starts from the row’s saved options — except consent, which is asked again', () => {
+        const { Posts } = load();
+        const saved = Posts.tiktokChoicesFrom({
+            mode: 'direct', privacy_level: 'FOLLOWER_OF_CREATOR',
+            allow_comment: true, allow_duet: false, allow_stitch: true,
+            brand_organic: false, brand_content: true, is_aigc: true, consent_at: '2026-09-24T10:00:00Z',
+        });
+        assert.equal(saved.privacy_level, 'FOLLOWER_OF_CREATOR');
+        assert.equal(saved.allow_comment, true);
+        assert.equal(saved.allow_stitch, true);
+        assert.equal(saved.disclose, true, 'a saved brand flag turns the disclosure switch on');
+        assert.equal(saved.brand_content, true);
+        assert.equal(saved.is_aigc, true);
+        assert.equal(saved.consent, false);
+
+        for (const none of [null, undefined, { mode: 'inbox' }]) {
+            assert.deepEqual(JSON.parse(JSON.stringify(Posts.tiktokChoicesFrom(none))),
+                JSON.parse(JSON.stringify(Posts.TIKTOK_DEFAULT_CHOICES)));
+        }
+    });
+
+    it('a direct-mode card says TikTok may take a few minutes, and a posted one shows its privacy', () => {
+        const { Posts, t } = load();
+        const row = {
+            id: 'd1', platform: 'tiktok', post_type: 'video', scheduled_time: '2027-03-04T18:20:00.000Z', caption: 'c',
+            platform_options: { mode: 'direct', privacy_level: 'MUTUAL_FOLLOW_FRIENDS' },
+        };
+
+        const processing = String(Posts.renderScheduledCard({ ...row, status: 'PROCESSING' }));
+        assert.ok(processing.includes(t('posts.tiktok.direct.processingNote')));
+        assert.ok(!processing.includes(t('posts.tiktok.processingNote')), 'not the inbox-mode note');
+
+        const published = String(Posts.renderScheduledCard({ ...row, status: 'PUBLISHED', published_post_id: 'TT:1' }));
+        assert.ok(published.includes(t('posts.tiktok.postedNoId')), '"Posted on TikTok", even with an id');
+        assert.ok(published.includes(Posts.privacyLabel('MUTUAL_FOLLOW_FRIENDS')), 'the privacy chip');
+
+        // An inbox row is exactly as before.
+        const inbox = String(Posts.renderScheduledCard({ ...row, platform_options: null, status: 'PROCESSING' }));
+        assert.ok(inbox.includes(t('posts.tiktok.processingNote')));
+        assert.ok(!inbox.includes(Posts.privacyLabel('MUTUAL_FOLLOW_FRIENDS')));
+
+        assert.equal(Posts.tiktokOutcomeText('PROCESSING', 'direct'), t('posts.tiktok.direct.processingToast'));
+        assert.equal(Posts.tiktokOutcomeText('PUBLISHING', 'direct'), t('posts.tiktok.direct.processingToast'));
+        assert.equal(Posts.tiktokOutcomeText('IN_INBOX'), t('posts.tiktok.sentToInbox'), 'inbox wording unchanged');
+    });
+});
+
+describe('SettingsPage — TikTok posting mode', () => {
+    it('names the mode in force, and the unaudited restriction with it', () => {
+        const { Settings, t } = load();
+        assert.equal(Settings.tiktokModeLabel({ postMode: 'inbox' }), t('settings.tiktok.mode.inbox'));
+        assert.equal(Settings.tiktokModeLabel(null), t('settings.tiktok.mode.inbox'));
+        assert.equal(Settings.tiktokModeLabel({ postMode: 'direct', audited: true }), t('settings.tiktok.mode.direct'));
+        assert.equal(Settings.tiktokModeLabel({ postMode: 'direct', audited: false }), t('settings.tiktok.mode.directUnaudited'));
+    });
+
+    it('the intro describes the mode posts will actually go out in', () => {
+        const { Settings, t } = load();
+        assert.equal(Settings.tiktokIntro({ connected: true, postMode: 'direct' }), t('settings.tiktok.introDirect'));
+        assert.equal(Settings.tiktokIntro({ connected: true, postMode: 'inbox' }), t('settings.tiktok.introInbox'));
+        // Switched on, but this connection lacks video.publish: still inbox until reconnect.
+        assert.equal(Settings.tiktokIntro({ connected: true, postMode: 'inbox', directPostEnabled: true }), t('settings.tiktok.introInbox'));
+        // Not connected yet with Direct Post on: connecting will ask for it.
+        assert.equal(Settings.tiktokIntro({ connected: false, directPostEnabled: true }), t('settings.tiktok.introDirect'));
+        assert.equal(Settings.tiktokIntro(null), t('settings.tiktok.introInbox'));
+        assert.notEqual(t('settings.tiktok.introDirect'), t('settings.tiktok.introInbox'));
     });
 });

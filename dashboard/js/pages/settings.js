@@ -321,6 +321,9 @@ const SettingsPage = {
         const refreshExpires = c && c.refreshExpiresAt ? new Date(c.refreshExpiresAt) : null;
         const daysToReconnect = refreshExpires ? Math.ceil((refreshExpires - Date.now()) / 86400000) : null;
         const avatar = c ? safeUrl(c.avatarUrl) : '';
+        // Direct Post is switched on for the app but this connection predates
+        // it, so it lacks `video.publish` — posts stay inbox drafts until reconnect.
+        const needsDirectScope = !!(c && c.directPostEnabled && !c.canDirectPost);
 
         let body;
         if (tiktokError) {
@@ -354,7 +357,14 @@ const SettingsPage = {
                 ${needsReconnect && c.lastError ? html`
                     <p class="form-hint text-warning mbe-3" dir="auto">${t('settings.tiktok.lastError', { message: c.lastError })}</p>
                 ` : ''}
-                ${connected && !c.canUpload ? html`
+                <p class="token-info mbe-2">${t('settings.tiktok.modeLine', { mode: this.tiktokModeLabel(c) })}</p>
+                ${needsDirectScope ? html`
+                    <p class="form-hint text-warning mbe-3">
+                        <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                        ${t('settings.tiktok.reconnectForDirect')}
+                    </p>
+                ` : ''}
+                ${connected && !c.canUpload && !c.canDirectPost ? html`
                     <p class="form-hint text-warning mbe-3">${t('settings.tiktok.cannotUpload')}</p>
                 ` : ''}
                 ${refreshExpires ? html`
@@ -402,12 +412,32 @@ const SettingsPage = {
             <section class="section">
                 <h2 class="section-title">${t('settings.tiktok.title')}</h2>
                 <div class="settings-card surface">
-                    <p class="form-hint mbe-4">${t('settings.tiktok.intro')}</p>
+                    <p class="form-hint mbe-4">${this.tiktokIntro(c)}</p>
                     ${body}
                     ${isAdmin ? this.tiktokAppBlock(tiktokApp, tiktokAppError, !!(tiktok && tiktok.appConfigured)) : ''}
                 </div>
             </section>
         `;
+    },
+
+    /**
+     * The mode posts go out in right now. Only the server decides it
+     * (`postMode` is 'direct' iff the connection has `video.publish` AND the
+     * admin has switched Direct Post on); this only names it.
+     */
+    tiktokModeLabel(c) {
+        if (!c || c.postMode !== 'direct') return t('settings.tiktok.mode.inbox');
+        return c.audited ? t('settings.tiktok.mode.direct') : t('settings.tiktok.mode.directUnaudited');
+    },
+
+    /**
+     * The section's opening sentence, true for the mode in force. Not connected
+     * yet with Direct Post switched on: connecting will ask for `video.publish`,
+     * so the direct sentence is the one that will be true.
+     */
+    tiktokIntro(c) {
+        const direct = !!(c && (c.postMode === 'direct' || (c.directPostEnabled && !c.connected)));
+        return direct ? t('settings.tiktok.introDirect') : t('settings.tiktok.introInbox');
     },
 
     /**
@@ -492,6 +522,29 @@ const SettingsPage = {
                         <p class="form-hint">${t('settings.tiktok.app.verifyHint')}</p>
                         ${app.verification.url ? html`<p class="form-hint">${UI.ltr(app.verification.url)}</p>` : ''}
                     </div>
+                    <!-- Two facts only the admin can know, because they live in
+                         TikTok's portal: whether Direct Post is on for the app,
+                         and whether TikTok's audit has passed. -->
+                    <fieldset class="form-group fieldset-plain">
+                        <legend class="form-label">${t('settings.tiktok.app.directPostTitle')}</legend>
+                        <div class="stack gap-3">
+                            <div class="check-row">
+                                <input type="checkbox" id="tiktok-direct-enabled" name="directPostEnabled"
+                                       ${app.directPostEnabled === true ? html.raw('checked') : ''}>
+                                <span class="check-text">
+                                    <label class="check-label" for="tiktok-direct-enabled">${t('settings.tiktok.app.directPostEnabled')}</label>
+                                </span>
+                            </div>
+                            <div class="check-row">
+                                <input type="checkbox" id="tiktok-audited" name="audited"
+                                       ${app.audited === true ? html.raw('checked') : ''}>
+                                <span class="check-text">
+                                    <label class="check-label" for="tiktok-audited">${t('settings.tiktok.app.audited')}</label>
+                                </span>
+                            </div>
+                        </div>
+                        <p class="form-hint">${t('settings.tiktok.app.directPostHint')}</p>
+                    </fieldset>
                     <div class="form-actions">
                         ${UI.button({
                             variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
@@ -549,6 +602,10 @@ const SettingsPage = {
         const payload = {
             clientKey: (data.get('clientKey') || '').toString().trim(),
             publicBaseUrl: (data.get('publicBaseUrl') || '').toString().trim(),
+            // Always sent, as booleans: an unticked box is a real "no", and
+            // FormData would otherwise omit it.
+            directPostEnabled: data.get('directPostEnabled') === 'on',
+            audited: data.get('audited') === 'on',
         };
         // A blank secret means "leave it", not "clear it" — it is never sent
         // back to the page, so the field is always blank on load.

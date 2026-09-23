@@ -37,9 +37,13 @@ export const TIKTOK_API_BASE = 'https://open.tiktokapis.com';
  */
 export const TIKTOK_SCOPES = ['user.info.basic', 'video.upload'] as const;
 
-/** The scopes to request: `video.publish` only once Direct Post is switched on in the portal. */
+/**
+ * The scopes to request. Direct Post needs `video.publish` and nothing else from the Content
+ * Posting API, so `video.upload` is dropped in that mode: TikTok's app review asks for every
+ * requested scope to be demonstrated, and a scope the app no longer uses only delays it.
+ */
 export function tiktokScopes(directPostEnabled: boolean): string[] {
-    return directPostEnabled ? [...TIKTOK_SCOPES, 'video.publish'] : [...TIKTOK_SCOPES];
+    return directPostEnabled ? ['user.info.basic', 'video.publish'] : [...TIKTOK_SCOPES];
 }
 
 /**
