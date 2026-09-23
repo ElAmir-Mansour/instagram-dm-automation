@@ -872,6 +872,9 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
     background-size: 16px 16px;
 }
 .form-hint { font-size: var(--fs-100); color: var(--text-muted); margin-block-start: var(--space-2); line-height: var(--lh-normal); }
+/* `.text-warning` is declared earlier, so on source order `.form-hint`'s muted
+   colour beat it and every "form-hint text-warning" rendered grey. */
+.form-hint.text-warning { color: var(--warning-text); }
 .form-actions { margin-block-start: var(--space-5); display: flex; gap: var(--space-2); flex-wrap: wrap; }
 .field-row { display: flex; gap: var(--space-2); align-items: stretch; }
 .field-row .field { flex: 1; }
@@ -912,6 +915,29 @@ html[dir='rtl'] .switch input:checked + .switch-track::before { transform: trans
 .switch-track::after { content: ''; position: absolute; inset-block: -9px; inset-inline: 0; }
 .switch-row { display: flex; align-items: center; gap: var(--space-3); }
 .switch-label { font-size: var(--fs-200); color: var(--text-default); }
+/* A switch the operator cannot change (TikTok has the interaction turned off
+   for the account). Greyed, not hidden, and the row says why — so the track
+   fades, the knob stops at "off", and the label drops to muted text. The
+   label stays a real text colour rather than taking the opacity, so the
+   reason beside it is still readable. */
+.switch input:disabled + .switch-track { opacity: 0.45; cursor: not-allowed; }
+.switch-row.is-disabled .switch-label { color: var(--text-muted); }
+/* Label with a hint under it, beside a switch. */
+.switch-text { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
+.switch-text .form-hint { margin: 0; }
+
+/* Checkbox with a visible label and a hint under it. The box aligns with the
+   label's first line, so a two-line hint does not drag it to the middle. */
+.check-row { display: flex; align-items: flex-start; gap: var(--space-3); }
+.check-text { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; padding-block-start: 2px; }
+.check-label { font-size: var(--fs-200); color: var(--text-default); cursor: pointer; }
+.check-text .form-hint { margin: 0; }
+input[type='checkbox']:disabled { cursor: not-allowed; opacity: 0.45; }
+.check-row.is-disabled .check-label { color: var(--text-muted); cursor: not-allowed; }
+
+/* A fieldset that groups without drawing a box. */
+.fieldset-plain { border: 0; padding: 0; margin-inline: 0; min-inline-size: 0; }
+.fieldset-plain > legend { padding: 0; }
 .toggle-block {
     display: flex; align-items: center; justify-content: space-between;
     gap: var(--space-4);
@@ -1591,7 +1617,42 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .tiktok-next-body { margin: 0; }
 .tiktok-account svg,
 .tiktok-next-title svg { width: 16px; height: 16px; flex-shrink: 0; }
+.tiktok-account { flex-wrap: wrap; }
 .tiktok-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+
+/* Direct Post: the controls TikTok's Content Sharing Guidelines require, in
+   the same quiet panel. */
+.tiktok-direct-title { margin: 0; font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.tiktok-direct { display: flex; flex-direction: column; gap: var(--space-3); }
+.tiktok-direct .form-label { margin-block-end: var(--space-1); }
+.tiktok-subhead {
+    margin: var(--space-2) 0 0;
+    font-size: var(--fs-100); font-weight: var(--fw-semibold);
+    color: var(--text-strong);
+}
+.tiktok-loading { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+.tiktok-note {
+    display: flex; align-items: flex-start; gap: var(--space-2);
+    margin: 0; padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--info-soft);
+    border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
+    color: var(--text-default);
+}
+.tiktok-note svg { width: 16px; height: 16px; color: var(--info-text); flex-shrink: 0; margin-block-start: 2px; }
+.tiktok-disclosure {
+    display: flex; flex-direction: column; gap: var(--space-3);
+    padding-inline-start: var(--space-4);
+    border-inline-start: 2px solid var(--border-subtle);
+}
+.tiktok-disclosure .form-hint { margin: 0; }
+.tiktok-disclosure .form-hint svg { width: 14px; height: 14px; vertical-align: -2px; }
+.tiktok-label-preview { margin: 0; font-weight: var(--fw-semibold); color: var(--text-strong); }
+/* Consent + "By posting, you agree to …", directly above the submit button. */
+.tiktok-consent { display: flex; flex-direction: column; gap: var(--space-2); margin-block: var(--space-4) var(--space-2); }
+.tiktok-declaration { margin: 0; font-size: var(--fs-100); color: var(--text-default); line-height: var(--lh-normal); }
+.tiktok-declaration a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
+.tiktok-declaration a:hover { text-decoration-thickness: 2px; }
 .tiktok-avatar-lg { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .tiktok-register { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
 /* Label on its own line, then the value with its copy button beside it — the

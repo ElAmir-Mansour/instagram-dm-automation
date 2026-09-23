@@ -33,6 +33,20 @@ const PostsPage = {
     tiktok: null,
 
     /**
+     * Direct Post composer state, per open modal. `tiktokCreator` is the live
+     * GET /tiktok/creator-info answer — `{ status: 'loading'|'ready'|'error',
+     * data?, error? }` — fetched when TikTok becomes a target, never at page
+     * load, because TikTok's guidelines want the account's CURRENT limits.
+     * `_ttChoices` is what the operator has picked so far, kept outside the DOM
+     * so the panel can be re-rendered from it; `_ttDurationSec` is read off the
+     * preview `<video>`'s metadata.
+     */
+    tiktokCreator: null,
+    _ttChoices: null,
+    _ttDurationSec: null,
+    _ttSeq: 0,
+
+    /**
      * Guards the write against landing after the operator has navigated away.
      * This page settles two requests and then writes the whole container;
      * `#page-container` is refilled rather than replaced, so a late
@@ -53,6 +67,10 @@ const PostsPage = {
         this.liveError = null;
         this.publishError = null;
         this.tiktok = null;
+        this._ttSeq++;
+        this.tiktokCreator = null;
+        this._ttChoices = null;
+        this._ttDurationSec = null;
     },
 
     /**
@@ -273,7 +291,60 @@ const PostsPage = {
     /** Is this account's TikTok connection usable for a new post right now? */
     tiktokReady() {
         const c = this.tiktok && this.tiktok.connection;
-        return !!(c && c.connected && c.canUpload);
+        // Either permission can deliver a post: `video.upload` to the inbox, `video.publish`
+        // straight to the profile. Direct Post connections hold only the second.
+        return !!(c && c.connected && (c.canUpload || c.canDirectPost));
+    },
+
+    /** What the connection summary says: 'direct' only when the server says so. */
+    tiktokConnectionMode() {
+        const c = this.tiktok && this.tiktok.connection;
+        return c && c.postMode === 'direct' ? 'direct' : 'inbox';
+    },
+
+    /**
+     * The mode a NEW post from this composer will use. The live creator-info
+     * answer wins once it is in, since it is fresher than the page-load summary.
+     */
+    tiktokPostMode() {
+        const info = this.tiktokCreator;
+        if (info && info.status === 'ready' && info.data && info.data.postMode) {
+            return info.data.postMode === 'direct' ? 'direct' : 'inbox';
+        }
+        return this.tiktokConnectionMode();
+    },
+
+    /** A scheduled row's own mode. Rows from before v19 carry no options: inbox. */
+    tiktokRowMode(row) {
+        const o = row && row.platform_options;
+        return o && o.mode === 'direct' ? 'direct' : 'inbox';
+    },
+
+    /** TikTok's privacy levels, each with a translated label. Unknown values show as themselves. */
+    privacyLabel(level) {
+        switch (level) {
+            case 'PUBLIC_TO_EVERYONE': return t('posts.tiktok.privacy.public');
+            case 'MUTUAL_FOLLOW_FRIENDS': return t('posts.tiktok.privacy.friends');
+            case 'FOLLOWER_OF_CREATOR': return t('posts.tiktok.privacy.followers');
+            case 'SELF_ONLY': return t('posts.tiktok.privacy.selfOnly');
+            default: return String(level || '—');
+        }
+    },
+
+    privacyIcon(level) {
+        if (level === 'PUBLIC_TO_EVERYONE') return 'globe';
+        if (level === 'SELF_ONLY') return 'lock';
+        return 'users';
+    },
+
+    /** Seconds as m:ss (h:mm:ss past an hour). Rounded UP, so 60.4s never reads as 1:00. */
+    formatDuration(sec) {
+        const total = Math.max(0, Math.ceil(Number(sec) || 0));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        const pad = (n) => String(n).padStart(2, '0');
+        return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
     },
 
     renderScheduledCard(post) {
@@ -286,6 +357,10 @@ const PostsPage = {
         const isProcessing = post.status === 'PROCESSING';
         const isInInbox = post.status === 'IN_INBOX';
         const isTikTok = post.platform === 'tiktok';
+        // Direct Post goes straight to the profile, so there is no inbox step
+        // and the privacy the operator chose is worth showing on the card.
+        const isDirect = isTikTok && this.tiktokRowMode(post) === 'direct';
+        const privacyLevel = isDirect ? String(post.platform_options.privacy_level || '') : '';
 
         let statusClass = 'pending';
         if (isFailed) statusClass = 'failed';
@@ -313,6 +388,7 @@ const PostsPage = {
                             <i data-lucide="${badge.icon}" aria-hidden="true"></i> ${badge.label}
                         </span>
                         <span class="badge badge-neutral">${typeLabel}</span>
+                        ${privacyLevel ? this.tiktokPrivacyChip(privacyLevel) : ''}
                     </div>
                     <span class="status-pill ${html.raw(statusClass)}">
                         ${isPublishing || isProcessing
@@ -378,7 +454,7 @@ const PostsPage = {
                 ${isTikTok && isProcessing ? html`
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="loader" aria-hidden="true"></i>
-                        <span>${t('posts.tiktok.processingNote')}</span>
+                        <span>${isDirect ? t('posts.tiktok.direct.processingNote') : t('posts.tiktok.processingNote')}</span>
                     </p>
                 ` : ''}
 
@@ -387,10 +463,11 @@ const PostsPage = {
                 ${isPublished && post.published_post_id ? html`
                     <p class="post-card-id"><strong>${t('posts.publishedIdLabel')}</strong> ${UI.ltr(post.published_post_id)}</p>
                 ` : ''}
-                ${isPublished && isTikTok && !post.published_post_id ? html`
+                ${isPublished && isTikTok && (isDirect || !post.published_post_id) ? html`
                     <!-- TikTok returns a post id only for public posts that have
                          passed moderation; a private or friends-only post never
-                         gets one. -->
+                         gets one. A direct post always says where it went, since
+                         there was no inbox step the operator saw it through. -->
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="check-circle" aria-hidden="true"></i>
                         <span class="text-success">${t('posts.tiktok.postedNoId')}</span>
@@ -453,6 +530,17 @@ const PostsPage = {
                     </a>
                 </div>
             </div>
+        `;
+    },
+
+    /** Who can see a direct post, as a chip. A badge, not a status: it is the operator's choice. */
+    tiktokPrivacyChip(level) {
+        return html`
+            <span class="badge badge-neutral" title="${t('posts.tiktok.direct.privacy')}">
+                <i data-lucide="${this.privacyIcon(level)}" aria-hidden="true"></i>
+                <span class="sr-only">${t('posts.tiktok.direct.privacy')}:</span>
+                ${this.privacyLabel(level)}
+            </span>
         `;
     },
 
@@ -548,14 +636,17 @@ const PostsPage = {
     /**
      * The TikTok part of the composer. `offerAlso` is the create form's
      * "Also send to TikTok" switch, which schedules a second, TikTok-only row
-     * alongside an Instagram/Facebook post. The info panel says, before the
-     * operator commits, what inbox mode means: TikTok will not post by itself.
+     * alongside an Instagram/Facebook post.
+     *
+     * Inbox mode: the info panel says, before the operator commits, that TikTok
+     * will not post by itself. Direct mode: the panel is a host that
+     * `refreshTikTokDirect()` fills once the live creator info is in — TikTok's
+     * Content Sharing Guidelines move every choice its own editor would ask
+     * (privacy, interactions, disclosure, consent) into this composer.
      */
     tiktokFields(offerAlso) {
         const ready = this.tiktokReady();
-        const c = this.tiktok && this.tiktok.connection;
-        const inbox = this.tiktok && this.tiktok.inbox;
-        const avatar = c ? safeUrl(c.avatarUrl) : '';
+        const direct = ready && this.tiktokConnectionMode() === 'direct';
         return html`
             ${offerAlso ? html`
                 <div class="form-group switch-row hidden" id="tiktok-also-group">
@@ -568,27 +659,624 @@ const PostsPage = {
                     <span class="switch-label">${t('posts.tiktok.also')}</span>
                 </div>
             ` : ''}
-            <div class="tiktok-panel hidden" id="tiktok-info" role="note">
-                ${ready ? html`
-                    <p class="tiktok-account">
-                        ${avatar ? html`<img class="tiktok-avatar" src="${avatar}" alt="" width="24" height="24">` : html`<i data-lucide="music-2" aria-hidden="true"></i>`}
-                        <span>${t('posts.tiktok.postingAs')}</span>
-                        <strong dir="auto">${c.displayName || t('settings.tiktok.unnamed')}</strong>
-                    </p>
-                    <p class="form-hint">${t('posts.tiktok.inboxExplainer')}</p>
-                    ${inbox ? html`
-                        <p class="form-hint ${inbox.pending >= inbox.limit ? html.raw('text-warning') : ''}">
-                            ${t('posts.tiktok.inboxUsage', { pending: inbox.pending, limit: inbox.limit })}
+            ${direct ? html`
+                <!-- A group, not a note: this panel holds the post's controls. -->
+                <div class="tiktok-panel hidden" id="tiktok-info" role="group" aria-labelledby="tiktok-direct-title">
+                    <h3 class="tiktok-direct-title" id="tiktok-direct-title">${t('posts.tiktok.direct.title')}</h3>
+                    <div class="tiktok-direct" id="tiktok-direct"></div>
+                </div>
+            ` : html`
+                <div class="tiktok-panel hidden" id="tiktok-info" role="note">
+                    ${ready ? this.tiktokInboxBody() : html`
+                        <p class="form-hint text-warning">
+                            <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                            ${t('posts.tiktok.notConnected')}
                         </p>
-                    ` : ''}
-                ` : html`
-                    <p class="form-hint text-warning">
-                        <i data-lucide="alert-triangle" aria-hidden="true"></i>
-                        ${t('posts.tiktok.notConnected')}
-                    </p>
-                `}
+                    `}
+                </div>
+            `}
+        `;
+    },
+
+    /** Inbox mode's panel body, unchanged: whose inbox, what happens, how full it is. */
+    tiktokInboxBody() {
+        const c = this.tiktok && this.tiktok.connection;
+        const inbox = this.tiktok && this.tiktok.inbox;
+        const avatar = c ? safeUrl(c.avatarUrl) : '';
+        return html`
+            <p class="tiktok-account">
+                ${avatar ? html`<img class="tiktok-avatar" src="${avatar}" alt="" width="24" height="24">` : html`<i data-lucide="music-2" aria-hidden="true"></i>`}
+                <span>${t('posts.tiktok.postingAs')}</span>
+                <strong dir="auto">${(c && c.displayName) || t('settings.tiktok.unnamed')}</strong>
+            </p>
+            <p class="form-hint">${t('posts.tiktok.inboxExplainer')}</p>
+            ${inbox ? html`
+                <p class="form-hint ${inbox.pending >= inbox.limit ? html.raw('text-warning') : ''}">
+                    ${t('posts.tiktok.inboxUsage', { pending: inbox.pending, limit: inbox.limit })}
+                </p>
+            ` : ''}
+        `;
+    },
+
+    // ─── TikTok Direct Post ──────────────────────────────────────────────────
+    /**
+     * Every choice starts OFF / empty. TikTok's guidelines are explicit that the
+     * privacy level has no default and that no interaction is pre-ticked, so
+     * "the operator did not touch it" and "the operator chose no" are the same
+     * thing here, on purpose.
+     */
+    TIKTOK_DEFAULT_CHOICES: Object.freeze({
+        privacy_level: '',
+        allow_comment: false,
+        allow_duet: false,
+        allow_stitch: false,
+        disclose: false,
+        brand_organic: false,
+        brand_content: false,
+        is_aigc: false,
+        consent: false,
+    }),
+
+    TIKTOK_LEGAL_LINKS: Object.freeze({
+        music: 'https://www.tiktok.com/legal/page/global/music-usage-confirmation/en',
+        policy: 'https://www.tiktok.com/legal/page/global/bc-policy/en',
+    }),
+
+    /**
+     * An edit modal starts from what the row saved. Consent is NOT carried
+     * over: it is asked again for every submission, because TikTok wants it
+     * given for the upload that actually happens.
+     */
+    tiktokChoicesFrom(options) {
+        const o = options && typeof options === 'object' && options.mode === 'direct' ? options : null;
+        if (!o) return { ...this.TIKTOK_DEFAULT_CHOICES };
+        const organic = o.brand_organic === true;
+        const content = o.brand_content === true;
+        return {
+            ...this.TIKTOK_DEFAULT_CHOICES,
+            privacy_level: typeof o.privacy_level === 'string' ? o.privacy_level : '',
+            allow_comment: o.allow_comment === true,
+            allow_duet: o.allow_duet === true,
+            allow_stitch: o.allow_stitch === true,
+            disclose: organic || content,
+            brand_organic: organic,
+            brand_content: content,
+            is_aigc: o.is_aigc === true,
+        };
+    },
+
+    /**
+     * Everything the Direct Post panel shows, decided in one pure function so
+     * the rules — which TikTok's app audit checks one by one — are pinned by
+     * tests rather than read out of a template.
+     *
+     * The two rules that interlock:
+     *   - branded content cannot be private: while "Branded content" is ticked,
+     *     SELF_ONLY is disabled; while SELF_ONLY is selected, "Branded content"
+     *     is disabled;
+     *   - an unaudited app can only post SELF_ONLY, so every other level is
+     *     disabled — and, by the rule above, branded content always is.
+     *
+     * A saved choice that is no longer allowed (an edit whose level the account
+     * no longer offers) resolves to "nothing selected" rather than a default.
+     *
+     * @param {object|null} creator  `creator` from GET /tiktok/creator-info
+     * @param {object} choices       what the operator has picked (TIKTOK_DEFAULT_CHOICES shape)
+     * @param {{ audited?: boolean, durationSec?: number|null }} [opts]
+     */
+    tiktokDirectState(creator, choices, opts) {
+        const o = opts || {};
+        const cr = creator || {};
+        const c = { ...this.TIKTOK_DEFAULT_CHOICES, ...(choices || {}) };
+        // Anything other than an explicit `true` is treated as unaudited: the
+        // restrictive reading is the one TikTok will enforce anyway.
+        const audited = o.audited === true;
+        const levels = Array.isArray(cr.privacyLevelOptions) ? cr.privacyLevelOptions.map(String) : [];
+
+        const disclose = !!c.disclose;
+        const brandOrganic = disclose && !!c.brand_organic;
+        const brandContent = disclose && !!c.brand_content && audited;
+
+        const levelDisabled = (level) => (!audited && level !== 'SELF_ONLY')
+            || (brandContent && level === 'SELF_ONLY');
+        const wanted = String(c.privacy_level || '');
+        const privacy = levels.includes(wanted) && !levelDisabled(wanted) ? wanted : '';
+
+        let brandContentReason = null;
+        if (!audited) brandContentReason = 'unaudited';
+        else if (privacy === 'SELF_ONLY') brandContentReason = 'private';
+
+        const interaction = (flag, off) => ({ checked: !cr[off] && !!c[flag], disabled: !!cr[off] });
+
+        const max = Number(cr.maxVideoPostDurationSec) > 0 ? Number(cr.maxVideoPostDurationSec) : null;
+        const duration = Number.isFinite(o.durationSec) && o.durationSec > 0 ? o.durationSec : null;
+
+        return {
+            nickname: cr.nickname || '',
+            username: cr.username || '',
+            avatarUrl: cr.avatarUrl || '',
+            audited,
+            levels,
+            privacy,
+            privacyOptions: levels.map((level) => ({ value: level, disabled: levelDisabled(level) })),
+            selfOnlyBlocked: brandContent && levels.includes('SELF_ONLY'),
+            comment: interaction('allow_comment', 'commentDisabled'),
+            duet: interaction('allow_duet', 'duetDisabled'),
+            stitch: interaction('allow_stitch', 'stitchDisabled'),
+            disclose,
+            brandOrganic,
+            brandContent,
+            brandContentDisabled: brandContentReason !== null,
+            brandContentReason,
+            needsDisclosureChoice: disclose && !brandOrganic && !brandContent,
+            // TikTok: branded content (alone or with "your brand") is labelled
+            // Paid partnership; "your brand" alone is Promotional content.
+            label: brandContent ? 'paid' : (brandOrganic ? 'promotional' : null),
+            declaration: brandContent ? 'branded' : 'music',
+            isAigc: !!c.is_aigc,
+            consent: !!c.consent,
+            maxDurationSec: max,
+            durationSec: duration,
+            tooLong: max !== null && duration !== null && duration > max,
+        };
+    },
+
+    /**
+     * Can this be submitted, and if so with exactly which `tiktok_options`?
+     * Checks the operator's RAW choices, so a combination the panel would have
+     * quietly resolved (branded + Only me from an old row) is named, not hidden.
+     *
+     * @returns {{ ok: true, options: object } | { ok: false, code: string, field: string|null, message: string }}
+     */
+    validateTikTokOptions(creator, choices, opts) {
+        const fail = (code, field, params) => ({ ok: false, code, field, message: this.tiktokErrorText(code, params) });
+        if (!creator) return fail('notReady', null);
+
+        const c = { ...this.TIKTOK_DEFAULT_CHOICES, ...(choices || {}) };
+        const s = this.tiktokDirectState(creator, c, opts);
+        const level = String(c.privacy_level || '');
+
+        if (s.tooLong) {
+            return fail('tooLong', 'post-media-url', {
+                duration: this.formatDuration(s.durationSec), max: this.formatDuration(s.maxDurationSec),
+            });
+        }
+        if (!level) return fail('privacyRequired', 'tiktok-privacy');
+        if (!s.levels.includes(level)) return fail('privacyUnavailable', 'tiktok-privacy');
+        if (!s.audited && level !== 'SELF_ONLY') return fail('unauditedPrivate', 'tiktok-privacy');
+        if (c.disclose && !c.brand_organic && !c.brand_content) return fail('discloseChoose', 'tiktok-brand-organic');
+        if (c.disclose && c.brand_content && level === 'SELF_ONLY') return fail('brandedPrivate', 'tiktok-privacy');
+        if (!c.consent) return fail('consentRequired', 'tiktok-consent-check');
+
+        return {
+            ok: true,
+            options: {
+                privacy_level: level,
+                // An interaction the account has switched off is sent as off,
+                // whatever the saved choice said.
+                allow_comment: s.comment.checked,
+                allow_duet: s.duet.checked,
+                allow_stitch: s.stitch.checked,
+                brand_organic: s.brandOrganic,
+                brand_content: s.brandContent,
+                is_aigc: s.isAigc,
+                consent: true,
+            },
+        };
+    },
+
+    tiktokErrorText(code, params) {
+        switch (code) {
+            case 'tooLong': return t('posts.tiktok.direct.tooLong', params);
+            case 'privacyRequired': return t('posts.tiktok.direct.privacyRequired');
+            case 'privacyUnavailable': return t('posts.tiktok.direct.privacyUnavailable');
+            case 'unauditedPrivate': return t('posts.tiktok.direct.unauditedPrivate');
+            case 'discloseChoose': return t('posts.tiktok.direct.discloseChoose');
+            case 'brandedPrivate': return t('posts.tiktok.direct.brandedPrivate');
+            case 'consentRequired': return t('posts.tiktok.direct.consentRequired');
+            default: return t('posts.tiktok.direct.notReady');
+        }
+    },
+
+    /** The panel's view model, from whatever the open modal currently holds. */
+    tiktokView() {
+        const info = this.tiktokCreator;
+        const data = info && info.status === 'ready' && info.data ? info.data : {};
+        const c = this.tiktok && this.tiktok.connection;
+        return this.tiktokDirectState(data.creator || null, this._ttChoices, {
+            audited: typeof data.audited === 'boolean' ? data.audited : !!(c && c.audited === true),
+            durationSec: this._ttDurationSec,
+        });
+    },
+
+    /** Is the live creator info in, in direct mode, with a creator to post as? */
+    tiktokCreatorUsable() {
+        const info = this.tiktokCreator;
+        return !!(info && info.status === 'ready' && info.data
+            && info.data.postMode === 'direct' && info.data.creator);
+    },
+
+    /** The panel body for whichever state the creator-info request is in. */
+    renderTikTokDirect() {
+        const info = this.tiktokCreator;
+        if (!info || info.status === 'loading') {
+            return html`
+                <p class="tiktok-loading" role="status">
+                    <span class="spinner spinner-sm" aria-hidden="true"></span>
+                    <span>${t('posts.tiktok.direct.loading')}</span>
+                </p>
+            `;
+        }
+        if (info.status === 'error') {
+            return this.tiktokCreatorError((info.error && info.error.message) || t('error.unexpected'));
+        }
+        const data = info.data || {};
+        // The live answer can disagree with the page-load summary (the mode was
+        // switched in Settings since). Inbox it is, then: no options, the old panel.
+        if (data.postMode !== 'direct') return this.tiktokInboxBody();
+        if (!data.creator) return this.tiktokCreatorError(t('posts.tiktok.direct.noCreator'));
+        return this.tiktokDirectForm(this.tiktokView());
+    },
+
+    /** A 409 (not connected) or 502 (TikTok refused), with a way to ask again. */
+    tiktokCreatorError(message) {
+        return html`
+            <div class="inline-error" role="alert">
+                <i data-lucide="alert-circle" aria-hidden="true"></i>
+                <div>
+                    <strong dir="auto">${t('posts.tiktok.direct.loadFailed', { message })}</strong>
+                    <span class="inline-error-hint">${t('posts.tiktok.direct.loadFailedHint')}</span>
+                </div>
+            </div>
+            <div>
+                ${UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'),
+                    action: 'posts:retryTikTokCreator', id: 'tiktok-creator-retry',
+                })}
             </div>
         `;
+    },
+
+    /**
+     * A switch with its label, and — when TikTok has it switched off for this
+     * account — greyed out with the reason beside it rather than hidden.
+     */
+    tiktokSwitch(id, label, state) {
+        const s = state || {};
+        const note = s.disabled ? (s.note || t('posts.tiktok.direct.interactionOff')) : (s.hint || '');
+        const noteId = `${id}-note`;
+        return html`
+            <div class="switch-row tiktok-switch ${s.disabled ? html.raw('is-disabled') : ''}">
+                <label class="switch" for="${id}">
+                    <span class="sr-only">${label}</span>
+                    <input type="checkbox" id="${id}" data-change="posts:tiktokChange"
+                           ${s.checked ? html.raw('checked') : ''}
+                           ${s.disabled ? html.raw('disabled') : ''}
+                           ${note ? html`aria-describedby="${noteId}"` : ''}>
+                    <span class="switch-track"></span>
+                </label>
+                <span class="switch-text">
+                    <span class="switch-label">${label}</span>
+                    ${note ? html`<span class="form-hint" id="${noteId}">${note}</span>` : ''}
+                </span>
+            </div>
+        `;
+    },
+
+    /** A checkbox with a visible label, an always-on hint and an optional reason it is disabled. */
+    tiktokCheck(id, label, state) {
+        const s = state || {};
+        const described = [s.hint ? `${id}-hint` : '', s.note ? `${id}-note` : ''].filter(Boolean).join(' ');
+        return html`
+            <div class="check-row ${s.disabled ? html.raw('is-disabled') : ''}">
+                <input type="checkbox" id="${id}" data-change="posts:tiktokChange"
+                       ${s.checked ? html.raw('checked') : ''}
+                       ${s.disabled ? html.raw('disabled') : ''}
+                       ${s.required ? html.raw('required') : ''}
+                       ${described ? html`aria-describedby="${described}"` : ''}>
+                <span class="check-text">
+                    <label class="check-label" for="${id}">${label}</label>
+                    ${s.hint ? html`<span class="form-hint" id="${id}-hint">${s.hint}</span>` : ''}
+                    ${s.note ? html`<span class="form-hint text-warning" id="${id}-note">${s.note}</span>` : ''}
+                </span>
+            </div>
+        `;
+    },
+
+    /**
+     * The Direct Post controls, in the order TikTok's guidelines list them:
+     * the account, the length limit, privacy, interactions, commercial
+     * disclosure, the AI label. Consent and the declaration sit by the submit
+     * button instead — see `tiktokConsentBlock`.
+     */
+    tiktokDirectForm(v) {
+        const avatar = safeUrl(v.avatarUrl);
+        let brandedNote = '';
+        if (v.brandContentReason === 'unaudited') brandedNote = t('posts.tiktok.direct.brandedUnaudited');
+        else if (v.brandContentReason === 'private') brandedNote = t('posts.tiktok.direct.brandedPrivate');
+
+        return html`
+            <p class="tiktok-account">
+                ${avatar
+                    ? html`<img class="tiktok-avatar" src="${avatar}" alt="" width="24" height="24">`
+                    : html`<i data-lucide="music-2" aria-hidden="true"></i>`}
+                <span>${t('posts.tiktok.direct.postingTo')}</span>
+                <strong dir="auto">${v.nickname || t('settings.tiktok.unnamed')}</strong>
+                ${v.username ? html`<span class="text-meta">${UI.ltr(`@${v.username}`)}</span>` : ''}
+            </p>
+            <p class="form-hint">${t('posts.tiktok.direct.explainer')}</p>
+
+            ${v.audited ? '' : html`
+                <p class="tiktok-note">
+                    <i data-lucide="info" aria-hidden="true"></i>
+                    <span>${t('posts.tiktok.direct.unaudited')}</span>
+                </p>
+            `}
+
+            ${v.maxDurationSec ? html`
+                <p class="form-hint ${v.tooLong ? html.raw('text-warning') : ''}" id="tiktok-duration-note">
+                    ${v.tooLong
+                        ? t('posts.tiktok.direct.tooLong', {
+                            duration: this.formatDuration(v.durationSec), max: this.formatDuration(v.maxDurationSec),
+                        })
+                        : t('posts.tiktok.direct.maxDuration', { max: this.formatDuration(v.maxDurationSec) })}
+                </p>
+            ` : ''}
+
+            <div class="tiktok-field">
+                <label class="form-label" for="tiktok-privacy">${t('posts.tiktok.direct.privacy')}</label>
+                <!-- No default, by TikTok's rule: the empty option is the
+                     starting state and "required" refuses it. -->
+                <select class="select" id="tiktok-privacy" data-change="posts:tiktokChange" required
+                        ${v.selfOnlyBlocked ? html.raw('aria-describedby="tiktok-privacy-hint"') : ''}>
+                    <option value="" ${v.privacy ? '' : html.raw('selected')}>${t('posts.tiktok.direct.privacyPlaceholder')}</option>
+                    ${v.privacyOptions.map((o) => html`
+                        <option value="${o.value}"
+                                ${o.value === v.privacy ? html.raw('selected') : ''}
+                                ${o.disabled ? html.raw('disabled') : ''}>${this.privacyLabel(o.value)}</option>
+                    `)}
+                </select>
+                ${v.selfOnlyBlocked ? html`
+                    <p class="form-hint" id="tiktok-privacy-hint">${t('posts.tiktok.direct.privateBlockedByBranded')}</p>
+                ` : ''}
+            </div>
+
+            <p class="tiktok-subhead">${t('posts.tiktok.direct.interactions')}</p>
+            ${this.tiktokSwitch('tiktok-allow-comment', t('posts.tiktok.direct.allowComment'), v.comment)}
+            ${this.tiktokSwitch('tiktok-allow-duet', t('posts.tiktok.direct.allowDuet'), v.duet)}
+            ${this.tiktokSwitch('tiktok-allow-stitch', t('posts.tiktok.direct.allowStitch'), v.stitch)}
+
+            <p class="tiktok-subhead">${t('posts.tiktok.direct.disclosureTitle')}</p>
+            ${this.tiktokSwitch('tiktok-disclose', t('posts.tiktok.direct.disclose'), {
+                checked: v.disclose, hint: t('posts.tiktok.direct.discloseHint'),
+            })}
+            ${v.disclose ? html`
+                <div class="tiktok-disclosure" role="group" aria-label="${t('posts.tiktok.direct.disclose')}">
+                    ${this.tiktokCheck('tiktok-brand-organic', t('posts.tiktok.direct.yourBrand'), {
+                        checked: v.brandOrganic, hint: t('posts.tiktok.direct.yourBrandHint'),
+                    })}
+                    ${this.tiktokCheck('tiktok-brand-content', t('posts.tiktok.direct.brandedContent'), {
+                        checked: v.brandContent, disabled: v.brandContentDisabled,
+                        hint: t('posts.tiktok.direct.brandedContentHint'), note: brandedNote,
+                    })}
+                    ${v.needsDisclosureChoice ? html`
+                        <p class="form-hint text-warning" id="tiktok-disclose-choose">
+                            <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                            ${t('posts.tiktok.direct.discloseChoose')}
+                        </p>
+                    ` : ''}
+                    ${v.label ? html`
+                        <p class="tiktok-label-preview">
+                            ${v.label === 'paid' ? t('posts.tiktok.direct.labelPaid') : t('posts.tiktok.direct.labelPromotional')}
+                        </p>
+                    ` : ''}
+                </div>
+            ` : ''}
+
+            ${this.tiktokSwitch('tiktok-aigc', t('posts.tiktok.direct.aigc'), { checked: v.isAigc })}
+        `;
+    },
+
+    /**
+     * "By posting, you agree to …", with the policy names as links. `t()` never
+     * returns markup, so the sentence carries `{music}` / `{policy}` tokens and
+     * the anchors are built here, around the translated link text.
+     */
+    tiktokDeclaration(kind) {
+        const sentence = kind === 'branded'
+            ? t('posts.tiktok.declaration.branded')
+            : t('posts.tiktok.declaration.music');
+        const text = {
+            music: t('posts.tiktok.declaration.musicLink'),
+            policy: t('posts.tiktok.declaration.policyLink'),
+        };
+        const parts = String(sentence).split(/(\{\w+\})/).map((part) => {
+            const m = part.match(/^\{(\w+)\}$/);
+            if (m && Object.prototype.hasOwnProperty.call(this.TIKTOK_LEGAL_LINKS, m[1])) {
+                return html`<a href="${this.TIKTOK_LEGAL_LINKS[m[1]]}" target="_blank" rel="noopener noreferrer">${text[m[1]]}</a>`;
+            }
+            return part;
+        });
+        return html`${parts}`;
+    },
+
+    /** Express consent, then the declaration — the last thing above the submit button. */
+    tiktokConsentBlock(v) {
+        return html`
+            ${this.tiktokCheck('tiktok-consent-check', t('posts.tiktok.direct.consent'), {
+                checked: v.consent, required: true,
+            })}
+            <p class="tiktok-declaration" id="tiktok-declaration">${this.tiktokDeclaration(v.declaration)}</p>
+        `;
+    },
+
+    /** '' unless the Direct Post form is actually on screen. */
+    renderTikTokConsent() {
+        return this.tiktokCreatorUsable() ? this.tiktokConsentBlock(this.tiktokView()) : '';
+    },
+
+    /** Does the open composer currently send anything to TikTok? */
+    composerTargetsTikTok() {
+        const platformSelect = document.getElementById('post-platform-select');
+        const also = document.getElementById('post-also-tiktok');
+        return (platformSelect && platformSelect.value === 'tiktok')
+            || !!(also && also.checked && !also.disabled);
+    },
+
+    /** Fresh per modal: nothing chosen, nothing fetched, no duration measured. */
+    resetTikTokComposer(post) {
+        this._ttSeq++;
+        this.tiktokCreator = null;
+        this._ttDurationSec = null;
+        this._ttChoices = post && post.platform === 'tiktok'
+            ? this.tiktokChoicesFrom(post.platform_options)
+            : { ...this.TIKTOK_DEFAULT_CHOICES };
+    },
+
+    /**
+     * GET /tiktok/creator-info, once per modal (Retry forces another). Only in
+     * direct mode — inbox mode needs nothing from it, and a failure there would
+     * put an error in front of a panel that has no use for the answer.
+     */
+    async loadTikTokCreator(force) {
+        const current = this.tiktokCreator;
+        if (!force && current && (current.status === 'loading' || current.status === 'ready')) return;
+        const seq = ++this._ttSeq;
+        this.tiktokCreator = { status: 'loading' };
+        this.refreshTikTokDirect();
+
+        let next;
+        try {
+            const data = await API.getTikTokCreatorInfo();
+            next = { status: 'ready', data: data || {} };
+        } catch (err) {
+            next = { status: 'error', error: err };
+        }
+        // A modal closed or reopened meanwhile has its own request.
+        if (seq !== this._ttSeq) return;
+        this.tiktokCreator = next;
+        this.refreshTikTokDirect();
+    },
+
+    /** Read the panel's controls. A control not on screen keeps its last value. */
+    readTikTokChoices(prev) {
+        const p = { ...this.TIKTOK_DEFAULT_CHOICES, ...(prev || {}) };
+        const checked = (id, key) => {
+            const el = document.getElementById(id);
+            return el ? !!el.checked : !!p[key];
+        };
+        const privacy = document.getElementById('tiktok-privacy');
+        const next = {
+            privacy_level: privacy ? String(privacy.value || '') : p.privacy_level,
+            allow_comment: checked('tiktok-allow-comment', 'allow_comment'),
+            allow_duet: checked('tiktok-allow-duet', 'allow_duet'),
+            allow_stitch: checked('tiktok-allow-stitch', 'allow_stitch'),
+            disclose: checked('tiktok-disclose', 'disclose'),
+            brand_organic: checked('tiktok-brand-organic', 'brand_organic'),
+            brand_content: checked('tiktok-brand-content', 'brand_content'),
+            is_aigc: checked('tiktok-aigc', 'is_aigc'),
+            consent: checked('tiktok-consent-check', 'consent'),
+        };
+        // Switching disclosure off clears both ticks. Otherwise a stale
+        // "Branded content" would come back with the switch and silently
+        // un-select an "Only me" chosen in between.
+        if (!next.disclose) {
+            next.brand_organic = false;
+            next.brand_content = false;
+        }
+        return next;
+    },
+
+    onTikTokChange() {
+        this._ttChoices = this.readTikTokChoices(this._ttChoices);
+        this.refreshTikTokDirect();
+    },
+
+    /**
+     * Repaint the Direct Post panel and the consent block from state. Neither
+     * holds a control while TikTok is not a target: a `required` field inside a
+     * hidden panel would block an Instagram-only submit with an error pointing
+     * at nothing.
+     */
+    refreshTikTokDirect() {
+        const host = document.getElementById('tiktok-direct');
+        const consent = document.getElementById('tiktok-consent');
+        if (!host && !consent) return;
+        const on = this.composerTargetsTikTok();
+
+        // Every control here has an id, so focus is put back by id.
+        const active = document.activeElement;
+        const inside = active && ((host && host.contains(active)) || (consent && consent.contains(active)));
+        const focusId = inside ? active.id : '';
+
+        if (host) {
+            host.innerHTML = esc(on ? this.renderTikTokDirect() : '');
+            UI.icons(host);
+        }
+        if (consent) {
+            const markup = esc(on ? this.renderTikTokConsent() : '');
+            consent.innerHTML = markup;
+            consent.classList.toggle('hidden', !markup.trim());
+            UI.icons(consent);
+        }
+
+        if (focusId) {
+            const el = document.getElementById(focusId);
+            if (el && !el.disabled && typeof el.focus === 'function') el.focus({ preventScroll: true });
+        }
+    },
+
+    /**
+     * The video's length comes from the preview `<video>` the composer already
+     * shows. `loadedmetadata` does not bubble, so it is caught in the capture
+     * phase on the container, which outlives every preview swapped into it.
+     */
+    watchPreviewDuration() {
+        const preview = document.getElementById('media-preview-container');
+        if (!preview) return;
+        preview.addEventListener('loadedmetadata', (e) => this.onPreviewMetadata(e.target), true);
+        preview.addEventListener('error', (e) => {
+            if (e.target && e.target.tagName === 'VIDEO') this.setPreviewDuration(null);
+        }, true);
+        const video = preview.querySelector('video');
+        if (video && video.readyState >= 1) this.onPreviewMetadata(video);
+    },
+
+    onPreviewMetadata(video) {
+        if (!video || video.tagName !== 'VIDEO' || !video.isConnected) return;
+        this.setPreviewDuration(video.duration);
+    },
+
+    setPreviewDuration(seconds) {
+        const d = Number(seconds);
+        const next = Number.isFinite(d) && d > 0 ? d : null;
+        // Repaint only on a real change: this runs on every debounced URL
+        // keystroke, and a repaint closes a privacy dropdown the operator has open.
+        if (next === this._ttDurationSec) return;
+        this._ttDurationSec = next;
+        this.refreshTikTokDirect();
+    },
+
+    /**
+     * Adds `tiktok_options` when the post goes to TikTok in direct mode, or
+     * says why it cannot go yet. Inbox mode sends nothing extra, as before.
+     *
+     * @returns {{ message: string, field: string|null }|null} null when the payload is good to send
+     */
+    attachTikTokOptions(payload) {
+        const toTikTok = payload.platform === 'tiktok' || payload.also_tiktok === true;
+        if (!toTikTok || this.tiktokPostMode() !== 'direct') return null;
+
+        const info = this.tiktokCreator;
+        if (!info || info.status !== 'ready') return { message: t('posts.tiktok.direct.notReady'), field: null };
+        this._ttChoices = this.readTikTokChoices(this._ttChoices);
+        const view = this.tiktokView();
+        const result = this.validateTikTokOptions(info.data.creator || null, this._ttChoices, {
+            audited: view.audited, durationSec: this._ttDurationSec,
+        });
+        if (!result.ok) return { message: result.message, field: result.field };
+        payload.tiktok_options = result.options;
+        return null;
     },
 
     mediaFields(post) {
@@ -610,7 +1298,7 @@ const PostsPage = {
                 <div id="media-preview-container" class="media-preview ${mediaUrl ? html.raw('is-visible') : ''}">
                     ${mediaUrl
                         ? (isVideo
-                            ? html`<video src="${mediaUrl}" muted controls aria-label="${t('posts.mediaPreview')}"></video>`
+                            ? html`<video src="${mediaUrl}" muted controls preload="metadata" aria-label="${t('posts.mediaPreview')}"></video>`
                             : html`<img src="${mediaUrl}" alt="${t('posts.mediaPreview')}">`)
                         : ''}
                 </div>
@@ -901,6 +1589,7 @@ const PostsPage = {
         // so the old prefill was off by the whole UTC offset (UTC+3: two hours in
         // the past for a "1 hour from now" default).
         const defaultTime = UI.toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000));
+        this.resetTikTokComposer(null);
 
         UI.showModal(html`
             ${this.modalHeader(t('posts.createTitle'))}
@@ -937,6 +1626,7 @@ const PostsPage = {
                     </label>
                     <span class="switch-label">${t('posts.publishNowToggle')}</span>
                 </div>
+                ${this.tiktokConsentHost()}
                 <div class="modal-actions">
                     ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
                     ${UI.button({
@@ -950,7 +1640,17 @@ const PostsPage = {
         // Apply the platform/type matrix on open — it used to run only on change,
         // so a Facebook post could show Instagram-only types until you touched it.
         this._uploadsInFlight = 0;
+        this.watchPreviewDuration();
         this.applyPlatformMatrix();
+    },
+
+    /**
+     * Where Direct Post's consent box and "By posting, you agree to …" go:
+     * immediately above the submit button, which is where TikTok wants the
+     * declaration read. Empty (and hidden) unless the Direct Post form is up.
+     */
+    tiktokConsentHost() {
+        return html`<div class="tiktok-consent hidden" id="tiktok-consent"></div>`;
     },
 
     showEditModal(id) {
@@ -962,6 +1662,8 @@ const PostsPage = {
         // publishes identically to both platforms.
         const postType = post.post_type === 'reel' ? 'video' : post.post_type;
         const platform = post.platform;
+        // A TikTok row starts from the options it was saved with.
+        this.resetTikTokComposer(post);
 
         UI.showModal(html`
             ${this.modalHeader(t('posts.editTitle'))}
@@ -990,6 +1692,7 @@ const PostsPage = {
                 </div>
                 ${this.mediaFields({ ...post, post_type: postType })}
                 ${this.scheduleFields(defaultTime)}
+                ${this.tiktokConsentHost()}
                 <div class="modal-actions">
                     ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
                     ${UI.button({
@@ -1002,6 +1705,7 @@ const PostsPage = {
         // A count left over from a modal closed mid-upload would hold this
         // form's submit button disabled with nothing on screen explaining it.
         this._uploadsInFlight = 0;
+        this.watchPreviewDuration();
         this.applyPlatformMatrix();
     },
 
@@ -1059,8 +1763,16 @@ const PostsPage = {
         if (also && !offerAlso) also.checked = false;
 
         const info = document.getElementById('tiktok-info');
-        const toTikTok = platform === 'tiktok' || (offerAlso && also && also.checked);
+        const toTikTok = this.composerTargetsTikTok();
         if (info) info.classList.toggle('hidden', !toTikTok);
+
+        // Direct Post: the creator info is fetched the moment TikTok becomes a
+        // target (not at page load — it is live), and the panel follows the
+        // target on and off.
+        if (toTikTok && this.tiktokReady() && this.tiktokConnectionMode() === 'direct') {
+            this.loadTikTokCreator();
+        }
+        this.refreshTikTokDirect();
 
         const showCover = isVideo && platform !== 'tiktok';
         coverGroup.classList.toggle('hidden', !showCover);
@@ -1110,8 +1822,15 @@ const PostsPage = {
         return group.find((row) => row && row.platform === 'tiktok') || null;
     },
 
-    /** What "published" means for TikTok, which answers asynchronously. */
-    tiktokOutcomeText(status) {
+    /**
+     * What "published" means for TikTok, which answers asynchronously. A direct
+     * post has no inbox step, and TikTok's guidelines require saying that the
+     * video can take a few minutes to process before it shows on the profile.
+     */
+    tiktokOutcomeText(status, mode) {
+        if (mode === 'direct') {
+            return status === 'PUBLISHED' ? t('posts.tiktok.postedNoId') : t('posts.tiktok.direct.processingToast');
+        }
         if (status === 'IN_INBOX') return t('posts.tiktok.sentToInbox');
         if (status === 'PUBLISHED') return t('posts.publishedOk');
         return t('posts.tiktok.processingToast');
@@ -1144,13 +1863,16 @@ const PostsPage = {
      * and then had to hunt for which of six fields it was about, and a sighted
      * keyboard user had to scroll up to find out.
      */
-    showFormError(message, fieldId) {
+    showFormError(message, fieldId, hint) {
         const host = document.getElementById('post-form-error');
         if (!host) return;
         const stripId = 'post-form-error-strip';
         const form = document.getElementById('post-schedule-form');
         UI.clearInvalid(form);
-        host.innerHTML = esc(UI.errorStrip(message, t('posts.publishFailedHint'), stripId));
+        // `hint` overrides the default, which describes a failed publish — not
+        // true of a check that stopped the post before anything was sent.
+        const note = hint === undefined ? t('posts.publishFailedHint') : hint;
+        host.innerHTML = esc(UI.errorStrip(message, note, stripId));
         UI.icons(host);
 
         const field = fieldId ? document.getElementById(fieldId) : null;
@@ -1180,6 +1902,13 @@ const PostsPage = {
             return;
         }
 
+        // Direct Post: nothing leaves until TikTok's rules are met.
+        const blocked = this.attachTikTokOptions(payload);
+        if (blocked) {
+            this.showFormError(blocked.message, blocked.field, '');
+            return;
+        }
+
         // Was the one hand-rolled busy state left on this screen: no `aria-busy`,
         // and `buttonSpinner()` with no argument relabels the button "Loading",
         // so "Schedule" and "Publish now" — which `toggleScheduleTime` has just
@@ -1204,11 +1933,14 @@ const PostsPage = {
             }
 
             const tiktokRow = this.tiktokRowOf(result);
+            const tiktokMode = payload.tiktok_options || this.tiktokRowMode(tiktokRow) === 'direct' ? 'direct' : 'inbox';
             if (publishNow && tiktokRow && tiktokRow.status === 'FAILED') {
                 // The Instagram/Facebook half went out; say plainly that TikTok did not.
                 UI.toast(t('posts.tiktok.failedToast', { message: tiktokRow.error_log || t('error.unexpected') }), 'error');
             } else if (publishNow && tiktokRow) {
-                UI.toast(this.tiktokOutcomeText(tiktokRow.status));
+                UI.toast(this.tiktokOutcomeText(tiktokRow.status, tiktokMode));
+            } else if (!publishNow && payload.tiktok_options) {
+                UI.toast(t('posts.tiktok.direct.scheduledToast'));
             } else {
                 UI.toast(publishNow ? t('posts.publishedOk') : t('posts.scheduledOk'));
             }
@@ -1238,6 +1970,11 @@ const PostsPage = {
         }
 
         const payload = { ...this.formPayload(form), scheduled_time: scheduledTime };
+        const blocked = this.attachTikTokOptions(payload);
+        if (blocked) {
+            this.showFormError(blocked.message, blocked.field, '');
+            return;
+        }
 
         // This was the one submit handler on the page with no guard at all:
         // two Enters on a cold start sent two PUTs for the same row.
@@ -1310,8 +2047,9 @@ const PostsPage = {
                 return;
             }
 
+            const direct = this.tiktokRowMode(result) === 'direct' || this.tiktokRowMode(post) === 'direct';
             UI.toast(result && result.platform === 'tiktok'
-                ? this.tiktokOutcomeText(result.status)
+                ? this.tiktokOutcomeText(result.status, direct ? 'direct' : 'inbox')
                 : t('posts.publishedOk'));
             await this.render();
         } catch (err) {
@@ -1471,6 +2209,9 @@ const PostsPage = {
     showMediaPreview(url, isVideo) {
         const preview = document.getElementById('media-preview-container');
         if (!preview) return;
+        // A different file: the old length no longer applies. The new
+        // <video>'s `loadedmetadata` (see watchPreviewDuration) sets it again.
+        this.setPreviewDuration(null);
         const clean = safeUrl(url);
         if (!clean) {
             preview.classList.remove('is-visible');
@@ -1479,7 +2220,7 @@ const PostsPage = {
         }
         preview.classList.add('is-visible');
         preview.innerHTML = esc(isVideo
-            ? html`<video src="${clean}" muted controls aria-label="${t('posts.mediaPreview')}"></video>`
+            ? html`<video src="${clean}" muted controls preload="metadata" aria-label="${t('posts.mediaPreview')}"></video>`
             : html`<img src="${clean}" alt="${t('posts.mediaPreview')}">`);
     },
 
@@ -1488,10 +2229,17 @@ const PostsPage = {
         if (!value) {
             const preview = document.getElementById('media-preview-container');
             if (preview) { preview.classList.remove('is-visible'); preview.innerHTML = ''; }
+            this.setPreviewDuration(null);
             this.refreshCoverPreview();
             return;
         }
-        this.showMediaPreview(value, /\.(mp4|mov|avi|wmv|m4v|webm)(\?|$)/i.test(value));
+        // A typed URL with no extension (our own /api/uploads/<id>) used to
+        // preview as an <img>. When the post IS a video, preview it as one, so
+        // its length can be read for TikTok's duration limit.
+        const typeSelect = document.getElementById('post-type-select');
+        const asVideo = (typeSelect && typeSelect.value === 'video')
+            || /\.(mp4|mov|avi|wmv|m4v|webm)(\?|$)/i.test(value);
+        this.showMediaPreview(value, asVideo);
         this.refreshCoverPreview();
     },
 };
@@ -1530,4 +2278,6 @@ UI.registerActions('posts', {
     handleEdit: (el, e) => PostsPage.handleEdit(el, e),
     handleFileUpload: (el) => PostsPage.handleFileUpload(el),
     handleUrlInput: (el) => debouncedUrlInput(el),
+    tiktokChange: () => PostsPage.onTikTokChange(),
+    retryTikTokCreator: () => PostsPage.loadTikTokCreator(true),
 });

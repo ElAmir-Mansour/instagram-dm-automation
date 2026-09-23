@@ -270,6 +270,12 @@ const API = {
 
     // TikTok — the connection is per account; the app credentials are platform-admin only.
     getTikTokConnection: () => API.request('/tiktok/connection'),
+    /**
+     * Live from TikTok (Direct Post): who is posting, which privacy levels the
+     * account offers, which interactions it has switched off, the longest video
+     * it may post. Asked when TikTok becomes a composer target, never at page load.
+     */
+    getTikTokCreatorInfo: () => API.request('/tiktok/creator-info'),
     startTikTokConnect: () => API.request('/tiktok/connect', { method: 'POST' }),
     disconnectTikTok: () => API.request('/tiktok/disconnect', { method: 'POST' }),
     getTikTokAppSettings: () => API.request('/tiktok/app-settings'),
