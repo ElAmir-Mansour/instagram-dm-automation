@@ -135,7 +135,9 @@ describe('pendingInboxShares', () => {
         assert.equal(n, 3);
         const sql = oneLine(statements[0]!.sql);
         assert.match(sql, /platform = 'tiktok'/);
-        assert.match(sql, /status IN \('PROCESSING', 'IN_INBOX'\)/);
+        // PUBLISHING included: a concurrent drain mid-upload must count, or two drains both
+        // squeeze past the limit.
+        assert.match(sql, /status IN \('PUBLISHING', 'PROCESSING', 'IN_INBOX'\)/);
         assert.match(sql, /claimed_at > NOW\(\) - INTERVAL '24 hours'/);
         assert.deepEqual(statements[0]!.params, ['tenant-a', 'post-1']);
         assert.equal(MAX_PENDING_INBOX_SHARES, 5, 'TikTok: at most 5 pending shares within any 24-hour period');
