@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Five flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Six flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
@@ -23,7 +23,8 @@ bug it was written to fix.
 [2. DM → AI reply](#2-dm--ai-reply) ·
 [3. Scheduled post → publish](#3-scheduled-post--publish) ·
 [4. Login → session → tenant](#4-login--session--tenant) ·
-[5. Job lifecycle](#5-job-lifecycle)
+[5. Job lifecycle](#5-job-lifecycle) ·
+[6. TikTok post → inbox → published](#6-tiktok-post--inbox--published)
 
 ---
 
@@ -766,7 +767,8 @@ with the job marked done and the inbound row permanently unanswerable.
 
 ## 3. Scheduled post → publish
 
-A post is queued in the dashboard and published to Instagram, Facebook, or both.
+A post is queued in the dashboard and published to Instagram, Facebook, or both. TikTok rows
+share the creation route and the claim, then branch — see [flow 6](#6-tiktok-post--inbox--published).
 
 ### 3.1 — Creation
 
@@ -853,8 +855,10 @@ the same endpoint every 60 s (**`heroku-worker/worker.mjs:37-60`**). See
 > written as a precaution and became load-bearing the moment a second schedule started calling
 > the same sweep (**`src/routes/api.ts:591-594`**).
 
-3. `attemptPublish(post, {...})` (**:642-647**), inside a try that only *logs* — the terminal row
-   write already happened inside `attemptPublish`.
+3. `publishClaimedPost(post, {...})` (**`src/routes/api.ts:788`**, defined at **:688**), inside a
+   try that only *logs* — the terminal row write already happened inside the publisher. It
+   dispatches Meta rows to `attemptPublish` and TikTok rows to `publishTikTokPost`
+   ([flow 6](#6-tiktok-post--inbox--published)).
 
 ### 3.4 — `attemptPublish()` and partial-publish recovery
 
@@ -1347,6 +1351,154 @@ so the row is inert.
 
 ---
 
+## 6. TikTok post → inbox → published
+
+A video is scheduled for TikTok, alone or beside a Meta post. At the scheduled time it is
+uploaded into the creator's TikTok inbox; they post it from the TikTok app, and TikTok tells us.
+
+Inbox mode (scope `video.upload`), not Direct Post: unaudited apps are forced to SELF_ONLY, and
+the audit rejects own-account tools (**`src/services/tiktok.ts:9-14`**).
+
+### 6.1 — Connecting, once per tenant
+
+1. **`src/routes/tiktok.ts:210`** — `POST /api/tiktok/connect`, owner only (`canAdminister`,
+   **:179**). Needs `getTikTokAppConfig()` (**`src/services/appSettings.ts:93`** — `app_settings`
+   first, then `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET`).
+2. `redirectUriFor` (**`src/routes/tiktok.ts:45`**) → `getPublicBaseUrl`
+   (**`src/services/appSettings.ts:130`**): the `app.public_base_url` setting, then
+   `PUBLIC_BASE_URL`, then — last resort — the request origin.
+3. `createOAuthState` (**`src/services/tiktokConnections.ts:49`**) inserts a 32-byte nonce into
+   `oauth_states` with the tenant and user, 10-minute TTL. The route sets the same value as an
+   HttpOnly, `SameSite=Lax` cookie with `Path=/api/tiktok/callback` (**`src/routes/tiktok.ts:67-71`**,
+   **:223**) and returns the authorize URL (`buildAuthorizeUrl`, **`src/services/tiktok.ts:143`**).
+4. **`src/routes/tiktok.ts:85`** — `GET /api/tiktok/callback`, on `tiktokPublicRouter`, which is
+   mounted above `requireAuth` (**`src/routes/api.ts:1090`** vs **:1093**). The cookie must equal
+   `state` (**`src/routes/tiktok.ts:105-110`**), then `consumeOAuthState`
+   (**`src/services/tiktokConnections.ts:64`**) spends it in a single
+   `UPDATE … WHERE used_at IS NULL AND expires_at > NOW() RETURNING`.
+5. `completeConnection` (**`src/services/tiktokConnections.ts:139`**) — `exchangeCode`
+   (**`src/services/tiktok.ts:200`**, not retried: the code is single-use), a best-effort
+   `getUserInfo`, then an upsert into `platform_connections` with both tokens `enc:v1:`. The same
+   `open_id` on another tenant is a 23505 → `account_in_use` (**:198**).
+
+> **Why the state lives in the DB *and* a cookie.** Dashboard sessions are Bearer tokens in
+> localStorage, so TikTok's redirect back carries no session at all. The nonce is the only thing
+> binding the returned code to a tenant; the cookie means a state lifted from a log or a referrer
+> cannot be completed from another browser (**`src/config/migration_v18_tiktok.sql:66-71`**).
+
+> **Why not the Host header.** TikTok matches `redirect_uri` byte for byte against the one
+> registered in its portal, and a Host-derived URI differs on every preview deployment
+> (**`src/services/appSettings.ts:24-31`**).
+
+### 6.2 — Creation
+
+**`src/routes/api.ts:2131`** — `POST /api/posts/scheduled`, the same route as
+[3.1](#31--creation).
+
+- `also_tiktok: true` (**:2137**) adds a TikTok row beside the Meta one; `platform: 'tiktok'`
+  alone also works. `both` still means IG+FB.
+- A bad `scheduled_time` is a 400 (**:2144-2148**), not the 500 the INSERT used to throw.
+- TikTok needs a `media_url` and an **active** connection, checked now (**:2169-2182**) rather
+  than at publish time.
+- The rows are inserted in one transaction (**:2193-2208**) and share a `group_id`
+  (**:2184-2186**). TikTok rows get no `cover_url` (**:2202**).
+- `publish_now` (**:2218**) claims each row with the sweep's `claimed_at` UPDATE (**:2226-2232**)
+  and hands it to `publishClaimedPost` (**:2236**). This branch used to set PUBLISHING without
+  `claimed_at`, so a row whose invocation died was never reaped.
+
+### 6.3 — Dispatch
+
+Every publish path — `publishDuePosts` (**`src/routes/api.ts:788`**), create-time `publish_now`
+(**:2236**) and `POST /api/posts/scheduled/:id/publish-now` (**:2445**) — calls
+`publishClaimedPost` (**`src/routes/api.ts:688`**). `platform === 'tiktok'` goes to
+`publishTikTokPost` (**:689-698**); everything else to `attemptPublish`, which now fails closed on
+a non-Meta platform (**:580-582**). An unknown platform used to fall through to a PUBLISHED write
+with an empty id.
+
+### 6.4 — `publishTikTokPost()`: the upload
+
+**`src/services/tiktokPublish.ts:174`**. The row is already `PUBLISHING`.
+
+1. Video only, `media_url` required (**:177-181**).
+2. **Pending-draft limit** (**:183-186**) — `pendingInboxShares` (**:65**) counts this tenant's
+   `PROCESSING` / `IN_INBOX` rows claimed in the last 24h. At 5 (`MAX_PENDING_INBOX_SHARES`,
+   **:54**) it throws `TikTokInboxFullError`, and the catch puts the row back to **PENDING** with
+   the reason in `error_log` (**:259-267**). Held, not failed: the sweep logs
+   `cron.publish_held_tiktok_inbox` (**`src/routes/api.ts:796-799`**); publish-now answers 409
+   (**`src/routes/api.ts:2452-2455`**).
+3. `getAccessToken` (**`src/services/tiktokConnections.ts:299`**) — refreshes when within 10 min of
+   expiry, under the `refresh_claimed_at` claim (`refreshUnderClaim`, **:244**). If another
+   invocation holds the claim it waits for it rather than refreshing in parallel.
+4. `loadMedia` (**`src/services/tiktokPublish.ts:87`**) — an `/api/uploads/<uuid>` URL is read
+   straight from the media store (`media_uploads` bytes), not fetched over HTTP.
+5. `planChunks` (**`src/services/tiktok.ts:296`**): up to 64MB goes whole, otherwise 32MB chunks
+   with the remainder on the last.
+6. **Resume check** (**`src/services/tiktokPublish.ts:200-213`**) — a row that already has an
+   `external_publish_id` reached TikTok before; ask `fetchPublishStatus` first rather than upload
+   a duplicate draft against the 5-a-day limit.
+7. `initInboxVideoUpload` (**`src/services/tiktok.ts:339`**) — `source: 'FILE_UPLOAD'`, caption as
+   the undocumented `post_info.title`; on `invalid_params` it retries once without it
+   (**:366-374**). Otherwise NOT retried: a 5xx may already have created a pending share.
+8. `external_publish_id` is written **before** any bytes go up
+   (**`src/services/tiktokPublish.ts:218-221`**), so a crash from here on is resumable.
+9. `uploadChunks` (**`src/services/tiktok.ts:381`**) — sequential PUTs with `Content-Range`, each
+   retried (a re-PUT is safe). Then `PROCESSING` (**`src/services/tiktokPublish.ts:228-232`**).
+10. **Inline poll** (**:237-256**) — every 3s for 12s, `fetchPublishStatus` → `applyStatus`. A
+    small reel usually reaches `IN_INBOX` here, so "Publish now" shows the real outcome. Anything
+    still processing returns `PROCESSING` and is left to 6.5.
+
+> **Why FILE_UPLOAD, not PULL_FROM_URL.** Pulling needs the URL prefix verified in TikTok's
+> portal, and TikTok would fetch through `/api/uploads/:id`, whose response Vercel caps at 4.5MB.
+> Pushing the bytes is an outbound request with neither problem (**`src/services/tiktok.ts:16-19`**).
+
+### 6.5 — Three writers, one idempotent transition
+
+After the upload the row is `PROCESSING`, then `IN_INBOX` while it waits for the creator, then
+`PUBLISHED` once they post it (TikTok's `PUBLISH_COMPLETE`). Three things move it, all through
+`applyStatus` (**`src/services/tiktokPublish.ts:111`**):
+
+| Writer | Where | When |
+|---|---|---|
+| inline poll | **`tiktokPublish.ts:237-256`** | the 12s after upload |
+| webhook | `POST /api/tiktok/webhook`, **`src/routes/tiktok.ts:146`** → `applyWebhookEvent` (**`tiktokPublish.ts:359`**) | TikTok pushes `post.publish.*` |
+| sweep | `reconcileTikTokPosts` (**`tiktokPublish.ts:286`**), from `/api/jobs/drain` (**`src/routes/api.ts:366`**) and the daily cron (**`src/routes/api.ts:874`**) | `PROCESSING` every 30s; `IN_INBOX` every 10 min, for 7 days |
+
+`applyStatus` maps TikTok's status (`mapPublishState`, **`src/services/tiktok.ts:503`**), and each
+UPDATE names the states it may be reached from (**`tiktokPublish.ts:118-150`**): a late
+`PROCESSING` cannot drag an `IN_INBOX` row back, and a success may overwrite a FAILED our side
+wrote after a timeout. `published_post_id` becomes `TT:<id>` (**:141**) — only public, moderated
+posts get an id, so PUBLISHED with no id is normal.
+
+- **Webhook auth** — `verifyTikTokSignature` (**`src/services/tiktok.ts:532`**):
+  `Tiktok-Signature: t=…,s=…`, HMAC-SHA256 of `"<t>.<raw body>"` keyed with the client secret,
+  over `req.rawBody` (**`src/index.ts:51`**). No freshness window, because TikTok retries for 72h;
+  a replay is harmless because the transitions are idempotent. A rejection is a logged 401
+  (**`src/routes/tiktok.ts:150-157`**).
+- **Webhook events** (**`tiktokPublish.ts:348-353`**) — unknown events are 200'd and ignored; the
+  `publish_id` must match a row, and its `open_id` the same tenant (**:369-380**).
+  `authorization.removed` deletes the connection row (**:360-364**, `deleteConnectionByOpenId`,
+  **`src/services/tiktokConnections.ts:398`**).
+- **Give-up** — a `PROCESSING` row TikTok is silent about for 24h is FAILED
+  (**`tiktokPublish.ts:321-325`**); an `IN_INBOX` draft is simply left alone after 7 days.
+- **Post ids** — TikTok sends them as int64 JSON numbers. `fetchPublishStatus`
+  (**`src/services/tiktok.ts:446`**) keeps the raw text and `parseJsonKeepingIds` (**:437**) quotes
+  the ids before parsing; plain `JSON.parse` would round them to a different video's id.
+
+### 6.6 — Daily token check
+
+`GET /api/cron/publish` runs `refreshAllConnections()` (**`src/routes/api.ts:870`**,
+**`src/services/tiktokConnections.ts:327`**) before its reconcile sweep. Access tokens last 24h;
+the refresh token lasts 365 days from the **first** authorization, and refreshing does not extend
+it. A refused refresh marks the row `invalid` so Settings asks for a reconnect
+(**`tiktokConnections.ts:270-283`**) — found by the cron, not by the next post.
+
+> **Why refreshes are serialized.** TikTok may rotate the refresh token on every refresh. Two
+> concurrent refreshes would each receive a new one, and the loser's write would store a dead
+> token. The `refresh_claimed_at` claim (**`tiktokConnections.ts:245-253`**) allows one at a time;
+> a claim older than 2 min belongs to a dead invocation and is taken over.
+
+---
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -1371,5 +1523,9 @@ error, and several write **no row at all**.
 | 2 | agent switched off — **`ai.ts:323`** | `ai.disabled` (`debug`) | same |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
 | 5 | budget spent — **`runner.ts:145`** | `job.drain_complete` (`budgetExhausted: true`) | jobs stay `pending` |
+| 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
+| 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |
+| 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |
+| 6 | **creator never posts the draft** | *(none)* | row stays `IN_INBOX`; the sweep stops asking after 7 days |
 
 `RUNBOOK.md` works these backwards from the symptom.

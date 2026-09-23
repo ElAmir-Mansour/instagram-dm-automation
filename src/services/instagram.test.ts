@@ -266,6 +266,26 @@ describe('publishFacebookPost', () => {
         assert.deepEqual(calls[0]!.body, { message: 'نص فقط' });
     });
 
+    it("publishes the dashboard's `feed` type through /feed instead of rejecting it", async () => {
+        // The incident: the composer offers `feed` for Facebook, and this function threw
+        // "Unsupported Facebook post_type: feed" — every text post failed at publish time.
+        onPost = ok({ id: 'fb-5' });
+
+        await publishFacebookPost('page-1', 'feed', 'نص فقط', null, TOKEN);
+
+        assert.equal(calls[0]!.url, `${BASE}/page-1/feed`);
+        assert.deepEqual(calls[0]!.body, { message: 'نص فقط' });
+    });
+
+    it('shares a URL on a `feed` post as a link, not as an uploaded asset', async () => {
+        onPost = ok({ id: 'fb-6' });
+
+        await publishFacebookPost('page-1', 'feed', 'شاهد', 'https://example.com/a', TOKEN);
+
+        assert.equal(calls[0]!.url, `${BASE}/page-1/feed`);
+        assert.deepEqual(calls[0]!.body, { message: 'شاهد', link: 'https://example.com/a' });
+    });
+
     it('wraps a publish failure with the Meta code intact', async () => {
         onPost = async () => {
             throw metaError(200, 'Insufficient permission');

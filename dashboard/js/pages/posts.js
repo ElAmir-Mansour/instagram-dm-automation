@@ -25,6 +25,12 @@ const PostsPage = {
     scheduledError: null,
     liveError: null,
     publishError: null,
+    /**
+     * The tenant's TikTok connection summary (GET /tiktok/connection), or null
+     * when it could not be read. Only ever decides what the composer OFFERS —
+     * the server refuses a TikTok post without a connection regardless.
+     */
+    tiktok: null,
 
     /**
      * Guards the write against landing after the operator has navigated away.
@@ -46,6 +52,7 @@ const PostsPage = {
         this.scheduledError = null;
         this.liveError = null;
         this.publishError = null;
+        this.tiktok = null;
     },
 
     /**
@@ -56,10 +63,13 @@ const PostsPage = {
      *    /photo_stories + /video_stories upload the backend does not implement,
      *    so platform="both" cannot offer it either.
      *  - `feed` (text/link) is Facebook-only.
+     *  - TikTok takes video only: photo posts need TikTok to pull the images
+     *    from a verified URL, which is not wired up. `both` still means
+     *    Instagram + Facebook; TikTok is its own row (see "Also send to TikTok").
      */
     POST_TYPES: [
         { value: 'image', labelKey: 'posts.type.image', platforms: ['instagram', 'facebook', 'both'] },
-        { value: 'video', labelKey: 'posts.type.video', platforms: ['instagram', 'facebook', 'both'] },
+        { value: 'video', labelKey: 'posts.type.video', platforms: ['instagram', 'facebook', 'both', 'tiktok'] },
         { value: 'story', labelKey: 'posts.type.story', platforms: ['instagram'] },
         { value: 'feed', labelKey: 'posts.type.feed', platforms: ['facebook'] },
     ],
@@ -83,9 +93,10 @@ const PostsPage = {
         // in-place refresh, so a fast response never flashes a skeleton.
         const gate = Motion.beginLoad(container, () => this.skeleton());
 
-        const [scheduled, live] = await Promise.allSettled([
+        const [scheduled, live, tiktok] = await Promise.allSettled([
             API.getScheduledPosts(),
             API.getLivePosts(),
+            API.getTikTokConnection(),
         ]);
         if (!alive()) return;
         gate.done();
@@ -108,6 +119,10 @@ const PostsPage = {
             this.livePosts = [];
             this.liveError = live.reason;
         }
+
+        // Not an error panel of its own: without it the composer simply does
+        // not offer TikTok, and Settings is where a broken connection is shown.
+        this.tiktok = tiktok.status === 'fulfilled' ? tiktok.value : null;
 
         this.renderLayout();
         Motion.announce(this.activeTab === 'scheduled'
@@ -248,7 +263,17 @@ const PostsPage = {
         const value = String(platform || '');
         if (value === 'instagram') return { cls: 'badge-instagram', icon: 'instagram', label: t('common.instagram') };
         if (value === 'facebook') return { cls: 'badge-facebook', icon: 'facebook', label: t('common.facebook') };
-        return { cls: 'badge-neutral', icon: 'share-2', label: t('common.both') };
+        if (value === 'tiktok') return { cls: 'badge-tiktok', icon: 'music-2', label: t('common.tiktok') };
+        if (value === 'both') return { cls: 'badge-neutral', icon: 'share-2', label: t('common.both') };
+        // Anything else used to fall through to "Both platforms" — a label that
+        // was a claim about where the post would go. Say what the row says.
+        return { cls: 'badge-neutral', icon: 'help-circle', label: value || '—' };
+    },
+
+    /** Is this account's TikTok connection usable for a new post right now? */
+    tiktokReady() {
+        const c = this.tiktok && this.tiktok.connection;
+        return !!(c && c.connected && c.canUpload);
     },
 
     renderScheduledCard(post) {
@@ -256,6 +281,11 @@ const PostsPage = {
         const isFailed = post.status === 'FAILED';
         const isPublishing = post.status === 'PUBLISHING';
         const isPublished = post.status === 'PUBLISHED';
+        // TikTok is asynchronous: PROCESSING while TikTok ingests the upload,
+        // IN_INBOX once it waits in the creator's TikTok inbox to be posted.
+        const isProcessing = post.status === 'PROCESSING';
+        const isInInbox = post.status === 'IN_INBOX';
+        const isTikTok = post.platform === 'tiktok';
 
         let statusClass = 'pending';
         if (isFailed) statusClass = 'failed';
@@ -285,8 +315,8 @@ const PostsPage = {
                         <span class="badge badge-neutral">${typeLabel}</span>
                     </div>
                     <span class="status-pill ${html.raw(statusClass)}">
-                        ${isPublishing
-                            ? html`<span class="dot-blink" aria-hidden="true"></span> ${t('posts.statusPublishing')}`
+                        ${isPublishing || isProcessing
+                            ? html`<span class="dot-blink" aria-hidden="true"></span> ${isProcessing ? t('state.processing') : t('posts.statusPublishing')}`
                             : UI.statusLabel(post.status)}
                     </span>
                 </div>
@@ -300,7 +330,7 @@ const PostsPage = {
                     </div>
                 ` : ''}
 
-                ${isVideo ? html`
+                ${isVideo && !isTikTok ? html`
                     <p class="post-card-meta">
                         <i data-lucide="${coverUrl ? 'image-plus' : 'alert-triangle'}" aria-hidden="true"></i>
                         <span class="${coverUrl ? html.raw('text-success') : html.raw('text-warning')}">
@@ -335,8 +365,36 @@ const PostsPage = {
                     </p>
                 ` : ''}
 
-                ${isPublished ? html`
+                ${isPending && post.error_log ? html`
+                    <!-- A PENDING row with a note is one being held, not one that
+                         failed — today only TikTok's five-drafts-a-day limit does
+                         this — so it reads as a warning, not an error. -->
+                    <p class="post-card-meta post-card-meta--note">
+                        <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                        <span class="text-warning" dir="auto">${post.error_log}</span>
+                    </p>
+                ` : ''}
+
+                ${isTikTok && isProcessing ? html`
+                    <p class="post-card-meta post-card-meta--note">
+                        <i data-lucide="loader" aria-hidden="true"></i>
+                        <span>${t('posts.tiktok.processingNote')}</span>
+                    </p>
+                ` : ''}
+
+                ${isTikTok && isInInbox ? this.renderTikTokInboxNote(post) : ''}
+
+                ${isPublished && post.published_post_id ? html`
                     <p class="post-card-id"><strong>${t('posts.publishedIdLabel')}</strong> ${UI.ltr(post.published_post_id)}</p>
+                ` : ''}
+                ${isPublished && isTikTok && !post.published_post_id ? html`
+                    <!-- TikTok returns a post id only for public posts that have
+                         passed moderation; a private or friends-only post never
+                         gets one. -->
+                    <p class="post-card-meta post-card-meta--note">
+                        <i data-lucide="check-circle" aria-hidden="true"></i>
+                        <span class="text-success">${t('posts.tiktok.postedNoId')}</span>
+                    </p>
                 ` : ''}
 
                 <div class="card-actions">
@@ -367,6 +425,34 @@ const PostsPage = {
                     `}
                 </div>
             </article>
+        `;
+    },
+
+    /**
+     * The one step inbox mode leaves to a person: the video is in the TikTok
+     * inbox and has to be posted from the TikTok app. The caption is sent with
+     * the upload, but TikTok does not document that it is kept, so it is also
+     * one tap from the clipboard — the dashboard is mostly used from a phone,
+     * where "copy, open TikTok, paste" is the whole flow.
+     */
+    renderTikTokInboxNote(post) {
+        return html`
+            <div class="tiktok-next" role="note">
+                <p class="tiktok-next-title">
+                    <i data-lucide="inbox" aria-hidden="true"></i>
+                    <strong>${t('posts.tiktok.inboxTitle')}</strong>
+                </p>
+                <p class="tiktok-next-body">${t('posts.tiktok.inboxBody')}</p>
+                <div class="row row--wrap gap-2">
+                    ${post.caption ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'copy', label: t('posts.tiktok.copyCaption'),
+                        action: 'app:copyValue', data: { copy: post.caption },
+                    }) : ''}
+                    <a class="btn btn-secondary btn-sm" href="https://www.tiktok.com/" target="_blank" rel="noopener noreferrer">
+                        <i data-lucide="external-link" aria-hidden="true"></i> ${t('posts.tiktok.openTikTok')}
+                    </a>
+                </div>
+            </div>
         `;
     },
 
@@ -457,6 +543,52 @@ const PostsPage = {
                     ${selected === type.value ? html.raw('selected') : ''}
                     ${type.platforms.includes(platform) ? '' : html.raw('hidden disabled')}>${t(type.labelKey)}</option>
         `);
+    },
+
+    /**
+     * The TikTok part of the composer. `offerAlso` is the create form's
+     * "Also send to TikTok" switch, which schedules a second, TikTok-only row
+     * alongside an Instagram/Facebook post. The info panel says, before the
+     * operator commits, what inbox mode means: TikTok will not post by itself.
+     */
+    tiktokFields(offerAlso) {
+        const ready = this.tiktokReady();
+        const c = this.tiktok && this.tiktok.connection;
+        const inbox = this.tiktok && this.tiktok.inbox;
+        const avatar = c ? safeUrl(c.avatarUrl) : '';
+        return html`
+            ${offerAlso ? html`
+                <div class="form-group switch-row hidden" id="tiktok-also-group">
+                    <label class="switch" for="post-also-tiktok">
+                        <span class="sr-only">${t('posts.tiktok.also')}</span>
+                        <input type="checkbox" name="also_tiktok" id="post-also-tiktok"
+                               data-change="posts:handleTypeChange" ${ready ? '' : html.raw('disabled')}>
+                        <span class="switch-track"></span>
+                    </label>
+                    <span class="switch-label">${t('posts.tiktok.also')}</span>
+                </div>
+            ` : ''}
+            <div class="tiktok-panel hidden" id="tiktok-info" role="note">
+                ${ready ? html`
+                    <p class="tiktok-account">
+                        ${avatar ? html`<img class="tiktok-avatar" src="${avatar}" alt="" width="24" height="24">` : html`<i data-lucide="music-2" aria-hidden="true"></i>`}
+                        <span>${t('posts.tiktok.postingAs')}</span>
+                        <strong dir="auto">${c.displayName || t('settings.tiktok.unnamed')}</strong>
+                    </p>
+                    <p class="form-hint">${t('posts.tiktok.inboxExplainer')}</p>
+                    ${inbox ? html`
+                        <p class="form-hint ${inbox.pending >= inbox.limit ? html.raw('text-warning') : ''}">
+                            ${t('posts.tiktok.inboxUsage', { pending: inbox.pending, limit: inbox.limit })}
+                        </p>
+                    ` : ''}
+                ` : html`
+                    <p class="form-hint text-warning">
+                        <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                        ${t('posts.tiktok.notConnected')}
+                    </p>
+                `}
+            </div>
+        `;
     },
 
     mediaFields(post) {
@@ -780,6 +912,7 @@ const PostsPage = {
                         <option value="instagram">${t('common.instagram')}</option>
                         <option value="facebook">${t('common.facebook')}</option>
                         <option value="both">${t('common.both')}</option>
+                        <option value="tiktok">${t('common.tiktokOnly')}</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -788,6 +921,7 @@ const PostsPage = {
                         ${this.typeOptions('instagram', 'image')}
                     </select>
                 </div>
+                ${this.tiktokFields(true)}
                 <div class="form-group">
                     <label class="form-label" for="post-caption">${t('posts.caption')}</label>
                     <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
@@ -839,6 +973,7 @@ const PostsPage = {
                         <option value="instagram" ${platform === 'instagram' ? html.raw('selected') : ''}>${t('common.instagram')}</option>
                         <option value="facebook" ${platform === 'facebook' ? html.raw('selected') : ''}>${t('common.facebook')}</option>
                         <option value="both" ${platform === 'both' ? html.raw('selected') : ''}>${t('common.both')}</option>
+                        <option value="tiktok" ${platform === 'tiktok' ? html.raw('selected') : ''}>${t('common.tiktokOnly')}</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -847,6 +982,7 @@ const PostsPage = {
                         ${this.typeOptions(platform, postType)}
                     </select>
                 </div>
+                ${this.tiktokFields(false)}
                 <div class="form-group">
                     <label class="form-label" for="post-caption">${t('posts.caption')}</label>
                     <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
@@ -903,13 +1039,32 @@ const PostsPage = {
         this.applyTypeMatrix();
     },
 
-    /** The cover step only makes sense for video. */
+    /**
+     * The cover step only makes sense for video on Instagram/Facebook — TikTok
+     * picks its own cover in its editor. The TikTok switch only makes sense for
+     * a video headed to Meta; the TikTok panel shows whenever TikTok is a target.
+     */
     applyTypeMatrix() {
         const typeSelect = document.getElementById('post-type-select');
         const coverGroup = document.getElementById('cover-url-group');
         if (!typeSelect || !coverGroup) return;
-        coverGroup.classList.toggle('hidden', typeSelect.value !== 'video');
-        if (typeSelect.value === 'video') this.refreshCoverPreview();
+        const platformSelect = document.getElementById('post-platform-select');
+        const platform = platformSelect ? platformSelect.value : '';
+        const isVideo = typeSelect.value === 'video';
+
+        const alsoGroup = document.getElementById('tiktok-also-group');
+        const also = document.getElementById('post-also-tiktok');
+        const offerAlso = isVideo && platform !== 'tiktok';
+        if (alsoGroup) alsoGroup.classList.toggle('hidden', !offerAlso);
+        if (also && !offerAlso) also.checked = false;
+
+        const info = document.getElementById('tiktok-info');
+        const toTikTok = platform === 'tiktok' || (offerAlso && also && also.checked);
+        if (info) info.classList.toggle('hidden', !toTikTok);
+
+        const showCover = isVideo && platform !== 'tiktok';
+        coverGroup.classList.toggle('hidden', !showCover);
+        if (showCover) this.refreshCoverPreview();
     },
 
     toggleScheduleTime(publishNow) {
@@ -932,13 +1087,34 @@ const PostsPage = {
         const data = new FormData(form);
         const coverUrl = (data.get('cover_url') || '').toString().trim();
         const postType = data.get('post_type');
-        return {
-            platform: data.get('platform'),
+        const platform = data.get('platform');
+        const payload = {
+            platform,
             post_type: postType,
             caption: data.get('caption'),
             media_url: (data.get('media_url') || '').toString().trim() || null,
-            cover_url: postType === 'video' && coverUrl ? coverUrl : null,
+            cover_url: postType === 'video' && platform !== 'tiktok' && coverUrl ? coverUrl : null,
         };
+        // Only the create form has the switch; FormData omits an unchecked box.
+        if (data.get('also_tiktok') === 'on' && postType === 'video' && platform !== 'tiktok') {
+            payload.also_tiktok = true;
+        }
+        return payload;
+    },
+
+    /** The TikTok row of a create response: the row itself, or its sibling in `group`. */
+    tiktokRowOf(result) {
+        if (!result) return null;
+        if (result.platform === 'tiktok') return result;
+        const group = Array.isArray(result.group) ? result.group : [];
+        return group.find((row) => row && row.platform === 'tiktok') || null;
+    },
+
+    /** What "published" means for TikTok, which answers asynchronously. */
+    tiktokOutcomeText(status) {
+        if (status === 'IN_INBOX') return t('posts.tiktok.sentToInbox');
+        if (status === 'PUBLISHED') return t('posts.publishedOk');
+        return t('posts.tiktok.processingToast');
     },
 
     /**
@@ -1027,7 +1203,15 @@ const PostsPage = {
                 return;
             }
 
-            UI.toast(publishNow ? t('posts.publishedOk') : t('posts.scheduledOk'));
+            const tiktokRow = this.tiktokRowOf(result);
+            if (publishNow && tiktokRow && tiktokRow.status === 'FAILED') {
+                // The Instagram/Facebook half went out; say plainly that TikTok did not.
+                UI.toast(t('posts.tiktok.failedToast', { message: tiktokRow.error_log || t('error.unexpected') }), 'error');
+            } else if (publishNow && tiktokRow) {
+                UI.toast(this.tiktokOutcomeText(tiktokRow.status));
+            } else {
+                UI.toast(publishNow ? t('posts.publishedOk') : t('posts.scheduledOk'));
+            }
             // render() first, close after: closing first restored focus to the
             // "New post" button and the re-render then destroyed it, leaving
             // focus on a control inside the hidden overlay.
@@ -1126,7 +1310,9 @@ const PostsPage = {
                 return;
             }
 
-            UI.toast(t('posts.publishedOk'));
+            UI.toast(result && result.platform === 'tiktok'
+                ? this.tiktokOutcomeText(result.status)
+                : t('posts.publishedOk'));
             await this.render();
         } catch (err) {
             this.publishError = { message: this.publishFailure(null, err) };

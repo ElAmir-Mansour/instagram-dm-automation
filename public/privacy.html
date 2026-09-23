@@ -26,6 +26,23 @@
        7-day floor (src/services/retention.ts:34) and is a NO-OP when the
        variable is unset (src/services/retention.ts:84). Change the variable
        and this page becomes untrue.
+
+  TIKTOK (added 2026-09-23) — THE ONE PART WRITTEN AHEAD OF THE CODE.
+  The TikTok claims (section 1 "When the account owner connects TikTok", and
+  the TikTok lines in sections 2, 4, 5 and 7) come from the owner's spec and
+  src/config/migration_v18_tiktok.sql, not from a finished integration. They
+  promise, and the code on feat/tiktok has to deliver:
+    · scopes user.info.basic and video.upload, and no others;
+    · tokens stored enc:v1 (AES-256-GCM, src/config/crypto.ts);
+    · videos go to the owner's TikTok INBOX, never Direct Post;
+    · disconnect revokes with TikTok and DELETES the connection
+      (disconnect() in src/services/tiktokConnections.ts), and the
+      authorization.removed webhook deletes the same row
+      (deleteConnectionByOpenId(), same file) — reconciled 2026-09-23; the
+      webhook used to keep a 'revoked' tombstone with open_id/name/avatar;
+    · scheduled_posts rows are the owner's own content, like their Meta posts:
+      they are NOT deleted on disconnect, and the page now says so.
+  Grep the function names rather than trusting line numbers.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -52,7 +69,7 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=6.9">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=7.0">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -691,23 +708,31 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة الخصوصية</h1>
-                <p class="stamp">آخر تحديث: 21 سبتمبر 2026</p>
+                <p class="stamp">آخر تحديث: 23 سبتمبر 2026</p>
 
                 <p>
                     «أوتوريبلاي برو» أداة تُشغّلها صاحبة أو صاحب حساب واحد على إنستجرام وفيسبوك،
-                    وتقوم بأمرين فقط: الردّ الآلي على التعليقات التي تُطابِق كلمة مفتاحية محدّدة
-                    مسبقاً، والردّ على الرسائل الخاصة الواردة إلى ذلك الحساب. لا تقوم الأداة
-                    بأي نشاط إعلاني أو تسويقي موجّه، ولا تبيع البيانات.
+                    وتقوم مع مَن يعلّق أو يراسل ذلك الحساب بأمرين فقط: الردّ الآلي على التعليقات
+                    التي تُطابِق كلمة مفتاحية محدّدة مسبقاً، والردّ على الرسائل الخاصة الواردة إليه.
+                    وإن ربط صاحب الحساب حساباً على تيك توك أيضاً، فهي ترفع إليه الفيديوهات التي
+                    يجدولها، ولا تفعل هناك شيئاً غير ذلك. لا تقوم الأداة بأي نشاط إعلاني أو تسويقي
+                    موجّه، ولا تبيع البيانات.
                 </p>
                 <p>
                     هذه الصفحة تصف ما يحدث لبياناتك أنت — بوصفك مَن علّق على منشور أو أرسل رسالة
                     خاصة — لا بيانات صاحب الحساب. وهي مكتوبة بحسب ما يفعله الكود فعلاً، لا بحسب
-                    ما ينبغي أن يفعله.
+                    ما ينبغي أن يفعله. والاستثناء الوحيد هو تيك توك: بيانات تيك توك الموصوفة أدناه
+                    تخصّ صاحب الحساب الذي ربطه، لأن الأداة لا تقرأ على تيك توك شيئاً من أي شخص آخر.
                 </p>
                 <p>
                     تعمل الخدمة عبر تطبيق مُسجَّل في «منصّة مطوّري ميتا» باسم
                     <span class="code" lang="en" dir="ltr">AutoResponseBot</span>، وهو الاسم الذي
-                    تجده لدى ميتا، بينما <strong>أوتوريبلاي برو</strong> هو اسم المنتج نفسه.
+                    تجده لدى ميتا، بينما <strong>أوتوريبلاي برو</strong> هو اسم المنتج نفسه. ويجري
+                    الوصول إلى تيك توك عبر تطبيق منفصل مُسجَّل في «منصّة مطوّري تيك توك»
+                    (<bdi lang="en" dir="ltr">TikTok for Developers</bdi>)، باستخدام
+                    <span class="code" lang="en" dir="ltr">Login Kit</span>
+                    و<span class="code" lang="en" dir="ltr">Content Posting API</span> الرسميتين من
+                    تيك توك.
                 </p>
 
                 <div class="callout">
@@ -766,12 +791,53 @@
                     لأنك كتبتها.
                 </p>
 
+                <h3>عندما يربط صاحب الحساب تيك توك</h3>
+                <p>
+                    هذا الجزء يخصّ بيانات صاحب الحساب نفسه. تطلب الأداة من تيك توك صلاحيتين فقط، لا
+                    غير: <span class="code" lang="en" dir="ltr">user.info.basic</span>
+                    و<span class="code" lang="en" dir="ltr">video.upload</span>. ولا تسمح أيٌّ منهما
+                    بقراءة التعليقات أو الرسائل أو أي حساب آخر، فلا تصلنا أي بيانات عن مشاهدي تيك توك
+                    إطلاقاً.
+                </p>
+                <ul>
+                    <li>
+                        <strong>يُخزَّن، من <span class="code" lang="en" dir="ltr">Login Kit</span> في
+                        تيك توك (صلاحية <span class="code" lang="en" dir="ltr">user.info.basic</span>):</strong>
+                        معرّف الحساب <span class="code" lang="en" dir="ltr">open_id</span> — وهو معرّف
+                        يمنحه تيك توك للحساب خاصاً بهذا التطبيق — والاسم المعروض، ورابط الصورة الرمزية.
+                    </li>
+                    <li>
+                        <strong>يُخزَّن مشفّراً:</strong> رمزا الوصول والتحديث
+                        (<bdi lang="en" dir="ltr">OAuth</bdi>) اللذان يُصدرهما تيك توك، مشفّرَين أثناء
+                        التخزين بخوارزمية AES-256-GCM (القسم 7).
+                    </li>
+                    <li>
+                        <strong>الفيديوهات التي يجدولها صاحب الحساب</strong> وأوصافها تُخزَّن لتُرفَع في
+                        موعدها، وتُرفَع إلى تيك توك عبر <span class="code" lang="en" dir="ltr">Content Posting API</span>
+                        (صلاحية <span class="code" lang="en" dir="ltr">video.upload</span>) إلى صندوق
+                        الوارد في حسابه على تيك توك، ويُرسَل الوصف معها حيث يقبله تيك توك. يراجع صاحب الحساب كل فيديو وينشره بنفسه من تطبيق
+                        تيك توك؛ لا يُنشَر شيء علناً نيابةً عنه.
+                    </li>
+                    <li>
+                        <strong>نتائج حالة النشر:</strong> ما يُبلغ به تيك توك عن كل عملية رفع — قيد
+                        المعالجة، أو وصل إلى صندوق الوارد، أو فشل — مع نصّ أي خطأ أعاده تيك توك.
+                    </li>
+                </ul>
+                <p>
+                    تُستخدم بيانات تيك توك لتقديم ميزة النشر فقط. <strong>لا تُباع أبداً، ويُحذف
+                    اتصال تيك توك عندما يفصله صاحب الحساب</strong> — الخطوات في
+                    <a href="/data-deletion">صفحة حذف البيانات</a>. أمّا المنشورات المجدولة التي
+                    أنشأها صاحب الحساب في لوحة التحكم، ومنها حالة نشرها على تيك توك، فتبقى فيها إلى أن
+                    يحذفها بنفسه، كما هو الحال مع منشورات إنستغرام وفيسبوك.
+                </p>
+
                 <h2>2. لماذا نستخدم هذه البيانات</h2>
                 <ul>
                     <li>معرفة ما إذا كان التعليق يُطابِق كلمة مفتاحية لحملة قائمة.</li>
                     <li>إرسال الردّ الآلي إليك، علناً على التعليق أو في رسالة خاصة.</li>
                     <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
+                    <li>رفع الفيديوهات التي يجدولها صاحب الحساب إلى صندوق الوارد في حسابه على تيك توك، وإظهار ما إذا نجحت كل عملية رفع.</li>
                     <li>تشخيص الأعطال: معرفة سبب فشل ردّ لم يصل.</li>
                 </ul>
 
@@ -813,6 +879,12 @@
                         الحساب في صندوق رسائله. <strong>هذا يشمل نصّ رسائلك الخاصة.</strong> إن
                         أردتَ حذفها، فالطريق هو <a href="/data-deletion">صفحة حذف البيانات</a>.
                     </li>
+                    <li>
+                        <strong>اتصال تيك توك</strong> — معرّف <span class="code" lang="en" dir="ltr">open_id</span>
+                        والاسم المعروض ورابط الصورة الرمزية والرمزان: يبقى ما دام تيك توك مربوطاً،
+                        ويُحذف عندما يفصله صاحب الحساب، سواء من الإعدادات في لوحة التحكم أو من «إدارة
+                        أذونات التطبيقات» في تيك توك نفسه.
+                    </li>
                 </ul>
 
                 <h2>5. مَن يعالج البيانات معنا</h2>
@@ -822,6 +894,12 @@
                         <strong>ميتا</strong> (إنستجرام وفيسبوك) — منها تأتي التعليقات والرسائل،
                         وعبرها تُرسَل الردود.
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">سياسة خصوصية ميتا</a>.
+                    </li>
+                    <li>
+                        <strong>تيك توك</strong> — فقط إن ربطه صاحب الحساب. منه تأتي بيانات الملف
+                        الأساسية للحساب، وإليه تُرفَع الفيديوهات التي يجدولها صاحب الحساب وأوصافها. لا يُرسَل إلى
+                        تيك توك أي شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك.
+                        <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية تيك توك</a>.
                     </li>
                     <li>
                         <strong>جوجل</strong> — تتلقّى واجهة Gemini API نصوص الرسائل الخاصة كما
@@ -855,8 +933,9 @@
                         أن يُدخل أحداثاً مزيّفة إلى النظام.
                     </li>
                     <li>
-                        رمز وصول ميتا الخاص بصاحب الحساب <strong>يُشفَّر قبل التخزين</strong>
-                        بخوارزمية AES-256-GCM، ومفتاح التشفير محفوظ خارج قاعدة البيانات.
+                        رمز وصول ميتا الخاص بصاحب الحساب، ورمزا الوصول والتحديث الخاصان بتيك توك،
+                        <strong>تُشفَّر قبل التخزين</strong> بخوارزمية AES-256-GCM، ومفتاح التشفير
+                        محفوظ خارج قاعدة البيانات.
                     </li>
                     <li>لوحة التحكم — وهي المكان الوحيد الذي تُقرأ منه المحادثات — محميّة بكلمة مرور.</li>
                 </ul>
@@ -903,24 +982,32 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Privacy Policy</h1>
-                <p class="stamp">Last updated: 21 September 2026</p>
+                <p class="stamp">Last updated: 23 September 2026</p>
 
                 <p>
                     AutoReply Pro is a tool operated by the owner of a single Instagram and
-                    Facebook account. It does two things: it replies automatically to comments
-                    that match a keyword the owner configured, and it answers direct messages
-                    sent to that account. It runs no advertising or marketing targeting, and it
-                    does not sell data.
+                    Facebook account. With the people who comment on or message that account, it
+                    does two things: it replies automatically to comments that match a keyword the
+                    owner configured, and it answers direct messages sent to the account. If the
+                    owner also connects a TikTok account, it uploads the videos the owner schedules
+                    to it, and does nothing else there. It runs no advertising or marketing
+                    targeting, and it does not sell data.
                 </p>
                 <p>
                     This page describes what happens to <em>your</em> data — as someone who
                     commented on a post or sent a direct message — not the account owner's. It
                     is written from what the code actually does, not from what it ought to do.
+                    The one exception is TikTok: the TikTok data described below belongs to the
+                    account owner who connected it, because nothing on TikTok is read from anyone
+                    else.
                 </p>
                 <p>
                     The service runs through an app registered on the Meta Developer Platform as
                     <span class="code">AutoResponseBot</span>, which is the name Meta holds;
-                    <strong>AutoReply Pro</strong> is the name of the product itself.
+                    <strong>AutoReply Pro</strong> is the name of the product itself. TikTok
+                    access goes through a separate app registered on TikTok for Developers, using
+                    TikTok's official <span class="code">Login Kit</span> and
+                    <span class="code">Content Posting API</span>.
                 </p>
 
                 <div class="callout">
@@ -981,12 +1068,55 @@
                     wrote it.
                 </p>
 
+                <h3>When the account owner connects TikTok</h3>
+                <p>
+                    This part is about the account owner's own data. The app asks TikTok for two
+                    scopes and no others: <span class="code">user.info.basic</span> and
+                    <span class="code">video.upload</span>. Neither lets it read comments,
+                    messages, or anyone else's account, so no TikTok viewer's data reaches us at
+                    all.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Stored, from TikTok Login Kit
+                        (<span class="code">user.info.basic</span>):</strong> the account's
+                        <span class="code">open_id</span> — TikTok's identifier for the account,
+                        specific to this app — its display name, and its avatar URL.
+                    </li>
+                    <li>
+                        <strong>Stored, encrypted:</strong> the OAuth access token and refresh
+                        token TikTok issues, encrypted at rest with AES-256-GCM (section 7).
+                    </li>
+                    <li>
+                        <strong>The videos the owner schedules</strong>, and their captions, are
+                        stored so they can be uploaded at the scheduled time, and are uploaded to
+                        TikTok through the Content Posting API
+                        (<span class="code">video.upload</span>) into the owner's TikTok inbox,
+                        with the caption sent along where TikTok accepts it. The owner reviews and posts each one in the TikTok
+                        app; nothing is posted publicly on their behalf.
+                    </li>
+                    <li>
+                        <strong>Publish status results:</strong> what TikTok reports back about each
+                        upload — still processing, delivered to the inbox, or failed — with the
+                        text of any error TikTok returned.
+                    </li>
+                </ul>
+                <p>
+                    TikTok data is used only to provide the posting feature. <strong>It is never
+                    sold, and the TikTok connection is deleted when the owner disconnects
+                    TikTok</strong> — the steps are on the <a href="/data-deletion">data deletion page</a>.
+                    Scheduled posts the owner created in the dashboard, including their TikTok
+                    publish status, stay there until the owner deletes them, exactly as Instagram and
+                    Facebook posts do.
+                </p>
+
                 <h2>2. Why we use it</h2>
                 <ul>
                     <li>To decide whether a comment matches a keyword on an active campaign.</li>
                     <li>To send you the automated reply, publicly under the comment or as a direct message.</li>
                     <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
+                    <li>To upload the videos the account owner schedules to their own TikTok inbox, and to show them whether each upload went through.</li>
                     <li>To diagnose faults: to find out why a reply that should have arrived did not.</li>
                 </ul>
 
@@ -1032,6 +1162,12 @@
                         want yours removed, the route is the
                         <a href="/data-deletion">data deletion page</a>.
                     </li>
+                    <li>
+                        <strong>The TikTok connection</strong> — the <span class="code">open_id</span>,
+                        display name, avatar URL, and both tokens: kept while TikTok is connected,
+                        and deleted when the owner disconnects it, either from Settings in the
+                        dashboard or from "Manage app permissions" in TikTok itself.
+                    </li>
                 </ul>
 
                 <h2>5. Who else processes it</h2>
@@ -1041,6 +1177,13 @@
                         <strong>Meta</strong> (Instagram and Facebook) — comments and messages
                         arrive from Meta, and replies are sent back through it.
                         <a href="https://www.facebook.com/privacy/policy/" target="_blank" rel="noopener noreferrer">Meta's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>TikTok</strong> — only if the account owner connects it. The
+                        account's basic profile comes from TikTok, and the owner's scheduled videos
+                        and their captions are uploaded to it. Nothing about people who comment or message on Instagram
+                        or Facebook is sent to TikTok.
+                        <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">TikTok's privacy policy</a>.
                     </li>
                     <li>
                         <strong>Google</strong> — the Gemini API receives direct-message text as
@@ -1075,9 +1218,9 @@
                         it is processed, so no one else can inject forged events into the system.
                     </li>
                     <li>
-                        The account owner's Meta access token is
-                        <strong>encrypted before it is stored</strong>, with AES-256-GCM, and
-                        the encryption key is held outside the database.
+                        The account owner's Meta access token, and their TikTok access and
+                        refresh tokens, are <strong>encrypted before they are stored</strong>,
+                        with AES-256-GCM, and the encryption key is held outside the database.
                     </li>
                     <li>The dashboard — the only place conversations are read from — is password-protected.</li>
                 </ul>
@@ -1167,6 +1310,7 @@
                 </nav>
                 <nav aria-labelledby="foot-h-policies">
                     <p class="foot-h" id="foot-h-policies"><bdi class="t-ar" lang="ar">السياسات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Policies</bdi></p>
+                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
                     <a href="/privacy" aria-current="page"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
                     <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
                 </nav>

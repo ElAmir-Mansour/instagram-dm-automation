@@ -225,7 +225,7 @@ export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
                        AND NOT EXISTS (
                            SELECT 1
                              FROM scheduled_posts s
-                            WHERE s.status IN ('PENDING', 'PUBLISHING', 'FAILED')
+                            WHERE s.status IN ('PENDING', 'PUBLISHING', 'PROCESSING', 'FAILED')
                               AND (
                                     s.media_url LIKE '%' || m.id::text || '%'
                                  OR s.cover_url LIKE '%' || m.id::text || '%'

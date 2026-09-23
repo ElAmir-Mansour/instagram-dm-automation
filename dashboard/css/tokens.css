@@ -113,6 +113,11 @@
     --brand-facebook: #1877f2;
     --brand-facebook-soft: rgba(24, 119, 242, 0.14);
     --brand-facebook-text: #6fa8ff;
+    /* TikTok's cyan, as a tint only. The label on a TikTok badge is the
+       theme's own text colour: cyan text fails contrast on a light surface,
+       and TikTok's brand is black-and-white first anyway. */
+    --brand-tiktok: #25f4ee;
+    --brand-tiktok-soft: rgba(37, 244, 238, 0.16);
     --brand-on-solid: #ffffff;
 
     /* ─── Chart series ───────────────────────────────────────────────────────

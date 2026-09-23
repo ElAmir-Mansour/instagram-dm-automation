@@ -45,6 +45,11 @@ interface PostsApi {
     publishWindowText(win: PublishWindow | null): string;
     scheduleNoteText(localValue: string): string;
     renderScheduledCard(post: Record<string, unknown>): { toString(): string };
+    platformBadge(platform: unknown): { cls: string; icon: string; label: string };
+    tiktokRowOf(result: unknown): Record<string, unknown> | null;
+    tiktokOutcomeText(status: string): string;
+    tiktok: unknown;
+    tiktokReady(): boolean;
 }
 
 interface ActivityApi {
@@ -617,5 +622,70 @@ describe('AiSettingsPage — Save survives a failed load followed by a retry', (
         await Ai.loadSettings();
         assert.equal(dom.get('save-settings-btn')!.disabled, false, 'a successful retry must make Save usable again');
         assert.equal(dom.get('system-prompt-text')!.value, 'p', 'and the form must actually hold the loaded prompt');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('PostsPage — TikTok rows', () => {
+    const base = { id: 'p1', post_type: 'video', scheduled_time: '2027-03-04T18:20:00.000Z', caption: 'تعلم #AI' };
+
+    it('labels a TikTok row TikTok, and an unknown platform as itself — never "Both platforms"', () => {
+        // platformBadge used to fall through to "Both platforms" for any value it
+        // did not know, which is a claim about where the post goes. A `tiktok`
+        // row was labelled exactly that before this branch existed.
+        const { Posts, t } = load();
+        assert.equal(Posts.platformBadge('tiktok').label, t('common.tiktok'));
+        assert.equal(Posts.platformBadge('both').label, t('common.both'));
+        assert.notEqual(Posts.platformBadge('mastodon').label, t('common.both'));
+        assert.equal(Posts.platformBadge('mastodon').label, 'mastodon');
+    });
+
+    it('an IN_INBOX card says what to do next and puts the caption one tap from the clipboard', () => {
+        const { Posts, t } = load();
+        const card = String(Posts.renderScheduledCard({ ...base, platform: 'tiktok', status: 'IN_INBOX' }));
+
+        assert.ok(card.includes(t('posts.tiktok.inboxTitle')), 'the next step must be on the card');
+        assert.ok(card.includes('data-action="app:copyValue"'), 'copy-caption button');
+        assert.ok(card.includes(`data-copy="${base.caption}"`), 'the button copies THIS caption');
+        assert.ok(card.includes(t('state.in_inbox')), 'the status reads "in your TikTok inbox"');
+        // TikTok picks its own cover, so the Instagram cover warning is noise here.
+        assert.ok(!card.includes(t('posts.cover.missingBadge')));
+    });
+
+    it('a PROCESSING card is visibly in flight, not "Pending"', () => {
+        const { Posts, t } = load();
+        const card = String(Posts.renderScheduledCard({ ...base, platform: 'tiktok', status: 'PROCESSING' }));
+        assert.ok(card.includes(t('state.processing')));
+        assert.ok(card.includes('dot-blink'));
+        assert.ok(!card.includes(t('state.pending')));
+    });
+
+    it('a PENDING row held by TikTok\u2019s draft limit shows the reason as a warning, not an error', () => {
+        const { Posts, t } = load();
+        const note = 'Waiting for TikTok: 5 drafts are still in your inbox.';
+        const card = String(Posts.renderScheduledCard({ ...base, platform: 'tiktok', status: 'PENDING', error_log: note }));
+        assert.ok(card.includes(note));
+        assert.ok(card.includes('text-warning'));
+        assert.ok(!card.includes(t('posts.errorLabel')), 'held is not failed');
+    });
+
+    it('finds the TikTok half of a create response, whichever row it is', () => {
+        const { Posts } = load();
+        const tt = { id: 'b', platform: 'tiktok', status: 'IN_INBOX' };
+        assert.equal(Posts.tiktokRowOf({ id: 'a', platform: 'both', group: [{ id: 'a', platform: 'both' }, tt] }), tt);
+        assert.equal(Posts.tiktokRowOf(tt), tt);
+        assert.equal(Posts.tiktokRowOf({ id: 'a', platform: 'instagram' }), null);
+        assert.equal(Posts.tiktokRowOf(null), null);
+    });
+
+    it('offers TikTok only when the connection can actually upload', () => {
+        const { Posts } = load();
+        Posts.tiktok = null;
+        assert.equal(Posts.tiktokReady(), false);
+        Posts.tiktok = { connection: { connected: true, canUpload: false } };
+        assert.equal(Posts.tiktokReady(), false, 'connected without video.upload is not ready');
+        Posts.tiktok = { connection: { connected: true, canUpload: true } };
+        assert.equal(Posts.tiktokReady(), true);
     });
 });

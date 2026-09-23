@@ -1,5 +1,5 @@
 /**
- * Settings — access token, webhook verify token, account info, appearance.
+ * Settings — access token, webhook verify token, TikTok, account info, appearance.
  *
  * Every credential shown here is a Latin string sitting inside Arabic prose,
  * which is exactly where bidi goes wrong: an unisolated token preview drags
@@ -65,6 +65,19 @@ const SettingsPage = {
         } catch (err) {
             webhookError = err;
         }
+
+        // TikTok, loaded the same way and for the same reason: its failure
+        // must not take the Meta settings down with it.
+        let tiktok = null;
+        let tiktokError = null;
+        let tiktokApp = null;
+        let tiktokAppError = null;
+        const [tt, ttApp] = await Promise.allSettled([
+            API.getTikTokConnection(),
+            App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
+        ]);
+        if (tt.status === 'fulfilled') tiktok = tt.value; else tiktokError = tt.reason;
+        if (ttApp.status === 'fulfilled') tiktokApp = ttApp.value; else tiktokAppError = ttApp.reason;
 
         if (!live()) return;
         gate.done();
@@ -222,6 +235,8 @@ const SettingsPage = {
                 </div>
             </section>
 
+            ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
+
             <section class="section">
                 <h2 class="section-title">${t('settings.accountInfo')}</h2>
                 <div class="settings-card surface stack gap-2">
@@ -269,6 +284,295 @@ const SettingsPage = {
         UI.icons(container);
         UI.restoreFocus(focus);
         Motion.announce(`${t('nav.settings')} — ${t('common.loaded')}`);
+        this.announceTikTokReturn();
+    },
+
+    /** Reasons the OAuth callback can send back, each with its own sentence. */
+    TIKTOK_RETURN_REASONS: ['denied', 'state_mismatch', 'state_expired', 'account_in_use', 'exchange_failed', 'no_base_url'],
+
+    /**
+     * Coming back from TikTok's consent screen: the callback redirects to
+     * `#/settings?tiktok=connected|error&reason=…`. Say what happened once,
+     * then drop the parameters so a reload does not say it again.
+     */
+    announceTikTokReturn() {
+        const outcome = App.hashParam('tiktok');
+        if (!outcome) return;
+        if (outcome === 'connected') {
+            UI.toast(t('settings.tiktok.connectedToast'), 'success');
+        } else {
+            const reason = App.hashParam('reason');
+            const known = this.TIKTOK_RETURN_REASONS.includes(reason);
+            UI.toast(known ? t(`settings.tiktok.return.${reason}`) : t('settings.tiktok.return.generic'), 'error');
+        }
+        try {
+            history.replaceState(null, '', `${location.pathname}#/settings`);
+        } catch {
+            // Only the repeat-on-reload is lost.
+        }
+    },
+
+    tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError }) {
+        const isAdmin = App.isAdmin();
+        const canAdminister = App.canAdminister();
+        const c = tiktok && tiktok.connection;
+        const connected = !!(c && c.connected);
+        const needsReconnect = !!(c && c.status === 'invalid');
+        const refreshExpires = c && c.refreshExpiresAt ? new Date(c.refreshExpiresAt) : null;
+        const daysToReconnect = refreshExpires ? Math.ceil((refreshExpires - Date.now()) / 86400000) : null;
+        const avatar = c ? safeUrl(c.avatarUrl) : '';
+
+        let body;
+        if (tiktokError) {
+            body = html`
+                <div class="inline-error" role="alert">
+                    <i data-lucide="alert-circle" aria-hidden="true"></i>
+                    <div><strong dir="auto">${t('settings.tiktok.loadFailed', { message: tiktokError.message })}</strong></div>
+                </div>
+                ${UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render',
+                })}
+            `;
+        } else if (!tiktok.appConfigured) {
+            body = html`
+                <p class="form-hint">${isAdmin ? t('settings.tiktok.notConfiguredAdmin') : t('settings.tiktok.notConfiguredMember')}</p>
+            `;
+        } else if (connected || needsReconnect) {
+            body = html`
+                <div class="row row--start gap-3 mbe-4">
+                    ${avatar
+                        ? html`<img class="tiktok-avatar-lg" src="${avatar}" alt="" width="44" height="44">`
+                        : html`<span class="stat-icon shrink-0"><i data-lucide="music-2" aria-hidden="true"></i></span>`}
+                    <div class="stack gap-1">
+                        <strong dir="auto">${c.displayName || t('settings.tiktok.unnamed')}</strong>
+                        <span class="health-pill ${needsReconnect ? html.raw('health-stale') : html.raw('health-fresh')}">
+                            <i data-lucide="${needsReconnect ? 'alert-triangle' : 'check-circle'}" aria-hidden="true"></i>
+                            ${needsReconnect ? t('settings.tiktok.statusInvalid') : t('settings.tiktok.statusActive')}
+                        </span>
+                    </div>
+                </div>
+                ${needsReconnect && c.lastError ? html`
+                    <p class="form-hint text-warning mbe-3" dir="auto">${t('settings.tiktok.lastError', { message: c.lastError })}</p>
+                ` : ''}
+                ${connected && !c.canUpload ? html`
+                    <p class="form-hint text-warning mbe-3">${t('settings.tiktok.cannotUpload')}</p>
+                ` : ''}
+                ${refreshExpires ? html`
+                    <p class="token-info mbe-2">
+                        ${t('settings.tiktok.reconnectBy', { date: UI.formatDay(refreshExpires) })}
+                        ${daysToReconnect !== null && daysToReconnect < 30 ? html`
+                            <span class="text-warning">${t('settings.daysLeft', { count: Math.max(daysToReconnect, 0) })}</span>
+                        ` : ''}
+                    </p>
+                ` : ''}
+                ${tiktok.inbox ? html`
+                    <p class="token-info mbe-4 ${tiktok.inbox.pending >= tiktok.inbox.limit ? html.raw('text-warning') : ''}">
+                        ${t('posts.tiktok.inboxUsage', { pending: tiktok.inbox.pending, limit: tiktok.inbox.limit })}
+                    </p>
+                ` : ''}
+                ${c.scopes && c.scopes.length ? html`
+                    <div class="mbe-4">
+                        <p class="form-label">${t('settings.permissions')}</p>
+                        <div class="scope-list">${c.scopes.map((sc) => html`<span class="chip">${UI.ltr(sc)}</span>`)}</div>
+                    </div>
+                ` : ''}
+                ${canAdminister ? html`
+                    <div class="row row--wrap gap-2">
+                        ${UI.button({
+                            variant: needsReconnect ? 'primary' : 'secondary', size: 'sm', icon: 'refresh-cw',
+                            label: t('settings.tiktok.reconnect'), action: 'settings:connectTikTok', id: 'settings-tiktok-connect',
+                        })}
+                        ${UI.button({
+                            variant: 'danger', size: 'sm', icon: 'unlink',
+                            label: t('settings.tiktok.disconnect'), action: 'settings:disconnectTikTok', id: 'settings-tiktok-disconnect',
+                        })}
+                    </div>
+                ` : html`<p class="form-hint">${t('settings.tiktok.ownerOnly')}</p>`}
+            `;
+        } else {
+            body = html`
+                ${canAdminister ? UI.button({
+                    variant: 'primary', size: 'sm', icon: 'link',
+                    label: t('settings.tiktok.connect'), action: 'settings:connectTikTok', id: 'settings-tiktok-connect',
+                }) : html`<p class="form-hint">${t('settings.tiktok.ownerOnly')}</p>`}
+            `;
+        }
+
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.tiktok.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.tiktok.intro')}</p>
+                    ${body}
+                    ${isAdmin ? this.tiktokAppBlock(tiktokApp, tiktokAppError, !!(tiktok && tiktok.appConfigured)) : ''}
+                </div>
+            </section>
+        `;
+    },
+
+    /**
+     * The TikTok app's own credentials — one set for the whole deployment, so
+     * platform admins only. Open by default until the app is configured, since
+     * until then it is the only thing in the section that does anything.
+     */
+    tiktokAppBlock(app, error, configured) {
+        if (error) {
+            return html`<p class="form-hint text-warning" dir="auto">${t('settings.tiktok.app.loadFailed', { message: error.message })}</p>`;
+        }
+        if (!app) return '';
+        const reg = app.register;
+        const secretNote = app.clientSecret.source === 'env'
+            ? t('settings.tiktok.app.secretFromEnv')
+            : (app.clientSecret.preview ? t('settings.tiktok.app.secretSet', { preview: app.clientSecret.preview }) : '');
+        const row = (label, value) => html`
+            <li>
+                <span class="form-label">${label}</span>
+                <code dir="ltr">${UI.ltr(value)}</code>
+                ${UI.button({
+                    variant: 'ghost', size: 'sm', icon: 'copy',
+                    ariaLabel: t('setup.copyUrl'), title: t('setup.copyUrl'),
+                    action: 'app:copyValue', data: { copy: value },
+                })}
+            </li>
+        `;
+
+        return html`
+            <details class="settings-block" ${configured ? '' : html.raw('open')}>
+                <summary class="form-label tiktok-app-summary">
+                    <i data-lucide="chevron-down" aria-hidden="true"></i>
+                    ${t('settings.tiktok.app.title')}
+                </summary>
+                <p class="form-hint mbe-3">${t('settings.tiktok.app.hint')}</p>
+
+                ${reg ? html`
+                    <p class="form-label">${t('settings.tiktok.app.register')}</p>
+                    <ul class="tiktok-register mbe-4">
+                        ${row(t('settings.tiktok.app.websiteUrl'), reg.websiteUrl)}
+                        ${row(t('settings.tiktok.app.termsUrl'), reg.termsUrl)}
+                        ${row(t('settings.tiktok.app.privacyUrl'), reg.privacyUrl)}
+                        ${row(t('settings.tiktok.app.redirectUri'), reg.redirectUri)}
+                        ${row(t('settings.tiktok.app.webhookUrl'), reg.webhookUrl)}
+                        ${row(t('settings.tiktok.app.scopes'), (app.scopes || []).join(','))}
+                    </ul>
+                ` : ''}
+
+                <form id="tiktok-app-form" data-submit="settings:saveTikTokApp">
+                    <div class="form-group">
+                        <label class="form-label" for="tiktok-client-key">${t('settings.tiktok.app.clientKey')}</label>
+                        <input class="field field-mono" id="tiktok-client-key" name="clientKey" type="text" dir="ltr"
+                               autocomplete="off" spellcheck="false" autocapitalize="off"
+                               value="${app.clientKey.value || ''}">
+                    </div>
+                    <div class="form-group">
+                        <!-- Never prefilled: the secret is never sent back. Blank
+                             means "keep what is saved". -->
+                        <label class="form-label" for="tiktok-client-secret">${t('settings.tiktok.app.clientSecret')}</label>
+                        <input class="field field-mono" id="tiktok-client-secret" name="clientSecret" type="password" dir="ltr"
+                               autocomplete="new-password" spellcheck="false" autocapitalize="off">
+                        ${secretNote ? html`<p class="form-hint">${UI.ltr(secretNote)}</p>` : ''}
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="tiktok-base-url">${t('settings.tiktok.app.baseUrl')}</label>
+                        <input class="field field-mono" id="tiktok-base-url" name="publicBaseUrl" type="url" dir="ltr"
+                               autocomplete="off" spellcheck="false"
+                               placeholder="${app.publicBaseUrl.effective || 'https://'}"
+                               value="${app.publicBaseUrl.saved || ''}">
+                        <p class="form-hint">${t('settings.tiktok.app.baseUrlHint')}</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="tiktok-verify-name">
+                            ${t('settings.tiktok.app.verifyName')} <span class="label-optional">${t('common.optional')}</span>
+                        </label>
+                        <input class="field field-mono" id="tiktok-verify-name" name="verificationFilename" type="text" dir="ltr"
+                               autocomplete="off" spellcheck="false" placeholder="tiktokXXXXXXXX.txt"
+                               value="${app.verification.filename || ''}">
+                        <label class="form-label mbs-3" for="tiktok-verify-content">${t('settings.tiktok.app.verifyContent')}</label>
+                        <input class="field field-mono" id="tiktok-verify-content" name="verificationContent" type="text" dir="ltr"
+                               autocomplete="off" spellcheck="false" placeholder="tiktok-developers-site-verification=…">
+                        <p class="form-hint">${t('settings.tiktok.app.verifyHint')}</p>
+                        ${app.verification.url ? html`<p class="form-hint">${UI.ltr(app.verification.url)}</p>` : ''}
+                    </div>
+                    <div class="form-actions">
+                        ${UI.button({
+                            variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
+                            label: t('settings.tiktok.app.save'), id: 'tiktok-app-submit',
+                        })}
+                    </div>
+                </form>
+            </details>
+        `;
+    },
+
+    /**
+     * The session lives in localStorage, so the connect flow cannot be a plain
+     * link: this asks the server (authenticated) for TikTok's authorise URL,
+     * which also sets the single-use state cookie, and only then navigates.
+     */
+    async connectTikTok(btn) {
+        if (!btn || btn.disabled) return;
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        try {
+            const { url } = await API.startTikTokConnect();
+            window.location.href = url;
+        } catch (err) {
+            restore();
+            UI.toast(err.message || t('settings.tiktok.return.generic'), 'error');
+        }
+    },
+
+    disconnectTikTok(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.tiktok.disconnectTitle'),
+            body: t('settings.tiktok.disconnectBody'),
+            hint: t('settings.tiktok.disconnectHint'),
+            confirmLabel: t('settings.tiktok.disconnect'),
+            confirmIcon: 'unlink',
+            onConfirm: () => SettingsPage.disconnectTikTokConfirmed(),
+        });
+    },
+
+    /**
+     * A rejection here is shown inside the confirm dialog, which stays open
+     * (Admin.runConfirm) — so no toast of its own on failure.
+     */
+    async disconnectTikTokConfirmed() {
+        await API.disconnectTikTok();
+        UI.toast(t('settings.tiktok.disconnected'), 'success');
+        await this.render();
+    },
+
+    async saveTikTokApp(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const payload = {
+            clientKey: (data.get('clientKey') || '').toString().trim(),
+            publicBaseUrl: (data.get('publicBaseUrl') || '').toString().trim(),
+        };
+        // A blank secret means "leave it", not "clear it" — it is never sent
+        // back to the page, so the field is always blank on load.
+        const secret = (data.get('clientSecret') || '').toString().trim();
+        if (secret) payload.clientSecret = secret;
+        const verifyName = (data.get('verificationFilename') || '').toString().trim();
+        const verifyContent = (data.get('verificationContent') || '').toString().trim();
+        if (verifyContent) {
+            payload.verificationFilename = verifyName;
+            payload.verificationContent = verifyContent;
+        }
+
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveTikTokAppSettings(payload);
+            UI.toast(t('settings.tiktok.app.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            UI.toast(err.message, 'error');
+        }
     },
 
     /**
@@ -375,4 +679,7 @@ UI.registerActions('settings', {
     extendToken: (el) => SettingsPage.extendToken(el),
     handleTokenUpdate: (el, e) => SettingsPage.handleTokenUpdate(el, e),
     handleWebhookTokenUpdate: (el, e) => SettingsPage.handleWebhookTokenUpdate(el, e),
+    connectTikTok: (el) => SettingsPage.connectTikTok(el),
+    disconnectTikTok: (el) => SettingsPage.disconnectTikTok(el),
+    saveTikTokApp: (el, e) => SettingsPage.saveTikTokApp(el, e),
 });

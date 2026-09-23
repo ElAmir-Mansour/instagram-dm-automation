@@ -268,6 +268,13 @@ const API = {
     updateWebhookToken: (token) => API.request('/settings/webhook-token', { method: 'POST', body: JSON.stringify({ token }) }),
     getCreators: () => API.request('/creators'),
 
+    // TikTok — the connection is per account; the app credentials are platform-admin only.
+    getTikTokConnection: () => API.request('/tiktok/connection'),
+    startTikTokConnect: () => API.request('/tiktok/connect', { method: 'POST' }),
+    disconnectTikTok: () => API.request('/tiktok/disconnect', { method: 'POST' }),
+    getTikTokAppSettings: () => API.request('/tiktok/app-settings'),
+    saveTikTokAppSettings: (data) => API.request('/tiktok/app-settings', { method: 'POST', body: JSON.stringify(data) }),
+
     // Posts Scheduler
     getScheduledPosts: () => API.request('/posts/scheduled'),
     createScheduledPost: (data) => API.request('/posts/scheduled', { method: 'POST', body: JSON.stringify(data) }),

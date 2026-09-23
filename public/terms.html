@@ -1,63 +1,70 @@
 <!DOCTYPE html>
 <!--
   ═══════════════════════════════════════════════════════════════════════════
-  AutoReply Pro — Data Deletion Instructions  ·  حذف البيانات
+  AutoReply Pro — Terms of Service  ·  شروط الخدمة
   ═══════════════════════════════════════════════════════════════════════════
 
-  Bilingual in one file for the same reason as public/privacy.html: `/data-deletion`
-  is one hardcoded Express route (src/index.ts:105-107) and `public/**` has no
-  static handler, so a second file would be unreachable in production. No JS =
-  both languages shown, each with its own lang/dir.
+  Bilingual in one file for the same reason as public/privacy.html: `/terms`
+  is one hardcoded Express route in src/index.ts and `public/**` has no static
+  handler, so a second file (terms-ar.html) would be unreachable in
+  production. Without JavaScript both languages are shown, each with its own
+  lang/dir; with it, the switch in the header filters to one and updates
+  <html lang dir>, exactly as privacy.html does.
 
-  ───────────────────────────────────────────────────────────────────────────
-  OPERATOR CHECKLIST — what a deletion request actually has to touch.
-  There is no self-service endpoint and no admin route that does this
-  (src/routes/admin.ts has tenant/user routes only), so it is a manual
-  operation. Clearing `messages.text` alone does NOT honour the request,
-  because the same text exists in two other places:
+  WHY IT EXISTS. TikTok will not register an app without a public Terms of
+  Service URL next to the Privacy Policy URL. This is that page, and it is
+  also simply the terms the dashboard's users agree to.
 
-    1. messages.text            — the message body           (src/webhook/messaging.ts:175-189)
-    2. messages.raw_payload     — a verbatim second copy     (same INSERT; JSONB)
-    3. jobs.payload             — a THIRD verbatim copy      (src/config/migration_v13_jobs.sql:20-30)
-                                  `done` rows self-prune after 7 days, but
-                                  `failed` rows are never pruned
-                                  (src/jobs/queue.ts:220-221) — these are the
-                                  ones that outlive the published window.
-    4. conversations            — the Meta-scoped user id    (messaging.ts:265-272)
-    5. interactions             — username, comment id, post id (comments.ts:166-171)
-    6. dm_send_log              — recipient id (self-prunes at 48h, rateLimiter.ts:173)
+  THE SHELL IS privacy.html's, copied rather than reinvented: the same <head>,
+  the same page-local CSS, and the SHARED SITE CHROME blocks byte for byte.
+  Those blocks still describe themselves as shared by "four public pages";
+  this is a fifth copy. The footer's Policies group gained the /terms link in
+  the same change — every copy of the footer has to carry it.
 
-  Grep by `conversations.instagram_user_id` for DMs and by
-  `interactions.sender_username` for comments. A row in `jobs` is found by
-  payload->'sender'->>'id' or payload->'value'->'from'->>'username'.
+  CLAIMS ABOUT WHAT THE SERVICE DOES ARE TRACEABLE, as on /privacy:
+    comment → private reply, optional public reply, a like
+        src/webhook/comments.ts (sendPrivateReply, sendPublicReply, likeComment)
+    DM replies written by Gemini
+        src/services/ai.ts
+    publishing is a queue, not a clock
+        see the note at the top of public/pricing.html (drain every ~5-15 min)
+    Meta connected by a Page access token, never a password
+        creators.page_access_token (src/db/rows.ts)
+    TikTok: user.info.basic + video.upload only, upload to the inbox, revoke
+    on disconnect, the authorization.removed webhook
+        src/config/migration_v18_tiktok.sql and the TikTok integration on
+        feat/tiktok. THESE WERE WRITTEN AHEAD OF THAT CODE. Re-read sections
+        2, 3 and 7 against it before this page ships.
 
-  TIKTOK (added 2026-09-23) — account-owner data, and the one deletion on this
-  page that is NOT manual. Section 6 promises that either route deletes the
-  stored TikTok connection with nobody acting by hand:
-    · Settings → disconnect: revoke with TikTok (/v2/oauth/revoke/), then
-      delete the platform_connections row (src/config/migration_v18_tiktok.sql);
-    · the authorization.removed webhook: the same deletion.
-  Both are implemented in src/services/tiktokConnections.ts: disconnect()
-  (revoke is best-effort, the DELETE is not) and deleteConnectionByOpenId(),
-  which the webhook calls via applyWebhookEvent() in tiktokPublish.ts.
-  Reconciled 2026-09-23 — the webhook used to keep a 'revoked' tombstone.
-
-  OWNER: a contact email is still missing and is marked on the page. Do not let
-  it ship unfilled. Nothing on this page states a legal basis or a jurisdiction,
-  because neither is established anywhere in the code.
+  OWNER: THINGS ONLY YOU CAN SUPPLY — marked at the end of each language, the
+  same gaps /privacy has:
+    1. A contact email address.
+    2. The name of the person or entity that operates the service, and the
+       country whose law governs these terms. No governing law, jurisdiction
+       or venue is stated anywhere on this page, because none could be
+       established and none may be invented. Section 9 is written "to the
+       extent the law allows" for the same reason.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Both schemes are real here: the page consumes the app's tokens, which
+         carry a full light theme as a peer of dark. -->
     <meta name="color-scheme" content="dark light">
-    <title>حذف البيانات · Data Deletion — AutoReply Pro</title>
-    <meta name="description" content="كيف تطلب حذف بياناتك من «أوتوريبلاي برو»، وما يُحذف فعلاً وما لا يُحذف — How to have your data deleted, and the limits of what deletion can reach.">
+    <title>شروط الخدمة · Terms of Service — AutoReply Pro</title>
+    <meta name="description" content="شروط استخدام «أوتوريبلاي برو» لربط حسابات إنستجرام وفيسبوك وتيك توك — The terms for connecting Instagram, Facebook and TikTok accounts to AutoReply Pro.">
 
 
-    <!-- The app's own tokens — the same file the dashboard and eid.html load.
-         `var(--x, literal)` fallbacks keep the page legible if it ever 404s. -->
+    <!-- One design system in this repo, not three. This is the same file the
+         dashboard and dashboard/eid.html load, so the review surface and the
+         product cannot drift apart. Same origin, and allowed by the CSP that
+         src/routes/api.ts:50-63 sets on this route.
+         The `var(--x, literal)` fallbacks below are deliberate and are the only
+         duplication: if this stylesheet ever 404s — the dashboard moving behind
+         Vercel Deployment Protection would do it — the page has to stay legible
+         rather than render as unstyled black-on-transparent. -->
     <!-- No webfont. HIG's answer to typography is the system font, and --font-ui in
          tokens.css is the -apple-system stack, so there is nothing to download: one fewer
          third-party round trip on the critical path and ~100KB saved. The preconnects to
@@ -66,6 +73,7 @@
     <link rel="stylesheet" href="/dashboard/css/tokens.css?v=7.0">
 
     <style>
+        /* ─── Page ─────────────────────────────────────────────────────────── */
         * { box-sizing: border-box; }
 
         body {
@@ -109,6 +117,7 @@
             border-radius: var(--radius-xs, 6px);
         }
 
+        /* ─── Document body ────────────────────────────────────────────────── */
         .doc { max-width: var(--measure, 68ch); }
         .doc[lang='en'] { font-family: var(--font-latin, system-ui, sans-serif); }
 
@@ -128,6 +137,12 @@
             padding-top: var(--space-4, 1rem);
             border-top: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
         }
+        h3 {
+            font-size: var(--fs-300, 1rem);
+            font-weight: var(--fw-semibold, 600);
+            color: var(--text-strong, #14182a);
+            margin: var(--space-5, 1.5rem) 0 var(--space-2, 0.5rem);
+        }
         p, ul, ol { margin: 0 0 var(--space-4, 1rem); }
         ul, ol { padding-inline-start: var(--space-5, 1.5rem); }
         li { margin-bottom: var(--space-2, 0.5rem); }
@@ -143,6 +158,7 @@
             margin-bottom: var(--space-5, 1.5rem);
         }
 
+        /* Latin runs inside Arabic prose — table names, env vars, endpoints. */
         code, .code {
             font-family: var(--font-mono, ui-monospace, monospace);
             font-size: 0.9em;
@@ -154,37 +170,7 @@
             border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
         }
 
-        /* The steps — the thing most readers came for. */
-        .steps {
-            counter-reset: step;
-            list-style: none;
-            padding: 0;
-            margin: 0 0 var(--space-5, 1.5rem);
-        }
-        .steps > li {
-            counter-increment: step;
-            position: relative;
-            padding-inline-start: var(--space-7, 3rem);
-            margin-bottom: var(--space-4, 1rem);
-        }
-        .steps > li::before {
-            content: counter(step);
-            position: absolute;
-            inset-inline-start: 0;
-            top: 0.2em;
-            width: 1.75rem;
-            height: 1.75rem;
-            display: grid;
-            place-items: center;
-            border-radius: var(--radius-pill, 999px);
-            background: var(--accent-soft, rgba(79, 70, 229, 0.12));
-            color: var(--accent-text, #4338ca);
-            font-family: var(--font-latin, system-ui, sans-serif);
-            font-size: var(--fs-100, 0.75rem);
-            font-weight: var(--fw-bold, 700);
-            line-height: 1;
-        }
-
+        /* A callout for the one thing a reader is most likely to want. */
         .callout {
             padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
             margin: 0 0 var(--space-5, 1.5rem);
@@ -193,9 +179,11 @@
             border-inline-start: 3px solid var(--accent, #4f46e5);
             background: var(--surface-raised, rgba(0, 0, 0, 0.03));
         }
-        .callout.warn { border-inline-start-color: var(--warning, #9a6408); }
         .callout > :last-child { margin-bottom: 0; }
 
+        /* Placeholders the operator must fill. Marked to be impossible to miss
+           rather than quietly plausible — an invented email would be worse than
+           a visible gap. */
         .todo {
             padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
             margin: var(--space-5, 1.5rem) 0 0;
@@ -232,7 +220,6 @@
         @media (max-width: 30rem) {
             .shell { padding-inline: var(--space-4, 1rem); }
             h1 { font-size: var(--fs-500, 1.375rem); }
-            .steps > li { padding-inline-start: var(--space-6, 2rem); }
         }
         /* ═══════════════════════════════════════════════════════════════════
            SHARED SITE CHROME · CSS
@@ -638,6 +625,9 @@
     </style>
 
     <script>
+        /* Resolve the language before first paint so the page never shows the
+           wrong script for a frame. Mirrors dashboard/js/i18n.js: stored choice,
+           then the browser's own languages, then Arabic. */
         (function () {
             var lang = null;
             try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
@@ -715,169 +705,239 @@
     </header>
     <div class="shell">
         <main id="content">
-
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
-                <h1>حذف بياناتك</h1>
-                <p class="stamp">آخر تحديث: 23 سبتمبر 2026</p>
+                <h1>شروط الخدمة</h1>
+                <p class="stamp">آخر تحديث: <time datetime="2026-09-23" dir="ltr">2026-09-23</time></p>
 
                 <p>
-                    إن علّقت على منشور أو أرسلت رسالة خاصة إلى حساب يستخدم «أوتوريبلاي برو»،
-                    يمكنك طلب حذف بياناتك في أي وقت ودون إبداء سبب. هذه الصفحة تشرح كيف، وتشرح
-                    أيضاً ما لا يستطيع الحذف الوصول إليه — لأن نصف الحقيقة هنا لا يفيدك.
+                    هذه الشروط هي الاتفاق بينك وبين مُشغّل «أوتوريبلاي برو» على استخدامك له. كُتبت
+                    لتُقرأ: قصيرة وواضحة، ولا تتناول إلا ما تفعله الخدمة فعلاً.
                 </p>
                 <p>
-                    تفاصيل ما يُجمَع ومدة الاحتفاظ به في <a href="/privacy">سياسة الخصوصية</a>.
-                    وإن كنت صاحب حساب وتريد إزالة حساب تيك توك ربطته، فالقسم 6 مخصّص لك.
+                    «أوتوريبلاي برو» أداة صغيرة تُدار بشكل مستقل، لا شركة كبيرة. تتّصل بحساباتك على
+                    إنستجرام وفيسبوك وتيك توك عبر الواجهات البرمجية الرسمية لكل منصّة، ولا تتصرّف في
+                    تلك الحسابات إلا على النحو الموضّح أدناه.
                 </p>
 
-                <h2>1. ما هو المخزَّن عنك</h2>
-                <ul>
-                    <li>
-                        <strong>إن علّقت:</strong> اسم المستخدم الظاهر على إنستجرام (أو الاسم
-                        المعروض على فيسبوك)، ومعرّف التعليق، ومعرّف المنشور، ووقت التفاعل،
-                        وحالة الإرسال. <strong>نصّ تعليقك نفسه غير مخزَّن.</strong>
-                    </li>
-                    <li>
-                        <strong>إن أرسلت رسالة خاصة:</strong> نصّ رسائلك كما كتبتها، ونصّ الردود
-                        التي أُرسلت إليك، ومعرّف حسابك عند ميتا، والحدث الأصلي كما ورد من ميتا
-                        حرفياً — وهو نسخة ثانية من نصّ رسالتك.
-                    </li>
-                    <li>
-                        <strong>إن ربطتَ حساباً على تيك توك</strong> (لأصحاب الحسابات فقط): معرّف
-                        الحساب <span class="code" lang="en" dir="ltr">open_id</span> والاسم المعروض
-                        ورابط الصورة الرمزية، ورمزا الوصول والتحديث مشفّرَين، والفيديوهات التي جدولتها
-                        وحالة نشرها. القسم 6 يشرح كيف تُزيلها.
-                    </li>
-                </ul>
-
-                <h2>2. كيف تطلب الحذف</h2>
-                <ol class="steps">
-                    <li>
-                        اختر أي طريق من الاثنين: <strong>ردّ على الحساب نفسه</strong> الذي راسلك
-                        على إنستجرام أو فيسبوك واطلب حذف بياناتك؛ أو افتح موضوعاً على
-                        <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني للمشروع</a>.
-                    </li>
-                    <li>
-                        اذكر <strong>اسم المستخدم</strong> الذي علّقت أو راسلت منه. هو المفتاح
-                        الوحيد الذي يُعرَف به ما هو لك؛ فبدونه لا يمكن تمييز بياناتك عن بيانات غيرك.
-                    </li>
-                    <li>
-                        ستصلك رسالة تأكيد، ويُحذف كل ما يتعلّق بك <strong>في غضون 30 يوماً</strong>
-                        من وصول الطلب.
-                    </li>
-                </ol>
-                <div class="callout warn">
+                <div class="callout">
                     <p>
-                        متتبّع المشكلات <strong>علني ويقرأه أي شخص</strong>. لا تكتب فيه شيئاً لا
-                        تريده منشوراً. إن كان طلبك يتضمّن معلومات شخصية، فالردّ على الحساب مباشرةً
-                        هو الطريق الأنسب.
+                        <strong>باختصار:</strong>
+                        أنت تربط حساباتك أنت، وتبقى مسؤولاً عمّا يُنشر ويُرسَل منها، وتلتزم بقواعد
+                        ميتا وتيك توك، ويمكنك فصل أي حساب في أي وقت. ما نخزّنه وكيف تحذفه في
+                        <a href="/privacy">سياسة الخصوصية</a> و<a href="/data-deletion">صفحة حذف البيانات</a>.
                     </p>
                 </div>
+
+                <h2>1. قبول هذه الشروط</h2>
                 <p>
-                    لا توجد صفحة أو زرّ يقوم بالحذف تلقائياً: الطلب يُنفَّذ يدوياً على قاعدة
-                    البيانات. هذا يعني أنه يعتمد على إنسان، ولذلك يُفضَّل أن تحصل على تأكيد
-                    بالتنفيذ ولا تفترضه.
+                    بربط حساب بـ«أوتوريبلاي برو» أو باستخدام لوحة التحكم، فأنت توافق على هذه الشروط.
+                    إن لم توافق، فلا تربط أي حساب؛ وإن كنت قد ربطته، فافصله (القسم 7). وإن كنت
+                    تستخدم الخدمة نيابةً عن نشاط تجاري، فأنت تؤكّد أنك مخوَّل بقبول هذه الشروط عنه.
                 </p>
 
-                <h2>3. ما يُحذف دون أن تطلب</h2>
+                <h2>2. ما تقدّمه الخدمة</h2>
                 <ul>
                     <li>
-                        <strong>الحدث الأصلي الوارد من ميتا</strong> — وهو النسخة الثانية من نصّ
-                        رسالتك — يُمحى بعد أن يتجاوز عمره 30 يوماً، عبر عملية تنظيف تعمل مرة
-                        واحدة يومياً.
+                        <strong>ربط الحسابات:</strong> إنستجرام وفيسبوك عبر
+                        <span class="code" lang="en" dir="ltr">Graph API</span> الرسمية من ميتا،
+                        وتيك توك عبر <span class="code" lang="en" dir="ltr">Login Kit</span>
+                        و<span class="code" lang="en" dir="ltr">Content Posting API</span> الرسميتين
+                        من تيك توك.
                     </li>
                     <li>
-                        <strong>صفوف طابور المعالجة</strong> التي تمّت بنجاح — وفيها نسخة ثالثة من
-                        الحدث نفسه — تُحذف بعد 7 أيام. أمّا الصفوف التي
-                        <strong>فشلت فتبقى بلا حدّ زمني</strong>، لأنها ما يُفحَص لمعرفة سبب الفشل.
+                        <strong>جدولة المنشورات ونشرها:</strong> على إنستجرام وفيسبوك تدخل المنشورات
+                        التي تُعدّها في طابور وتُنشَر قرب الموعد الذي تختاره — يعمل الطابور كل بضع
+                        دقائق، فالنشر ليس بدقّة الدقيقة. أمّا على تيك توك فيُرفَع الفيديو إلى صندوق
+                        الوارد في حسابك على تيك توك، فتراجعه وتنشره بنفسك من تطبيق تيك توك؛ الأداة لا
+                        تنشر على تيك توك علناً من تلقاء نفسها.
                     </li>
                     <li>
-                        <strong>سجلّ «رسالة آلية واحدة في اليوم»</strong> — معرّف حسابك ووقت
-                        الإرسال — يُحذف بعد 48 ساعة.
-                    </li>
-                </ul>
-
-                <h2>4. ما يبقى إلى أن تطلب حذفه</h2>
-                <p>
-                    <strong>نصوص رسائلك الخاصة، ومحادثتك، وسجلّ تفاعلك مع التعليقات، تبقى بلا مدة
-                    انتهاء تلقائية.</strong> السبب أنها هي ما يقرأه صاحب الحساب في صندوق رسائله —
-                    حذفها تلقائياً كان سيمحو المحادثة من الجهتين. لذلك إن أردت إزالتها، فالطلب في
-                    القسم 2 هو الطريق الوحيد.
-                </p>
-
-                <h2>5. ما لا يستطيع الحذف الوصول إليه</h2>
-                <p>حذف بياناتنا لا يعني حذفها من كل مكان. هذه هي الحدود الحقيقية:</p>
-                <ul>
-                    <li>
-                        <strong>ميتا (إنستجرام وفيسبوك):</strong> تعليقك ورسالتك موجودان أصلاً على
-                        إنستجرام أو فيسبوك، وهذه نسخة ميتا لا نملكها ولا نتحكّم بها. لحذفها،
-                        احذف التعليق أو المحادثة من حسابك، أو استخدم
-                        <a href="https://accountscenter.instagram.com/" target="_blank" rel="noopener noreferrer">إعدادات حسابك في ميتا</a>.
-                    </li>
-                    <li>
-                        <strong>جوجل:</strong> لتوليد الردّ الآلي، أُرسل نصّ رسالتك إلى واجهة
-                        Gemini API. نسخة جوجل تخضع
-                        <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">لشروط جوجل</a>
-                        و<a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصيتها</a>،
-                        ولا نستطيع حذفها نيابةً عنك. (لا يُرسَل اسمك ولا معرّف حسابك إلى جوجل —
-                        النصوص فقط.)
-                    </li>
-                    <li>
-                        <strong>سجلّات التشغيل:</strong> تحتوي سجلّات المنصّة المستضيفة على أسماء
-                        المستخدمين ومعرّفات ميتا (لا على نصوص الرسائل)، وتخضع لمدة الاحتفاظ التي
-                        تحدّدها المنصّة، لا نحن.
-                    </li>
-                    <li>
-                        <strong>النسخ الاحتياطية:</strong> قد تبقى بياناتك في نسخة احتياطية لقاعدة
-                        البيانات بعد حذفها من قاعدة البيانات نفسها، إلى أن تنتهي دورة تلك النسخة
-                        عند مزوّد الاستضافة.
-                    </li>
-                </ul>
-
-                <h2>6. إزالة بيانات تيك توك</h2>
-                <p>
-                    هذا القسم لأصحاب الحسابات الذين ربطوا حساباً على تيك توك. وعلى خلاف الطلبات في
-                    القسم 2، <strong>الحذف هنا تلقائي</strong>: يكفي أيٌّ من الطريقين أدناه وحده، ولا
-                    يحتاج أيٌّ منهما إلى تنفيذ يدوي.
-                </p>
-                <ul>
-                    <li>
-                        <strong>افصل تيك توك من الإعدادات.</strong> افتح <strong>الإعدادات</strong> في
-                        لوحة التحكم وافصل تيك توك. يُلغي التطبيق رمزه لدى تيك توك، فيُسحَب الوصول من
-                        جهة تيك توك ومن جهتنا معاً، ثم يحذف الاتصال المخزَّن: معرّف
-                        <span class="code" lang="en" dir="ltr">open_id</span>، والاسم المعروض، ورابط
-                        الصورة الرمزية، ورمزي الوصول والتحديث المشفّرين.
-                    </li>
-                    <li>
-                        <strong>أو أزِل التطبيق من تيك توك نفسه.</strong> في تطبيق تيك توك، أزِل هذا
-                        التطبيق من «إدارة أذونات التطبيقات»
-                        (<bdi lang="en" dir="ltr">Manage app permissions</bdi>). عندها يُبلغنا تيك توك —
-                        عبر إشعار <span class="code" lang="en" dir="ltr">authorization.removed</span> —
-                        ويُطلِق ذلك الحذف نفسه للاتصال المخزَّن.
+                        <strong>ردود ورسائل آلية نيابةً عنك:</strong> حين يُطابِق تعليقٌ كلمة مفتاحية
+                        حدّدتها، تُرسَل رسالة خاصة إلى كاتبه (وردّ علني على التعليق إن فعّلته)،
+                        ويُسجَّل إعجاب بذلك التعليق؛ كما يُرَدّ على الرسائل الخاصة الواردة إلى حسابك.
+                        الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي
+                        (<bdi lang="en" dir="ltr">Google Gemini</bdi>)، لا إنسان.
                     </li>
                 </ul>
                 <p>
-                    بعد الفصل لا يُرفَع إلى ذلك الحساب على تيك توك أي شيء آخر. وتبقى المنشورات التي
-                    جدولتها في لوحة التحكم فيها إلى أن تحذفها، كمنشورات إنستغرام وفيسبوك. أمّا ما لا يصل إليه
-                    الحذف: الفيديوهات التي رُفعت من قبل موجودة في صندوق الوارد لديك على تيك توك، أو في
-                    ملفك إن كنت نشرتها، وهذه نسخة تيك توك؛ احذفها من تيك توك نفسه. وما يحتفظ به تيك توك
-                    من سجلّات يخضع
-                    <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">لسياسة خصوصية تيك توك</a>.
+                    على تيك توك لا تقرأ الأداة شيئاً سوى بيانات ملفك الأساسية وحالة الفيديوهات التي
+                    رفعتها. وقد تتغيّر ميزات الخدمة أو تُضاف أو تُزال مع الوقت.
                 </p>
 
-                <h2>7. للتواصل</h2>
+                <h2>3. ربط حساباتك، وما تأذن به</h2>
                 <p>
-                    للسؤال عن طلب حذف قائم، أو عن أي شيء في هذه الصفحة، استخدم أحد الطريقين في
-                    القسم 2.
+                    يُربَط إنستجرام وفيسبوك عبر رمز وصول تُصدره ميتا لصفحتك، ويُربَط تيك توك بتسجيل
+                    الدخول في صفحة تيك توك نفسها. في الحالتين لا نطلب كلمة مرور حسابك ولا نخزّنها.
+                </p>
+                <p>
+                    بربط أي حساب، <strong>فأنت تأذن لـ«أوتوريبلاي برو» بأن يتصرّف نيابةً عنك</strong>
+                    في حدود الأذونات التي منحتها: أن ينشر المنشورات التي تجدولها، وأن يرفع الفيديوهات
+                    التي تجدولها إلى صندوق الوارد في تيك توك، وأن يرسل الردود والرسائل التي تصفها
+                    إعداداتك. كل ما تُرسله الخدمة يُرسَل باسمك ومن حسابك.
+                </p>
+                <p>
+                    من تيك توك تُطلَب صلاحيتان فقط:
+                    <span class="code" lang="en" dir="ltr">user.info.basic</span> (معرّف
+                    <span class="code" lang="en" dir="ltr">open_id</span> واسمك المعروض وصورتك
+                    الرمزية) و<span class="code" lang="en" dir="ltr">video.upload</span> (رفع
+                    الفيديوهات إلى صندوق الوارد). لا شيء غيرهما.
+                </p>
+                <p>وأنت تؤكّد أن الحسابات التي تربطها مملوكة لك، أو أن مالكها خوّلك بربطها.</p>
+
+                <h2>4. مسؤولياتك</h2>
+                <p>أنت مسؤول عن:</p>
+                <ul>
+                    <li>
+                        <strong>محتواك:</strong> كل منشور ووصف وفيديو وكلمة مفتاحية ونصّ ردّ تضعه في
+                        الخدمة، وكل ردّ يُرسَل من حسابك بناءً على إعداداتك — بما في ذلك الردود التي
+                        يكتبها الذكاء الاصطناعي. الأداة تفعل ما تقوله إعداداتك، فراجعها.
+                    </li>
+                    <li>
+                        <strong>حقوق ما تنشره:</strong> الموسيقى واللقطات والصور والعلامات التجارية وكل
+                        ما يتضمّنه.
+                    </li>
+                    <li>
+                        <strong>قواعد كل منصّة تربطها:</strong>
+                        <a href="https://www.facebook.com/terms.php" target="_blank" rel="noopener noreferrer">شروط خدمة فيسبوك</a>
+                        و<a href="https://help.instagram.com/581066165581870" target="_blank" rel="noopener noreferrer">شروط استخدام إنستجرام</a>
+                        و<a href="https://transparency.meta.com/policies/community-standards/" target="_blank" rel="noopener noreferrer">معايير مجتمع ميتا</a>
+                        و<a href="https://help.instagram.com/477434105621119" target="_blank" rel="noopener noreferrer">إرشادات مجتمع إنستجرام</a>،
+                        و<a href="https://www.tiktok.com/legal/terms-of-service" target="_blank" rel="noopener noreferrer">شروط خدمة تيك توك</a>
+                        و<a href="https://www.tiktok.com/community-guidelines" target="_blank" rel="noopener noreferrer">إرشادات مجتمع تيك توك</a>.
+                        هذه القواعد تسري على حسابك أيّاً كان ما تقوله هذه الشروط.
+                    </li>
+                    <li>
+                        <strong>على تيك توك تحديداً:</strong> يسري
+                        <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener noreferrer">تأكيد استخدام الموسيقى</a>
+                        (<bdi lang="en" dir="ltr">Music Usage Confirmation</bdi>) من تيك توك على أي
+                        موسيقى في الفيديوهات التي تنشرها. وإن كان الفيديو يروّج لعلامة تجارية أو منتج
+                        أو خدمة مقابل أي منفعة، فعليك الإفصاح عن ذلك كما تشترط
+                        <a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener noreferrer">سياسة المحتوى المدعوم</a>
+                        (<bdi lang="en" dir="ltr">Branded Content Policy</bdi>) من تيك توك، باستخدام
+                        إعداد الإفصاح عن المحتوى في تيك توك عند النشر.
+                    </li>
+                    <li>
+                        <strong>بيانات دخولك إلى لوحة التحكم:</strong> لا تشاركها، وأخبرنا إن ظننت أن
+                        غيرك استخدمها.
+                    </li>
+                </ul>
+
+                <h2>5. الاستخدام المقبول</h2>
+                <p>لا تستخدم «أوتوريبلاي برو» من أجل:</p>
+                <ul>
+                    <li>
+                        إرسال رسائل مزعجة: رسائل غير مطلوبة أو متكرّرة أو جماعية، أو ردود لا علاقة لها
+                        بما كتبه الشخص؛
+                    </li>
+                    <li>
+                        نشر محتوى مضلّل أو إرساله: ادّعاءات كاذبة عن منتجات أو أسعار أو مسابقات، أو
+                        استعجال مصطنع، أو محتوى يوهم بأنه صادر عن شخص أو جهة أخرى؛
+                    </li>
+                    <li>مضايقة أي شخص أو تهديده أو خداعه؛</li>
+                    <li>نشر أي محتوى مخالف للقانون أو ينتهك حقوق غيرك؛</li>
+                    <li>
+                        التحايل على حدود أي منصّة أو مراجعاتها أو إجراءاتها، أو ربط حساب قيّدته المنصّة
+                        عن النشاط الذي ستستخدم الخدمة فيه؛
+                    </li>
+                    <li>
+                        العبث بالخدمة نفسها: فحصها بحثاً عن ثغرات، أو إغراقها بالطلبات، أو محاولة
+                        الوصول إلى بيانات مستخدم آخر.
+                    </li>
+                </ul>
+                <p>
+                    يجوز لنا إيقاف حساب أو فصله إن خالف هذه القواعد، أو إن أبلغتنا منصّة بأنه يخالف
+                    قواعدها.
+                </p>
+
+                <h2>6. المنصّات الخارجية: بلا ضمان</h2>
+                <p>
+                    تعتمد «أوتوريبلاي برو» كلياً على واجهات ميتا وتيك توك البرمجية، وهي خارج
+                    سيطرتنا. قد تتغيّر أو تتباطأ أو تتعطّل أو تشترط مراجعة جديدة أو تسحب الوصول — عن
+                    التطبيق كله أو عن حسابك وحده — في أي وقت ودون إشعار مسبق لنا. حين يحدث ذلك قد
+                    تتوقّف ميزات عن العمل حتى تُعدَّل الخدمة، وقد لا تعود أبداً.
+                </p>
+                <p>
+                    <strong>لذلك لا نَعِد بأن يُنشَر منشور، أو يصل فيديو إلى صندوق الوارد في تيك توك،
+                    أو يُسلَّم ردّ، في وقت محدّد أو أصلاً.</strong> تعرض لوحة التحكم الحالة التي تُبلغ
+                    بها كل منصّة؛ راجعها في كل ما يهمّك.
+                </p>
+                <p>
+                    لا ترتبط «أوتوريبلاي برو» بميتا ولا بتيك توك، ولا تحظى بتأييد أيٍّ منهما أو
+                    رعايته. إنستجرام وفيسبوك وتيك توك علامات تجارية مملوكة لأصحابها.
+                </p>
+
+                <h2>7. فصل الحسابات وسحب الإذن</h2>
+                <p>يمكنك إيقاف تصرّف الخدمة نيابةً عنك في أي وقت، دون أن تُبدي سبباً.</p>
+                <ul>
+                    <li>
+                        <strong>تيك توك:</strong> افصله من <strong>الإعدادات</strong> في لوحة التحكم،
+                        فيُلغى وصول التطبيق لدى تيك توك ويُحذَف الاتصال المخزَّن؛ أو أزِل التطبيق من
+                        «إدارة أذونات التطبيقات» (<bdi lang="en" dir="ltr">Manage app permissions</bdi>)
+                        في تطبيق تيك توك نفسه، فيُلغى الوصول ويُطلِق ذلك الحذف نفسه لدينا.
+                    </li>
+                    <li>
+                        <strong>إنستجرام وفيسبوك:</strong> أزِل التطبيق من «عمليات تكامل الأعمال»
+                        (<bdi lang="en" dir="ltr">Business integrations</bdi>) في إعدادات فيسبوك، فيبطل
+                        رمز الوصول الذي تحتفظ به الخدمة؛ أو اطلب منّا إزالة الحساب عبر طريق التواصل في
+                        القسم 11.
+                    </li>
+                </ul>
+                <p>
+                    بعد الفصل لا يُنشَر من ذلك الحساب ولا يُرفَع إليه ولا يُرسَل منه أي شيء جديد. ما
+                    نُشر من قبل يبقى على المنصّة حتى تحذفه منها بنفسك.
+                </p>
+
+                <h2>8. بياناتك</h2>
+                <p>
+                    ما تخزّنه الخدمة، ولماذا، وإلى متى، في <a href="/privacy">سياسة الخصوصية</a>.
+                    وطريقة حذفه — بما في ذلك بيانات تيك توك — في
+                    <a href="/data-deletion">صفحة حذف البيانات</a>. الصفحتان تسريان إلى جانب هذه
+                    الشروط.
+                </p>
+                <p>لا نبيع بياناتك، ولا بيانات مَن يراسلونك.</p>
+
+                <h2>9. حدود المسؤولية</h2>
+                <p>
+                    تُقدَّم الخدمة «كما هي» و«حسب توفّرها»، دون أي ضمانات، في الحدود التي يسمح بها
+                    القانون. لا نضمن أن تعمل دون انقطاع أو أخطاء، ولا أن تبقى متوافقة مع واجهات ميتا أو
+                    تيك توك.
+                </p>
+                <p>
+                    وفي الحدود التي يسمح بها القانون، لسنا مسؤولين عن الخسائر غير المباشرة أو التبعية —
+                    كفوات مبيعات أو متابعين أو بيانات، أو تقييد حسابك أو إيقافه — ولا عمّا تفعله أي
+                    منصّة بحسابك، ولا عن محتوى نُشر أو أُرسل بسببك أو بسبب إعداداتك. وحيث لا يمكن
+                    استبعاد المسؤولية، فهي محدودة بما دفعته لنا مقابل الخدمة خلال الاثني عشر شهراً
+                    السابقة للمطالبة.
+                </p>
+                <p>لا شيء في هذه الشروط يقيّد حقاً لا يجيز القانون تقييده.</p>
+
+                <h2>10. تغييرات هذه الشروط</h2>
+                <p>
+                    إن تغيّرت هذه الشروط، تُحدَّث هذه الصفحة ويتغيّر معها تاريخ «آخر تحديث» أعلاها.
+                    استمرارك في استخدام الخدمة بعد ذلك يعني قبولك النسخة الجديدة؛ وإن لم تقبلها،
+                    فافصل حساباتك (القسم 7).
+                </p>
+
+                <h2>11. للتواصل</h2>
+                <p>
+                    لأي سؤال عن هذه الشروط، افتح موضوعاً على
+                    <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني للمشروع</a>
+                    — وهو علني، فلا تكتب فيه معلومات شخصية أو تفاصيل حسابك.
                 </p>
 
                 <div class="todo">
-                    <p><strong>ملاحظة تحريرية — على مُشغّل الخدمة إكمالها:</strong></p>
+                    <p>
+                        <strong>ملاحظة تحريرية — على مُشغّل الخدمة إكمالها:</strong>
+                    </p>
                     <ul>
-                        <li>بريد إلكتروني لطلبات الحذف: <span class="code">[غير مُحدَّد بعد]</span></li>
-                        <li>اسم الشخص أو الجهة التي تُشغّل الخدمة: <span class="code">[غير مُحدَّد بعد]</span></li>
+                        <li>بريد إلكتروني للتواصل بشأن هذه الشروط: <span class="code">[غير مُحدَّد بعد]</span></li>
+                        <li>اسم الشخص أو الجهة التي تُشغّل الخدمة، والدولة التي يسري قانونها: <span class="code">[غير مُحدَّد بعد]</span></li>
                     </ul>
+                    <p>
+                        لم يُذكر في هذه الشروط أي قانون واجب التطبيق ولا أي جهة قضائية مختصّة، لأن
+                        شيئاً من ذلك لم يُحدَّد ولا يصحّ اختراعه.
+                    </p>
                 </div>
             </article>
 
@@ -885,178 +945,252 @@
 
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
-                <h1>Deleting your data</h1>
-                <p class="stamp">Last updated: 23 September 2026</p>
+                <h1>Terms of Service</h1>
+                <p class="stamp">Last updated: <time datetime="2026-09-23">2026-09-23</time></p>
 
                 <p>
-                    If you commented on a post or sent a direct message to an account running
-                    AutoReply Pro, you can ask for your data to be deleted at any time and
-                    without giving a reason. This page explains how — and also what deletion
-                    cannot reach, because half the truth would not help you here.
+                    These terms are the agreement between you and the operator of AutoReply Pro
+                    for your use of it. They are written to be read: short, plain, and limited to
+                    what the service actually does.
                 </p>
                 <p>
-                    What is collected, and for how long, is set out in the
-                    <a href="/privacy">privacy policy</a>. If you are an account owner removing a
-                    TikTok account you connected, section 6 is for you.
+                    AutoReply Pro is a small, independently run tool, not a large company. It
+                    connects to your Instagram, Facebook and TikTok accounts through each
+                    platform's official API, and acts on those accounts only in the ways described
+                    below.
                 </p>
 
-                <h2>1. What is stored about you</h2>
-                <ul>
-                    <li>
-                        <strong>If you commented:</strong> your public Instagram username (or
-                        your Facebook display name), the comment ID, the post ID, the time of
-                        the interaction, and the delivery status.
-                        <strong>The text of your comment is not stored.</strong>
-                    </li>
-                    <li>
-                        <strong>If you sent a direct message:</strong> the text of your messages
-                        as you wrote them, the text of the replies sent to you, your Meta-scoped
-                        account ID, and the verbatim event received from Meta — which is a
-                        second copy of your message text.
-                    </li>
-                    <li>
-                        <strong>If you connected a TikTok account</strong> (account owners only):
-                        the account's <span class="code">open_id</span>, display name and avatar
-                        URL, the encrypted access and refresh tokens, the videos you scheduled, and
-                        their publish status. Section 6 explains how to remove it.
-                    </li>
-                </ul>
-
-                <h2>2. How to request deletion</h2>
-                <ol class="steps">
-                    <li>
-                        Pick either route: <strong>reply to the same account</strong> that
-                        messaged you on Instagram or Facebook and ask for your data to be
-                        deleted; or open an issue on the
-                        <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">project's public issue tracker</a>.
-                    </li>
-                    <li>
-                        Include the <strong>username</strong> you commented or messaged from. It
-                        is the only key by which your records can be identified; without it
-                        yours cannot be told apart from anyone else's.
-                    </li>
-                    <li>
-                        You will get a confirmation, and everything relating to you is deleted
-                        <strong>within 30 days</strong> of the request arriving.
-                    </li>
-                </ol>
-                <div class="callout warn">
+                <div class="callout">
                     <p>
-                        The issue tracker is <strong>public and readable by anyone</strong>. Do
-                        not put anything in it you would not want published. If your request
-                        involves personal details, replying to the account directly is the
-                        better route.
+                        <strong>The short version:</strong>
+                        you connect your own accounts, you stay responsible for what is posted and
+                        sent from them, you follow Meta's and TikTok's rules, and you can disconnect
+                        at any time. What we store and how to delete it is in the
+                        <a href="/privacy">privacy policy</a> and on the
+                        <a href="/data-deletion">data deletion page</a>.
                     </p>
                 </div>
+
+                <h2>1. Accepting these terms</h2>
                 <p>
-                    There is no page or button that performs the deletion automatically: the
-                    request is carried out by hand against the database. That means it depends on
-                    a person, so it is worth getting confirmation that it happened rather than
-                    assuming it.
+                    By connecting an account to AutoReply Pro or using its dashboard, you agree to
+                    these terms. If you do not agree, do not connect an account; if you already
+                    have, disconnect it (section 7). If you use the service on behalf of a
+                    business, you confirm that you are allowed to accept these terms for it.
                 </p>
 
-                <h2>3. What is deleted without asking</h2>
+                <h2>2. What the service does</h2>
                 <ul>
                     <li>
-                        <strong>The verbatim event received from Meta</strong> — the second copy
-                        of your message text — is erased once it is more than 30 days old, by a
-                        sweep that runs once a day.
+                        <strong>Connects your accounts:</strong> Instagram and Facebook through
+                        Meta's official <span class="code">Graph API</span>, and TikTok through
+                        TikTok's official <span class="code">Login Kit</span> and
+                        <span class="code">Content Posting API</span>.
                     </li>
                     <li>
-                        <strong>Processing-queue rows</strong> that completed successfully — which
-                        hold a third copy of the same event — are deleted after 7 days. Rows that
-                        <strong>failed are kept with no time limit</strong>, because they are what
-                        gets inspected to find out why.
+                        <strong>Schedules and publishes posts:</strong> on Instagram and Facebook,
+                        the posts you prepare go into a queue and are published around the time
+                        you choose — the queue runs every few minutes, so not to the minute. On
+                        TikTok, the video is uploaded to your TikTok inbox, where you review it and
+                        post it yourself in the TikTok app; the service does not post publicly to
+                        TikTok on its own.
                     </li>
                     <li>
-                        <strong>The one-automated-DM-per-day log</strong> — your account ID and a
-                        timestamp — is deleted after 48 hours.
-                    </li>
-                </ul>
-
-                <h2>4. What stays until you ask</h2>
-                <p>
-                    <strong>The text of your private messages, your conversation thread, and your
-                    comment interaction log have no automatic expiry.</strong> They are what the
-                    account owner reads in their own inbox, and deleting them automatically would
-                    erase the conversation for both sides. So if you want them removed, the
-                    request in section 2 is the only route.
-                </p>
-
-                <h2>5. What deletion cannot reach</h2>
-                <p>Deleting our copy does not delete every copy. These are the real limits:</p>
-                <ul>
-                    <li>
-                        <strong>Meta (Instagram and Facebook):</strong> your comment and your
-                        message exist on Instagram or Facebook in the first place. That copy is
-                        Meta's and we neither own nor control it. To remove it, delete the comment
-                        or the conversation from your own account, or use your
-                        <a href="https://accountscenter.instagram.com/" target="_blank" rel="noopener noreferrer">Meta account settings</a>.
-                    </li>
-                    <li>
-                        <strong>Google:</strong> to generate the automated reply, the text of your
-                        message was sent to the Gemini API. Google's copy is governed by
-                        <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Google's terms</a>
-                        and <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">privacy policy</a>,
-                        and we cannot delete it on your behalf. (Your name and account ID are
-                        never sent to Google — only message text.)
-                    </li>
-                    <li>
-                        <strong>Operational logs:</strong> the hosting platform's logs contain
-                        usernames and Meta IDs (not message text) and are subject to the
-                        platform's own retention period, not ours.
-                    </li>
-                    <li>
-                        <strong>Backups:</strong> your data may persist in a database backup after
-                        it has been deleted from the database itself, until that backup ages out at
-                        the hosting provider.
-                    </li>
-                </ul>
-
-                <h2>6. Removing your TikTok data</h2>
-                <p>
-                    This section is for account owners who connected a TikTok account. Unlike the
-                    requests in section 2, <strong>this deletion is automatic</strong>: either
-                    route below is enough on its own, and neither needs anyone to act by hand.
-                </p>
-                <ul>
-                    <li>
-                        <strong>Disconnect TikTok in Settings.</strong> Open
-                        <strong>Settings</strong> in the dashboard and disconnect TikTok. The app
-                        revokes its token with TikTok, so access is withdrawn at TikTok's end as
-                        well as ours, and then deletes the stored connection: the
-                        <span class="code">open_id</span>, display name, avatar URL, and the
-                        encrypted access and refresh tokens.
-                    </li>
-                    <li>
-                        <strong>Or remove the app in TikTok itself.</strong> In the TikTok app,
-                        remove this app under "Manage app permissions". TikTok then notifies us —
-                        its <span class="code">authorization.removed</span> webhook — and that
-                        triggers the same deletion of the stored connection.
+                        <strong>Sends automated replies and messages on your behalf:</strong> when
+                        a comment matches a keyword you set, a private message to the person who
+                        wrote it (and a public reply under the comment, if you turn that on), plus
+                        a like on that comment; and replies to direct messages sent to your
+                        account. Direct-message replies are written by an AI model (Google
+                        Gemini), not a person.
                     </li>
                 </ul>
                 <p>
-                    Once disconnected, nothing more is uploaded to that TikTok account. Posts you
-                    scheduled in the dashboard stay there until you delete them, like your Instagram
-                    and Facebook posts. What deletion cannot reach: videos already uploaded sit in
-                    your TikTok inbox, or on your profile if you posted them. That copy is TikTok's;
-                    delete it in TikTok.
-                    Whatever records TikTok keeps itself are governed by
-                    <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">TikTok's privacy policy</a>.
+                    On TikTok the service reads nothing except your basic profile and the status
+                    of the videos you uploaded. Features may change, be added, or be removed over
+                    time.
                 </p>
 
-                <h2>7. Contact</h2>
+                <h2>3. Connecting your accounts, and what you authorise</h2>
                 <p>
-                    To ask about a deletion request already made, or about anything on this page,
-                    use either route in section 2.
+                    Instagram and Facebook are connected with an access token Meta issues for
+                    your Page; TikTok is connected by signing in on TikTok's own page. Either way,
+                    we never ask for or store your account password.
+                </p>
+                <p>
+                    By connecting an account, <strong>you authorise AutoReply Pro to act on your
+                    behalf</strong> within the permissions you granted: to publish the posts you
+                    schedule, to upload the videos you schedule to your TikTok inbox, and to send
+                    the replies and messages your settings describe. Everything the service sends
+                    is sent as you, from your account.
+                </p>
+                <p>
+                    From TikTok, exactly two scopes are requested:
+                    <span class="code">user.info.basic</span> (your <span class="code">open_id</span>,
+                    display name and avatar) and <span class="code">video.upload</span> (uploading
+                    videos to your inbox). No others.
+                </p>
+                <p>You confirm that the accounts you connect are yours, or that their owner has authorised you to connect them.</p>
+
+                <h2>4. Your responsibilities</h2>
+                <p>You are responsible for:</p>
+                <ul>
+                    <li>
+                        <strong>Your content:</strong> every post, caption, video, keyword and reply
+                        template you put into the service, and every reply sent from your account
+                        because of your settings — including replies an AI model writes. The
+                        service does what your settings say, so check them.
+                    </li>
+                    <li>
+                        <strong>The rights to what you publish:</strong> music, footage, images,
+                        trademarks, and anything else in it.
+                    </li>
+                    <li>
+                        <strong>The rules of every platform you connect:</strong>
+                        <a href="https://www.facebook.com/terms.php" target="_blank" rel="noopener noreferrer">Facebook's Terms of Service</a>,
+                        <a href="https://help.instagram.com/581066165581870" target="_blank" rel="noopener noreferrer">Instagram's Terms of Use</a>,
+                        <a href="https://transparency.meta.com/policies/community-standards/" target="_blank" rel="noopener noreferrer">Meta's Community Standards</a>
+                        and <a href="https://help.instagram.com/477434105621119" target="_blank" rel="noopener noreferrer">Instagram's Community Guidelines</a>;
+                        and <a href="https://www.tiktok.com/legal/terms-of-service" target="_blank" rel="noopener noreferrer">TikTok's Terms of Service</a>
+                        and <a href="https://www.tiktok.com/community-guidelines" target="_blank" rel="noopener noreferrer">TikTok's Community Guidelines</a>.
+                        Those rules apply to your account whatever these terms say.
+                    </li>
+                    <li>
+                        <strong>On TikTok specifically:</strong> TikTok's
+                        <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank" rel="noopener noreferrer">Music Usage Confirmation</a>
+                        applies to any music in the videos you post. And if a video promotes a
+                        brand, product or service in exchange for anything of value, you must
+                        disclose it as TikTok's
+                        <a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank" rel="noopener noreferrer">Branded Content Policy</a>
+                        requires, using TikTok's own content disclosure setting when you post.
+                    </li>
+                    <li>
+                        <strong>Your dashboard login:</strong> keep it to yourself, and tell us if
+                        you think someone else has used it.
+                    </li>
+                </ul>
+
+                <h2>5. Acceptable use</h2>
+                <p>Do not use AutoReply Pro to:</p>
+                <ul>
+                    <li>
+                        send spam: unsolicited, repetitive or bulk messages, or replies that have
+                        nothing to do with what the person wrote;
+                    </li>
+                    <li>
+                        publish or send misleading content: false claims about products, prices or
+                        giveaways, invented urgency, or content that pretends to come from someone
+                        else;
+                    </li>
+                    <li>harass, threaten or deceive anyone;</li>
+                    <li>publish anything illegal, or anything that infringes someone else's rights;</li>
+                    <li>
+                        get around a platform's limits, reviews or enforcement, or connect an
+                        account a platform has restricted from the activity you would use the
+                        service for;
+                    </li>
+                    <li>
+                        interfere with the service itself: probing it for weaknesses, flooding it
+                        with requests, or trying to reach another user's data.
+                    </li>
+                </ul>
+                <p>
+                    We may pause or disconnect an account that breaks these rules, or that a
+                    platform tells us is breaking theirs.
+                </p>
+
+                <h2>6. Third-party platforms: no guarantee</h2>
+                <p>
+                    AutoReply Pro depends entirely on Meta's and TikTok's APIs, which we do not
+                    control. They can change, slow down, fail, require a new review, or withdraw
+                    access — for the whole app or for your account alone — at any time and without
+                    notice to us. When that happens, features may stop working until the service
+                    is adapted, or may not come back at all.
+                </p>
+                <p>
+                    <strong>So we cannot promise that a post will publish, that a video will reach
+                    your TikTok inbox, or that a reply will be delivered, at a particular time or
+                    at all.</strong> The dashboard shows the status each platform reports back;
+                    check it for anything that matters to you.
+                </p>
+                <p>
+                    AutoReply Pro is not affiliated with, endorsed by, or sponsored by Meta or
+                    TikTok. Instagram, Facebook and TikTok are trademarks of their respective
+                    owners.
+                </p>
+
+                <h2>7. Disconnecting and revoking access</h2>
+                <p>You can stop the service acting for you at any time, without giving a reason.</p>
+                <ul>
+                    <li>
+                        <strong>TikTok:</strong> disconnect it from <strong>Settings</strong> in the
+                        dashboard, which revokes the app's access with TikTok and deletes the stored
+                        connection; or remove the app under "Manage app permissions" in the TikTok
+                        app itself, which revokes access and triggers the same deletion on our
+                        side.
+                    </li>
+                    <li>
+                        <strong>Instagram and Facebook:</strong> remove the app from Business
+                        integrations in your Facebook settings, which invalidates the access token
+                        the service holds; or ask us to remove the account, using the contact route
+                        in section 11.
+                    </li>
+                </ul>
+                <p>
+                    After you disconnect, nothing new is published from, uploaded to, or sent from
+                    that account. What was already published stays on the platform until you
+                    delete it there.
+                </p>
+
+                <h2>8. Your data</h2>
+                <p>
+                    What the service stores, why, and for how long is in the
+                    <a href="/privacy">privacy policy</a>. How to delete it — including your
+                    TikTok data — is on the <a href="/data-deletion">data deletion page</a>. Both
+                    apply alongside these terms.
+                </p>
+                <p>We do not sell your data, or the data of the people who message you.</p>
+
+                <h2>9. Limitation of liability</h2>
+                <p>
+                    The service is provided "as is" and "as available", without warranties of any
+                    kind, to the extent the law allows. We do not promise that it will run without
+                    interruption or error, or that it will keep working with Meta's or TikTok's
+                    APIs.
+                </p>
+                <p>
+                    To the extent the law allows, we are not liable for indirect or consequential
+                    losses — lost sales, lost followers, lost data, a restricted or suspended
+                    account — nor for anything a platform does to your account, nor for content
+                    that you or your settings caused to be published or sent. Where liability
+                    cannot be excluded, it is limited to what you paid us for the service in the
+                    twelve months before the claim.
+                </p>
+                <p>Nothing in these terms limits a right that the law says cannot be limited.</p>
+
+                <h2>10. Changes to these terms</h2>
+                <p>
+                    If these terms change, this page is updated and the "last updated" date at the
+                    top changes with it. Continuing to use the service after that means you accept
+                    the new version; if you do not, disconnect your accounts (section 7).
+                </p>
+
+                <h2>11. Contact</h2>
+                <p>
+                    For any question about these terms, open an issue on the
+                    <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">project's public issue tracker</a>
+                    — it is public, so do not put personal information or account details in it.
                 </p>
 
                 <div class="todo">
                     <p><strong>Editorial note — for the operator to complete:</strong></p>
                     <ul>
-                        <li>A contact email address for deletion requests: <span class="code">[not yet supplied]</span></li>
-                        <li>The name of the person or entity operating the service: <span class="code">[not yet supplied]</span></li>
+                        <li>A contact email address for questions about these terms: <span class="code">[not yet supplied]</span></li>
+                        <li>The name of the person or entity operating the service, and the country whose law applies: <span class="code">[not yet supplied]</span></li>
                     </ul>
+                    <p>
+                        No governing law and no jurisdiction are stated anywhere in these terms,
+                        because neither has been supplied and neither may be invented.
+                    </p>
                 </div>
             </article>
 
@@ -1109,9 +1243,9 @@
                 </nav>
                 <nav aria-labelledby="foot-h-policies">
                     <p class="foot-h" id="foot-h-policies"><bdi class="t-ar" lang="ar">السياسات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Policies</bdi></p>
-                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
+                    <a href="/terms" aria-current="page"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
                     <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
-                    <a href="/data-deletion" aria-current="page"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
+                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
                 </nav>
                 <nav aria-labelledby="foot-h-source">
                     <p class="foot-h" id="foot-h-source"><bdi class="t-ar" lang="ar">المصدر</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source</bdi></p>
@@ -1133,6 +1267,9 @@
     </div>
 
     <script>
+        /* The switch. Sets the attribute the CSS filters on, keeps <html lang dir>
+           honest, and remembers the choice under the same key the dashboard uses
+           so a visitor is not asked twice. */
         (function () {
             var root = document.documentElement;
             var buttons = document.querySelectorAll('[data-set-lang]');
@@ -1156,6 +1293,7 @@
                 });
             }
 
+            /* The head script already chose; reflect it on the buttons. */
             apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
         })();
     </script>
