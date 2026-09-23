@@ -70,12 +70,16 @@ function stateCookie(value: string, maxAgeSeconds: number): string {
     return `${STATE_COOKIE}=${encodeURIComponent(value)}; Path=${CALLBACK_PATH}; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=Lax`;
 }
 
-/** Back to Settings with an outcome the page turns into a toast. */
+/**
+ * Back to Settings with an outcome the page turns into a toast. The parameters go in the HASH
+ * query (`#/settings?tiktok=…`), because that is where the dashboard's router reads them
+ * (`App.hashParam`) — a `?tiktok=` before the `#` is invisible to it, and the toast never showed.
+ */
 function backToSettings(res: Response, outcome: 'connected' | 'error', reason?: string): void {
     const params = new URLSearchParams({ tiktok: outcome });
     if (reason) params.set('reason', reason);
     res.setHeader('Set-Cookie', stateCookie('', 0));
-    res.redirect(302, `/dashboard?${params.toString()}#/settings`);
+    res.redirect(302, `/dashboard#/settings?${params.toString()}`);
 }
 
 // ─── Public ─────────────────────────────────────────────────────────────────────────────

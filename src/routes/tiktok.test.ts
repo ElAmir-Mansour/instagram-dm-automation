@@ -60,7 +60,10 @@ async function callback(query: string, cookie?: string) {
         headers: cookie ? { cookie } : {},
     });
     const location = res.headers.get('location') ?? '';
-    const params = new URL(location, base).searchParams;
+    // The dashboard reads these from the hash query (App.hashParam), so that is where they
+    // must be — not in the page's own query string.
+    const hash = new URL(location, base).hash;
+    const params = new URLSearchParams(hash.slice(hash.indexOf('?') + 1));
     return { status: res.status, location, outcome: params.get('tiktok'), reason: params.get('reason'), setCookie: res.headers.get('set-cookie') ?? '' };
 }
 
@@ -68,8 +71,7 @@ describe('GET /api/tiktok/callback', () => {
     it('sends a cancelled consent screen back to Settings, touching nothing', async () => {
         const r = await callback('error=access_denied&state=abc');
         assert.equal(r.status, 302);
-        assert.match(r.location, /^\/dashboard\?/);
-        assert.match(r.location, /#\/settings$/);
+        assert.match(r.location, /^\/dashboard#\/settings\?/, 'params belong in the hash query, where App.hashParam reads them');
         assert.equal(r.outcome, 'error');
         assert.equal(r.reason, 'denied');
         assert.equal(statements.length, 0);
