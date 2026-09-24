@@ -31,7 +31,22 @@
  * The server's `validateCarousel` is the authority. Its messages follow
  * check-carousels.mts — `Id[3:point].title: 45 > 40 «…»` — so a 400's
  * `problems` are sorted onto the slide and field they name (`problemTarget`),
- * and anything that names neither stays in the list above the Save button.
+ * and anything that names neither stays in the problems panel above the forms.
+ *
+ * ─── One path, three steps ──────────────────────────────────────────────────
+ * Choose a topic → Generate → Review & schedule, with a stepper saying where
+ * the operator is and exactly one primary button per step: Generate on the
+ * home view, then Save (while there are edits) or Schedule in the editor.
+ * Everything else is progressive: angle, slide count, keyword and accent sit
+ * under "More options" and remember their last value in this browser; the
+ * setup checklist appears only while the lesson path is actually blocked.
+ *
+ * ─── Nothing typed is lost ──────────────────────────────────────────────────
+ * The editor keeps a copy of unsaved edits in localStorage, keyed by draft and
+ * by the server copy they were made against, and offers it back on the next
+ * visit. Generation (a minute, synchronous on the server) never freezes the
+ * page: the operator can leave, and the progress card is still there when they
+ * come back, because the request belongs to this object, not to the DOM.
  */
 const StudioPage = {
     // ─── Home state ──────────────────────────────────────────────────────────
@@ -60,6 +75,14 @@ const StudioPage = {
      * the plan. It defaults the schedule picker while that slot is still free.
      */
     plannedSlots: {},
+    /** 'lesson' | 'idea': where the next carousel comes from. Null until chosen, then remembered. */
+    mode: null,
+    /** The lesson picker's search text. */
+    lessonQuery: '',
+    /** What the create form holds across repaints and visits, so a repaint never eats typing. */
+    newText: { idea: '', keyword: '' },
+    /** The generation in flight: `{ startedAt, lessonMode, summary, stage }`, or null. */
+    gen: null,
 
     // ─── Settings state (STUDIO.md §10) ──────────────────────────────────────
     /** The tenant's StudioSettings, as the server last returned them. */
@@ -98,6 +121,17 @@ const StudioPage = {
     slotsError: null,
     /** lessonId → `{ lesson, moments }` from GET /lessons/:id, for shots. */
     lessonDetails: {},
+    /** The slide shown in the preview, and whose form is open beside it. */
+    selectedSlide: 0,
+    /** A deleted slide that Undo can still put back: `{ slide, index, shots }`. */
+    undo: null,
+    _undoTimer: null,
+    /** Unsaved edits found in this browser on open: `{ state: 'restored'|'stale', work }`, or null. */
+    restored: null,
+    /** The screenshot picker's "clean frames only" filter. On: clean frames make the best slides. */
+    cleanOnly: true,
+    /** Settings problems filed by path (`product.url`), after a refused or locally checked save. */
+    settingsFieldProblems: null,
 
     // ─── Timers and sequencing ───────────────────────────────────────────────
     /**
@@ -128,18 +162,123 @@ const StudioPage = {
     IG_CAPTION_MAX: 2200,
     TIKTOK_CAPTION_MAX: 4000,
     ACCENT_RE: /^#[0-9A-Fa-f]{6}$/,
+    /** Per-browser memory: the last generation options, and unsaved edits per draft. Colons, not dots: these are not i18n keys. */
+    PREFS_KEY: 'studio:prefs',
+    EDITS_PREFIX: 'studio:edits:',
+    UNDO_MS: 12000,
+    /**
+     * What generation is doing, told by the clock. POST /drafts is one synchronous
+     * request, so the server cannot report its stages; these are where a typical run
+     * is at that point, and the copy says "usually". The fourth stage, drawing, is
+     * real: it starts when the draft comes back `rendering`.
+     */
+    GEN_STAGES: Object.freeze(['read', 'write', 'check', 'render']),
+    GEN_STAGE_AT: Object.freeze([0, 8, 45]),
+    GEN_SLOW_S: 80,
+    _renderTimer: null,
+    _onKeydown: null,
+    _onBeforeUnload: null,
 
     destroy() {
         this._seq++;
         this.stopStatusTimer();
         this.stopPoll();
         this.stopGenTicker();
+        this.stopRenderTicker();
+        this.unbindKeys();
+        this.clearUndo();
         // A worker token is shown once. Leaving the page is the end of "once".
         this.newWorker = null;
     },
 
+    // ─── Browser memory ──────────────────────────────────────────────────────
+    /** localStorage can be missing, full or refused (private mode): every use is guarded, and optional. */
+    storeGet(key) {
+        try {
+            const raw = localStorage.getItem(key);
+            return raw ? JSON.parse(raw) : null;
+        } catch {
+            return null;
+        }
+    },
+
+    storeSet(key, value) {
+        try {
+            localStorage.setItem(key, JSON.stringify(value));
+            return true;
+        } catch {
+            return false;
+        }
+    },
+
+    storeRemove(key) {
+        try { localStorage.removeItem(key); } catch { /* private mode: nothing was stored */ }
+    },
+
+    /**
+     * The last generation options, each re-checked so a stale or hand-edited entry
+     * cannot send junk. The keyword is deliberately NOT remembered: a keyword reused
+     * by accident answers the next post's commenters with the previous post's DM.
+     */
+    prefs() {
+        const p = this.storeGet(this.PREFS_KEY) || {};
+        const slides = Math.round(Number(p.slides));
+        return {
+            mode: p.mode === 'idea' || p.mode === 'lesson' ? p.mode : null,
+            angle: this.ANGLES.includes(p.angle) ? p.angle : 'auto',
+            slides: slides >= this.SLIDES_MIN && slides <= this.SLIDES_MAX ? slides : this.SLIDES_DEFAULT,
+            accent: typeof p.accent === 'string' && this.ACCENT_RE.test(p.accent) ? p.accent.toUpperCase() : '',
+        };
+    },
+
+    savePrefs(patch) {
+        this.storeSet(this.PREFS_KEY, { ...this.prefs(), ...patch });
+    },
+
+    // ─── The stepper ─────────────────────────────────────────────────────────
+    /**
+     * Choose a topic → Generate → Review & schedule. `current` is 1–3, or 4 once
+     * the draft is scheduled and every step is done. It is a list, not tabs: the
+     * steps are where the operator IS, and the page's own buttons move them on.
+     */
+    stepperMarkup(current) {
+        const steps = ['topic', 'generate', 'review'];
+        return html`
+            <ol class="studio-stepper" aria-label="${t('studio.step.label')}">
+                ${steps.map((key, i) => {
+                    const n = i + 1;
+                    const state = n < current ? 'done' : n === current ? 'current' : 'todo';
+                    return html`
+                        <li class="studio-step is-${html.raw(state)}"${state === 'current' ? html.raw(' aria-current="step"') : ''}>
+                            <span class="studio-step-num" aria-hidden="true">${state === 'done'
+                                ? html`<i data-lucide="check" aria-hidden="true"></i>` : UI.formatNumber(n)}</span>
+                            <span class="studio-step-label">${t(`studio.step.${key}`)}</span>
+                            <span class="sr-only">${t(`studio.step.state.${state}`)}</span>
+                        </li>
+                    `;
+                })}
+            </ol>
+        `;
+    },
+
+    paintStepper(current) {
+        this.paintRegion('studio-stepper', this.stepperMarkup(current));
+    },
+
+    /** Where a draft stands on the three steps. */
+    editorStep() {
+        const status = this.draft && this.draft.status;
+        if (status === 'scheduled') return 4;
+        if (status === 'generating') return 2;
+        return 3;
+    },
+
+    /** Bumped by a tenant switch: a generation started before it must not open, paint or toast after it. */
+    _tenantEpoch: 0,
+
     /** Tenant switch: every list, draft and plan here belongs to the old tenant. */
     resetTenantState() {
+        this._tenantEpoch++;
         this.destroy();
         this.status = null;
         this.statusError = null;
@@ -151,6 +290,10 @@ const StudioPage = {
         this.selected = [];
         this.newError = null;
         this.generating = false;
+        this.gen = null;
+        this.mode = null;
+        this.lessonQuery = '';
+        this.newText = { idea: '', keyword: '' };
         this.plan = null;
         this._planSeq++;
         this.planRunning = false;
@@ -181,6 +324,11 @@ const StudioPage = {
         this.slots = null;
         this.slotsError = null;
         this.lessonDetails = {};
+        this.selectedSlide = 0;
+        this.restored = null;
+        this.clearUndo();
+        this.stopRenderTicker();
+        this.unbindKeys();
     },
 
     skeleton() {
@@ -219,6 +367,8 @@ const StudioPage = {
         // A second render (Retry, a tenant switch) must not leave the first one's timers running.
         this.stopStatusTimer();
         this.stopPoll();
+        this.stopRenderTicker();
+        this.unbindKeys();
         const seq = ++this._seq;
         const id = this.hashDraftId();
         if (id) {
@@ -236,14 +386,15 @@ const StudioPage = {
 
     /** Carousels | Settings — navigation between two views, so links with aria-current. */
     tabsMarkup(active) {
+        // Quiet segments, not blue buttons: the page's one primary is the step's own.
         const tab = (key, href, icon, label) => html`
-            <a class="btn btn-sm ${active === key ? html.raw('btn-primary') : html.raw('btn-ghost')}" href="${href}"
+            <a class="btn btn-sm btn-ghost" href="${href}"
                ${active === key ? html.raw('aria-current="page"') : ''}>
                 <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
             </a>
         `;
         return html`
-            <nav class="segmented studio-tabs" aria-label="${t('studio.tabs.label')}">
+            <nav class="segmented studio-seg studio-tabs" aria-label="${t('studio.tabs.label')}">
                 ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
                 ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
             </nav>
@@ -320,6 +471,8 @@ const StudioPage = {
         this.applySettings(settings);
         this.paintHome();
         this.startStatusTimer(seq);
+        // A carousel being written when the operator left is still being written.
+        if (this.generating) this.startGenTicker();
         Motion.announce(`${t('nav.studio')} — ${t('studio.drafts.count', { count: this.drafts.length })}`);
     },
 
@@ -349,6 +502,92 @@ const StudioPage = {
         this._genTimer = null;
     },
 
+    stopRenderTicker() {
+        if (this._renderTimer) clearInterval(this._renderTimer);
+        this._renderTimer = null;
+    },
+
+    // ─── Keyboard ────────────────────────────────────────────────────────────
+    /**
+     * One document listener per view, removed with the view. Cmd/Ctrl+S saves the
+     * editor or the settings; arrow keys move through slides when the preview or
+     * the slide rail has focus. Nothing here fires while a modal is open.
+     */
+    bindKeys(view) {
+        this.unbindKeys();
+        if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+        this._onKeydown = (event) => StudioPage.onKeydown(event, view);
+        document.addEventListener('keydown', this._onKeydown);
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+            this._onBeforeUnload = (event) => {
+                const dirty = view === 'settings' ? StudioPage.settingsDirty() : StudioPage.isDirty();
+                if (!dirty) return;
+                event.preventDefault();
+                event.returnValue = '';
+            };
+            window.addEventListener('beforeunload', this._onBeforeUnload);
+        }
+    },
+
+    unbindKeys() {
+        if (this._onKeydown && typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+            document.removeEventListener('keydown', this._onKeydown);
+        }
+        if (this._onBeforeUnload && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+            window.removeEventListener('beforeunload', this._onBeforeUnload);
+        }
+        this._onKeydown = null;
+        this._onBeforeUnload = null;
+    },
+
+    modalOpen() {
+        const overlay = document.getElementById('modal-overlay');
+        return !!overlay && !overlay.classList.contains('hidden');
+    },
+
+    /** The document is right-to-left: "next" is then to the left, for arrows and for swipes. */
+    isRtl() {
+        const root = document.documentElement;
+        return !!root && String(root.dir || (root.getAttribute && root.getAttribute('dir')) || '').toLowerCase() === 'rtl';
+    },
+
+    onKeydown(event, view) {
+        if (!event || this.modalOpen()) return;
+        const key = String(event.key || '');
+        if ((event.metaKey || event.ctrlKey) && !event.altKey && key.toLowerCase() === 's') {
+            // The browser's "Save page" is never what the operator means here.
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            if (view === 'settings') {
+                const form = document.getElementById('studio-settings-form');
+                if (form && this.settingsDirty()) studioReport(this.saveSettings(form, null));
+            } else if (view === 'editor' && this.isDirty()) {
+                studioReport(this.save(null));
+            }
+            return;
+        }
+        if (view !== 'editor') return;
+        const target = event.target && typeof event.target.closest === 'function' ? event.target : null;
+        const inStage = target && target.closest('.phone-stage');
+        const inRail = target && target.closest('.slide-rail');
+        if (!inStage && !inRail) return;
+        // The preview is a focusable group, not a button: Enter and Space open its form here.
+        if (inStage && (key === 'Enter' || key === ' ')) {
+            if (typeof event.preventDefault === 'function') event.preventDefault();
+            this.editSlide(inStage);
+            return;
+        }
+        const forward = this.isRtl() ? 'ArrowLeft' : 'ArrowRight';
+        const back = this.isRtl() ? 'ArrowRight' : 'ArrowLeft';
+        let to = null;
+        if (key === forward) to = this.selectedSlide + 1;
+        else if (key === back) to = this.selectedSlide - 1;
+        else if (key === 'Home') to = 0;
+        else if (key === 'End') to = this.slideCount() - 1;
+        if (to === null) return;
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+        this.selectSlide(to, { focus: inRail ? 'tab' : 'stage' });
+    },
+
     /**
      * Re-read the status and repaint the bar. On the home view a draft still
      * being written or rendered is refreshed on the same tick, so its card turns
@@ -359,6 +598,7 @@ const StudioPage = {
         this._statusInFlight = true;
         const home = !this.draftId;
         const busyDraft = home && this.drafts.some((d) => this.isBusyStatus(d && d.status));
+        const before = this.libraryCounts();
         try {
             const [status, drafts] = await Promise.allSettled([
                 API.getStudioStatus(),
@@ -371,9 +611,40 @@ const StudioPage = {
                 this.applyDrafts(drafts);
                 this.paintDrafts();
             }
+            // A scan or an index finished on the Mac: the picker (and the setup list)
+            // show the new lessons without a reload.
+            const after = this.libraryCounts();
+            if (home && this.lessonsLoaded && after !== before && document.getElementById('studio-source-body')) {
+                await this.reloadLessons();
+            }
+            if (!home && this.draft && this.isBusyStatus(this.draft.status)) this.paintRenderState();
         } finally {
             this._statusInFlight = false;
         }
+    },
+
+    /** "34/34/0" — what changes when the worker scans or indexes. */
+    libraryCounts() {
+        const l = (this.status && this.status.lessons) || {};
+        return `${Number(l.total) || 0}/${Number(l.indexed) || 0}/${Number(l.indexing) || 0}`;
+    },
+
+    /** Retry on the offline notice: re-read the status now and say what came back. */
+    async retryWorker(el) {
+        const restore = UI.actionBusy(el, t('studio.worker.checking'));
+        if (!restore) return;
+        this._statusBusy++;
+        try {
+            await this.refreshStatus(this._seq);
+        } finally {
+            this._statusBusy = Math.max(0, this._statusBusy - 1);
+            restore();
+        }
+        this.paintStatus();
+        const online = this.workerOnline();
+        const message = online ? t('studio.worker.backOnline') : t('studio.worker.stillOffline');
+        Motion.announce(message);
+        UI.toast(message, online ? 'success' : 'error');
     },
 
     // ─── Small readings of the data ──────────────────────────────────────────
@@ -449,6 +720,7 @@ const StudioPage = {
         host.innerHTML = esc(markup);
         UI.icons(host);
         this.wireErrors(host);
+        this.applySwatches(host);
         UI.restoreFocus(focus);
         return host;
     },
@@ -478,11 +750,15 @@ const StudioPage = {
                 </div>
             `;
         }
+        // The TikTok item earns its space only when there is something to say:
+        // carousels waiting for the batch, or the audit that retired the batch.
+        const tiktok = s.tiktok || {};
+        const showTikTok = tiktok.audited === true || (Number(tiktok.queued) || 0) > 0;
         return html`
             <div class="studio-status-grid">
                 ${this.workerMarkup(s.worker || {}, s.jobs || {})}
                 ${this.libraryMarkup(s.lessons || {})}
-                ${this.tiktokQueueMarkup(s.tiktok || {})}
+                ${showTikTok ? this.tiktokQueueMarkup(tiktok) : ''}
             </div>
             ${this.statusError ? html`
                 <p class="form-hint text-warning" role="status">${t('studio.status.stale')}</p>
@@ -496,31 +772,68 @@ const StudioPage = {
         const pending = Number(jobs.pending) || 0;
         const claimed = Number(jobs.claimed) || 0;
         return html`
-            <div class="studio-status-item">
+            <div class="studio-status-item${online ? '' : html.raw(' is-wide')}">
                 <p class="studio-status-head">
                     <span class="health-pill ${online ? html.raw('health-fresh') : html.raw('health-off')}" id="studio-worker-pill">
                         <span class="health-dot" aria-hidden="true"></span>
                         ${online ? t('studio.worker.online') : t('studio.worker.offline')}
                     </span>
                     ${worker.name ? html`<span class="text-meta" dir="auto">${worker.name}</span>` : ''}
+                    <span class="text-meta" title="${seen ? seen.title : ''}">
+                        ${seen ? t('studio.worker.lastSeen', { when: seen.text }) : t('studio.worker.neverSeen')}
+                    </span>
                 </p>
-                <p class="text-meta" title="${seen ? seen.title : ''}">
-                    ${seen ? t('studio.worker.lastSeen', { when: seen.text }) : t('studio.worker.neverSeen')}
-                </p>
-                ${!online ? html`
-                    <p class="studio-hint" id="studio-worker-hint">
-                        <i data-lucide="laptop" aria-hidden="true"></i>
-                        <span>${t('studio.worker.startHint')}</span>
-                    </p>
-                ` : ''}
                 ${pending || claimed ? html`
                     <p class="text-meta">
                         ${t('studio.jobs.summary', { pending: UI.formatNumber(pending), claimed: UI.formatNumber(claimed) })}
                         ${!online && pending ? html`<span class="text-warning"> · ${t('studio.jobs.waitingForMac')}</span>` : ''}
                     </p>
                 ` : ''}
+                ${online ? '' : this.workerHelpMarkup(worker)}
             </div>
         `;
+    },
+
+    /**
+     * Offline is a state with a way out, so it says what the worker IS, how to
+     * start it, and offers a real re-check. Writing still works without it: only
+     * indexing and drawing the slides wait, and the copy says so.
+     */
+    workerHelpMarkup(worker) {
+        const never = !worker.lastSeen;
+        return html`
+            <div class="studio-callout is-warning" id="studio-worker-hint">
+                <i data-lucide="laptop" aria-hidden="true"></i>
+                <div class="studio-callout-body">
+                    <p class="studio-callout-title">${never ? t('studio.worker.neverTitle') : t('studio.worker.offlineTitle')}</p>
+                    <p>${t('studio.worker.what')}</p>
+                    <p>${t('studio.worker.startHint')}</p>
+                    <details class="studio-howto">
+                        <summary>${t('studio.worker.howTo')}</summary>
+                        <ol>
+                            <li>${t('studio.worker.howTo1')}</li>
+                            <li>${t('studio.worker.howTo2')}</li>
+                            <li>${t('studio.worker.howTo3')}</li>
+                        </ol>
+                    </details>
+                    <div class="row row--wrap gap-2">
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('studio.worker.retry'),
+                            action: 'studio:retryWorker', id: 'studio-worker-retry',
+                        })}
+                        <a class="btn btn-ghost btn-sm" href="#/studio?tab=settings&amp;focus=workers">${t('studio.worker.manage')}</a>
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    /** A native progress bar: announced as "12 of 34", and it fills from the reading start. */
+    meterMarkup(value, max, label, id) {
+        const n = Math.max(0, Number(value) || 0);
+        const m = Math.max(1, Number(max) || 0);
+        return html`<progress class="studio-meter"${id ? html` id="${id}"` : ''} value="${Math.min(n, m)}" max="${m}"
+                              aria-label="${label}" aria-valuetext="${t('studio.countSr', { n: UI.formatNumber(n), max: UI.formatNumber(m) })}"></progress>`;
     },
 
     libraryMarkup(lessons) {
@@ -538,6 +851,7 @@ const StudioPage = {
                     <strong class="studio-status-count">${UI.ltr(`${UI.formatNumber(indexed)}/${UI.formatNumber(total)}`)}</strong>
                     <span>${t('studio.library.indexedLabel')}</span>
                 </p>
+                ${total && indexed < total ? this.meterMarkup(indexed, total, t('studio.library.meterLabel'), 'studio-library-meter') : ''}
                 ${indexing || failed ? html`
                     <p class="text-meta">
                         ${indexing ? t('studio.library.indexing', { n: UI.formatNumber(indexing) }) : ''}
@@ -585,7 +899,8 @@ const StudioPage = {
                     <p class="text-meta">${t('studio.tiktok.queueNote')}</p>
                     <div class="row row--wrap gap-2">
                         ${UI.button({
-                            variant: 'primary', size: 'sm', icon: 'send', label: t('studio.tiktok.batch'),
+                            // Secondary: the page's one primary button is the step's (Generate).
+                            variant: 'secondary', size: 'sm', icon: 'send', label: t('studio.tiktok.batch'),
                             action: 'studio:confirmTikTokBatch', id: 'studio-tiktok-batch',
                             disabled: queued === 0,
                             title: queued === 0 ? t('studio.tiktok.batchEmpty') : '',
@@ -665,21 +980,54 @@ const StudioPage = {
         if (!container) return;
         const focus = UI.captureFocus(container);
         container.innerHTML = esc(html`
-            <div class="page-toolbar">${this.tabsMarkup('home')}</div>
+            <div class="page-toolbar studio-toolbar">
+                ${this.tabsMarkup('home')}
+                <div id="studio-stepper">${this.stepperMarkup(this.generating ? 2 : 1)}</div>
+            </div>
             ${this.statusSection()}
-            <section class="surface pad-5 studio-new" aria-labelledby="studio-new-title">
-                <h2 class="section-title" id="studio-new-title">${t('studio.new.title')}</h2>
-                ${this.newFormMarkup()}
+            <section class="surface pad-5 studio-new" id="studio-new" aria-labelledby="studio-new-title">
+                ${this.newCardMarkup()}
             </section>
             <div id="studio-plan">${this.planMarkup()}</div>
             <section class="studio-drafts" aria-labelledby="studio-drafts-title">
-                <h2 class="section-title" id="studio-drafts-title">${t('studio.drafts.title')}</h2>
+                <div class="studio-section-head">
+                    <h2 class="section-title" id="studio-drafts-title">${t('studio.drafts.title')}</h2>
+                </div>
                 <div id="studio-drafts">${this.draftsMarkup()}</div>
             </section>
         `);
         UI.icons(container);
         this.wireErrors(container);
+        this.applySwatches(container);
         UI.restoreFocus(focus);
+    },
+
+    /** The step-1 form, or — while a carousel is being written — the step-2 progress card. */
+    newCardMarkup() {
+        return this.generating ? this.genProgressMarkup() : this.newFormMarkup();
+    },
+
+    paintNewCard() {
+        // "More options" stays as the operator left it: a repaint is not a reason to fold it up.
+        const more = document.getElementById('studio-more');
+        const open = !!(more && more.open);
+        this.paintRegion('studio-new', this.newCardMarkup());
+        const again = document.getElementById('studio-more');
+        if (again && open) again.open = true;
+        this.paintStepper(this.generating ? 2 : 1);
+    },
+
+    /** Colour dots carry their hex in `data-color`; it is set as a style here, checked, never interpolated. */
+    applySwatches(root) {
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        root.querySelectorAll('[data-color], [data-bg]').forEach((el) => {
+            const hex = String(el.dataset.color || el.dataset.bg || '');
+            if (this.ACCENT_RE.test(hex) && el.style) el.style.backgroundColor = hex;
+        });
+        root.querySelectorAll('[data-fg]').forEach((el) => {
+            const hex = String(el.dataset.fg || '');
+            if (this.ACCENT_RE.test(hex) && el.style) el.style.color = hex;
+        });
     },
 
     /** "2/3", isolated so it reads left to right inside Arabic, with a spoken form. */
@@ -699,103 +1047,380 @@ const StudioPage = {
         return first ? String(first).toLowerCase() : '#888888';
     },
 
+    /**
+     * Where the next carousel comes from: what the operator chose (this visit, or
+     * last time in this browser), else a lesson. Lessons first even while none can
+     * be picked: that is where the setup checklist lives, and the way out to
+     * "From an idea" is one button on it.
+     */
+    sourceMode() {
+        if (this.mode === 'lesson' || this.mode === 'idea') return this.mode;
+        if (this.selected.length) return 'lesson';
+        return this.prefs().mode || 'lesson';
+    },
+
+    /** The tenant's accent palette, valid entries only. */
+    palette() {
+        const list = this.settings && this.settings.brand && Array.isArray(this.settings.brand.palette) ? this.settings.brand.palette : [];
+        return list.map((c) => String(c || '').toUpperCase()).filter((c) => this.ACCENT_RE.test(c));
+    },
+
+    /** A segmented control's segment: a toggle button, one of which is pressed. */
+    segButton(o) {
+        const on = !!o.pressed;
+        return html`
+            <button type="button" class="btn btn-sm btn-ghost" id="${o.id}" aria-pressed="${on ? 'true' : 'false'}"
+                    data-action="${o.action}" ${o.data ? html.raw(o.data) : ''}>
+                <i data-lucide="${o.icon}" aria-hidden="true"></i> ${o.label}
+            </button>
+        `;
+    },
+
     newFormMarkup() {
+        const mode = this.sourceMode();
+        const prefs = this.prefs();
+        const blocked = mode === 'lesson' && !this.lessons.some((l) => this.isPickable(l));
+        return html`
+            <form id="studio-new-form" class="studio-new-form" data-submit="studio:generate" novalidate>
+                <div class="studio-section-head studio-new-head">
+                    <div class="studio-new-heading">
+                        <h2 class="section-title" id="studio-new-title">${t('studio.new.title')}</h2>
+                        <p class="form-hint studio-lede">${t('studio.new.lede')}</p>
+                    </div>
+                    ${this.planLaunchMarkup()}
+                </div>
+                <div class="segmented studio-seg studio-source" role="group" aria-label="${t('studio.new.source')}">
+                    ${this.segButton({ id: 'studio-mode-lesson', action: 'studio:setMode', data: 'data-mode="lesson"', icon: 'book-open', label: t('studio.new.fromLesson'), pressed: mode === 'lesson' })}
+                    ${this.segButton({ id: 'studio-mode-idea', action: 'studio:setMode', data: 'data-mode="idea"', icon: 'lightbulb', label: t('studio.new.fromIdea'), pressed: mode === 'idea' })}
+                </div>
+                <div id="studio-source-body" class="studio-source-body">${mode === 'lesson' ? this.lessonSourceMarkup() : this.ideaSourceMarkup()}</div>
+                ${this.moreOptionsMarkup(mode, prefs)}
+                <div id="studio-new-error">${this.newErrorMarkup()}</div>
+                <div class="studio-new-actions">
+                    ${UI.button({
+                        variant: 'primary', type: 'submit', icon: 'sparkles', label: t('studio.new.generate'),
+                        id: 'studio-generate', className: 'studio-generate', disabled: blocked,
+                    })}
+                    <p class="form-hint" id="studio-generate-hint">${blocked ? t('studio.new.blockedHint') : t('studio.new.generateHint')}</p>
+                </div>
+            </form>
+        `;
+    },
+
+    planLaunchMarkup() {
+        return html`
+            <div class="studio-plan-launch">
+                <label class="sr-only" for="studio-plan-count">${t('studio.plan.count')}</label>
+                <select class="select studio-plan-count" id="studio-plan-count" title="${t('studio.plan.count')}">
+                    ${this.PLAN_COUNTS.map((n) => html`<option value="${n}" ${n === this.PLAN_DEFAULT ? html.raw('selected') : ''}>${t('studio.plan.countOption', { n: UI.formatNumber(n) })}</option>`)}
+                </select>
+                ${UI.button({
+                    variant: 'ghost', icon: 'calendar-range', label: t('studio.plan.button'),
+                    action: 'studio:planWeek', id: 'studio-plan-btn',
+                })}
+            </div>
+        `;
+    },
+
+    ideaSourceMarkup() {
+        return html`
+            <div class="form-group">
+                <label class="form-label" for="studio-idea">${t('studio.new.ideaLabel')}</label>
+                <textarea class="field-textarea user-content" id="studio-idea" name="idea" dir="auto" lang="${this.contentLang()}" rows="4"
+                          placeholder="${t('studio.new.ideaPlaceholder')}" aria-describedby="studio-idea-hint"
+                          data-input="studio:newText" data-key="idea">${this.newText.idea}</textarea>
+                <p class="form-hint" id="studio-idea-hint">${t('studio.new.ideaOnlyHint')}</p>
+            </div>
+        `;
+    },
+
+    lessonSourceMarkup() {
+        const setup = this.setupMarkup();
+        if (setup) return setup;
+        const total = this.lessons.length;
+        return html`
+            <div class="field-head">
+                <span class="form-label" id="studio-lessons-label">
+                    ${t('studio.new.lessons')}
+                    <span class="label-optional">${t('studio.new.lessonsHint', { max: this.MAX_LESSONS })}</span>
+                </span>
+                <span class="field-count" id="studio-lessons-count">${this.countMarkup(this.selected.length, this.MAX_LESSONS)}</span>
+            </div>
+            <div id="studio-picked" class="studio-picked">${this.pickedMarkup()}</div>
+            ${this.indexNoteMarkup()}
+            <div class="studio-lesson-search">
+                <i data-lucide="search" aria-hidden="true"></i>
+                <label class="sr-only" for="studio-lesson-q">${t('studio.lessons.search')}</label>
+                <input class="field" type="search" id="studio-lesson-q" value="${this.lessonQuery}" autocomplete="off" spellcheck="false"
+                       placeholder="${t('studio.lessons.searchPlaceholder', { n: UI.formatNumber(total) })}"
+                       data-input="studio:lessonSearch" aria-controls="studio-lessons">
+            </div>
+            <div id="studio-lessons" class="studio-lessons" role="group" aria-labelledby="studio-lessons-label">
+                ${this.lessonPickerMarkup()}
+            </div>
+        `;
+    },
+
+    /** The picked lessons, each a button that un-picks it, and what the first one covers. */
+    pickedMarkup() {
+        const picked = this.selected.map((id) => this.lessonById(id)).filter(Boolean);
+        // Nothing picked: the label ("up to 3") and the count already say it; the hint is for a screen reader.
+        if (!picked.length) return html`<p class="sr-only">${t('studio.lessons.pickHint')}</p>`;
+        const summary = picked[0].summary;
+        return html`
+            <ul class="studio-picked-list">
+                ${picked.map((l) => html`
+                    <li>
+                        <button type="button" class="picked-chip" data-action="studio:toggleLesson" data-id="${l.id}"
+                                data-focus-key="picked-${l.id}" aria-label="${t('studio.lessons.unpick', { name: this.lessonName(l) })}">
+                            <bdi class="lesson-chip-no" dir="ltr">${l.lesson_no || ''}</bdi>
+                            <span class="lesson-chip-title" dir="auto">${l.title || ''}</span>
+                            <i data-lucide="x" aria-hidden="true"></i>
+                        </button>
+                    </li>
+                `)}
+            </ul>
+            ${summary ? html`<p class="studio-picked-summary user-content" dir="auto">${summary}</p>` : ''}
+        `;
+    },
+
+    /** Counts from the lesson list itself, so the note agrees with the chips beside it. */
+    lessonCounts() {
+        const total = this.lessons.length;
+        const by = (st) => this.lessons.filter((l) => l && l.status === st).length;
+        const indexed = by('indexed');
+        const indexing = by('indexing');
+        return { total, indexed, indexing, missing: Math.max(0, total - indexed - indexing) };
+    },
+
+    /** Part of the library is indexed: say how much, show it, and offer the rest. */
+    indexNoteMarkup() {
+        const c = this.lessonCounts();
+        if (!c.total || c.indexed >= c.total) return '';
+        return html`
+            <div class="studio-index-note" id="studio-index-note">
+                <p class="studio-index-note-text">
+                    <span>${t('studio.lessons.indexedOf')}</span>
+                    ${UI.ltr(`${UI.formatNumber(c.indexed)}/${UI.formatNumber(c.total)}`)}
+                    ${c.indexing ? html`<span class="text-meta">· ${t('studio.lessons.indexingNow', { n: UI.formatNumber(c.indexing) })}</span>` : ''}
+                </p>
+                ${this.meterMarkup(c.indexed, c.total, t('studio.library.meterLabel'), 'studio-index-meter')}
+                ${c.missing ? UI.button({
+                    variant: 'ghost', size: 'sm', icon: 'scan-text', label: t('studio.lessons.indexRest', { n: UI.formatNumber(c.missing) }),
+                    action: 'studio:indexMissing', id: 'studio-index-rest',
+                }) : ''}
+            </div>
+        `;
+    },
+
+    /**
+     * While not one lesson can be picked, the lesson path is blocked, and this
+     * says exactly why: three steps that tick themselves off as the status
+     * changes. Writing from an idea needs none of it, and the card says so.
+     */
+    setupMarkup() {
+        if (this.lessons.some((l) => this.isPickable(l))) return '';
+        if (this.lessonsError && !this.lessons.length) {
+            return this.errorHost(this.lessonsError, t('studio.lessons.errorTitle'), 'lessons');
+        }
+        if (!this.lessonsLoaded) return html`<p class="studio-empty-note">${t('common.loading')}</p>`;
+        const s = this.status || {};
+        const worker = s.worker || {};
+        const c = this.lessonCounts();
+        const root = this.libraryRoot();
+        const folderKnown = !!this.settings;
+        const step = (n, done, title, body, action) => html`
+            <li class="setup-step${done ? html.raw(' is-done') : ''}">
+                <span class="setup-step-mark" aria-hidden="true">${done ? html`<i data-lucide="check" aria-hidden="true"></i>` : UI.formatNumber(n)}</span>
+                <div class="setup-step-body">
+                    <p class="setup-step-title">${title}<span class="sr-only"> (${done ? t('studio.setup.done') : t('studio.setup.todo')})</span></p>
+                    ${body ? html`<div class="form-hint">${body}</div>` : ''}
+                    ${action || ''}
+                </div>
+            </li>
+        `;
+
+        const folderDone = !!root;
+        const folder = step(1, folderDone, t('studio.setup.folderTitle'),
+            folderDone ? html`<code class="studio-path" dir="ltr">${root}</code>` : t('studio.setup.folderBody'),
+            folderDone ? '' : html`<a class="btn btn-secondary btn-sm" href="#/studio?tab=settings&amp;focus=library">${t('studio.setup.folderAction')}</a>`);
+
+        const seen = !!worker.lastSeen;
+        let workerBody = t('studio.setup.workerBody');
+        if (seen && worker.online) workerBody = t('studio.setup.workerOnline', { name: worker.name || '' });
+        else if (seen) workerBody = t('studio.setup.workerOffline', { when: UI.relativeAge(worker.lastSeen).text });
+        const workerStep = step(2, seen, t('studio.setup.workerTitle'), workerBody,
+            seen ? '' : html`<a class="btn btn-secondary btn-sm" href="#/studio?tab=settings&amp;focus=workers">${t('studio.setup.workerAction')}</a>`);
+
+        let libraryBody;
+        let libraryAction = '';
+        if (!c.total) {
+            libraryBody = t('studio.setup.scanBody');
+            const noFolder = folderKnown && !folderDone;
+            libraryAction = UI.button({
+                variant: 'secondary', size: 'sm', icon: 'folder-search', label: t('studio.library.scan'),
+                action: 'studio:scanLibrary', id: 'studio-setup-scan', disabled: noFolder,
+                title: noFolder ? t('studio.library.noFolder') : '',
+            });
+        } else if (c.indexing) {
+            libraryBody = html`
+                <span>${t('studio.setup.indexingBody', { n: UI.formatNumber(c.indexing) })}</span>
+                ${this.meterMarkup(c.indexed, c.total, t('studio.library.meterLabel'), 'studio-setup-meter')}
+            `;
+        } else {
+            libraryBody = t('studio.setup.indexBody', { n: UI.formatNumber(c.total) });
+            libraryAction = UI.button({
+                variant: 'secondary', size: 'sm', icon: 'scan-text', label: t('studio.setup.indexAction', { n: UI.formatNumber(c.missing) }),
+                action: 'studio:indexMissing', id: 'studio-setup-index',
+            });
+        }
+        const libraryStep = step(3, false, t('studio.setup.libraryTitle'), libraryBody, libraryAction);
+
+        return html`
+            <div class="studio-setup" id="studio-setup">
+                <p class="studio-setup-title">${t('studio.setup.title')}</p>
+                <p class="form-hint">${t('studio.setup.intro')}</p>
+                <ol class="setup-steps">${folder}${workerStep}${libraryStep}</ol>
+                <p class="studio-setup-alt">
+                    <span>${t('studio.setup.orIdea')}</span>
+                    ${UI.button({ variant: 'ghost', size: 'sm', icon: 'lightbulb', label: t('studio.new.fromIdea'), action: 'studio:setMode', data: { mode: 'idea' }, id: 'studio-setup-idea' })}
+                </p>
+            </div>
+        `;
+    },
+
+    /** "AI picks the angle · 8 slides · accent from your palette": the closed state says what will be sent. */
+    moreSummary() {
+        const read = (id) => {
+            const el = document.getElementById(id);
+            return el && typeof el.value === 'string' ? el.value : null;
+        };
+        const prefs = this.prefs();
+        const angle = read('studio-angle') || prefs.angle;
+        const slides = Number(read('studio-slides')) || prefs.slides;
+        const accent = (read('studio-accent') !== null ? read('studio-accent') : prefs.accent).trim();
+        const keyword = (read('studio-keyword') !== null ? read('studio-keyword') : this.newText.keyword).trim();
+        const parts = [
+            angle === 'auto' ? t('studio.new.summaryAngleAuto') : this.angleLabel(angle),
+            t('studio.new.summarySlides', { n: UI.formatNumber(slides) }),
+            keyword ? t('studio.new.summaryKeyword', { keyword }) : t('studio.new.summaryKeywordAuto'),
+            this.ACCENT_RE.test(accent) ? t('studio.new.summaryAccent', { hex: accent.toUpperCase() }) : t('studio.new.summaryAccentAuto'),
+        ];
+        return parts.join(' · ');
+    },
+
+    moreOptionsMarkup(mode, prefs) {
         const slideOptions = [];
         for (let n = this.SLIDES_MIN; n <= this.SLIDES_MAX; n++) slideOptions.push(n);
+        const palette = this.palette();
+        const accent = prefs.accent;
+        const swatch = (hex, label) => {
+            const on = (hex || '') === (accent || '');
+            return html`
+                <li>
+                    <button type="button" class="swatch-btn${hex ? '' : html.raw(' swatch-btn--auto')}" data-action="studio:pickAccent" data-hex="${hex}"
+                            aria-pressed="${on ? 'true' : 'false'}" aria-label="${label}" title="${label}">
+                        ${hex ? html`<span class="swatch-dot" data-color="${hex}"></span>` : html`<i data-lucide="wand-sparkles" aria-hidden="true"></i>`}
+                    </button>
+                </li>
+            `;
+        };
         return html`
-            <form id="studio-new-form" data-submit="studio:generate" novalidate>
-                <fieldset class="fieldset-plain" id="studio-new-fields">
-                    <div class="form-group">
-                        <div class="field-head">
-                            <span class="form-label" id="studio-lessons-label">
-                                ${t('studio.new.lessons')}
-                                <span class="label-optional">${t('studio.new.lessonsHint', { max: this.MAX_LESSONS })}</span>
-                            </span>
-                            <span class="field-count" id="studio-lessons-count">${this.countMarkup(this.selected.length, this.MAX_LESSONS)}</span>
+            <details class="studio-more" id="studio-more">
+                <summary class="studio-more-toggle">
+                    <span class="studio-more-label"><i data-lucide="sliders-horizontal" aria-hidden="true"></i> ${t('studio.new.more')}</span>
+                    <span class="studio-more-summary" id="studio-more-summary">${this.moreSummaryFrom(prefs)}</span>
+                </summary>
+                <div class="studio-more-body">
+                    ${mode === 'lesson' ? html`
+                        <div class="form-group">
+                            <label class="form-label" for="studio-idea">
+                                ${t('studio.new.focus')} <span class="label-optional">${t('common.optional')}</span>
+                            </label>
+                            <textarea class="field-textarea user-content" id="studio-idea" name="idea" dir="auto" lang="${this.contentLang()}" rows="2"
+                                      placeholder="${t('studio.new.focusPlaceholder')}" aria-describedby="studio-idea-hint"
+                                      data-input="studio:newText" data-key="idea">${this.newText.idea}</textarea>
+                            <p class="form-hint" id="studio-idea-hint">${t('studio.new.ideaHint')}</p>
                         </div>
-                        <div id="studio-lessons" class="studio-lessons" role="group" aria-labelledby="studio-lessons-label">
-                            ${this.lessonPickerMarkup()}
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label" for="studio-idea">
-                            ${t('studio.new.idea')} <span class="label-optional">${t('common.optional')}</span>
-                        </label>
-                        <textarea class="field-textarea user-content" id="studio-idea" name="idea" dir="auto" lang="ar" rows="3"
-                                  placeholder="${t('studio.new.ideaPlaceholder')}" aria-describedby="studio-idea-hint"></textarea>
-                        <p class="form-hint" id="studio-idea-hint">${t('studio.new.ideaHint')}</p>
-                    </div>
-
+                    ` : ''}
                     <div class="studio-new-grid">
                         <div class="form-group">
                             <label class="form-label" for="studio-angle">${t('studio.new.angle')}</label>
-                            <select class="select" id="studio-angle" name="angle">
-                                ${this.ANGLES.map((a) => html`<option value="${a}" ${a === 'auto' ? html.raw('selected') : ''}>${this.angleLabel(a)}</option>`)}
+                            <select class="select" id="studio-angle" name="angle" data-change="studio:rememberOption" aria-describedby="studio-angle-hint">
+                                ${this.ANGLES.map((a) => html`<option value="${a}" ${a === prefs.angle ? html.raw('selected') : ''}>${this.angleLabel(a)}</option>`)}
                             </select>
+                            <p class="form-hint" id="studio-angle-hint">${t('studio.new.angleHint')}</p>
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="studio-slides">${t('studio.new.slides')}</label>
-                            <select class="select" id="studio-slides" name="slides">
-                                ${slideOptions.map((n) => html`<option value="${n}" ${n === this.SLIDES_DEFAULT ? html.raw('selected') : ''}>${UI.formatNumber(n)}</option>`)}
+                            <select class="select" id="studio-slides" name="slides" data-change="studio:rememberOption">
+                                ${slideOptions.map((n) => html`<option value="${n}" ${n === prefs.slides ? html.raw('selected') : ''}>${UI.formatNumber(n)}</option>`)}
                             </select>
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="studio-keyword">
                                 ${t('studio.new.keyword')} <span class="label-optional">${t('common.optional')}</span>
                             </label>
-                            <input class="field" id="studio-keyword" name="keyword" dir="auto" lang="ar" autocomplete="off"
-                                   aria-describedby="studio-keyword-hint">
+                            <input class="field" id="studio-keyword" name="keyword" dir="auto" lang="${this.contentLang()}" autocomplete="off"
+                                   value="${this.newText.keyword}" data-input="studio:newText" data-key="keyword" aria-describedby="studio-keyword-hint">
                             <p class="form-hint" id="studio-keyword-hint">${t('studio.new.keywordHint')}</p>
                         </div>
-                        <div class="form-group">
-                            <label class="form-label" for="studio-accent">
-                                ${t('studio.new.accent')} <span class="label-optional">${t('common.optional')}</span>
-                            </label>
-                            <div class="field-row">
-                                <input class="field field-mono" id="studio-accent" name="accent" dir="ltr" autocomplete="off"
-                                       placeholder="#RRGGBB" maxlength="7" spellcheck="false"
-                                       data-input="studio:accentTyped" data-picker="studio-accent-picker"
-                                       aria-describedby="studio-accent-hint">
-                                <input type="color" class="studio-color" id="studio-accent-picker" value="${this.paletteStart()}"
-                                       data-input="studio:accentPicked" data-target="studio-accent"
-                                       aria-label="${t('studio.new.accentPick')}" title="${t('studio.new.accentPick')}">
-                            </div>
-                            <p class="form-hint" id="studio-accent-hint">${t('studio.new.accentHint')}</p>
-                        </div>
                     </div>
-
-                    <div id="studio-new-error">${this.newErrorMarkup()}</div>
-
-                    <div class="form-actions studio-new-actions">
-                        ${UI.button({
-                            variant: 'primary', type: 'submit', icon: 'sparkles', label: t('studio.new.generate'),
-                            id: 'studio-generate',
-                        })}
-                        <div class="studio-plan-launch">
-                            <label class="sr-only" for="studio-plan-count">${t('studio.plan.count')}</label>
-                            <select class="select studio-plan-count" id="studio-plan-count" title="${t('studio.plan.count')}">
-                                ${this.PLAN_COUNTS.map((n) => html`<option value="${n}" ${n === this.PLAN_DEFAULT ? html.raw('selected') : ''}>${t('studio.plan.countOption', { n: UI.formatNumber(n) })}</option>`)}
-                            </select>
-                            ${UI.button({
-                                variant: 'secondary', icon: 'calendar-range', label: t('studio.plan.button'),
-                                action: 'studio:planWeek', id: 'studio-plan-btn',
-                            })}
+                    <fieldset class="fieldset-plain form-group studio-accent-choice">
+                        <legend class="form-label">${t('studio.new.accent')} <span class="label-optional">${t('common.optional')}</span></legend>
+                        <ul class="swatch-row">
+                            ${swatch('', t('studio.new.accentAuto'))}
+                            ${palette.map((hex) => swatch(hex, t('studio.new.accentUse', { hex })))}
+                        </ul>
+                        <div class="field-row studio-accent-custom">
+                            <label class="sr-only" for="studio-accent">${t('studio.new.accentCustom')}</label>
+                            <input class="field field-mono" id="studio-accent" name="accent" dir="ltr" autocomplete="off"
+                                   placeholder="#RRGGBB" maxlength="7" spellcheck="false" value="${accent}"
+                                   data-input="studio:accentTyped" data-picker="studio-accent-picker"
+                                   aria-describedby="studio-accent-hint">
+                            <input type="color" class="studio-color" id="studio-accent-picker" value="${accent ? accent.toLowerCase() : this.paletteStart()}"
+                                   data-input="studio:accentPicked" data-target="studio-accent"
+                                   aria-label="${t('studio.new.accentPick')}" title="${t('studio.new.accentPick')}">
                         </div>
-                    </div>
-                    <p class="studio-progress hidden" id="studio-gen-progress"></p>
-                </fieldset>
-            </form>
+                        <p class="form-hint" id="studio-accent-hint">${t('studio.new.accentHint')}</p>
+                    </fieldset>
+                    <p class="form-hint">${t('studio.new.remembered')}</p>
+                </div>
+            </details>
         `;
+    },
+
+    /** The summary line before the fields exist (first paint), from the remembered choices. */
+    moreSummaryFrom(prefs) {
+        const keyword = String(this.newText.keyword || '').trim();
+        return [
+            prefs.angle === 'auto' ? t('studio.new.summaryAngleAuto') : this.angleLabel(prefs.angle),
+            t('studio.new.summarySlides', { n: UI.formatNumber(prefs.slides) }),
+            keyword ? t('studio.new.summaryKeyword', { keyword }) : t('studio.new.summaryKeywordAuto'),
+            prefs.accent ? t('studio.new.summaryAccent', { hex: prefs.accent }) : t('studio.new.summaryAccentAuto'),
+        ].join(' · ');
+    },
+
+    refreshMoreSummary() {
+        const el = document.getElementById('studio-more-summary');
+        if (el) el.textContent = this.moreSummary();
     },
 
     // ─── Lesson picker ───────────────────────────────────────────────────────
     /** Sections in the order the server listed their first lesson; intro and extras last-seen as they come. */
+    /** Every word of the search, in any order, against number, title and section; Arabic normalised. */
+    lessonMatches(lesson, query) {
+        const words = UI.normalizeArabic(query || '').split(' ').filter(Boolean);
+        if (!words.length) return true;
+        const hay = UI.normalizeArabic(`${lesson.lesson_no || ''} ${lesson.title || ''} ${lesson.section_title || ''}`);
+        return words.every((word) => hay.includes(word));
+    },
+
     lessonGroups() {
         const groups = [];
         const byKey = new Map();
         for (const lesson of this.lessons) {
-            if (!lesson) continue;
+            if (!lesson || !this.lessonMatches(lesson, this.lessonQuery)) continue;
             const hasSection = lesson.section_no !== null && lesson.section_no !== undefined;
             const key = hasSection ? `s:${lesson.section_no}` : `x:${lesson.section_title || ''}`;
             let group = byKey.get(key);
@@ -828,8 +1453,18 @@ const StudioPage = {
             return html`<p class="studio-empty-note">${this.lessonsLoaded ? t('studio.lessons.empty') : t('common.loading')}</p>`;
         }
         const full = this.selected.length >= this.MAX_LESSONS;
+        const groups = this.lessonGroups();
+        if (!groups.length) {
+            return html`
+                <div class="studio-no-match">
+                    <p class="studio-empty-note" dir="auto">${t('studio.lessons.noMatch', { query: this.lessonQuery })}</p>
+                    ${UI.button({ variant: 'ghost', size: 'sm', icon: 'x', label: t('studio.lessons.clearSearch'), action: 'studio:clearLessonSearch' })}
+                </div>
+            `;
+        }
+        const someNotIndexed = this.lessons.some((l) => l && !this.isPickable(l));
         return html`
-            ${this.lessonGroups().map((group) => html`
+            ${groups.map((group) => html`
                 <div class="lesson-group">
                     <h3 class="lesson-group-title" dir="auto">${group.title}</h3>
                     <ul class="lesson-chips">
@@ -837,7 +1472,7 @@ const StudioPage = {
                     </ul>
                 </div>
             `)}
-            <p class="form-hint">${t('studio.lessons.onlyIndexed')}</p>
+            ${someNotIndexed ? html`<p class="form-hint">${t('studio.lessons.onlyIndexed')}</p>` : ''}
         `;
     },
 
@@ -871,9 +1506,87 @@ const StudioPage = {
     },
 
     paintLessons() {
+        // From "nothing to pick" to a list (a scan or an index landed), or back: the
+        // source changes shape, and so does whether Generate can run.
+        const pickable = this.lessons.some((l) => this.isPickable(l));
+        const showingSetup = !!document.getElementById('studio-setup');
+        if (this.sourceMode() === 'lesson' && document.getElementById('studio-source-body') && showingSetup === pickable) {
+            this.paintNewCard();
+            return;
+        }
+        const list = document.getElementById('studio-lessons');
+        const top = list ? list.scrollTop : 0;
         this.paintRegion('studio-lessons', this.lessonPickerMarkup());
+        // Picking from the middle of a long list must not throw the list back to the top.
+        if (list) list.scrollTop = top;
+        this.paintRegion('studio-picked', this.pickedMarkup());
+        const note = document.getElementById('studio-index-note');
+        if (note) note.outerHTML = esc(this.indexNoteMarkup());
         const count = document.getElementById('studio-lessons-count');
         if (count) count.innerHTML = esc(this.countMarkup(this.selected.length, this.MAX_LESSONS));
+    },
+
+    lessonSearch(el) {
+        this.lessonQuery = String((el && el.value) || '');
+        this.paintRegion('studio-lessons', this.lessonPickerMarkup());
+    },
+
+    clearLessonSearch() {
+        this.lessonQuery = '';
+        const field = document.getElementById('studio-lesson-q');
+        if (field) {
+            field.value = '';
+            if (typeof field.focus === 'function') field.focus();
+        }
+        this.paintRegion('studio-lessons', this.lessonPickerMarkup());
+    },
+
+    /** Lesson or idea. The choice is remembered; typed text in either survives the switch. */
+    setMode(mode) {
+        const next = mode === 'idea' ? 'idea' : 'lesson';
+        this.mode = next;
+        this.savePrefs({ mode: next });
+        this.newError = null;
+        this.paintNewCard();
+        const target = document.getElementById(next === 'idea' ? 'studio-idea' : 'studio-lesson-q')
+            || document.getElementById(`studio-mode-${next}`);
+        if (target && typeof target.focus === 'function') target.focus();
+    },
+
+    /** Idea and keyword live on the page object, so a repaint (or a visit elsewhere) keeps them. */
+    newTextInput(el) {
+        const key = el && el.dataset ? el.dataset.key : '';
+        if (key !== 'idea' && key !== 'keyword') return;
+        this.newText[key] = String(el.value || '');
+        if (key === 'keyword') this.refreshMoreSummary();
+    },
+
+    rememberOption(el) {
+        if (!el) return;
+        if (el.id === 'studio-angle' && this.ANGLES.includes(el.value)) this.savePrefs({ angle: el.value });
+        if (el.id === 'studio-slides') this.savePrefs({ slides: Number(el.value) });
+        this.refreshMoreSummary();
+    },
+
+    /** An accent swatch: '' is "from my palette". */
+    pickAccent(el) {
+        const hex = String((el && el.dataset && el.dataset.hex) || '').toUpperCase();
+        if (hex && !this.ACCENT_RE.test(hex)) return;
+        const field = document.getElementById('studio-accent');
+        if (field) field.value = hex;
+        const picker = document.getElementById('studio-accent-picker');
+        if (picker && hex) picker.value = hex.toLowerCase();
+        this.markSwatches(hex);
+        this.savePrefs({ accent: hex });
+        this.refreshMoreSummary();
+    },
+
+    markSwatches(hex) {
+        const form = document.getElementById('studio-new-form');
+        if (!form || typeof form.querySelectorAll !== 'function') return;
+        form.querySelectorAll('.swatch-btn').forEach((b) => {
+            b.setAttribute('aria-pressed', String((b.dataset.hex || '').toUpperCase() === hex ? 'true' : 'false'));
+        });
     },
 
     toggleLesson(id) {
@@ -1070,9 +1783,15 @@ const StudioPage = {
         if (!this.ANGLES.includes(angle)) angle = 'auto';
         let slides = Math.round(Number(text('slides')) || this.SLIDES_DEFAULT);
         slides = Math.min(this.SLIDES_MAX, Math.max(this.SLIDES_MIN, slides));
-        const lessonIds = this.selected.slice(0, this.MAX_LESSONS);
+        // "From an idea" means the idea alone, even if lessons were picked before the switch.
+        const lessonMode = this.sourceMode() === 'lesson';
+        const lessonIds = lessonMode ? this.selected.slice(0, this.MAX_LESSONS) : [];
 
-        if (!lessonIds.length && !idea) return { ok: false, message: t('studio.new.needSource'), field: 'studio-idea' };
+        if (!lessonIds.length && !idea) {
+            return lessonMode
+                ? { ok: false, message: t('studio.new.needLesson'), field: 'studio-lesson-q' }
+                : { ok: false, message: t('studio.new.needSource'), field: 'studio-idea' };
+        }
         if (keyword && /\s/.test(keyword)) return { ok: false, message: t('studio.keywordOneWord'), field: 'studio-keyword' };
         if (accent && !this.ACCENT_RE.test(accent)) return { ok: false, message: t('studio.accentFormat'), field: 'studio-accent' };
 
@@ -1112,29 +1831,102 @@ const StudioPage = {
         const form = document.getElementById('studio-new-form');
         if (form) UI.clearInvalid(form);
         const field = fieldId ? document.getElementById(fieldId) : null;
+        // A field under "More options" cannot take focus while the section is folded.
+        const more = document.getElementById('studio-more');
+        if (field && more && typeof more.contains === 'function' && more.contains(field)) more.open = true;
         if (field) UI.markInvalid(field, 'studio-new-error-strip');
+        if (error && error.message) Motion.announce(error.message);
     },
 
-    /** The whole form, chips and "Plan my week" included, while a carousel is being written. */
-    setNewFormLocked(locked) {
-        const fields = document.getElementById('studio-new-fields');
-        if (fields) fields.disabled = !!locked;
+    /** Is the operator looking at the Studio's home right now (not a draft, not Settings)? */
+    onStudioHome() {
+        return typeof App !== 'undefined' && App.currentPage === 'studio'
+            && !this.hashDraftId() && this.hashValue('tab') !== 'settings'
+            && !!document.getElementById('studio-new');
+    },
+
+    /** "1.1 · Why chat is dead · Tips · 8 slides": what is being written, said on the progress card. */
+    genSummary(input) {
+        const lessons = (input.lessonIds || []).map((id) => this.lessonById(id)).filter(Boolean);
+        const bits = [lessons.length
+            ? lessons.map((l) => this.lessonName(l)).join(' + ')
+            : t('studio.gen.fromIdea', { idea: String(input.idea || '').slice(0, 90) })];
+        if (input.angle && input.angle !== 'auto') bits.push(this.angleLabel(input.angle));
+        bits.push(t('studio.new.summarySlides', { n: UI.formatNumber(input.slides || this.SLIDES_DEFAULT) }));
+        return bits.join(' · ');
+    },
+
+    genStage(elapsed) {
+        let stage = 0;
+        this.GEN_STAGE_AT.forEach((at, i) => { if (elapsed >= at) stage = i; });
+        return stage;
+    },
+
+    genStageLabel(key, lessonMode) {
+        if (key === 'read' && !lessonMode) return t('studio.gen.stage.readIdea');
+        return t(`studio.gen.stage.${key}`);
+    },
+
+    genStagesMarkup() {
+        const g = this.gen || { stage: 0, lessonMode: true };
+        return this.GEN_STAGES.map((key, i) => {
+            const state = i < g.stage ? 'done' : i === g.stage ? 'current' : 'todo';
+            let mark = '';
+            if (state === 'done') mark = html`<i data-lucide="check" aria-hidden="true"></i>`;
+            else if (state === 'current') mark = html`<span class="spinner spinner-sm" aria-hidden="true"></span>`;
+            return html`
+                <li class="studio-stage is-${html.raw(state)}"${state === 'current' ? html.raw(' aria-current="step"') : ''}>
+                    <span class="studio-stage-mark" aria-hidden="true">${mark}</span>
+                    <span class="studio-stage-label">${this.genStageLabel(key, g.lessonMode)}</span>
+                    <span class="sr-only"> (${t(`studio.step.state.${state}`)})</span>
+                </li>
+            `;
+        });
+    },
+
+    /** Step 2: what is happening, how long it has taken, and that leaving is fine. */
+    genProgressMarkup() {
+        const g = this.gen || { startedAt: Date.now(), stage: 0, summary: '', lessonMode: true };
+        const elapsed = (Date.now() - g.startedAt) / 1000;
+        return html`
+            <div class="studio-progress-card" aria-busy="true">
+                <h2 class="section-title" id="studio-new-title">${t('studio.gen.title')}</h2>
+                ${g.summary ? html`<p class="text-meta studio-gen-summary" dir="auto">${g.summary}</p>` : ''}
+                <ol class="studio-stages" id="studio-gen-stages">${this.genStagesMarkup()}</ol>
+                <div class="studio-indeterminate" aria-hidden="true"><span></span></div>
+                <p class="studio-gen-time">
+                    <span class="studio-gen-clock" id="studio-gen-elapsed">${this.clock(elapsed)}</span>
+                    <span>· ${t('studio.gen.usually')}</span>
+                </p>
+                <p class="form-hint text-warning${elapsed < this.GEN_SLOW_S ? html.raw(' hidden') : ''}" id="studio-gen-slow">${t('studio.gen.slow')}</p>
+                <div class="studio-callout" role="note">
+                    <i data-lucide="info" aria-hidden="true"></i>
+                    <div class="studio-callout-body"><p>${t('studio.gen.leave')}</p></div>
+                </div>
+            </div>
+        `;
     },
 
     /**
-     * Generation runs synchronously on the server and can take two minutes, so
-     * the wait is shown as it happens: the verb on the button, and the elapsed
-     * time under it. The elapsed line is not a live region — a screen reader is
-     * told once that writing started, not once a second.
+     * The clock moves the stages, once a second; only a CHANGE of stage is
+     * announced, so a screen reader hears four sentences, not sixty numbers.
      */
     startGenTicker() {
         this.stopGenTicker();
-        const started = Date.now();
         const tick = () => {
-            const el = document.getElementById('studio-gen-progress');
-            if (!el) return;
-            el.classList.remove('hidden');
-            el.textContent = t('studio.new.writingElapsed', { time: this.clock((Date.now() - started) / 1000) });
+            const g = this.gen;
+            if (!g) return;
+            const elapsed = (Date.now() - g.startedAt) / 1000;
+            const clock = document.getElementById('studio-gen-elapsed');
+            if (clock) clock.textContent = this.clock(elapsed);
+            const stage = this.genStage(elapsed);
+            if (stage !== g.stage) {
+                g.stage = stage;
+                this.paintRegion('studio-gen-stages', this.genStagesMarkup());
+                Motion.announce(this.genStageLabel(this.GEN_STAGES[stage], g.lessonMode));
+            }
+            const slow = document.getElementById('studio-gen-slow');
+            if (slow) slow.classList.toggle('hidden', elapsed < this.GEN_SLOW_S);
         };
         tick();
         this._genTimer = setInterval(tick, 1000);
@@ -1150,48 +1942,91 @@ const StudioPage = {
         }
         const restore = UI.formBusy(form, t('studio.new.writing'));
         if (!restore) return;
+        this.savePrefs({ mode: this.sourceMode(), angle: read.input.angle, slides: read.input.slides, accent: read.input.accent || '' });
+        try {
+            await this.runGeneration(read.input);
+        } finally {
+            restore();
+        }
+    },
+
+    /**
+     * POST /drafts, with the page free while it runs (up to two minutes). The
+     * request belongs to this object, so leaving the page does not cancel it and
+     * coming back finds the progress card where it was. The answer opens the
+     * editor only if the operator is still on the Studio's home; anywhere else a
+     * toast says it is ready, and the draft is in the grid.
+     */
+    async runGeneration(input) {
         const seq = this._seq;
+        const tenant = this._tenantEpoch;
         this.generating = true;
         this.newError = null;
-        this.paintNewError();
-        this.setNewFormLocked(true);
+        this.gen = {
+            startedAt: Date.now(),
+            lessonMode: Array.isArray(input.lessonIds) && input.lessonIds.length > 0,
+            summary: this.genSummary(input),
+            stage: 0,
+        };
+        this.paintNewCard();
         this.startGenTicker();
-        Motion.announce(t('studio.new.writing'));
+        Motion.announce(t('studio.gen.started'));
+        // The server saved a `generating` row before it started writing: show it.
+        setTimeout(() => {
+            if (this.generating && document.getElementById('studio-drafts')) this.reloadDrafts();
+        }, 1500);
+        let opened = false;
         try {
-            const res = await API.createStudioDraft(read.input);
+            const res = await API.createStudioDraft(input);
+            // Written for the tenant the operator has since switched away from: nothing here is theirs now.
+            if (tenant !== this._tenantEpoch) return;
             const draft = res && res.draft;
             if (!draft || !draft.id) throw new Error(t('error.unexpected'));
             if (draft.status === 'failed') {
                 // Saved, but with nothing to edit: say why here, and let the grid show the row.
                 this.newError = { message: t('studio.new.failed', { message: draft.error || t('error.unexpected') }) };
-                if (seq === this._seq) {
-                    this.paintNewError();
-                    this.reloadDrafts();
-                }
                 return;
             }
             this.selected = [];
-            UI.toast(t('studio.new.done'));
-            if (seq === this._seq && typeof App !== 'undefined' && typeof App.goWithQuery === 'function') {
+            this.newText = { idea: '', keyword: '' };
+            if ((seq === this._seq || this.onStudioHome()) && typeof App !== 'undefined' && typeof App.goWithQuery === 'function') {
+                UI.toast(t('studio.new.done'));
+                opened = true;
                 App.goWithQuery('studio', { draft: draft.id });
+            } else {
+                UI.toast(t('studio.new.doneElsewhere', { title: this.draftTitle(draft) }));
             }
         } catch (err) {
-            this.newError = { message: (err && err.message) || t('error.unexpected'), problems: this.problemList(err) };
-            if (seq === this._seq) this.paintNewError();
+            if (tenant === this._tenantEpoch) {
+                this.newError = { message: (err && err.message) || t('error.unexpected'), problems: this.problemList(err) };
+            }
         } finally {
-            this.generating = false;
-            this.stopGenTicker();
-            const progress = document.getElementById('studio-gen-progress');
-            if (progress) progress.classList.add('hidden');
-            this.setNewFormLocked(false);
-            restore();
+            const stale = tenant !== this._tenantEpoch;
+            if (!stale) {
+                this.generating = false;
+                this.gen = null;
+                this.stopGenTicker();
+            }
+            if (!opened && !stale) {
+                // Back to step 1, with the reason (if any) where it was asked for.
+                if (document.getElementById('studio-new')) this.paintNewCard();
+                this.paintNewError();
+                if (this.newError) Motion.announce(this.newError.message);
+                if (document.getElementById('studio-drafts')) this.reloadDrafts();
+            }
         }
     },
 
     /** The colour picker writes the hex into the text field, which is what is sent. */
     accentPicked(el) {
         const target = el && el.dataset ? document.getElementById(el.dataset.target || '') : null;
-        if (target) target.value = String(el.value || '').toUpperCase();
+        const value = String((el && el.value) || '').toUpperCase();
+        if (target) target.value = value;
+        if (this.ACCENT_RE.test(value)) {
+            this.markSwatches(value);
+            this.savePrefs({ accent: value });
+        }
+        this.refreshMoreSummary();
     },
 
     /** …and a valid typed hex moves the picker, so the two never disagree. */
@@ -1199,6 +2034,11 @@ const StudioPage = {
         const picker = el && el.dataset ? document.getElementById(el.dataset.picker || '') : null;
         const value = String((el && el.value) || '').trim();
         if (picker && this.ACCENT_RE.test(value)) picker.value = value.toLowerCase();
+        if (!value || this.ACCENT_RE.test(value)) {
+            this.markSwatches(value.toUpperCase());
+            this.savePrefs({ accent: value.toUpperCase() });
+        }
+        this.refreshMoreSummary();
     },
 
     // ─── Plan my week ────────────────────────────────────────────────────────
@@ -1457,9 +2297,39 @@ const StudioPage = {
             return this.errorHost(this.draftsError, t('studio.drafts.errorTitle'), 'drafts');
         }
         if (!this.drafts.length) {
-            return html`<div class="surface pad-5">${Admin.emptyState('layers', t('studio.drafts.emptyTitle'), t('studio.drafts.emptyBody'))}</div>`;
+            // Not a congratulation and not a blank: what a draft will look like, and how to get one.
+            return html`
+                <div class="surface pad-5 studio-drafts-empty" id="studio-drafts-empty">
+                    <div class="studio-empty-copy">
+                        <p class="studio-empty-title">${t('studio.drafts.emptyTitle')}</p>
+                        <p class="form-hint">${t('studio.drafts.emptyBody')}</p>
+                    </div>
+                    <figure class="draft-example" id="studio-drafts-example">
+                        <div class="draft-card surface draft-card--example" aria-hidden="true">
+                            <span class="draft-cover draft-cover--example"><span class="draft-example-title">${t('studio.drafts.exampleCover')}</span></span>
+                            <span class="draft-card-body">
+                                <span class="draft-card-head">
+                                    <span class="draft-title">${t('studio.drafts.exampleTitle')}</span>
+                                    <span class="status-pill sent">${t('studio.state.ready')}</span>
+                                </span>
+                                <span class="draft-card-tags">
+                                    <span class="chip">${t('studio.drafts.slides', { n: UI.formatNumber(this.SLIDES_DEFAULT) })}</span>
+                                    <span class="chip">${t('studio.drafts.exampleWhere')}</span>
+                                </span>
+                            </span>
+                        </div>
+                        <figcaption class="form-hint">${t('studio.drafts.exampleCaption')}</figcaption>
+                    </figure>
+                </div>
+            `;
         }
         return html`<ul class="card-grid studio-draft-grid">${this.drafts.map((d) => this.draftCard(d))}</ul>`;
+    },
+
+    /** What a busy draft is waiting on, in words: writing, drawing, or the Mac. */
+    draftStageText(draft) {
+        if (!draft || draft.status === 'generating') return t('studio.drafts.stageWriting');
+        return this.workerOnline() ? t('studio.drafts.stageDrawing') : t('studio.drafts.stageWaiting');
     },
 
     draftCard(draft) {
@@ -1500,6 +2370,7 @@ const StudioPage = {
                             ${keyword ? html`<span class="chip chip-accent" dir="auto">${keyword}</span>` : ''}
                         </p>
                     ` : ''}
+                    ${busy ? html`<p class="draft-card-stage"><span class="spinner spinner-sm" aria-hidden="true"></span> ${this.draftStageText(draft)}</p>` : ''}
                     ${draft.status === 'failed' && draft.error ? html`<p class="post-card-error" dir="auto">${draft.error}</p>` : ''}
                 </div>
             </li>
@@ -1526,7 +2397,7 @@ const StudioPage = {
      * over from it. Missing parts are filled in the same way on both sides of the
      * baseline, so a draft does not open "dirty" because the server left one out.
      */
-    loadDraft(res) {
+    loadDraft(res, opts) {
         const draft = (res && res.draft) || null;
         this.draft = draft;
         if (res && Array.isArray(res.lessons)) this.draftLessons = res.lessons;
@@ -1545,6 +2416,66 @@ const StudioPage = {
         this._lastDirty = false;
         this.problems = null;
         this.saveError = null;
+        if (opts && opts.restore) this.restoreEdits();
+        this.selectedSlide = this.clampSlide(this.selectedSlide);
+    },
+
+    editsKey() {
+        return this.draft && this.draft.id ? `${this.EDITS_PREFIX}${this.draft.id}` : '';
+    },
+
+    /**
+     * On opening a draft: edits this browser kept and never saved come back. Made
+     * against the same server copy, they are simply restored (and say so); made
+     * against an older one, they are offered, because applying them blind could
+     * undo a change made since — a rewrite, a save from another tab.
+     */
+    restoreEdits() {
+        this.restored = null;
+        const key = this.editsKey();
+        if (!key || !this.work || !this.work.carousel || this.draft.status === 'scheduled') return;
+        const stored = this.storeGet(key);
+        if (!stored || !stored.work || !stored.work.carousel || !Array.isArray(stored.work.carousel.slides)) return;
+        if (JSON.stringify(stored.work) === this._baseline) {
+            this.storeRemove(key);
+            return;
+        }
+        if (stored.baseline === this._baseline) {
+            this.work = this.clone(stored.work);
+            this.restored = { state: 'restored' };
+        } else {
+            this.restored = { state: 'stale', work: stored.work };
+        }
+    },
+
+    /** A copy of the working edits after every change; none once they are saved or thrown away. */
+    persistEdits() {
+        const key = this.editsKey();
+        if (!key || !this.work) return;
+        if (this.isDirty()) this.storeSet(key, { baseline: this._baseline, work: this.work, at: new Date().toISOString() });
+        else this.storeRemove(key);
+    },
+
+    forgetEdits() {
+        const key = this.editsKey();
+        if (key) this.storeRemove(key);
+        this.restored = null;
+    },
+
+    applyRestored() {
+        if (!this.restored || !this.restored.work || this.readOnly()) return;
+        this.work = this.clone(this.restored.work);
+        this.restored = { state: 'restored' };
+        this.selectedSlide = this.clampSlide(this.selectedSlide);
+        this.persistEdits();
+        this.paintEditor();
+        Motion.announce(t('studio.restore.applied'));
+    },
+
+    dropRestored() {
+        this.forgetEdits();
+        this.paintNotices();
+        Motion.announce(t('studio.restore.dropped'));
     },
 
     isDirty() {
@@ -1595,8 +2526,9 @@ const StudioPage = {
             return;
         }
 
-        this.loadDraft(draft.value);
+        this.loadDraft(draft.value, { restore: true });
         this.paintEditor();
+        this.bindKeys('editor');
         this.startStatusTimer(seq);
         this.startPoll(seq);
         if (this.draft.status !== 'scheduled') this.loadSlots(seq);
@@ -1683,24 +2615,40 @@ const StudioPage = {
         container.innerHTML = esc(this.editorMarkup());
         UI.icons(container);
         this.wireErrors(container);
+        this.applySwatches(container);
         UI.restoreFocus(focus);
+        this.wirePreview();
+        this.syncRenderTicker();
     },
 
+    /**
+     * Preview first: the phone and the slide rail on one side (on top, on a
+     * phone), the chosen slide's form on the other, then the caption, the
+     * comment automation and the schedule — the order a post is checked in.
+     */
     editorMarkup() {
         const editable = !!(this.work && this.work.carousel);
+        const ro = this.readOnly();
         return html`
-            <div class="page-toolbar">${this.backLink()}</div>
-            ${this.statusSection()}
+            <div class="page-toolbar studio-toolbar">
+                ${this.backLink()}
+                <div id="studio-stepper">${this.stepperMarkup(this.editorStep())}</div>
+            </div>
             <section class="surface pad-5 studio-editor-head" id="studio-editor-head" aria-labelledby="studio-editor-title">
                 ${this.editorHeadMarkup()}
             </section>
+            <div id="studio-notices" class="studio-notices">${this.noticesMarkup()}</div>
             <div class="studio-editor">
-                <section class="surface pad-4 studio-area-previews" id="studio-previews" aria-labelledby="studio-previews-title">
-                    ${this.previewsMarkup()}
-                </section>
+                <div class="studio-area-previews">
+                    <section class="surface pad-4 studio-preview-panel" id="studio-previews" aria-labelledby="studio-previews-title">
+                        ${this.previewsMarkup()}
+                    </section>
+                    ${editable ? html`<section class="surface pad-4 studio-look" id="studio-look" aria-label="${t('studio.look.label')}">${this.lookMarkup()}</section>` : ''}
+                </div>
                 <div class="studio-area-main">
                     ${editable ? html`
-                        <section class="surface pad-4" id="studio-slides" aria-labelledby="studio-slides-title">
+                        <div id="studio-problems">${this.problemsMarkup()}</div>
+                        <section class="surface pad-4 studio-slide-editor" id="studio-slides" aria-labelledby="studio-slides-title">
                             ${this.slidesMarkup()}
                         </section>
                         <section class="surface pad-4" id="studio-captions" aria-labelledby="studio-captions-title">
@@ -1709,18 +2657,18 @@ const StudioPage = {
                         <section class="surface pad-4" id="studio-campaign" aria-labelledby="studio-campaign-title">
                             ${this.campaignMarkup()}
                         </section>
-                        <div class="studio-savebar surface" id="studio-savebar">${this.saveBarMarkup()}</div>
                     ` : html`
                         <section class="surface pad-5">
                             <p class="studio-empty-note">${this.draft && this.draft.status === 'generating'
                                 ? t('studio.editor.stillWriting') : t('studio.editor.noCarousel')}</p>
                         </section>
                     `}
+                    <section class="surface pad-4 studio-area-schedule" id="studio-schedule" aria-labelledby="studio-schedule-title">
+                        ${this.scheduleMarkup()}
+                    </section>
                 </div>
-                <section class="surface pad-4 studio-area-schedule" id="studio-schedule" aria-labelledby="studio-schedule-title">
-                    ${this.scheduleMarkup()}
-                </section>
             </div>
+            ${editable && !ro ? html`<div class="studio-savebar surface" id="studio-savebar">${this.saveBarMarkup()}</div>` : ''}
             ${this.draft && this.draft.status !== 'scheduled' ? html`
                 <div class="studio-danger">
                     ${UI.button({
@@ -1732,8 +2680,15 @@ const StudioPage = {
         `;
     },
 
-    paintHead() { this.paintRegion('studio-editor-head', this.editorHeadMarkup()); },
-    paintPreviews() { this.paintRegion('studio-previews', this.previewsMarkup()); },
+    paintHead() {
+        this.paintRegion('studio-editor-head', this.editorHeadMarkup());
+        this.paintStepper(this.editorStep());
+    },
+    paintPreviews() {
+        this.paintRegion('studio-previews', this.previewsMarkup());
+        this.wirePreview();
+        this.syncRenderTicker();
+    },
     paintSlides(focusKey) {
         const host = this.paintRegion('studio-slides', this.slidesMarkup());
         if (host && focusKey) {
@@ -1745,26 +2700,33 @@ const StudioPage = {
     paintCampaign() { this.paintRegion('studio-campaign', this.campaignMarkup()); },
     paintSaveBar() { this.paintRegion('studio-savebar', this.saveBarMarkup()); },
     paintSchedule() { this.paintRegion('studio-schedule', this.scheduleMarkup()); },
+    paintNotices() { this.paintRegion('studio-notices', this.noticesMarkup()); },
+    paintLook() { this.paintRegion('studio-look', this.lookMarkup()); },
+    paintRenderState() { this.paintRegion('studio-render-state', this.renderStateMarkup()); },
+    paintProblemsPanel() { this.paintRegion('studio-problems', this.problemsMarkup()); },
 
     editorHeadMarkup() {
         const d = this.draft || {};
         const lessons = this.draftLessons || [];
         const canRender = !!(d.carousel && d.status === 'failed');
+        const canRegenerate = !!d.input && d.status !== 'scheduled' && d.status !== 'generating';
         return html`
             <div class="studio-editor-titlebar">
                 <h2 class="studio-editor-title" id="studio-editor-title" dir="auto">${this.draftTitle(d)}</h2>
-                ${this.statusPill(d.status)}
+                <div class="row row--wrap gap-2">
+                    ${this.statusPill(d.status)}
+                    ${canRegenerate ? UI.button({
+                        variant: 'ghost', size: 'sm', icon: 'wand-sparkles', label: t('studio.regen.button'),
+                        action: 'studio:openRegenerate', id: 'studio-regen',
+                    }) : ''}
+                </div>
             </div>
-            <p class="post-card-meta">
+            <p class="post-card-meta studio-head-meta">
                 <i data-lucide="clock" aria-hidden="true"></i>
                 <span>${t('studio.drafts.created', { when: UI.formatDateTime(d.created_at) })}</span>
+                ${lessons.map((l) => html`<span class="chip">${UI.ltr(l.lesson_no || '')} <span dir="auto">${l.title || ''}</span></span>`)}
+                ${d.input && d.input.idea ? html`<span class="text-meta" dir="auto">${t('studio.plan.idea', { idea: d.input.idea })}</span>` : ''}
             </p>
-            ${lessons.length ? html`
-                <p class="draft-card-tags">
-                    ${lessons.map((l) => html`<span class="chip">${UI.ltr(l.lesson_no || '')} <span dir="auto">${l.title || ''}</span></span>`)}
-                </p>
-            ` : ''}
-            ${d.input && d.input.idea ? html`<p class="text-meta" dir="auto">${t('studio.plan.idea', { idea: d.input.idea })}</p>` : ''}
             ${d.status === 'failed' ? html`
                 ${UI.errorStrip(d.error || t('error.unexpected'), canRender ? t('studio.editor.failedHint') : '', 'studio-draft-error')}
                 ${canRender ? html`<div class="row row--wrap gap-2 mbs-4">${UI.button({
@@ -1776,69 +2738,325 @@ const StudioPage = {
         `;
     },
 
+    /** Restored edits, and the Undo for a deleted slide: things to know now, with a way back. */
+    noticesMarkup() {
+        const out = [];
+        const r = this.restored;
+        if (r && r.state === 'restored') {
+            out.push(html`
+                <div class="studio-callout" role="status">
+                    <i data-lucide="history" aria-hidden="true"></i>
+                    <div class="studio-callout-body studio-callout-row">
+                        <p>${t('studio.restore.restored')}</p>
+                        ${UI.button({ variant: 'ghost', size: 'sm', icon: 'rotate-ccw', label: t('studio.restore.discard'), action: 'studio:discard', id: 'studio-restore-discard' })}
+                    </div>
+                </div>
+            `);
+        } else if (r && r.state === 'stale') {
+            out.push(html`
+                <div class="studio-callout is-warning" role="status">
+                    <i data-lucide="history" aria-hidden="true"></i>
+                    <div class="studio-callout-body studio-callout-row">
+                        <p>${t('studio.restore.stale')}</p>
+                        <span class="row row--wrap gap-2">
+                            ${UI.button({ variant: 'secondary', size: 'sm', label: t('studio.restore.apply'), action: 'studio:applyRestored', id: 'studio-restore-apply' })}
+                            ${UI.button({ variant: 'ghost', size: 'sm', label: t('studio.restore.drop'), action: 'studio:dropRestored', id: 'studio-restore-drop' })}
+                        </span>
+                    </div>
+                </div>
+            `);
+        }
+        if (this.undo) {
+            out.push(html`
+                <div class="studio-callout studio-undo" role="status">
+                    <i data-lucide="undo-2" aria-hidden="true"></i>
+                    <div class="studio-callout-body studio-callout-row">
+                        <p>${this.undo.message}</p>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'undo-2', label: t('studio.undo.button'), action: 'studio:undo', id: 'studio-undo' })}
+                    </div>
+                </div>
+            `);
+        }
+        return out;
+    },
+
     previewTabButton(tab, icon, label) {
-        const active = this.previewTab === tab;
-        return html`
-            <button type="button" id="studio-preview-${tab}" aria-pressed="${active ? 'true' : 'false'}"
-                    class="btn btn-sm ${active ? html.raw('btn-primary') : html.raw('btn-ghost')}"
-                    data-action="studio:previewTab" data-tab="${tab}">
-                <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
-            </button>
-        `;
+        return this.segButton({
+            id: `studio-preview-${tab}`, action: 'studio:previewTab', data: `data-tab="${tab}"`,
+            icon, label, pressed: this.previewTab === tab,
+        });
+    },
+
+    slideCount() {
+        const slides = this.work && this.work.carousel && Array.isArray(this.work.carousel.slides) ? this.work.carousel.slides : null;
+        if (slides) return slides.length;
+        const render = this.draft && this.draft.render;
+        return render && Array.isArray(render.ig) && render.ig.length ? render.ig.length : this.SLIDES_DEFAULT;
+    },
+
+    clampSlide(i) {
+        const n = this.slideCount();
+        return Math.min(Math.max(0, Math.round(Number(i)) || 0), Math.max(0, n - 1));
+    },
+
+    renderedUrls(tab) {
+        const render = (this.draft && this.draft.render) || {};
+        return (Array.isArray(render[tab]) ? render[tab] : []).map((u) => safeUrl(u));
     },
 
     previewsMarkup() {
-        const d = this.draft || {};
         const tab = this.previewTab === 'tt' ? 'tt' : 'ig';
-        const render = d.render || {};
-        const urls = (Array.isArray(render[tab]) ? render[tab] : []).map((u) => safeUrl(u)).filter(Boolean);
-        const busy = this.isBusyStatus(d.status);
-        const count = (this.work && this.work.carousel && this.work.carousel.slides.length) || this.SLIDES_DEFAULT;
-        const platform = tab === 'tt' ? t('studio.preview.tt') : t('studio.preview.ig');
-        let body;
-        if (busy) {
-            const skeletons = [];
-            for (let i = 0; i < count; i++) skeletons.push(html`<li class="preview-slide"><span class="skel skel-block"></span></li>`);
-            body = html`
-                <p class="studio-progress" role="status">
-                    <span class="spinner spinner-sm" aria-hidden="true"></span>
-                    ${d.status === 'generating' ? t('studio.preview.generating') : t('studio.preview.rendering')}
-                </p>
-                ${!this.workerOnline() && d.status === 'rendering' ? html`<p class="form-hint text-warning">${t('studio.preview.waitingForMac')}</p>` : ''}
-                <div class="preview-scroller" aria-hidden="true">
-                    <ol class="preview-strip preview-strip--${tab}">${skeletons}</ol>
-                </div>
-            `;
-        } else if (urls.length) {
-            body = html`
-                <div class="preview-scroller" role="region" tabindex="0"
-                     aria-label="${t('studio.preview.stripLabel', { platform, n: urls.length })}">
-                    <ol class="preview-strip preview-strip--${tab}">
-                        ${urls.map((url, i) => html`
-                            <li class="preview-slide">
-                                <img src="${url}" alt="${t('studio.preview.slide', { n: i + 1, total: urls.length })}" loading="lazy" decoding="async">
-                                <span class="slide-num" aria-hidden="true">${UI.formatNumber(i + 1)}</span>
-                            </li>
-                        `)}
-                    </ol>
-                </div>
-                <p class="text-meta">
-                    ${render.rendered_at ? t('studio.preview.renderedAt', { when: UI.relativeAge(render.rendered_at).text }) : ''}
-                    ${this.isDirty() ? html`<span class="text-warning"> ${t('studio.preview.stale')}</span>` : ''}
-                </p>
-            `;
-        } else {
-            body = html`<p class="studio-empty-note">${t('studio.preview.none')}</p>`;
-        }
+        const urls = this.renderedUrls(tab);
+        const count = this.slideCount();
+        const i = this.clampSlide(this.selectedSlide);
         return html`
             <div class="studio-section-head">
                 <h2 class="studio-panel-title" id="studio-previews-title">${t('studio.preview.title')}</h2>
-                <div class="segmented" role="group" aria-label="${t('studio.preview.format')}">
+                <div class="segmented studio-seg" role="group" aria-label="${t('studio.preview.format')}">
                     ${this.previewTabButton('ig', 'instagram', t('studio.preview.ig'))}
                     ${this.previewTabButton('tt', 'music-2', t('studio.preview.tt'))}
                 </div>
             </div>
-            ${body}
+            ${this.phoneMarkup(tab, urls, i, count)}
+            <p class="sr-only" id="studio-slide-live" aria-live="polite">${t('studio.preview.slide', { n: i + 1, total: count })}</p>
+            ${this.railMarkup(tab, urls, i, count)}
+            <div id="studio-render-state" class="studio-render-state">${this.renderStateMarkup()}</div>
+            ${this.readOnly() || !this.work || !this.work.carousel ? '' : this.addSlideMarkup()}
+        `;
+    },
+
+    /** The slide as a follower will see it: the platform's frame, the render, and the caption's start. */
+    phoneMarkup(tab, urls, i, count) {
+        const d = this.draft || {};
+        const busy = this.isBusyStatus(d.status);
+        const url = urls[i] || '';
+        const slide = this.work && this.work.carousel ? this.work.carousel.slides[i] : null;
+        const stale = !!url && (busy || this.isDirty());
+        const platform = tab === 'tt' ? t('studio.preview.tt') : t('studio.preview.ig');
+        const brand = (this.settings && this.settings.brand && this.settings.brand.name) || '';
+        const caps = (this.work && this.work.carousel && this.work.carousel.captions) || {};
+        const lang = this.contentLang();
+        const line = String((tab === 'tt' ? caps.tiktokTitle : caps.instagram) || '').split('\n')[0];
+        const stage = url
+            ? html`<img src="${url}" alt="${t('studio.preview.slideAlt', { n: i + 1, total: count, kind: this.kindLabel(slide && slide.kind) })}" decoding="async">`
+            : this.wireframeMarkup(slide, busy);
+        return html`
+            <div class="phone phone--${tab}" id="studio-phone">
+                ${tab === 'ig' ? html`
+                    <div class="phone-bar" aria-hidden="true">
+                        <span class="phone-avatar"></span>
+                        <span class="phone-handle" dir="auto">${brand}</span>
+                    </div>
+                ` : ''}
+                <div class="phone-stage${stale ? html.raw(' is-stale') : ''}" tabindex="0" role="group"
+                     aria-roledescription="${t('studio.preview.carousel')}"
+                     aria-label="${t('studio.preview.stageLabel', { platform, n: i + 1, total: count })}"
+                     aria-describedby="studio-stage-hint" data-action="studio:editSlide" data-slide="${i}">
+                    ${stage}
+                    ${stale ? html`<span class="phone-badge">${busy ? t('studio.preview.drawing') : t('studio.preview.lastRender')}</span>` : ''}
+                </div>
+                <p class="sr-only" id="studio-stage-hint">${t('studio.preview.stageHint')}</p>
+                <div class="phone-nav">
+                    <button type="button" class="icon-btn" id="studio-prev-slide" data-action="studio:prevSlide"
+                            aria-label="${t('studio.preview.prev')}" title="${t('studio.preview.prev')}" ${i === 0 ? html.raw('disabled') : ''}>
+                        <i data-lucide="chevron-left" aria-hidden="true"></i>
+                    </button>
+                    <span class="phone-count" aria-hidden="true">${UI.ltr(`${UI.formatNumber(i + 1)}/${UI.formatNumber(count)}`)}</span>
+                    <button type="button" class="icon-btn" id="studio-next-slide" data-action="studio:nextSlide"
+                            aria-label="${t('studio.preview.next')}" title="${t('studio.preview.next')}" ${i >= count - 1 ? html.raw('disabled') : ''}>
+                        <i data-lucide="chevron-right" aria-hidden="true"></i>
+                    </button>
+                </div>
+                ${line ? html`<p class="phone-caption user-content" dir="auto" lang="${lang}">${tab === 'ig' && brand ? html`<strong dir="auto">${brand}</strong> ` : ''}${line}</p>` : ''}
+            </div>
+        `;
+    },
+
+    /** No render yet: the slide's kind and its words, so the operator can still read what is on it. */
+    wireframeMarkup(slide, busy) {
+        const s = slide || {};
+        const words = s.title || s.value || s.promise || s.label || '';
+        return html`
+            <div class="phone-wire${busy ? html.raw(' is-busy') : ''}">
+                ${busy ? html`<span class="skel skel-block" aria-hidden="true"></span>` : ''}
+                <span class="phone-wire-kind">${this.kindLabel(s.kind)}</span>
+                ${words ? html`<span class="phone-wire-title user-content" dir="auto" lang="${this.contentLang()}">${words}</span>` : ''}
+            </div>
+        `;
+    },
+
+    /**
+     * The slides as tabs: each one selects its form and its preview. One tab stop;
+     * the arrow keys move along the rail in the reading direction.
+     */
+    railMarkup(tab, urls, i, count) {
+        const slides = this.work && this.work.carousel ? this.work.carousel.slides : [];
+        const busy = this.isBusyStatus(this.draft && this.draft.status);
+        const items = [];
+        for (let k = 0; k < count; k++) {
+            const slide = slides[k] || null;
+            const url = urls[k] || '';
+            const selected = k === i;
+            const flagged = !!(this.problems && (this.problems.slides.get(k) || []).length);
+            let thumb;
+            if (url) thumb = html`<img src="${url}" alt="" loading="lazy" decoding="async">`;
+            else if (busy) thumb = html`<span class="skel skel-block"></span>`;
+            else thumb = html`<span class="rail-wire">${this.kindLabel(slide && slide.kind)}</span>`;
+            const name = t('studio.rail.tab', { n: k + 1, kind: this.kindLabel(slide && slide.kind) });
+            items.push(html`
+                <li class="rail-item" role="presentation">
+                    <button type="button" role="tab" class="rail-tab${selected ? html.raw(' is-selected') : ''}${flagged ? html.raw(' has-problems') : ''}"
+                            id="st-${k}-tab" aria-selected="${selected ? 'true' : 'false'}" aria-controls="st-${k}"
+                            tabindex="${selected ? '0' : '-1'}" data-action="studio:selectSlide" data-slide="${k}"
+                            aria-label="${flagged ? t('studio.rail.tabProblems', { name }) : name}">
+                        ${thumb}
+                        <span class="slide-num" aria-hidden="true">${UI.formatNumber(k + 1)}</span>
+                        ${flagged ? html`<span class="rail-flag" aria-hidden="true"></span>` : ''}
+                    </button>
+                </li>
+            `);
+        }
+        return html`<ol class="slide-rail slide-rail--${tab}" role="tablist" aria-label="${t('studio.rail.label')}">${items}</ol>`;
+    },
+
+    addSlideMarkup() {
+        const total = this.slideCount();
+        return html`
+            <div class="studio-add-slide">
+                <label class="sr-only" for="studio-add-kind">${t('studio.slides.addKind')}</label>
+                <select class="select" id="studio-add-kind">
+                    ${this.SLIDE_KINDS.filter((k) => k !== 'cover' && k !== 'cta').map((k) => html`<option value="${k}" ${k === 'point' ? html.raw('selected') : ''}>${this.kindLabel(k)}</option>`)}
+                </select>
+                ${UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'plus', label: t('studio.slides.add'),
+                    action: 'studio:addSlide', id: 'studio-add-slide', disabled: total >= this.SLIDES_MAX,
+                    title: total >= this.SLIDES_MAX ? t('studio.slides.full', { max: this.SLIDES_MAX }) : '',
+                })}
+            </div>
+        `;
+    },
+
+    /**
+     * What the render is waiting on, from what the status can tell: the Mac is
+     * off, the job is queued, or it is being drawn. The elapsed time sits outside
+     * the live region, so it is shown every second and announced never.
+     */
+    renderStateMarkup() {
+        const d = this.draft || {};
+        const render = d.render || {};
+        if (d.status === 'rendering') {
+            const s = this.status || {};
+            const worker = s.worker || {};
+            const jobs = s.jobs || {};
+            const offline = !!this.status && worker.online !== true;
+            let text = t('studio.preview.rendering');
+            if (offline) text = t('studio.preview.waitingForMac');
+            else if ((Number(jobs.claimed) || 0) > 0) text = t('studio.render.drawing', { name: worker.name || t('studio.render.theWorker') });
+            const since = Date.parse(d.updated_at || '');
+            const elapsed = Number.isFinite(since) ? Math.max(0, (Date.now() - since) / 1000) : 0;
+            return html`
+                <div class="studio-render-line${offline ? html.raw(' is-warning') : ''}">
+                    <span class="spinner spinner-sm" aria-hidden="true"></span>
+                    <span role="status">${text}</span>
+                    <span class="studio-render-clock" id="studio-render-elapsed" aria-hidden="true">${this.clock(elapsed)}</span>
+                </div>
+                ${offline ? html`
+                    <p class="form-hint">${t('studio.render.offlineHint')}</p>
+                    <div class="row row--wrap gap-2">
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('studio.worker.retry'), action: 'studio:retryWorker', id: 'studio-render-retry' })}
+                    </div>
+                ` : ''}
+            `;
+        }
+        if (d.status === 'generating') {
+            return html`<p class="studio-progress" role="status"><span class="spinner spinner-sm" aria-hidden="true"></span> ${t('studio.preview.generating')}</p>`;
+        }
+        if (render.rendered_at) {
+            return html`
+                <p class="text-meta">
+                    ${t('studio.preview.renderedAt', { when: UI.relativeAge(render.rendered_at).text })}
+                    ${this.isDirty() ? html`<span class="text-warning"> ${t('studio.preview.stale')}</span>` : ''}
+                </p>
+            `;
+        }
+        return html`<p class="studio-empty-note">${t('studio.preview.none')}</p>`;
+    },
+
+    /** One second at a time while a render runs; nothing otherwise. */
+    syncRenderTicker() {
+        const rendering = !!(this.draft && this.draft.status === 'rendering');
+        if (!rendering) { this.stopRenderTicker(); return; }
+        if (this._renderTimer) return;
+        this._renderTimer = setInterval(() => {
+            const el = document.getElementById('studio-render-elapsed');
+            if (!el || !this.draft || this.draft.status !== 'rendering') { this.stopRenderTicker(); return; }
+            const since = Date.parse(this.draft.updated_at || '');
+            el.textContent = this.clock(Number.isFinite(since) ? Math.max(0, (Date.now() - since) / 1000) : 0);
+        }, 1000);
+    },
+
+    /**
+     * Swipe on the preview: the pointer, not a scroll, so the direction is the
+     * document's — in Arabic the next slide is to the left, as it is in the
+     * rendered carousel's own "swipe" hint.
+     */
+    wirePreview() {
+        const stage = document.querySelector && document.querySelector('.phone-stage');
+        if (!stage || stage.dataset.wired === '1' || typeof stage.addEventListener !== 'function') return;
+        stage.dataset.wired = '1';
+        let start = null;
+        stage.addEventListener('pointerdown', (e) => { start = { x: e.clientX, y: e.clientY }; });
+        stage.addEventListener('pointercancel', () => { start = null; });
+        stage.addEventListener('pointerup', (e) => {
+            if (!start) return;
+            const dx = e.clientX - start.x;
+            const dy = e.clientY - start.y;
+            start = null;
+            if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
+            StudioPage._swiped = true;
+            const forward = StudioPage.isRtl() ? dx > 0 : dx < 0;
+            StudioPage.selectSlide(StudioPage.selectedSlide + (forward ? 1 : -1), { focus: 'stage' });
+        });
+    },
+    _swiped: false,
+
+    /** The accent sits by the preview it colours: the palette as swatches, or any hex. */
+    lookMarkup() {
+        if (!this.work || !this.work.carousel) return '';
+        const accent = String(this.work.carousel.accent || '').toUpperCase();
+        const problems = this.fieldProblems('accent');
+        const ro = this.readOnly();
+        const palette = this.palette();
+        return html`
+            <div class="form-group studio-accent-row">
+                <span class="form-label" id="st-accent-label">${t('studio.new.accent')}</span>
+                ${palette.length ? html`
+                    <ul class="swatch-row" role="group" aria-labelledby="st-accent-label">
+                        ${palette.map((hex) => html`
+                            <li>
+                                <button type="button" class="swatch-btn" data-action="studio:accentSwatch" data-hex="${hex}"
+                                        aria-pressed="${hex === accent ? 'true' : 'false'}" aria-label="${t('studio.new.accentUse', { hex })}"
+                                        title="${hex}" ${ro ? html.raw('disabled') : ''}>
+                                    <span class="swatch-dot" data-color="${hex}"></span>
+                                </button>
+                            </li>
+                        `)}
+                    </ul>
+                ` : ''}
+                <div class="field-row">
+                    <label class="sr-only" for="st-accent">${t('studio.new.accentCustom')}</label>
+                    <input class="field field-mono" id="st-accent" dir="ltr" maxlength="7" spellcheck="false" autocomplete="off"
+                           value="${accent}" data-input="studio:accentField" data-picker="st-accent-picker"
+                           ${ro ? html.raw('disabled') : ''}
+                           ${problems.length ? html.raw('aria-invalid="true" aria-describedby="st-accent-problems"') : ''}>
+                    <input type="color" class="studio-color" id="st-accent-picker"
+                           value="${this.ACCENT_RE.test(accent) ? accent.toLowerCase() : this.paletteStart()}"
+                           data-input="studio:accentFieldPicked" data-target="st-accent"
+                           aria-label="${t('studio.new.accentPick')}" title="${t('studio.new.accentPick')}" ${ro ? html.raw('disabled') : ''}>
+                </div>
+                ${problems.length ? this.problemListMarkup('st-accent-problems', problems) : ''}
+                <p class="form-hint">${t('studio.look.hint')}</p>
+            </div>
         `;
     },
 
@@ -1892,12 +3110,19 @@ const StudioPage = {
         `;
     },
 
+    /** The kinds a middle slide can be switched between. The cover opens and the CTA closes, always. */
+    CONTENT_KINDS: Object.freeze(['point', 'list', 'compare', 'steps', 'prompt', 'stat', 'shot']),
+
+    /**
+     * Every slide's form is in the page, and only the chosen one is shown: a problem
+     * can point at a field on any slide, and typing is never lost to a hidden repaint.
+     */
     slidesMarkup() {
         const slides = this.work.carousel.slides;
         const total = slides.length;
-        const ro = this.readOnly();
         const outside = total < this.SLIDES_MIN || total > this.SLIDES_MAX;
         const general = this.fieldProblems('slides');
+        const i = this.clampSlide(this.selectedSlide);
         return html`
             <div class="studio-section-head">
                 <h2 class="studio-panel-title" id="studio-slides-title">${t('studio.slides.title')}</h2>
@@ -1905,48 +3130,13 @@ const StudioPage = {
             </div>
             <p class="form-hint">${t('studio.slides.rule', { min: this.SLIDES_MIN, max: this.SLIDES_MAX })}</p>
             ${general.length ? this.problemListMarkup('studio-slides-problems', general) : ''}
-            ${this.accentFieldMarkup()}
-            <ol class="slide-cards">
-                ${slides.map((slide, i) => this.slideCardMarkup(slide, i, total))}
-            </ol>
-            ${ro ? '' : html`
-                <div class="studio-add-slide">
-                    <label class="sr-only" for="studio-add-kind">${t('studio.slides.addKind')}</label>
-                    <select class="select" id="studio-add-kind">
-                        ${this.SLIDE_KINDS.map((k) => html`<option value="${k}" ${k === 'point' ? html.raw('selected') : ''}>${this.kindLabel(k)}</option>`)}
-                    </select>
-                    ${UI.button({
-                        variant: 'secondary', size: 'sm', icon: 'plus', label: t('studio.slides.add'),
-                        action: 'studio:addSlide', id: 'studio-add-slide', disabled: total >= this.SLIDES_MAX,
-                    })}
-                </div>
-            `}
-        `;
-    },
-
-    accentFieldMarkup() {
-        const accent = String(this.work.carousel.accent || '');
-        const problems = this.fieldProblems('accent');
-        const ro = this.readOnly();
-        return html`
-            <div class="form-group studio-accent-row">
-                <label class="form-label" for="st-accent">${t('studio.new.accent')}</label>
-                <div class="field-row">
-                    <input class="field field-mono" id="st-accent" dir="ltr" maxlength="7" spellcheck="false" autocomplete="off"
-                           value="${accent}" data-input="studio:accentField" data-picker="st-accent-picker"
-                           ${ro ? html.raw('disabled') : ''}
-                           ${problems.length ? html.raw('aria-invalid="true" aria-describedby="st-accent-problems"') : ''}>
-                    <input type="color" class="studio-color" id="st-accent-picker"
-                           value="${this.ACCENT_RE.test(accent) ? accent.toLowerCase() : this.paletteStart()}"
-                           data-input="studio:accentFieldPicked" data-target="st-accent"
-                           aria-label="${t('studio.new.accentPick')}" title="${t('studio.new.accentPick')}" ${ro ? html.raw('disabled') : ''}>
-                </div>
-                ${problems.length ? this.problemListMarkup('st-accent-problems', problems) : ''}
+            <div class="slide-cards">
+                ${slides.map((slide, k) => this.slideCardMarkup(slide, k, total, k === i))}
             </div>
         `;
     },
 
-    slideCardMarkup(slide, i, total) {
+    slideCardMarkup(slide, i, total, visible) {
         const ro = this.readOnly();
         const claimed = new Set();
         const ctx = { slide: slide || {}, index: i, claimed, ro };
@@ -1954,25 +3144,34 @@ const StudioPage = {
         const all = this.problems ? (this.problems.slides.get(i) || []) : [];
         const rest = all.filter((p) => !claimed.has(p.id));
         const n = i + 1;
-        const up = t('studio.slides.moveUp', { n });
-        const down = t('studio.slides.moveDown', { n });
+        const kind = ctx.slide.kind;
+        const fixed = kind === 'cover' || kind === 'cta';
+        const earlier = t('studio.slides.moveUp', { n });
+        const later = t('studio.slides.moveDown', { n });
+        const copy = t('studio.slides.duplicateN', { n });
         const remove = t('studio.slides.delete', { n });
+        const copyOff = fixed || total >= this.SLIDES_MAX;
         return html`
-            <li class="slide-card${all.length ? html.raw(' has-problems') : ''}" id="st-${i}" tabindex="-1" aria-labelledby="st-${i}-name">
+            <div class="slide-card${all.length ? html.raw(' has-problems') : ''}" id="st-${i}" role="tabpanel" tabindex="-1"
+                 aria-labelledby="st-${i}-name"${visible ? '' : html.raw(' hidden')}>
                 <div class="slide-card-head">
                     <span class="slide-card-num" aria-hidden="true">${UI.formatNumber(n)}</span>
-                    <h3 class="slide-card-name" id="st-${i}-name">${t('studio.slides.cardName', { n, kind: this.kindLabel(ctx.slide.kind) })}</h3>
+                    <h3 class="slide-card-name" id="st-${i}-name">${t('studio.slides.cardName', { n, kind: this.kindLabel(kind) })}</h3>
                     ${ro ? '' : html`
                         <div class="slide-card-actions">
-                            <!-- A vertical list: "up" is earlier in either reading direction, so
-                                 these arrows are the same in Arabic and English. -->
+                            <!-- Earlier and later, along the rail: the arrows point the reading
+                                 direction's way (mirrored in Arabic by the RTL icon rule). -->
                             <button type="button" class="icon-btn" id="st-${i}-up" data-action="studio:moveSlide" data-slide="${i}" data-dir="-1"
-                                    aria-label="${up}" title="${up}" ${i === 0 ? html.raw('disabled') : ''}>
-                                <i data-lucide="arrow-up" aria-hidden="true"></i>
+                                    aria-label="${earlier}" title="${earlier}" ${i === 0 ? html.raw('disabled') : ''}>
+                                <i data-lucide="arrow-left" aria-hidden="true"></i>
                             </button>
                             <button type="button" class="icon-btn" id="st-${i}-down" data-action="studio:moveSlide" data-slide="${i}" data-dir="1"
-                                    aria-label="${down}" title="${down}" ${i === total - 1 ? html.raw('disabled') : ''}>
-                                <i data-lucide="arrow-down" aria-hidden="true"></i>
+                                    aria-label="${later}" title="${later}" ${i === total - 1 ? html.raw('disabled') : ''}>
+                                <i data-lucide="arrow-right" aria-hidden="true"></i>
+                            </button>
+                            <button type="button" class="icon-btn" id="st-${i}-copy" data-action="studio:duplicateSlide" data-slide="${i}"
+                                    aria-label="${copy}" title="${fixed ? t('studio.slides.cantDuplicate') : copy}" ${copyOff ? html.raw('disabled') : ''}>
+                                <i data-lucide="copy" aria-hidden="true"></i>
                             </button>
                             ${UI.button({
                                 variant: 'ghost', size: 'sm', icon: 'sparkles', label: t('studio.slides.rewrite'),
@@ -1986,9 +3185,68 @@ const StudioPage = {
                         </div>
                     `}
                 </div>
+                ${ro || fixed ? '' : html`
+                    <div class="form-group slide-kind-row">
+                        <label class="form-label" for="st-${i}-kind">${t('studio.slides.kind')}</label>
+                        <select class="select" id="st-${i}-kind" data-change="studio:changeKind" data-slide="${i}" aria-describedby="st-${i}-kind-hint">
+                            ${this.withCurrent(this.CONTENT_KINDS, kind).map((k) => html`<option value="${k}" ${k === kind ? html.raw('selected') : ''}>${this.kindLabel(k)}</option>`)}
+                        </select>
+                        <p class="form-hint" id="st-${i}-kind-hint">${t('studio.slides.kindHint')}</p>
+                    </div>
+                `}
                 <div class="slide-card-body">${body}</div>
                 ${rest.length ? this.problemListMarkup(`st-${i}-problems`, rest) : ''}
-            </li>
+            </div>
+        `;
+    },
+
+    /** "Slide 3 · List": where a problem is, before the validator's own words. */
+    problemWhere(problem) {
+        const target = problem && problem.target;
+        if (!target) return '';
+        if (typeof target.slide === 'number') {
+            const slide = this.work && this.work.carousel ? this.work.carousel.slides[target.slide] : null;
+            return t('studio.problems.onSlide', { n: target.slide + 1, kind: this.kindLabel(slide && slide.kind) });
+        }
+        const where = {
+            'captions.instagram': 'studio.captions.instagram',
+            'captions.tiktokTitle': 'studio.captions.tiktokTitle',
+            'captions.tiktok': 'studio.captions.tiktok',
+            accent: 'studio.new.accent',
+            keyword: 'studio.campaign.keyword',
+            slides: 'studio.slides.title',
+        }[target.field];
+        return where ? t(where) : '';
+    },
+
+    /** Every problem the server named, each with the way to it. Slides on other tabs included. */
+    problemsMarkup() {
+        const p = this.problems;
+        if (!p || !p.all.length) return '';
+        return html`
+            <div class="studio-problems" id="studio-problems-box" tabindex="-1" role="alert" aria-labelledby="studio-problems-title">
+                <p class="studio-problems-title" id="studio-problems-title">
+                    <i data-lucide="alert-circle" aria-hidden="true"></i>
+                    ${t('studio.problems.title', { n: UI.formatNumber(p.all.length) })}
+                </p>
+                <ul class="problem-list">
+                    ${p.all.map((x) => {
+                        const where = this.problemWhere(x);
+                        return html`
+                            <li>
+                                <span class="problem-text">
+                                    ${where ? html`<strong class="problem-where">${where}</strong>` : ''}
+                                    <span class="problem-raw" dir="auto">${x.message}</span>
+                                </span>
+                                ${this.problemFocusId(x) ? UI.button({
+                                    variant: 'ghost', size: 'sm', label: t('studio.problems.show'),
+                                    action: 'studio:focusProblem', data: { problem: x.id },
+                                }) : ''}
+                            </li>
+                        `;
+                    })}
+                </ul>
+            </div>
         `;
     },
 
@@ -2346,42 +3604,51 @@ const StudioPage = {
         `;
     },
 
+    /** "⌘S" on a Mac, "Ctrl+S" elsewhere: shown beside Save, and in its tooltip. */
+    saveKeys() {
+        const nav = typeof navigator !== 'undefined' ? navigator : {};
+        const platform = String(nav.platform || nav.userAgent || '');
+        return /Mac|iPhone|iPad/i.test(platform) ? '⌘S' : 'Ctrl+S';
+    },
+
+    /**
+     * The action bar follows the operator down the page (and sits on the bottom
+     * edge of a phone). It holds exactly one primary action: Save while there are
+     * edits; otherwise the way to the schedule, which is the step's last action.
+     */
     saveBarMarkup() {
         if (this.readOnly()) return html`<p class="text-meta">${t('studio.editor.readOnly')}</p>`;
         const dirty = this.isDirty();
-        const p = this.problems;
+        const n = this.problems ? this.problems.all.length : 0;
+        const ready = !!(this.draft && this.draft.status === 'ready');
+        const keys = this.saveKeys();
         return html`
             ${this.saveError ? UI.errorStrip(this.saveError, '', 'studio-save-error') : ''}
-            ${p && p.all.length ? html`
-                <div class="studio-problems" id="studio-problems" tabindex="-1" role="alert" aria-labelledby="studio-problems-title">
-                    <p class="studio-problems-title" id="studio-problems-title">
-                        <i data-lucide="alert-circle" aria-hidden="true"></i>
-                        ${t('studio.problems.title', { n: UI.formatNumber(p.all.length) })}
-                    </p>
-                    <ul class="problem-list">
-                        ${p.all.map((x) => html`
-                            <li>
-                                <span dir="auto">${x.message}</span>
-                                ${this.problemFocusId(x) ? UI.button({
-                                    variant: 'ghost', size: 'sm', label: t('studio.problems.show'),
-                                    action: 'studio:focusProblem', data: { problem: x.id },
-                                }) : ''}
-                            </li>
-                        `)}
-                    </ul>
-                </div>
-            ` : ''}
             <div class="studio-savebar-row">
-                <p class="text-meta" id="studio-dirty" role="status">${dirty ? t('studio.editor.unsaved') : t('studio.editor.saved')}</p>
-                <div class="row row--wrap gap-2">
+                <p class="studio-dirty${dirty ? html.raw(' is-dirty') : ''}" id="studio-dirty" role="status">
+                    <span class="studio-dirty-dot" aria-hidden="true"></span>
+                    <span>${dirty ? t('studio.editor.unsaved') : t('studio.editor.saved')}</span>
+                    ${n ? html`<span class="text-danger">· ${t('studio.problems.title', { n: UI.formatNumber(n) })}</span>` : ''}
+                </p>
+                <div class="studio-savebar-actions">
+                    ${n ? UI.button({
+                        variant: 'ghost', size: 'sm', icon: 'alert-circle', label: t('studio.problems.showFirst'),
+                        action: 'studio:focusFirstProblem', id: 'studio-first-problem',
+                    }) : ''}
                     ${dirty ? UI.button({
                         variant: 'ghost', size: 'sm', icon: 'rotate-ccw', label: t('studio.editor.discard'),
                         action: 'studio:discard', id: 'studio-discard',
                     }) : ''}
-                    ${UI.button({
-                        variant: 'primary', icon: 'save', label: t('studio.editor.save'),
-                        action: 'studio:save', id: 'studio-save', disabled: !dirty,
-                    })}
+                    ${dirty ? html`
+                        ${UI.button({
+                            variant: 'primary', icon: 'save', label: t('studio.editor.save'),
+                            action: 'studio:save', id: 'studio-save', title: t('studio.editor.saveShortcut', { keys }),
+                        })}
+                        <kbd class="studio-kbd" aria-hidden="true">${keys}</kbd>
+                    ` : ready ? UI.button({
+                        variant: 'secondary', icon: 'calendar-check', label: t('studio.editor.toSchedule'),
+                        action: 'studio:goSchedule', id: 'studio-go-schedule',
+                    }) : ''}
                 </div>
             </div>
         `;
@@ -2394,6 +3661,105 @@ const StudioPage = {
         const planned = this.plannedSlots[String(this.draftId)];
         if (planned && slots.includes(planned)) return planned;
         return slots[0] || 'custom';
+    },
+
+    /** The tenant's own time zone (Settings → Schedule): the one its slots are written in. */
+    scheduleZone() {
+        const zone = this.settings && this.settings.schedule && this.settings.schedule.timezone;
+        if (typeof zone === 'string' && zone) {
+            try {
+                new Intl.DateTimeFormat('en-US', { timeZone: zone });
+                return zone;
+            } catch { /* not a zone this browser knows: fall back to the device's */ }
+        }
+        return this.deviceZone();
+    },
+
+    deviceZone() {
+        try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+    },
+
+    /** "Riyadh" / «الرياض»: the city part of an IANA zone, in the interface language when we have it. */
+    zoneCity(zone) {
+        const city = String(zone || 'UTC').split('/').pop().replace(/_/g, ' ');
+        const key = `studio.city.${city.replace(/\s+/g, '')}`;
+        const named = t(key);
+        return named && named !== key ? named : city;
+    },
+
+    /** "Thu 25 Sep, 9:00 PM" in the tenant's zone, which is the zone the slot was chosen in. */
+    zoneTime(iso) {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return '';
+        try {
+            return new Intl.DateTimeFormat(I18N.locale(), {
+                weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: this.scheduleZone(),
+            }).format(d);
+        } catch {
+            return UI.formatDateTime(iso);
+        }
+    },
+
+    /** A slot as the picker lists it: "Thu 25 Sep, 9:00 PM · Riyadh". */
+    slotOption(iso) {
+        return `${this.zoneTime(iso)} · ${this.zoneCity(this.scheduleZone())}`;
+    },
+
+    /**
+     * What pressing Schedule will do, in plain words, one line per destination.
+     * Read from the form as it stands, so it changes with every choice.
+     */
+    scheduleSummary(choice) {
+        const c = choice || {};
+        const lines = [];
+        const when = c.when ? t('studio.schedule.sumWhen', { time: this.zoneTime(c.when), city: this.zoneCity(this.scheduleZone()) }) : t('studio.schedule.sumNoTime');
+        lines.push({ icon: 'instagram', text: t('studio.schedule.sumMeta', { when }) });
+        if (c.tiktok === 'queue') lines.push({ icon: 'music-2', text: t('studio.schedule.sumTikTokQueue') });
+        else if (c.tiktok === 'scheduled') lines.push({ icon: 'music-2', text: t('studio.schedule.sumTikTokSame', { when }) });
+        else lines.push({ icon: 'music-2', text: t('studio.schedule.sumTikTokNone') });
+        const keyword = String((this.work && this.work.carousel && this.work.carousel.keyword) || '').trim();
+        if (keyword) {
+            lines.push({
+                icon: 'message-circle',
+                text: c.campaign ? t('studio.schedule.sumDm', { keyword }) : t('studio.schedule.sumNoDm', { keyword }),
+            });
+        }
+        return lines;
+    },
+
+    scheduleSummaryMarkup(choice) {
+        return html`
+            <p class="studio-summary-title">${t('studio.schedule.sumTitle')}</p>
+            <ul class="studio-summary-list">
+                ${this.scheduleSummary(choice).map((line) => html`
+                    <li><i data-lucide="${line.icon}" aria-hidden="true"></i><span dir="auto">${line.text}</span></li>
+                `)}
+            </ul>
+        `;
+    },
+
+    /** The form's current choice, for the summary; the same reading Schedule itself makes. */
+    scheduleChoice() {
+        const form = document.getElementById('studio-schedule-form');
+        const audited = this.tiktokAudited();
+        const fallback = { when: this.defaultSlot() === 'custom' ? null : this.defaultSlot(), tiktok: audited ? 'scheduled' : 'queue', campaign: !!(this.work && this.work.campaign && this.work.campaign.create) };
+        if (!form || typeof FormData === 'undefined' || typeof form.querySelector !== 'function') return fallback;
+        const read = this.readSchedule(form);
+        if (read.ok) return { when: read.body.scheduled_time, tiktok: read.body.tiktok, campaign: read.body.create_campaign };
+        const data = new FormData(form);
+        return { when: null, tiktok: String(data.get('tiktok') || fallback.tiktok), campaign: data.get('create_campaign') === 'on' };
+    },
+
+    refreshScheduleSummary() {
+        const choice = this.scheduleChoice();
+        const host = document.getElementById('studio-schedule-summary');
+        if (host) {
+            host.innerHTML = esc(this.scheduleSummaryMarkup(choice));
+            UI.icons(host);
+        }
+        const submit = document.getElementById('studio-schedule-submit');
+        const label = submit ? submit.querySelector('.studio-submit-label') : null;
+        if (label) label.textContent = choice.when ? t('studio.schedule.submitAt', { time: this.zoneTime(choice.when) }) : t('studio.schedule.submit');
     },
 
     scheduleMarkup() {
@@ -2411,6 +3777,8 @@ const StudioPage = {
         const chosen = this.defaultSlot();
         const create = !!(this.work && this.work.campaign && this.work.campaign.create);
         const tiktokDefault = audited ? 'scheduled' : 'queue';
+        const zone = this.scheduleZone();
+        const device = this.deviceZone();
         const radio = (value, label, hint) => html`
             <label class="tiktok-delivery-option">
                 <input type="radio" name="tiktok" value="${value}" ${value === tiktokDefault ? html.raw('checked') : ''}>
@@ -2420,29 +3788,34 @@ const StudioPage = {
                 </span>
             </label>
         `;
+        const choice = { when: chosen === 'custom' ? null : chosen, tiktok: tiktokDefault, campaign: create };
         return html`
             <h2 class="studio-panel-title" id="studio-schedule-title" tabindex="-1">${t('studio.schedule.title')}</h2>
             <form id="studio-schedule-form" data-submit="studio:schedule" novalidate>
                 <div class="form-group">
                     <label class="form-label" for="st-slot">${t('studio.schedule.slot')}</label>
-                    <select class="select" id="st-slot" name="slot" data-change="studio:slotChange" ${loading ? html.raw('disabled') : ''}>
+                    <select class="select" id="st-slot" name="slot" data-change="studio:slotChange" aria-describedby="st-slot-hint" ${loading ? html.raw('disabled') : ''}>
                         ${loading ? html`<option value="">${t('studio.schedule.loadingSlots')}</option>` : ''}
-                        ${slots.map((s) => html`<option value="${s}" ${s === chosen ? html.raw('selected') : ''}>${this.slotLabel(s)}${s === planned ? ` · ${t('studio.schedule.planned')}` : ''}</option>`)}
+                        ${slots.map((s) => html`<option value="${s}" ${s === chosen ? html.raw('selected') : ''}>${this.slotOption(s)}${s === planned ? ` · ${t('studio.schedule.planned')}` : ''}</option>`)}
                         ${loading ? '' : html`<option value="custom" ${chosen === 'custom' ? html.raw('selected') : ''}>${t('studio.schedule.custom')}</option>`}
                     </select>
                     <input type="datetime-local" class="field studio-custom-time${!loading && chosen === 'custom' ? '' : html.raw(' hidden')}"
                            id="st-slot-custom" name="custom_time" aria-label="${t('studio.schedule.customLabel')}"
+                           data-change="studio:scheduleChange" aria-describedby="st-slot-custom-hint"
                            value="${UI.toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000))}">
-                    <p class="form-hint">${this.slotsError ? t('studio.schedule.slotsFailed') : t('studio.schedule.slotHint')}</p>
+                    <p class="form-hint" id="st-slot-hint">${this.slotsError
+                        ? t('studio.schedule.slotsFailed')
+                        : t('studio.schedule.zoneHint', { city: this.zoneCity(zone), zone })}</p>
+                    ${zone !== device ? html`<p class="form-hint${chosen === 'custom' ? '' : html.raw(' hidden')}" id="st-slot-custom-hint">${t('studio.schedule.deviceZone', { zone: device })}</p>` : ''}
                 </div>
-                <fieldset class="tiktok-delivery">
+                <fieldset class="tiktok-delivery" data-change="studio:scheduleChange">
                     <legend class="form-label">${t('studio.schedule.tiktok')}</legend>
                     ${audited
                         ? radio('scheduled', t('studio.schedule.tiktokScheduled'), t('studio.schedule.tiktokScheduledHint'))
                         : radio('queue', t('studio.schedule.tiktokQueue'), t('studio.schedule.tiktokQueueHint'))}
                     ${radio('none', t('studio.schedule.tiktokNone'), t('studio.schedule.tiktokNoneHint'))}
                 </fieldset>
-                <div class="form-group check-row">
+                <div class="form-group check-row" data-change="studio:scheduleChange">
                     <input type="checkbox" id="st-sched-campaign" name="create_campaign" ${create ? html.raw('checked') : ''}
                            aria-describedby="st-sched-campaign-hint">
                     <span class="check-text">
@@ -2450,12 +3823,13 @@ const StudioPage = {
                         <span class="form-hint" id="st-sched-campaign-hint">${t('studio.campaign.createHint')}</span>
                     </span>
                 </div>
+                <div class="studio-summary" id="studio-schedule-summary" aria-live="polite">${this.scheduleSummaryMarkup(choice)}</div>
                 <div id="studio-schedule-error"></div>
                 ${blocked ? html`<p class="form-hint text-warning" id="studio-schedule-blocked">${blocked}</p>` : ''}
-                ${UI.button({
-                    variant: 'primary', type: 'submit', icon: 'calendar-check', label: t('studio.schedule.submit'),
-                    id: 'studio-schedule-submit', full: true, disabled: !!blocked,
-                })}
+                <button type="submit" class="btn btn-primary btn-full" id="studio-schedule-submit" ${blocked ? html.raw('disabled') : ''}>
+                    <i data-lucide="calendar-check" aria-hidden="true"></i>
+                    <span class="studio-submit-label">${choice.when ? t('studio.schedule.submitAt', { time: this.zoneTime(choice.when) }) : t('studio.schedule.submit')}</span>
+                </button>
             </form>
         `;
     },
@@ -2520,12 +3894,28 @@ const StudioPage = {
      * schedule panel (which schedules the LAST render, so it waits for a save).
      */
     markDirty() {
+        // Every edit is kept in this browser at once: a closed tab or a crash costs nothing.
+        this.persistEdits();
         const dirty = this.isDirty();
         if (dirty === this._lastDirty) return;
         this._lastDirty = dirty;
         this.paintSaveBar();
         this.paintPreviews();
         this.paintSchedule();
+    },
+
+    /** The caption's first line under the phone, kept in step with typing (text only, no repaint). */
+    refreshPhoneCaption() {
+        const el = document.querySelector && document.querySelector('.phone-caption');
+        if (!el || !this.work || !this.work.carousel) return;
+        const caps = this.work.carousel.captions || {};
+        const line = String((this.previewTab === 'tt' ? caps.tiktokTitle : caps.instagram) || '').split('\n')[0];
+        const strong = el.querySelector ? el.querySelector('strong') : null;
+        el.textContent = line;
+        if (strong && typeof document.createTextNode === 'function') {
+            el.insertBefore(document.createTextNode(' '), el.firstChild);
+            el.insertBefore(strong, el.firstChild);
+        }
     },
     _lastDirty: false,
 
@@ -2554,6 +3944,7 @@ const StudioPage = {
         this.setPath(this.work.carousel, path, String(el.value || ''));
         this.refreshCount(el);
         this.refreshLineChecks();
+        if (path === 'captions.instagram' || path === 'captions.tiktokTitle') this.refreshPhoneCaption();
         this.markDirty();
     },
 
@@ -2576,6 +3967,7 @@ const StudioPage = {
         this.work.carousel.keyword = value;
         this.work.campaign.keyword = value;
         this.refreshLineChecks();
+        this.refreshScheduleSummary();
         this.markDirty();
     },
 
@@ -2598,6 +3990,7 @@ const StudioPage = {
         this.work.carousel.accent = value;
         const picker = document.getElementById(el.dataset && el.dataset.picker ? el.dataset.picker : '');
         if (picker && this.ACCENT_RE.test(value)) picker.value = value.toLowerCase();
+        this.markLookSwatches(value.toUpperCase());
         this.markDirty();
     },
 
@@ -2607,10 +4000,122 @@ const StudioPage = {
         this.work.carousel.accent = value;
         const target = document.getElementById(el.dataset && el.dataset.target ? el.dataset.target : '');
         if (target) target.value = value;
+        this.markLookSwatches(value);
         this.markDirty();
     },
 
+    /** A palette swatch beside the preview: one click, the whole carousel's accent. */
+    accentSwatch(el) {
+        if (!el || !el.dataset || this.readOnly()) return;
+        const hex = String(el.dataset.hex || '').toUpperCase();
+        if (!this.ACCENT_RE.test(hex)) return;
+        this.work.carousel.accent = hex;
+        const field = document.getElementById('st-accent');
+        if (field) field.value = hex;
+        const picker = document.getElementById('st-accent-picker');
+        if (picker) picker.value = hex.toLowerCase();
+        this.markLookSwatches(hex);
+        this.markDirty();
+        Motion.announce(t('studio.look.changed', { hex }));
+    },
+
+    markLookSwatches(hex) {
+        const look = document.getElementById('studio-look');
+        if (!look || typeof look.querySelectorAll !== 'function') return;
+        look.querySelectorAll('.swatch-btn').forEach((b) => {
+            b.setAttribute('aria-pressed', (b.dataset.hex || '').toUpperCase() === hex ? 'true' : 'false');
+        });
+    },
+
+    // ─── Editor: choosing a slide ────────────────────────────────────────────
+    /**
+     * Show slide `index` in the preview and open its form. `focus` is where the
+     * keyboard goes: 'tab' (the rail), 'stage' (the preview), 'form' (the slide's
+     * first field), or nowhere.
+     */
+    selectSlide(index, opts) {
+        const o = opts || {};
+        const to = this.clampSlide(index);
+        const changed = to !== this.selectedSlide;
+        this.selectedSlide = to;
+        const panels = document.getElementById('studio-slides');
+        if (panels && typeof panels.querySelectorAll === 'function') {
+            panels.querySelectorAll('.slide-card[role="tabpanel"]').forEach((card) => {
+                card.hidden = card.id !== `st-${to}`;
+            });
+        }
+        this.paintPreviews();
+        this.revealTab(document.getElementById(`st-${to}-tab`));
+        if (changed) Motion.announce(t('studio.preview.slide', { n: to + 1, total: this.slideCount() }));
+        let target = null;
+        if (o.focus === 'tab') target = document.getElementById(`st-${to}-tab`);
+        else if (o.focus === 'stage') target = document.querySelector && document.querySelector('.phone-stage');
+        else if (o.focus === 'form') target = this.firstField(to);
+        if (target && typeof target.focus === 'function') target.focus({ preventScroll: o.focus !== 'form' });
+        if (o.focus === 'form' && target && typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'center' });
+    },
+
+    /**
+     * Keep the chosen thumbnail in view by scrolling the rail sideways, and only
+     * the rail: scrollIntoView would also move the page and the sticky column.
+     * The deltas are visual, so they are right in either direction.
+     */
+    revealTab(tab) {
+        const rail = tab && typeof tab.closest === 'function' ? tab.closest('.slide-rail') : null;
+        if (!rail || typeof rail.getBoundingClientRect !== 'function') return;
+        const r = rail.getBoundingClientRect();
+        const b = tab.getBoundingClientRect();
+        const pad = 8;
+        if (b.left < r.left) rail.scrollLeft -= (r.left - b.left) + pad;
+        else if (b.right > r.right) rail.scrollLeft += (b.right - r.right) + pad;
+    },
+
+    /** The slide's first words to edit — its body, not the "Slide type" control above them. */
+    firstField(index) {
+        const card = document.getElementById(`st-${index}`);
+        if (!card || typeof card.querySelector !== 'function') return card;
+        return card.querySelector('.slide-card-body input:not([disabled]):not([type="hidden"]):not([type="number"]), .slide-card-body textarea:not([disabled])')
+            || card.querySelector('input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled])')
+            || card;
+    },
+
+    prevSlide() { this.selectSlide(this.selectedSlide - 1, { focus: 'stage' }); },
+    nextSlide() { this.selectSlide(this.selectedSlide + 1, { focus: 'stage' }); },
+
+    /** A click on the preview opens that slide's form, beside it (below it on a phone). A swipe does not. */
+    editSlide(el) {
+        if (this._swiped) { this._swiped = false; return; }
+        const index = el && el.dataset ? Number(el.dataset.slide) : this.selectedSlide;
+        if (this.readOnly()) return;
+        this.selectSlide(index, { focus: 'form' });
+    },
+
+    goSchedule() {
+        const heading = document.getElementById('studio-schedule-title');
+        if (!heading) return;
+        if (typeof heading.scrollIntoView === 'function') heading.scrollIntoView({ block: 'start' });
+        if (typeof heading.focus === 'function') heading.focus({ preventScroll: true });
+    },
+
+    focusFirstProblem() {
+        const first = this.problems && this.problems.all.find((p) => this.problemFocusId(p));
+        if (first) this.focusProblem(first.id);
+        else {
+            const box = document.getElementById('studio-problems-box');
+            if (box && typeof box.focus === 'function') box.focus();
+        }
+    },
+
     // ─── Editor: structure ───────────────────────────────────────────────────
+    /** After any change to the slides' order or number: the forms, the rail, the problems. */
+    paintStructure(focusKey) {
+        this.problems = null;
+        this.paintProblemsPanel();
+        this.paintPreviews();
+        this.paintSlides(focusKey);
+        this.markDirty();
+    },
+
     moveSlide(index, delta) {
         if (this.readOnly()) return;
         const slides = this.work.carousel.slides;
@@ -2622,23 +4127,118 @@ const StudioPage = {
         const atEdge = to === 0 || to === slides.length - 1;
         const same = delta < 0 ? 'up' : 'down';
         const other = delta < 0 ? 'down' : 'up';
-        this.problems = null;
-        this.paintSlides(`st-${to}-${atEdge ? other : same}`);
-        this.markDirty();
+        this.selectedSlide = to;
+        this.paintStructure(`st-${to}-${atEdge ? other : same}`);
         Motion.announce(t('studio.slides.moved', { from: from + 1, to: to + 1 }));
     },
 
+    /**
+     * Delete, with a way back: the slide (and the shot it used) is kept for a few
+     * seconds, and Undo puts it back where it was.
+     */
     deleteSlide(index) {
         if (this.readOnly()) return;
         const slides = this.work.carousel.slides;
         const i = Number(index);
         if (!slides[i] || slides.length <= 1) return;
-        slides.splice(i, 1);
-        this.problems = null;
-        const next = Math.min(i, slides.length - 1);
-        this.paintSlides(`st-${next}`);
-        this.markDirty();
+        const [slide] = slides.splice(i, 1);
+        this.setUndo({ type: 'delete', index: i, slide, message: t('studio.undo.deleted', { n: i + 1, kind: this.kindLabel(slide && slide.kind) }) });
+        this.selectedSlide = Math.min(i, slides.length - 1);
+        this.paintStructure();
         Motion.announce(t('studio.slides.deleted', { n: i + 1 }));
+        const undo = document.getElementById('studio-undo');
+        if (undo && typeof undo.focus === 'function') undo.focus();
+    },
+
+    setUndo(entry) {
+        this.clearUndo();
+        this.undo = entry;
+        this.paintNotices();
+        this._undoTimer = setTimeout(() => {
+            this._undoTimer = null;
+            this.undo = null;
+            this.paintNotices();
+        }, this.UNDO_MS);
+    },
+
+    clearUndo() {
+        if (this._undoTimer) clearTimeout(this._undoTimer);
+        this._undoTimer = null;
+        this.undo = null;
+    },
+
+    undoLast() {
+        const u = this.undo;
+        if (!u || this.readOnly() || !this.work || !this.work.carousel) return;
+        const slides = this.work.carousel.slides;
+        if (u.type === 'delete') slides.splice(Math.min(u.index, slides.length), 0, u.slide);
+        else if (u.type === 'kind' && slides[u.index]) slides[u.index] = u.slide;
+        this.clearUndo();
+        this.selectedSlide = this.clampSlide(u.index);
+        this.paintNotices();
+        this.paintStructure(`st-${this.selectedSlide}-tab`);
+        const tab = document.getElementById(`st-${this.selectedSlide}-tab`);
+        if (tab && typeof tab.focus === 'function') tab.focus();
+        Motion.announce(t('studio.undo.done'));
+    },
+
+    /** A copy right after the original: the fastest way to a second slide in the same shape. */
+    duplicateSlide(index) {
+        if (this.readOnly()) return;
+        const slides = this.work.carousel.slides;
+        const i = Number(index);
+        const slide = slides[i];
+        if (!slide || slide.kind === 'cover' || slide.kind === 'cta' || slides.length >= this.SLIDES_MAX) return;
+        slides.splice(i + 1, 0, this.clone(slide));
+        this.selectedSlide = i + 1;
+        this.paintStructure(`st-${i + 1}-copy`);
+        Motion.announce(t('studio.slides.duplicated', { n: i + 1, to: i + 2 }));
+    },
+
+    /** The fields each kind has, for carrying text across a change of kind. */
+    KIND_FIELDS: Object.freeze({
+        cover: ['kicker', 'title', 'highlight', 'subtitle', 'shot'],
+        point: ['n', 'title', 'body', 'tip', 'shot'],
+        list: ['title', 'items'],
+        compare: ['title', 'left', 'right'],
+        steps: ['title', 'steps'],
+        prompt: ['title', 'label', 'prompt', 'note'],
+        stat: ['value', 'label', 'body'],
+        shot: ['title', 'shot', 'caption'],
+        cta: ['promise'],
+    }),
+
+    /**
+     * Change a slide's kind and keep what the two kinds share — the title, the
+     * body, the screenshot; a list's items become steps and back. Undo restores
+     * the slide exactly as it was, since some fields cannot come along.
+     */
+    changeKind(el) {
+        if (!el || !el.dataset || this.readOnly()) return;
+        const i = Number(el.dataset.slide);
+        const kind = String(el.value || '');
+        const slides = this.work.carousel.slides;
+        const old = slides[i];
+        if (!old || !this.CONTENT_KINDS.includes(kind) || old.kind === kind) return;
+        const next = this.slideTemplate(kind);
+        const keep = this.KIND_FIELDS[kind] || [];
+        ['title', 'body', 'shot', 'caption', 'note'].forEach((field) => {
+            if (keep.includes(field) && old[field] !== undefined && old[field] !== '') next[field] = this.clone(old[field]);
+        });
+        if (kind === 'steps' && Array.isArray(old.items)) {
+            next.steps = old.items.slice(0, 4).map((item) => ({ title: String((item && item.text) || '').slice(0, 28), ...(item && item.sub ? { body: String(item.sub) } : {}) }));
+            while (next.steps.length < 3) next.steps.push({ title: '' });
+        }
+        if (kind === 'list' && Array.isArray(old.steps)) {
+            next.items = old.steps.slice(0, 5).map((step) => ({ text: String((step && step.title) || ''), ...(step && step.body ? { sub: String(step.body) } : {}) }));
+            while (next.items.length < 3) next.items.push({ text: '' });
+        }
+        if (kind === 'shot' && !next.shot) next.shot = { name: '' };
+        slides[i] = next;
+        this.setUndo({ type: 'kind', index: i, slide: old, message: t('studio.undo.kind', { n: i + 1, kind: this.kindLabel(kind) }) });
+        this.paintStructure(`st-${i}-kind`);
+        Motion.announce(t('studio.slides.kindChanged', { n: i + 1, kind: this.kindLabel(kind) }));
+        if (kind === 'shot' && !(next.shot && next.shot.name)) this.openShots(i);
     },
 
     /** A new slide of each kind, with its required fields present and empty. */
@@ -2667,9 +4267,10 @@ const StudioPage = {
         const last = slides[slides.length - 1];
         const at = kind !== 'cta' && last && last.kind === 'cta' ? slides.length - 1 : slides.length;
         slides.splice(at, 0, slide);
-        this.problems = null;
-        this.paintSlides(`st-${at}`);
-        this.markDirty();
+        this.selectedSlide = at;
+        this.paintStructure();
+        const field = this.firstField(at);
+        if (field && typeof field.focus === 'function') field.focus();
         Motion.announce(t('studio.slides.added', { n: at + 1, kind: this.kindLabel(kind) }));
         if (kind === 'shot') this.openShots(at);
     },
@@ -2763,11 +4364,24 @@ const StudioPage = {
         UI.showModal(html`
             ${this.modalHeader(t('studio.shot.pickTitle', { n: i + 1 }))}
             <p class="form-hint">${t('studio.shot.pickHint')}</p>
-            <div class="form-group">
-                <label class="form-label" for="st-shot-lesson">${t('studio.shot.lesson')}</label>
-                <div id="studio-shot-lessons">${this.shotLessonSelect()}</div>
+            <div class="shot-picker-controls">
+                <div class="form-group">
+                    <label class="form-label" for="st-shot-lesson">${t('studio.shot.lesson')}</label>
+                    <div id="studio-shot-lessons">${this.shotLessonSelect()}</div>
+                </div>
+                <div class="form-group check-row">
+                    <input type="checkbox" id="st-shot-clean" data-change="studio:shotClean" aria-describedby="st-shot-clean-hint"
+                           ${this.cleanOnly ? html.raw('checked') : ''}>
+                    <span class="check-text">
+                        <label class="check-label" for="st-shot-clean">${t('studio.shot.cleanOnly')}</label>
+                        <span class="form-hint" id="st-shot-clean-hint">${t('studio.shot.cleanHint')}</span>
+                    </span>
+                </div>
             </div>
-            <div id="studio-shot-grid">${this.spinnerMarkup()}</div>
+            <div class="shot-picker">
+                <div class="shot-hero" id="st-shot-hero"></div>
+                <div id="studio-shot-grid" class="shot-picker-grid">${this.spinnerMarkup()}</div>
+            </div>
             <div class="modal-actions">
                 ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
             </div>
@@ -2785,6 +4399,42 @@ const StudioPage = {
         await this.paintShotGrid(token);
     },
 
+    /** The moments the picker shows: clean frames only, unless the operator asked for all. */
+    shownMoments(moments) {
+        const all = Array.isArray(moments) ? moments : [];
+        return this.cleanOnly ? all.filter((m) => m && m.clean !== false) : all;
+    },
+
+    shotPickerMarkup(detail) {
+        const all = detail.moments;
+        if (!all.length) return html`<p class="studio-empty-note">${t('studio.shot.noMoments')}</p>`;
+        const slide = this.work && this.work.carousel.slides[this._shotSlide];
+        const current = slide && slide.shot ? String(slide.shot.name || '') : '';
+        const shown = this.shownMoments(all);
+        return html`
+            <p class="text-meta" id="st-shot-count">${t('studio.shot.showing', { n: UI.formatNumber(shown.length), total: UI.formatNumber(all.length) })}</p>
+            ${shown.length
+                ? html`<ul class="moment-grid moment-grid--pick" id="st-shot-list">${shown.map((m) => this.momentTile(m, { slide: this._shotSlide, current }))}</ul>`
+                : html`<p class="studio-empty-note">${t('studio.shot.noClean')}</p>`}
+        `;
+    },
+
+    /** The big version of one moment: what the frame really shows, before it is picked. */
+    shotHeroMarkup(moment) {
+        if (!moment) return html`<p class="studio-empty-note">${t('studio.shot.heroEmpty')}</p>`;
+        const thumb = safeUrl(moment.thumb_url);
+        return html`
+            <span class="shot-hero-frame">
+                ${thumb ? html`<img src="${thumb}" alt="" decoding="async">` : html`<i data-lucide="image-off" aria-hidden="true"></i>`}
+            </span>
+            <span class="shot-hero-meta">
+                ${UI.ltr(this.clock(moment.t))} · ${this.momentKind(moment.kind)}
+                ${moment.clean === false ? html` · <span class="text-warning">${t('studio.moment.notClean')}</span>` : ''}
+            </span>
+            <span class="shot-hero-desc" dir="auto">${moment.description || ''}</span>
+        `;
+    },
+
     async paintShotGrid(token) {
         const lessonId = this._shotLesson;
         if (!lessonId) {
@@ -2793,21 +4443,47 @@ const StudioPage = {
         }
         if (this.modalLive(token)) this.paintRegion('studio-shot-grid', this.spinnerMarkup());
         let markup;
+        let detail = null;
         try {
-            const detail = await this.fetchLesson(lessonId);
-            const slide = this.work && this.work.carousel.slides[this._shotSlide];
-            const current = slide && slide.shot ? String(slide.shot.name || '') : '';
-            markup = detail.moments.length
-                ? html`<ul class="moment-grid moment-grid--pick">${detail.moments.map((m) => this.momentTile(m, { slide: this._shotSlide, current }))}</ul>`
-                : html`<p class="studio-empty-note">${t('studio.shot.noMoments')}</p>`;
+            detail = await this.fetchLesson(lessonId);
+            markup = this.shotPickerMarkup(detail);
         } catch (err) {
             markup = UI.errorStrip((err && err.message) || t('error.unexpected'), '');
         }
-        if (this.modalLive(token) && lessonId === this._shotLesson) this.paintRegion('studio-shot-grid', markup);
+        if (!this.modalLive(token) || lessonId !== this._shotLesson) return;
+        this.paintRegion('studio-shot-grid', markup);
+        // The hero starts on the slide's current frame, else the first one shown.
+        const slide = this.work && this.work.carousel.slides[this._shotSlide];
+        const current = slide && slide.shot && String(slide.shot.name || '').startsWith('m-') ? this.momentById(String(slide.shot.name).slice(2)) : null;
+        const first = detail ? this.shownMoments(detail.moments)[0] : null;
+        this.paintRegion('st-shot-hero', this.shotHeroMarkup(current || first || null));
+        this.wireShotHero(token);
+    },
+
+    /** Hover or keyboard focus on a tile shows it large; a click (or Enter) picks it. */
+    wireShotHero(token) {
+        const list = document.getElementById('st-shot-list');
+        if (!list || typeof list.addEventListener !== 'function') return;
+        const show = (event) => {
+            const tile = event.target && typeof event.target.closest === 'function' ? event.target.closest('.moment-pick') : null;
+            if (!tile || !this.modalLive(token) || tile.dataset.moment === this._heroMoment) return;
+            this._heroMoment = tile.dataset.moment;
+            this.paintRegion('st-shot-hero', this.shotHeroMarkup(this.momentById(tile.dataset.moment)));
+        };
+        list.addEventListener('pointerover', show);
+        list.addEventListener('focusin', show);
+    },
+    _heroMoment: '',
+
+    shotClean(el) {
+        this.cleanOnly = !!(el && el.checked);
+        this._heroMoment = '';
+        this.paintShotGrid(this._modalToken);
     },
 
     shotLesson(el) {
         this._shotLesson = String((el && el.value) || '');
+        this._heroMoment = '';
         this.paintShotGrid(this._modalToken);
     },
 
@@ -2931,21 +4607,33 @@ const StudioPage = {
 
     focusProblem(id) {
         const problem = this.problems && this.problems.all.find((p) => String(p.id) === String(id));
-        const el = problem ? document.getElementById(this.problemFocusId(problem)) : null;
+        if (!problem) return;
+        // A problem on another slide first brings that slide up, in the preview and the form.
+        if (problem.target && typeof problem.target.slide === 'number' && problem.target.slide !== this.selectedSlide) {
+            this.selectSlide(problem.target.slide);
+        }
+        const el = document.getElementById(this.problemFocusId(problem));
         if (!el) return;
         if (el.tabIndex < 0 && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
         if (typeof el.focus === 'function') el.focus({ preventScroll: true });
         if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
     },
 
-    /** After a 400: every form that can show a problem, and the list above Save. */
+    /** After a 400: every form that can show a problem, the rail's flags, and the list. */
     paintProblems() {
+        // The first slide with a problem comes up, so the first thing seen is a field to fix.
+        const first = this.problems && this.problems.all.find((p) => p.target && typeof p.target.slide === 'number');
+        if (first && !(this.problems.slides.get(this.selectedSlide) || []).length) this.selectedSlide = this.clampSlide(first.target.slide);
+        this.paintProblemsPanel();
+        this.paintPreviews();
         this.paintSlides();
         this.paintCaptions();
         this.paintCampaign();
+        this.paintLook();
         this.paintSaveBar();
-        const summary = document.getElementById('studio-problems') || document.getElementById('studio-save-error');
+        const summary = document.getElementById('studio-problems-box') || document.getElementById('studio-save-error');
         if (summary && typeof summary.focus === 'function') summary.focus();
+        if (this.problems) Motion.announce(t('studio.problems.title', { n: UI.formatNumber(this.problems.all.length) }));
     },
 
     // ─── Editor: save, rewrite, render ───────────────────────────────────────
@@ -2966,6 +4654,8 @@ const StudioPage = {
 
     async patchDraft() {
         const res = await API.updateStudioDraft(this.draft.id, this.patchPayload());
+        // Saved: the copy kept in this browser has done its job.
+        this.forgetEdits();
         this.loadDraft({ draft: (res && res.draft) || this.draft, lessons: this.draftLessons });
         return res;
     },
@@ -3009,6 +4699,8 @@ const StudioPage = {
 
     discard() {
         if (!this.draft) return;
+        this.forgetEdits();
+        this.clearUndo();
         this.loadDraft({ draft: this.draft, lessons: this.draftLessons });
         this.paintEditor();
         Motion.announce(t('studio.editor.discarded'));
@@ -3083,6 +4775,78 @@ const StudioPage = {
             this.paintRegion('studio-rewrite-error', UI.errorStrip((err && err.message) || t('error.unexpected'), '', 'studio-rewrite-error-strip'));
             restore();
         }
+    },
+
+    /**
+     * Write the whole carousel again, from the same lessons or idea, at another
+     * angle. It is a NEW draft (POST /drafts): this one stays as it is, so trying
+     * an angle never costs the edits made to this version.
+     */
+    openRegenerate() {
+        const d = this.draft;
+        if (!d || !d.input || this.generating) {
+            if (this.generating) UI.toast(t('studio.regen.busy'), 'error');
+            return;
+        }
+        const current = this.ANGLES.includes(d.input.angle) ? d.input.angle : 'auto';
+        const suggested = this.ANGLES.find((a) => a !== current && a !== 'auto') || 'tips';
+        const slides = Math.min(this.SLIDES_MAX, Math.max(this.SLIDES_MIN, Number(d.input.slides) || this.slideCount()));
+        const options = [];
+        for (let n = this.SLIDES_MIN; n <= this.SLIDES_MAX; n++) options.push(n);
+        const fromLessons = Array.isArray(d.input.lessonIds) && d.input.lessonIds.length > 0;
+        UI.showModal(html`
+            ${this.modalHeader(t('studio.regen.title'))}
+            <form id="studio-regen-form" data-submit="studio:regenerate" novalidate>
+                <p class="modal-body-text">${fromLessons ? t('studio.regen.bodyLessons') : t('studio.regen.bodyIdea')}</p>
+                <div class="studio-new-grid">
+                    <div class="form-group">
+                        <label class="form-label" for="st-regen-angle">${t('studio.new.angle')}</label>
+                        <select class="select" id="st-regen-angle" name="angle">
+                            ${this.ANGLES.map((a) => html`<option value="${a}" ${a === suggested ? html.raw('selected') : ''}>${this.angleLabel(a)}${a === current ? ` · ${t('studio.regen.current')}` : ''}</option>`)}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="st-regen-slides">${t('studio.new.slides')}</label>
+                        <select class="select" id="st-regen-slides" name="slides">
+                            ${options.map((n) => html`<option value="${n}" ${n === slides ? html.raw('selected') : ''}>${UI.formatNumber(n)}</option>`)}
+                        </select>
+                    </div>
+                </div>
+                <p class="form-hint">${t('studio.regen.keeps')}</p>
+                <div class="modal-actions">
+                    ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                    ${UI.button({ variant: 'primary', type: 'submit', icon: 'wand-sparkles', label: t('studio.regen.submit') })}
+                </div>
+            </form>
+        `);
+    },
+
+    /** The new draft's input: the same source, keyword and accent, at the chosen angle and length. */
+    regenInput(form) {
+        const d = this.draft || {};
+        const data = new FormData(form);
+        let angle = String(data.get('angle') || 'auto');
+        if (!this.ANGLES.includes(angle)) angle = 'auto';
+        const slides = Math.min(this.SLIDES_MAX, Math.max(this.SLIDES_MIN, Math.round(Number(data.get('slides'))) || this.SLIDES_DEFAULT));
+        const src = d.input || {};
+        const input = { lessonIds: Array.isArray(src.lessonIds) ? src.lessonIds.map(String).slice(0, this.MAX_LESSONS) : [], angle, slides };
+        if (src.idea) input.idea = String(src.idea);
+        if (!input.lessonIds.length && !input.idea) input.idea = this.draftTitle(d);
+        const keyword = String((this.work && this.work.carousel && this.work.carousel.keyword) || src.keyword || '').trim();
+        if (keyword && !/\s/.test(keyword)) input.keyword = keyword;
+        const accent = String((this.work && this.work.carousel && this.work.carousel.accent) || '').toUpperCase();
+        if (this.ACCENT_RE.test(accent)) input.accent = accent;
+        return input;
+    },
+
+    regenerate(form, event) {
+        if (event && typeof event.preventDefault === 'function') event.preventDefault();
+        if (!this.draft || this.generating) return undefined;
+        const input = this.regenInput(form);
+        UI.closeModal();
+        // The progress lives on the home view, where the new draft will open from.
+        if (typeof App !== 'undefined' && typeof App.go === 'function') App.go('studio');
+        return this.runGeneration(input);
     },
 
     async renderAgain(el) {
@@ -3164,8 +4928,17 @@ const StudioPage = {
 
     // ─── Editor: schedule actions ────────────────────────────────────────────
     slotChange(el) {
+        const isCustom = !!(el && el.value === 'custom');
         const custom = document.getElementById('st-slot-custom');
-        if (custom) custom.classList.toggle('hidden', !(el && el.value === 'custom'));
+        if (custom) custom.classList.toggle('hidden', !isCustom);
+        const hint = document.getElementById('st-slot-custom-hint');
+        if (hint) hint.classList.toggle('hidden', !isCustom);
+        this.refreshScheduleSummary();
+    },
+
+    /** Any choice in the schedule form: the summary and the button say what will happen now. */
+    scheduleChange() {
+        this.refreshScheduleSummary();
     },
 
     /**
@@ -3265,6 +5038,7 @@ const StudioPage = {
         const id = this.draft && this.draft.id;
         if (!id) return;
         await API.deleteStudioDraft(id);
+        this.forgetEdits();
         this.drafts = this.drafts.filter((d) => String(d.id) !== String(id));
         UI.toast(t('studio.editor.deleted'));
         if (typeof App !== 'undefined' && typeof App.go === 'function') App.go('studio');
@@ -3356,6 +5130,7 @@ const StudioPage = {
         this._settingsDirty = false;
         this.settingsProblems = null;
         this.settingsSaveError = null;
+        this.settingsFieldProblems = null;
     },
 
     settingsDirty() {
@@ -3379,6 +5154,8 @@ const StudioPage = {
         this.applyStatus(status);
         this.loadSettingsWork();
         this.paintSettingsPage();
+        this.bindKeys('settings');
+        this.focusSettingsTarget();
         Motion.announce(t('studio.tabs.settings'));
     },
 
@@ -3404,7 +5181,17 @@ const StudioPage = {
         `);
         UI.icons(container);
         this.wireErrors(container);
+        this.applySwatches(container);
         UI.restoreFocus(focus);
+    },
+
+    /** `#/studio?tab=settings&focus=library`: the setup checklist's links land on the field itself. */
+    focusSettingsTarget() {
+        const target = { library: 'sts-library-root', workers: 'sts-worker-name' }[this.hashValue('focus')];
+        const el = target ? document.getElementById(target) : null;
+        if (!el) return;
+        if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
+        if (typeof el.focus === 'function') el.focus({ preventScroll: true });
     },
 
     settingId(path) {
@@ -3412,12 +5199,24 @@ const StudioPage = {
     },
 
     /** One labelled settings control, bound to `settingsWork` at `path`. */
+    /** Problems filed under a settings path, from the server's 400 or from the check before it. */
+    settingProblems(path) {
+        const map = this.settingsFieldProblems;
+        return map && map.has(path) ? map.get(path) : [];
+    },
+
+    settingProblemsMarkup(id, problems) {
+        return problems.length ? html`<ul class="problem-list" id="${id}-problems">${problems.map((p) => html`<li dir="auto">${p}</li>`)}</ul>` : '';
+    },
+
     settingField(o) {
         const id = this.settingId(o.path);
         const raw = this.getPath(this.settingsWork, o.path);
         const value = raw === null || raw === undefined ? '' : String(raw);
         const hintId = o.hint ? `${id}-hint` : '';
-        const attrs = html` id="${id}" data-path="${o.path}"${hintId ? html` aria-describedby="${hintId}"` : ''}`;
+        const problems = this.settingProblems(o.path);
+        const described = [hintId, problems.length ? `${id}-problems` : ''].filter(Boolean).join(' ');
+        const attrs = html` id="${id}" data-path="${o.path}"${described ? html` aria-describedby="${described}"` : ''}${problems.length ? html.raw(' aria-invalid="true"') : ''}`;
         let control;
         if (o.options) {
             control = html`
@@ -3436,6 +5235,7 @@ const StudioPage = {
                 <label class="form-label" for="${id}">${o.label}</label>
                 ${control}
                 ${o.hint ? html`<p class="form-hint" id="${hintId}">${o.hint}</p>` : ''}
+                ${this.settingProblemsMarkup(id, problems)}
             </div>
         `;
     },
@@ -3466,10 +5266,13 @@ const StudioPage = {
                 <legend class="form-label">${o.label}</legend>
                 ${items.length ? html`
                     <ol class="studio-item-list">
-                        ${items.map((item, k) => html`
-                            <li class="studio-item">
+                        ${items.map((item, k) => {
+                            const bad = this.settingProblems(`${o.path}.${k}`);
+                            return html`
+                            <li class="studio-item${bad.length ? html.raw(' has-problems') : ''}">
                                 <input class="field${o.type === 'time' ? html.raw(' studio-field-time') : ''}" type="${o.type || 'text'}" dir="${o.type === 'time' ? 'ltr' : 'auto'}"
                                        id="${id}-${k}" value="${item}" data-input="studio:setting" data-path="${o.path}.${k}"
+                                       ${bad.length ? html`aria-invalid="true" aria-describedby="${id}-${k}-problems"` : ''}
                                        aria-label="${t('studio.settings.itemN', { label: o.itemLabel, n: k + 1 })}">
                                 <button type="button" class="icon-btn icon-btn-danger" data-action="studio:removeListItem"
                                         data-path="${o.path}" data-item="${k}" data-focus-key="${id}-remove-${k}"
@@ -3477,8 +5280,10 @@ const StudioPage = {
                                         title="${t('studio.settings.removeItem', { label: o.itemLabel, n: k + 1 })}">
                                     <i data-lucide="x" aria-hidden="true"></i>
                                 </button>
+                                ${this.settingProblemsMarkup(`${id}-${k}`, bad)}
                             </li>
-                        `)}
+                        `;
+                        })}
                     </ol>
                 ` : html`<p class="text-meta">${t('studio.settings.listEmpty')}</p>`}
                 ${UI.button({
@@ -3486,6 +5291,7 @@ const StudioPage = {
                     action: 'studio:addListItem', data: { path: o.path }, id: `${id}-add`,
                 })}
                 ${o.hint ? html`<p class="form-hint" id="${id}-hint">${o.hint}</p>` : ''}
+                ${this.settingProblemsMarkup(id, this.settingProblems(o.path))}
             </fieldset>
         `;
     },
@@ -3494,6 +5300,7 @@ const StudioPage = {
         const palette = this.settingsWork.brand.palette;
         return html`
             <h2 class="section-title" id="sts-brand-title">${t('studio.settings.brand')}</h2>
+            <p class="form-hint studio-section-lede">${t('studio.settings.brandIntro')}</p>
             <div class="studio-settings-grid">
                 ${this.settingField({ path: 'brand.name', label: t('studio.settings.brandName'), hint: t('studio.settings.brandNameHint') })}
                 ${this.settingField({ path: 'brand.signature.latin', label: t('studio.settings.signatureLatin'), dir: 'ltr' })}
@@ -3523,7 +5330,12 @@ const StudioPage = {
                 </ul>
                 ${UI.button({ variant: 'ghost', size: 'sm', icon: 'plus', label: t('studio.settings.addSwatch'), action: 'studio:addSwatch', id: 'sts-add-swatch' })}
                 <p class="form-hint" id="sts-palette-hint">${t('studio.settings.paletteHint')}</p>
+                ${this.settingProblemsMarkup('sts-brand-palette', [
+                    ...this.settingProblems('brand.palette'),
+                    ...palette.flatMap((c, k) => this.settingProblems(`brand.palette.${k}`)),
+                ])}
             </fieldset>
+            <div id="sts-brand-sample">${this.brandSampleMarkup()}</div>
             <div class="studio-settings-grid">
                 ${this.colorField('brand.colors.ink', t('studio.settings.ink'))}
                 ${this.colorField('brand.colors.paper', t('studio.settings.paper'))}
@@ -3546,6 +5358,34 @@ const StudioPage = {
         `;
     },
 
+    /**
+     * A slide in miniature, painted with the brand's own ink, paper, muted and
+     * accents, and signed with its signature — so a colour is judged where it will
+     * be used, not as a hex code. Decorative for a screen reader: every value is a
+     * labelled field above it.
+     */
+    brandSampleMarkup() {
+        const b = this.settingsWork.brand;
+        const hex = (v, d) => (this.ACCENT_RE.test(String(v || '')) ? String(v).toUpperCase() : d);
+        const ink = hex(b.colors.ink, '#0B0B10');
+        const paper = hex(b.colors.paper, '#F5F5F7');
+        const muted = hex(b.colors.muted, '#8A8A99');
+        const palette = b.palette.map((c) => hex(c, '')).filter(Boolean);
+        const accent = palette[0] || '#FFD60A';
+        const sign = [b.signature.latin, b.signature.local].map((s) => String(s || '').trim()).filter(Boolean).join(' · ');
+        return html`
+            <div class="brand-sample" aria-hidden="true">
+                <span class="brand-sample-slide" data-bg="${ink}" dir="${b.direction === 'rtl' ? 'rtl' : 'ltr'}">
+                    <span class="brand-sample-kicker" data-fg="${muted}">${t('studio.settings.sampleKicker')}</span>
+                    <span class="brand-sample-title" data-fg="${paper}">${t('studio.settings.sampleTitle')} <span data-fg="${accent}">${t('studio.settings.sampleAccent')}</span></span>
+                    <span class="brand-sample-sign" data-fg="${muted}">${sign || '—'}</span>
+                </span>
+                <span class="brand-sample-dots">${palette.map((c) => html`<span class="swatch-dot" data-color="${c}"></span>`)}</span>
+            </div>
+            <p class="form-hint">${t('studio.settings.sampleHint')}</p>
+        `;
+    },
+
     /** A fixed option list, plus whatever the tenant already has if it is not on it. */
     withCurrent(options, current) {
         const list = options.slice();
@@ -3556,6 +5396,7 @@ const StudioPage = {
     voiceSectionMarkup() {
         return html`
             <h2 class="section-title" id="sts-voice-title">${t('studio.settings.voice')}</h2>
+            <p class="form-hint studio-section-lede">${t('studio.settings.voiceIntro')}</p>
             <div class="studio-settings-grid">
                 ${this.settingField({
                     path: 'voice.language', label: t('studio.settings.language'),
@@ -3578,6 +5419,7 @@ const StudioPage = {
     productSectionMarkup() {
         return html`
             <h2 class="section-title" id="sts-product-title">${t('studio.settings.product')}</h2>
+            <p class="form-hint studio-section-lede">${t('studio.settings.productIntro')}</p>
             <div class="studio-settings-grid">
                 ${this.settingField({ path: 'product.name', label: t('studio.settings.productName') })}
                 ${this.settingField({ path: 'product.url', label: t('studio.settings.productUrl'), type: 'url', dir: 'ltr', mono: true, hint: t('studio.settings.productUrlHint') })}
@@ -3652,6 +5494,7 @@ const StudioPage = {
     scheduleSectionMarkup() {
         return html`
             <h2 class="section-title" id="sts-schedule-title">${t('studio.settings.schedule')}</h2>
+            <p class="form-hint studio-section-lede">${t('studio.settings.scheduleIntro')}</p>
             ${this.settingField({
                 path: 'schedule.timezone', label: t('studio.settings.timezone'), hint: t('studio.settings.timezoneHint'),
                 options: this.timeZones().map((z) => ({ value: z, label: z })),
@@ -3666,6 +5509,7 @@ const StudioPage = {
     librarySectionMarkup() {
         return html`
             <h2 class="section-title" id="sts-library-title">${t('studio.settings.library')}</h2>
+            <p class="form-hint studio-section-lede">${t('studio.settings.libraryIntro')}</p>
             ${this.settingField({
                 path: 'library.root', label: t('studio.settings.libraryRoot'), dir: 'ltr', mono: true,
                 placeholder: t('studio.settings.libraryPlaceholder'), hint: t('studio.settings.libraryHint'),
@@ -3687,7 +5531,11 @@ const StudioPage = {
                 <p class="text-meta" role="status">${dirty ? t('studio.editor.unsaved') : t('studio.editor.saved')}</p>
                 <div class="row row--wrap gap-2">
                     ${dirty ? UI.button({ variant: 'ghost', size: 'sm', icon: 'rotate-ccw', label: t('studio.editor.discard'), action: 'studio:discardSettings' }) : ''}
-                    ${UI.button({ variant: 'primary', type: 'submit', icon: 'save', label: t('studio.settings.save'), id: 'sts-save', disabled: !dirty })}
+                    ${UI.button({
+                        variant: 'primary', type: 'submit', icon: 'save', label: t('studio.settings.save'), id: 'sts-save', disabled: !dirty,
+                        title: t('studio.editor.saveShortcut', { keys: this.saveKeys() }),
+                    })}
+                    ${dirty ? html`<kbd class="studio-kbd" aria-hidden="true">${this.saveKeys()}</kbd>` : ''}
                 </div>
             </div>
         `;
@@ -3714,6 +5562,15 @@ const StudioPage = {
         this.setPath(this.settingsWork, path, value);
         if (path.startsWith('cta.') || path.startsWith('product.')) {
             this.paintRegion('sts-previews', this.settingsPreviewsMarkup());
+        }
+        if (path.startsWith('brand.')) this.paintRegion('sts-brand-sample', this.brandSampleMarkup());
+        // Being fixed: the field's own complaint goes the moment it is touched.
+        const map = this.settingsFieldProblems;
+        if (map && map.has(path)) {
+            map.delete(path);
+            if (typeof el.removeAttribute === 'function') el.removeAttribute('aria-invalid');
+            const list = document.getElementById(`${el.id}-problems`);
+            if (list && typeof list.remove === 'function') list.remove();
         }
         this.markSettingsDirty();
     },
@@ -3803,13 +5660,65 @@ const StudioPage = {
         return body;
     },
 
+    /** `schedule.slots[1] must be…` → `schedule.slots.1`: the server leads every message with its path. */
+    settingsProblemPath(message) {
+        const m = /^([a-zA-Z]+(?:\.[a-zA-Z]+|\[\d+\])*)/.exec(String(message || ''));
+        return m ? m[1].replace(/\[(\d+)\]/g, '.$1') : '';
+    },
+
+    /**
+     * The server's own rules, checked before the round trip so the answer lands
+     * beside the field at once. The server still checks everything.
+     */
+    localSettingsProblems(body) {
+        const out = [];
+        const add = (path, key) => out.push({ path, message: t(key) });
+        if (body.product.url && !/^https:\/\//i.test(body.product.url)) add('product.url', 'studio.settings.err.url');
+        if (body.cta.instagramAsk && !body.cta.instagramAsk.includes('{keyword}')) add('cta.instagramAsk', 'studio.settings.err.ask');
+        if (!body.brand.palette.length) add('brand.palette', 'studio.settings.err.palette');
+        if (!body.schedule.slots.length) add('schedule.slots', 'studio.settings.err.noSlot');
+        const seen = new Set();
+        (this.settingsWork.schedule.slots || []).forEach((slot, k) => {
+            const v = String(slot || '').trim();
+            if (v && seen.has(v)) add(`schedule.slots.${k}`, 'studio.settings.err.slotTwice');
+            seen.add(v);
+        });
+        if (body.library.root && !/^(\/|[A-Za-z]:[\\/])/.test(body.library.root)) add('library.root', 'studio.settings.err.root');
+        return out;
+    },
+
+    /** Problems beside their fields, the list in the save bar, and focus on the first field to fix. */
+    showSettingsProblems(list, filed, message) {
+        const map = new Map();
+        filed.forEach((p) => {
+            if (!p.path) return;
+            if (!map.has(p.path)) map.set(p.path, []);
+            map.get(p.path).push(p.message);
+        });
+        this.settingsFieldProblems = map;
+        this.settingsProblems = list;
+        this.settingsSaveError = message;
+        this._settingsDirty = this.settingsDirty();
+        this.paintSettingsPage();
+        const first = filed.find((p) => p.path && document.getElementById(this.settingId(p.path)));
+        const el = first ? document.getElementById(this.settingId(first.path)) : document.getElementById('studio-settings-error');
+        if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
+        if (el && typeof el.focus === 'function') el.focus({ preventScroll: true });
+        Motion.announce(message);
+    },
+
     async saveSettings(form, event) {
         if (event && typeof event.preventDefault === 'function') event.preventDefault();
         if (!this.settingsWork) return;
+        const body = this.settingsPayload();
+        const local = this.localSettingsProblems(body);
+        if (local.length) {
+            this.showSettingsProblems(local.map((p) => p.message), local, t('studio.settings.fixFirst'));
+            return;
+        }
         const restore = UI.formBusy(form, t('common.saving'));
         if (!restore) return;
         const seq = this._seq;
-        const body = this.settingsPayload();
         try {
             const res = await API.saveStudioSettings(body);
             if (seq !== this._seq) return;
@@ -3819,12 +5728,12 @@ const StudioPage = {
             this.paintSettingsPage();
         } catch (err) {
             if (seq !== this._seq) return;
-            this.settingsProblems = this.problemList(err);
-            this.settingsSaveError = (err && err.message) || t('error.unexpected');
-            this._settingsDirty = this.settingsDirty();
-            this.paintRegion('studio-settings-savebar', this.settingsSaveBarMarkup());
-            const strip = document.getElementById('studio-settings-error');
-            if (strip && typeof strip.focus === 'function') strip.focus();
+            const problems = this.problemList(err);
+            this.showSettingsProblems(
+                problems,
+                problems.map((m) => ({ path: this.settingsProblemPath(m), message: m })),
+                (err && err.message) || t('error.unexpected'),
+            );
         } finally {
             restore();
         }
@@ -4026,10 +5935,17 @@ const studioReport = (value) => {
 UI.registerActions('studio', {
     // Status bar
     refreshStatus: () => studioReport(StudioPage.refreshStatus()),
+    retryWorker: (el) => studioReport(StudioPage.retryWorker(el)),
     scanLibrary: (el) => studioReport(StudioPage.scanLibrary(el)),
     indexMissing: (el) => studioReport(StudioPage.indexMissing(el)),
     confirmTikTokBatch: () => StudioPage.confirmTikTokBatch(),
     // New carousel and the plan
+    setMode: (el) => StudioPage.setMode(el.dataset.mode),
+    newText: (el) => StudioPage.newTextInput(el),
+    lessonSearch: (el) => StudioPage.lessonSearch(el),
+    clearLessonSearch: () => StudioPage.clearLessonSearch(),
+    rememberOption: (el) => StudioPage.rememberOption(el),
+    pickAccent: (el) => StudioPage.pickAccent(el),
     toggleLesson: (el) => StudioPage.toggleLesson(el.dataset.id),
     showLesson: (el) => studioReport(StudioPage.showLesson(el.dataset.id)),
     indexLesson: (el) => studioReport(StudioPage.indexLesson(el, el.dataset.id)),
@@ -4042,6 +5958,22 @@ UI.registerActions('studio', {
     generateAll: () => studioReport(StudioPage.generateAll()),
     // Editor
     previewTab: (el) => StudioPage.previewTabSwitch(el.dataset.tab),
+    selectSlide: (el) => StudioPage.selectSlide(Number(el.dataset.slide), { focus: 'tab' }),
+    prevSlide: () => StudioPage.prevSlide(),
+    nextSlide: () => StudioPage.nextSlide(),
+    editSlide: (el) => StudioPage.editSlide(el),
+    duplicateSlide: (el) => StudioPage.duplicateSlide(el.dataset.slide),
+    changeKind: (el) => StudioPage.changeKind(el),
+    undo: () => StudioPage.undoLast(),
+    applyRestored: () => StudioPage.applyRestored(),
+    dropRestored: () => StudioPage.dropRestored(),
+    accentSwatch: (el) => StudioPage.accentSwatch(el),
+    goSchedule: () => StudioPage.goSchedule(),
+    focusFirstProblem: () => StudioPage.focusFirstProblem(),
+    scheduleChange: () => StudioPage.scheduleChange(),
+    openRegenerate: () => StudioPage.openRegenerate(),
+    regenerate: (el, e) => studioReport(StudioPage.regenerate(el, e)),
+    shotClean: (el) => StudioPage.shotClean(el),
     slideField: (el) => StudioPage.slideField(el),
     metaField: (el) => StudioPage.metaField(el),
     keywordField: (el) => StudioPage.keywordField(el),
