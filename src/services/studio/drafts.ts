@@ -437,6 +437,35 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
     };
 }
 
+/**
+ * A reused keyword, swapped for its campaign's main one. A campaign triggers on several words —
+ * «منديل, رسمة, stitch» — and the writer may pick any of them, but the first is the one the
+ * creator chose to ask for: in their audience's language, and the one the DM was written around.
+ * The caption's ask line is rewritten to match, so the rules still find it.
+ */
+export async function preferPrimaryKeyword<T extends { carousel: Carousel; campaign: { keyword: string; create: boolean } & Record<string, unknown> }>(
+    creatorId: string, generated: T, settings: StudioSettings,
+): Promise<T> {
+    const picked = normalizeArabic(generated.carousel.keyword.trim().toLowerCase());
+    const campaigns = await queryRows<{ trigger_keyword: string | null }>(
+        'SELECT trigger_keyword FROM campaigns WHERE creator_id = $1 AND is_active = TRUE ORDER BY created_at', [creatorId]
+    );
+    for (const c of campaigns) {
+        const words = (c.trigger_keyword ?? '').split(',').map((w) => w.trim()).filter(Boolean);
+        if (!words.some((w) => normalizeArabic(w.toLowerCase()) === picked)) continue;
+        const primary = words[0]!;
+        if (primary === generated.carousel.keyword) return generated;
+        const ask = (k: string) => settings.cta.instagramAsk.replace('{keyword}', k);
+        const caption = generated.carousel.captions.instagram.split(ask(generated.carousel.keyword)).join(ask(primary));
+        return {
+            ...generated,
+            carousel: { ...generated.carousel, keyword: primary, captions: { ...generated.carousel.captions, instagram: caption } },
+            campaign: { ...generated.campaign, keyword: primary },
+        };
+    }
+    return generated;
+}
+
 // ─── Writes ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -481,6 +510,10 @@ export async function createDraft(creatorId: string, raw: unknown): Promise<Draf
     } catch (err) {
         log('warn', 'studio.generate_failed', { draft_id: draft.id, ...describeError(err) });
         return fail(`Writing the carousel failed: ${errorText(err)}`);
+    }
+
+    if (generated?.carousel && generated.campaign && generated.campaign.create === false) {
+        generated = await preferPrimaryKeyword(creatorId, generated, settings);
     }
 
     // The module repairs its own output; this is the backstop for one that still breaks a rule.
