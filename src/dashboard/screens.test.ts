@@ -2148,6 +2148,10 @@ interface StudioLoaded {
     toasts: Array<{ message: string; type?: string }>;
     copied: string[];
     hash: Record<string, string>;
+    /** The page's localStorage. */
+    storage: FakeStorage;
+    /** The stubbed App, e.g. to say which page is current. */
+    app: Record<string, unknown>;
     /** A fake host for a region the page repaints by id; its innerHTML is what was painted. */
     host(id: string): FakeEl;
 }
@@ -2157,7 +2161,25 @@ function unrefTimer<T>(handle: T): T {
     return handle;
 }
 
-function loadStudio(hash: Record<string, string> = {}): StudioLoaded {
+/** A Map-backed localStorage: the page's per-browser memory, readable by the test. */
+interface FakeStorage {
+    getItem(key: string): string | null;
+    setItem(key: string, value: string): void;
+    removeItem(key: string): void;
+    keys(): string[];
+}
+
+function fakeStorage(): FakeStorage {
+    const map = new Map<string, string>();
+    return {
+        getItem: (key) => (map.has(key) ? (map.get(key) as string) : null),
+        setItem: (key, value) => { map.set(key, String(value)); },
+        removeItem: (key) => { map.delete(key); },
+        keys: () => [...map.keys()],
+    };
+}
+
+function loadStudio(hash: Record<string, string> = {}, storage: FakeStorage = fakeStorage()): StudioLoaded {
     const noop = (): void => {};
     const dom = new Map<string, FakeEl>();
     const api: Record<string, (...args: Json[]) => unknown> = {};
@@ -2211,6 +2233,7 @@ function loadStudio(hash: Record<string, string> = {}): StudioLoaded {
             goWithQuery: (page: string, params: Record<string, unknown>) => { nav.push({ page, params }); },
         },
         FormData: FakeFormData,
+        localStorage: storage,
     };
     ctx.globalThis = ctx;
     vm.createContext(ctx);
@@ -2234,7 +2257,7 @@ function loadStudio(hash: Record<string, string> = {}): StudioLoaded {
         dom.set(id, el);
         return el;
     };
-    return { Studio: StudioPage, t, I18N, dom, api, calls, confirms, nav, toasts, copied, hash, host };
+    return { Studio: StudioPage, t, I18N, dom, api, calls, confirms, nav, toasts, copied, hash, storage, app: ctx.App as Record<string, unknown>, host };
 }
 
 const minutesAgo = (n: number): string => new Date(Date.now() - n * 60 * 1000).toISOString();
@@ -2403,7 +2426,12 @@ describe('StudioPage — the home view, from stubbed responses', () => {
         assert.ok(page.includes(s.t('studio.jobs.waitingForMac')));
         assert.ok(page.includes('30/34'));
         assert.ok(page.includes(s.t('studio.library.failed', { n: '1' })));
-        assert.ok(/\sdisabled\b/.test(tagOf(page, 'studio-tiktok-batch')), 'nothing queued, nothing to post');
+        // A disabled button with nothing to do is noise: the TikTok item appears only
+        // when something is queued (or the audit has retired the batch).
+        assert.ok(!page.includes('id="studio-tiktok-batch"'), 'nothing queued: no batch button at all');
+        // Offline is a state with a way out: what the worker is, how to start it, and a real re-check.
+        assert.ok(page.includes(s.t('studio.worker.what')) && page.includes(s.t('studio.worker.howTo')));
+        assert.ok(tagOf(page, 'studio-worker-retry').includes('data-action="studio:retryWorker"'), 'Retry re-reads the status');
     });
 
     it('hides the batch button once TikTok has audited the app', () => {
@@ -2504,6 +2532,7 @@ describe('StudioPage — Generate', () => {
 
     it('an idea alone is enough; neither a lesson nor an idea sends nothing and says why', async () => {
         const s = loadStudio();
+        (s.Studio as Json).mode = 'idea';
         const errorHost = s.host('studio-new-error');
         const idea = s.host('studio-idea');
         const sent: Json[] = [];
@@ -2642,7 +2671,8 @@ describe('StudioPage — the draft editor', () => {
         const previews = s.host('studio-previews');
         await openEditor(s, studioDraft({ status: 'rendering', render: null }));
         const page = s.dom.get('page-container')!.innerHTML;
-        assert.ok(page.includes('preview-slide"><span class="skel skel-block"></span>'), 'skeleton slides');
+        assert.ok(page.includes('class="phone-wire is-busy"'), 'a skeleton in the phone frame');
+        assert.ok(/class="rail-tab[^"]*"[^>]*>\s*<span class="skel skel-block"><\/span>/.test(page), 'and on every slide in the rail');
         assert.ok(page.includes(s.t('studio.preview.rendering')));
         assert.ok(tagOf(page, 'studio-schedule-submit').includes('disabled'), 'nothing to schedule until the render is in');
 
@@ -2710,6 +2740,7 @@ describe('StudioPage — the draft editor', () => {
         const captionsHost = s.host('studio-captions');
         const campaignHost = s.host('studio-campaign');
         const saveBar = s.host('studio-savebar');
+        const panel = s.host('studio-problems');
         s.Studio.slideField({ dataset: { slide: '2', path: 'title' }, value: 'عنوان طويل جداً لا يتسع في مكانه على الشريحة أبداً' });
         const problems = [
             'GoalsNotQuestions[3:list].title: 45 > 36 «عنوان طويل»',
@@ -2734,8 +2765,12 @@ describe('StudioPage — the draft editor', () => {
         assert.ok(tagOf(captionsHost.innerHTML, 'st-cap-ig').includes('aria-invalid="true"'), 'caption problems go to the caption');
         assert.ok(tagOf(campaignHost.innerHTML, 'st-keyword').includes('aria-invalid="true"'), 'keyword problems go to the keyword');
         const bar = saveBar.innerHTML;
-        assert.ok(bar.includes(s.t('studio.problems.title', { n: '6' })), 'the count above Save');
-        for (const p of problems) assert.ok(bar.includes(esc4(p)), `listed above Save: ${p}`);
+        assert.ok(bar.includes(s.t('studio.problems.title', { n: '6' })), 'the count in the save bar');
+        assert.ok(bar.includes('data-action="studio:focusFirstProblem"'), 'with a way to the first one');
+        // The whole list sits in the panel above the forms, not in the sticky bar.
+        for (const p of problems) assert.ok(panel.innerHTML.includes(esc4(p)), `listed in the problems panel: ${p}`);
+        assert.ok(panel.innerHTML.includes(s.t('studio.problems.onSlide', { n: 3, kind: s.t('studio.kind.list') })), 'each says which slide it is on');
+        assert.equal((s.Studio as Json).selectedSlide, 2, 'the first slide with a problem is the one brought up');
         assert.equal(s.Studio.isDirty(), true, 'nothing was saved');
         assert.ok(!s.toasts.some((x) => x.message === s.t('studio.editor.savedToast')));
     });
@@ -2997,5 +3032,413 @@ describe('StudioPage — Settings', () => {
         const before = names.length;
         await s.Studio.createWorker(fakeForm({ name: '   ' }), submitEvent);
         assert.equal(names.length, before, 'a worker needs a name');
+    });
+});
+
+// ─── The three-step flow (Studio UX v2) ──────────────────────────────────────
+const currentStep = (markup: string): string => ((markup.match(/<li class="studio-step is-current" aria-current="step">[\s\S]*?<span class="studio-step-label">([^<]*)<\/span>/) || [])[1] || '');
+
+describe('StudioPage — one path in three steps', () => {
+    it('a stepper says where the operator is: 1 on the home view, 3 in the editor, all done once scheduled', async () => {
+        const s = loadStudio();
+        stubHome(s.api);
+        await s.Studio.render();
+        const home = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        assert.equal(currentStep(home), s.t('studio.step.topic'));
+        assert.equal((home.match(/class="studio-step is-/g) || []).length, 3);
+
+        const e = loadStudio();
+        await openEditor(e);
+        const editor = e.dom.get('page-container')!.innerHTML;
+        e.Studio.destroy();
+        assert.equal(currentStep(editor), e.t('studio.step.review'));
+        assert.equal((editor.match(/class="studio-step is-done"/g) || []).length, 2, 'topic and generate are behind it');
+
+        const S = e.Studio as Json;
+        S.draft = studioDraft({ status: 'scheduled' });
+        assert.equal(S.editorStep(), 4);
+        assert.equal((String(S.stepperMarkup(4)).match(/is-done/g) || []).length, 3);
+    });
+
+    it('one primary button per step: Generate at home, then Save while there are edits, else the way to Schedule', async () => {
+        const s = loadStudio();
+        stubHome(s.api);
+        await s.Studio.render();
+        const home = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        assert.deepEqual((home.match(/class="btn btn-primary[^"]*"/g) || []).length, 1, 'Generate is the only primary');
+        assert.ok(tagOf(home, 'studio-generate').includes('btn-primary'));
+
+        const e = loadStudio();
+        const bar = e.host('studio-savebar');
+        await openEditor(e);
+        let markup = String((e.Studio as Json).saveBarMarkup());
+        assert.ok(!markup.includes('btn-primary') && markup.includes('data-action="studio:goSchedule"'), 'clean and ready: the way to Schedule');
+        e.Studio.slideField({ dataset: { slide: '1', path: 'title' }, value: 'عنوان جديد' });
+        markup = bar.innerHTML;
+        e.Studio.destroy();
+        assert.equal((markup.match(/btn-primary/g) || []).length, 1);
+        assert.ok(tagOf(markup, 'studio-save').includes('btn-primary'), 'with edits: Save is the one');
+        assert.ok(markup.includes(e.t('studio.editor.unsaved')));
+    });
+
+    it('only the picker and Generate up front; angle, slides, keyword and accent under a closed "More options"', async () => {
+        const s = loadStudio();
+        stubHome(s.api);
+        await s.Studio.render();
+        const page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        const more = (page.match(/<details class="studio-more" id="studio-more">[\s\S]*?<\/details>/) || [''])[0];
+        assert.ok(more, 'a <details>, closed');
+        for (const id of ['studio-angle', 'studio-slides', 'studio-keyword', 'studio-accent']) assert.ok(more.includes(`id="${id}"`), `${id} is inside it`);
+        assert.ok(more.includes(s.t('studio.new.summaryAngleAuto')) && more.includes(s.t('studio.new.summarySlides', { n: '8' })), 'the closed state says what will be sent');
+        assert.ok(page.includes('id="studio-lesson-q"') && page.includes('data-action="studio:setMode" data-mode="idea"'), 'search, and the switch to an idea');
+    });
+
+    it('remembers angle, slides and accent in this browser — but never the keyword', async () => {
+        const storage = fakeStorage();
+        const s = loadStudio({}, storage);
+        s.api.createStudioDraft = () => Promise.resolve({ draft: { id: 'n1', status: 'rendering' } });
+        s.Studio.selected = ['l1'];
+        await s.Studio.generate(fakeForm({ angle: 'mistakes', slides: '7', keyword: 'هدف', accent: '#7C5CFF' }), submitEvent);
+        const saved = JSON.parse(storage.getItem('studio:prefs') || '{}');
+        assert.deepEqual(saved, { mode: 'lesson', angle: 'mistakes', slides: 7, accent: '#7C5CFF' });
+
+        const next = loadStudio({}, storage);
+        stubHome(next.api);
+        await next.Studio.render();
+        const page = next.dom.get('page-container')!.innerHTML;
+        next.Studio.destroy();
+        assert.ok(page.includes('<option value="mistakes" selected>'), 'the angle comes back');
+        assert.ok(/<option value="7" selected>/.test(page), 'and the slide count');
+        assert.ok(tagOf(page, 'studio-accent').includes('value="#7C5CFF"'), 'and the accent');
+        assert.ok(tagOf(page, 'studio-keyword').includes('value=""'), 'a reused keyword would answer the next post with this one’s DM');
+
+        const broken = fakeStorage();
+        broken.setItem('studio:prefs', '{"angle":"sideways","slides":40,"accent":"red"}');
+        const b = loadStudio({}, broken);
+        assert.deepEqual(plainJson((b.Studio as Json).prefs()), { mode: null, angle: 'auto', slides: 8, accent: '' }, 'junk is re-checked, not trusted');
+    });
+
+    it('a carousel finished for the tenant the operator switched away from opens nothing and says nothing', async () => {
+        const s = loadStudio();
+        let resolve: (v: Json) => void = () => {};
+        s.api.createStudioDraft = () => new Promise((r) => { resolve = r; });
+        s.Studio.selected = ['l1'];
+        const run = s.Studio.generate(fakeForm({}), submitEvent);
+        await settle(2);
+        assert.equal((s.Studio as Json).generating, true);
+        (s.Studio as Json).resetTenantState();
+        // The operator is now on the NEW tenant's Studio home: exactly where a stale answer would open.
+        s.app.currentPage = 'studio';
+        s.host('studio-new');
+        resolve({ draft: { id: 'old-tenant', status: 'rendering' } });
+        await run;
+        assert.equal(s.nav.length, 0, 'not opened under the new tenant');
+        assert.equal(s.toasts.length, 0, 'and not announced');
+        assert.equal((s.Studio as Json).generating, false);
+    });
+
+    it('lesson mode with nothing picked says so on the picker, and an idea is sent without lessons', async () => {
+        const s = loadStudio();
+        const sent: Json[] = [];
+        s.api.createStudioDraft = (body: Json) => { sent.push(body); return Promise.resolve({ draft: { id: 'x', status: 'rendering' } }); };
+        const search = s.host('studio-lesson-q');
+        const errorHost = s.host('studio-new-error');
+        await s.Studio.generate(fakeForm({ idea: '' }), submitEvent);
+        assert.equal(sent.length, 0);
+        assert.ok(errorHost.innerHTML.includes(s.t('studio.new.needLesson')));
+        assert.equal(search.getAttribute('aria-invalid'), 'true');
+
+        (s.Studio as Json).mode = 'idea';
+        s.Studio.selected = ['l1'];
+        await s.Studio.generate(fakeForm({ idea: 'Local RAG in ten minutes' }), submitEvent);
+        assert.deepEqual(plainJson(sent[0]).lessonIds, [], '"From an idea" means the idea alone');
+    });
+});
+
+describe('StudioPage — empty and blocked states', () => {
+    const homeWith = async (status: Json, settings: Json, lessons: Json[] = [], drafts: Json[] = []): Promise<{ s: StudioLoaded; page: string }> => {
+        const s = loadStudio();
+        s.api.getStudioStatus = () => Promise.resolve(status);
+        s.api.getStudioLessons = () => Promise.resolve({ lessons });
+        s.api.getStudioDrafts = () => Promise.resolve({ drafts });
+        s.api.getStudioSettings = () => Promise.resolve({ settings });
+        await s.Studio.render();
+        const page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        return { s, page };
+    };
+    const setupSteps = (page: string): string[] => [...page.matchAll(/<li class="setup-step( is-done)?">/g)].map((m) => (m[1] ? 'done' : 'todo'));
+
+    it('a brand-new tenant gets a three-step setup list, each step with its way forward, and an idea still works', async () => {
+        const { s, page } = await homeWith(
+            studioStatus({ worker: { online: false, lastSeen: null, name: null }, lessons: { total: 0, indexed: 0, indexing: 0, failed: 0 } }),
+            studioSettings({ library: { root: null } }),
+        );
+        assert.ok(page.includes('id="studio-setup"'));
+        assert.deepEqual(setupSteps(page), ['todo', 'todo', 'todo']);
+        assert.ok(page.includes('href="#/studio?tab=settings&amp;focus=library"'), 'the folder step goes to the field itself');
+        assert.ok(page.includes('href="#/studio?tab=settings&amp;focus=workers"'), 'the worker step to Workers');
+        assert.ok(/\sdisabled\b/.test(tagOf(page, 'studio-setup-scan')), 'nothing to scan without a folder');
+        assert.ok(/\sdisabled\b/.test(tagOf(page, 'studio-generate')), 'Generate waits for a lesson…');
+        assert.ok(page.includes(s.t('studio.new.blockedHint')), '…and says why');
+        assert.ok(page.includes('data-action="studio:setMode" data-mode="idea"'), 'with the way out');
+        assert.ok(page.includes(s.t('studio.worker.neverTitle')), 'and what the worker is, before it has ever connected');
+    });
+
+    it('folder set, not scanned: the Scan button is live; indexing: a progress bar that reads "12 of 34"', async () => {
+        const scanned = await homeWith(studioStatus({ lessons: { total: 0, indexed: 0, indexing: 0, failed: 0 } }), studioSettings());
+        assert.deepEqual(setupSteps(scanned.page), ['done', 'done', 'todo']);
+        const scan = tagOf(scanned.page, 'studio-setup-scan');
+        assert.ok(scan.includes('data-action="studio:scanLibrary"') && !/\sdisabled\b/.test(scan));
+
+        const lessons = studioLessons().lessons.map((l: Json, i: number) => ({ ...l, status: i < 2 ? 'indexed' : 'indexing' }));
+        const indexing = await homeWith(studioStatus({ lessons: { total: 34, indexed: 12, indexing: 5, failed: 0 } }), studioSettings(), lessons);
+        const bar = tagOf(indexing.page, 'studio-library-meter');
+        assert.ok(bar.startsWith('<progress') && bar.includes('value="12"') && bar.includes('max="34"'));
+        assert.ok(bar.includes(`aria-valuetext="${indexing.s.t('studio.countSr', { n: '12', max: '34' })}"`));
+        assert.ok(tagOf(indexing.page, 'studio-index-meter').includes('value="2"'), 'the picker says the same about its own list');
+    });
+
+    it('no drafts yet: an example of what a draft looks like, and how to get one', async () => {
+        const { s, page } = await homeWith(studioStatus(), studioSettings(), studioLessons().lessons, []);
+        assert.ok(page.includes('id="studio-drafts-example"'));
+        assert.ok(page.includes(s.t('studio.drafts.emptyBody')) && page.includes(s.t('studio.drafts.exampleCaption')));
+    });
+
+    it('Retry on the offline notice re-reads the status and says what came back', async () => {
+        const s = loadStudio();
+        const S = s.Studio as Json;
+        s.api.getStudioStatus = () => Promise.resolve(studioStatus({ worker: { online: false, lastSeen: minutesAgo(200), name: 'Mac' } }));
+        s.api.getStudioDrafts = () => Promise.resolve({ drafts: [] });
+        await S.retryWorker(null);
+        assert.equal(s.toasts.at(-1)?.message, s.t('studio.worker.stillOffline'));
+        s.api.getStudioStatus = () => Promise.resolve(studioStatus());
+        await S.retryWorker(null);
+        assert.equal(s.toasts.at(-1)?.message, s.t('studio.worker.backOnline'));
+    });
+});
+
+describe('StudioPage — editing, preview first', () => {
+    it('every slide has its form in the page, one shown: the rail is tabs, and a tab opens its slide', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const S = s.Studio as Json;
+        const page = s.dom.get('page-container')!.innerHTML;
+        assert.ok(page.includes('role="tablist"') && (page.match(/role="tab"/g) || []).length === 8);
+        assert.ok(tagOf(page, 'st-0-tab').includes('aria-selected="true"') && tagOf(page, 'st-1-tab').includes('tabindex="-1"'), 'one tab stop');
+        assert.ok(!tagOf(page, 'st-0').includes('hidden') && tagOf(page, 'st-1').includes('hidden'), 'slide 1 shown, the rest hidden');
+        assert.ok(page.includes('aria-roledescription="') && page.includes('data-action="studio:editSlide"'), 'the preview is a carousel you can click into');
+        const previews = s.host('studio-previews');
+        S.selectSlide(3);
+        s.Studio.destroy();
+        assert.equal(S.selectedSlide, 3);
+        assert.ok(previews.innerHTML.includes('src="https://cdn.test/ig-4.jpg"'), 'the phone shows slide 4');
+        assert.ok(tagOf(previews.innerHTML, 'st-3-tab').includes('aria-selected="true"'));
+    });
+
+    it('arrow keys follow the reading direction: in Arabic, left is the next slide', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const S = s.Studio as Json;
+        const stage = { closest: (sel: string) => (sel === '.phone-stage' ? {} : null) };
+        const key = (k: string): void => S.onKeydown({ key: k, target: stage, preventDefault: () => {} }, 'editor');
+        key('ArrowLeft');
+        assert.equal(S.selectedSlide, 1, 'RTL: left is forward');
+        key('ArrowRight');
+        assert.equal(S.selectedSlide, 0);
+        key('End');
+        assert.equal(S.selectedSlide, 7);
+        key('ArrowLeft');
+        assert.equal(S.selectedSlide, 7, 'and stops at the end');
+        s.Studio.destroy();
+    });
+
+    it('Cmd/Ctrl+S saves the edits, and does nothing when there are none', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const S = s.Studio as Json;
+        let prevented = 0;
+        let patches = 0;
+        s.api.updateStudioDraft = (_id: string, body: Json) => { patches++; return Promise.resolve({ draft: studioDraft({ status: 'rendering', carousel: body.carousel }) }); };
+        S.onKeydown({ key: 's', metaKey: true, preventDefault: () => { prevented++; } }, 'editor');
+        await settle();
+        assert.equal(patches, 0, 'nothing to save');
+        assert.equal(prevented, 1, 'but the browser still does not "Save page"');
+        s.Studio.slideField({ dataset: { slide: '1', path: 'title' }, value: 'ابدأ بالنتيجة دائماً' });
+        S.onKeydown({ key: 'S', ctrlKey: true, preventDefault: () => { prevented++; } }, 'editor');
+        await settle();
+        s.Studio.destroy();
+        assert.equal(patches, 1, 'Ctrl+S saved');
+        assert.equal(s.Studio.isDirty(), false);
+    });
+
+    it('never loses typing: edits are kept in this browser, offered back on the next visit, and dropped once saved', async () => {
+        const storage = fakeStorage();
+        const s = loadStudio({}, storage);
+        await openEditor(s);
+        s.Studio.slideField({ dataset: { slide: '1', path: 'title' }, value: 'لم يُحفظ بعد' });
+        s.Studio.destroy();
+        const kept = JSON.parse(storage.getItem('studio:edits:d1') || 'null');
+        assert.equal(kept.work.carousel.slides[1].title, 'لم يُحفظ بعد', 'every edit is written at once');
+
+        const back = loadStudio({}, storage);
+        const notices = back.host('studio-notices');
+        await openEditor(back);
+        const S = back.Studio as Json;
+        assert.equal(S.restored.state, 'restored');
+        assert.equal(S.work.carousel.slides[1].title, 'لم يُحفظ بعد');
+        assert.equal(back.Studio.isDirty(), true);
+        assert.ok(back.dom.get('page-container')!.innerHTML.includes(back.t('studio.restore.restored')), 'and it says so');
+        back.api.updateStudioDraft = (_id: string, body: Json) => Promise.resolve({ draft: studioDraft({ status: 'rendering', carousel: body.carousel }) });
+        await back.Studio.save();
+        back.Studio.destroy();
+        assert.equal(storage.getItem('studio:edits:d1'), null, 'saved: the copy is gone');
+        assert.ok(!notices.innerHTML.includes(back.t('studio.restore.restored')));
+
+        // Made against an older server copy: offered, not applied blind.
+        storage.setItem('studio:edits:d1', JSON.stringify({ baseline: '{"old":true}', work: kept.work }));
+        const stale = loadStudio({}, storage);
+        await openEditor(stale);
+        const T = stale.Studio as Json;
+        assert.equal(T.restored.state, 'stale');
+        assert.equal(stale.Studio.isDirty(), false, 'nothing applied yet');
+        T.applyRestored();
+        stale.Studio.destroy();
+        assert.equal(T.work.carousel.slides[1].title, 'لم يُحفظ بعد', 'applied on request');
+    });
+
+    it('a deleted slide can be put back exactly where it was', async () => {
+        const s = loadStudio();
+        const notices = s.host('studio-notices');
+        await openEditor(s);
+        const S = s.Studio as Json;
+        const original = plainJson(S.work.carousel.slides[2]);
+        S.deleteSlide(2);
+        assert.equal(S.work.carousel.slides.length, 7);
+        assert.ok(notices.innerHTML.includes('data-action="studio:undo"') && notices.innerHTML.includes(s.t('studio.undo.deleted', { n: 3, kind: s.t('studio.kind.list') })));
+        S.undoLast();
+        s.Studio.destroy();
+        assert.equal(S.work.carousel.slides.length, 8);
+        assert.deepEqual(plainJson(S.work.carousel.slides[2]), original);
+        assert.equal(s.Studio.isDirty(), false, 'deleted and restored is no change at all');
+        assert.ok(!notices.innerHTML.includes('data-action="studio:undo"'), 'the offer is gone once used');
+    });
+
+    it('duplicates a slide, and changes a slide’s type keeping what both types share — with Undo', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const S = s.Studio as Json;
+        S.duplicateSlide(1);
+        assert.equal(S.work.carousel.slides.length, 9);
+        assert.deepEqual(plainJson(S.work.carousel.slides[2]), plainJson(S.work.carousel.slides[1]));
+        assert.equal(S.selectedSlide, 2, 'the copy is the slide now open');
+        S.duplicateSlide(0);
+        assert.equal(S.work.carousel.slides.length, 9, 'one cover only');
+
+        // Slide 6 (index 5 after the copy) is the steps slide: to a list, the steps become items.
+        const steps = plainJson(S.work.carousel.slides[5]);
+        assert.equal(steps.kind, 'steps');
+        S.changeKind({ dataset: { slide: '5' }, value: 'list' });
+        const list: Json = plainJson(S.work.carousel.slides[5]);
+        assert.equal(list.kind, 'list');
+        assert.equal(list.title, 'بالخطوات', 'the title carries over');
+        assert.deepEqual(list.items.map((i: Json) => i.text), ['الدور', 'المهمة', 'الصيغة']);
+        assert.equal(list.items[1].sub, 'وش المطلوب');
+        S.undoLast();
+        s.Studio.destroy();
+        assert.deepEqual(plainJson(S.work.carousel.slides[5]), steps, 'Undo restores it exactly');
+    });
+
+    it('the screenshot picker shows clean frames only by default, and says how many it hides', () => {
+        const s = loadStudio();
+        const S = s.Studio as Json;
+        S.work = { carousel: studioCarousel(), shots: {}, campaign: {} };
+        S._shotSlide = 0;
+        const moments = [...studioMoments().moments, { id: 'mo4', lesson_id: 'l1', t: 130, description: 'Arrows drawn on it', kind: 'other', clean: false, thumb_url: '/api/uploads/t4' }];
+        let markup = String(S.shotPickerMarkup({ lesson: {}, moments }));
+        assert.ok(markup.includes(s.t('studio.shot.showing', { n: '3', total: '4' })));
+        assert.ok(!markup.includes('data-moment="mo4"'));
+        S.cleanOnly = false;
+        markup = String(S.shotPickerMarkup({ lesson: {}, moments }));
+        assert.ok(markup.includes('data-moment="mo4"') && markup.includes(s.t('studio.shot.showing', { n: '4', total: '4' })));
+        assert.ok(String(S.shotHeroMarkup(moments[3])).includes(s.t('studio.moment.notClean')), 'the large view says what is wrong with it');
+    });
+
+    it('"Write it again" makes a new draft from the same source, at the chosen angle, and goes to watch it', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const S = s.Studio as Json;
+        assert.deepEqual(plainJson(S.regenInput(fakeForm({ angle: 'steps', slides: '7' }))), {
+            lessonIds: ['l1'], angle: 'steps', slides: 7, keyword: 'برومبت', accent: '#FF6B6B',
+        });
+        const posted: Json[] = [];
+        s.api.createStudioDraft = (body: Json) => { posted.push(body); return Promise.resolve({ draft: { id: 'v2', status: 'rendering' } }); };
+        s.api.getStudioDrafts = () => Promise.resolve({ drafts: [] });
+        await S.regenerate(fakeForm({ angle: 'mistakes', slides: '8' }), submitEvent);
+        s.Studio.destroy();
+        assert.deepEqual(plainJson(s.nav[0]), { page: 'studio' }, 'to the home view, where the progress is');
+        assert.equal(posted.length, 1);
+        assert.equal(plainJson(posted[0]).angle, 'mistakes');
+        assert.equal(S.draftId === 'v2', false, 'this draft is left as it was');
+    });
+});
+
+describe('StudioPage — scheduling says exactly what will happen', () => {
+    const slotB = '2026-09-26T18:00:00.000Z';
+
+    it('names the platforms, the time in the tenant’s zone and city, the TikTok outcome and the DM', async () => {
+        const s = loadStudio();
+        s.I18N.lang = 'en';
+        await openEditor(s);
+        const S = s.Studio as Json;
+        s.Studio.destroy();
+        const time = new Intl.DateTimeFormat('en-US', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Riyadh' }).format(new Date(slotB));
+        assert.ok(time.includes('9:00 PM'), '18:00Z is 9 PM in Riyadh');
+        assert.equal(S.zoneTime(slotB), time);
+        const lines = (choice: Json): string[] => (JSON.parse(JSON.stringify(S.scheduleSummary(choice))) as Json[]).map((l) => String(l.text));
+        const queued = lines({ when: slotB, tiktok: 'queue', campaign: true });
+        assert.equal(queued[0], s.t('studio.schedule.sumMeta', { when: s.t('studio.schedule.sumWhen', { time, city: 'Riyadh' }) }));
+        assert.equal(queued[1], s.t('studio.schedule.sumTikTokQueue'));
+        assert.equal(queued[2], s.t('studio.schedule.sumDm', { keyword: 'برومبت' }));
+        assert.equal(lines({ when: slotB, tiktok: 'none', campaign: false })[1], s.t('studio.schedule.sumTikTokNone'));
+        assert.equal(lines({ when: slotB, tiktok: 'none', campaign: false })[2], s.t('studio.schedule.sumNoDm', { keyword: 'برومبت' }));
+        assert.ok(String(lines({ when: slotB, tiktok: 'scheduled', campaign: true })[1]).includes(time));
+        const markup = String(S.scheduleMarkup());
+        assert.ok(markup.includes('id="studio-schedule-summary"') && markup.includes('aria-live="polite"'));
+        assert.ok(markup.includes(s.t('studio.schedule.zoneHint', { city: 'Riyadh', zone: 'Asia/Riyadh' })), 'the zone is said, not assumed');
+        s.I18N.lang = 'ar';
+        assert.equal(S.zoneCity('Asia/Riyadh'), 'الرياض', 'in Arabic, the city in Arabic');
+    });
+});
+
+describe('StudioPage — settings problems sit next to their fields', () => {
+    it('checks the server’s rules first, and files a 400’s problems under the fields they name', async () => {
+        const s = loadStudio();
+        s.hash.tab = 'settings';
+        s.api.getStudioSettings = () => Promise.resolve({ settings: studioSettings() });
+        s.api.getStudioWorkers = () => Promise.resolve({ workers: [] });
+        s.api.getStudioStatus = () => Promise.resolve(studioStatus());
+        await s.Studio.render();
+        const S = s.Studio as Json;
+        let puts = 0;
+        s.api.saveStudioSettings = () => { puts++; return Promise.reject(Object.assign(new Error('Some settings need fixing.'), { status: 400, body: { error: 'Some settings need fixing.', problems: ['schedule.slots[1] must be a time like 13:00', 'a problem with no path'] } })); };
+        S.setting({ dataset: { path: 'product.url' }, value: 'http://acme.test' });
+        await S.saveSettings(fakeForm({}), submitEvent);
+        let page = s.dom.get('page-container')!.innerHTML;
+        assert.equal(puts, 0, 'caught before the round trip');
+        assert.ok(tagOf(page, 'sts-product-url').includes('aria-invalid="true"'));
+        assert.ok(/id="sts-product-url-problems"[^>]*>\s*<li dir="auto">/.test(page) && page.includes(s.t('studio.settings.err.url')));
+
+        S.setting({ dataset: { path: 'product.url' }, value: 'https://acme.test' });
+        await S.saveSettings(fakeForm({}), submitEvent);
+        page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        assert.equal(puts, 1);
+        assert.equal(S.settingsProblemPath('schedule.slots[1] must be a time like 13:00'), 'schedule.slots.1');
+        assert.ok(tagOf(page, 'sts-schedule-slots-1').includes('aria-invalid="true"'), 'the second slot is the one marked');
+        assert.ok(page.includes('a problem with no path'), 'and what names no field stays in the list by Save');
     });
 });
