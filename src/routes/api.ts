@@ -7,7 +7,10 @@ import {
     createLegacySession, createSession, requireAuth, createDownloadToken, consumeDownloadToken
 } from '../middleware/auth.js';
 import axios from 'axios';
-import { sendDirectMessage, publishFacebookPost, publishInstagramPost, API_VERSION } from '../services/instagram.js';
+import {
+    sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
+    API_VERSION,
+} from '../services/instagram.js';
 import { generateAiResponse } from '../services/ai.js';
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
@@ -28,11 +31,12 @@ import type { UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
-import { getMediaStore } from '../services/storage.js';
+import { getMediaStore, uploadIdFromSegment } from '../services/storage.js';
+import { isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
 import adminRouter from './admin.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import {
-    publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokOptions,
+    publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokInboxOptions, validateTikTokOptions,
 } from '../services/tiktokPublish.js';
 import { getTikTokPostingFlags } from '../services/appSettings.js';
 import { postModeFor } from './tiktok.js';
@@ -421,8 +425,8 @@ export function unsupportedPlatformCombination(platform: unknown, postType: unkn
     if (postType === 'story' && (platform === 'facebook' || platform === 'both')) {
         return 'Facebook Page stories are not supported — this service has no /photo_stories or /video_stories upload. Schedule a story for Instagram only.';
     }
-    if (platform === 'tiktok' && postType !== 'video') {
-        return 'TikTok posts must be videos — photo posts are not supported yet.';
+    if (platform === 'tiktok' && postType !== 'video' && !isTikTokPhotoType(postType)) {
+        return 'TikTok posts must be a video, a photo or a carousel of photos.';
     }
     return null;
 }
@@ -503,7 +507,7 @@ export interface PublishSweepResult {
 type PublishTarget = Pick<
     ScheduledPostRow,
     'id' | 'platform' | 'post_type' | 'caption' | 'media_url' | 'cover_url' | 'published_post_id'
->;
+> & { media_urls?: ScheduledPostRow['media_urls'] };
 
 /**
  * The creator fields `attemptPublish` needs to reach Meta. `id` is nullable here — unlike
@@ -582,6 +586,12 @@ export async function attemptPublish(
         if (!isMetaPlatform(post.platform)) {
             throw new Error(`Unsupported platform "${String(post.platform)}" — nothing was published.`);
         }
+        // A carousel without its list would otherwise go out as whatever `media_url` holds: one
+        // slide of several, recorded as the whole post.
+        const slides = post.post_type === 'carousel' ? (post.media_urls ?? []) : null;
+        if (slides && slides.length === 0) {
+            throw new Error('This carousel has no images — edit the post and add them again.');
+        }
         const token = decryptSecret(creator.page_access_token);
 
         // 1. Publish to Facebook
@@ -590,13 +600,15 @@ export async function attemptPublish(
                 throw new Error('Facebook Page ID is missing for this creator.');
             }
             log('info', 'publish.facebook_start', { post_id: post.id });
-            const fbRes = await publishFacebookPost(
-                creator.facebook_page_id,
-                postType,
-                post.caption || '',
-                post.media_url,
-                token
-            );
+            const fbRes = slides
+                ? await publishFacebookCarousel(creator.facebook_page_id, post.caption || '', slides, token)
+                : await publishFacebookPost(
+                    creator.facebook_page_id,
+                    postType,
+                    post.caption || '',
+                    post.media_url,
+                    token
+                );
             fbId = fbRes.id || fbRes.post_id;
             log('info', 'publish.facebook_done', { post_id: post.id, fb_post_id: fbId });
         } else if (fbId) {
@@ -610,23 +622,25 @@ export async function attemptPublish(
             if (!creator.instagram_page_id) {
                 throw new Error('Instagram Account ID is missing for this creator.');
             }
-            if (!post.media_url) {
+            if (!slides && !post.media_url) {
                 throw new Error('Instagram requires a media URL to publish.');
             }
             if (postType === 'feed') {
                 throw new Error('Text posts are Facebook-only — Instagram needs an image or a video.');
             }
             log('info', 'publish.instagram_start', { post_id: post.id });
-            const igRes = await publishInstagramPost(
-                creator.instagram_page_id,
-                postType,
-                post.caption || '',
-                post.media_url,
-                token,
-                // `cover_url` is the reason a reel does not get a black tile in the
-                // profile grid. It survives create, edit and publish-now.
-                post.cover_url
-            );
+            const igRes = slides
+                ? await publishInstagramCarousel(creator.instagram_page_id, post.caption || '', slides, token)
+                : await publishInstagramPost(
+                    creator.instagram_page_id,
+                    postType,
+                    post.caption || '',
+                    post.media_url!,
+                    token,
+                    // `cover_url` is the reason a reel does not get a black tile in the
+                    // profile grid. It survives create, edit and publish-now.
+                    post.cover_url
+                );
             igId = igRes.id;
             log('info', 'publish.instagram_done', { post_id: post.id, ig_media_id: igId });
         } else if (igId) {
@@ -696,6 +710,7 @@ export async function publishClaimedPost(post: ClaimedPost, creator: PublishCrea
             post_type: post.post_type,
             caption: post.caption,
             media_url: post.media_url,
+            media_urls: post.media_urls ?? null,
             external_publish_id: post.external_publish_id ?? null,
             platform_options: post.platform_options ?? null,
         });
@@ -923,11 +938,11 @@ const MAX_UPLOAD_BYTES = 3.2 * 1024 * 1024;
 // has to be publicly fetchable. Everything below assumes the caller is hostile.
 router.get('/uploads/:id', async (req, res) => {
     try {
-        const { id } = req.params;
-
-        // Postgres raises 22P02 on a malformed uuid literal, which surfaced as a 500 for what
-        // is really just a URL that cannot match anything.
-        if (!id || !UUID_PATTERN.test(id)) {
+        // `<uuid>` or `<uuid>.jpg` — TikTok's photo fetcher is sent the second form. Postgres
+        // raises 22P02 on a malformed uuid literal, which surfaced as a 500 for what is really
+        // just a URL that cannot match anything, so anything else stops here.
+        const id = uploadIdFromSegment(req.params.id);
+        if (!id) {
             res.status(404).send('Not Found');
             return;
         }
@@ -2161,6 +2176,32 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             return;
         }
 
+        // A carousel's images, and a TikTok photo's, are checked now. Instagram refuses a PNG
+        // slide and TikTok a PNG or an outside link too, but only at publish time, in a card
+        // nobody is looking at.
+        const media = await validatePostMedia({
+            platform, postType: post_type, mediaUrl: media_url, mediaUrls: req.body?.media_urls,
+        });
+        if (!media.ok) {
+            res.status(400).json({ error: media.error });
+            return;
+        }
+        // The TikTok sibling may bring its own images — 9:16 versions of the same slides — and
+        // otherwise shares the Meta row's, checked against TikTok's rules rather than Meta's.
+        const ownTikTokList = req.body?.tiktok_media_urls;
+        const tiktokMedia = alsoTikTok
+            ? await validatePostMedia({
+                platform: 'tiktok', postType: post_type, mediaUrl: media.mediaUrl,
+                mediaUrls: ownTikTokList != null && !(Array.isArray(ownTikTokList) && ownTikTokList.length === 0)
+                    ? ownTikTokList
+                    : media.mediaUrls,
+            })
+            : null;
+        if (tiktokMedia && !tiktokMedia.ok) {
+            res.status(400).json({ error: tiktokMedia.error });
+            return;
+        }
+
         const creatorId = getTenantId(req);
         const creator = await getTenant(creatorId, [
             'id', 'page_access_token', 'instagram_page_id', 'facebook_page_id'
@@ -2171,9 +2212,11 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         }
 
         const wantsTikTok = platform === 'tiktok' || alsoTikTok;
+        const tiktokKind = isTikTokPhotoType(post_type) ? 'photo' : 'video';
         let tiktokOptions: ScheduledPostRow['platform_options'] = null;
         if (wantsTikTok) {
-            if (!media_url) {
+            // A photo post's image was checked with the rest of the media above.
+            if (tiktokKind === 'video' && !media_url) {
                 res.status(400).json({ error: 'TikTok needs a video — upload one first.' });
                 return;
             }
@@ -2196,16 +2239,14 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
                 && scopes.includes('video.upload')) {
                 mode = 'inbox';
             }
-            if (mode === 'direct') {
-                const checked = validateTikTokOptions(req.body?.tiktok_options, { audited: flags.audited });
-                if (!checked.ok) {
-                    res.status(400).json({ error: checked.error });
-                    return;
-                }
-                tiktokOptions = checked.options;
-            } else {
-                tiktokOptions = { mode: 'inbox' };
+            const checked = mode === 'direct'
+                ? validateTikTokOptions(req.body?.tiktok_options, { audited: flags.audited, media: tiktokKind })
+                : validateTikTokInboxOptions(req.body?.tiktok_options, tiktokKind);
+            if (!checked.ok) {
+                res.status(400).json({ error: checked.error });
+                return;
             }
+            tiktokOptions = checked.options;
         }
 
         const targets: string[] = [platform];
@@ -2219,12 +2260,13 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         try {
             await client.query('BEGIN');
             for (const target of targets) {
+                const rowMedia = target === 'tiktok' && tiktokMedia ? tiktokMedia : media;
                 const inserted = await client.query(
                     `INSERT INTO scheduled_posts
-                         (creator_id, platform, post_type, caption, media_url, scheduled_time, status, cover_url, group_id, platform_options)
-                     VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, $8, $9::jsonb) RETURNING *`,
+                         (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options)
+                     VALUES ($1, $2, $3, $4, $5, $6::text[], $7, 'PENDING', $8, $9, $10::jsonb) RETURNING *`,
                     [
-                        creatorId, target, post_type, caption || null, media_url || null, when,
+                        creatorId, target, post_type, caption || null, rowMedia.mediaUrl, rowMedia.mediaUrls, when,
                         // A cover image is an Instagram/Facebook concept; TikTok picks its own.
                         target === 'tiktok' ? null : (cover_url || null),
                         groupId,
@@ -2330,8 +2372,8 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
         // The guard has to run against the EFFECTIVE combination, not the body: every column
         // below is `COALESCE($n, column)`, so a PUT sending only `platform` still has a
         // post_type, and it is the one already on the row. Read it first.
-        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type' | 'status'>>(
-            'SELECT platform, post_type, status FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
+        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type' | 'status' | 'media_url' | 'media_urls'>>(
+            'SELECT platform, post_type, status, media_url, media_urls FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
             [id, tenantId]
         );
         if (!current) {
@@ -2351,7 +2393,32 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
             return;
         }
 
+        // The media is checked against the effective row too. Moving a carousel from facebook
+        // to both has to re-check slides the PUT did not send, because Instagram takes JPEG
+        // only — the same two-step edit the platform guard above exists for.
+        const effectivePlatform = platform ?? current.platform;
+        const effectiveType = post_type ?? current.post_type;
+        const rawMediaUrls = req.body?.media_urls;
+        const mediaTouched = platform != null || post_type != null || media_url != null || rawMediaUrls != null;
+        let mediaUrlParam = media_url;
+        let mediaUrlsParam: string[] | null = null;
+        if (mediaTouched && (effectiveType === 'carousel' || (effectivePlatform === 'tiktok' && isTikTokPhotoType(effectiveType)))) {
+            const checked = await validatePostMedia({
+                platform: effectivePlatform,
+                postType: effectiveType,
+                mediaUrl: media_url ?? current.media_url,
+                mediaUrls: rawMediaUrls ?? current.media_urls,
+            });
+            if (!checked.ok) {
+                res.status(400).json({ error: checked.error });
+                return;
+            }
+            mediaUrlParam = checked.mediaUrl;
+            mediaUrlsParam = checked.mediaUrls;
+        }
+
         // New Direct Post choices for a TikTok row, validated exactly as at create time.
+        const tiktokKind = isTikTokPhotoType(effectiveType) ? 'photo' : 'video';
         let tiktokOptionsJson: string | null = null;
         if (rawTikTokOptions !== undefined && (platform ?? current.platform) === 'tiktok') {
             const { audited } = await getTikTokPostingFlags();
@@ -2361,12 +2428,17 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                     res.status(409).json({ error: 'Sending to TikTok drafts needs the upload permission — reconnect TikTok in Settings.' });
                     return;
                 }
-                tiktokOptionsJson = JSON.stringify({ mode: 'inbox' });
+                const inbox = validateTikTokInboxOptions(rawTikTokOptions, tiktokKind);
+                if (!inbox.ok) {
+                    res.status(400).json({ error: inbox.error });
+                    return;
+                }
+                tiktokOptionsJson = JSON.stringify(inbox.options);
             }
         }
         if (tiktokOptionsJson === null && rawTikTokOptions !== undefined && (platform ?? current.platform) === 'tiktok') {
             const { audited } = await getTikTokPostingFlags();
-            const checked = validateTikTokOptions(rawTikTokOptions, { audited });
+            const checked = validateTikTokOptions(rawTikTokOptions, { audited, media: tiktokKind });
             if (!checked.ok) {
                 res.status(400).json({ error: checked.error });
                 return;
@@ -2385,9 +2457,15 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                  scheduled_time = COALESCE($5, scheduled_time)::timestamp with time zone,
                  cover_url = COALESCE($6, cover_url),
                  platform_options = COALESCE($9::jsonb, platform_options),
+                 media_urls = CASE WHEN $10::boolean THEN $11::text[] ELSE media_urls END,
                  status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
              WHERE id = $7 AND creator_id = $8 RETURNING *`,
-            [platform, post_type, caption, media_url, scheduled_time, cover_url, id, tenantId, tiktokOptionsJson]
+            [
+                platform, post_type, caption, mediaUrlParam, scheduled_time, cover_url, id, tenantId, tiktokOptionsJson,
+                // Rewritten whenever the media could have changed: a row that is no longer a
+                // carousel must not keep a list that would be read as slides if it became one again.
+                mediaTouched, mediaUrlsParam,
+            ]
         );
 
         if (result.rows.length === 0) {

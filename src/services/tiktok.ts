@@ -18,6 +18,9 @@
  * have TikTok fetch through `/api/uploads/:id`, whose response Vercel caps at 4.5MB. Pushing
  * the bytes ourselves is an outbound request: no verification, no response cap.
  *
+ * Photos have no such choice: PULL_FROM_URL is the only source TikTok accepts for a photo post,
+ * so they need the verified prefix. A photo upload here tops out at 3.2MB, inside the cap.
+ *
  * @see https://developers.tiktok.com/doc/content-posting-api-reference-upload-video
  * @see https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide
  * @see https://developers.tiktok.com/doc/oauth-user-access-token-management
@@ -118,7 +121,20 @@ const CODE_MESSAGES: Record<string, string> = {
         'That privacy choice is not available for this TikTok account any more — edit the post and choose again.',
     file_format_check_failed: 'TikTok rejected the file format — upload an MP4 (H.264).',
     invalid_file_upload: 'TikTok rejected the uploaded file.',
+    // Photo posts (content/init). PULL_FROM_URL is the only source TikTok takes for photos.
+    url_ownership_unverified:
+        'TikTok can only fetch photos from a verified URL prefix. In the TikTok developer portal, open "URL properties", verify https://msg-response-auto.vercel.app/, then retry.',
+    invalid_param: 'TikTok refused the post’s settings as invalid.',
+    invalid_params: 'TikTok refused the post’s settings as invalid.',
+    app_version_check_failed:
+        'Sending photos to TikTok drafts needs TikTok app version 31.8 or newer. Update the TikTok app, then retry.',
 };
+
+/**
+ * Codes whose friendly wording is not the whole story: TikTok's own message names the field it
+ * refused, which is the one thing needed to fix it, so it is kept alongside.
+ */
+const KEEP_TIKTOK_DETAIL = new Set(['invalid_param', 'invalid_params']);
 
 /** Pull a TikTok error out of an axios failure or a 200 whose envelope says otherwise. */
 export function toTikTokError(context: string, err: any): TikTokApiError | Error {
@@ -131,8 +147,9 @@ export function toTikTokError(context: string, err: any): TikTokApiError | Error
     if (envelope && typeof envelope === 'object' && typeof envelope.code === 'string') {
         const code = envelope.code;
         const friendly = CODE_MESSAGES[code];
+        const detail = friendly && KEEP_TIKTOK_DETAIL.has(code) && envelope.message ? ` (TikTok: ${envelope.message})` : '';
         return new TikTokApiError(
-            `${context}: ${friendly ?? envelope.message ?? code}`, code, status, envelope.log_id
+            `${context}: ${friendly ?? envelope.message ?? code}${detail}`, code, status, envelope.log_id
         );
     }
     // OAuth endpoints: { error: "invalid_grant", error_description, log_id }
@@ -514,6 +531,91 @@ export async function initDirectVideoPost(
     }
 }
 
+// ─── Photo posts ────────────────────────────────────────────────────────────────────────
+
+/** TikTok's photo title and description ceilings, in UTF-16 code units (`String.length`). */
+export const MAX_PHOTO_TITLE_UTF16 = 90;
+export const MAX_PHOTO_DESCRIPTION_UTF16 = 4000;
+/** A photo post holds 1–35 images. */
+export const MAX_PHOTO_IMAGES = 35;
+
+/**
+ * Cut to at most `max` UTF-16 code units without splitting a surrogate pair. `slice` alone can
+ * end on half an emoji, and a lone surrogate is not text TikTok will take.
+ */
+export function truncateUtf16(text: string, max: number): string {
+    if (text.length <= max) return text;
+    const cut = text.slice(0, max);
+    const last = cut.charCodeAt(cut.length - 1);
+    return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
+/**
+ * The title a photo post goes out with: the creator's own, or else the caption's first line
+ * with text on it — a caption that opens with a blank line still gets a title — trimmed to 90.
+ */
+export function photoTitle(caption: string | null | undefined, title?: string | null): string {
+    const chosen = title?.trim();
+    if (chosen) return truncateUtf16(chosen, MAX_PHOTO_TITLE_UTF16);
+    const firstLine = (caption ?? '').split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? '';
+    return truncateUtf16(firstLine, MAX_PHOTO_TITLE_UTF16).trim();
+}
+
+/** The Direct Post half of a photo's `post_info`. MEDIA_UPLOAD takes none of it. */
+export interface PhotoDirectPostInfo {
+    privacy_level: string;
+    disable_comment: boolean;
+    auto_add_music: boolean;
+    brand_content_toggle: boolean;
+    brand_organic_toggle: boolean;
+}
+
+/**
+ * Start a photo post: DIRECT_POST when `direct` is given, otherwise MEDIA_UPLOAD, which lands in
+ * the creator's TikTok inbox like an inbox video. PULL_FROM_URL only — TikTok fetches every URL
+ * itself, and only from the URL prefix verified in its portal. The first image is the cover.
+ *
+ * MEDIA_UPLOAD sends only the title and description: privacy, comments, music and disclosure
+ * are DIRECT_POST fields, chosen in TikTok's editor otherwise. `direct` being absent is what
+ * leaves them out, so the one cannot be sent with the other's fields by mistake.
+ *
+ * NOT retried, for the same reason as the video inits: a 5xx may still have created the post —
+ * a duplicate on a live profile, or a second draft against the five-a-day limit. TikTok also
+ * allows this endpoint 6 requests a minute per token, and a refusal says `rate_limit_exceeded`.
+ */
+export async function initPhotoPost(
+    accessToken: string,
+    photoUrls: readonly string[],
+    text: { title: string; description: string },
+    direct?: PhotoDirectPostInfo
+): Promise<{ publishId: string }> {
+    if (photoUrls.length === 0 || photoUrls.length > MAX_PHOTO_IMAGES) {
+        throw new Error(`TikTok photo posts take 1 to ${MAX_PHOTO_IMAGES} images — this one has ${photoUrls.length}.`);
+    }
+    const words = {
+        title: truncateUtf16(text.title, MAX_PHOTO_TITLE_UTF16),
+        description: truncateUtf16(text.description, MAX_PHOTO_DESCRIPTION_UTF16),
+    };
+    try {
+        const res = await tiktokHttp.post(
+            `${TIKTOK_API_BASE}/v2/post/publish/content/init/`,
+            {
+                media_type: 'PHOTO',
+                post_mode: direct ? 'DIRECT_POST' : 'MEDIA_UPLOAD',
+                post_info: direct ? { ...words, ...direct } : words,
+                source_info: { source: 'PULL_FROM_URL', photo_images: [...photoUrls], photo_cover_index: 0 },
+            },
+            { headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' } }
+        );
+        const data = unwrap<{ publish_id?: string }>('TikTok photo post', res.data, res.status);
+        // toTikTokError below adds the 'TikTok photo post:' prefix.
+        if (!data?.publish_id) throw new Error('the response had no publish_id.');
+        return { publishId: data.publish_id };
+    } catch (err) {
+        throw toTikTokError('TikTok photo post', err);
+    }
+}
+
 /**
  * A video's length in seconds, from the MP4 `mvhd` box — or null if it cannot be read.
  *
@@ -610,7 +712,7 @@ const FAIL_REASONS: Record<string, string> = {
     picture_size_check_failed: 'TikTok needs a resolution between 360 and 4096 pixels on each side.',
     internal: 'TikTok had an internal error — retry the post.',
     video_pull_failed: 'TikTok could not fetch the video.',
-    photo_pull_failed: 'TikTok could not fetch the photos.',
+    photo_pull_failed: 'TikTok could not fetch the photos — check they are still uploaded and that the URL prefix is verified in TikTok’s portal.',
     publish_cancelled: 'The TikTok upload was cancelled.',
     auth_removed: 'The TikTok connection was removed — reconnect TikTok in Settings.',
     spam_risk_too_many_posts: 'TikTok’s daily posting limit for this account has been reached.',

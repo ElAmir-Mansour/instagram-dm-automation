@@ -179,7 +179,7 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
  * ── What it will NOT delete, and why each matters ──
  *
  * A row is only eligible when **no** scheduled post in a non-final state references it, by
- * either `media_url` or `cover_url`:
+ * `media_url`, `cover_url` or any slide in `media_urls`:
  *
  *   - `PENDING` / `PUBLISHING` — the media is about to be fetched by Meta. Deleting it is a
  *     publish that fails with a broken URL.
@@ -189,6 +189,10 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
  * `cover_url` is checked as well as `media_url` because it is a separate upload — it is the
  * whole reason a reel does not get a black frame-0 tile — and six posts currently have one.
  * Matching only `media_url` would delete covers that are still in use.
+ *
+ * `media_urls` (v20) for the same reason: `media_url` mirrors only a carousel's first image,
+ * so slides 2..N would be deleted while the post waits to publish — and a TikTok photo post is
+ * still fetching them while it is PROCESSING.
  *
  * Opt-in, like `pruneRawPayloads`, and off by default: this is an irreversible delete of the
  * operator's own media, and it should be their decision rather than a surprise on upgrade.
@@ -229,6 +233,7 @@ export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
                               AND (
                                     s.media_url LIKE '%' || m.id::text || '%'
                                  OR s.cover_url LIKE '%' || m.id::text || '%'
+                                 OR array_to_string(s.media_urls, ' ') LIKE '%' || m.id::text || '%'
                               )
                        )
                      LIMIT $2

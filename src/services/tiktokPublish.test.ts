@@ -11,9 +11,11 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    applyStatus, applyWebhookEvent, MAX_PENDING_INBOX_SHARES, pendingInboxShares, uploadIdFromUrl,
-    validateTikTokOptions,
+    applyStatus, applyWebhookEvent, MAX_PENDING_INBOX_SHARES, pendingInboxShares, publishTikTokPost,
+    validateTikTokInboxOptions, validateTikTokOptions, type TikTokPublishTarget,
 } from './tiktokPublish.js';
+import { uploadIdFromUrl } from './storage.js';
+import { tiktokHttp, TIKTOK_API_BASE } from './tiktok.js';
 import { postModeFor } from '../routes/tiktok.js';
 import { attemptPublish, isMetaPlatform, unsupportedPlatformCombination } from '../routes/api.js';
 
@@ -189,10 +191,14 @@ describe('the dispatcher fails closed on platforms it does not publish to', () =
         assert.equal(isMetaPlatform(undefined), false);
     });
 
-    it('refuses to schedule an unknown platform, or a non-video TikTok post', () => {
+    it('refuses to schedule an unknown platform, or a TikTok type TikTok has no post for', () => {
         assert.match(unsupportedPlatformCombination('twitter', 'image')!, /Unknown platform/);
-        assert.match(unsupportedPlatformCombination('tiktok', 'image')!, /must be videos/);
-        assert.equal(unsupportedPlatformCombination('tiktok', 'video'), null);
+        for (const postType of ['video', 'image', 'carousel']) {
+            assert.equal(unsupportedPlatformCombination('tiktok', postType), null, postType);
+        }
+        for (const postType of ['reel', 'story', 'feed']) {
+            assert.match(unsupportedPlatformCombination('tiktok', postType)!, /video, a photo or a carousel/, postType);
+        }
     });
 });
 
@@ -236,5 +242,227 @@ describe('validateTikTokOptions — TikTok\u2019s Content Sharing Guidelines, se
         assert.equal(postModeFor(true, true), 'direct');
         assert.equal(postModeFor(true, false), 'inbox');
         assert.equal(postModeFor(false, true), 'inbox', 'switched on, but this connection was made before — reconnect');
+    });
+});
+
+describe('validateTikTokOptions — photo posts', () => {
+    const base = { consent: true, privacy_level: 'SELF_ONLY' };
+
+    it('drops duet, stitch and is_aigc, which a TikTok photo post does not have', () => {
+        const r = validateTikTokOptions(
+            { ...base, allow_duet: true, allow_stitch: true, is_aigc: true, allow_comment: true },
+            { audited: false, media: 'photo' }
+        );
+        assert.ok(r.ok);
+        if (!r.ok) return;
+        assert.equal('allow_duet' in r.options, false);
+        assert.equal('allow_stitch' in r.options, false);
+        assert.equal('is_aigc' in r.options, false, 'a choice kept on the row would read as applied');
+        assert.equal(r.options.allow_comment, true);
+    });
+
+    it('turns music on unless it is switched off', () => {
+        const on = validateTikTokOptions(base, { audited: false, media: 'photo' });
+        const off = validateTikTokOptions({ ...base, auto_add_music: false }, { audited: false, media: 'photo' });
+        assert.ok(on.ok && off.ok);
+        if (!on.ok || !off.ok) return;
+        assert.equal(on.options.auto_add_music, true);
+        assert.equal(off.options.auto_add_music, false);
+    });
+
+    it('takes a title of up to 90 UTF-16 units, and leaves a blank one to the caption', () => {
+        const ok = validateTikTokOptions({ ...base, title: '  ' + 'ع'.repeat(90) + '  ' }, { audited: false, media: 'photo' });
+        assert.ok(ok.ok);
+        if (ok.ok) assert.equal(ok.options.title, 'ع'.repeat(90));
+
+        const blank = validateTikTokOptions({ ...base, title: '   ' }, { audited: false, media: 'photo' });
+        assert.ok(blank.ok);
+        if (blank.ok) assert.equal('title' in blank.options, false, 'absent means "use the caption"');
+
+        // 46 emoji are 92 units: over, although only 46 characters.
+        const over = validateTikTokOptions({ ...base, title: '😀'.repeat(46) }, { audited: false, media: 'photo' });
+        assert.equal(over.ok, false);
+        if (!over.ok) assert.match(over.error, /at most 90/);
+    });
+
+    it('keeps every Content Sharing Guidelines check a video has', () => {
+        assert.equal(validateTikTokOptions({ ...base, consent: false }, { audited: false, media: 'photo' }).ok, false);
+        assert.equal(validateTikTokOptions({ consent: true, privacy_level: 'PUBLIC_TO_EVERYONE' }, { audited: false, media: 'photo' }).ok, false);
+    });
+
+    it('leaves a video exactly as it was', () => {
+        const r = validateTikTokOptions({ ...base, allow_duet: true, title: 'ignored' }, { audited: false });
+        assert.ok(r.ok);
+        if (!r.ok) return;
+        assert.equal(r.options.allow_duet, true);
+        assert.equal('title' in r.options, false);
+        assert.equal('auto_add_music' in r.options, false);
+    });
+
+    it('takes a photo title in inbox mode too, and nothing else', () => {
+        assert.deepEqual(validateTikTokInboxOptions({ mode: 'inbox', title: ' عنوان ', privacy_level: 'SELF_ONLY' }, 'photo'),
+            { ok: true, options: { mode: 'inbox', title: 'عنوان' } });
+        assert.deepEqual(validateTikTokInboxOptions({ mode: 'inbox', title: 'x' }, 'video'), { ok: true, options: { mode: 'inbox' } });
+        assert.deepEqual(validateTikTokInboxOptions(undefined, 'photo'), { ok: true, options: { mode: 'inbox' } });
+        assert.equal(validateTikTokInboxOptions({ title: 'x'.repeat(91) }, 'photo').ok, false);
+    });
+});
+
+/**
+ * The photo branch of `publishTikTokPost`, end to end against a stubbed pool and a stubbed
+ * TikTok. What it has to get right cannot be seen from the row afterwards: which URLs TikTok
+ * is told to pull, and which fields each mode sends.
+ */
+describe('publishTikTokPost — photo posts', () => {
+    const JPEG_ID = '0b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    const WEBP_ID = '1b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    const PNG_ID = '2b8a7a0e-3c1f-4f7e-9d0a-1234567890ab';
+    const MIMES: Record<string, string> = { [JPEG_ID]: 'image/jpeg', [WEBP_ID]: 'image/webp', [PNG_ID]: 'image/png' };
+
+    let tiktokCalls: { url: string; body: any }[] = [];
+    let creatorInfo: Record<string, unknown> = {};
+    const originalPost = tiktokHttp.post;
+
+    beforeEach(() => {
+        tiktokCalls = [];
+        creatorInfo = { privacy_level_options: ['SELF_ONLY', 'PUBLIC_TO_EVERYONE'], comment_disabled: false };
+        (tiktokHttp as any).post = async (url: string, body: any) => {
+            tiktokCalls.push({ url, body });
+            if (url.endsWith('/creator_info/query/')) return { status: 200, data: { data: creatorInfo, error: { code: 'ok' } } };
+            if (url.endsWith('/content/init/')) return { status: 200, data: { data: { publish_id: 'p_pub_url~1' }, error: { code: 'ok' } } };
+            throw new Error(`no TikTok call arranged for ${url}`);
+        };
+        respond = (sql, params) => {
+            if (/FROM platform_connections/.test(sql)) {
+                return {
+                    rows: [{
+                        id: 'conn-1', creator_id: 'creator-1', status: 'active', refresh_token: 'r', access_token: 'act.1',
+                        access_expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+                        scopes: ['user.info.basic', 'video.upload', 'video.publish'],
+                    }],
+                };
+            }
+            if (/FROM app_settings/.test(sql)) {
+                // Deliberately NOT the host the rows below were saved with.
+                return { rows: params[0] === 'app.public_base_url' ? [{ value: 'https://msg-response-auto.vercel.app', is_secret: false }] : [] };
+            }
+            if (/FROM media_uploads/.test(sql)) {
+                return { rows: (params[0] as string[]).filter((id) => MIMES[id]).map((id) => ({ id, mime_type: MIMES[id] })) };
+            }
+            if (/COUNT\(\*\)/.test(sql)) return { rows: [{ n: 0 }] };
+            return { rows: [], rowCount: 1 };
+        };
+    });
+
+    afterEach(() => {
+        (tiktokHttp as any).post = originalPost;
+    });
+
+    function row(overrides: Partial<TikTokPublishTarget> = {}): TikTokPublishTarget {
+        return {
+            id: 'post-1', creator_id: 'creator-1', post_type: 'carousel',
+            caption: 'السطر الأول\nوالباقي #AI',
+            media_url: `https://preview-123.vercel.app/api/uploads/${JPEG_ID}`,
+            media_urls: [`https://preview-123.vercel.app/api/uploads/${JPEG_ID}`, `http://localhost:3000/api/uploads/${WEBP_ID}.webp`],
+            external_publish_id: null,
+            platform_options: { mode: 'direct', privacy_level: 'SELF_ONLY', allow_comment: true, brand_content: false, brand_organic: false },
+            ...overrides,
+        };
+    }
+
+    const init = () => tiktokCalls.find((c) => c.url === `${TIKTOK_API_BASE}/v2/post/publish/content/init/`);
+
+    it('rebuilds every URL on the public base URL, with an extension, in slide order', async () => {
+        const status = await publishTikTokPost(row(), 0);
+
+        assert.equal(status, 'PROCESSING');
+        // Never the host the row stored: TikTok pulls only from the verified prefix.
+        assert.deepEqual(init()!.body.source_info, {
+            source: 'PULL_FROM_URL',
+            photo_images: [
+                `https://msg-response-auto.vercel.app/api/uploads/${JPEG_ID}.jpg`,
+                `https://msg-response-auto.vercel.app/api/uploads/${WEBP_ID}.webp`,
+            ],
+            photo_cover_index: 0,
+        });
+        assert.equal(init()!.body.media_type, 'PHOTO');
+    });
+
+    it('posts directly with the stored choices, the caption as description and its first line as title', async () => {
+        await publishTikTokPost(row(), 0);
+
+        assert.equal(init()!.body.post_mode, 'DIRECT_POST');
+        assert.deepEqual(init()!.body.post_info, {
+            title: 'السطر الأول', description: 'السطر الأول\nوالباقي #AI',
+            privacy_level: 'SELF_ONLY', disable_comment: false, auto_add_music: true,
+            brand_content_toggle: false, brand_organic_toggle: false,
+        });
+        assert.ok(tiktokCalls.some((c) => c.url.endsWith('/creator_info/query/')), 'creator_info is re-read before posting');
+    });
+
+    it('forces comments off when the creator has switched them off since', async () => {
+        creatorInfo = { ...creatorInfo, comment_disabled: true };
+        await publishTikTokPost(row(), 0);
+        assert.equal(init()!.body.post_info.disable_comment, true);
+    });
+
+    it('sends only title and description to the inbox, and uses the stored title', async () => {
+        await publishTikTokPost(row({ platform_options: { mode: 'inbox', title: 'عنوان مختار' } }), 0);
+
+        assert.equal(init()!.body.post_mode, 'MEDIA_UPLOAD');
+        assert.deepEqual(init()!.body.post_info, { title: 'عنوان مختار', description: 'السطر الأول\nوالباقي #AI' });
+        assert.ok(!tiktokCalls.some((c) => c.url.endsWith('/creator_info/query/')), 'inbox mode needs no creator_info');
+    });
+
+    it('posts a single photo from media_url', async () => {
+        await publishTikTokPost(row({ post_type: 'image', media_urls: null }), 0);
+        assert.deepEqual(init()!.body.source_info.photo_images, [`https://msg-response-auto.vercel.app/api/uploads/${JPEG_ID}.jpg`]);
+    });
+
+    it('records the publish id before anything else, then PROCESSING', async () => {
+        await publishTikTokPost(row(), 0);
+
+        const writes = statements.filter((st) => /UPDATE scheduled_posts/.test(st.sql)).map((st) => oneLine(st.sql));
+        assert.match(writes[0]!, /SET external_publish_id = \$2/);
+        assert.match(writes[1]!, /SET status = 'PROCESSING'.*WHERE id = \$1 AND status = 'PUBLISHING'/);
+    });
+
+    it('refuses a PNG before TikTok is asked for anything that creates a post', async () => {
+        const err = await publishTikTokPost(row({
+            media_urls: [`https://x/api/uploads/${JPEG_ID}`, `https://x/api/uploads/${PNG_ID}`],
+        }), 0).then(() => null, (e) => e);
+
+        assert.match(String(err?.message), /JPEG or WebP — image 2 is PNG/);
+        assert.equal(init(), undefined, 'no init');
+        const failed = statements.find((st) => /SET status = 'FAILED'/.test(st.sql));
+        assert.match(String(failed?.params[1]), /image 2 is PNG/, 'the reason lands on the row');
+    });
+
+    it('refuses an upload that no longer exists, and a link to another site', async () => {
+        const gone = await publishTikTokPost(row({
+            media_urls: [`https://x/api/uploads/${JPEG_ID}`, 'https://x/api/uploads/3b8a7a0e-3c1f-4f7e-9d0a-1234567890ab'],
+        }), 0).then(() => null, (e) => e);
+        assert.match(String(gone?.message), /Image 2 can’t be found/);
+
+        const outside = await publishTikTokPost(row({
+            media_urls: [`https://x/api/uploads/${JPEG_ID}`, 'https://cdn.example/slide.jpg'],
+        }), 0).then(() => null, (e) => e);
+        assert.match(String(outside?.message), /uploaded here/);
+        assert.equal(init(), undefined);
+    });
+
+    it('does not post a second time when a previous attempt already reached TikTok', async () => {
+        (tiktokHttp as any).post = async (url: string, body: any) => {
+            tiktokCalls.push({ url, body });
+            if (url.endsWith('/status/fetch/')) {
+                return { status: 200, data: JSON.stringify({ data: { status: 'PROCESSING_DOWNLOAD' }, error: { code: 'ok' } }) };
+            }
+            throw new Error(`no TikTok call arranged for ${url}`);
+        };
+
+        const status = await publishTikTokPost(row({ external_publish_id: 'p_pub_url~earlier' }), 0);
+
+        assert.equal(status, 'PROCESSING');
+        assert.equal(init(), undefined, 'resumed, not re-initialised');
     });
 });
