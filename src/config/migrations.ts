@@ -37,6 +37,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v18_tiktok.sql',
     'migration_v19_tiktok_direct_post.sql',
     'migration_v20_carousel.sql',
+    'migration_v21_studio.sql',
 ] as const;
 
 export interface SchemaState {

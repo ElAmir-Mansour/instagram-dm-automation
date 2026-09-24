@@ -21,6 +21,7 @@
  * database. Selecting a subset of columns is expressed at the call site with `Pick<>`, so the
  * type says which columns the query actually asked for.
  */
+import type { Carousel } from '../services/studio/carouselTypes.js';
 
 /** Postgres `TIMESTAMP WITH TIME ZONE` arrives as a Date through `pg`'s default parser. */
 export type Timestamptz = Date;
@@ -309,4 +310,263 @@ export interface AiAgentRow {
     knowledge_base: string | null;
     model: string | null;
     temperature: number | null;
+}
+
+// ─── Carousel Studio (v21) ──────────────────────────────────────────────────────────────
+//
+// The shapes STUDIO.md §3 names. They live here, beside the rows whose JSONB columns hold
+// them, the way `TikTokPostOptions` lives beside `platform_options`. The generator
+// (src/services/studio/generate.ts) is written against these too.
+
+export type LessonStatus = 'new' | 'indexing' | 'indexed' | 'failed';
+
+/** What a lesson teaches, as the worker's Gemini pass read it off the video. */
+export interface LessonNotes {
+    /** 2–4 sentences, Arabic. */
+    summary: string;
+    /** What it teaches, 3–10. `t` is seconds into the video. */
+    points: { title: string; detail: string; t?: number }[];
+    /** Prompts shown on screen, verbatim. */
+    prompts: { text: string; t?: number }[];
+    /** Products used, e.g. "NotebookLM". */
+    tools: string[];
+    demos: { title: string; result: string; t?: number }[];
+}
+
+/** A `course_lessons` row. The contract calls it `LessonRow`, so it is named that here too. */
+export interface LessonRow {
+    id: string;
+    creator_id: string;
+    /** "1.2", "8.3"; "I.1" for intro videos, "G.1" for the Gemini apps. */
+    lesson_no: string;
+    section_no: number | null;
+    section_title: string | null;
+    title: string;
+    /** Absolute, on the Mac. Only the worker can open it. */
+    video_path: string;
+    /** NUMERIC: select it as `duration_s::float8` or `pg` hands back a string. */
+    duration_s: number | null;
+    status: LessonStatus;
+    notes: LessonNotes | null;
+    indexed_at: Timestamptz | null;
+    error: string | null;
+    created_at: Timestamptz;
+    updated_at: Timestamptz;
+}
+
+export type MomentKind = 'slide' | 'ui' | 'result' | 'code' | 'prompt' | 'other';
+
+/** A `lesson_moments` row as the API and the generator see it (STUDIO.md §3 `Moment`). */
+export interface Moment {
+    id: string;
+    lesson_id: string;
+    /** Seconds into the video. NUMERIC: select it as `t::float8`. */
+    t: number;
+    description: string;
+    kind: MomentKind;
+    /** No annotation arrows or scribbles, nothing loading or blank. */
+    clean: boolean;
+    /** `/api/uploads/<id>`, a 480px JPEG. */
+    thumb_url: string | null;
+}
+
+/** A still for a slide: which lesson, when, and how to frame it. 1 = the whole frame. */
+export interface ShotSpec {
+    lessonId: string;
+    t: number;
+    zoom: number;
+    /** The point of the frame to centre on, 0..1. */
+    focusX: number;
+    focusY: number;
+    desc?: string;
+}
+
+export type DraftAngle = 'auto' | 'tips' | 'steps' | 'mistakes' | 'compare' | 'prompt' | 'overview';
+
+/** What the operator asked for. Stored as given, after validation, in `carousel_drafts.input`. */
+export interface DraftInput {
+    /** 0–3 lessons to ground the post in. */
+    lessonIds: string[];
+    /** Free-text topic; required when `lessonIds` is empty. */
+    idea?: string;
+    angle?: DraftAngle;
+    /** 6–10, default 8. */
+    slides?: number;
+    /** Else suggested. */
+    keyword?: string;
+    /** `#RRGGBB`, else picked from the palette. */
+    accent?: string;
+}
+
+/** The keyword → DM campaign a draft proposes. `create: false` reuses an active one. */
+export interface DraftCampaign {
+    keyword: string;
+    variants: string[];
+    dm: string;
+    create: boolean;
+}
+
+/** Upload URLs in slide order: `ig` 1080×1350, `tt` 1080×1920. `job_id` is the render that made them. */
+export interface DraftRender {
+    ig: string[];
+    tt: string[];
+    rendered_at: string;
+    job_id: string;
+}
+
+export type DraftTikTokIntent = 'none' | 'queue' | 'scheduled';
+
+export interface DraftSchedule {
+    scheduled_time: string;
+    meta_row_id: string;
+    tiktok: DraftTikTokIntent;
+    tiktok_row_id: string | null;
+    /** The operator's "made public on TikTok" tick — unaudited direct posts go out private. */
+    tiktok_public_done: boolean;
+}
+
+export type DraftStatus = 'generating' | 'rendering' | 'ready' | 'scheduled' | 'failed';
+
+export interface CarouselDraftRow {
+    id: string;
+    creator_id: string;
+    status: DraftStatus;
+    input: DraftInput;
+    carousel: Carousel | null;
+    /** Keyed by `ShotRef.name`; generated drafts name theirs `m-<momentId>`. */
+    shots: Record<string, ShotSpec> | null;
+    campaign: DraftCampaign | null;
+    render: DraftRender | null;
+    schedule: DraftSchedule | null;
+    error: string | null;
+    created_at: Timestamptz;
+    updated_at: Timestamptz;
+}
+
+export type StudioJobKind = 'scan_library' | 'index_lesson' | 'render_carousel';
+export type StudioJobStatus = 'pending' | 'claimed' | 'done' | 'failed';
+
+export interface ScanLibraryPayload { root: string }
+export interface IndexLessonPayload { lessonId: string; video_path: string; lesson_no: string; title: string }
+/**
+ * Each shot carries its lesson's `video_path`, so the worker needs no second lookup. `brand`,
+ * `cta` and `facts` are the tenant's settings at the moment the render was queued (v1.1): the
+ * templates read every colour, font and CTA word from them, never from constants.
+ */
+export interface RenderCarouselPayload {
+    draftId: string;
+    carousel: Carousel;
+    shots: Record<string, ShotSpec & { video_path: string }>;
+    brand: BrandKit;
+    cta: CtaSlideWords;
+    facts: string[];
+}
+
+export interface StudioJobRow {
+    id: string;
+    creator_id: string;
+    kind: StudioJobKind;
+    payload: ScanLibraryPayload | IndexLessonPayload | RenderCarouselPayload;
+    status: StudioJobStatus;
+    progress: string | null;
+    claimed_at: Timestamptz | null;
+    /** Moved by every progress call. A claim older than 15 minutes by this is claimable again. */
+    heartbeat_at: Timestamptz | null;
+    attempts: number;
+    result: unknown;
+    error: string | null;
+    created_at: Timestamptz;
+    updated_at: Timestamptz;
+}
+
+// ── Per-tenant Studio settings (STUDIO.md §10) ──
+// Nothing about one creator is in code. `defaultStudioSettings()` (src/services/studio/settings.ts)
+// is the neutral fallback; each tenant's row is merged over it section by section.
+
+export type StudioDisplayFont = 'Cairo' | 'Tajawal' | 'IBM Plex Sans Arabic' | 'Inter';
+
+export interface BrandKit {
+    /** Shown in the UI. */
+    name: string;
+    /** The slide sign-off, e.g. "AGENTIC AI" · "بالعربي". */
+    signature: { latin: string; local: string };
+    /** Accents to rotate through, `#RRGGBB`. */
+    palette: string[];
+    colors: { ink: string; paper: string; muted: string };
+    fonts: { display: StudioDisplayFont; mono: 'JetBrains Mono' };
+    direction: 'rtl' | 'ltr';
+    /** One theme in v1; the field exists so more can be added. */
+    theme: 'dark-grid';
+}
+
+export interface VoiceProfile {
+    language: 'ar' | 'en';
+    /** Free-text voice guide the writer follows. */
+    guide: string;
+    digits: 'arabic-indic' | 'latin';
+}
+
+export interface ProductInfo {
+    name: string;
+    /** With any referral code. */
+    url: string;
+    /** Short facts usable on slides, e.g. "٣٤ درس". */
+    facts: string[];
+    /** The ✅ lines in the DM. */
+    dmBullets: string[];
+}
+
+/** The last slide's words, per platform. */
+export interface CtaSlideWords {
+    igAsk: string;
+    igSub: string;
+    save: string;
+    ttHeadline: string;
+    ttPill: string;
+    ttSub: string;
+    follow: string;
+    swipe: string;
+}
+
+export interface CtaConfig {
+    /** The Instagram caption's ask, with `{keyword}`. */
+    instagramAsk: string;
+    /** The TikTok caption's line, e.g. link in bio. */
+    tiktokLine: string;
+    /** With `{username}` `{question}` `{pitch}` `{url}` `{bullets}`. */
+    dmTemplate: string;
+    slide: CtaSlideWords;
+}
+
+/** Local posting times (`HH:MM`) in an IANA timezone. */
+export interface ScheduleConfig { timezone: string; slots: string[] }
+
+/** The folder the worker scans. Null until the tenant sets it. */
+export interface LibraryConfig { root: string | null }
+
+export interface StudioSettings {
+    brand: BrandKit;
+    voice: VoiceProfile;
+    product: ProductInfo;
+    cta: CtaConfig;
+    schedule: ScheduleConfig;
+    library: LibraryConfig;
+    /** Carousels the tenant approved, as few-shot examples; null = the built-in ones. */
+    examples: Carousel[] | null;
+}
+
+export interface StudioSettingsRow extends StudioSettings {
+    creator_id: string;
+    updated_at: Timestamptz;
+}
+
+export interface StudioWorkerRow {
+    id: string;
+    creator_id: string;
+    name: string;
+    /** SHA-256 hex of the token. The token itself is shown once and never stored. */
+    token_hash: string;
+    last_seen_at: Timestamptz | null;
+    created_at: Timestamptz;
+    revoked_at: Timestamptz | null;
 }
