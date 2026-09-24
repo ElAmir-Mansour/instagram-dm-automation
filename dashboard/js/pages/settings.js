@@ -364,6 +364,9 @@ const SettingsPage = {
                         ${t('settings.tiktok.reconnectForDirect')}
                     </p>
                 ` : ''}
+                ${connected && c.directPostEnabled && !c.audited && c.canDirectPost && !c.canUpload ? html`
+                    <p class="form-hint mbe-3">${t('settings.tiktok.reconnectForDrafts')}</p>
+                ` : ''}
                 ${connected && !c.canUpload && !c.canDirectPost ? html`
                     <p class="form-hint text-warning mbe-3">${t('settings.tiktok.cannotUpload')}</p>
                 ` : ''}
@@ -427,7 +430,8 @@ const SettingsPage = {
      */
     tiktokModeLabel(c) {
         if (!c || c.postMode !== 'direct') return t('settings.tiktok.mode.inbox');
-        return c.audited ? t('settings.tiktok.mode.direct') : t('settings.tiktok.mode.directUnaudited');
+        if (c.audited) return t('settings.tiktok.mode.direct');
+        return c.canUpload && c.canDirectPost ? t('settings.tiktok.mode.choose') : t('settings.tiktok.mode.directUnaudited');
     },
 
     /**

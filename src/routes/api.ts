@@ -2188,7 +2188,14 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             // needs the creator's choices and consent up front — there is no TikTok editor step
             // in which to make them later.
             const flags = await getTikTokPostingFlags();
-            const mode = postModeFor((connection.scopes ?? []).includes('video.publish'), flags.directPostEnabled);
+            const scopes = connection.scopes ?? [];
+            let mode = postModeFor(scopes.includes('video.publish'), flags.directPostEnabled);
+            // Until the app is audited a direct post is private, so the creator may ask for an
+            // inbox draft instead — provided the connection can deliver one.
+            if (mode === 'direct' && !flags.audited && req.body?.tiktok_options?.mode === 'inbox'
+                && scopes.includes('video.upload')) {
+                mode = 'inbox';
+            }
             if (mode === 'direct') {
                 const checked = validateTikTokOptions(req.body?.tiktok_options, { audited: flags.audited });
                 if (!checked.ok) {
@@ -2347,6 +2354,17 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
         // New Direct Post choices for a TikTok row, validated exactly as at create time.
         let tiktokOptionsJson: string | null = null;
         if (rawTikTokOptions !== undefined && (platform ?? current.platform) === 'tiktok') {
+            const { audited } = await getTikTokPostingFlags();
+            if (!audited && rawTikTokOptions?.mode === 'inbox') {
+                const connection = await getTikTokConnection(tenantId);
+                if (!(connection?.scopes ?? []).includes('video.upload')) {
+                    res.status(409).json({ error: 'Sending to TikTok drafts needs the upload permission — reconnect TikTok in Settings.' });
+                    return;
+                }
+                tiktokOptionsJson = JSON.stringify({ mode: 'inbox' });
+            }
+        }
+        if (tiktokOptionsJson === null && rawTikTokOptions !== undefined && (platform ?? current.platform) === 'tiktok') {
             const { audited } = await getTikTokPostingFlags();
             const checked = validateTikTokOptions(rawTikTokOptions, { audited });
             if (!checked.ok) {
