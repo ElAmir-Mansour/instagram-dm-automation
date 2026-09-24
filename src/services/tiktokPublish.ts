@@ -17,17 +17,23 @@
  *      the webhook is not configured or a delivery was missed.
  *
  * All three go through `applyStatus`, whose transitions are idempotent, so they can overlap.
+ *
+ * Photo posts (`image`, `carousel`) follow the same lifecycle with no upload step: TikTok pulls
+ * each image from our public URL, so the row goes from the init straight to PROCESSING.
  */
 import { queryCount, queryRows } from '../db/query.js';
 import type { ScheduledPostRow, TikTokPostOptions, TikTokPrivacyLevel } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
-import { getMediaStore } from './storage.js';
+import { getMediaStore, uploadIdFromUrl } from './storage.js';
 import {
-    describeFailReason, fetchPublishStatus, initDirectVideoPost, initInboxVideoUpload, mapPublishState,
-    mp4DurationSeconds, planChunks, queryCreatorInfo, tiktokHttp, uploadChunks,
-    type TikTokPublishStatus, type TikTokWebhookEvent,
+    describeFailReason, fetchPublishStatus, initDirectVideoPost, initInboxVideoUpload, initPhotoPost, mapPublishState,
+    MAX_PHOTO_TITLE_UTF16, mp4DurationSeconds, photoTitle, planChunks, queryCreatorInfo, tiktokHttp, uploadChunks,
+    type PhotoDirectPostInfo, type TikTokCreatorInfo, type TikTokPublishStatus, type TikTokWebhookEvent,
 } from './tiktok.js';
-import { getTikTokPostingFlags } from './appSettings.js';
+import { getPublicBaseUrl, getTikTokPostingFlags } from './appSettings.js';
+import {
+    imageProblem, inspectImages, isTikTokPhotoType, TIKTOK_CAROUSEL_MAX, TIKTOK_CAROUSEL_MIN,
+} from './postMedia.js';
 import {
     connectionByOpenId, deleteConnectionByOpenId, getAccessToken, noteTikTokFailure,
 } from './tiktokConnections.js';
@@ -45,8 +51,14 @@ const MAX_EXTERNAL_MEDIA_BYTES = 256 * 1024 * 1024;
 
 export type TikTokPublishTarget = Pick<
     ScheduledPostRow,
-    'id' | 'creator_id' | 'post_type' | 'caption' | 'media_url' | 'external_publish_id'
+    'id' | 'creator_id' | 'post_type' | 'caption' | 'media_url' | 'media_urls' | 'external_publish_id'
 > & { platform_options?: TikTokPostOptions | null };
+
+/**
+ * What a TikTok post is made of. Photo posts have no duet, stitch or AI-generated label in
+ * TikTok's API; they have a title and optional music instead.
+ */
+export type TikTokMediaKind = 'video' | 'photo';
 
 // ─── Direct Post options ────────────────────────────────────────────────────────────────
 
@@ -60,14 +72,20 @@ export const TIKTOK_PRIVACY_LEVELS: readonly TikTokPrivacyLevel[] = [
  */
 export function validateTikTokOptions(
     raw: unknown,
-    ctx: { audited: boolean }
+    ctx: { audited: boolean; media?: TikTokMediaKind }
 ): { ok: true; options: TikTokPostOptions } | { ok: false; error: string } {
+    const media = ctx.media ?? 'video';
     if (!raw || typeof raw !== 'object') {
         return { ok: false, error: 'Choose the TikTok post settings (who can see it, and your consent) first.' };
     }
     const r = raw as Record<string, unknown>;
     if (r.consent !== true) {
-        return { ok: false, error: 'Tick "I agree to post this video to my TikTok account" first.' };
+        return {
+            ok: false,
+            error: media === 'photo'
+                ? 'Tick "I agree to post this to my TikTok account" first.'
+                : 'Tick "I agree to post this video to my TikTok account" first.',
+        };
     }
     const privacy = r.privacy_level;
     if (typeof privacy !== 'string' || !(TIKTOK_PRIVACY_LEVELS as readonly string[]).includes(privacy)) {
@@ -79,6 +97,26 @@ export function validateTikTokOptions(
     const brandContent = r.brand_content === true;
     if (brandContent && privacy === 'SELF_ONLY') {
         return { ok: false, error: 'Branded content can’t be private — choose a wider audience or untick Branded content.' };
+    }
+    if (media === 'photo') {
+        const title = readPhotoTitle(r.title);
+        if (!title.ok) return title;
+        // Duet, stitch and is_aigc are not stored at all: TikTok's photo post has none of
+        // them, and a choice kept on the row would read as one that had been applied.
+        return {
+            ok: true,
+            options: {
+                mode: 'direct',
+                privacy_level: privacy as TikTokPrivacyLevel,
+                allow_comment: r.allow_comment === true,
+                brand_organic: r.brand_organic === true,
+                brand_content: brandContent,
+                ...(title.title ? { title: title.title } : {}),
+                // On unless switched off — TikTok's own default for a photo post.
+                auto_add_music: r.auto_add_music !== false,
+                consent_at: new Date().toISOString(),
+            },
+        };
     }
     return {
         ok: true,
@@ -94,6 +132,33 @@ export function validateTikTokOptions(
             consent_at: new Date().toISOString(),
         },
     };
+}
+
+/** A photo title the creator typed, or `undefined` for "the caption's first line". */
+function readPhotoTitle(raw: unknown): { ok: true; title?: string } | { ok: false; error: string } {
+    if (raw === undefined || raw === null) return { ok: true };
+    if (typeof raw !== 'string') return { ok: false, error: 'The TikTok title must be text.' };
+    const title = raw.trim();
+    if (!title) return { ok: true };
+    // `.length` is UTF-16 code units, which is what TikTok counts.
+    if (title.length > MAX_PHOTO_TITLE_UTF16) {
+        return { ok: false, error: `The TikTok title can be at most ${MAX_PHOTO_TITLE_UTF16} characters — this one has ${title.length}.` };
+    }
+    return { ok: true, title };
+}
+
+/**
+ * Inbox mode's options. TikTok's editor asks the creator for everything else when they open
+ * the draft, so the only thing a post carries is a photo post's title.
+ */
+export function validateTikTokInboxOptions(
+    raw: unknown,
+    media: TikTokMediaKind
+): { ok: true; options: TikTokPostOptions } | { ok: false; error: string } {
+    if (media !== 'photo') return { ok: true, options: { mode: 'inbox' } };
+    const title = readPhotoTitle(raw && typeof raw === 'object' ? (raw as Record<string, unknown>).title : undefined);
+    if (!title.ok) return title;
+    return { ok: true, options: title.title ? { mode: 'inbox', title: title.title } : { mode: 'inbox' } };
 }
 
 export function isDirectPost(post: { platform_options?: TikTokPostOptions | null }): boolean {
@@ -133,12 +198,6 @@ export async function pendingInboxShares(creatorId: string, excludePostId?: stri
         [creatorId, excludePostId ?? null]
     );
     return rows[0]?.n ?? 0;
-}
-
-/** The `<uuid>` of one of our own `/api/uploads/<uuid>` URLs, or null. */
-export function uploadIdFromUrl(url: string): string | null {
-    const match = /\/api\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?#]|$)/i.exec(url);
-    return match ? match[1]!.toLowerCase() : null;
 }
 
 /**
@@ -221,6 +280,23 @@ async function markFailed(postId: string, message: string): Promise<void> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * The privacy level a Direct Post goes out with, checked against a FRESH creator_info — the one
+ * taken at scheduling time may be days old, and the creator can have changed their privacy
+ * options since.
+ */
+function checkedPrivacy(opts: TikTokPostOptions, audited: boolean, creator: TikTokCreatorInfo): TikTokPrivacyLevel {
+    const privacy = opts.privacy_level;
+    if (!privacy) throw new Error('This TikTok post has no privacy choice — edit it and choose who can see it.');
+    if (!audited && privacy !== 'SELF_ONLY') {
+        throw new Error('Until TikTok approves this app, direct posts can only be private (Only me) — edit the post.');
+    }
+    if (creator.privacyLevelOptions.length > 0 && !creator.privacyLevelOptions.includes(privacy)) {
+        throw new Error('That privacy choice is not available for this TikTok account any more — edit the post and choose again.');
+    }
+    return privacy;
+}
+
+/**
  * The Direct Post init, with every check TikTok's guidelines ask for made against a FRESH
  * creator_info — the one taken at scheduling time may be days old, and the creator can have
  * changed their privacy options or switched comments off since.
@@ -234,14 +310,7 @@ async function startDirectPost(
     const opts = post.platform_options ?? { mode: 'direct' };
     const [{ audited }, creator] = await Promise.all([getTikTokPostingFlags(), queryCreatorInfo(accessToken)]);
 
-    const privacy = opts.privacy_level;
-    if (!privacy) throw new Error('This TikTok post has no privacy choice — edit it and choose who can see it.');
-    if (!audited && privacy !== 'SELF_ONLY') {
-        throw new Error('Until TikTok approves this app, direct posts can only be private (Only me) — edit the post.');
-    }
-    if (creator.privacyLevelOptions.length > 0 && !creator.privacyLevelOptions.includes(privacy)) {
-        throw new Error('That privacy choice is not available for this TikTok account any more — edit the post and choose again.');
-    }
+    const privacy = checkedPrivacy(opts, audited, creator);
     const seconds = mp4DurationSeconds(video);
     if (seconds !== null && creator.maxVideoPostDurationSec > 0 && seconds > creator.maxVideoPostDurationSec + 0.5) {
         throw new Error(`This video is ${Math.round(seconds)}s; your TikTok account allows up to ${creator.maxVideoPostDurationSec}s.`);
@@ -269,17 +338,149 @@ export class TikTokRejectedError extends Error {
 }
 
 /**
+ * Wait a little for TikTok's verdict, so the person who pressed "Publish now" sees the real
+ * outcome instead of "processing". Anything still processing is left to the webhook and the
+ * reconcile sweep.
+ */
+async function settleInline(
+    accessToken: string,
+    postId: string,
+    publishId: string,
+    budgetMs: number
+): Promise<ScheduledPostRow['status']> {
+    const deadline = Date.now() + budgetMs;
+    while (Date.now() < deadline) {
+        await sleep(INLINE_POLL_INTERVAL_MS);
+        let reported: TikTokPublishStatus;
+        try {
+            reported = await fetchPublishStatus(accessToken, publishId);
+        } catch (err) {
+            // Not a failure of the post — TikTok has it. The webhook or the sweep will learn
+            // the outcome.
+            log('warn', 'tiktok.inline_poll_failed', { post_id: postId, ...describeError(err) });
+            break;
+        }
+        const landed = await applyStatus(postId, reported);
+        if (landed && landed !== 'PROCESSING') {
+            log('info', 'tiktok.publish_settled', { post_id: postId, status: landed });
+            // applyStatus has already written TikTok's reason onto the row.
+            if (landed === 'FAILED') throw new TikTokRejectedError(describeFailReason(reported.failReason));
+            return landed;
+        }
+    }
+    return 'PROCESSING';
+}
+
+/**
+ * The URLs TikTok will pull, in slide order, once every upload is confirmed to exist and to be
+ * a JPEG or WebP — checked here as well as at scheduling, because an upload can be deleted or
+ * a row edited in between, and TikTok's answer to either is a failed pull minutes later.
+ *
+ * Rebuilt from the upload ids on the public base URL rather than taken from the row: TikTok
+ * pulls only from the URL prefix verified in its portal, so the host a row happened to be
+ * saved from — a preview deployment, localhost — would be refused; and its fetcher wants a URL
+ * that ends like an image.
+ */
+async function tiktokPhotoUrls(post: TikTokPublishTarget): Promise<string[]> {
+    const listed = post.media_urls && post.media_urls.length > 0 ? post.media_urls : post.media_url ? [post.media_url] : [];
+    const sources = post.post_type === 'carousel' ? listed : listed.slice(0, 1);
+    if (sources.length === 0) throw new Error('TikTok needs a photo to post — edit the post and add one.');
+    if (post.post_type === 'carousel' && (sources.length < TIKTOK_CAROUSEL_MIN || sources.length > TIKTOK_CAROUSEL_MAX)) {
+        throw new Error(`A TikTok carousel takes ${TIKTOK_CAROUSEL_MIN} to ${TIKTOK_CAROUSEL_MAX} photos — this one has ${sources.length}. Edit the post.`);
+    }
+
+    const images = await inspectImages(sources);
+    const problem = imageProblem(images, { carousel: post.post_type === 'carousel', instagram: false, tiktok: true });
+    if (problem) throw new Error(problem);
+
+    const base = await getPublicBaseUrl(null);
+    if (!base) {
+        throw new Error('TikTok fetches photos from this app’s public address, and none is set — add it in Settings → TikTok app.');
+    }
+    return images.map((image) => `${base}/api/uploads/${image.uploadId}.${image.mimeType === 'image/webp' ? 'webp' : 'jpg'}`);
+}
+
+/** A photo's Direct Post choices, re-checked against a fresh creator_info as a video's are. */
+async function directPhotoInfo(accessToken: string, post: TikTokPublishTarget): Promise<PhotoDirectPostInfo> {
+    const opts = post.platform_options ?? { mode: 'direct' };
+    const [{ audited }, creator] = await Promise.all([getTikTokPostingFlags(), queryCreatorInfo(accessToken)]);
+    return {
+        privacy_level: checkedPrivacy(opts, audited, creator),
+        // A creator who has switched comments off cannot have them switched back on by us.
+        disable_comment: !opts.allow_comment || creator.commentDisabled,
+        auto_add_music: opts.auto_add_music !== false,
+        brand_content_toggle: opts.brand_content === true,
+        brand_organic_toggle: opts.brand_organic === true,
+    };
+}
+
+/**
+ * The photo half of `publishTikTokPost`, after the checks both halves share. There is no upload
+ * and no duration: TikTok pulls the images itself, so once the init has a `publish_id` the row
+ * is PROCESSING and the same three writers carry it on.
+ */
+async function publishPhotoPost(
+    accessToken: string,
+    post: TikTokPublishTarget,
+    direct: boolean,
+    inlinePollBudgetMs: number
+): Promise<ScheduledPostRow['status']> {
+    // A retry of a row that already reached TikTok. Unless TikTok refused it, the post or the
+    // draft exists, and a second init would duplicate it.
+    if (post.external_publish_id) {
+        try {
+            const previous = await fetchPublishStatus(accessToken, post.external_publish_id);
+            if (previous.status !== 'FAILED') {
+                const landed = await applyStatus(post.id, previous);
+                log('info', 'tiktok.publish_resumed', { post_id: post.id, status: landed });
+                if (landed) return landed;
+            }
+        } catch (err) {
+            log('warn', 'tiktok.publish_resume_check_failed', { post_id: post.id, ...describeError(err) });
+        }
+    }
+
+    const photoUrls = await tiktokPhotoUrls(post);
+    const text = {
+        title: photoTitle(post.caption, post.platform_options?.title),
+        description: post.caption ?? '',
+    };
+    const init = await initPhotoPost(
+        accessToken, photoUrls, text, direct ? await directPhotoInfo(accessToken, post) : undefined
+    );
+    // Written before anything else, so a crash from here on resumes instead of posting twice.
+    await queryCount(
+        `UPDATE scheduled_posts SET external_publish_id = $2 WHERE id = $1`,
+        [post.id, init.publishId]
+    );
+    log('info', 'tiktok.photo_post_started', {
+        post_id: post.id, publish_id: init.publishId, photos: photoUrls.length, mode: direct ? 'direct' : 'inbox',
+    });
+    await queryCount(
+        `UPDATE scheduled_posts SET status = 'PROCESSING', error_log = NULL, status_checked_at = NOW()
+          WHERE id = $1 AND status = 'PUBLISHING'`,
+        [post.id]
+    );
+    return settleInline(accessToken, post.id, init.publishId, inlinePollBudgetMs);
+}
+
+/**
  * Publish one claimed TikTok row (status PUBLISHING). Returns the status the row ended in; on
  * failure it writes FAILED and rethrows, matching `attemptPublish` for the Meta rows.
  */
-export async function publishTikTokPost(post: TikTokPublishTarget): Promise<ScheduledPostRow['status']> {
+export async function publishTikTokPost(
+    post: TikTokPublishTarget,
+    /** How long to wait for TikTok's verdict before leaving it to the webhook and the sweep. */
+    inlinePollBudgetMs: number = INLINE_POLL_BUDGET_MS
+): Promise<ScheduledPostRow['status']> {
     let connectionId: string | null = null;
     try {
         if (!post.creator_id) throw new Error('This post has no account.');
-        if (post.post_type !== 'video') {
-            throw new Error('TikTok posts must be videos — photo posts are not supported yet.');
+        const photo = isTikTokPhotoType(post.post_type);
+        if (!photo && post.post_type !== 'video') {
+            throw new Error('TikTok posts must be a video, a photo or a carousel of photos.');
         }
-        if (!post.media_url) throw new Error('TikTok needs a video to upload.');
+        if (!photo && !post.media_url) throw new Error('TikTok needs a video to upload.');
 
         const direct = isDirectPost(post);
         if (!direct) {
@@ -300,7 +501,9 @@ export async function publishTikTokPost(post: TikTokPublishTarget): Promise<Sche
             throw new Error('This post is set to go to your TikTok drafts, but TikTok has not granted uploading — reconnect TikTok in Settings, or edit the post to post directly.');
         }
 
-        const media = await loadMedia(post.media_url);
+        if (photo) return await publishPhotoPost(accessToken, post, direct, inlinePollBudgetMs);
+
+        const media = await loadMedia(post.media_url!);
         if (!TIKTOK_VIDEO_MIME_TYPES.has(media.mimeType)) {
             throw new Error(`TikTok accepts MP4, MOV or WebM video — this file is ${media.mimeType || 'of unknown type'}.`);
         }
@@ -346,29 +549,8 @@ export async function publishTikTokPost(post: TikTokPublishTarget): Promise<Sche
         );
         log('info', 'tiktok.upload_done', { post_id: post.id, publish_id: init.publishId });
 
-        // Most small reels are in the inbox within seconds; waiting a little here means the
-        // person who pressed "Publish now" sees the real outcome instead of "processing".
-        const deadline = Date.now() + INLINE_POLL_BUDGET_MS;
-        while (Date.now() < deadline) {
-            await sleep(INLINE_POLL_INTERVAL_MS);
-            let reported: TikTokPublishStatus;
-            try {
-                reported = await fetchPublishStatus(accessToken, init.publishId);
-            } catch (err) {
-                // Not a failure of the post — the upload is done. The webhook or the sweep
-                // will learn the outcome.
-                log('warn', 'tiktok.inline_poll_failed', { post_id: post.id, ...describeError(err) });
-                break;
-            }
-            const landed = await applyStatus(post.id, reported);
-            if (landed && landed !== 'PROCESSING') {
-                log('info', 'tiktok.publish_settled', { post_id: post.id, status: landed });
-                // applyStatus has already written TikTok's reason onto the row.
-                if (landed === 'FAILED') throw new TikTokRejectedError(describeFailReason(reported.failReason));
-                return landed;
-            }
-        }
-        return 'PROCESSING';
+        // Most small reels are in the inbox within seconds.
+        return await settleInline(accessToken, post.id, init.publishId, inlinePollBudgetMs);
     } catch (err: any) {
         if (err instanceof TikTokInboxFullError) {
             // Held, not failed: put the claim back so the next sweep tries again once a draft

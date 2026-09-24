@@ -30,7 +30,9 @@ import {
     MediaProcessingTimeoutError,
     MetaApiError,
     likeComment,
+    publishFacebookCarousel,
     publishFacebookPost,
+    publishInstagramCarousel,
     publishInstagramPost,
     sendDirectMessage,
     sendPrivateReply,
@@ -457,5 +459,145 @@ describe('publishInstagramPost', () => {
         calls = [];
         await publishInstagramPost('ig-1', 'story', '', 'https://cdn/s.jpg', TOKEN);
         assert.deepEqual(posts()[0]!.body, { media_type: 'STORIES', image_url: 'https://cdn/s.jpg' });
+    });
+});
+
+describe('publishInstagramCarousel', () => {
+    const slides = ['https://app/api/uploads/a.jpg', 'https://app/api/uploads/b.jpg', 'https://app/api/uploads/c.jpg'];
+
+    /** Children get ids child-1.., the parent `parent-1`, the publish `ig-carousel-1`. */
+    function arrangeCarousel() {
+        let child = 0;
+        onPost = async (url, body) => {
+            if (url.endsWith('/media') && body.is_carousel_item) return { data: { id: `child-${++child}` } };
+            if (url.endsWith('/media')) return { data: { id: 'parent-1' } };
+            if (url.endsWith('/media_publish')) return { data: { id: 'ig-carousel-1' } };
+            throw new Error(`unexpected ${url}`);
+        };
+        onGet = async () => ({ data: { status_code: 'FINISHED' } });
+    }
+
+    it('creates one flagged child per image, then a CAROUSEL parent that carries the caption', async () => {
+        arrangeCarousel();
+
+        const result = await publishInstagramCarousel('ig-1', 'وصف', slides, TOKEN);
+
+        assert.deepEqual(result, { id: 'ig-carousel-1' });
+        const creates = posts().filter((c) => c.url === `${BASE}/ig-1/media`);
+        assert.equal(creates.length, 4, 'three children and one parent');
+        // In slide order, flagged as items, and without a caption: the caption lives on the
+        // parent, and a child container is not a post anyone sees.
+        assert.deepEqual(creates.slice(0, 3).map((c) => c.body), slides.map((image_url) => ({
+            image_url, is_carousel_item: true,
+        })));
+        assert.deepEqual(creates[3]!.body, {
+            media_type: 'CAROUSEL', children: 'child-1,child-2,child-3', caption: 'وصف',
+        });
+        assert.equal(typeof (creates[3]!.body as any).children, 'string', 'children is a comma-joined string, not an array');
+    });
+
+    it('polls the parent, not the children, and publishes the parent exactly once', async () => {
+        arrangeCarousel();
+
+        await publishInstagramCarousel('ig-1', 'c', slides.slice(0, 2), TOKEN);
+
+        assert.deepEqual(gets().map((c) => c.url), [`${BASE}/parent-1`]);
+        const publishes = posts().filter((c) => c.url.endsWith('/media_publish'));
+        assert.equal(publishes.length, 1);
+        assert.deepEqual(publishes[0]!.body, { creation_id: 'parent-1' });
+    });
+
+    it('refuses fewer than 2 or more than 10 images before creating anything', async () => {
+        for (const count of [0, 1, 11]) {
+            const urls = Array.from({ length: count }, (_, i) => `https://cdn/${i}.jpg`);
+            const err = await publishInstagramCarousel('ig-1', 'c', urls, TOKEN).then(() => null, (e) => e);
+            assert.match(String(err?.message), /2 to 10 images/, `${count} images`);
+        }
+        assert.equal(calls.length, 0, 'no orphan child containers');
+    });
+
+    it('throws MediaProcessingTimeoutError, unwrapped, when the parent never finishes', async () => {
+        arrangeCarousel();
+        onGet = async () => ({ data: { status_code: 'IN_PROGRESS', status: 'still working' } });
+
+        const err = await publishInstagramCarousel('ig-1', 'c', slides, TOKEN, 40).then(() => null, (e) => e);
+
+        assert.ok(err instanceof MediaProcessingTimeoutError, `got ${err?.name}`);
+        assert.equal(err.containerId, 'parent-1');
+        assert.ok(!posts().some((c) => c.url.endsWith('/media_publish')), 'an unfinished carousel is never published');
+    });
+
+    it('rides out the 9007 not-ready race on publish, like a single post', async () => {
+        arrangeCarousel();
+        const publishAttempts = { n: 0 };
+        const arranged = onPost;
+        onPost = async (url, body, config) => {
+            if (url.endsWith('/media_publish') && ++publishAttempts.n === 1) {
+                throw metaError(9007, 'Media ID is not available');
+            }
+            return arranged(url, body, config);
+        };
+
+        const result = await publishInstagramCarousel('ig-1', 'c', slides, TOKEN);
+
+        assert.deepEqual(result, { id: 'ig-carousel-1' });
+        assert.equal(publishAttempts.n, 2);
+    });
+
+    it('wraps a rejected child with the Meta code intact, and stops there', async () => {
+        onPost = async () => { throw metaError(36003, 'Only photo or video can be accepted as media type.'); };
+
+        const err = await publishInstagramCarousel('ig-1', 'c', slides, TOKEN).then(() => null, (e) => e);
+
+        assert.ok(err instanceof MetaApiError);
+        assert.equal(err.metaCode, 36003);
+        assert.match(err.message, /Instagram Publish Failed/);
+        assert.equal(posts().length, 1, 'no parent is created once a child has been refused');
+    });
+});
+
+describe('publishFacebookCarousel', () => {
+    const slides = ['https://app/api/uploads/a.jpg', 'https://app/api/uploads/b.png'];
+
+    it('uploads each photo unpublished, then attaches them all to one feed post', async () => {
+        let photo = 0;
+        onPost = async (url) => {
+            if (url.endsWith('/photos')) return { data: { id: `photo-${++photo}` } };
+            if (url.endsWith('/feed')) return { data: { id: 'page-1_post-1' } };
+            throw new Error(`unexpected ${url}`);
+        };
+
+        const result = await publishFacebookCarousel('page-1', 'وصف', slides, TOKEN);
+
+        assert.deepEqual(result, { id: 'page-1_post-1' });
+        const uploads = posts().filter((c) => c.url === `${BASE}/page-1/photos`);
+        // `published: false`, or every slide appears on the Page as a post of its own.
+        assert.deepEqual(uploads.map((c) => c.body), [
+            { url: slides[0], published: false },
+            { url: slides[1], published: false },
+        ]);
+        const feed = posts().find((c) => c.url === `${BASE}/page-1/feed`);
+        assert.deepEqual(feed?.body, {
+            message: 'وصف',
+            attached_media: [{ media_fbid: 'photo-1' }, { media_fbid: 'photo-2' }],
+        });
+        assert.equal(feed?.config.headers.Authorization, `Bearer ${TOKEN}`);
+    });
+
+    it('refuses an empty list instead of posting a caption-only status', async () => {
+        const err = await publishFacebookCarousel('page-1', 'c', [], TOKEN).then(() => null, (e) => e);
+        assert.ok(err);
+        assert.equal(calls.length, 0);
+    });
+
+    it('wraps a failure with the Meta code intact', async () => {
+        onPost = async () => { throw metaError(324, 'Missing or invalid image file'); };
+
+        const err = await publishFacebookCarousel('page-1', 'c', slides, TOKEN).then(() => null, (e) => e);
+
+        assert.ok(err instanceof MetaApiError);
+        assert.equal(err.metaCode, 324);
+        assert.match(err.message, /Facebook Publish Failed/);
+        assert.ok(!posts().some((c) => c.url.endsWith('/feed')), 'no feed post without every photo');
     });
 });

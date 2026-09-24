@@ -323,6 +323,125 @@ export async function publishFacebookPost(
 }
 
 /**
+ * Publishes several photos as one Facebook Page feed post.
+ *
+ * Each photo is uploaded with `published: false` — otherwise every slide appears on the Page as
+ * a post of its own — and `/feed` then attaches them all by id, with the caption on the feed
+ * post only. An empty list throws rather than falling through to a text-only status, which
+ * would come back with a post id and be recorded as a success.
+ */
+export async function publishFacebookCarousel(
+    pageId: string,
+    caption: string,
+    imageUrls: readonly string[],
+    accessToken: string
+) {
+    if (imageUrls.length === 0) {
+        throw new Error('Facebook Publish Failed: this carousel has no images.');
+    }
+    const headers = { Authorization: `Bearer ${accessToken}` };
+
+    try {
+        const attached: { media_fbid: string }[] = [];
+        for (const [index, url] of imageUrls.entries()) {
+            // A retry after a 5xx can leave an unpublished photo behind. It is never shown, so
+            // that is a better outcome than a carousel missing a slide.
+            const photoRes = await withRetry(
+                () => metaHttp.post(`${GRAPH_BASE}/${pageId}/photos`, { url, published: false }, { headers }),
+                { label: `publishFacebookCarousel[photo ${index + 1}/${imageUrls.length}]` }
+            );
+            attached.push({ media_fbid: photoRes.data.id });
+        }
+
+        const response = await withRetry(
+            () => metaHttp.post(`${GRAPH_BASE}/${pageId}/feed`, { message: caption, attached_media: attached }, { headers }),
+            { label: 'publishFacebookCarousel[feed]' }
+        );
+        return response.data; // returns { id: "post_id" }
+    } catch (error: any) {
+        throw metaFailure('Facebook Publish Failed', error);
+    }
+}
+
+/**
+ * Poll a container until Instagram reports it FINISHED. Throws on ERROR / EXPIRED, and
+ * {@link MediaProcessingTimeoutError} once `pollBudgetMs` is spent.
+ */
+async function waitForContainer(containerId: string, accessToken: string, pollBudgetMs: number): Promise<void> {
+    const startedAt = Date.now();
+    const deadline = startedAt + pollBudgetMs;
+    let status = 'IN_PROGRESS';
+    let statusDetail = '';
+
+    while (Date.now() < deadline) {
+        // A transient blip on a status check should not abandon an upload that is
+        // already in flight; the deadline above is what ultimately bounds this.
+        const statusRes = await withRetry(
+            () => metaHttp.get(`${GRAPH_BASE}/${containerId}`, {
+                params: { fields: 'status_code,status', access_token: accessToken }
+            }),
+            { retries: 1, baseMs: 500, label: 'ig-container-status' }
+        );
+        status = statusRes.data.status_code;
+        statusDetail = statusRes.data.status || '';
+        const msLeft = Math.max(0, deadline - Date.now());
+        log('debug', 'publish.container_status', {
+            container_id: containerId, status, detail: statusDetail, ms_left: msLeft,
+        });
+
+        if (status === 'ERROR' || status === 'EXPIRED') {
+            throw new Error(`Instagram media processing failed with status: ${status}. Detail: ${statusDetail}`);
+        }
+
+        if (status === 'FINISHED') {
+            break;
+        }
+
+        if (msLeft <= 0) break;
+        await sleep(Math.min(CONTAINER_POLL_INTERVAL_MS, msLeft));
+    }
+
+    if (status !== 'FINISHED') {
+        throw new MediaProcessingTimeoutError(containerId, Date.now() - startedAt, statusDetail);
+    }
+}
+
+/** `media_publish` a finished container, riding out the not-ready race. */
+async function publishContainer(instagramId: string, containerId: string, accessToken: string) {
+    log('info', 'publish.container_publishing', { container_id: containerId });
+    const publishUrl = `${GRAPH_BASE}/${instagramId}/media_publish`;
+
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await withRetry(
+                () => metaHttp.post(publishUrl, {
+                    creation_id: containerId
+                }, {
+                    headers: { Authorization: `Bearer ${accessToken}` }
+                }),
+                { retries: 1, baseMs: 750, label: 'ig-media-publish' }
+            );
+        } catch (publishError: any) {
+            const metaCode = publishError.response?.data?.error?.code;
+
+            // Code 9007 "Media ID is not available" and a bare 100 both mean the container
+            // exists but is not publishable yet — a race the status poll cannot close for
+            // images, which skip it entirely. withRetry rightly refuses to retry a 400, so
+            // this specific case is ridden out here and the two budgets compose.
+            if ((metaCode === 9007 || metaCode === 100) && attempt < CONTAINER_NOT_READY_RETRIES) {
+                log('warn', 'publish.container_not_ready', {
+                    container_id: containerId, meta_code: metaCode,
+                    delay_ms: CONTAINER_NOT_READY_DELAY_MS,
+                });
+                await sleep(CONTAINER_NOT_READY_DELAY_MS);
+                continue;
+            }
+            throw publishError; // Throw other errors like Auth issues immediately
+        }
+    }
+}
+
+/**
  * Publishes a post to an Instagram Business account.
  * Handles the 2-step media container lifecycle (create container, check status, publish).
  *
@@ -386,84 +505,74 @@ export async function publishInstagramPost(
 
         if (type !== 'image') {
             // Check and poll status for video, reel, story to make sure processing is complete
-            const startedAt = Date.now();
-            const deadline = startedAt + pollBudgetMs;
-            let status = 'IN_PROGRESS';
-            let statusDetail = '';
-
-            while (Date.now() < deadline) {
-                // A transient blip on a status check should not abandon an upload that is
-                // already in flight; the deadline above is what ultimately bounds this.
-                const statusRes = await withRetry(
-                    () => metaHttp.get(`${GRAPH_BASE}/${containerId}`, {
-                        params: { fields: 'status_code,status', access_token: accessToken }
-                    }),
-                    { retries: 1, baseMs: 500, label: 'ig-container-status' }
-                );
-                status = statusRes.data.status_code;
-                statusDetail = statusRes.data.status || '';
-                const msLeft = Math.max(0, deadline - Date.now());
-                log('debug', 'publish.container_status', {
-                    container_id: containerId, status, detail: statusDetail, ms_left: msLeft,
-                });
-
-                if (status === 'ERROR' || status === 'EXPIRED') {
-                    throw new Error(`Instagram media processing failed with status: ${status}. Detail: ${statusDetail}`);
-                }
-
-                if (status === 'FINISHED') {
-                    break;
-                }
-
-                if (msLeft <= 0) break;
-                await sleep(Math.min(CONTAINER_POLL_INTERVAL_MS, msLeft));
-            }
-
-            if (status !== 'FINISHED') {
-                throw new MediaProcessingTimeoutError(containerId, Date.now() - startedAt, statusDetail);
-            }
+            await waitForContainer(containerId, accessToken, pollBudgetMs);
         }
 
         // Step 2: Publish container
-        log('info', 'publish.container_publishing', { container_id: containerId });
-        const publishUrl = `${GRAPH_BASE}/${instagramId}/media_publish`;
-
-        let publishRes;
-        for (let attempt = 0; ; attempt++) {
-            try {
-                publishRes = await withRetry(
-                    () => metaHttp.post(publishUrl, {
-                        creation_id: containerId
-                    }, {
-                        headers: { Authorization: `Bearer ${accessToken}` }
-                    }),
-                    { retries: 1, baseMs: 750, label: 'ig-media-publish' }
-                );
-                break; // Success
-            } catch (publishError: any) {
-                const metaCode = publishError.response?.data?.error?.code;
-
-                // Code 9007 "Media ID is not available" and a bare 100 both mean the container
-                // exists but is not publishable yet — a race the status poll cannot close for
-                // images, which skip it entirely. withRetry rightly refuses to retry a 400, so
-                // this specific case is ridden out here and the two budgets compose.
-                if ((metaCode === 9007 || metaCode === 100) && attempt < CONTAINER_NOT_READY_RETRIES) {
-                    log('warn', 'publish.container_not_ready', {
-                        container_id: containerId, meta_code: metaCode,
-                        delay_ms: CONTAINER_NOT_READY_DELAY_MS,
-                    });
-                    await sleep(CONTAINER_NOT_READY_DELAY_MS);
-                    continue;
-                }
-                throw publishError; // Throw other errors like Auth issues immediately
-            }
-        }
+        const publishRes = await publishContainer(instagramId, containerId, accessToken);
 
         log('info', 'publish.instagram_success', { ig_media_id: publishRes?.data?.id });
         return publishRes?.data; // returns { id: "media_id" }
     } catch (error: any) {
         // The timeout carries the container id and last known status, which is what lets the
         // caller requeue rather than guess; flattening it into a string Error loses that.
+        if (error instanceof MediaProcessingTimeoutError) throw error;
+
+        throw metaFailure('Instagram Publish Failed', error);
+    }
+}
+
+/**
+ * Publishes an image carousel to an Instagram Business account.
+ *
+ * Three steps rather than two: one child container per image (`is_carousel_item`, no caption —
+ * Instagram takes the caption from the parent), then the CAROUSEL parent naming the children
+ * as a comma-separated string, then the same status poll and `media_publish` as a single post.
+ *
+ * Instagram takes JPEG only, 2–10 images, and crops every slide to the first one's aspect
+ * ratio. Throws {@link MediaProcessingTimeoutError} if the parent is still processing when the
+ * poll budget runs out, exactly as a reel does.
+ */
+export async function publishInstagramCarousel(
+    instagramId: string,
+    caption: string,
+    imageUrls: readonly string[],
+    accessToken: string,
+    pollBudgetMs: number = DEFAULT_CONTAINER_POLL_BUDGET_MS
+) {
+    if (imageUrls.length < 2 || imageUrls.length > 10) {
+        throw new Error(`Instagram Publish Failed: a carousel takes 2 to 10 images — this one has ${imageUrls.length}.`);
+    }
+    const createUrl = `${GRAPH_BASE}/${instagramId}/media`;
+    const headers = { Authorization: `Bearer ${accessToken}` };
+
+    try {
+        log('info', 'publish.container_creating', { post_type: 'carousel', items: imageUrls.length });
+        const children: string[] = [];
+        for (const [index, imageUrl] of imageUrls.entries()) {
+            // A retried child is at worst an orphan container, which expires unpublished.
+            const childRes = await withRetry(
+                () => metaHttp.post(createUrl, { image_url: imageUrl, is_carousel_item: true }, { headers }),
+                { label: `ig-create-carousel-item[${index + 1}/${imageUrls.length}]` }
+            );
+            children.push(childRes.data.id);
+        }
+
+        const parentRes = await withRetry(
+            () => metaHttp.post(createUrl, {
+                media_type: 'CAROUSEL', children: children.join(','), caption,
+            }, { headers }),
+            { label: 'ig-create-container[carousel]' }
+        );
+        const containerId = parentRes.data.id;
+        log('info', 'publish.container_created', { container_id: containerId, children: children.length });
+
+        await waitForContainer(containerId, accessToken, pollBudgetMs);
+        const publishRes = await publishContainer(instagramId, containerId, accessToken);
+
+        log('info', 'publish.instagram_success', { ig_media_id: publishRes?.data?.id });
+        return publishRes?.data; // returns { id: "media_id" }
+    } catch (error: any) {
         if (error instanceof MediaProcessingTimeoutError) throw error;
 
         throw metaFailure('Instagram Publish Failed', error);

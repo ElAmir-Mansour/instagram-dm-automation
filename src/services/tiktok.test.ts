@@ -16,6 +16,7 @@ import {
     isTikTokReauthError, mapPublishState, MAX_CHUNK_BYTES, parseJsonKeepingIds, parseWebhookEvent, planChunks,
     refreshTokens, SPLIT_CHUNK_BYTES, TIKTOK_API_BASE, TikTokApiError, tiktokHttp, toTikTokError,
     uploadChunks, verifyTikTokSignature, queryCreatorInfo, initDirectVideoPost, mp4DurationSeconds, tiktokScopes,
+    initPhotoPost, photoTitle, truncateUtf16, MAX_PHOTO_TITLE_UTF16, MAX_PHOTO_DESCRIPTION_UTF16,
 } from './tiktok.js';
 
 const MB = 1024 * 1024;
@@ -421,5 +422,120 @@ describe('Direct Post', () => {
         assert.equal(mp4DurationSeconds(box(0, 1000, 15253)), 15.253);
         assert.equal(mp4DurationSeconds(box(1, 600, 9000)), 15);
         assert.equal(mp4DurationSeconds(Buffer.from('not a video')), null);
+    });
+});
+
+describe('Photo posts', () => {
+    const photos = [
+        'https://msg-response-auto.vercel.app/api/uploads/0b8a7a0e-3c1f-4f7e-9d0a-1234567890ab.jpg',
+        'https://msg-response-auto.vercel.app/api/uploads/1b8a7a0e-3c1f-4f7e-9d0a-1234567890ab.webp',
+    ];
+    const okInit = async () => ({ status: 200, data: { data: { publish_id: 'p_pub_url~v2.1' }, error: { code: 'ok' } } });
+    const direct = {
+        privacy_level: 'SELF_ONLY', disable_comment: true, auto_add_music: true,
+        brand_content_toggle: false, brand_organic_toggle: true,
+    };
+
+    it('asks for a DIRECT_POST photo post pulled from our URLs, cover first', async () => {
+        onPost = okInit;
+        const init = await initPhotoPost('act.1', photos, { title: 'عنوان', description: 'وصف كامل' }, direct);
+
+        assert.equal(calls[0]!.url, `${TIKTOK_API_BASE}/v2/post/publish/content/init/`);
+        assert.deepEqual(calls[0]!.body, {
+            media_type: 'PHOTO',
+            post_mode: 'DIRECT_POST',
+            post_info: {
+                title: 'عنوان', description: 'وصف كامل', privacy_level: 'SELF_ONLY', disable_comment: true,
+                auto_add_music: true, brand_content_toggle: false, brand_organic_toggle: true,
+            },
+            source_info: { source: 'PULL_FROM_URL', photo_images: photos, photo_cover_index: 0 },
+        });
+        assert.equal(calls[0]!.config.headers.Authorization, 'Bearer act.1');
+        assert.equal(init.publishId, 'p_pub_url~v2.1');
+    });
+
+    it('sends only the title and description in MEDIA_UPLOAD mode — the rest is Direct Post only', async () => {
+        onPost = okInit;
+        await initPhotoPost('act.1', photos, { title: 't', description: 'd' });
+
+        assert.equal(calls[0]!.body.post_mode, 'MEDIA_UPLOAD');
+        assert.deepEqual(calls[0]!.body.post_info, { title: 't', description: 'd' });
+        assert.equal(calls[0]!.body.source_info.source, 'PULL_FROM_URL');
+    });
+
+    it('cuts the title to 90 and the description to 4000 UTF-16 units', async () => {
+        onPost = okInit;
+        await initPhotoPost('act.1', photos, { title: 'ع'.repeat(120), description: 'x'.repeat(5000) });
+
+        assert.equal(calls[0]!.body.post_info.title.length, MAX_PHOTO_TITLE_UTF16);
+        assert.equal(calls[0]!.body.post_info.description.length, MAX_PHOTO_DESCRIPTION_UTF16);
+    });
+
+    it('is not retried — a 5xx may already have posted it, or spent one of five drafts', async () => {
+        onPost = async () => { throw apiError(500, 'internal_error'); };
+        const err = await initPhotoPost('act.1', photos, { title: '', description: '' }, direct).then(() => null, (e) => e);
+        assert.ok(err);
+        assert.equal(calls.length, 1);
+    });
+
+    it('refuses an empty list or more than 35 photos without calling TikTok', async () => {
+        for (const count of [0, 36]) {
+            const urls = Array.from({ length: count }, (_, i) => `https://x/api/uploads/${i}.jpg`);
+            const err = await initPhotoPost('act.1', urls, { title: '', description: '' }).then(() => null, (e) => e);
+            assert.match(String(err?.message), /1 to 35 images/, `${count} photos`);
+        }
+        assert.equal(calls.length, 0);
+    });
+
+    it('tells the operator exactly which portal setting an unverified URL needs', async () => {
+        onPost = async () => { throw apiError(403, 'url_ownership_unverified'); };
+        const err = await initPhotoPost('act.1', photos, { title: '', description: '' }).then(() => null, (e) => e);
+
+        assert.ok(err instanceof TikTokApiError);
+        assert.equal(err.code, 'url_ownership_unverified');
+        assert.match(err.message, /URL properties/);
+        assert.match(err.message, /https:\/\/msg-response-auto\.vercel\.app\//);
+    });
+
+    it('keeps TikTok’s own detail on invalid_param, which names the field it refused', () => {
+        const err = toTikTokError('TikTok photo post', apiError(400, 'invalid_param', 'photo_images is invalid'));
+        assert.ok(err instanceof TikTokApiError);
+        assert.match(err.message, /invalid/);
+        assert.match(err.message, /photo_images is invalid/);
+    });
+
+    it('explains the TikTok app version MEDIA_UPLOAD photos need', () => {
+        const err = toTikTokError('TikTok photo post', apiError(400, 'app_version_check_failed'));
+        assert.match(err.message, /31\.8/);
+    });
+});
+
+describe('photo titles', () => {
+    it('defaults to the caption’s first line with text on it', () => {
+        assert.equal(photoTitle('تعلم الذكاء الاصطناعي\nالسطر الثاني #AI'), 'تعلم الذكاء الاصطناعي');
+        assert.equal(photoTitle('\n  \r\n  first real line  \nsecond'), 'first real line');
+        assert.equal(photoTitle(null), '');
+        assert.equal(photoTitle(''), '');
+    });
+
+    it('prefers the creator’s own title, and ignores a blank one', () => {
+        assert.equal(photoTitle('caption line', '  My title  '), 'My title');
+        assert.equal(photoTitle('caption line', '   '), 'caption line');
+    });
+
+    it('trims the default to 90 UTF-16 units — String.length, not characters', () => {
+        const long = 'ب'.repeat(200);
+        assert.equal(photoTitle(long).length, MAX_PHOTO_TITLE_UTF16);
+        // 45 emoji are 90 UTF-16 units: exactly at the limit, kept whole.
+        assert.equal(photoTitle('😀'.repeat(45)), '😀'.repeat(45));
+    });
+
+    it('never splits a surrogate pair at the cut', () => {
+        // 89 units then an emoji straddling the 90th: the emoji goes, not half of it.
+        const title = photoTitle('a'.repeat(89) + '😀' + 'tail');
+        assert.equal(title, 'a'.repeat(89));
+        assert.equal(truncateUtf16('ab😀', 3), 'ab');
+        assert.equal(truncateUtf16('ab😀', 4), 'ab😀');
+        assert.equal(truncateUtf16('short', 90), 'short');
     });
 });

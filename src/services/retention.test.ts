@@ -8,6 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import {
     JOB_PRUNE_BATCH_SIZE,
@@ -194,5 +195,65 @@ describe('media retention gating', () => {
         for (const good of [String(MIN_RETENTION_DAYS), '30', '365']) {
             assert.equal(resolveRetention(good).enabled, true, `value ${good}`);
         }
+    });
+});
+
+/**
+ * Which references keep an upload alive. There is no database here, so the DELETE itself is
+ * the thing asserted — its NOT EXISTS clause is the whole policy, the same stance
+ * tiktokPublish.test.ts takes on its transition clauses.
+ */
+describe('pruneOrphanedMedia — what still counts as in use', () => {
+    let saved: string | undefined;
+    let statements: string[] = [];
+    const originalQuery = pool.query;
+    let restoreSink: (() => void) | undefined;
+
+    before(() => {
+        const previous = setLogSink(() => {});
+        restoreSink = () => setLogSink(previous);
+    });
+    after(() => restoreSink?.());
+
+    beforeEach(() => {
+        saved = process.env.MEDIA_RETENTION_DAYS;
+        process.env.MEDIA_RETENTION_DAYS = '30';
+        statements = [];
+        (pool as unknown as { query: unknown }).query = async (sql: string) => {
+            statements.push(sql.replace(/\s+/g, ' '));
+            return { rows: [], rowCount: 0 };
+        };
+    });
+    afterEach(() => {
+        (pool as unknown as { query: unknown }).query = originalQuery;
+        if (saved === undefined) delete process.env.MEDIA_RETENTION_DAYS;
+        else process.env.MEDIA_RETENTION_DAYS = saved;
+    });
+
+    /** The NOT EXISTS clause of the one DELETE the prune runs. */
+    async function keepClause(): Promise<string> {
+        await pruneOrphanedMedia();
+        assert.equal(statements.length, 1);
+        const sql = statements[0]!;
+        assert.match(sql, /^ ?DELETE FROM media_uploads/);
+        const clause = /NOT EXISTS \((.*)\) LIMIT/.exec(sql)?.[1];
+        assert.ok(clause, 'the delete is guarded by NOT EXISTS');
+        return clause!;
+    }
+
+    it('keeps every slide of a carousel, not just the first one media_url mirrors', async () => {
+        // The bug this guards: media_url holds slide 1 only. Matching it alone deleted slides
+        // 2..N of a carousel still waiting to publish, and Meta or TikTok then fetched a 404.
+        const clause = await keepClause();
+        assert.match(clause, /array_to_string\(s\.media_urls, ' '\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
+    it('still keeps media and covers, for every state that may yet publish', async () => {
+        const clause = await keepClause();
+        assert.match(clause, /s\.media_url LIKE/);
+        assert.match(clause, /s\.cover_url LIKE/);
+        // PROCESSING because a TikTok photo post is still being pulled; FAILED because an
+        // edit flips it back to PENDING.
+        assert.match(clause, /s\.status IN \('PENDING', 'PUBLISHING', 'PROCESSING', 'FAILED'\)/);
     });
 });

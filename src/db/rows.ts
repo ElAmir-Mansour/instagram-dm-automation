@@ -149,6 +149,13 @@ export type SchedulePlatform = 'instagram' | 'facebook' | 'both' | 'tiktok';
  */
 export type ScheduleStatus = 'PENDING' | 'PUBLISHING' | 'PROCESSING' | 'IN_INBOX' | 'PUBLISHED' | 'FAILED';
 
+/**
+ * `carousel` (v20) is several images in `media_urls`: an Instagram CAROUSEL container, a
+ * Facebook multi-photo feed post, or a TikTok photo post. On TikTok, `image` is a single-photo
+ * post and `video` the only other type.
+ */
+export type SchedulePostType = 'image' | 'video' | 'reel' | 'story' | 'feed' | 'carousel';
+
 export interface ScheduledPostRow {
     id: string;
     creator_id: string | null;
@@ -157,9 +164,12 @@ export interface ScheduledPostRow {
      * `video`, not `reel`, for anything cross-posted: `publishFacebookPost` has no `reel`
      * branch and falls through to a text-only feed post with the media silently dropped.
      */
-    post_type: string;
+    post_type: SchedulePostType | string;
     caption: string | null;
+    /** For a carousel, always `media_urls[0]`, so readers that know only this column keep working. */
     media_url: string | null;
+    /** v20. A carousel's images in slide order; NULL for every other row. */
+    media_urls: string[] | null;
     cover_url: string | null;
     scheduled_time: Timestamptz;
     status: ScheduleStatus | string;
@@ -187,11 +197,20 @@ export interface TikTokPostOptions {
     mode: 'direct' | 'inbox';
     privacy_level?: TikTokPrivacyLevel;
     allow_comment?: boolean;
+    /** Video only — a TikTok photo post has no duet or stitch, so photo rows never carry these. */
     allow_duet?: boolean;
     allow_stitch?: boolean;
     brand_organic?: boolean;
     brand_content?: boolean;
+    /** Video only, like duet and stitch: TikTok's photo post has no AI-generated label to set. */
     is_aigc?: boolean;
+    /**
+     * Photo posts only (v20), either mode: TikTok's photo title, at most 90 UTF-16 units. Absent
+     * means the caption's first line, worked out at publish time so a caption edit carries over.
+     */
+    title?: string;
+    /** Photo posts, direct mode only (v20). Absent means true. */
+    auto_add_music?: boolean;
     /** When the creator ticked "I agree to post this" — TikTok requires express consent. */
     consent_at?: string;
 }
