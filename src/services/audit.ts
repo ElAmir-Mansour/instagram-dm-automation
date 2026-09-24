@@ -107,6 +107,16 @@ export const AUDIT_ACTIONS = {
     tiktokConnect: 'tiktok.connect',
     tiktokDisconnect: 'tiktok.disconnect',
     settingsTikTokAppWrite: 'settings.tiktok_app_write',
+    /** A Studio worker credential was minted. Its token acts as the tenant for claims and uploads. */
+    studioWorkerCreate: 'studio.worker_create',
+    /** A Studio worker credential was revoked; its token stopped working at that moment. */
+    studioWorkerRevoke: 'studio.worker_revoke',
+    /** Brand, voice, product, CTA, schedule or library settings changed. */
+    studioSettingsWrite: 'studio.settings_write',
+    /** A Studio draft became scheduled posts (and possibly a campaign). */
+    studioSchedule: 'studio.schedule',
+    /** The queued TikTok carousels went out as a batch of rows due now. */
+    studioTikTokBatch: 'studio.tiktok_batch',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

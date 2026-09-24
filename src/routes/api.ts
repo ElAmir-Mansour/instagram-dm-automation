@@ -35,6 +35,7 @@ import { getMediaStore, uploadIdFromSegment } from '../services/storage.js';
 import { isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
 import adminRouter from './admin.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
+import { studioRouter, studioWorkerRouter } from './studio.js';
 import {
     publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokInboxOptions, validateTikTokOptions,
 } from '../services/tiktokPublish.js';
@@ -1108,6 +1109,12 @@ router.get('/interactions/export', async (req, res) => {
 // any other /tiktok path fall through this router to the authenticated one below.
 router.use('/tiktok', tiktokPublicRouter);
 
+// ─── Carousel Studio worker ─────────────────────────────────────────────────
+// Called by the Mac worker, which has no session: its bearer token resolves its tenant
+// (src/services/studio/worker.ts). Only /studio/worker/* is handled here; every other /studio
+// path falls through to the session-authenticated router below.
+router.use('/studio', studioWorkerRouter);
+
 // ─── All routes below require authentication ────────────────────────────────
 router.use(requireAuth);
 
@@ -1325,6 +1332,9 @@ router.use(resolveTenant);
 
 // TikTok connection management — tenant-scoped, so below resolveTenant.
 router.use('/tiktok', tiktokRouter);
+
+// Carousel Studio (STUDIO.md) — tenant-scoped, operator role; carries its own guards.
+router.use('/studio', studioRouter);
 
 // ─── In-tenant role guards ──────────────────────────────────────────────────
 //

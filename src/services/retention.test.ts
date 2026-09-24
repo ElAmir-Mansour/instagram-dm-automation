@@ -256,4 +256,27 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         // edit flips it back to PENDING.
         assert.match(clause, /s\.status IN \('PENDING', 'PUBLISHING', 'PROCESSING', 'FAILED'\)/);
     });
+
+    it('keeps a Studio draft’s rendered slides, both formats, before any post names them', async () => {
+        // A `ready` draft is waiting to be scheduled. Collecting its slides first would schedule
+        // a carousel of 404s — and no scheduled_posts row protects them until it is scheduled.
+        const clause = await keepClause();
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM carousel_drafts d WHERE/);
+        assert.match(clause, /COALESCE\(d\.render->>'ig', ''\) \|\| ' ' \|\| COALESCE\(d\.render->>'tt', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
+    it('keeps the thumbnails the shot picker shows', async () => {
+        const clause = await keepClause();
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM lesson_moments lm WHERE lm\.thumb_url LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
+    it('requires every guard at once: each NOT EXISTS is ANDed, never ORed', async () => {
+        // An OR between them would delete anything any single table does not name — a render
+        // slide is named by no scheduled post, so it would go.
+        await pruneOrphanedMedia();
+        const sql = statements[0]!;
+        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 3);
+        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 3);
+        assert.doesNotMatch(sql, /OR NOT EXISTS/);
+    });
 });

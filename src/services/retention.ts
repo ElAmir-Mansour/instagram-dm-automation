@@ -194,6 +194,18 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
  * so slides 2..N would be deleted while the post waits to publish — and a TikTok photo post is
  * still fetching them while it is PROCESSING.
  *
+ * The Studio's own references (v21), which no scheduled post names until a draft is scheduled:
+ *
+ *   - `carousel_drafts.render` — the `ig` and `tt` slides of every draft's current render. A
+ *     `ready` draft is waiting for the operator to schedule it; deleting its slides would
+ *     schedule a carousel of 404s. A superseded render's slides are not named here any more,
+ *     and are deleted by the Studio itself when the new render lands.
+ *   - `lesson_moments.thumb_url` — the thumbnails the shot picker shows. A re-index replaces
+ *     the moments, so the old thumbnails fall out of this clause and are collected.
+ *
+ * Both tables arrive with migration v21, so this statement fails until it is applied. It fails
+ * safe: a failed prune deletes nothing and is logged as `retention.media_prune_failed`.
+ *
  * Opt-in, like `pruneRawPayloads`, and off by default: this is an irreversible delete of the
  * operator's own media, and it should be their decision rather than a surprise on upgrade.
  * Never throws — it runs in the same cron invocation as the publishes.
@@ -235,6 +247,17 @@ export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
                                  OR s.cover_url LIKE '%' || m.id::text || '%'
                                  OR array_to_string(s.media_urls, ' ') LIKE '%' || m.id::text || '%'
                               )
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM carousel_drafts d
+                            WHERE (COALESCE(d.render->>'ig', '') || ' ' || COALESCE(d.render->>'tt', ''))
+                                  LIKE '%' || m.id::text || '%'
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM lesson_moments lm
+                            WHERE lm.thumb_url LIKE '%' || m.id::text || '%'
                        )
                      LIMIT $2
               )`,
