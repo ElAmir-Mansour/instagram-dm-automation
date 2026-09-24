@@ -3,7 +3,7 @@
  * branded carousel out, as strict JSON that passes `validateCarousel`.
  *
  * The flow for one draft:
- *   1. Gemini (`gemini-2.5-pro`, `responseSchema`) writes the carousel in a *flat* slide format.
+ *   1. Gemini (the first of `STUDIO_MODELS` that answers, `responseSchema`) writes the carousel in a *flat* slide format.
  *      The typed `Slide` union is hard to express in Gemini's schema subset, so every slide is one
  *      object with a `kind` enum and optional fields, plus the `sources` it rests on and, for a
  *      screenshot, a `momentId`.
@@ -144,7 +144,16 @@ export class StudioGenerationError extends Error {
 
 // ─── Constants ──────────────────────────────────────────────────────────────────────────────
 
-export const STUDIO_MODEL = 'gemini-2.5-pro';
+/**
+ * Tried in order. A model Google has closed to new keys answers 404, and one whose quota is spent
+ * answers 429 — on a free-tier key that is 20 requests a day — so either moves on to the next
+ * rather than failing the draft, as does a 503 from a model that is overloaded. None of these is `gemini-2.5-flash`: the DM bot runs on it, and a
+ * carousel must never spend the quota a customer's reply depends on.
+ */
+export const STUDIO_MODELS: readonly string[] = [
+    'gemini-3.1-pro-preview', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.8-flash',
+];
+export const STUDIO_MODEL = STUDIO_MODELS[0]!;
 /** The whole generation's budget, repairs included: POST /drafts runs it synchronously. */
 export const GENERATION_TIMEOUT_MS = 120_000;
 export const MAX_REPAIR_ROUNDS = 2;
@@ -213,16 +222,31 @@ class ModelError extends Error {
  * string, which lands in logs), narrow error logging (never the request config, which holds the
  * key), and the same failure modes surfaced as errors that say what happened.
  */
+/**
+ * The schema as sent. Gemini 3 answers a schema carrying `minItems`/`maxItems` with a bare 400
+ * "Request contains an invalid argument", so the bounds stay in our own schema — the
+ * descriptions still state them to the model — and are enforced where they always really were:
+ * `validateCarousel` and the repair rounds.
+ */
+export function withoutArrayBounds<T>(schema: T): T {
+    if (Array.isArray(schema)) return schema.map((s) => withoutArrayBounds(s)) as T;
+    if (!schema || typeof schema !== 'object') return schema;
+    return Object.fromEntries(
+        Object.entries(schema as Record<string, unknown>)
+            .filter(([key]) => key !== 'minItems' && key !== 'maxItems')
+            .map(([key, value]) => [key, withoutArrayBounds(value)]),
+    ) as T;
+}
+
 export async function callGemini(req: ModelRequest): Promise<unknown> {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new ModelError('Missing GEMINI_API_KEY environment variable.', false);
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${STUDIO_MODEL}:generateContent`;
     const payload = {
         systemInstruction: { parts: [{ text: req.system }] },
         contents: req.turns.map((t) => ({ role: t.role, parts: [{ text: t.text }] })),
         generationConfig: {
             responseMimeType: 'application/json',
-            responseSchema: req.schema,
+            responseSchema: withoutArrayBounds(req.schema),
             temperature: req.temperature,
             maxOutputTokens: MAX_OUTPUT_TOKENS,
             thinkingConfig: { thinkingBudget: req.thinkingBudget },
@@ -230,28 +254,38 @@ export async function callGemini(req: ModelRequest): Promise<unknown> {
     };
 
     let data: any;
-    try {
-        const res = await axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout: req.timeoutMs });
-        data = res.data;
-    } catch (err: any) {
-        const apiError = err?.response?.data?.error;
-        const status: number | undefined = err?.response?.status;
-        const timedOut = err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT';
-        log('error', 'studio.ai_request_failed', {
-            purpose: req.purpose, model: STUDIO_MODEL, http_status: status, gemini_status: apiError?.status,
-            timed_out: timedOut, message: apiError?.message ?? err?.message,
-        });
-        const why = status ? ` [HTTP ${status}]` : timedOut ? ' (timed out)' : '';
-        throw new ModelError(
-            `Gemini request failed${why}: ${apiError?.message || err?.message}`,
-            !timedOut && (status === undefined || status === 429 || status >= 500),
-        );
+    let model = STUDIO_MODELS[0]!;
+    for (const [i, candidate] of STUDIO_MODELS.entries()) {
+        model = candidate;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`;
+        try {
+            const res = await axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout: req.timeoutMs });
+            data = res.data;
+            break;
+        } catch (err: any) {
+            const apiError = err?.response?.data?.error;
+            const status: number | undefined = err?.response?.status;
+            const timedOut = err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT';
+            log('error', 'studio.ai_request_failed', {
+                purpose: req.purpose, model: candidate, http_status: status, gemini_status: apiError?.status,
+                timed_out: timedOut, message: apiError?.message ?? err?.message,
+            });
+            // Unavailable to this key, out of quota, overloaded right now, or refusing a schema
+            // feature it doesn't support (400): the next model may well answer. A 400 that is
+            // really our request's fault fails on every model and surfaces from the last.
+            if ((status === 400 || status === 404 || status === 429 || status === 503) && i < STUDIO_MODELS.length - 1) continue;
+            const why = status ? ` [HTTP ${status}]` : timedOut ? ' (timed out)' : '';
+            throw new ModelError(
+                `Gemini request failed${why}: ${apiError?.message || err?.message}`,
+                !timedOut && (status === undefined || status === 429 || status >= 500),
+            );
+        }
     }
 
     const usage = data?.usageMetadata;
     if (usage) {
         log('info', 'studio.ai_usage', {
-            purpose: req.purpose, model: STUDIO_MODEL, prompt_tokens: usage.promptTokenCount,
+            purpose: req.purpose, model, prompt_tokens: usage.promptTokenCount,
             output_tokens: usage.candidatesTokenCount, thinking_tokens: usage.thoughtsTokenCount ?? 0,
             cached_tokens: usage.cachedContentTokenCount ?? 0,
         });

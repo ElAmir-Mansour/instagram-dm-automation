@@ -11,7 +11,7 @@ import { setLogSink } from '../../utils/log.js';
 import type { Carousel } from './carouselTypes.js';
 import { StudioError } from './common.js';
 import {
-    buildGenContext, createDraft, parseDraftInput, patchDraft, presentDraft, rewriteDraftSlide, setGeneration,
+    buildGenContext, createDraft, parseDraftInput, patchDraft, preferPrimaryKeyword, presentDraft, rewriteDraftSlide, setGeneration,
     STALE_GENERATION_ERROR, STALE_GENERATION_MS,
 } from './drafts.js';
 import { defaultStudioSettings } from './settings.js';
@@ -340,5 +340,29 @@ describe('rewriteDraftSlide', () => {
     it('refuses an index outside the carousel', async () => {
         library();
         await assert.rejects(rewriteDraftSlide(TENANT, DRAFT, { index: 3 }), isStudioError(400));
+    });
+});
+
+describe('preferPrimaryKeyword', () => {
+    const settings = defaultStudioSettings();
+    const ask = (k: string) => settings.cta.instagramAsk.replace('{keyword}', k);
+    const generated = (keyword: string) => ({
+        carousel: { ...CAROUSEL, keyword, captions: { ...CAROUSEL.captions, instagram: `Hook\n\n${ask(keyword)}\n\n#tag` } },
+        campaign: { keyword, variants: [], dm: '', create: false },
+    });
+
+    it("swaps a reused secondary keyword for the campaign's first, in the carousel, caption and campaign", async () => {
+        routes.push([/SELECT trigger_keyword FROM campaigns/, () => ({ rows: [{ trigger_keyword: 'متجر' }, { trigger_keyword: 'منديل, رسمة, stitch' }] })]);
+        const out = await preferPrimaryKeyword(TENANT, generated('stitch'), settings);
+        assert.equal(out.carousel.keyword, 'منديل');
+        assert.equal(out.campaign.keyword, 'منديل');
+        assert.ok(out.carousel.captions.instagram.includes(ask('منديل')));
+        assert.ok(!out.carousel.captions.instagram.includes(ask('stitch')));
+    });
+
+    it('leaves a primary keyword, or one no campaign holds, as it is', async () => {
+        routes.push([/SELECT trigger_keyword FROM campaigns/, () => ({ rows: [{ trigger_keyword: 'منديل, رسمة, stitch' }] })]);
+        assert.equal((await preferPrimaryKeyword(TENANT, generated('منديل'), settings)).carousel.keyword, 'منديل');
+        assert.equal((await preferPrimaryKeyword(TENANT, generated('دفتر'), settings)).carousel.keyword, 'دفتر');
     });
 });
