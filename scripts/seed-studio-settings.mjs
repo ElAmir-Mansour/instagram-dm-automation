@@ -44,10 +44,12 @@ export const STUDIO_SETTINGS = {
             'Use Arabic-Indic digits (٣ not 3) everywhere in Arabic text.',
             'Lead with the result the viewer gets, then name the tool that gets it.',
             'Short lines: one idea per line, one point per slide.',
-            'Product and tool names stay in English (NotebookLM, Gemini, n8n).',
+            'Product and tool names stay in English (NotebookLM, Gemini, Stitch).',
             'No invented features or numbers: every claim comes from the lesson.',
             'TikTok copy points to the link in the bio («رابطه في البايو»), never to the comments.',
         ].join('\n'),
+        // The course's MCP section is not published yet.
+        avoid: ['MCP'],
     },
     product: {
         name: 'Agentic AI: الدليل العملي لبناء ما تحتاجه بالذكاء الاصطناعي',
