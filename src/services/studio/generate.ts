@@ -709,12 +709,12 @@ const tagsIndex = (ps: string[][]): number => {
     return last && last.every(isHashtagLine) ? ps.length - 1 : ps.length;
 };
 
-/** A line's words for comparison: normalised, letters and digits only. */
+/** A line's words for comparison: normalised, letters and digits only, and 3+ long so "the"/"في" noise drops out. */
 function words(s: string): string[] {
-    return normalizeArabic(s).split(/\s+/).map((w) => w.replace(/[^\p{L}\p{N}]/gu, '')).filter((w) => w.length > 1);
+    return normalizeArabic(s).split(/\s+/).map((w) => w.replace(/[^\p{L}\p{N}]/gu, '')).filter((w) => w.length >= 3);
 }
 
-/** How much of `target`'s wording `l` carries, 0..1. */
+/** How much of `target`'s vocabulary `l` carries, 0..1. */
 function overlap(l: string, target: string): number {
     const t = new Set(words(target));
     if (!t.size) return 0;
@@ -724,17 +724,35 @@ function overlap(l: string, target: string): number {
     return n / t.size;
 }
 
-/** Matches a line that quotes one of the keywords: "k", «k», “k”. */
-function quotedKeywords(keywords: readonly string[]): RegExp | null {
-    const ks = [...new Set(keywords.filter(Boolean))].map(escapeRegExp);
-    return ks.length ? new RegExp(`["«“']\\s*(?:${ks.join('|')})\\s*["»”']`, 'u') : null;
+const pairs = (ws: string[]): Set<string> => new Set(ws.slice(1).map((w, i) => `${ws[i]} ${w}`));
+
+/**
+ * How much of `target`'s phrasing `l` carries, 0..1: shared word pairs, in order. Unlike single
+ * words, pairs don't add up from "and", "you" and "the" in an unrelated line.
+ */
+function phraseOverlap(l: string, target: string): number {
+    const t = pairs(words(target));
+    if (!t.size) return 0;
+    const have = pairs(words(l));
+    let n = 0;
+    for (const p of t) if (have.has(p)) n++;
+    return n / t.size;
 }
 
-/** Whether `l` is a version of the keyword ask: the same wording, or a quoted keyword and part of it. */
-function looksLikeAsk(l: string, askTemplate: string, quoted: RegExp | null): boolean {
-    const wording = fillKeyword(askTemplate, '');
-    const o = overlap(l, wording);
-    return o >= 0.6 || (o >= 0.3 && (quoted?.test(l) ?? false));
+/**
+ * A test for versions of the keyword ask: a line that phrases it the same way once the keyword
+ * is taken out, or one that quotes a keyword ("k", «k», “k”) and shares some of its words. A
+ * value line that merely shares a few words is not one.
+ */
+function askMatcher(template: string, keywords: readonly string[]): (l: string) => boolean {
+    const wording = fillKeyword(template, '');
+    const ks = [...new Set(keywords.filter(Boolean))].map(escapeRegExp);
+    const quoted = ks.length ? new RegExp(`["«“']\\s*(?:${ks.join('|')})\\s*["»”']`, 'u') : null;
+    const bare = ks.length ? new RegExp(`["«“']?\\s*(?:${ks.join('|')})\\s*["»”']?`, 'gu') : null;
+    return (l) => {
+        const without = bare ? l.replace(bare, ' ') : l;
+        return phraseOverlap(without, wording) >= 0.6 || (!!quoted?.test(l) && overlap(l, wording) >= 0.3);
+    };
 }
 
 /**
@@ -742,20 +760,22 @@ function looksLikeAsk(l: string, askTemplate: string, quoted: RegExp | null): bo
  * or added before the hashtags) and its save line (added before the ask when missing).
  */
 export function normalizeInstagramCaption(raw: unknown, keyword: string | null, candidates: readonly string[], settings: StudioSettings): string {
-    const ps = paragraphs(raw);
+    let ps = paragraphs(raw);
     const template = settings?.cta?.instagramAsk?.trim() ?? '';
     const ask = keyword && template ? fillKeyword(template, keyword) : '';
     if (ask) {
-        const quoted = quotedKeywords([keyword!, ...candidates]);
+        const isAsk = askMatcher(template, [keyword!, ...candidates]);
         let placed = false;
         for (const p of ps) {
             for (let i = 0; i < p.length; i++) {
                 const l = p[i]!;
-                if (!l.includes(ask) && !looksLikeAsk(l, template, quoted)) continue;
+                if (!l.includes(ask) && !isAsk(l)) continue;
                 if (placed) p.splice(i--, 1);
                 else { p[i] = l.includes(ask) ? l : ask; placed = true; }
             }
         }
+        // Positions below are computed on the paragraphs that are left.
+        ps = ps.filter((p) => p.length);
         if (!placed) ps.splice(tagsIndex(ps), 0, [ask]);
     }
     const save = saveLine(settings);
@@ -772,11 +792,13 @@ export function normalizeInstagramCaption(raw: unknown, keyword: string | null, 
  * and the language's learning hashtags.
  */
 export function normalizeTiktokCaption(raw: unknown, candidates: readonly string[], settings: StudioSettings): string {
-    const ps = paragraphs(raw);
+    let ps = paragraphs(raw);
     const template = settings?.cta?.instagramAsk?.trim() ?? '';
     if (template) {
-        const quoted = quotedKeywords(candidates);
-        for (const p of ps) for (let i = 0; i < p.length; i++) if (looksLikeAsk(p[i]!, template, quoted)) p.splice(i--, 1);
+        const isAsk = askMatcher(template, candidates);
+        for (const p of ps) for (let i = 0; i < p.length; i++) if (isAsk(p[i]!)) p.splice(i--, 1);
+        // Positions below are computed on the paragraphs that are left.
+        ps = ps.filter((p) => p.length);
     }
     const link = tiktokLine(settings);
     if (link) {
@@ -784,12 +806,14 @@ export function normalizeTiktokCaption(raw: unknown, candidates: readonly string
         for (const p of ps) {
             for (let i = 0; i < p.length; i++) {
                 const l = p[i]!;
-                if (!l.includes(link) && overlap(l, link) < 0.6) continue;
+                // Conservative on purpose: a missed variant costs a duplicate line, a false match a value line.
+                if (!l.includes(link) && phraseOverlap(l, link) < 0.8) continue;
                 if (placed) p.splice(i--, 1);
                 else { p[i] = l.includes(link) ? l : link; placed = true; }
             }
         }
-        if (!placed) ps.splice(tagsIndex(ps.filter((p) => p.length)), 0, [link]);
+        ps = ps.filter((p) => p.length);
+        if (!placed) ps.splice(tagsIndex(ps), 0, [link]);
     }
     const kept = ps.filter((p) => p.length);
     const present = new Set((joinParas(kept).match(/#[^\s#]+/g) ?? []).map((t) => t.toLowerCase()));
