@@ -38,12 +38,18 @@ export const TIKTOK_API_BASE = 'https://open.tiktokapis.com';
 export const TIKTOK_SCOPES = ['user.info.basic', 'video.upload'] as const;
 
 /**
- * The scopes to request. Direct Post needs `video.publish` and nothing else from the Content
- * Posting API, so `video.upload` is dropped in that mode: TikTok's app review asks for every
- * requested scope to be demonstrated, and a scope the app no longer uses only delays it.
+ * The scopes to request.
+ *
+ *   - Direct Post off:                 user.info.basic + video.upload (inbox drafts only)
+ *   - Direct Post on, app NOT audited: all three. Until TikTok approves the app a direct post is
+ *     private (SELF_ONLY) and needs a private account, so the creator chooses per post between
+ *     that and a draft in their inbox — which needs `video.upload`.
+ *   - Direct Post on, app audited:     user.info.basic + video.publish. Posts go out public, and
+ *     a scope the app no longer uses has no business being requested.
  */
-export function tiktokScopes(directPostEnabled: boolean): string[] {
-    return directPostEnabled ? ['user.info.basic', 'video.publish'] : [...TIKTOK_SCOPES];
+export function tiktokScopes(directPostEnabled: boolean, audited = false): string[] {
+    if (!directPostEnabled) return [...TIKTOK_SCOPES];
+    return audited ? ['user.info.basic', 'video.publish'] : [...TIKTOK_SCOPES, 'video.publish'];
 }
 
 /**

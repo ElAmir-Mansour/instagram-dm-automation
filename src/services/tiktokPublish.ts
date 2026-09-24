@@ -291,8 +291,13 @@ export async function publishTikTokPost(post: TikTokPublishTarget): Promise<Sche
 
         const { accessToken, connection } = await getAccessToken(post.creator_id);
         connectionId = connection.id;
+        // Checked here rather than left to TikTok: its answer is scope_not_authorized, which would
+        // mark the whole connection invalid — blocking the other mode, which still works.
         if (direct && !(connection.scopes ?? []).includes('video.publish')) {
             throw new Error('This post is set to post directly, but TikTok has not granted direct posting — reconnect TikTok in Settings.');
+        }
+        if (!direct && !(connection.scopes ?? []).includes('video.upload')) {
+            throw new Error('This post is set to go to your TikTok drafts, but TikTok has not granted uploading — reconnect TikTok in Settings, or edit the post to post directly.');
         }
 
         const media = await loadMedia(post.media_url);

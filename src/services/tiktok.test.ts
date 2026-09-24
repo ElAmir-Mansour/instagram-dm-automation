@@ -351,8 +351,10 @@ describe('Direct Post', () => {
     it('asks for video.publish only once Direct Post is switched on in the portal', () => {
         // Requesting a scope the app is not approved for fails the whole authorisation.
         assert.deepEqual(tiktokScopes(false), ['user.info.basic', 'video.upload']);
-        // Direct Post drops video.upload: review wants every requested scope demonstrated.
-        assert.deepEqual(tiktokScopes(true), ['user.info.basic', 'video.publish']);
+        // Unaudited: both, so the creator can choose a private direct post or an inbox draft.
+        assert.deepEqual(tiktokScopes(true, false), ['user.info.basic', 'video.upload', 'video.publish']);
+        // Audited: publish only — posts go out public, and an unused scope is not requested.
+        assert.deepEqual(tiktokScopes(true, true), ['user.info.basic', 'video.publish']);
     });
 
     it('maps creator_info onto what the composer needs', async () => {

@@ -42,6 +42,12 @@ const PostsPage = {
      * preview `<video>`'s metadata.
      */
     tiktokCreator: null,
+    /**
+     * This post's delivery when the account can do both (until TikTok approves the app):
+     * 'direct' | 'inbox', or '' before the operator has chosen. There is no default — a
+     * private direct post and an inbox draft are different outcomes, so the operator picks.
+     */
+    _ttDelivery: '',
     _ttChoices: null,
     _ttDurationSec: null,
     _ttSeq: 0,
@@ -320,6 +326,79 @@ const PostsPage = {
         return o && o.mode === 'direct' ? 'direct' : 'inbox';
     },
 
+    /**
+     * Until TikTok approves the app, a direct post is private (Only me) and needs a private
+     * account — so a connection holding BOTH permissions lets each post choose between that and
+     * an inbox draft. Once audited, direct posts go out public and there is nothing to choose.
+     */
+    tiktokOffersChoice() {
+        const c = this.tiktok && this.tiktok.connection;
+        return !!(c && c.connected && c.canUpload && c.canDirectPost
+            && this.tiktokConnectionMode() === 'direct' && c.audited !== true);
+    },
+
+    /** The mode THIS post will use: the per-post choice when one is offered ('' = not chosen). */
+    tiktokEffectiveMode() {
+        if (this.tiktokOffersChoice()) return this._ttDelivery || '';
+        return this.tiktokPostMode();
+    },
+
+    tiktokDeliveryChoice() {
+        const chosen = this._ttDelivery;
+        const option = (value, label, hint) => html`
+            <label class="tiktok-delivery-option" for="tiktok-delivery-${value}">
+                <input type="radio" name="tiktok_delivery" id="tiktok-delivery-${value}" value="${value}"
+                       data-change="posts:tiktokDelivery" ${chosen === value ? html.raw('checked') : ''}>
+                <span class="stack gap-1">
+                    <strong>${label}</strong>
+                    <span class="form-hint">${hint}</span>
+                </span>
+            </label>
+        `;
+        return html`
+            <fieldset class="tiktok-delivery" id="tiktok-delivery">
+                <legend class="form-label">${t('posts.tiktok.delivery.legend')}</legend>
+                ${option('direct', t('posts.tiktok.delivery.direct'), t('posts.tiktok.delivery.directHint'))}
+                ${option('inbox', t('posts.tiktok.delivery.inbox'), t('posts.tiktok.delivery.inboxHint'))}
+            </fieldset>
+        `;
+    },
+
+    onTikTokDelivery(el) {
+        const value = el && el.value;
+        this._ttDelivery = value === 'direct' || value === 'inbox' ? value : '';
+        const inboxBody = document.getElementById('tiktok-inbox-body');
+        if (inboxBody) inboxBody.classList.toggle('hidden', this._ttDelivery !== 'inbox');
+        const wrap = document.getElementById('tiktok-direct-wrap');
+        if (wrap) wrap.classList.toggle('hidden', this.tiktokEffectiveMode() !== 'direct');
+        this.refreshTikTokDirect();
+    },
+
+    /**
+     * The fallback that never depends on TikTok's API: take the file and the caption and post
+     * them from the TikTok app. Shown on every TikTok card that is not live yet.
+     */
+    renderTikTokManual(post, withHint = true) {
+        const href = safeUrl(post && post.media_url);
+        if (!href && !(post && post.caption)) return '';
+        return html`
+            <div class="tiktok-manual">
+                ${withHint ? html`<p class="form-hint">${t('posts.tiktok.manualHint')}</p>` : ''}
+                <div class="row row--wrap gap-2">
+                    ${href ? html`
+                        <a class="btn btn-secondary btn-sm" href="${href}" download>
+                            <i data-lucide="download" aria-hidden="true"></i> ${t('posts.tiktok.download')}
+                        </a>
+                    ` : ''}
+                    ${post.caption ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'copy', label: t('posts.tiktok.copyCaption'),
+                        action: 'app:copyValue', data: { copy: post.caption },
+                    }) : ''}
+                </div>
+            </div>
+        `;
+    },
+
     /** TikTok's privacy levels, each with a translated label. Unknown values show as themselves. */
     privacyLabel(level) {
         switch (level) {
@@ -459,6 +538,7 @@ const PostsPage = {
                 ` : ''}
 
                 ${isTikTok && isInInbox ? this.renderTikTokInboxNote(post) : ''}
+                ${isTikTok && !isInInbox && !isPublished ? this.renderTikTokManual(post) : ''}
 
                 ${isPublished && post.published_post_id ? html`
                     <p class="post-card-id"><strong>${t('posts.publishedIdLabel')}</strong> ${UI.ltr(post.published_post_id)}</p>
@@ -525,6 +605,11 @@ const PostsPage = {
                         variant: 'secondary', size: 'sm', icon: 'copy', label: t('posts.tiktok.copyCaption'),
                         action: 'app:copyValue', data: { copy: post.caption },
                     }) : ''}
+                    ${safeUrl(post.media_url) ? html`
+                        <a class="btn btn-secondary btn-sm" href="${safeUrl(post.media_url)}" download>
+                            <i data-lucide="download" aria-hidden="true"></i> ${t('posts.tiktok.download')}
+                        </a>
+                    ` : ''}
                     <a class="btn btn-secondary btn-sm" href="https://www.tiktok.com/" target="_blank" rel="noopener noreferrer">
                         <i data-lucide="external-link" aria-hidden="true"></i> ${t('posts.tiktok.openTikTok')}
                     </a>
@@ -662,8 +747,16 @@ const PostsPage = {
             ${direct ? html`
                 <!-- A group, not a note: this panel holds the post's controls. -->
                 <div class="tiktok-panel hidden" id="tiktok-info" role="group" aria-labelledby="tiktok-direct-title">
-                    <h3 class="tiktok-direct-title" id="tiktok-direct-title">${t('posts.tiktok.direct.title')}</h3>
-                    <div class="tiktok-direct" id="tiktok-direct"></div>
+                    ${this.tiktokOffersChoice() ? html`
+                        ${this.tiktokDeliveryChoice()}
+                        <div id="tiktok-inbox-body" class="stack gap-2 ${this._ttDelivery === 'inbox' ? '' : html.raw('hidden')}">
+                            ${this.tiktokInboxBody()}
+                        </div>
+                    ` : ''}
+                    <div id="tiktok-direct-wrap" class="${this.tiktokOffersChoice() && this._ttDelivery !== 'direct' ? html.raw('hidden') : ''}">
+                        <h3 class="tiktok-direct-title" id="tiktok-direct-title">${t('posts.tiktok.direct.title')}</h3>
+                        <div class="tiktok-direct" id="tiktok-direct"></div>
+                    </div>
                 </div>
             ` : html`
                 <div class="tiktok-panel hidden" id="tiktok-info" role="note">
@@ -1128,6 +1221,7 @@ const PostsPage = {
         this._ttSeq++;
         this.tiktokCreator = null;
         this._ttDurationSec = null;
+        this._ttDelivery = post && post.platform === 'tiktok' ? this.tiktokRowMode(post) : '';
         this._ttChoices = post && post.platform === 'tiktok'
             ? this.tiktokChoicesFrom(post.platform_options)
             : { ...this.TIKTOK_DEFAULT_CHOICES };
@@ -1202,7 +1296,8 @@ const PostsPage = {
         const host = document.getElementById('tiktok-direct');
         const consent = document.getElementById('tiktok-consent');
         if (!host && !consent) return;
-        const on = this.composerTargetsTikTok();
+        // Only a DIRECT post has controls here; a draft is finished in TikTok's own editor.
+        const on = this.composerTargetsTikTok() && this.tiktokEffectiveMode() === 'direct';
 
         // Every control here has an id, so focus is put back by id.
         const active = document.activeElement;
@@ -1265,7 +1360,16 @@ const PostsPage = {
      */
     attachTikTokOptions(payload) {
         const toTikTok = payload.platform === 'tiktok' || payload.also_tiktok === true;
-        if (!toTikTok || this.tiktokPostMode() !== 'direct') return null;
+        if (!toTikTok) return null;
+        if (this.tiktokOffersChoice()) {
+            if (!this._ttDelivery) return { message: t('posts.tiktok.delivery.required'), field: 'tiktok-delivery-direct' };
+            if (this._ttDelivery === 'inbox') {
+                payload.tiktok_options = { mode: 'inbox' };
+                return null;
+            }
+        } else if (this.tiktokPostMode() !== 'direct') {
+            return null;
+        }
 
         const info = this.tiktokCreator;
         if (!info || info.status !== 'ready') return { message: t('posts.tiktok.direct.notReady'), field: null };
@@ -1275,7 +1379,7 @@ const PostsPage = {
             audited: view.audited, durationSec: this._ttDurationSec,
         });
         if (!result.ok) return { message: result.message, field: result.field };
-        payload.tiktok_options = result.options;
+        payload.tiktok_options = { ...result.options, mode: 'direct' };
         return null;
     },
 
@@ -2279,5 +2383,6 @@ UI.registerActions('posts', {
     handleFileUpload: (el) => PostsPage.handleFileUpload(el),
     handleUrlInput: (el) => debouncedUrlInput(el),
     tiktokChange: () => PostsPage.onTikTokChange(),
+    tiktokDelivery: (el) => PostsPage.onTikTokDelivery(el),
     retryTikTokCreator: () => PostsPage.loadTikTokCreator(true),
 });

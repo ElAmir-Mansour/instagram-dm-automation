@@ -271,10 +271,12 @@ tiktokRouter.post('/connect', canAdminister, async (req, res) => {
             return;
         }
         const state = await createOAuthState(getTenantId(req), req.session?.userId ?? null);
-        const { directPostEnabled } = await getTikTokPostingFlags();
+        const { directPostEnabled, audited } = await getTikTokPostingFlags();
         res.setHeader('Set-Cookie', stateCookie(state, Math.floor(OAUTH_STATE_TTL_MS / 1000)));
         res.json({
-            url: buildAuthorizeUrl({ clientKey: app.clientKey, redirectUri, state, scopes: tiktokScopes(directPostEnabled) }),
+            url: buildAuthorizeUrl({
+                clientKey: app.clientKey, redirectUri, state, scopes: tiktokScopes(directPostEnabled, audited),
+            }),
         });
     } catch (err) {
         log('error', 'api.tiktok_connect_failed', describeError(err));
@@ -342,7 +344,7 @@ tiktokRouter.get('/app-settings', requirePlatformAdmin, async (req, res) => {
                 privacyUrl: `${base}/privacy`,
                 websiteUrl: `${base}/`,
             } : null,
-            scopes: tiktokScopes(flags.directPostEnabled),
+            scopes: tiktokScopes(flags.directPostEnabled, flags.audited),
             directPostEnabled: flags.directPostEnabled,
             audited: flags.audited,
         });

@@ -50,6 +50,10 @@ interface PostsApi {
     tiktokOutcomeText(status: string, mode?: string): string;
     tiktok: unknown;
     tiktokReady(): boolean;
+    tiktokOffersChoice(): boolean;
+    tiktokEffectiveMode(): string;
+    attachTikTokOptions(payload: Record<string, unknown>): { message: string; field: string | null } | null;
+    _ttDelivery: string;
     // Direct Post
     tiktokCreator: unknown;
     _ttChoices: Record<string, unknown> | null;
@@ -1123,5 +1127,69 @@ describe('SettingsPage — TikTok posting mode', () => {
         assert.equal(Settings.tiktokIntro({ connected: false, directPostEnabled: true }), t('settings.tiktok.introDirect'));
         assert.equal(Settings.tiktokIntro(null), t('settings.tiktok.introInbox'));
         assert.notEqual(t('settings.tiktok.introDirect'), t('settings.tiktok.introInbox'));
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('PostsPage — choosing direct post or drafts until TikTok approves the app', () => {
+    const both = (audited: boolean) => ({
+        connection: { connected: true, canUpload: true, canDirectPost: true, postMode: 'direct', audited },
+    });
+
+    it('offers the choice only with both permissions, and only while unaudited', () => {
+        const { Posts } = load();
+        Posts.tiktok = both(false);
+        assert.equal(Posts.tiktokOffersChoice(), true);
+        Posts.tiktok = both(true);
+        assert.equal(Posts.tiktokOffersChoice(), false, 'audited: always direct, nothing to choose');
+        Posts.tiktok = { connection: { connected: true, canUpload: false, canDirectPost: true, postMode: 'direct', audited: false } };
+        assert.equal(Posts.tiktokOffersChoice(), false, 'publish only: direct, no choice');
+        Posts.tiktok = { connection: { connected: true, canUpload: true, canDirectPost: false, postMode: 'inbox', audited: false } };
+        assert.equal(Posts.tiktokOffersChoice(), false, 'upload only: inbox, no choice');
+    });
+
+    it('has no default, and blocks the submit until a delivery is chosen', () => {
+        const { Posts } = load();
+        Posts.tiktok = both(false);
+        Posts._ttDelivery = '';
+        assert.equal(Posts.tiktokEffectiveMode(), '');
+        const blocked = Posts.attachTikTokOptions({ platform: 'tiktok' });
+        assert.ok(blocked, 'must refuse to submit');
+        assert.equal(blocked!.field, 'tiktok-delivery-direct');
+    });
+
+    it('sends { mode: "inbox" } for a draft, with none of the direct-post choices', () => {
+        const { Posts } = load();
+        Posts.tiktok = both(false);
+        Posts._ttDelivery = 'inbox';
+        const payload: Record<string, unknown> = { platform: 'tiktok' };
+        assert.equal(Posts.attachTikTokOptions(payload), null);
+        // The object comes from the page's vm realm, so compare by value, not prototype.
+        assert.equal(JSON.stringify(payload.tiktok_options), JSON.stringify({ mode: 'inbox' }));
+    });
+
+    it('leaves an Instagram-only post alone', () => {
+        const { Posts } = load();
+        Posts.tiktok = both(false);
+        const payload: Record<string, unknown> = { platform: 'instagram' };
+        assert.equal(Posts.attachTikTokOptions(payload), null);
+        assert.equal(payload.tiktok_options, undefined);
+    });
+
+    it('puts Download video on a TikTok card that is not live yet, and not on a published one', () => {
+        const { Posts, t } = load();
+        const base = {
+            id: 'p9', platform: 'tiktok', post_type: 'video', caption: 'c',
+            media_url: 'https://msg-response-auto.vercel.app/api/uploads/0b8a7a0e-3c1f-4f7e-9d0a-1234567890ab',
+            scheduled_time: '2027-03-04T18:20:00.000Z',
+        };
+        for (const status of ['PENDING', 'FAILED', 'PROCESSING', 'IN_INBOX']) {
+            const card = String(Posts.renderScheduledCard({ ...base, status }));
+            assert.ok(card.includes(t('posts.tiktok.download')), `${status}: download offered`);
+            assert.ok(card.includes(' download>') || card.includes(' download '), `${status}: a real download link`);
+        }
+        const published = String(Posts.renderScheduledCard({ ...base, status: 'PUBLISHED' }));
+        assert.ok(!published.includes(t('posts.tiktok.download')), 'published: nothing left to do by hand');
     });
 });

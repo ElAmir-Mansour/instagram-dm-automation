@@ -1654,6 +1654,18 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .tiktok-declaration a { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
 .tiktok-declaration a:hover { text-decoration-thickness: 2px; }
 .tiktok-avatar-lg { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+/* Per-post delivery choice, until TikTok approves the app. */
+.tiktok-delivery { border: 0; margin: 0 0 var(--space-3); padding: 0; display: grid; gap: var(--space-2); }
+.tiktok-delivery legend { margin-block-end: var(--space-2); }
+.tiktok-delivery-option {
+    display: flex; gap: var(--space-2); align-items: flex-start; cursor: pointer;
+    padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm);
+    border: 1px solid var(--brand-tiktok-soft);
+}
+.tiktok-delivery-option input { margin-block-start: 3px; flex-shrink: 0; }
+.tiktok-delivery-option .form-hint { margin: 0; }
+.tiktok-manual { display: grid; gap: var(--space-2); }
+.tiktok-manual .form-hint { margin: 0; }
 .tiktok-register { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
 /* Label on its own line, then the value with its copy button beside it — the
    values are long URLs, and a label sharing their line pushed each one onto a
