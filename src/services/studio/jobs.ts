@@ -133,8 +133,10 @@ export async function latestRenderJobId(exec: Exec, creatorId: string, draftId: 
 // ─── Claim ──────────────────────────────────────────────────────────────────────────────
 
 /**
- * The oldest claimable job: pending, or claimed with a heartbeat older than 15 minutes and
- * fewer than three claims behind it.
+ * The next claimable job: pending, or claimed with a heartbeat older than 15 minutes and
+ * fewer than three claims behind it. Renders go first, then scans, then indexing, oldest first
+ * within each: a render is someone waiting at the editor, while indexing the whole library is a
+ * backlog of an hour or more that would otherwise hold every render behind it.
  *
  * SKIP LOCKED makes two claimers split the work rather than queue behind each other's lock,
  * and the lock itself is what stops them both taking the same row: the UPDATE runs on the row
@@ -149,7 +151,7 @@ export const CLAIM_SQL = `
                 OR (status = 'claimed'
                     AND COALESCE(heartbeat_at, claimed_at, created_at) < NOW() - make_interval(mins => $2)
                     AND attempts < $3))
-         ORDER BY created_at, id
+         ORDER BY CASE kind WHEN 'render_carousel' THEN 0 WHEN 'scan_library' THEN 1 ELSE 2 END, created_at, id
          LIMIT 1
            FOR UPDATE SKIP LOCKED
     )
