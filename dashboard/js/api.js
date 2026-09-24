@@ -310,4 +310,44 @@ const API = {
     getAiSettings: () => API.request('/settings/ai'),
     saveAiSettings: (data) => API.request('/settings/ai', { method: 'POST', body: JSON.stringify(data) }),
     testAiSettings: (data) => API.request('/settings/ai/test', { method: 'POST', body: JSON.stringify(data) }),
+
+    // ─── Carousel Studio (STUDIO.md §4) ─────────────────────────────────────
+    // The worker on the Mac does the slow parts (indexing, rendering); these
+    // only ever queue work for it or read what it has finished. A 400 carries
+    // `problems: string[]` from validateCarousel on `err.body`.
+    getStudioStatus: () => API.request('/studio/status'),
+    getStudioLessons: () => API.request('/studio/lessons'),
+    getStudioLesson: (id) => API.request(`/studio/lessons/${encodeURIComponent(id)}`),
+    scanStudioLibrary: () => API.request('/studio/scan', { method: 'POST' }),
+    indexStudioLesson: (id) => API.request(`/studio/lessons/${encodeURIComponent(id)}/index`, { method: 'POST' }),
+    indexMissingStudioLessons: () => API.request('/studio/lessons/index-missing', { method: 'POST' }),
+    getStudioDrafts: () => API.request('/studio/drafts'),
+    getStudioDraft: (id) => API.request(`/studio/drafts/${encodeURIComponent(id)}`),
+    /** Writes the carousel synchronously on the server: up to two minutes. */
+    createStudioDraft: (input) => API.request('/studio/drafts', { method: 'POST', body: JSON.stringify(input) }),
+    updateStudioDraft: (id, data) => API.request(`/studio/drafts/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: JSON.stringify(data),
+    }),
+    rewriteStudioSlide: (id, data) => API.request(`/studio/drafts/${encodeURIComponent(id)}/rewrite`, {
+        method: 'POST', body: JSON.stringify(data),
+    }),
+    renderStudioDraft: (id) => API.request(`/studio/drafts/${encodeURIComponent(id)}/render`, { method: 'POST' }),
+    scheduleStudioDraft: (id, data) => API.request(`/studio/drafts/${encodeURIComponent(id)}/schedule`, {
+        method: 'POST', body: JSON.stringify(data),
+    }),
+    deleteStudioDraft: (id) => API.request(`/studio/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    postStudioTikTokBatch: () => API.request('/studio/tiktok/batch', { method: 'POST' }),
+    setStudioTikTokPublic: (id, done) => API.request(`/studio/drafts/${encodeURIComponent(id)}/tiktok-public`, {
+        method: 'POST', body: JSON.stringify({ done: !!done }),
+    }),
+    getStudioSlots: (count) => API.request(`/studio/slots?count=${encodeURIComponent(count)}`),
+    planStudioWeek: (data) => API.request('/studio/plan', { method: 'POST', body: JSON.stringify(data) }),
+    // Per-tenant settings (STUDIO.md §10): brand, voice, product, CTAs, schedule, library.
+    getStudioSettings: () => API.request('/studio/settings'),
+    /** Partial merge on the server; the dashboard sends whole sections. */
+    saveStudioSettings: (data) => API.request('/studio/settings', { method: 'PUT', body: JSON.stringify(data) }),
+    getStudioWorkers: () => API.request('/studio/workers'),
+    /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
+    createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),
+    revokeStudioWorker: (id) => API.request(`/studio/workers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };
