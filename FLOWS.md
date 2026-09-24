@@ -930,6 +930,104 @@ not, because they are housekeeping measured in days:
 
 Then `drainWorker()` (**:712**) as a backstop, and `publishDuePosts()` (**:714**).
 
+### 3.6 — Carousels (v20)
+
+A carousel is one `scheduled_posts` row with `post_type = 'carousel'` and its images in
+`media_urls`, in slide order. It publishes as an Instagram CAROUSEL container, a Facebook
+multi-photo feed post, or — on its own `tiktok` row — a TikTok photo post. `media_url` always
+holds the first slide as well, so every reader that knows only that column (the cards,
+thumbnails) still sees the lead image (**`src/config/migration_v20_carousel.sql`**).
+
+**Creation** — the same route as [3.1](#31--creation), **`src/routes/api.ts:2150`**.
+
+1. `unsupportedPlatformCombination` (**`src/routes/api.ts:419`**) takes `carousel` on every
+   platform; TikTok now takes `image` and `carousel` beside `video` (**:428**).
+2. **`src/routes/api.ts:2182`** — `validatePostMedia` (**`src/services/postMedia.ts:144`**)
+   decides what the row stores, or answers 400 with the sentence the dashboard shows as-is:
+   - counts: 2–10 for instagram/facebook/both (Instagram's API maximum is 10), 2–35 for a
+     TikTok carousel, exactly one for a TikTok `image` (`media_url` alone, or a one-item list);
+   - every entry an http(s) URL string;
+   - our own uploads are looked up in one `SELECT id, mime_type` — never the bytes — through
+     `MediaStore.mimeTypes` (**`src/services/storage.ts:95`**), then held to `imageProblem`
+     (**`src/services/postMedia.ts:72`**): no video as a slide; JPEG only when Instagram is a
+     target; for TikTok, only our own uploads, and only JPEG or WebP. An external URL passes
+     for Meta, which fetches it itself — there is nothing here to inspect.
+   - Every other post type passes through untouched, and a stray `media_urls` on one is ignored
+     rather than refused.
+3. **`src/routes/api.ts:2191-2203`** — with `also_tiktok`, the TikTok sibling takes
+   `tiktok_media_urls` when sent (9:16 versions of the same slides), otherwise the Meta row's
+   list, and is checked by TikTok's rules, not Meta's: a PNG carousel is fine on Facebook and
+   refused here for its TikTok sibling.
+4. TikTok options for a photo (**:2215**, **:2242-2244**) — `validateTikTokOptions(…, { media:
+   'photo' })` (**`src/services/tiktokPublish.ts:101`**) drops duet, stitch and `is_aigc`, which
+   a photo post does not have, and adds `title` (at most 90 UTF-16 units) and `auto_add_music`
+   (on unless switched off). Inbox mode keeps only the title (`validateTikTokInboxOptions`,
+   **`src/services/tiktokPublish.ts:154`**).
+5. The insert (**`src/routes/api.ts:2263-2270`**) — each row writes its own `media_url` / `media_urls` pair.
+
+**Editing** — `PUT /posts/scheduled/:id` (**`src/routes/api.ts:2353`**) re-checks the
+*effective* media (**:2402-2419**) whenever `platform`, `post_type`, `media_url` or `media_urls`
+is sent. Moving a PNG carousel from `facebook` to `both` is refused although the PUT resent no
+slide — the same two-step edit `unsupportedAfterEdit` exists for. On those edits `media_urls` is
+rewritten, and NULLed once the row is no longer a carousel (**:2460**).
+
+**Dispatch** — `attemptPublish` (**`src/routes/api.ts:570`**): the same claim, the same
+Facebook-then-Instagram order, the same `FB:… | IG:…` bookkeeping as
+[3.4](#34--attemptpublish-and-partial-publish-recovery).
+
+1. **:591** — a carousel row with no `media_urls` fails closed, rather than going out as its
+   first slide and being recorded as the whole post.
+2. **:604** → `publishFacebookCarousel` (**`src/services/instagram.ts:333`**): each image
+   `POST /{page}/photos` with `published: false` (**:350**) — otherwise every slide appears on
+   the Page as a post of its own — then one `POST /{page}/feed` carrying the caption and
+   `attached_media: [{ media_fbid }, …]` (**:357**).
+3. **`src/routes/api.ts:633`** → `publishInstagramCarousel` (**`src/services/instagram.ts:536`**): one child
+   container per image, `is_carousel_item: true` and no caption (**:555**); then the parent,
+   `media_type: 'CAROUSEL'`, `children` comma-joined, with the caption (**:563**); then the
+   same `waitForContainer` poll on the parent (**:370**) and `publishContainer` (**:410**), with
+   its 9007/100 not-ready retry, that a single post uses.
+4. A partial success is recorded as for any `both` post: Facebook live and Instagram failed is
+   FAILED with `FB:<id>`, and the retry skips Facebook.
+
+**TikTok photo posts** — a `tiktok` row whose `post_type` is `image` or `carousel` takes the
+photo branch of `publishTikTokPost` (**`src/services/tiktokPublish.ts:504`**), after the checks
+every TikTok post shares: the pending-draft limit, the token, the scope for its mode
+([6.4](#64--publishtiktokpost-the-upload), steps 1–3).
+
+1. **Resume** (**:430**) — a row that already has an `external_publish_id` is asked about
+   first. Unless TikTok refused it, the post or the draft exists, and a second init would
+   duplicate it.
+2. `tiktokPhotoUrls` (**:384**) re-checks every upload (**:393**) — one may have been deleted, or
+   the row edited, since scheduling — then rebuilds each URL as
+   `<public base URL>/api/uploads/<uuid>.jpg` (`.webp` for a WebP) (**:396**).
+3. `initPhotoPost` (**`src/services/tiktok.ts:586`**) — `POST /v2/post/publish/content/init/`
+   with `media_type: 'PHOTO'`, `PULL_FROM_URL`, `photo_cover_index: 0`. DIRECT_POST sends the
+   full `post_info` from `directPhotoInfo` (**`src/services/tiktokPublish.ts:404`**: a fresh
+   creator_info, the same privacy check as a video, comments forced off when the creator has
+   them off, music on by default). MEDIA_UPLOAD sends only `title` and `description`
+   (**`src/services/tiktok.ts:604`**). The title is the stored one or the caption's first line
+   with text on it, cut to 90 UTF-16 units without splitting a surrogate pair (`photoTitle`,
+   **:557**); the description is the caption, cut to 4000. **Not retried**, like both video
+   inits. TikTok allows this endpoint 6 calls a minute per token.
+4. `external_publish_id` is written first (**`src/services/tiktokPublish.ts:453`**), then
+   PROCESSING (**:460**), then the same inline poll as a video (`settleInline`, **:345**). There
+   is no upload and no duration check: TikTok pulls the images itself. From here the three
+   writers of [6.5](#65--three-writers-one-idempotent-transition) carry the row on —
+   `PROCESSING_DOWNLOAD`, then `SEND_TO_USER_INBOX` in inbox mode, then `PUBLISH_COMPLETE`.
+
+> **Why the URL is rebuilt rather than taken from the row.** PULL_FROM_URL only fetches from
+> the URL prefix verified in TikTok's portal (under "URL properties":
+> `https://msg-response-auto.vercel.app/`). A row saved from a preview deployment or localhost
+> carries a host TikTok refuses, with `url_ownership_unverified` (**`src/services/tiktok.ts:125`**,
+> worded for the operator). TikTok's fetcher also wants a URL that ends like an image, so
+> `GET /api/uploads/:id` answers `<uuid>.jpg|.jpeg|.png|.webp|.mp4` too, ignoring the extension
+> and serving the stored type (**`src/routes/api.ts:944`**, `uploadIdFromSegment`,
+> **`src/services/storage.ts:130`**).
+
+**Retention** — `pruneOrphanedMedia` keeps every upload named in the `media_urls` of a post that
+may yet publish (**`src/services/retention.ts:236`**). `media_url` mirrors only the first slide,
+so matching it alone would delete slides 2..N before they were published.
+
 ---
 
 ## 4. Login → session → tenant
@@ -1355,6 +1453,8 @@ so the row is inert.
 
 A video is scheduled for TikTok, alone or beside a Meta post. At the scheduled time it is
 uploaded into the creator's TikTok inbox; they post it from the TikTok app, and TikTok tells us.
+Photo posts (`image`, `carousel`, v20) share this lifecycle with no upload step — see
+[3.6](#36--carousels-v20).
 
 Inbox mode (scope `video.upload`), not Direct Post: unaudited apps are forced to SELF_ONLY, and
 the audit rejects own-account tools (**`src/services/tiktok.ts:9-14`**).
@@ -1417,9 +1517,10 @@ with an empty id.
 
 ### 6.4 — `publishTikTokPost()`: the upload
 
-**`src/services/tiktokPublish.ts:174`**. The row is already `PUBLISHING`.
+**`src/services/tiktokPublish.ts:471`**. The row is already `PUBLISHING`.
 
-1. Video only, `media_url` required (**:177-181**).
+1. `video`, `image` or `carousel`; a video needs `media_url` (**:479-483**). A photo post
+   branches off after step 3 — see [3.6](#36--carousels-v20).
 2. **Pending-draft limit** (**:183-186**) — `pendingInboxShares` (**:65**) counts this tenant's
    `PROCESSING` / `IN_INBOX` rows claimed in the last 24h. At 5 (`MAX_PENDING_INBOX_SHARES`,
    **:54**) it throws `TikTokInboxFullError`, and the catch puts the row back to **PENDING** with

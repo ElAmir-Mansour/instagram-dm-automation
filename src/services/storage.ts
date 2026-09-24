@@ -17,7 +17,7 @@
  * without credentials. Meta cURLs the URL itself during ingestion — it is not a browser and
  * it carries no session — so a signed short-lived URL is fine but a private bucket is not.
  */
-import { queryOne } from '../db/query.js';
+import { queryOne, queryRows } from '../db/query.js';
 import { log } from '../utils/log.js';
 import type { MediaUploadRow } from '../db/rows.js';
 
@@ -39,6 +39,11 @@ export interface MediaStore {
     put(input: PutMediaInput): Promise<{ id: string }>;
     /** Fetch by id, or null when it does not exist. */
     get(id: string): Promise<StoredMedia | null>;
+    /**
+     * What each id is stored as, without reading its bytes — validating a 35-photo carousel
+     * must not pull 35 files over the Postgres connection. Ids that do not exist are absent.
+     */
+    mimeTypes(ids: readonly string[]): Promise<Map<string, string>>;
     /**
      * The URL Meta will fetch. Takes the request origin because this deployment's own
      * hostname is the only thing serving the Postgres-backed implementation; an object-store
@@ -87,9 +92,45 @@ export class PostgresMediaStore implements MediaStore {
         return { id, mimeType: row.mime_type, data: row.data };
     }
 
+    async mimeTypes(ids: readonly string[]): Promise<Map<string, string>> {
+        if (ids.length === 0) return new Map();
+        const rows = await queryRows<Pick<MediaUploadRow, 'id' | 'mime_type'>>(
+            'SELECT id, mime_type FROM media_uploads WHERE id = ANY($1::uuid[])',
+            [[...ids]]
+        );
+        return new Map(rows.map((row) => [String(row.id).toLowerCase(), row.mime_type]));
+    }
+
     publicUrl(id: string, origin: string): string {
         return `${origin}/api/uploads/${id}`;
     }
+}
+
+const UPLOAD_ID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+/**
+ * `/api/uploads/<id>` also answers with an extension on the end. Only TikTok needs one — its
+ * photo fetcher wants a URL that looks like an image — and it is ignored: the stored mime type
+ * is what gets served.
+ */
+const UPLOAD_EXTENSION = '(?:\\.(?:jpe?g|png|webp|mp4))?';
+const UPLOAD_URL_PATTERN = new RegExp(`/api/uploads/(${UPLOAD_ID})${UPLOAD_EXTENSION}(?:[/?#]|$)`, 'i');
+const UPLOAD_SEGMENT_PATTERN = new RegExp(`^(${UPLOAD_ID})${UPLOAD_EXTENSION}$`, 'i');
+
+/** The `<uuid>` of one of our own `/api/uploads/<uuid>` URLs, from any origin, or null. */
+export function uploadIdFromUrl(url: string): string | null {
+    const match = UPLOAD_URL_PATTERN.exec(url);
+    return match ? match[1]!.toLowerCase() : null;
+}
+
+/**
+ * The id in the route's `:id` segment, or null. Express 5 hands over the whole segment, so
+ * `<uuid>.jpg` arrives as one string — and anything that is not a uuid has to stop here,
+ * because Postgres answers a malformed uuid literal with an error rather than no rows.
+ */
+export function uploadIdFromSegment(segment: unknown): string | null {
+    if (typeof segment !== 'string') return null;
+    const match = UPLOAD_SEGMENT_PATTERN.exec(segment);
+    return match ? match[1]!.toLowerCase() : null;
 }
 
 let storeInstance: MediaStore | null = null;
