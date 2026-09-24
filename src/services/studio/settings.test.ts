@@ -77,10 +77,10 @@ describe('mergeSettings — a partial update', () => {
         }, problems);
         assert.deepEqual(problems, []);
         assert.equal(next.brand.signature.local, 'بالعربي');
-        assert.equal(next.brand.signature.latin, '', 'the sibling field is kept');
-        assert.equal(next.brand.name, 'My brand');
+        assert.equal(next.brand.signature.latin, defaultStudioSettings().brand.signature.latin, 'the sibling field is kept');
+        assert.equal(next.brand.name, defaultStudioSettings().brand.name);
         assert.equal(next.schedule.timezone, 'Asia/Riyadh');
-        assert.deepEqual(next.schedule.slots, ['10:00', '18:00'], 'the sibling field is kept');
+        assert.deepEqual(next.schedule.slots, defaultStudioSettings().schedule.slots, 'the sibling field is kept');
         assert.equal(next.voice.language, 'en', 'an untouched section is kept whole');
     });
 

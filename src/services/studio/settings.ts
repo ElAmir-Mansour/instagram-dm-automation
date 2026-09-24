@@ -10,6 +10,7 @@
 import { queryCount, queryOne } from '../../db/query.js';
 import type { StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
 import { isPlainObject, problemsError, StudioError } from './common.js';
+import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
 
 export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples'] as const;
 type Section = (typeof STUDIO_SETTINGS_SECTIONS)[number];
@@ -22,45 +23,15 @@ const MAX_PROBLEMS = 20;
 const HEX_COLOUR = /^#[0-9A-Fa-f]{6}$/;
 const LOCAL_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-/** Neutral. Every tenant starts here; nothing in it belongs to any one creator. */
+/**
+ * Neutral. Every tenant starts here; nothing in it belongs to any one creator.
+ *
+ * One definition, owned by the writer's `settingsTypes.ts`: its built-in English example and its
+ * rules are written against these exact CTA lines, so a second copy here drifted from them and a
+ * default tenant's first generated carousel failed its own checks.
+ */
 export function defaultStudioSettings(): StudioSettings {
-    return {
-        brand: {
-            name: 'My brand',
-            signature: { latin: '', local: '' },
-            palette: ['#FFD60A', '#22C7F0', '#FF5FA2', '#A3E635', '#B06AFF', '#FF8A3D', '#5EEAD4', '#5B8CFF'],
-            colors: { ink: '#08080A', paper: '#FAFAFA', muted: '#8A8A93' },
-            fonts: { display: 'Inter', mono: 'JetBrains Mono' },
-            direction: 'ltr',
-            theme: 'dark-grid',
-        },
-        voice: {
-            language: 'en',
-            digits: 'latin',
-            guide: 'Clear, friendly and practical. Lead with the result, then the tool that gets it. '
-                + 'Short lines, one idea per slide, plain words over jargon. No hype and no invented numbers: '
-                + 'every claim comes from the source material.',
-        },
-        product: { name: '', url: '', facts: [], dmBullets: [] },
-        cta: {
-            instagramAsk: 'Comment "{keyword}" and I\'ll DM you the link 📩',
-            tiktokLine: 'The full guide: link in bio 🔗',
-            dmTemplate: 'Hi {username} 👋\n\n{question}\n\n{pitch}\n\n{url}\n\n{bullets}',
-            slide: {
-                igAsk: 'Comment',
-                igSub: 'and I\'ll DM you the link 📩',
-                save: 'Save this post',
-                ttHeadline: 'Want the full guide?',
-                ttPill: 'Link in bio',
-                ttSub: 'Tap the link on my profile 👆',
-                follow: 'Follow for more',
-                swipe: 'Swipe',
-            },
-        },
-        schedule: { timezone: 'UTC', slots: ['10:00', '18:00'] },
-        library: { root: null },
-        examples: null,
-    };
+    return writerDefaults() as StudioSettings;
 }
 
 /**
@@ -158,6 +129,7 @@ export function settingsProblems(s: StudioSettings): string[] {
     oneOf(voice?.language, 'voice.language', ['ar', 'en']);
     oneOf(voice?.digits, 'voice.digits', ['arabic-indic', 'latin']);
     text(voice?.guide, 'voice.guide', 4000);
+    if (voice?.avoid !== undefined) list(voice.avoid, 'voice.avoid', 30, (v, p) => text(v, p, 80, true));
 
     text(product?.name, 'product.name', 200);
     text(product?.url, 'product.url', 1000);

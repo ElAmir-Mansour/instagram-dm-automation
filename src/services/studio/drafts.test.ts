@@ -184,11 +184,13 @@ describe('createDraft', () => {
     it('generates, saves, and queues a render carrying the video paths and the tenant’s brand', async () => {
         library();
         let seen: any;
+        // The rules have their own suite; this one is about what happens around them.
         setGeneration({
             generateDraft: async (input, sources, ctx) => {
                 seen = { input, sources, ctx };
                 return { carousel: CAROUSEL, shots: SHOTS, campaign: CAMPAIGN };
             },
+            validateCarousel: () => [],
         });
         const draft = await createDraft(TENANT, { lessonIds: [LESSON], angle: 'tips' });
         assert.equal(draft.status, 'rendering');
@@ -291,6 +293,7 @@ describe('patchDraft', () => {
 
     it('saves what was sent, keeps what was not, and re-renders', async () => {
         library();
+        setGeneration({ validateCarousel: () => [] });
         const edited = { ...CAROUSEL, captions: { ...CAROUSEL.captions, instagram: 'اكتب "دفتر" الحين' } };
         const draft = await patchDraft(TENANT, DRAFT, { carousel: edited });
         assert.equal(draft.status, 'rendering');
@@ -308,7 +311,10 @@ describe('rewriteDraftSlide', () => {
         routes.push([/FROM lesson_moments m JOIN course_lessons l/, () => ({
             rows: [{ id: NEW_MOMENT, lesson_id: LESSON, t: 40, description: 'Result screen' }],
         })]);
-        setGeneration({ rewriteSlide: async () => ({ kind: 'shot', title: 'النتيجة', shot: { name: `m-${NEW_MOMENT}` } }) });
+        setGeneration({
+            rewriteSlide: async () => ({ kind: 'shot', title: 'النتيجة', shot: { name: `m-${NEW_MOMENT}` } }),
+            validateCarousel: () => [],
+        });
 
         const draft = await rewriteDraftSlide(TENANT, DRAFT, { index: 1, instruction: 'show the result' });
         assert.equal(draft.status, 'rendering');
@@ -326,7 +332,7 @@ describe('rewriteDraftSlide', () => {
     it('409s when an edit landed while the model was rewriting', async () => {
         library();
         routes.unshift([/^UPDATE carousel_drafts SET carousel = \$3::jsonb, shots = \$4::jsonb, updated_at/, () => ({ rows: [] })]);
-        setGeneration({ rewriteSlide: async () => ({ kind: 'point', title: 'جديد' }) });
+        setGeneration({ rewriteSlide: async () => ({ kind: 'point', title: 'جديد' }), validateCarousel: () => [] });
         await assert.rejects(rewriteDraftSlide(TENANT, DRAFT, { index: 1 }), isStudioError(409));
         assert.equal(ran(/^INSERT INTO studio_jobs/).length, 0);
     });

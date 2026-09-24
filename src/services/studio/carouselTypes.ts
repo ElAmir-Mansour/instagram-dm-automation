@@ -1,5 +1,7 @@
-// STUB — replaced by the generation agent
-// Copied verbatim from ~/Desktop/AI Course/aicourse-captions/src/carousel/types.ts (STUDIO.md §1).
+// Copied verbatim from aicourse-captions/src/carousel/types.ts (the design's schema, STUDIO.md §1).
+// Keep the two in sync: the budgets below are the templates' hard limits. The one Studio
+// difference is semantic, not structural: `ShotRef.name` keys the draft's `shots` map
+// (`m-<momentId>`), not the static shot library the comment below mentions.
 
 /**
  * The contract between the carousel copy (`posts/*.ts`) and the slide templates.

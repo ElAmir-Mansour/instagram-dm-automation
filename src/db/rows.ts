@@ -504,6 +504,8 @@ export interface VoiceProfile {
     /** Free-text voice guide the writer follows. */
     guide: string;
     digits: 'arabic-indic' | 'latin';
+    /** Words and topics the writer must never use, e.g. an unpublished section. */
+    avoid?: string[];
 }
 
 export interface ProductInfo {
