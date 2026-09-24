@@ -252,3 +252,97 @@ https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB3
 - **Autostart:** launchd via `scripts/install-studio-worker.sh`, which writes
   `~/Library/LaunchAgents/com.aicourse.studio-worker.plist` (RunAtLoad, KeepAlive, log
   `~/Library/Logs/aicourse-studio-worker.log`). There's an uninstall script too.
+
+## 10. SaaS flexibility (v1.1 — supersedes anything above that hardcodes ElAmir)
+
+The Studio is a product feature for **any tenant**. Nothing about ElAmir — his brand, voice, course, links,
+schedule, folder — may be hardcoded in code or prompts. It all lives in per-tenant settings, and his
+tenant is simply seeded with today's values.
+
+### 10.1 New tables (add to migration v21; RLS on)
+```sql
+studio_settings (
+  creator_id uuid PRIMARY KEY REFERENCES creators(id) ON DELETE CASCADE,
+  brand    jsonb NOT NULL,   -- BrandKit
+  voice    jsonb NOT NULL,   -- VoiceProfile
+  product  jsonb NOT NULL,   -- ProductInfo
+  cta      jsonb NOT NULL,   -- CtaConfig
+  schedule jsonb NOT NULL,   -- ScheduleConfig
+  library  jsonb NOT NULL,   -- LibraryConfig
+  examples jsonb,            -- Carousel[] the tenant approved, used as few-shot; null = built-in examples
+  updated_at timestamptz DEFAULT now()
+)
+studio_workers (             -- replaces the global app_settings `studio.worker_*` keys
+  id uuid PRIMARY KEY default gen_random_uuid(),
+  creator_id uuid NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  token_hash text NOT NULL UNIQUE,   -- sha256 hex of the token; the token itself is shown once, never stored
+  last_seen_at timestamptz, created_at timestamptz DEFAULT now(), revoked_at timestamptz
+)
+```
+A worker token resolves its **tenant**; `claim` only ever returns that tenant's jobs; every write a worker
+makes is scoped to that tenant. A tenant may have several workers (a Mac today, a hosted renderer later).
+
+### 10.2 Settings types (defaults via `defaultStudioSettings()` when a tenant has no row)
+```ts
+type BrandKit = {
+  name: string;                                   // shown in the UI
+  signature: { latin: string; local: string };    // "AGENTIC AI" · "بالعربي" — the slide sign-off
+  palette: string[];                              // accents to rotate through (#RRGGBB)
+  colors: { ink: string; paper: string; muted: string };
+  fonts: { display: 'Cairo'|'Tajawal'|'IBM Plex Sans Arabic'|'Inter'; mono: 'JetBrains Mono' };
+  direction: 'rtl'|'ltr';
+  theme: 'dark-grid';                             // one theme in v1; the field exists so more can be added
+};
+type VoiceProfile = {
+  language: 'ar'|'en';
+  guide: string;                                  // free-text voice guide the writer follows
+  digits: 'arabic-indic'|'latin';
+};
+type ProductInfo = {
+  name: string;                                   // "Agentic AI: الدليل العملي…"
+  url: string;                                    // with referral code
+  facts: string[];                                // short facts usable on slides, e.g. "٣٤ درس"
+  dmBullets: string[];                            // the ✅ lines in the DM
+};
+type CtaConfig = {
+  instagramAsk: string;       // caption line, with {keyword}: 'اكتب "{keyword}" بالتعليقات ويوصلك رابط الكورس بالخاص 📩'
+  tiktokLine: string;         // caption line: '📚 الكورس كامل بالعربي — رابطه في البايو 🔗'
+  dmTemplate: string;         // with {username} {question} {pitch} {url} {bullets}
+  slide: {                    // the last slide's words, per platform
+    igAsk: string;            // 'اكتب في التعليقات'
+    igSub: string;            // 'ويوصلك الرابط بالخاص 📩'
+    save: string;             // 'احفظ المنشور'
+    ttHeadline: string;       // 'الكورس كامل بالعربي'
+    ttPill: string;           // 'رابطه في البايو'
+    ttSub: string;            // 'ادخل البروفايل واضغط الرابط 👆'
+    follow: string;           // 'تابعني للمزيد'
+    swipe: string;            // 'اسحب'
+  };
+};
+type ScheduleConfig = { timezone: string; slots: string[] };      // 'Asia/Riyadh', ['13:00','21:00']
+type LibraryConfig = { root: string | null };                     // folder the worker scans; null = not set
+type StudioSettings = { brand; voice; product; cta; schedule; library; examples: Carousel[] | null };
+```
+`defaultStudioSettings()` is neutral (English, generic copy, the dark-grid theme, a default palette, no
+product). ElAmir's tenant gets today's exact values from a seed script run once after deploy.
+
+### 10.3 Where settings flow
+- **Operator API**: `GET /api/studio/settings` → `{ settings }`; `PUT /api/studio/settings` (partial merge,
+  validated) → `{ settings }`; `GET /api/studio/workers` → `{ workers }`; `POST /api/studio/workers { name }`
+  → `{ worker, token }` (token shown once); `DELETE /api/studio/workers/:id` (revoke). These replace
+  `/api/studio/worker-token`.
+- **Generation**: `GenContext` gains `settings: StudioSettings`. Prompts are built from `voice.guide`,
+  `voice.language`, `voice.digits`, `product`, `cta`, and examples = `settings.examples ?? builtIn(language)`.
+  Palette = `brand.palette`. The DM = `cta.dmTemplate` filled in. Rules check the IG caption contains
+  `cta.instagramAsk` with the keyword filled, and the TikTok caption contains `cta.tiktokLine`
+  (not hardcoded «البايو»); Arabic-digit checks apply only when `voice.digits = 'arabic-indic'`.
+- **Slots**: `/slots` uses `schedule.timezone` + `schedule.slots`.
+- **Scan**: `scan_library` payload root = `library.root` (400 "set your library folder first" when null).
+- **Render**: `render_carousel` payload adds `brand: BrandKit`, `cta: CtaConfig['slide']`, `facts: string[]`.
+  The templates read colors, fonts, signature, direction and every CTA word from these (a `BrandContext`
+  whose defaults are today's constants), so ElAmir's renders stay pixel-identical.
+- **Dashboard**: a Studio **Settings** tab: Brand kit (signature, palette editor, colors, fonts),
+  Voice (language, digits, guide), Product & CTAs (all strings above, with live previews of the DM and
+  caption lines), Schedule (timezone, slots), Library folder, Workers (create → copy token once, revoke,
+  last seen).
