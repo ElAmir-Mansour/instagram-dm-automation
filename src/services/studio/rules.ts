@@ -4,8 +4,13 @@
  * `validateCarousel` returns one message per problem and `[]` for a valid carousel. It is pure:
  * no I/O, no clock, no mutation of its input.
  *
- * Every check of the original is here. There is one intended difference: a shot name is checked
- * against the draft's own `shotNames` (the keys of its `shots` map), not the static library.
+ * Every check of the original is here, with three intended differences (STUDIO.md §10.3):
+ *   - a shot name is checked against the draft's own `shotNames` (the keys of its `shots` map),
+ *     not the static library;
+ *   - the captions are checked against the tenant's own CTA lines: the Instagram caption must
+ *     carry `cta.instagramAsk` with the keyword filled in, the TikTok caption `cta.tiktokLine`
+ *     (the original hardcoded «البايو»);
+ *   - the Latin-digit-beside-Arabic test runs only when `voice.digits` is 'arabic-indic'.
  *
  * The original reads typed `posts/*.ts` files, so it never meets a missing array or a number where
  * a string belongs. This one validates JSON from the model and from the dashboard, where a
@@ -18,8 +23,18 @@
  * this validator enforces.
  */
 import type { Carousel, Slide } from './carouselTypes.js';
+import type { CtaConfig, VoiceProfile } from './settingsTypes.js';
 
 type Loose = Record<string, unknown>;
+
+/** The settings the rules read. A full `StudioSettings` satisfies it. */
+export type RuleSettings = {
+    voice: Pick<VoiceProfile, 'digits'>;
+    cta: Pick<CtaConfig, 'instagramAsk' | 'tiktokLine'>;
+};
+
+/** A CTA line with `{keyword}` filled in. */
+export const fillKeyword = (template: string, keyword: string): string => template.split('{keyword}').join(keyword);
 
 /** A budgeted text field, located so a caller can read it and (on a copy) rewrite it. */
 export type TextField = {
@@ -61,9 +76,6 @@ export const COUNTS = {
 } as const;
 
 export const CAPTION_LIMITS = { tiktokTitle: 90, tiktok: 4000, instagram: 2200, hashtags: 30 } as const;
-
-/** The line every TikTok caption must carry: TikTok can't auto-DM, so the link is in the bio. */
-export const LINK_IN_BIO = 'البايو';
 
 /** Arabic text uses Arabic-Indic digits; Latin digits are fine inside Latin runs ("Gemini 2.5"). */
 const LATIN_DIGIT_BESIDE_ARABIC = /[؀-ۿ]\s*[0-9]|[0-9]\s*[؀-ۿ]/;
@@ -186,7 +198,7 @@ function checkShotRef(problems: string[], p: string, ref: unknown, shotNames: Re
     }
 }
 
-function checkSlide(problems: string[], p: string, s: unknown, shotNames: ReadonlySet<string>): void {
+function checkSlide(problems: string[], p: string, s: unknown, shotNames: ReadonlySet<string>, digits: boolean): void {
     if (!isObj(s) || !(SLIDE_KINDS as readonly unknown[]).includes(s.kind)) {
         problems.push(`${p}: unknown slide kind`);
         return;
@@ -207,7 +219,7 @@ function checkSlide(problems: string[], p: string, s: unknown, shotNames: Readon
             continue;
         }
         if (v.length > f.max) problems.push(`${f.label}: ${v.length} > ${f.max} «${v}»`);
-        if (f.digits && LATIN_DIGIT_BESIDE_ARABIC.test(v)) problems.push(`${f.label}: Latin digit next to Arabic text «${v}»`);
+        if (digits && f.digits && LATIN_DIGIT_BESIDE_ARABIC.test(v)) problems.push(`${f.label}: Latin digit next to Arabic text «${v}»`);
     }
 
     // Shots: cover and point may carry one, a shot slide must.
@@ -259,12 +271,15 @@ function checkSlide(problems: string[], p: string, s: unknown, shotNames: Readon
 
 /**
  * All the problems with a carousel, or `[]`. `shotNames` is the set of names its slides may use:
- * the keys of the draft's `shots` map.
+ * the keys of the draft's `shots` map. `settings` supplies the tenant's CTA lines and digit style.
  */
-export function validateCarousel(c: Carousel, shotNames: ReadonlySet<string>): string[] {
+export function validateCarousel(c: Carousel, shotNames: ReadonlySet<string>, settings: RuleSettings): string[] {
     const problems: string[] = [];
     const raw = c as unknown;
     if (!isObj(raw)) return ['carousel: must be an object'];
+    const arabicDigits = settings?.voice?.digits === 'arabic-indic';
+    const instagramAsk = typeof settings?.cta?.instagramAsk === 'string' ? settings.cta.instagramAsk.trim() : '';
+    const tiktokLine = typeof settings?.cta?.tiktokLine === 'string' ? settings.cta.tiktokLine.trim() : '';
 
     const id = typeof raw.id === 'string' ? raw.id : '';
     if (!SAFE_ID.test(id)) problems.push(`id "${id}" must be ASCII letters, digits or "-", starting with a letter`);
@@ -283,7 +298,7 @@ export function validateCarousel(c: Carousel, shotNames: ReadonlySet<string>): s
         if (!isObj(slides[0]) || slides[0].kind !== 'cover') problems.push('first slide must be cover');
         const last = slides.at(-1);
         if (!isObj(last) || last.kind !== 'cta') problems.push('last slide must be cta');
-        slides.forEach((s, i) => checkSlide(problems, slideLabel(i, s), s, shotNames));
+        slides.forEach((s, i) => checkSlide(problems, slideLabel(i, s), s, shotNames, arabicDigits));
     }
 
     const captions = isObj(raw.captions) ? raw.captions : {};
@@ -304,10 +319,15 @@ export function validateCarousel(c: Carousel, shotNames: ReadonlySet<string>): s
     if (instagram !== null) {
         if (instagram.length > L.instagram) problems.push(`instagram caption ${instagram.length} > ${L.instagram}`);
         if (!instagram.includes(keyword)) problems.push("instagram caption doesn't mention the keyword");
+        if (instagramAsk && keyword && !instagram.includes(fillKeyword(instagramAsk, keyword))) {
+            problems.push(`instagram caption is missing the keyword ask «${fillKeyword(instagramAsk, keyword)}»`);
+        }
         const tags = (instagram.match(/#/g) ?? []).length;
         if (tags > L.hashtags) problems.push(`${tags} hashtags > ${L.hashtags}`);
     }
-    if (tiktok !== null && !tiktok.includes(LINK_IN_BIO)) problems.push('tiktok caption is missing the link-in-bio line');
+    if (tiktok !== null && tiktokLine && !tiktok.includes(tiktokLine)) {
+        problems.push(`tiktok caption is missing the link line «${tiktokLine}»`);
+    }
 
     return problems;
 }

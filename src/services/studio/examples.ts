@@ -1,10 +1,14 @@
 /**
- * Three of ElAmir's approved carousels, the generator's few-shot examples (STUDIO.md §7).
+ * The built-in few-shot examples (STUDIO.md §7, §10.3): used when a tenant hasn't approved
+ * examples of its own (`settings.examples` is null).
  *
- * Copied exactly from aicourse-captions/src/carousel/posts/{ChatVsAgent,ContextPyramid,LocalAI}.ts, formatting
- * included, so a diff against the originals stays empty. They are the target for quality and
- * voice. Their shot names come from the static shot library, not from a draft's `shots` map, so
- * validate them against `exampleShotNames`, not a draft's.
+ * Arabic: three approved carousels, copied exactly from
+ * aicourse-captions/src/carousel/posts/{ChatVsAgent,ContextPyramid,LocalAI}.ts, formatting included, so a diff
+ * against the originals stays empty. English: one neutral carousel written for this file.
+ *
+ * They are the target for quality, density and structure. Their CTA lines and facts belong to
+ * their author, and their shot names to a static shot library, not to any draft's `shots` map:
+ * validate them against `builtInExampleShotNames`.
  */
 import type { Carousel } from './carouselTypes.js';
 
@@ -298,10 +302,116 @@ export const localAI: Carousel = {
   },
 };
 
-/** The three examples, in the order the prompt shows them. */
-export const EXAMPLES: readonly Carousel[] = [chatVsAgent, contextPyramid, localAI];
+/**
+ * The neutral English built-in example, for tenants writing in English. Not any real creator's
+ * post: generic advice with no product facts, and the default settings' CTA lines.
+ */
+export const goalNotQuestion: Carousel = {
+  id: "GoalNotQuestion",
+  accent: "#5B8CFF",
+  keyword: "goal",
+  slides: [
+    {
+      kind: "cover",
+      kicker: "Better AI answers",
+      title: "Stop asking AI questions",
+      highlight: "questions",
+      subtitle: "Give it a goal instead, and it hands back finished work",
+    },
+    {
+      kind: "compare",
+      title: "A question vs a goal",
+      left: {
+        label: "A question",
+        items: ["\"What's the best laptop?\"", "You get an opinion", "You still do the work"],
+      },
+      right: {
+        label: "A goal",
+        items: ["\"Compare 3 laptops for me\"", "You get a table", "It does the legwork"],
+      },
+    },
+    {
+      kind: "point",
+      n: 1,
+      title: "Start with the result you want",
+      body: "Say what the finished thing looks like: a table, a checklist, a draft. The AI can't aim at a target you never named.",
+      tip: "Write the last line first: \"Give me…\"",
+    },
+    {
+      kind: "list",
+      title: "What a goal includes",
+      items: [
+        { icon: "🎯", text: "The outcome", sub: "What you'll hold at the end" },
+        { icon: "🧩", text: "The context", sub: "Who it's for, and why" },
+        { icon: "📐", text: "The format", sub: "A table, bullets or a draft" },
+        { icon: "🚧", text: "The limits", sub: "Length, tone, and what to skip" },
+      ],
+    },
+    {
+      kind: "prompt",
+      title: "Turn any question into a goal",
+      label: "Copy the prompt",
+      prompt:
+        "My goal: [the result you want]. Context: [who it's for and why]. Give me [a table / a checklist / a draft] within [length and tone]. If anything is unclear, ask me one question first.",
+      note: "Fill in the brackets, keep the order",
+    },
+    {
+      kind: "shot",
+      title: "The same ask, as a goal",
+      shot: { name: "example-result" },
+      caption: "One prompt with a goal, and the answer comes back as a finished comparison table",
+    },
+    {
+      kind: "point",
+      n: 2,
+      title: "Then review, don't redo",
+      body: "With a goal, your job moves from doing the work to checking it. Read it, correct one thing, and ask for the next version.",
+    },
+    { kind: "cta", promise: "The full method is in the course" },
+  ],
+  captions: {
+    instagram: `Stop asking AI questions 🎯 Give it a goal.
 
-/** Every shot name the examples use: their valid `shotNames` for `validateCarousel`. */
-export const exampleShotNames: ReadonlySet<string> = new Set(
-    EXAMPLES.flatMap((c) => c.slides.flatMap((s) => ('shot' in s && s.shot ? [s.shot.name] : []))),
+❓ A question gets you an opinion
+🎯 A goal gets you finished work: a table, a checklist, a draft
+
+Swipe for the prompt that turns any question into a goal 👉
+
+Save this post 🔖 for the next time an answer comes back generic
+
+Comment "goal" and I'll DM you the link 📩
+
+#AI #ChatGPT #Productivity #PromptEngineering #LearnAI`,
+    tiktokTitle: "Stop asking AI questions. Give it a goal 🎯",
+    tiktok: `Stop asking AI questions. Give it a goal 🎯
+
+❓ A question gets you an opinion
+🎯 A goal gets you finished work
+
+Swipe and grab the prompt 👉
+
+Do you ask AI questions, or give it goals? 👇
+
+🔗 The full course is in my bio
+
+#AI #ChatGPT #Productivity #LearnOnTikTok`,
+  },
+};
+
+/** The Arabic built-ins, in the order the prompt shows them. */
+export const ARABIC_EXAMPLES: readonly Carousel[] = [chatVsAgent, contextPyramid, localAI];
+
+/** The English built-in. */
+export const ENGLISH_EXAMPLES: readonly Carousel[] = [goalNotQuestion];
+
+/** The few-shot examples for a tenant with none of its own. */
+export function builtInExamples(language: 'ar' | 'en'): readonly Carousel[] {
+    return language === 'ar' ? ARABIC_EXAMPLES : ENGLISH_EXAMPLES;
+}
+
+/** Every shot name the built-in examples use: their `shotNames` for `validateCarousel`. */
+export const builtInExampleShotNames: ReadonlySet<string> = new Set(
+    [...ARABIC_EXAMPLES, ...ENGLISH_EXAMPLES].flatMap((c) =>
+        c.slides.flatMap((s) => ('shot' in s && s.shot ? [s.shot.name] : [])),
+    ),
 );

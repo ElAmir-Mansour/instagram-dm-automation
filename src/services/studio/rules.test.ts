@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Carousel, Slide } from './carouselTypes.js';
-import { EXAMPLES, exampleShotNames } from './examples.js';
-import { validateCarousel, usedShotNames } from './rules.js';
+import { ARABIC_EXAMPLES, ENGLISH_EXAMPLES, builtInExampleShotNames } from './examples.js';
+import { validateCarousel, usedShotNames, type RuleSettings } from './rules.js';
+import { ELAMIR_SETTINGS as AR, ENGLISH_SETTINGS as EN } from './testFixtures.js';
 
 /** `n` Arabic letters: budget-sized text with no digits in it. */
 const A = (n: number): string => 'ب'.repeat(n);
@@ -40,13 +41,16 @@ function slideOf<K extends Slide['kind']>(c: Carousel, kind: K): Extract<Slide, 
     return s as Extract<Slide, { kind: K }>;
 }
 
-describe('validateCarousel: the approved carousels', () => {
-    for (const ex of EXAMPLES) {
-        it(`${ex.id} passes`, () => assert.deepEqual(validateCarousel(ex, exampleShotNames), []));
+describe('validateCarousel: the built-in examples', () => {
+    for (const ex of ARABIC_EXAMPLES) {
+        it(`${ex.id} passes with ElAmir's settings`, () => assert.deepEqual(validateCarousel(ex, builtInExampleShotNames, AR), []));
+    }
+    for (const ex of ENGLISH_EXAMPLES) {
+        it(`${ex.id} passes with the English settings`, () => assert.deepEqual(validateCarousel(ex, builtInExampleShotNames, EN), []));
     }
 
     it('the fixture passes, so every failure below is the mutation alone', () => {
-        assert.deepEqual(validateCarousel(base(), SHOTS), []);
+        assert.deepEqual(validateCarousel(base(), SHOTS, AR), []);
     });
 });
 
@@ -103,7 +107,9 @@ const CASES: [string, (c: Carousel) => void, string][] = [
     // Captions and campaign fields.
     ['tiktokTitle over 90 UTF-16', (c) => { c.captions.tiktokTitle = A(89) + '🔒'; }, 'tiktokTitle 91 > 90 UTF-16'],
     ['instagram without the keyword', (c) => { c.captions.instagram = 'اكتب بالتعليقات #تقنية'; }, "instagram caption doesn't mention the keyword"],
-    ['tiktok without the link-in-bio line', (c) => { c.captions.tiktok = 'الكورس كامل بالعربي'; }, 'tiktok caption is missing the link-in-bio line'],
+    ['tiktok without the link line', (c) => { c.captions.tiktok = 'الكورس كامل بالعربي — رابطه في البايو'; }, 'tiktok caption is missing the link line «📚 الكورس كامل بالعربي — رابطه في البايو 🔗»'],
+    ['instagram ask reworded', (c) => { c.captions.instagram = 'اكتب "وكيل" في التعليقات #تقنية'; }, 'instagram caption is missing the keyword ask «اكتب "وكيل" بالتعليقات ويوصلك رابط الكورس بالخاص 📩»'],
+    ['instagram ask for another keyword', (c) => { c.captions.instagram = 'وكيل\nاكتب "سياق" بالتعليقات ويوصلك رابط الكورس بالخاص 📩'; }, 'instagram caption is missing the keyword ask'],
     ['instagram over 2200', (c) => { c.captions.instagram = 'وكيل ' + A(2196); }, 'instagram caption 2201 > 2200'],
     ['tiktok over 4000', (c) => { c.captions.tiktok += A(4000); }, 'tiktok caption too long'],
     ['31 hashtags', (c) => { c.captions.instagram += ' #و'.repeat(30); }, '31 hashtags > 30'],
@@ -125,7 +131,7 @@ describe('validateCarousel: each rule catches its violation', () => {
         it(what, () => {
             const c = base();
             mutate(c);
-            const problems = validateCarousel(c, SHOTS);
+            const problems = validateCarousel(c, SHOTS, AR);
             assert.ok(problems.some((p) => p.startsWith(expected)), `expected «${expected}» in:\n${problems.join('\n')}`);
         });
     }
@@ -135,26 +141,48 @@ describe('validateCarousel: what the checker allows', () => {
     it('allows Latin digits inside a Latin run', () => {
         const c = base();
         slideOf(c, 'point').title = 'جرّب Gemini 2.5 Pro';
-        assert.deepEqual(validateCarousel(c, SHOTS), []);
+        assert.deepEqual(validateCarousel(c, SHOTS, AR), []);
     });
 
     it('only measures prompt.prompt and stat.value, as the checker does', () => {
         const c = base();
         slideOf(c, 'prompt').prompt = 'اكتب 3 منشورات عن [منتجي]';
         slideOf(c, 'stat').value = '5 دقائق';
-        assert.deepEqual(validateCarousel(c, SHOTS), []);
+        assert.deepEqual(validateCarousel(c, SHOTS, AR), []);
     });
 
     it('counts an astral emoji as two UTF-16 units, so 88 letters + 🔒 is exactly 90', () => {
         const c = base();
         c.captions.tiktokTitle = A(88) + '🔒';
-        assert.deepEqual(validateCarousel(c, SHOTS), []);
+        assert.deepEqual(validateCarousel(c, SHOTS, AR), []);
+    });
+
+    it('skips the Latin-digit test for a tenant that writes Latin digits', () => {
+        const c = base();
+        slideOf(c, 'point').title = '5 أخطاء';
+        const latin: RuleSettings = { ...AR, voice: { ...AR.voice, digits: 'latin' } };
+        assert.deepEqual(validateCarousel(c, SHOTS, latin), []);
+        assert.ok(validateCarousel(c, SHOTS, AR).some((p) => p.includes('Latin digit')));
+    });
+
+    it('checks the captions against the tenant\'s own CTA lines, not ElAmir\'s', () => {
+        const problems = validateCarousel(base(), SHOTS, EN);
+        assert.ok(problems.includes('instagram caption is missing the keyword ask «Comment "وكيل" and I\'ll DM you the link 📩»'), problems.join('\n'));
+        assert.ok(problems.includes(`tiktok caption is missing the link line «${EN.cta.tiktokLine}»`), problems.join('\n'));
+    });
+
+    it('checks no ask or link line when the tenant has none configured', () => {
+        const none: RuleSettings = { voice: AR.voice, cta: { instagramAsk: '', tiktokLine: '' } };
+        const c = base();
+        c.captions.instagram = 'وكيل #تقنية';
+        c.captions.tiktok = 'بدون رابط';
+        assert.deepEqual(validateCarousel(c, SHOTS, none), []);
     });
 
     it('accepts a lowercase accent, as the checker\'s /i does', () => {
         const c = base();
         c.accent = '#ffd60a';
-        assert.deepEqual(validateCarousel(c, SHOTS), []);
+        assert.deepEqual(validateCarousel(c, SHOTS, AR), []);
     });
 });
 
@@ -174,7 +202,7 @@ describe('validateCarousel: malformed JSON is a problem, never a throw', () => {
     ];
     for (const [what, value, expected] of garbage) {
         it(what, () => {
-            const problems = validateCarousel(value as Carousel, SHOTS);
+            const problems = validateCarousel(value as Carousel, SHOTS, AR);
             assert.ok(problems.some((p) => p.startsWith(expected)), `expected «${expected}» in:\n${problems.join('\n')}`);
         });
     }
@@ -183,7 +211,7 @@ describe('validateCarousel: malformed JSON is a problem, never a throw', () => {
         const c = base();
         slideOf(c, 'point').title = A(99);
         const before = structuredClone(c);
-        validateCarousel(c, SHOTS);
+        validateCarousel(c, SHOTS, AR);
         assert.deepEqual(c, before);
     });
 });
