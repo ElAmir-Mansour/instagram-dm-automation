@@ -26,8 +26,8 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=7.2">
-    <link rel="stylesheet" href="/dashboard/css/styles.css?v=7.2">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=7.3">
+    <link rel="stylesheet" href="/dashboard/css/styles.css?v=7.3">
 
     <script>
         /* Applied before first paint so a pinned light theme never flashes dark.
@@ -73,7 +73,7 @@
                 var link = document.createElement('link');
                 link.rel = 'preload';
                 link.as = 'script';
-                link.href = '/dashboard/js/pages/' + page + '.js?v=7.2';
+                link.href = '/dashboard/js/pages/' + page + '.js?v=7.3';
                 document.head.appendChild(link);
             } catch (e) { /* the module still loads, just a beat later */ }
         }());
@@ -304,17 +304,17 @@
          pure functions. Note this does NOT let cdn.jsdelivr.net leave the CSP:
          Lucide still loads from there. -->
 
-    <script defer src="/dashboard/js/i18n.js?v=7.2"></script>
-    <script defer src="/dashboard/js/api.js?v=7.2"></script>
-    <script defer src="/dashboard/js/components.js?v=7.2"></script>
-    <script defer src="/dashboard/js/motion.js?v=7.2"></script>
-    <script defer src="/dashboard/js/charts.js?v=7.2"></script>
+    <script defer src="/dashboard/js/i18n.js?v=7.3"></script>
+    <script defer src="/dashboard/js/api.js?v=7.3"></script>
+    <script defer src="/dashboard/js/components.js?v=7.3"></script>
+    <script defer src="/dashboard/js/motion.js?v=7.3"></script>
+    <script defer src="/dashboard/js/charts.js?v=7.3"></script>
     <!-- Not a page: the administration foundation (Admin.confirm, which replaces
          window.confirm for destructive actions anywhere) plus the health strip,
          which has to be available on a page whose own module does not know
          about it. Small, and needed off the admin screens, so it is eager. -->
-    <script defer src="/dashboard/js/pages/admin_common.js?v=7.2"></script>
-    <script defer src="/dashboard/js/app.js?v=7.2"></script>
+    <script defer src="/dashboard/js/pages/admin_common.js?v=7.3"></script>
+    <script defer src="/dashboard/js/app.js?v=7.3"></script>
 
 </body>
 </html>
