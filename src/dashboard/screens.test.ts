@@ -2076,3 +2076,926 @@ describe('PostsPage — carousel cards', () => {
         assert.equal(trigger.disabled, false, 'and released after the last');
     });
 });
+
+// ─── Carousel Studio (#/studio) ──────────────────────────────────────────────
+/**
+ * The Studio page is loaded on its own, with the router, the confirm dialog and
+ * the API all recorded: what matters here is what the page SENDS (DraftInput,
+ * PATCH, schedule, settings) and what it says when the server refuses, so the
+ * stubs keep every call and the tests read the real handlers' output.
+ */
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Json = any;
+
+interface StudioApi {
+    render(): Promise<void>;
+    destroy(): void;
+    status: Json;
+    settings: Json;
+    lessons: Json[];
+    selected: string[];
+    plan: Json;
+    work: Json;
+    draft: Json;
+    settingsWork: Json;
+    newWorker: Json;
+    workers: Json[];
+    newError: Json;
+    plannedSlots: Record<string, string>;
+    ANGLES: string[];
+    SLIDE_KINDS: string[];
+    CTA_SLIDE_KEYS: string[];
+    statusMarkup(): { toString(): string };
+    isDirty(): boolean;
+    toggleLesson(id: string): void;
+    generate(form: unknown, event: unknown): Promise<void>;
+    planWeek(el: unknown): Promise<void>;
+    toggleProposal(key: string): void;
+    generateAll(): Promise<void>;
+    slideField(el: unknown): void;
+    metaField(el: unknown): void;
+    keywordField(el: unknown): void;
+    campaignField(el: unknown): void;
+    campaignToggle(el: unknown): void;
+    moveSlide(index: unknown, delta: number): void;
+    pickShot(el: unknown): void;
+    save(el?: unknown): Promise<void>;
+    problemTarget(message: string): Json;
+    readSchedule(form: unknown): Json;
+    schedule(form: unknown, event: unknown): Promise<void>;
+    confirmTikTokBatch(): void;
+    setting(el: unknown): void;
+    addListItem(path: string): void;
+    removeListItem(path: string, index: unknown): void;
+    addSwatch(): void;
+    removeSwatch(index: unknown): void;
+    saveSettings(form: unknown, event: unknown): Promise<void>;
+    createWorker(form: unknown, event: unknown): Promise<void>;
+    copyToken(): Promise<void>;
+    dismissToken(): void;
+}
+
+interface StudioLoaded {
+    Studio: StudioApi;
+    t: Translate;
+    I18N: { lang: string; strings: Record<string, Record<string, string>> };
+    dom: Map<string, FakeEl>;
+    api: Record<string, (...args: Json[]) => unknown>;
+    calls: Array<{ method: string; args: Json[] }>;
+    confirms: Array<Record<string, Json>>;
+    nav: Array<{ page: string; params?: Record<string, unknown> }>;
+    toasts: Array<{ message: string; type?: string }>;
+    copied: string[];
+    hash: Record<string, string>;
+    /** A fake host for a region the page repaints by id; its innerHTML is what was painted. */
+    host(id: string): FakeEl;
+}
+
+function unrefTimer<T>(handle: T): T {
+    (handle as unknown as { unref?: () => void }).unref?.();
+    return handle;
+}
+
+function loadStudio(hash: Record<string, string> = {}): StudioLoaded {
+    const noop = (): void => {};
+    const dom = new Map<string, FakeEl>();
+    const api: Record<string, (...args: Json[]) => unknown> = {};
+    const calls: Array<{ method: string; args: Json[] }> = [];
+    const confirms: Array<Record<string, Json>> = [];
+    const nav: Array<{ page: string; params?: Record<string, unknown> }> = [];
+    const copied: string[] = [];
+    const stubEl = {
+        addEventListener: noop, removeEventListener: noop,
+        querySelectorAll: () => [], querySelector: () => null,
+        appendChild: noop, setAttribute: noop, getAttribute: () => null,
+        removeAttribute: noop,
+        classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+        style: {}, dataset: {}, focus: noop, remove: noop, closest: () => null,
+        contains: () => false, children: [], innerHTML: '',
+    };
+    const ctx: Record<string, unknown> = {
+        document: {
+            ...stubEl,
+            createElement: () => ({ ...stubEl }),
+            body: { ...stubEl }, head: { ...stubEl },
+            documentElement: { ...stubEl, lang: 'ar', dir: 'rtl' },
+            getElementById: (id: string) => dom.get(id) ?? null,
+            activeElement: null,
+            visibilityState: 'visible',
+        },
+        window: {
+            addEventListener: noop, removeEventListener: noop,
+            matchMedia: () => ({ matches: false, addEventListener: noop }),
+            location: { hash: '' },
+        },
+        // The page's 15s status refresh and 4s render poll are cleared by destroy(),
+        // which a test that fails part-way never reaches. Unref'd, a leftover timer
+        // cannot hold this file's process open, so a failure is a failure, not a hang.
+        Intl, console, clearTimeout, clearInterval,
+        setTimeout: (fn: () => void, ms?: number) => unrefTimer(setTimeout(fn, ms)),
+        setInterval: (fn: () => void, ms?: number) => unrefTimer(setInterval(fn, ms)),
+        requestAnimationFrame: (f: () => void) => f(),
+        navigator: { language: 'ar', clipboard: { writeText: (text: string) => { copied.push(text); return Promise.resolve(); } } },
+        CSS: { escape: (v: string) => String(v) },
+        API: new Proxy(api, {
+            get: (target, prop: string) => (prop in target
+                ? (...args: Json[]) => { calls.push({ method: prop, args }); return target[prop]!(...args); }
+                : () => Promise.reject(new Error(`API.${prop} not stubbed`))),
+        }),
+        Admin: { emptyState: (_icon: string, title: string) => title, confirm: (o: Record<string, Json>) => { confirms.push(o); } },
+        App: {
+            currentTheme: () => 'auto', navigate: noop,
+            hashParam: (name: string) => hash[name] || '',
+            go: (page: string) => { nav.push({ page }); },
+            goWithQuery: (page: string, params: Record<string, unknown>) => { nav.push({ page, params }); },
+        },
+        FormData: FakeFormData,
+    };
+    ctx.globalThis = ctx;
+    vm.createContext(ctx);
+    for (const f of [
+        'dashboard/js/components.js',
+        'dashboard/js/i18n.js',
+        'dashboard/js/motion.js',
+        'dashboard/js/pages/studio.js',
+    ]) {
+        vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
+    }
+    const { StudioPage, UI, t, I18N } = vm.runInContext('({ StudioPage, UI, t, I18N })', ctx) as {
+        StudioPage: StudioApi; UI: { toast: (m: unknown, type?: string) => void }; t: Translate;
+        I18N: StudioLoaded['I18N'];
+    };
+    const toasts: Array<{ message: string; type?: string }> = [];
+    UI.toast = (message, type) => { toasts.push({ message: String(message), type }); };
+    dom.set('page-container', fakeEl('page-container'));
+    const host = (id: string): FakeEl => {
+        const el = fakeEl(id);
+        dom.set(id, el);
+        return el;
+    };
+    return { Studio: StudioPage, t, I18N, dom, api, calls, confirms, nav, toasts, copied, hash, host };
+}
+
+const minutesAgo = (n: number): string => new Date(Date.now() - n * 60 * 1000).toISOString();
+
+const studioStatus = (over: Json = {}): Json => ({
+    worker: { online: true, lastSeen: minutesAgo(0.3), name: 'Studio Mac' },
+    lessons: { total: 34, indexed: 34, indexing: 0, failed: 0 },
+    jobs: { pending: 0, claimed: 0 },
+    tiktok: { audited: false, queued: 3 },
+    ...over,
+});
+
+const studioLessons = (): Json => ({
+    lessons: [
+        { id: 'l1', lesson_no: '1.1', section_no: 1, section_title: 'Chapter 1 - Prompting', title: 'Goals, not questions', status: 'indexed', summary: 's', moments_count: 12 },
+        { id: 'l2', lesson_no: '1.2', section_no: 1, section_title: 'Chapter 1 - Prompting', title: 'Role and context', status: 'indexed', summary: 's', moments_count: 14 },
+        { id: 'l3', lesson_no: '2.1', section_no: 2, section_title: 'Chapter 2 - NotebookLM', title: 'Grounded answers', status: 'indexed', summary: 's', moments_count: 20 },
+        { id: 'l4', lesson_no: '2.2', section_no: 2, section_title: 'Chapter 2 - NotebookLM', title: 'Audio overviews', status: 'indexed', summary: 's', moments_count: 18 },
+        { id: 'l5', lesson_no: 'I.1', section_no: null, section_title: null, title: 'Welcome', status: 'new', summary: null, moments_count: 0 },
+    ],
+});
+
+/** Eight slides, one of each editable kind but stat. */
+const studioCarousel = (): Json => ({
+    id: 'GoalsNotQuestions',
+    accent: '#FF6B6B',
+    keyword: 'برومبت',
+    slides: [
+        { kind: 'cover', kicker: 'قبل ما تلوم الأداة', title: 'اعطه هدف بدل سؤال', highlight: 'هدف', subtitle: 'الفرق بين رأي وشغل منجز', shot: { name: 'm-mo1' } },
+        { kind: 'point', n: 1, title: 'ابدأ بالنتيجة', body: 'قل له وش تبي تستلم في النهاية.', tip: 'النتيجة أولاً' },
+        { kind: 'list', title: 'ثلاث أدوات', items: [{ icon: '🔎', text: 'بحث' }, { text: 'كود' }, { text: 'صور', sub: 'أداة للصور' }] },
+        { kind: 'compare', title: 'قبل وبعد', left: { label: 'سؤال', items: ['رأي', 'عام'] }, right: { label: 'هدف', items: ['تقرير', 'مخصص'] } },
+        { kind: 'steps', title: 'بالخطوات', steps: [{ title: 'الدور' }, { title: 'المهمة', body: 'وش المطلوب' }, { title: 'الصيغة' }] },
+        { kind: 'prompt', title: 'انسخ البرومبت', label: 'انسخ', prompt: 'أنت [الدور]. المطلوب: [المهمة].' },
+        { kind: 'shot', title: 'النتيجة الحقيقية', shot: { name: 'm-mo2' }, caption: 'من الدرس' },
+        { kind: 'cta', promise: 'شرحته خطوة بخطوة' },
+    ],
+    captions: {
+        instagram: 'اكتب "برومبت" بالتعليقات ويوصلك الرابط',
+        tiktokTitle: 'هدف بدل سؤال',
+        tiktok: 'الكورس كامل — رابطه في البايو',
+    },
+});
+
+const studioDraft = (over: Json = {}): Json => ({
+    id: 'd1',
+    status: 'ready',
+    input: { lessonIds: ['l1'], angle: 'auto', slides: 8 },
+    carousel: studioCarousel(),
+    shots: {
+        'm-mo1': { lessonId: 'l1', t: 42, zoom: 1.3, focusX: 0.5, focusY: 0.5, desc: 'The vague answer' },
+        'm-mo2': { lessonId: 'l1', t: 90, zoom: 1.3, focusX: 0.5, focusY: 0.5, desc: 'The report' },
+    },
+    campaign: { keyword: 'برومبت', variants: ['البرومبت'], dm: 'هلا {username} 👋', create: true },
+    render: {
+        ig: Array.from({ length: 8 }, (_, i) => `https://cdn.test/ig-${i + 1}.jpg`),
+        tt: Array.from({ length: 8 }, (_, i) => `https://cdn.test/tt-${i + 1}.jpg`),
+        rendered_at: minutesAgo(5),
+        job_id: 'j1',
+    },
+    schedule: null,
+    error: null,
+    created_at: '2026-09-20T10:00:00.000Z',
+    updated_at: '2026-09-20T10:05:00.000Z',
+    ...over,
+});
+
+const studioMoments = (): Json => ({
+    lesson: { id: 'l1', lesson_no: '1.1', title: 'Goals, not questions', status: 'indexed', notes: { summary: 's', points: [], prompts: [], tools: [], demos: [] } },
+    moments: [
+        { id: 'mo1', lesson_id: 'l1', t: 42, description: 'The vague answer', kind: 'ui', clean: true, thumb_url: '/api/uploads/t1' },
+        { id: 'mo2', lesson_id: 'l1', t: 90, description: 'The report', kind: 'result', clean: true, thumb_url: '/api/uploads/t2' },
+        { id: 'mo3', lesson_id: 'l1', t: 120.5, description: 'The finished report, full screen', kind: 'result', clean: true, thumb_url: '/api/uploads/t3' },
+    ],
+});
+
+const studioSettings = (over: Json = {}): Json => ({
+    brand: {
+        name: 'Agentic AI', signature: { latin: 'AGENTIC AI', local: 'بالعربي' },
+        palette: ['#FF6B6B', '#7C5CFF', '#22C55E'],
+        colors: { ink: '#0B0B10', paper: '#F5F5F7', muted: '#8A8A99' },
+        fonts: { display: 'Cairo', mono: 'JetBrains Mono' }, direction: 'rtl', theme: 'dark-grid',
+    },
+    voice: { language: 'ar', guide: 'Short lines.', digits: 'arabic-indic' },
+    product: { name: 'The course', url: 'https://example.com/course?ref=1', facts: ['34 lessons', '5h40'], dmBullets: ['Lifetime access', 'Certificate'] },
+    cta: {
+        instagramAsk: 'اكتب "{keyword}" بالتعليقات ويوصلك الرابط',
+        tiktokLine: 'رابطه في البايو',
+        dmTemplate: 'هلا {username}\n{question}\n{pitch}\n{url}\n{bullets}',
+        slide: { igAsk: 'a', igSub: 'b', save: 'c', ttHeadline: 'd', ttPill: 'e', ttSub: 'f', follow: 'g', swipe: 'h' },
+    },
+    schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'] },
+    library: { root: '/Users/elamir/Desktop/AI Course' },
+    examples: [{ id: 'Approved' }],
+    ...over,
+});
+
+/** Stub everything the home view reads. */
+function stubHome(api: StudioLoaded['api'], status: Json = studioStatus(), settings: Json = studioSettings()): void {
+    api.getStudioStatus = () => Promise.resolve(status);
+    api.getStudioLessons = () => Promise.resolve(studioLessons());
+    api.getStudioDrafts = () => Promise.resolve({
+        drafts: [
+            studioDraft(),
+            studioDraft({ id: 'd2', status: 'rendering', render: null }),
+            studioDraft({ id: 'd3', status: 'scheduled', schedule: { scheduled_time: '2026-09-26T10:00:00.000Z', tiktok: 'queue' } }),
+        ],
+    });
+    api.getStudioSettings = () => Promise.resolve({ settings });
+}
+
+/** Stub everything the editor reads, and open draft `d1`. */
+async function openEditor(s: StudioLoaded, draft: Json = studioDraft(), status: Json = studioStatus()): Promise<void> {
+    s.hash.draft = String(draft.id);
+    s.api.getStudioDraft = () => Promise.resolve({ draft, lessons: [{ id: 'l1', lesson_no: '1.1', title: 'Goals, not questions' }] });
+    s.api.getStudioStatus = () => Promise.resolve(status);
+    s.api.getStudioSettings = () => Promise.resolve({ settings: studioSettings() });
+    s.api.getStudioSlots = () => Promise.resolve({ slots: ['2026-09-26T10:00:00.000Z', '2026-09-26T18:00:00.000Z'] });
+    s.api.getStudioLesson = () => Promise.resolve(studioMoments());
+    await s.Studio.render();
+    await settle();
+}
+
+/** The opening tag of the element with this id, from a painted region. */
+const tagOf = (markup: string, id: string): string => (markup.match(new RegExp(`<[a-z]+[^>]*\\sid="${id}"[^>]*>`)) || [''])[0];
+
+describe('StudioPage — the home view, from stubbed responses', () => {
+    it('online worker: a green pill, when it was seen, the library count and the TikTok queue', async () => {
+        const s = loadStudio();
+        stubHome(s.api);
+        await s.Studio.render();
+        const page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+
+        assert.ok(tagOf(page, 'studio-worker-pill').includes('health-fresh'), 'green');
+        assert.ok(page.includes(s.t('studio.worker.online')));
+        assert.ok(page.includes('Studio Mac'));
+        assert.ok(page.includes(s.t('studio.worker.lastSeen', { when: s.t('common.justNow') })), 'last seen, as a relative age');
+        assert.ok(!page.includes('id="studio-worker-hint"'), 'no "start the worker" while it is running');
+        assert.ok(page.includes('<bdi class="ltr-text" dir="ltr">34/34</bdi>'), 'indexed/total, isolated inside Arabic');
+        assert.ok(page.includes(s.t('studio.library.indexedLabel')));
+        assert.ok(page.includes('data-action="studio:scanLibrary"') && page.includes('data-action="studio:indexMissing"'));
+        const batch = tagOf(page, 'studio-tiktok-batch');
+        assert.ok(batch.includes('data-action="studio:confirmTikTokBatch"'), 'the batch button, while TikTok is unaudited');
+        assert.ok(!/\sdisabled\b/.test(batch), 'three are queued, so it is live');
+        assert.ok(tagOf(page, 'studio-tiktok-queued') !== '', 'the queue count');
+        assert.equal(s.t('nav.studio'), 'الاستوديو');
+    });
+
+    it('offline worker: grey, "start the worker on your Mac", and jobs said to be waiting for it', async () => {
+        const s = loadStudio();
+        stubHome(s.api, studioStatus({
+            worker: { online: false, lastSeen: minutesAgo(180), name: 'Studio Mac' },
+            lessons: { total: 34, indexed: 30, indexing: 2, failed: 1 },
+            jobs: { pending: 4, claimed: 0 },
+            tiktok: { audited: false, queued: 0 },
+        }));
+        await s.Studio.render();
+        const page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+
+        assert.ok(tagOf(page, 'studio-worker-pill').includes('health-off'), 'grey, not green and not red');
+        assert.ok(page.includes(s.t('studio.worker.offline')));
+        assert.ok(page.includes('id="studio-worker-hint"'));
+        assert.ok(page.includes(s.t('studio.worker.startHint')));
+        assert.ok(page.includes(s.t('studio.jobs.waitingForMac')));
+        assert.ok(page.includes('30/34'));
+        assert.ok(page.includes(s.t('studio.library.failed', { n: '1' })));
+        assert.ok(/\sdisabled\b/.test(tagOf(page, 'studio-tiktok-batch')), 'nothing queued, nothing to post');
+    });
+
+    it('hides the batch button once TikTok has audited the app', () => {
+        const s = loadStudio();
+        s.Studio.status = studioStatus({ tiktok: { audited: true, queued: 2 } });
+        const bar = String(s.Studio.statusMarkup());
+        assert.ok(!bar.includes('studio-tiktok-batch'));
+        assert.ok(bar.includes(s.t('studio.tiktok.auditedNote')));
+    });
+
+    it('turns Scan library off, with a way to Settings, while no library folder is set', () => {
+        const s = loadStudio();
+        s.Studio.status = studioStatus();
+        s.Studio.settings = studioSettings({ library: { root: null } });
+        let bar = String(s.Studio.statusMarkup());
+        assert.ok(/\sdisabled\b/.test(tagOf(bar, 'studio-scan')));
+        assert.ok(bar.includes('id="studio-no-folder"') && bar.includes('href="#/studio?tab=settings"'));
+
+        s.Studio.settings = studioSettings();
+        bar = String(s.Studio.statusMarkup());
+        assert.ok(!/\sdisabled\b/.test(tagOf(bar, 'studio-scan')), 'a folder is set');
+        assert.ok(!bar.includes('studio-no-folder'));
+
+        // A failed settings read leaves Scan on: the server says why if it refuses.
+        s.Studio.settings = null;
+        assert.ok(!/\sdisabled\b/.test(tagOf(String(s.Studio.statusMarkup()), 'studio-scan')));
+    });
+
+    it('groups lessons by section, and offers only indexed ones', async () => {
+        const s = loadStudio();
+        stubHome(s.api);
+        await s.Studio.render();
+        const page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        assert.ok(page.includes('Chapter 1 - Prompting') && page.includes('Chapter 2 - NotebookLM'));
+        assert.ok(page.includes(s.t('studio.lessons.extras')), 'intro videos under their own heading');
+        const chip = (id: string): string => (page.match(new RegExp(`<button[^>]*data-action="studio:toggleLesson" data-id="${id}"[^>]*>`)) || [''])[0];
+        assert.ok(chip('l1') !== '' && !/\sdisabled\b/.test(chip('l1')));
+        assert.ok(/\sdisabled\b/.test(chip('l5')), 'not indexed: nothing to write from');
+        assert.ok(page.includes('data-action="studio:showLesson" data-id="l1"'), 'every chip has its info button');
+    });
+
+    it('draft cards: the IG cover, the status, when it was made, and where it is headed', async () => {
+        const s = loadStudio();
+        stubHome(s.api);
+        await s.Studio.render();
+        const page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        assert.ok(page.includes('src="https://cdn.test/ig-1.jpg"'), 'render.ig[0] is the thumbnail');
+        assert.ok(page.includes('href="#/studio?draft=d1"'), 'a real link into the editor');
+        assert.ok(page.includes(s.t('studio.state.ready')) && page.includes(s.t('studio.state.rendering')));
+        assert.ok(page.includes('class="skel skel-block"'), 'a draft still rendering shows a skeleton cover');
+        assert.ok(page.includes('status-pill scheduled'));
+        assert.ok(page.includes(s.t('studio.drafts.created', { when: '' }).trim()), 'when it was made');
+    });
+
+    it('picks up to three indexed lessons, and says so at the limit', () => {
+        const s = loadStudio();
+        s.Studio.lessons = studioLessons().lessons;
+        for (const id of ['l1', 'l2', 'l3']) s.Studio.toggleLesson(id);
+        assert.equal(JSON.stringify(s.Studio.selected), '["l1","l2","l3"]');
+        s.Studio.toggleLesson('l4');
+        assert.equal(s.Studio.selected.length, 3, 'a fourth is refused');
+        assert.equal(s.toasts.at(-1)?.type, 'error');
+        s.Studio.toggleLesson('l2');
+        s.Studio.toggleLesson('l5');
+        assert.equal(JSON.stringify(s.Studio.selected), '["l1","l3"]', 'a lesson that is not indexed cannot be picked');
+    });
+});
+
+describe('StudioPage — Generate', () => {
+    const newForm = (fields: Record<string, unknown>): Record<string, unknown> => fakeForm({ angle: 'auto', slides: '8', ...fields });
+
+    it('POSTs the DraftInput — picked lessons, then the form — and opens the new draft', async () => {
+        const s = loadStudio();
+        const sent: Json[] = [];
+        s.api.createStudioDraft = (body: Json) => { sent.push(body); return Promise.resolve({ draft: { id: 'new1', status: 'rendering' } }); };
+        s.Studio.selected = ['l1', 'l3'];
+        await s.Studio.generate(newForm({ idea: '  focus on reports  ', angle: 'mistakes', slides: '7', keyword: 'تقرير', accent: '#00aa55' }), submitEvent);
+        assert.deepEqual(plainJson(sent[0]), {
+            lessonIds: ['l1', 'l3'], idea: 'focus on reports', angle: 'mistakes', slides: 7, keyword: 'تقرير', accent: '#00AA55',
+        });
+        assert.deepEqual(plainJson(s.nav.at(-1)), { page: 'studio', params: { draft: 'new1' } }, 'straight into the editor');
+        assert.equal(s.Studio.selected.length, 0, 'the next carousel starts with a clean pick');
+    });
+
+    it('leaves optional fields out rather than sending them empty, and keeps angle and slides in range', async () => {
+        const s = loadStudio();
+        const sent: Json[] = [];
+        s.api.createStudioDraft = (body: Json) => { sent.push(body); return Promise.resolve({ draft: { id: 'n', status: 'rendering' } }); };
+        s.Studio.selected = ['l2'];
+        await s.Studio.generate(newForm({ idea: '', keyword: '', accent: '', angle: 'sideways', slides: '14' }), submitEvent);
+        assert.deepEqual(plainJson(sent[0]), { lessonIds: ['l2'], angle: 'auto', slides: 10 });
+        s.Studio.selected = ['l2'];
+        await s.Studio.generate(newForm({ slides: '2' }), submitEvent);
+        assert.equal(plainJson(sent[1]).slides, 6);
+    });
+
+    it('an idea alone is enough; neither a lesson nor an idea sends nothing and says why', async () => {
+        const s = loadStudio();
+        const errorHost = s.host('studio-new-error');
+        const idea = s.host('studio-idea');
+        const sent: Json[] = [];
+        s.api.createStudioDraft = (body: Json) => { sent.push(body); return Promise.resolve({ draft: { id: 'n', status: 'rendering' } }); };
+        await s.Studio.generate(newForm({ idea: '' }), submitEvent);
+        assert.equal(sent.length, 0);
+        assert.ok(errorHost.innerHTML.includes(s.t('studio.new.needSource')));
+        assert.equal(idea.getAttribute('aria-invalid'), 'true', 'on the idea field');
+
+        await s.Studio.generate(newForm({ idea: 'Local RAG in ten minutes', keyword: 'two words' }), submitEvent);
+        assert.equal(sent.length, 0, 'the keyword is one word');
+        assert.ok(errorHost.innerHTML.includes(s.t('studio.keywordOneWord')));
+
+        await s.Studio.generate(newForm({ idea: 'Local RAG in ten minutes' }), submitEvent);
+        assert.deepEqual(plainJson(sent[0]), { lessonIds: [], idea: 'Local RAG in ten minutes', angle: 'auto', slides: 8 });
+    });
+
+    it('a generation that failed is reported where it was asked for, and not opened', async () => {
+        const s = loadStudio();
+        const errorHost = s.host('studio-new-error');
+        s.api.getStudioDrafts = () => Promise.resolve({ drafts: [] });
+        s.api.createStudioDraft = () => Promise.resolve({ draft: { id: 'x', status: 'failed', error: 'Gemini timed out' } });
+        s.Studio.selected = ['l1'];
+        await s.Studio.generate(newForm({}), submitEvent);
+        assert.equal(s.nav.length, 0);
+        assert.ok(errorHost.innerHTML.includes('Gemini timed out'));
+        assert.equal(s.Studio.selected.length, 1, 'the pick survives, to try again');
+
+        s.api.createStudioDraft = () => Promise.reject(Object.assign(new Error('Invalid input'), {
+            status: 400, body: { error: 'Invalid input', problems: ['idea is required when lessonIds is empty'] },
+        }));
+        await s.Studio.generate(newForm({}), submitEvent);
+        assert.ok(errorHost.innerHTML.includes('Invalid input') && errorHost.innerHTML.includes('idea is required'));
+    });
+});
+
+describe('StudioPage — Plan my week', () => {
+    it('lists the proposals, drops the removed one, and POSTs /drafts for the rest one after another', async () => {
+        const s = loadStudio();
+        s.host('studio-plan');
+        s.Studio.lessons = studioLessons().lessons;
+        s.Studio.selected = ['l1'];
+        const planBodies: Json[] = [];
+        s.api.planStudioWeek = (body: Json) => {
+            planBodies.push(body);
+            return Promise.resolve({
+                proposals: [
+                    { lessonIds: ['l1'], angle: 'tips', slides: 8, title: 'Five goal prompts', rationale: 'Most saved format', slot: '2026-09-26T10:00:00.000Z' },
+                    { lessonIds: ['l3'], angle: 'steps', title: 'NotebookLM in 4 steps', rationale: 'Fresh lesson', slot: '2026-09-26T18:00:00.000Z' },
+                    { lessonIds: [], idea: 'Local AI', angle: 'compare', keyword: 'محلي', title: 'Cloud vs local', rationale: 'Asked in DMs', slot: '2026-09-27T10:00:00.000Z' },
+                ],
+            });
+        };
+        const count = Object.assign(fakeEl('studio-plan-count'), { value: '3' });
+        s.dom.set('studio-plan-count', count);
+        await s.Studio.planWeek(null);
+        assert.deepEqual(plainJson(planBodies[0]), { count: 3, lessonIds: ['l1'] });
+        const plan = s.dom.get('studio-plan')!.innerHTML;
+        assert.ok(plan.includes('Five goal prompts') && plan.includes('Most saved format'), 'each with its rationale');
+        assert.ok(plan.includes(s.t('studio.plan.generateAll', { n: '3' })));
+
+        s.Studio.toggleProposal('p2');
+        const resolvers: Array<(v: Json) => void> = [];
+        const posted: Json[] = [];
+        s.api.createStudioDraft = (body: Json) => new Promise((resolve) => { posted.push(body); resolvers.push(resolve); });
+        s.api.getStudioDrafts = () => Promise.resolve({ drafts: [] });
+        const run = s.Studio.generateAll();
+        await settle();
+        assert.equal(posted.length, 1, 'one at a time: the second waits for the first');
+        assert.ok(s.dom.get('studio-plan')!.innerHTML.includes(s.t('studio.plan.writing')), 'per-item progress');
+        resolvers[0]!({ draft: { id: 'dA', status: 'rendering' } });
+        await settle();
+        assert.equal(posted.length, 2);
+        resolvers[1]!({ draft: { id: 'dB', status: 'rendering' } });
+        await run;
+        // Title, rationale and slot are the plan's; the POST is a DraftInput.
+        assert.deepEqual(plainJson(posted), [
+            { lessonIds: ['l1'], angle: 'tips', slides: 8 },
+            { lessonIds: [], idea: 'Local AI', angle: 'compare', keyword: 'محلي' },
+        ]);
+        assert.equal(s.Studio.plannedSlots.dA, '2026-09-26T10:00:00.000Z', 'the slot is remembered for scheduling');
+        assert.ok(s.dom.get('studio-plan')!.innerHTML.includes('href="#/studio?draft=dB"'), 'each done item opens its draft');
+        assert.equal(s.toasts.at(-1)?.message, s.t('studio.plan.finished', { n: '2' }));
+    });
+});
+
+describe('StudioPage — Post queued TikTok carousels', () => {
+    it('asks first, says the account has to be private, and posts only on confirm', async () => {
+        const s = loadStudio();
+        s.Studio.status = studioStatus();
+        s.api.getStudioStatus = () => Promise.resolve(studioStatus({ tiktok: { audited: false, queued: 0 } }));
+        s.api.getStudioDrafts = () => Promise.resolve({ drafts: [] });
+        s.api.postStudioTikTokBatch = () => Promise.resolve({ queued: 3 });
+
+        s.Studio.confirmTikTokBatch();
+        assert.equal(s.confirms.length, 1);
+        const dialog = s.confirms[0]!;
+        assert.ok(String(dialog.body).includes('3'), 'how many will go');
+        assert.equal(dialog.hint, s.t('studio.tiktok.batchPrivate'));
+        assert.ok(String(dialog.hint).includes('خاص'), 'Arabic: the account must be private');
+        assert.equal(dialog.tone, 'primary', 'consequential, not destructive');
+        assert.ok(!s.calls.some((c) => c.method === 'postStudioTikTokBatch'), 'nothing is posted by asking');
+
+        await dialog.onConfirm();
+        assert.ok(s.calls.some((c) => c.method === 'postStudioTikTokBatch'));
+        assert.equal(s.toasts.at(-1)?.message, s.t('studio.tiktok.batchDone', { n: '3' }));
+
+        s.I18N.lang = 'en';
+        assert.ok(s.t('studio.tiktok.batchPrivate').includes('private'));
+    });
+});
+
+describe('StudioPage — the draft editor', () => {
+    it('paints previews, one form per slide with live budgets, captions and the campaign', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const page = s.dom.get('page-container')!.innerHTML;
+        s.Studio.destroy();
+        assert.ok(page.includes('src="https://cdn.test/ig-1.jpg"'), 'the Instagram strip by default');
+        assert.ok(page.includes('data-action="studio:previewTab" data-tab="tt"'), 'with a TikTok tab');
+        for (let i = 0; i < 8; i++) assert.ok(page.includes(`id="st-${i}"`), `slide ${i + 1} has its card`);
+        assert.ok(page.includes('<bdi class="ltr-text" dir="ltr">17/34</bdi>'), 'the cover title against its 34 budget');
+        assert.ok(tagOf(page, 'st-0-up').includes('disabled') && !tagOf(page, 'st-0-down').includes('disabled'), 'the first slide cannot move up');
+        assert.ok(page.includes('id="st-2-items-0-text"') && page.includes('id="st-3-right-items-1"') && page.includes('id="st-4-steps-2-title"'));
+        assert.ok(page.includes('data-action="studio:openRewrite"'), 'Rewrite with AI on every slide');
+        assert.ok(page.includes('id="st-cap-tt-title"') && page.includes('data-max="90"'), 'the TikTok title against 90');
+        assert.ok(tagOf(page, 'st-cap-ig-check').includes('text-success'), 'the IG caption carries the settings’ ask line');
+        assert.ok(tagOf(page, 'st-cap-tt-check').includes('text-success'), 'the TikTok caption carries the settings’ line');
+        assert.ok(page.includes('id="st-keyword"') && page.includes('id="st-dm"') && page.includes('id="st-create"'));
+    });
+
+    it('while rendering: skeletons, then the poll brings the slides in by itself', async () => {
+        const s = loadStudio();
+        assert.equal((s.Studio as Json).RENDER_POLL_MS, 4000, 'every 4 seconds');
+        (s.Studio as Json).RENDER_POLL_MS = 30;
+        const previews = s.host('studio-previews');
+        await openEditor(s, studioDraft({ status: 'rendering', render: null }));
+        const page = s.dom.get('page-container')!.innerHTML;
+        assert.ok(page.includes('preview-slide"><span class="skel skel-block"></span>'), 'skeleton slides');
+        assert.ok(page.includes(s.t('studio.preview.rendering')));
+        assert.ok(tagOf(page, 'studio-schedule-submit').includes('disabled'), 'nothing to schedule until the render is in');
+
+        let polls = 0;
+        s.api.getStudioDraft = () => { polls++; return Promise.resolve({ draft: studioDraft(), lessons: [] }); };
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        s.Studio.destroy();
+        assert.equal(polls, 1, 'asked again, and stopped once it was ready');
+        assert.ok(previews.innerHTML.includes('src="https://cdn.test/ig-1.jpg"'), 'the rendered slides replace the skeletons');
+        assert.ok(s.toasts.some((x) => x.message === s.t('studio.preview.rendered')));
+    });
+
+    it('PATCHes the working copy after edits: text, a move, a screenshot swap, captions, keyword and DM', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const S = s.Studio;
+        S.slideField({ dataset: { slide: '1', path: 'title' }, value: 'ابدأ بالنتيجة دائماً' });
+        S.slideField({ dataset: { slide: '1', path: 'n', kind: 'int' }, value: '2' });
+        S.slideField({ dataset: { slide: '0', path: 'kicker', optional: '1' }, value: '' });
+        S.slideField({ dataset: { slide: '2', path: 'items.1.text' }, value: 'برمجة' });
+        S.slideField({ dataset: { slide: '3', path: 'right.items.0' }, value: 'تقرير جاهز' });
+        S.moveSlide('1', 1);
+        S.pickShot({ dataset: { slide: '6', moment: 'mo3', lesson: 'l1' } });
+        S.metaField({ dataset: { path: 'captions.tiktokTitle' }, value: 'عنوان جديد' });
+        S.keywordField({ value: 'هدف' });
+        S.campaignField({ dataset: { path: 'dm' }, value: 'هلا {username}، هذا الرابط' });
+        S.campaignToggle({ checked: false });
+        assert.equal(S.isDirty(), true);
+
+        const sent: Json[] = [];
+        s.api.updateStudioDraft = (id: string, body: Json) => {
+            sent.push({ id, body });
+            return Promise.resolve({ draft: studioDraft({ status: 'rendering', carousel: body.carousel, shots: body.shots, campaign: body.campaign }) });
+        };
+        await S.save();
+        S.destroy();
+
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].id, 'd1');
+        const body: Json = plainJson(sent[0].body);
+        assert.deepEqual(Object.keys(body).sort(), ['campaign', 'carousel', 'shots']);
+        const slides = body.carousel.slides;
+        assert.equal(slides[1].kind, 'list', 'the point moved below the list');
+        assert.deepEqual(slides[2], { kind: 'point', n: 2, title: 'ابدأ بالنتيجة دائماً', body: 'قل له وش تبي تستلم في النهاية.', tip: 'النتيجة أولاً' });
+        assert.equal('kicker' in slides[0], false, 'an emptied optional field is left out, not sent as ""');
+        assert.equal(slides[1].items[1].text, 'برمجة');
+        assert.deepEqual(slides[3].right.items, ['تقرير جاهز', 'مخصص']);
+        assert.deepEqual(slides[6].shot, { name: 'm-mo3' }, 'the slide points at the moment it now shows');
+        assert.deepEqual(Object.keys(body.shots).sort(), ['m-mo1', 'm-mo3'], 'the swapped-out shot is not rendered for nothing');
+        assert.deepEqual(body.shots['m-mo3'], { lessonId: 'l1', t: 120.5, zoom: 1.3, focusX: 0.5, focusY: 0.5, desc: 'The finished report, full screen' });
+        assert.equal(body.carousel.captions.tiktokTitle, 'عنوان جديد');
+        assert.equal(body.carousel.keyword, 'هدف', 'one keyword: the CTA…');
+        assert.equal(body.campaign.keyword, 'هدف', '…and the campaign that answers it');
+        assert.equal(body.campaign.dm, 'هلا {username}، هذا الرابط');
+        assert.equal(body.campaign.create, false);
+        assert.deepEqual(body.campaign.variants, ['البرومبت'], 'what the page does not edit, it sends back as it came');
+        assert.equal(S.isDirty(), false, 'saved');
+        assert.ok(s.toasts.some((x) => x.message === s.t('studio.editor.savedToast')));
+    });
+
+    it('a 400 puts each problem next to the slide or field it names, and the rest above Save', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const slidesHost = s.host('studio-slides');
+        const captionsHost = s.host('studio-captions');
+        const campaignHost = s.host('studio-campaign');
+        const saveBar = s.host('studio-savebar');
+        s.Studio.slideField({ dataset: { slide: '2', path: 'title' }, value: 'عنوان طويل جداً لا يتسع في مكانه على الشريحة أبداً' });
+        const problems = [
+            'GoalsNotQuestions[3:list].title: 45 > 36 «عنوان طويل»',
+            'GoalsNotQuestions[4:compare].items[2]: 31 > 30 «تقرير»',
+            'GoalsNotQuestions[4:compare]: compare sides differ in length',
+            'GoalsNotQuestions: instagram caption doesn\'t mention the keyword',
+            'GoalsNotQuestions: keyword must be one word',
+            'Something the page cannot place',
+        ];
+        s.api.updateStudioDraft = () => Promise.reject(Object.assign(new Error('Invalid carousel'), {
+            status: 400, body: { error: 'Invalid carousel', problems },
+        }));
+        await s.Studio.save();
+        s.Studio.destroy();
+
+        const slides = slidesHost.innerHTML;
+        const title = tagOf(slides, 'st-2-title');
+        assert.ok(title.includes('aria-invalid="true"') && title.includes('st-2-title-problems'), 'the list title is marked, and points at why');
+        assert.ok(/id="st-2-title-problems"[^>]*>\s*<li dir="auto">GoalsNotQuestions\[3:list\]\.title: 45 &gt; 36/.test(slides), 'the message sits under that field');
+        assert.ok(tagOf(slides, 'st-3-right-items-0').includes('aria-invalid="true"'), 'compare counts both sides as one run: items[2] is the right side’s first');
+        assert.ok(/id="st-3-rows-problems"[\s\S]*compare sides differ in length/.test(slides), 'a slide-level problem sits with the slide');
+        assert.ok(tagOf(captionsHost.innerHTML, 'st-cap-ig').includes('aria-invalid="true"'), 'caption problems go to the caption');
+        assert.ok(tagOf(campaignHost.innerHTML, 'st-keyword').includes('aria-invalid="true"'), 'keyword problems go to the keyword');
+        const bar = saveBar.innerHTML;
+        assert.ok(bar.includes(s.t('studio.problems.title', { n: '6' })), 'the count above Save');
+        for (const p of problems) assert.ok(bar.includes(esc4(p)), `listed above Save: ${p}`);
+        assert.equal(s.Studio.isDirty(), true, 'nothing was saved');
+        assert.ok(!s.toasts.some((x) => x.message === s.t('studio.editor.savedToast')));
+    });
+
+    it('reads check-carousels messages onto slides and fields', () => {
+        const s = loadStudio();
+        s.Studio.work = { carousel: studioCarousel(), shots: {}, campaign: {} };
+        assert.deepEqual(plainJson(s.Studio.problemTarget('X[3:list].items[0].text: 40 > 36 «…»')), { slide: 2, path: 'items.0.text' });
+        assert.deepEqual(plainJson(s.Studio.problemTarget('X[1:cover].highlight not in title')), { slide: 0, path: 'highlight' });
+        assert.deepEqual(plainJson(s.Studio.problemTarget('X[4:compare].items[1]: 31 > 30')), { slide: 3, path: 'left.items.1' });
+        assert.deepEqual(plainJson(s.Studio.problemTarget('X: tiktokTitle 95 > 90 UTF-16')), { field: 'captions.tiktokTitle' });
+        assert.deepEqual(plainJson(s.Studio.problemTarget('X: tiktok caption is missing the link-in-bio line')), { field: 'captions.tiktok' });
+        assert.deepEqual(plainJson(s.Studio.problemTarget('X: accent "red" is not #RRGGBB')), { field: 'accent' });
+        assert.deepEqual(plainJson(s.Studio.problemTarget('X.slides: 11 items, expected 6–10')), { field: 'slides' });
+        assert.equal(s.Studio.problemTarget('Gemini returned nothing'), null);
+    });
+});
+
+/** The page's own escaping, for comparing a message with what was painted. */
+const esc4 = (value: string): string => value.replace(/[&<>"'`]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' })[c]!);
+
+describe('StudioPage — Schedule', () => {
+    const slotA = '2026-09-26T10:00:00.000Z';
+    const slotB = '2026-09-26T18:00:00.000Z';
+
+    it('defaults to the first free slot and, while TikTok is unaudited, to queueing the TikTok post', async () => {
+        const s = loadStudio();
+        const panel = s.host('studio-schedule');
+        await openEditor(s);
+        s.Studio.destroy();
+        const markup = panel.innerHTML;
+        assert.ok(new RegExp(`<option value="${slotA}" selected>`).test(markup), 'the first slot');
+        assert.ok(/<input type="radio" name="tiktok" value="queue" checked>/.test(markup));
+        assert.ok(!markup.includes('value="scheduled"'), 'no same-time TikTok post before the audit');
+        assert.ok(/<input type="radio" name="tiktok" value="none"/.test(markup));
+        assert.ok(tagOf(markup, 'st-sched-campaign').includes('checked'), 'create_campaign follows the draft’s campaign');
+    });
+
+    it('POSTs { scheduled_time, tiktok, create_campaign }, then shows the TikTok checklist', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const sent: Json[] = [];
+        s.api.scheduleStudioDraft = (id: string, body: Json) => {
+            sent.push({ id, body });
+            return Promise.resolve({
+                draft: studioDraft({ status: 'scheduled', schedule: { scheduled_time: body.scheduled_time, meta_row_id: 'r1', tiktok: body.tiktok, tiktok_row_id: null, tiktok_public_done: false } }),
+                rows: [{ id: 'r1' }],
+            });
+        };
+        await s.Studio.schedule(fakeForm({ slot: slotB, tiktok: 'queue', create_campaign: 'on' }), submitEvent);
+        s.Studio.destroy();
+        assert.deepEqual(plainJson(sent), [{ id: 'd1', body: { scheduled_time: slotB, tiktok: 'queue', create_campaign: true } }]);
+        const page = s.dom.get('page-container')!.innerHTML;
+        assert.ok(page.includes(s.t('studio.tiktokCheck.madePublic')), 'the "made public on TikTok" checklist');
+        assert.ok(tagOf(page, 'st-tt-public').includes('disabled'), 'not tickable until the batch has posted it');
+        assert.ok(!page.includes('data-action="studio:save"'), 'a scheduled draft is closed to edits');
+        assert.ok(!page.includes('data-action="studio:deleteDraft"'), 'and cannot be deleted');
+    });
+
+    it('sends only what TikTok’s audit state allows, a custom time as UTC, and nothing while there are unsaved edits', async () => {
+        const s = loadStudio();
+        await openEditor(s);
+        const S = s.Studio;
+        assert.equal(S.readSchedule(fakeForm({ slot: slotA, tiktok: 'scheduled' })).body.tiktok, 'queue', 'unaudited: never "scheduled"');
+        assert.equal(S.readSchedule(fakeForm({ slot: slotA, tiktok: 'none' })).body.tiktok, 'none');
+        assert.equal(S.readSchedule(fakeForm({ slot: slotA })).body.create_campaign, false);
+        const custom = S.readSchedule(fakeForm({ slot: 'custom', custom_time: '2031-03-04T18:20' }));
+        assert.equal(custom.body.scheduled_time, new Date('2031-03-04T18:20').toISOString());
+        assert.equal(S.readSchedule(fakeForm({ slot: 'custom', custom_time: '2020-01-01T10:00' })).ok, false, 'not in the past');
+        S.status = studioStatus({ tiktok: { audited: true, queued: 0 } });
+        assert.equal(S.readSchedule(fakeForm({ slot: slotA, tiktok: 'queue' })).body.tiktok, 'scheduled', 'audited: posted at the same time');
+
+        let posted = 0;
+        s.api.scheduleStudioDraft = () => { posted++; return Promise.resolve({}); };
+        S.slideField({ dataset: { slide: '1', path: 'title' }, value: 'تعديل لم يُحفظ' });
+        await S.schedule(fakeForm({ slot: slotA, tiktok: 'none' }), submitEvent);
+        S.destroy();
+        assert.equal(posted, 0, 'the post would use the old render');
+    });
+});
+
+describe('StudioPage — every string in Arabic and English', () => {
+    it('has each key the page uses in both dictionaries, including the ones built from a list', () => {
+        const { Studio, I18N } = loadStudio();
+        const source = readFileSync('dashboard/js/pages/studio.js', 'utf8');
+        const keys = new Set<string>(['nav.studio', 'page.studio.subtitle']);
+        // Literals, whether passed to t() or held in a field table as a labelKey.
+        for (const m of source.matchAll(/'(studio\.[a-zA-Z0-9_.]+)'/g)) keys.add(m[1]!);
+        // Keys built from a list: the list is the page's own, so a new entry cannot slip by.
+        Studio.ANGLES.forEach((a) => keys.add(`studio.angle.${a}`));
+        Studio.SLIDE_KINDS.forEach((k) => keys.add(`studio.kind.${k}`));
+        Studio.CTA_SLIDE_KEYS.forEach((k) => keys.add(`studio.settings.slide.${k}`));
+        ['generating', 'rendering', 'ready', 'scheduled', 'failed'].forEach((st) => keys.add(`studio.state.${st}`));
+        ['slide', 'ui', 'result', 'code', 'prompt', 'other'].forEach((k) => keys.add(`studio.moment.kind.${k}`));
+        assert.ok(keys.size > 250, `found ${keys.size} keys`);
+        const missing: string[] = [];
+        for (const key of keys) {
+            for (const lang of ['ar', 'en']) {
+                const value = I18N.strings[lang]![key];
+                if (typeof value !== 'string' || !value.trim()) missing.push(`${lang}:${key}`);
+            }
+        }
+        assert.deepEqual(missing, []);
+        assert.equal(I18N.strings.en!['nav.studio'], 'Studio');
+        assert.equal(I18N.strings.ar!['nav.studio'], 'الاستوديو');
+    });
+
+    it('keeps product and CTA words out of the page: they come from settings', () => {
+        const source = readFileSync('dashboard/js/pages/studio.js', 'utf8')
+            .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+        // No Arabic outside i18n.js, and none of the course's own words or links.
+        assert.equal(/[؀-ۿ]/.test(source), false, 'Arabic copy belongs in i18n.js');
+        for (const word of ['udemy', 'referralCode', 'agentic']) {
+            assert.equal(source.toLowerCase().includes(word.toLowerCase()), false, `no "${word}" in the page`);
+        }
+    });
+});
+
+describe('StudioPage — Settings', () => {
+    async function openSettings(s: StudioLoaded, settings: Json = studioSettings(), workers: Json[] = []): Promise<void> {
+        s.hash.tab = 'settings';
+        s.api.getStudioSettings = () => Promise.resolve({ settings });
+        s.api.getStudioWorkers = () => Promise.resolve({ workers });
+        s.api.getStudioStatus = () => Promise.resolve(studioStatus());
+        await s.Studio.render();
+    }
+
+    it('shows every section, and never a form built from blanks when the read failed', async () => {
+        const s = loadStudio();
+        await openSettings(s);
+        const page = s.dom.get('page-container')!.innerHTML;
+        for (const id of ['sts-section-brand', 'sts-section-voice', 'sts-section-product', 'sts-section-schedule', 'sts-section-library', 'studio-workers']) {
+            assert.ok(page.includes(`id="${id}"`), id);
+        }
+        assert.ok(page.includes('aria-current="page"') && page.includes('href="#/studio?tab=settings"'), 'the Settings tab is current');
+        for (const key of s.Studio.CTA_SLIDE_KEYS) assert.ok(page.includes(`id="sts-cta-slide-${key}"`), `cta.slide.${key}`);
+        assert.ok(page.includes('id="sts-brand-palette-2"'), 'one swatch per palette colour');
+        assert.ok(page.includes('<option value="Asia/Riyadh" selected>'), 'the time zone');
+
+        const failed = loadStudio();
+        failed.hash.tab = 'settings';
+        failed.api.getStudioSettings = () => Promise.reject(Object.assign(new Error('boom'), { status: 500 }));
+        failed.api.getStudioWorkers = () => Promise.resolve({ workers: [] });
+        failed.api.getStudioStatus = () => Promise.resolve(studioStatus());
+        await failed.Studio.render();
+        const broken = failed.dom.get('page-container')!.innerHTML;
+        assert.ok(!broken.includes('id="studio-settings-form"'), 'saving blanks over real settings is worse than no form');
+        assert.ok(broken.includes('data-error-host'));
+    });
+
+    it('PUTs all six sections as edited — and not the examples, which the merge keeps', async () => {
+        const s = loadStudio();
+        await openSettings(s);
+        const S = s.Studio;
+        S.setting({ dataset: { path: 'brand.name' }, value: 'Acme Studio' });
+        S.setting({ dataset: { path: 'brand.signature.latin' }, value: 'ACME' });
+        S.setting({ dataset: { path: 'brand.palette.1', kind: 'color', hex: 'none' }, value: '#00aa55' });
+        S.removeSwatch(0);
+        S.addSwatch();
+        S.setting({ dataset: { path: 'brand.colors.ink', kind: 'color' }, value: '#101010' });
+        S.setting({ dataset: { path: 'brand.fonts.display' }, value: 'Tajawal' });
+        S.setting({ dataset: { path: 'brand.direction' }, value: 'ltr' });
+        S.setting({ dataset: { path: 'voice.language' }, value: 'en' });
+        S.setting({ dataset: { path: 'voice.digits' }, value: 'latin' });
+        S.setting({ dataset: { path: 'voice.guide' }, value: 'Plain, short sentences.' });
+        S.setting({ dataset: { path: 'product.url' }, value: 'https://acme.test/course' });
+        S.addListItem('product.facts');
+        S.setting({ dataset: { path: 'product.facts.2' }, value: '12 projects' });
+        S.addListItem('product.facts');
+        S.removeListItem('product.dmBullets', 0);
+        S.setting({ dataset: { path: 'cta.instagramAsk' }, value: 'Comment "{keyword}" for the link' });
+        S.setting({ dataset: { path: 'cta.tiktokLine' }, value: 'Link in bio' });
+        S.setting({ dataset: { path: 'cta.slide.swipe' }, value: 'Swipe' });
+        S.setting({ dataset: { path: 'schedule.timezone' }, value: 'Europe/London' });
+        S.removeListItem('schedule.slots', 1);
+        S.addListItem('schedule.slots');
+        S.setting({ dataset: { path: 'schedule.slots.1' }, value: '18:30' });
+        S.setting({ dataset: { path: 'library.root' }, value: '   ' });
+        S.setting({ dataset: { path: 'examples.0' }, value: 'not a section' });
+
+        const sent: Json[] = [];
+        s.api.saveStudioSettings = (body: Json) => { sent.push(body); return Promise.resolve({ settings: { ...studioSettings(), ...body } }); };
+        await S.saveSettings(fakeForm({}), submitEvent);
+        S.destroy();
+
+        assert.equal(sent.length, 1);
+        const body: Json = plainJson(sent[0]);
+        assert.deepEqual(Object.keys(body).sort(), ['brand', 'cta', 'library', 'product', 'schedule', 'voice']);
+        assert.equal(body.brand.name, 'Acme Studio');
+        assert.deepEqual(body.brand.signature, { latin: 'ACME', local: 'بالعربي' });
+        assert.deepEqual(body.brand.palette, ['#00AA55', '#22C55E', '#22C55E'], 'upper-case hex; removed and added swatches');
+        assert.equal(body.brand.colors.ink, '#101010');
+        assert.deepEqual(body.brand.fonts, { display: 'Tajawal', mono: 'JetBrains Mono' });
+        assert.equal(body.brand.direction, 'ltr');
+        assert.equal(body.brand.theme, 'dark-grid', 'kept, though there is nothing to choose yet');
+        assert.deepEqual(body.voice, { language: 'en', guide: 'Plain, short sentences.', digits: 'latin' });
+        assert.deepEqual(body.product.facts, ['34 lessons', '5h40', '12 projects'], 'the empty row is dropped');
+        assert.deepEqual(body.product.dmBullets, ['Certificate']);
+        assert.equal(body.product.url, 'https://acme.test/course');
+        assert.equal(body.cta.instagramAsk, 'Comment "{keyword}" for the link');
+        assert.equal(body.cta.tiktokLine, 'Link in bio');
+        assert.equal(body.cta.slide.swipe, 'Swipe');
+        assert.equal(body.cta.slide.igAsk, 'a', 'untouched words go back as they came');
+        assert.deepEqual(body.schedule, { timezone: 'Europe/London', slots: ['13:00', '18:30'] });
+        assert.deepEqual(body.library, { root: null }, 'an emptied folder is "not set"');
+        assert.equal(s.toasts.at(-1)?.message, s.t('studio.settings.saved'));
+    });
+
+    it('previews the IG line with a sample keyword, and the DM filled in', async () => {
+        const s = loadStudio();
+        await openSettings(s);
+        const previews = s.host('sts-previews');
+        s.Studio.setting({ dataset: { path: 'cta.instagramAsk' }, value: 'Comment "{keyword}" below' });
+        s.Studio.setting({ dataset: { path: 'cta.dmTemplate' }, value: 'Hi {username}!\n{question}\n{url}\n{bullets}\n{unknown}' });
+        s.Studio.destroy();
+        const html = previews.innerHTML;
+        const keyword = s.t('studio.settings.sample.keyword');
+        assert.ok(html.includes(`Comment &quot;${keyword}&quot; below`), 'the keyword filled in');
+        assert.ok(html.includes(`Hi ${s.t('studio.settings.sample.username')}!`));
+        assert.ok(html.includes(s.t('studio.settings.sample.question')));
+        assert.ok(html.includes('https://example.com/course?ref=1'), 'the product link');
+        assert.ok(html.includes('Lifetime access\nCertificate'), 'the DM bullets, one per line');
+        assert.ok(html.includes('{unknown}'), 'what is not a placeholder is left as typed');
+    });
+
+    it('shows a new worker’s token once — with Copy and a warning — and never again', async () => {
+        const s = loadStudio();
+        await openSettings(s, studioSettings(), [{ id: 'w0', name: 'Old Mac', last_seen_at: minutesAgo(0.5), created_at: '2026-09-01T00:00:00.000Z' }]);
+        const listed = s.dom.get('page-container')!.innerHTML;
+        assert.ok(listed.includes('Old Mac') && listed.includes('data-action="studio:revokeWorker"'), 'each worker, with Revoke');
+        assert.ok(listed.includes(s.t('studio.worker.online')), 'seen within 90s');
+
+        const workers = s.host('studio-workers');
+        const names: string[] = [];
+        s.api.createStudioWorker = (name: string) => {
+            names.push(name);
+            return Promise.resolve({ worker: { id: 'w1', name, created_at: new Date().toISOString() }, token: 'stw_secret_123' });
+        };
+        await s.Studio.createWorker(fakeForm({ name: '  Mac mini  ' }), submitEvent);
+        assert.deepEqual(names, ['Mac mini']);
+        const shown = workers.innerHTML;
+        assert.equal(shown.split('stw_secret_123').length - 1, 1, 'the token is on screen, once');
+        assert.ok(shown.includes(s.t('studio.workers.tokenOnce')), 'with the warning');
+        assert.ok(shown.includes('data-action="studio:copyToken"'), 'and a Copy button');
+        assert.ok(!shown.includes('data-copy='), 'Copy reads it from memory, not from an attribute');
+        await s.Studio.copyToken();
+        assert.deepEqual(s.copied, ['stw_secret_123']);
+
+        s.Studio.dismissToken();
+        assert.equal(s.Studio.newWorker, null);
+        assert.ok(!workers.innerHTML.includes('stw_secret_123'), 'gone after Done');
+        assert.ok(workers.innerHTML.includes('Mac mini'), 'the worker itself stays listed');
+        assert.ok(!JSON.stringify(s.Studio.workers).includes('stw_secret_123'), 'and the list never held it');
+
+        s.Studio.newWorker = { worker: { id: 'w2', name: 'x' }, token: 'stw_other' };
+        s.Studio.destroy();
+        assert.equal(s.Studio.newWorker, null, 'leaving the page ends "once"');
+
+        const before = names.length;
+        await s.Studio.createWorker(fakeForm({ name: '   ' }), submitEvent);
+        assert.equal(names.length, before, 'a worker needs a name');
+    });
+});

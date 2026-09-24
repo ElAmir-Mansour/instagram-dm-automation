@@ -48,6 +48,7 @@ const App = {
         overview: { src: 'overview', page: () => OverviewPage },
         campaigns: { src: 'campaigns', page: () => CampaignsPage },
         posts: { src: 'posts', page: () => PostsPage },
+        studio: { src: 'studio', page: () => StudioPage },
         inbox: { src: 'inbox', page: () => InboxPage },
         ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
         analytics: { src: 'analytics', page: () => AnalyticsPage },
@@ -67,7 +68,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '7.3',
+    ASSET_VERSION: '7.4',
 
     _modules: Object.create(null),
 
