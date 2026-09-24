@@ -51,6 +51,31 @@ const PostsPage = {
     _ttChoices: null,
     _ttDurationSec: null,
     _ttSeq: 0,
+    /**
+     * A photo post (single image or carousel) to TikTok, rather than a video: no Duet or
+     * Stitch, an "Auto-add music" switch, and a title. Follows the type select.
+     */
+    _ttPhoto: false,
+    /**
+     * The TikTok title of a photo post. It follows the caption's first line until the
+     * operator types in it (`_ttTitleTouched`), and emptying it hands it back to the caption.
+     */
+    _ttTitle: '',
+    _ttTitleTouched: false,
+
+    /**
+     * Carousel slides, per open modal: `main` is the post's own images, `tiktok` the
+     * optional 9:16 set for the "Also send to TikTok" sibling. Each slide is
+     * `{ id, file, name, url, thumb, status, error }`, where status is one of
+     * queued | preparing | uploading | ready | failed. Order in the array is slide order.
+     * `_slideSeq` retires every upload a closed modal left running.
+     */
+    _slides: null,
+    _slideSeq: 0,
+    _slideCounter: 0,
+    _slideQueue: [],
+    _slideActive: 0,
+    _slideBatch: null,
 
     /**
      * Guards the write against landing after the operator has navigated away.
@@ -77,6 +102,10 @@ const PostsPage = {
         this.tiktokCreator = null;
         this._ttChoices = null;
         this._ttDurationSec = null;
+        this._ttPhoto = false;
+        this._ttTitle = '';
+        this._ttTitleTouched = false;
+        this.resetSlides(null);
     },
 
     /**
@@ -87,16 +116,28 @@ const PostsPage = {
      *    /photo_stories + /video_stories upload the backend does not implement,
      *    so platform="both" cannot offer it either.
      *  - `feed` (text/link) is Facebook-only.
-     *  - TikTok takes video only: photo posts need TikTok to pull the images
-     *    from a verified URL, which is not wired up. `both` still means
+     *  - `carousel` is 2-10 images on Instagram/Facebook and 2-35 as a TikTok
+     *    photo post; TikTok also takes a single `image`. `both` still means
      *    Instagram + Facebook; TikTok is its own row (see "Also send to TikTok").
      */
     POST_TYPES: [
-        { value: 'image', labelKey: 'posts.type.image', platforms: ['instagram', 'facebook', 'both'] },
+        { value: 'image', labelKey: 'posts.type.image', platforms: ['instagram', 'facebook', 'both', 'tiktok'] },
+        { value: 'carousel', labelKey: 'posts.type.carousel', platforms: ['instagram', 'facebook', 'both', 'tiktok'] },
         { value: 'video', labelKey: 'posts.type.video', platforms: ['instagram', 'facebook', 'both', 'tiktok'] },
         { value: 'story', labelKey: 'posts.type.story', platforms: ['instagram'] },
         { value: 'feed', labelKey: 'posts.type.feed', platforms: ['facebook'] },
     ],
+
+    /** Can `type` be posted to `platform`? The one reading of the matrix above. */
+    typeAllowedOn(type, platform) {
+        const entry = this.POST_TYPES.find((x) => x.value === type);
+        return !!(entry && entry.platforms.includes(platform));
+    },
+
+    /** A photo post — one image or a carousel — as opposed to a video, a story or text. */
+    isPhotoType(type) {
+        return type === 'image' || type === 'carousel';
+    },
 
     skeleton() {
         return html`
@@ -379,6 +420,7 @@ const PostsPage = {
      * them from the TikTok app. Shown on every TikTok card that is not live yet.
      */
     renderTikTokManual(post, withHint = true) {
+        if (post && this.isPhotoType(post.post_type)) return this.renderTikTokPhotoKit(post, withHint);
         const href = safeUrl(post && post.media_url);
         if (!href && !(post && post.caption)) return '';
         return html`
@@ -397,6 +439,89 @@ const PostsPage = {
                 </div>
             </div>
         `;
+    },
+
+    /** The images of a photo row, in slide order: its `media_urls`, or the one `media_url`. */
+    rowImageUrls(post) {
+        if (!post) return [];
+        if (post.post_type === 'carousel') return this.rowSlideUrls(post);
+        const one = safeUrl(post.media_url);
+        return one ? [one] : [];
+    },
+
+    /** A carousel row's slides, each through `safeUrl`. `media_urls` is null on every other row. */
+    rowSlideUrls(post) {
+        const urls = post && Array.isArray(post.media_urls) ? post.media_urls : [];
+        return urls.map((u) => safeUrl(u)).filter(Boolean);
+    },
+
+    /**
+     * `slide-01`, `slide-02`, … so a phone's downloads sort in slide order. No extension:
+     * the browser takes it from the Content-Type, and an older row may not be a JPEG.
+     */
+    slideFileName(index) {
+        return `slide-${String(index + 1).padStart(2, '0')}`;
+    },
+
+    /**
+     * The photo variant of the manual kit: every image as a real `<a download>`, in slide
+     * order, plus "Download all" — which clicks those same anchors one after another, so
+     * the two can never disagree about what gets downloaded.
+     */
+    renderTikTokPhotoKit(post, withHint = true) {
+        const urls = this.rowImageUrls(post);
+        if (!urls.length && !(post && post.caption)) return '';
+        const many = urls.length > 1;
+        return html`
+            <div class="tiktok-manual" data-photo-kit>
+                ${withHint ? html`<p class="form-hint">${many ? t('posts.tiktok.manualHintPhotos') : t('posts.tiktok.manualHint')}</p>` : ''}
+                <div class="row row--wrap gap-2">
+                    ${many ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'download', label: t('posts.tiktok.downloadAll'),
+                        action: 'posts:downloadAll',
+                    }) : ''}
+                    ${urls.length === 1 ? html`
+                        <a class="btn btn-secondary btn-sm" href="${urls[0]}" download="${this.slideFileName(0)}" data-slide-download>
+                            <i data-lucide="download" aria-hidden="true"></i> ${t('posts.tiktok.downloadImage')}
+                        </a>
+                    ` : ''}
+                    ${post.caption ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'copy', label: t('posts.tiktok.copyCaption'),
+                        action: 'app:copyValue', data: { copy: post.caption },
+                    }) : ''}
+                </div>
+                ${many ? html`
+                    <p class="form-hint">${t('posts.tiktok.downloadOneByOne')}</p>
+                    <ul class="slide-downloads">
+                        ${urls.map((url, i) => html`
+                            <li>
+                                <a class="btn btn-secondary btn-sm" href="${url}" download="${this.slideFileName(i)}" data-slide-download
+                                   aria-label="${t('posts.tiktok.downloadSlide', { n: i + 1 })}">
+                                    <i data-lucide="download" aria-hidden="true"></i> ${UI.formatNumber(i + 1)}
+                                </a>
+                            </li>
+                        `)}
+                    </ul>
+                ` : ''}
+            </div>
+        `;
+    },
+
+    /** Gap between the downloads "Download all" starts, so the browser takes each one. */
+    DOWNLOAD_SPACING_MS: 400,
+
+    /**
+     * Click this kit's own download anchors in order. The button is held busy until the
+     * last has fired: a second press mid-sequence would download everything twice.
+     */
+    downloadAll(el) {
+        const kit = el && typeof el.closest === 'function' ? el.closest('[data-photo-kit]') : null;
+        const links = kit ? Array.from(kit.querySelectorAll('a[data-slide-download]')) : [];
+        if (!links.length) return;
+        const restore = UI.actionBusy(el);
+        if (!restore) return;
+        links.forEach((a, i) => setTimeout(() => a.click(), i * this.DOWNLOAD_SPACING_MS));
+        setTimeout(restore, links.length * this.DOWNLOAD_SPACING_MS);
     },
 
     /** TikTok's privacy levels, each with a translated label. Unknown values show as themselves. */
@@ -449,10 +574,20 @@ const PostsPage = {
         const mediaUrl = safeUrl(post.media_url);
         const coverUrl = safeUrl(post.cover_url);
         const isVideo = post.post_type === 'video' || post.post_type === 'reel';
-        const typeLabel = this.typeLabel(post.post_type);
+        const isPhoto = this.isPhotoType(post.post_type);
+        // A carousel says how many slides it has on the badge, and shows the first four.
+        // One whose slides the row does not carry says only what it is, never "· 0".
+        const slides = post.post_type === 'carousel' ? this.rowSlideUrls(post) : [];
+        const typeLabel = slides.length
+            ? t('posts.carousel.badge', { n: UI.formatNumber(slides.length) })
+            : this.typeLabel(post.post_type);
         // Only a PENDING row has a publish still ahead of it. An overdue one
         // reads `isPast`, which is the state the operator has to act on.
         const pendingWindow = isPending ? this.publishWindow(post.scheduled_time) : null;
+        let processingNote = isPhoto ? t('posts.tiktok.processingNotePhoto') : t('posts.tiktok.processingNote');
+        if (isDirect) {
+            processingNote = isPhoto ? t('posts.tiktok.direct.processingNotePhoto') : t('posts.tiktok.direct.processingNote');
+        }
 
         return html`
             <!-- An <article> with no accessible name is announced as "article".
@@ -476,7 +611,8 @@ const PostsPage = {
                     </span>
                 </div>
 
-                ${mediaUrl ? html`
+                ${slides.length ? this.renderSlideStrip(slides) : ''}
+                ${!slides.length && mediaUrl ? html`
                     <div class="post-media-frame">
                         ${isVideo
                             ? html`<video src="${mediaUrl}" poster="${coverUrl}" muted controls
@@ -533,7 +669,7 @@ const PostsPage = {
                 ${isTikTok && isProcessing ? html`
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="loader" aria-hidden="true"></i>
-                        <span>${isDirect ? t('posts.tiktok.direct.processingNote') : t('posts.tiktok.processingNote')}</span>
+                        <span>${processingNote}</span>
                     </p>
                 ` : ''}
 
@@ -593,6 +729,26 @@ const PostsPage = {
      * where "copy, open TikTok, paste" is the whole flow.
      */
     renderTikTokInboxNote(post) {
+        const openTikTok = html`
+            <a class="btn btn-secondary btn-sm" href="https://www.tiktok.com/" target="_blank" rel="noopener noreferrer">
+                <i data-lucide="external-link" aria-hidden="true"></i> ${t('posts.tiktok.openTikTok')}
+            </a>
+        `;
+        if (this.isPhotoType(post.post_type)) {
+            // The same kit as a card that is not live yet — every image and the caption —
+            // with the way into the TikTok app after it.
+            return html`
+                <div class="tiktok-next" role="note">
+                    <p class="tiktok-next-title">
+                        <i data-lucide="inbox" aria-hidden="true"></i>
+                        <strong>${t('posts.tiktok.inboxTitle')}</strong>
+                    </p>
+                    <p class="tiktok-next-body">${t('posts.tiktok.inboxBody')}</p>
+                    ${this.renderTikTokPhotoKit(post, false)}
+                    <div class="row row--wrap gap-2">${openTikTok}</div>
+                </div>
+            `;
+        }
         return html`
             <div class="tiktok-next" role="note">
                 <p class="tiktok-next-title">
@@ -610,11 +766,33 @@ const PostsPage = {
                             <i data-lucide="download" aria-hidden="true"></i> ${t('posts.tiktok.download')}
                         </a>
                     ` : ''}
-                    <a class="btn btn-secondary btn-sm" href="https://www.tiktok.com/" target="_blank" rel="noopener noreferrer">
-                        <i data-lucide="external-link" aria-hidden="true"></i> ${t('posts.tiktok.openTikTok')}
-                    </a>
+                    ${openTikTok}
                 </div>
             </div>
+        `;
+    },
+
+    /**
+     * A carousel on its card: the first four slides and a "+N" for the rest. Consistent
+     * cell size whatever the count, so two cards side by side compare at a glance.
+     */
+    renderSlideStrip(urls) {
+        const shown = urls.slice(0, 4);
+        const more = urls.length - shown.length;
+        return html`
+            <ol class="post-slides" aria-label="${t('posts.carousel.label')}">
+                ${shown.map((url, i) => html`
+                    <li class="post-slide">
+                        <img src="${url}" alt="${t('posts.carousel.slide', { n: i + 1 })}" loading="lazy" decoding="async">
+                    </li>
+                `)}
+                ${more > 0 ? html`
+                    <li class="post-slide post-slide-more">
+                        <span aria-hidden="true">${UI.ltr(`+${UI.formatNumber(more)}`)}</span>
+                        <span class="sr-only">${t('posts.carousel.more', { count: more })}</span>
+                    </li>
+                ` : ''}
+            </ol>
         `;
     },
 
@@ -760,7 +938,9 @@ const PostsPage = {
                 </div>
             ` : html`
                 <div class="tiktok-panel hidden" id="tiktok-info" role="note">
-                    ${ready ? this.tiktokInboxBody() : html`
+                    ${ready ? html`
+                        <div id="tiktok-inbox-body" class="stack gap-2">${this.tiktokInboxBody()}</div>
+                    ` : html`
                         <p class="form-hint text-warning">
                             <i data-lucide="alert-triangle" aria-hidden="true"></i>
                             ${t('posts.tiktok.notConnected')}
@@ -771,7 +951,18 @@ const PostsPage = {
         `;
     },
 
-    /** Inbox mode's panel body, unchanged: whose inbox, what happens, how full it is. */
+    /**
+     * The inbox explainer names what arrives — "the video" or "this post" — so it is
+     * repainted when the type changes. It holds no controls, so nothing is lost.
+     */
+    refreshTikTokInbox() {
+        const host = document.getElementById('tiktok-inbox-body');
+        if (!host) return;
+        host.innerHTML = esc(this.tiktokInboxBody());
+        UI.icons(host);
+    },
+
+    /** Inbox mode's panel body: whose inbox, what happens, how full it is. */
     tiktokInboxBody() {
         const c = this.tiktok && this.tiktok.connection;
         const inbox = this.tiktok && this.tiktok.inbox;
@@ -782,7 +973,7 @@ const PostsPage = {
                 <span>${t('posts.tiktok.postingAs')}</span>
                 <strong dir="auto">${(c && c.displayName) || t('settings.tiktok.unnamed')}</strong>
             </p>
-            <p class="form-hint">${t('posts.tiktok.inboxExplainer')}</p>
+            <p class="form-hint">${this._ttPhoto ? t('posts.tiktok.inboxExplainerPhoto') : t('posts.tiktok.inboxExplainer')}</p>
             ${inbox ? html`
                 <p class="form-hint ${inbox.pending >= inbox.limit ? html.raw('text-warning') : ''}">
                     ${t('posts.tiktok.inboxUsage', { pending: inbox.pending, limit: inbox.limit })}
@@ -808,7 +999,13 @@ const PostsPage = {
         brand_content: false,
         is_aigc: false,
         consent: false,
+        // Photo posts only, and the one choice that starts ON: it is not an
+        // interaction or a disclosure, and the API's own default is true.
+        auto_add_music: true,
     }),
+
+    /** TikTok caps a photo post's title at 90 UTF-16 units — what JS `.length` counts. */
+    TIKTOK_TITLE_MAX: 90,
 
     TIKTOK_LEGAL_LINKS: Object.freeze({
         music: 'https://www.tiktok.com/legal/page/global/music-usage-confirmation/en',
@@ -835,6 +1032,7 @@ const PostsPage = {
             brand_organic: organic,
             brand_content: content,
             is_aigc: o.is_aigc === true,
+            auto_add_music: o.auto_add_music !== false,
         };
     },
 
@@ -853,14 +1051,18 @@ const PostsPage = {
      * A saved choice that is no longer allowed (an edit whose level the account
      * no longer offers) resolves to "nothing selected" rather than a default.
      *
+     * A photo post (`opts.photo`) has no Duet or Stitch and no length limit, and adds
+     * "Auto-add music"; everything else — privacy, disclosure, consent — is the same.
+     *
      * @param {object|null} creator  `creator` from GET /tiktok/creator-info
      * @param {object} choices       what the operator has picked (TIKTOK_DEFAULT_CHOICES shape)
-     * @param {{ audited?: boolean, durationSec?: number|null }} [opts]
+     * @param {{ audited?: boolean, durationSec?: number|null, photo?: boolean }} [opts]
      */
     tiktokDirectState(creator, choices, opts) {
         const o = opts || {};
         const cr = creator || {};
         const c = { ...this.TIKTOK_DEFAULT_CHOICES, ...(choices || {}) };
+        const photo = o.photo === true;
         // Anything other than an explicit `true` is treated as unaudited: the
         // restrictive reading is the one TikTok will enforce anyway.
         const audited = o.audited === true;
@@ -881,10 +1083,12 @@ const PostsPage = {
 
         const interaction = (flag, off) => ({ checked: !cr[off] && !!c[flag], disabled: !!cr[off] });
 
-        const max = Number(cr.maxVideoPostDurationSec) > 0 ? Number(cr.maxVideoPostDurationSec) : null;
-        const duration = Number.isFinite(o.durationSec) && o.durationSec > 0 ? o.durationSec : null;
+        // A length limit is a video's: photos have none to show or to break.
+        const max = !photo && Number(cr.maxVideoPostDurationSec) > 0 ? Number(cr.maxVideoPostDurationSec) : null;
+        const duration = !photo && Number.isFinite(o.durationSec) && o.durationSec > 0 ? o.durationSec : null;
 
         return {
+            photo,
             nickname: cr.nickname || '',
             username: cr.username || '',
             avatarUrl: cr.avatarUrl || '',
@@ -896,6 +1100,7 @@ const PostsPage = {
             comment: interaction('allow_comment', 'commentDisabled'),
             duet: interaction('allow_duet', 'duetDisabled'),
             stitch: interaction('allow_stitch', 'stitchDisabled'),
+            music: { checked: c.auto_add_music !== false },
             disclose,
             brandOrganic,
             brandContent,
@@ -919,10 +1124,16 @@ const PostsPage = {
      * Checks the operator's RAW choices, so a combination the panel would have
      * quietly resolved (branded + Only me from an old row) is named, not hidden.
      *
+     * A photo post sends no `allow_duet` / `allow_stitch` — TikTok has neither for photos —
+     * and sends `auto_add_music` instead.
+     *
      * @returns {{ ok: true, options: object } | { ok: false, code: string, field: string|null, message: string }}
      */
     validateTikTokOptions(creator, choices, opts) {
-        const fail = (code, field, params) => ({ ok: false, code, field, message: this.tiktokErrorText(code, params) });
+        const photo = !!(opts && opts.photo === true);
+        const fail = (code, field, params) => ({
+            ok: false, code, field, message: this.tiktokErrorText(code, { ...(params || {}), photo }),
+        });
         if (!creator) return fail('notReady', null);
 
         const c = { ...this.TIKTOK_DEFAULT_CHOICES, ...(choices || {}) };
@@ -941,6 +1152,20 @@ const PostsPage = {
         if (c.disclose && c.brand_content && level === 'SELF_ONLY') return fail('brandedPrivate', 'tiktok-privacy');
         if (!c.consent) return fail('consentRequired', 'tiktok-consent-check');
 
+        if (photo) {
+            return {
+                ok: true,
+                options: {
+                    privacy_level: level,
+                    allow_comment: s.comment.checked,
+                    brand_organic: s.brandOrganic,
+                    brand_content: s.brandContent,
+                    is_aigc: s.isAigc,
+                    consent: true,
+                    auto_add_music: s.music.checked,
+                },
+            };
+        }
         return {
             ok: true,
             options: {
@@ -959,14 +1184,15 @@ const PostsPage = {
     },
 
     tiktokErrorText(code, params) {
+        const photo = !!(params && params.photo);
         switch (code) {
             case 'tooLong': return t('posts.tiktok.direct.tooLong', params);
-            case 'privacyRequired': return t('posts.tiktok.direct.privacyRequired');
+            case 'privacyRequired': return photo ? t('posts.tiktok.direct.privacyRequiredPhoto') : t('posts.tiktok.direct.privacyRequired');
             case 'privacyUnavailable': return t('posts.tiktok.direct.privacyUnavailable');
             case 'unauditedPrivate': return t('posts.tiktok.direct.unauditedPrivate');
             case 'discloseChoose': return t('posts.tiktok.direct.discloseChoose');
             case 'brandedPrivate': return t('posts.tiktok.direct.brandedPrivate');
-            case 'consentRequired': return t('posts.tiktok.direct.consentRequired');
+            case 'consentRequired': return photo ? t('posts.tiktok.direct.consentRequiredPhoto') : t('posts.tiktok.direct.consentRequired');
             default: return t('posts.tiktok.direct.notReady');
         }
     },
@@ -979,7 +1205,107 @@ const PostsPage = {
         return this.tiktokDirectState(data.creator || null, this._ttChoices, {
             audited: typeof data.audited === 'boolean' ? data.audited : !!(c && c.audited === true),
             durationSec: this._ttDurationSec,
+            photo: this._ttPhoto,
         });
+    },
+
+    // ─── TikTok photo title ──────────────────────────────────────────────────
+    /** The caption's first line, trimmed. */
+    firstLine(text) {
+        return String(text || '').split(/\r\n|\r|\n/)[0].trim();
+    },
+
+    /**
+     * At most `max` UTF-16 units, never cutting an emoji in half: a lone high surrogate
+     * at the end is dropped rather than sent as a broken character.
+     */
+    clipUtf16(text, max) {
+        const value = String(text || '');
+        if (value.length <= max) return value;
+        let cut = value.slice(0, max);
+        const last = cut.charCodeAt(cut.length - 1);
+        if (last >= 0xD800 && last <= 0xDBFF) cut = cut.slice(0, -1);
+        return cut;
+    },
+
+    /** The prefill: the caption's first line, clipped to what TikTok takes. */
+    tiktokTitleFromCaption(caption) {
+        return this.clipUtf16(this.firstLine(caption), this.TIKTOK_TITLE_MAX);
+    },
+
+    /**
+     * Is this title sendable? Counted in UTF-16 units, as `.length` counts them and as
+     * the API limits them. Empty is fine: the server then uses the caption's first line.
+     *
+     * @returns {{ ok: true, title: string } | { ok: false, message: string }}
+     */
+    validateTikTokTitle(value) {
+        const title = String(value || '').trim();
+        const max = this.TIKTOK_TITLE_MAX;
+        if (title.length > max) {
+            return { ok: false, message: t('posts.tiktok.titleTooLong', { max, n: title.length }) };
+        }
+        return { ok: true, title };
+    },
+
+    /** The title on screen, or the last one known when the field is not rendered. */
+    readTikTokTitle() {
+        const input = document.getElementById('tiktok-title');
+        return input ? String(input.value || '') : String(this._ttTitle || '');
+    },
+
+    /**
+     * The title field, under the caption it is taken from. Shown only while the post goes
+     * to TikTok as photos; in either delivery it is the one TikTok-only thing to fill in.
+     */
+    tiktokTitleField() {
+        if (!this.tiktokReady()) return '';
+        const value = String(this._ttTitle || '');
+        return html`
+            <div class="form-group hidden" id="tiktok-title-group">
+                <div class="field-head">
+                    <label class="form-label" for="tiktok-title">${t('posts.tiktok.titleLabel')}</label>
+                    <span class="field-count" id="tiktok-title-count">${this.titleCountMarkup(value)}</span>
+                </div>
+                <input class="field" id="tiktok-title" dir="auto" lang="ar" maxlength="${this.TIKTOK_TITLE_MAX}"
+                       value="${value}" data-input="posts:tiktokTitle" data-guard-dirty
+                       aria-describedby="tiktok-title-hint tiktok-title-count">
+                <p class="form-hint" id="tiktok-title-hint">${t('posts.tiktok.titleHint')}</p>
+            </div>
+        `;
+    },
+
+    /** "12/90", isolated so it reads left to right inside Arabic, with a spoken form. */
+    titleCountMarkup(value) {
+        const n = String(value || '').length;
+        const max = this.TIKTOK_TITLE_MAX;
+        return html`<span aria-hidden="true">${UI.ltr(`${n}/${max}`)}</span><span class="sr-only">${t('posts.tiktok.titleCountSr', { n, max })}</span>`;
+    },
+
+    refreshTitleCount() {
+        const count = document.getElementById('tiktok-title-count');
+        if (!count) return;
+        const value = this.readTikTokTitle();
+        count.innerHTML = esc(this.titleCountMarkup(value));
+        count.classList.toggle('is-warning', value.length > this.TIKTOK_TITLE_MAX);
+    },
+
+    /** The operator typed a title: it stops following the caption, unless they emptied it. */
+    onTikTokTitle(el) {
+        const value = el ? String(el.value || '') : '';
+        this._ttTitle = value;
+        this._ttTitleTouched = value !== '';
+        this.refreshTitleCount();
+    },
+
+    /** Caption keystroke: an untouched title keeps pace with the caption's first line. */
+    onCaptionInput(el) {
+        if (this._ttTitleTouched) return;
+        const next = this.tiktokTitleFromCaption(el ? el.value : '');
+        this._ttTitle = next;
+        const input = document.getElementById('tiktok-title');
+        if (input && input.value !== next) input.value = next;
+        this.refreshTitleCount();
     },
 
     /** Is the live creator info in, in direct mode, with a creator to post as? */
@@ -1081,12 +1407,20 @@ const PostsPage = {
      * the account, the length limit, privacy, interactions, commercial
      * disclosure, the AI label. Consent and the declaration sit by the submit
      * button instead — see `tiktokConsentBlock`.
+     *
+     * A photo post (`v.photo`) drops Duet, Stitch and the length limit, adds
+     * "Auto-add music", and says "this post" wherever the video copy says "video".
      */
     tiktokDirectForm(v) {
         const avatar = safeUrl(v.avatarUrl);
+        const photo = !!v.photo;
         let brandedNote = '';
         if (v.brandContentReason === 'unaudited') brandedNote = t('posts.tiktok.direct.brandedUnaudited');
         else if (v.brandContentReason === 'private') brandedNote = t('posts.tiktok.direct.brandedPrivate');
+
+        let labelText = '';
+        if (v.label === 'paid') labelText = photo ? t('posts.tiktok.direct.labelPaidPhoto') : t('posts.tiktok.direct.labelPaid');
+        else if (v.label === 'promotional') labelText = photo ? t('posts.tiktok.direct.labelPromotionalPhoto') : t('posts.tiktok.direct.labelPromotional');
 
         return html`
             <p class="tiktok-account">
@@ -1097,7 +1431,7 @@ const PostsPage = {
                 <strong dir="auto">${v.nickname || t('settings.tiktok.unnamed')}</strong>
                 ${v.username ? html`<span class="text-meta">${UI.ltr(`@${v.username}`)}</span>` : ''}
             </p>
-            <p class="form-hint">${t('posts.tiktok.direct.explainer')}</p>
+            <p class="form-hint">${photo ? t('posts.tiktok.direct.explainerPhoto') : t('posts.tiktok.direct.explainer')}</p>
 
             ${v.audited ? '' : html`
                 <p class="tiktok-note">
@@ -1117,7 +1451,7 @@ const PostsPage = {
             ` : ''}
 
             <div class="tiktok-field">
-                <label class="form-label" for="tiktok-privacy">${t('posts.tiktok.direct.privacy')}</label>
+                <label class="form-label" for="tiktok-privacy">${photo ? t('posts.tiktok.direct.privacyPhoto') : t('posts.tiktok.direct.privacy')}</label>
                 <!-- No default, by TikTok's rule: the empty option is the
                      starting state and "required" refuses it. -->
                 <select class="select" id="tiktok-privacy" data-change="posts:tiktokChange" required
@@ -1134,23 +1468,35 @@ const PostsPage = {
                 ` : ''}
             </div>
 
-            <p class="tiktok-subhead">${t('posts.tiktok.direct.interactions')}</p>
+            <p class="tiktok-subhead">${photo ? t('posts.tiktok.direct.interactionsPhoto') : t('posts.tiktok.direct.interactions')}</p>
             ${this.tiktokSwitch('tiktok-allow-comment', t('posts.tiktok.direct.allowComment'), v.comment)}
-            ${this.tiktokSwitch('tiktok-allow-duet', t('posts.tiktok.direct.allowDuet'), v.duet)}
-            ${this.tiktokSwitch('tiktok-allow-stitch', t('posts.tiktok.direct.allowStitch'), v.stitch)}
+            ${photo ? '' : html`
+                ${this.tiktokSwitch('tiktok-allow-duet', t('posts.tiktok.direct.allowDuet'), v.duet)}
+                ${this.tiktokSwitch('tiktok-allow-stitch', t('posts.tiktok.direct.allowStitch'), v.stitch)}
+            `}
+
+            ${photo ? html`
+                <p class="tiktok-subhead">${t('posts.tiktok.direct.music')}</p>
+                ${this.tiktokSwitch('tiktok-auto-music', t('posts.tiktok.direct.autoMusic'), {
+                    checked: v.music && v.music.checked, hint: t('posts.tiktok.direct.autoMusicHint'),
+                })}
+            ` : ''}
 
             <p class="tiktok-subhead">${t('posts.tiktok.direct.disclosureTitle')}</p>
             ${this.tiktokSwitch('tiktok-disclose', t('posts.tiktok.direct.disclose'), {
-                checked: v.disclose, hint: t('posts.tiktok.direct.discloseHint'),
+                checked: v.disclose,
+                hint: photo ? t('posts.tiktok.direct.discloseHintPhoto') : t('posts.tiktok.direct.discloseHint'),
             })}
             ${v.disclose ? html`
                 <div class="tiktok-disclosure" role="group" aria-label="${t('posts.tiktok.direct.disclose')}">
                     ${this.tiktokCheck('tiktok-brand-organic', t('posts.tiktok.direct.yourBrand'), {
-                        checked: v.brandOrganic, hint: t('posts.tiktok.direct.yourBrandHint'),
+                        checked: v.brandOrganic,
+                        hint: photo ? t('posts.tiktok.direct.yourBrandHintPhoto') : t('posts.tiktok.direct.yourBrandHint'),
                     })}
                     ${this.tiktokCheck('tiktok-brand-content', t('posts.tiktok.direct.brandedContent'), {
                         checked: v.brandContent, disabled: v.brandContentDisabled,
-                        hint: t('posts.tiktok.direct.brandedContentHint'), note: brandedNote,
+                        hint: photo ? t('posts.tiktok.direct.brandedContentHintPhoto') : t('posts.tiktok.direct.brandedContentHint'),
+                        note: brandedNote,
                     })}
                     ${v.needsDisclosureChoice ? html`
                         <p class="form-hint text-warning" id="tiktok-disclose-choose">
@@ -1158,15 +1504,11 @@ const PostsPage = {
                             ${t('posts.tiktok.direct.discloseChoose')}
                         </p>
                     ` : ''}
-                    ${v.label ? html`
-                        <p class="tiktok-label-preview">
-                            ${v.label === 'paid' ? t('posts.tiktok.direct.labelPaid') : t('posts.tiktok.direct.labelPromotional')}
-                        </p>
-                    ` : ''}
+                    ${labelText ? html`<p class="tiktok-label-preview">${labelText}</p>` : ''}
                 </div>
             ` : ''}
 
-            ${this.tiktokSwitch('tiktok-aigc', t('posts.tiktok.direct.aigc'), { checked: v.isAigc })}
+            ${this.tiktokSwitch('tiktok-aigc', photo ? t('posts.tiktok.direct.aigcPhoto') : t('posts.tiktok.direct.aigc'), { checked: v.isAigc })}
         `;
     },
 
@@ -1196,7 +1538,7 @@ const PostsPage = {
     /** Express consent, then the declaration — the last thing above the submit button. */
     tiktokConsentBlock(v) {
         return html`
-            ${this.tiktokCheck('tiktok-consent-check', t('posts.tiktok.direct.consent'), {
+            ${this.tiktokCheck('tiktok-consent-check', v.photo ? t('posts.tiktok.direct.consentPhoto') : t('posts.tiktok.direct.consent'), {
                 checked: v.consent, required: true,
             })}
             <p class="tiktok-declaration" id="tiktok-declaration">${this.tiktokDeclaration(v.declaration)}</p>
@@ -1216,7 +1558,11 @@ const PostsPage = {
             || !!(also && also.checked && !also.disabled);
     },
 
-    /** Fresh per modal: nothing chosen, nothing fetched, no duration measured. */
+    /**
+     * Fresh per modal: nothing chosen, nothing fetched, no duration measured. The title
+     * starts from what the row saved, else from the caption — and only a saved one counts
+     * as the operator's own, so an unsaved one keeps following the caption.
+     */
     resetTikTokComposer(post) {
         this._ttSeq++;
         this.tiktokCreator = null;
@@ -1225,6 +1571,11 @@ const PostsPage = {
         this._ttChoices = post && post.platform === 'tiktok'
             ? this.tiktokChoicesFrom(post.platform_options)
             : { ...this.TIKTOK_DEFAULT_CHOICES };
+        this._ttPhoto = !!(post && this.isPhotoType(post.post_type));
+        const options = post && post.platform === 'tiktok' ? post.platform_options : null;
+        const saved = options && typeof options.title === 'string' ? options.title : '';
+        this._ttTitle = saved || this.tiktokTitleFromCaption(post && post.caption);
+        this._ttTitleTouched = saved !== '';
     },
 
     /**
@@ -1270,6 +1621,7 @@ const PostsPage = {
             brand_content: checked('tiktok-brand-content', 'brand_content'),
             is_aigc: checked('tiktok-aigc', 'is_aigc'),
             consent: checked('tiktok-consent-check', 'consent'),
+            auto_add_music: checked('tiktok-auto-music', 'auto_add_music'),
         };
         // Switching disclosure off clears both ticks. Otherwise a stale
         // "Branded content" would come back with the switch and silently
@@ -1354,20 +1706,31 @@ const PostsPage = {
 
     /**
      * Adds `tiktok_options` when the post goes to TikTok in direct mode, or
-     * says why it cannot go yet. Inbox mode sends nothing extra, as before.
+     * says why it cannot go yet. Inbox mode sends nothing extra for a video, as
+     * before; a photo post (image or carousel) carries its title in either mode,
+     * and `{ mode: 'inbox', title }` is the whole of its inbox options.
      *
      * @returns {{ message: string, field: string|null }|null} null when the payload is good to send
      */
     attachTikTokOptions(payload) {
         const toTikTok = payload.platform === 'tiktok' || payload.also_tiktok === true;
         if (!toTikTok) return null;
-        if (this.tiktokOffersChoice()) {
-            if (!this._ttDelivery) return { message: t('posts.tiktok.delivery.required'), field: 'tiktok-delivery-direct' };
-            if (this._ttDelivery === 'inbox') {
-                payload.tiktok_options = { mode: 'inbox' };
-                return null;
-            }
-        } else if (this.tiktokPostMode() !== 'direct') {
+        const choice = this.tiktokOffersChoice();
+        if (choice && !this._ttDelivery) {
+            return { message: t('posts.tiktok.delivery.required'), field: 'tiktok-delivery-direct' };
+        }
+
+        const photo = this.isPhotoType(payload.post_type);
+        const titled = photo ? this.validateTikTokTitle(this.readTikTokTitle()) : { ok: true, title: '' };
+        if (!titled.ok) return { message: titled.message, field: 'tiktok-title' };
+        const withTitle = (options) => (titled.title ? { ...options, title: titled.title } : options);
+
+        if (choice && this._ttDelivery === 'inbox') {
+            payload.tiktok_options = withTitle({ mode: 'inbox' });
+            return null;
+        }
+        if (!choice && this.tiktokPostMode() !== 'direct') {
+            if (photo && titled.title) payload.tiktok_options = withTitle({ mode: 'inbox' });
             return null;
         }
 
@@ -1376,11 +1739,616 @@ const PostsPage = {
         this._ttChoices = this.readTikTokChoices(this._ttChoices);
         const view = this.tiktokView();
         const result = this.validateTikTokOptions(info.data.creator || null, this._ttChoices, {
-            audited: view.audited, durationSec: this._ttDurationSec,
+            audited: view.audited, durationSec: photo ? null : this._ttDurationSec, photo,
         });
         if (!result.ok) return { message: result.message, field: result.field };
-        payload.tiktok_options = { ...result.options, mode: 'direct' };
+        payload.tiktok_options = withTitle({ ...result.options, mode: 'direct' });
         return null;
+    },
+
+    // ─── Carousel slides ─────────────────────────────────────────────────────
+    /**
+     * What each target takes, as the API enforces it: an Instagram/Facebook carousel is
+     * 2-10 images (and `both` must fit Instagram's 10), a TikTok photo post 2-35. The
+     * `tiktok` picker is always the TikTok sibling's own set, so always 35.
+     */
+    CAROUSEL_MIN: 2,
+    CAROUSEL_MAX_META: 10,
+    CAROUSEL_MAX_TIKTOK: 35,
+
+    slideLimits(which, platform) {
+        const tiktok = which === 'tiktok' || platform === 'tiktok';
+        return { min: this.CAROUSEL_MIN, max: tiktok ? this.CAROUSEL_MAX_TIKTOK : this.CAROUSEL_MAX_META, target: tiktok ? 'tiktok' : 'meta' };
+    },
+
+    /** The two pickers the composer can hold, and the id prefix each one's controls use. */
+    SLIDE_PICKERS: Object.freeze({
+        main: Object.freeze({ prefix: 'post-carousel', labelKey: 'posts.carousel.label' }),
+        tiktok: Object.freeze({ prefix: 'post-tiktok-slides', labelKey: 'posts.carousel.tiktokLabel' }),
+    }),
+
+    pickerName(value) {
+        return value === 'tiktok' ? 'tiktok' : 'main';
+    },
+
+    /** The live array for a picker — mutated in place, so its order IS the slide order. */
+    slideList(which) {
+        if (!this._slides) this._slides = { main: [], tiktok: [] };
+        return this._slides[this.pickerName(which)];
+    },
+
+    /** Queued, being prepared, or on its way up: not ready, and not yet failed either. */
+    slideWorking(slide) {
+        const s = slide && slide.status;
+        return s === 'queued' || s === 'preparing' || s === 'uploading';
+    },
+
+    slideStatusLabel(status) {
+        switch (status) {
+            case 'queued': return t('posts.carousel.status.queued');
+            case 'preparing': return t('posts.carousel.status.preparing');
+            case 'uploading': return t('posts.carousel.status.uploading');
+            case 'failed': return t('posts.carousel.status.failed');
+            default: return '';
+        }
+    },
+
+    /** A slide that is already on the server — an edit's saved `media_urls`. */
+    readySlide(url) {
+        return { id: `slide-${++this._slideCounter}`, file: null, name: '', url: String(url), thumb: '', status: 'ready', error: '' };
+    },
+
+    /**
+     * Fresh per modal. An edit of a carousel row starts from its saved slides, in order;
+     * the queue is emptied and `_slideSeq` moves, so an upload the last modal left running
+     * lands nowhere — and cannot release this modal's submit button either.
+     */
+    resetSlides(post) {
+        this._slideSeq++;
+        this._slideQueue = [];
+        this._slideActive = 0;
+        this._slideBatch = { main: null, tiktok: null };
+        const saved = post && post.post_type === 'carousel' && Array.isArray(post.media_urls) ? post.media_urls : [];
+        this._slides = {
+            main: saved.filter((u) => typeof u === 'string' && u).map((u) => this.readySlide(u)),
+            tiktok: [],
+        };
+    },
+
+    /**
+     * Can these slides be sent, and as which URLs? Pure, so the count rules are pinned by
+     * tests rather than read out of a template. The count is checked before the uploads:
+     * "remove two" is something to do now, "wait" is not.
+     *
+     * @param {Array} slides
+     * @param {{ min: number, max: number, target: 'meta'|'tiktok' }} limits
+     * @param {{ optional?: boolean, own?: boolean }} [opts]  optional: none at all is fine
+     *        (the TikTok set, which then defaults to the carousel's own); own: the message
+     *        is about that TikTok set rather than the carousel
+     * @returns {{ ok: true, urls: string[] } | { ok: false, code: string, message: string }}
+     */
+    validateSlides(slides, limits, opts) {
+        const o = opts || {};
+        const list = Array.isArray(slides) ? slides : [];
+        const n = list.length;
+        const fail = (code, message) => ({ ok: false, code, message });
+        if (o.optional && n === 0) return { ok: true, urls: [] };
+        if (n < limits.min) {
+            return fail('tooFew', o.own ? t('posts.carousel.tiktokTooFew') : t('posts.carousel.tooFew'));
+        }
+        if (n > limits.max) {
+            return fail('tooMany', limits.target === 'tiktok'
+                ? t('posts.carousel.tooManyTikTok', { max: limits.max, n })
+                : t('posts.carousel.tooManyMeta', { max: limits.max, n }));
+        }
+        if (list.some((s) => s.status === 'failed')) return fail('failed', t('posts.carousel.hasFailed'));
+        if (list.some((s) => this.slideWorking(s) || !s.url)) return fail('uploading', t('posts.carousel.stillUploading'));
+        return { ok: true, urls: list.map((s) => s.url) };
+    },
+
+    /** What is wrong with the count right now, for the line under the picker ('' when nothing). */
+    slideRuleText(which, platform) {
+        const list = this.slideList(which);
+        if (list.length === 0) return '';
+        const limits = this.slideLimits(which, platform);
+        if (list.length >= limits.min && list.length <= limits.max) return '';
+        const result = this.validateSlides(list, limits, { own: which === 'tiktok' });
+        return result.ok ? '' : result.message;
+    },
+
+    /**
+     * Adds `media_urls` for a carousel — and `tiktok_media_urls` when the TikTok sibling
+     * has its own images — or says why it cannot go yet. `media_url` is left out: the
+     * server sets it to the first slide itself.
+     *
+     * @returns {{ message: string, field: string }|null} null when the payload is good to send
+     */
+    attachSlides(payload) {
+        if (payload.post_type !== 'carousel') return null;
+        const main = this.validateSlides(this.slideList('main'), this.slideLimits('main', payload.platform));
+        if (!main.ok) return { message: main.message, field: `${this.SLIDE_PICKERS.main.prefix}-file` };
+        delete payload.media_url;
+        payload.media_urls = main.urls;
+
+        if (payload.also_tiktok === true) {
+            const own = this.validateSlides(this.slideList('tiktok'), this.slideLimits('tiktok'), { optional: true, own: true });
+            if (!own.ok) return { message: own.message, field: `${this.SLIDE_PICKERS.tiktok.prefix}-file` };
+            if (own.urls.length) payload.tiktok_media_urls = own.urls;
+        }
+        return null;
+    },
+
+    /** "3/10" beside the picker's label, with a spoken form. */
+    slideCountMarkup(which, platform) {
+        const n = this.slideList(which).length;
+        const { max } = this.slideLimits(which, platform);
+        return html`<span aria-hidden="true">${UI.ltr(`${n}/${max}`)}</span><span class="sr-only">${t('posts.carousel.countSr', { n, max })}</span>`;
+    },
+
+    /** "2 of 5 uploaded…" while anything is on its way; '' once nothing is. */
+    slideProgressText(which) {
+        const list = this.slideList(which);
+        if (!list.some((s) => this.slideWorking(s))) return '';
+        const done = list.filter((s) => s.status === 'ready').length;
+        return t('posts.carousel.progress', { done, total: list.length });
+    },
+
+    /**
+     * One picker: the multi-file input, the count against the target's limit, what is
+     * wrong with it, and the slides as an ordered list. `main` is the carousel itself;
+     * `tiktok` is the optional 9:16 set for the TikTok sibling.
+     *
+     * The hidden input carries the slide URLs and `data-guard-dirty`, so closing the modal
+     * after uploading asks first, exactly as it does for an edited caption.
+     */
+    slidePicker(which) {
+        const cfg = this.SLIDE_PICKERS[this.pickerName(which)];
+        const p = cfg.prefix;
+        const label = t(cfg.labelKey);
+        return html`
+            <div class="slide-picker" id="${p}">
+                <div class="field-head">
+                    <label class="form-label" for="${p}-file">${label}</label>
+                    <span class="field-count" id="${p}-count">${this.slideCountMarkup(which, '')}</span>
+                </div>
+                <input type="file" id="${p}-file" class="field" multiple
+                       accept="image/jpeg,image/png,image/webp"
+                       data-change="posts:pickSlides" data-picker="${this.pickerName(which)}"
+                       aria-describedby="${p}-hint ${p}-rule">
+                <p class="form-hint" id="${p}-hint">${t('posts.carousel.hint')}</p>
+                <p class="slide-rule" id="${p}-rule"></p>
+                <p class="slide-progress" id="${p}-progress"></p>
+                <ol class="slide-strip" id="${p}-strip" aria-label="${label}">${this.slideTiles(which)}</ol>
+                <input type="hidden" id="${p}-urls" value="${this.slideGuardValue(which)}" data-guard-dirty>
+            </div>
+        `;
+    },
+
+    /** One line per slide, in order: a queued slide counts before it has a URL. */
+    slideGuardValue(which) {
+        return this.slideList(which).map((s) => s.url || s.id).join('\n');
+    },
+
+    slideTiles(which) {
+        const name = this.pickerName(which);
+        const list = this.slideList(name);
+        return list.map((slide, i) => this.slideTile(name, slide, i, list.length));
+    },
+
+    /**
+     * One slide: its number, its state, and move earlier / move later / remove.
+     *
+     * "Earlier" is `arrow-left` and "later" `arrow-right`, and the stylesheet mirrors both
+     * under RTL. The list flows from the inline start, so slide 1 is on the right in
+     * Arabic and "earlier" points right there — each arrow points where its slide goes.
+     * Every button has a focus key, so a move keeps the operator on the slide they moved.
+     */
+    slideTile(which, slide, index, total) {
+        const n = index + 1;
+        const src = safeUrl(slide.thumb || slide.url);
+        const failed = slide.status === 'failed';
+        const working = this.slideWorking(slide);
+        let stateClass = '';
+        if (failed) stateClass = 'is-failed';
+        else if (working) stateClass = 'is-working';
+        const earlier = t('posts.carousel.moveEarlier', { n });
+        const later = t('posts.carousel.moveLater', { n });
+        const remove = t('posts.carousel.remove', { n });
+        return html`
+            <li class="slide-tile ${html.raw(stateClass)}" data-slide="${slide.id}">
+                <div class="slide-thumb">
+                    ${src
+                        ? html`<img src="${src}" alt="${t('posts.carousel.slide', { n })}">`
+                        : html`<i data-lucide="image" aria-hidden="true"></i>`}
+                    <span class="slide-num" aria-hidden="true">${UI.formatNumber(n)}</span>
+                    ${failed && slide.file ? html`
+                        <button type="button" class="slide-state slide-retry" data-action="posts:retrySlide"
+                                data-picker="${which}" data-slide="${slide.id}" data-focus-key="${slide.id}-retry"
+                                aria-label="${t('posts.carousel.retry', { n })}" title="${slide.error || ''}">
+                            <i data-lucide="rotate-cw" aria-hidden="true"></i> ${t('common.retry')}
+                        </button>
+                    ` : ''}
+                    ${failed && !slide.file ? html`
+                        <span class="slide-state slide-state--failed" title="${slide.error || ''}">${this.slideStatusLabel('failed')}</span>
+                    ` : ''}
+                    ${working ? html`
+                        <span class="slide-state">
+                            <span class="spinner spinner-sm" aria-hidden="true"></span>
+                            <span>${this.slideStatusLabel(slide.status)}</span>
+                        </span>
+                    ` : ''}
+                </div>
+                <div class="slide-actions">
+                    <button type="button" class="icon-btn" data-action="posts:moveSlide"
+                            data-picker="${which}" data-slide="${slide.id}" data-dir="-1"
+                            data-focus-key="${slide.id}-earlier" aria-label="${earlier}" title="${earlier}"
+                            ${index === 0 ? html.raw('disabled') : ''}>
+                        <i data-lucide="arrow-left" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="icon-btn" data-action="posts:moveSlide"
+                            data-picker="${which}" data-slide="${slide.id}" data-dir="1"
+                            data-focus-key="${slide.id}-later" aria-label="${later}" title="${later}"
+                            ${index === total - 1 ? html.raw('disabled') : ''}>
+                        <i data-lucide="arrow-right" aria-hidden="true"></i>
+                    </button>
+                    <button type="button" class="icon-btn icon-btn-danger" data-action="posts:removeSlide"
+                            data-picker="${which}" data-slide="${slide.id}"
+                            data-focus-key="${slide.id}-remove" aria-label="${remove}" title="${remove}">
+                        <i data-lucide="trash-2" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </li>
+        `;
+    },
+
+    /**
+     * Repaint one picker from state: the tiles, the count, the rule, the progress line and
+     * the guard input. `focusKey` names the control to land on afterwards; without it,
+     * whatever inside the strip had focus is found again by its key.
+     */
+    refreshSlides(which, focusKey) {
+        const name = this.pickerName(which);
+        const p = this.SLIDE_PICKERS[name].prefix;
+        const strip = document.getElementById(`${p}-strip`);
+        if (!strip) return;
+        const platformSelect = document.getElementById('post-platform-select');
+        const platform = platformSelect ? platformSelect.value : '';
+        const list = this.slideList(name);
+
+        const active = document.activeElement;
+        const inside = active && typeof strip.contains === 'function' && strip.contains(active);
+        const keep = focusKey || (inside ? UI.focusKey(active) : null);
+
+        strip.innerHTML = esc(this.slideTiles(name));
+        UI.icons(strip);
+
+        const count = document.getElementById(`${p}-count`);
+        if (count) {
+            count.innerHTML = esc(this.slideCountMarkup(name, platform));
+            const limits = this.slideLimits(name, platform);
+            count.classList.toggle('is-warning', list.length > 0 && (list.length < limits.min || list.length > limits.max));
+        }
+        const rule = document.getElementById(`${p}-rule`);
+        if (rule) rule.textContent = this.slideRuleText(name, platform);
+        const progress = document.getElementById(`${p}-progress`);
+        if (progress) progress.textContent = this.slideProgressText(name);
+        const urls = document.getElementById(`${p}-urls`);
+        if (urls) urls.value = this.slideGuardValue(name);
+        if (name === 'tiktok') {
+            const summary = document.getElementById('post-tiktok-slides-summary');
+            if (summary) summary.innerHTML = esc(list.length ? this.slideCountMarkup(name, platform) : '');
+        }
+
+        if (keep) {
+            const el = UI.elementByFocusKey(keep);
+            if (el && !el.disabled && typeof el.focus === 'function') el.focus({ preventScroll: true });
+        }
+    },
+
+    /** Formats a carousel takes. Anything else is refused at the picker, with its name. */
+    SLIDE_MIME_TYPES: Object.freeze(['image/jpeg', 'image/png', 'image/webp']),
+
+    /**
+     * Picked files join the end of the list, in the order the picker gave them, and each
+     * is prepared and uploaded on its own — so one bad image fails its own tile, not the
+     * batch. Only as many as the target has room for are taken; the rest are named.
+     */
+    pickSlides(input) {
+        const which = this.pickerName(input && input.dataset ? input.dataset.picker : '');
+        const files = Array.from((input && input.files) || []);
+        // Cleared so the same file can be picked again after a remove.
+        if (input) input.value = '';
+        if (!files.length) return;
+
+        const platformSelect = document.getElementById('post-platform-select');
+        const limits = this.slideLimits(which, platformSelect ? platformSelect.value : '');
+        const list = this.slideList(which);
+
+        const images = files.filter((f) => this.SLIDE_MIME_TYPES.includes(f.type));
+        const refused = files.find((f) => !this.SLIDE_MIME_TYPES.includes(f.type));
+        if (refused) UI.toast(t('posts.carousel.notImage', { name: refused.name || '' }), 'error');
+
+        const room = Math.max(0, limits.max - list.length);
+        const taken = images.slice(0, room);
+        const skipped = images.length - taken.length;
+        if (skipped > 0) UI.toast(t('posts.carousel.skipped', { count: skipped, max: limits.max }), 'error');
+
+        if (taken.length) {
+            if (!this._slideBatch) this._slideBatch = { main: null, tiktok: null };
+            if (!this._slideBatch[which]) this._slideBatch[which] = { ok: 0, failed: [] };
+            for (const file of taken) {
+                const slide = {
+                    id: `slide-${++this._slideCounter}`, file, name: file.name || '',
+                    url: '', thumb: '', status: 'queued', error: '',
+                };
+                list.push(slide);
+                this.enqueueSlide(which, slide);
+            }
+        }
+        this.refreshSlides(which);
+    },
+
+    /** How many slides are prepared and uploaded at once: steady on a phone connection. */
+    SLIDE_CONCURRENCY: 2,
+
+    enqueueSlide(which, slide) {
+        this._slideQueue.push({ which, slide, seq: this._slideSeq });
+        // Counted from the moment it is queued, so a queued slide holds the submit too.
+        this.setUploadBusy(1);
+        this.pumpSlides();
+    },
+
+    pumpSlides() {
+        while (this._slideActive < this.SLIDE_CONCURRENCY && this._slideQueue.length) {
+            const job = this._slideQueue.shift();
+            this._slideActive++;
+            Promise.resolve(this.runSlideJob(job)).finally(() => {
+                // A newer modal has reset the counters; this job is not one of its own.
+                if (job.seq !== this._slideSeq) return;
+                this._slideActive = Math.max(0, this._slideActive - 1);
+                this.pumpSlides();
+            });
+        }
+    },
+
+    /**
+     * One slide, start to finish: prepare it (JPEG, ≤1440px wide, under the cap), upload
+     * it with the same call a single file uses, and record the URL. A slide removed, or a
+     * modal closed, while this is in flight is left alone — but the busy count it took is
+     * always given back, or the submit button would stay held.
+     */
+    async runSlideJob(job) {
+        const { which, slide, seq } = job;
+        const current = () => seq === this._slideSeq && this.slideList(which).includes(slide);
+        try {
+            if (!current()) return;
+            slide.status = 'preparing';
+            this.refreshSlides(which);
+            const prepared = await this.prepareSlideFile(slide.file);
+            if (!current()) return;
+            slide.thumb = prepared.thumb || slide.thumb;
+            slide.name = prepared.name || slide.name;
+            slide.status = 'uploading';
+            this.refreshSlides(which);
+            const res = await API.uploadMedia({
+                filename: prepared.name,
+                mime_type: 'image/jpeg',
+                base64_data: prepared.dataUrl,
+            });
+            if (!current()) return;
+            const url = res && typeof res.url === 'string' ? res.url : '';
+            if (!url) throw new Error(t('error.unexpected'));
+            slide.url = url;
+            slide.status = 'ready';
+            slide.error = '';
+            slide.file = null;
+            const batch = this._slideBatch && this._slideBatch[which];
+            if (batch) batch.ok++;
+        } catch (err) {
+            if (!current()) return;
+            slide.status = 'failed';
+            slide.error = (err && err.message) || t('error.unexpected');
+            const batch = this._slideBatch && this._slideBatch[which];
+            if (batch) batch.failed.push(slide.error);
+        } finally {
+            if (seq === this._slideSeq) {
+                this.setUploadBusy(-1);
+                this.refreshSlides(which);
+                this.settleSlides(which);
+            }
+        }
+    },
+
+    /**
+     * Once nothing in a picker is still on its way: one toast for the whole batch, not one
+     * per image — ten failures on a dropped connection would otherwise stack ten errors.
+     */
+    settleSlides(which) {
+        if (this.slideList(which).some((s) => this.slideWorking(s))) return;
+        const batch = this._slideBatch && this._slideBatch[which];
+        if (!batch) return;
+        this._slideBatch[which] = null;
+        if (batch.failed.length) {
+            UI.toast(t('posts.uploadFailed', { message: batch.failed[0] }), 'error');
+        } else if (batch.ok > 0) {
+            UI.toast(t('posts.carousel.uploadedAll'));
+            Motion.announce(t('posts.carousel.uploadedAll'));
+        }
+    },
+
+    moveSlide(which, id, delta) {
+        const list = this.slideList(which);
+        const from = list.findIndex((s) => s.id === id);
+        const to = from + (delta < 0 ? -1 : 1);
+        if (from === -1 || to < 0 || to >= list.length) return;
+        [list[from], list[to]] = [list[to], list[from]];
+        // Stay on the same button of the slide that moved; at the end of the list that
+        // button is disabled, so land on the one pointing back.
+        const atEdge = (delta < 0 && to === 0) || (delta > 0 && to === list.length - 1);
+        const side = delta < 0 ? 'earlier' : 'later';
+        const back = delta < 0 ? 'later' : 'earlier';
+        this.refreshSlides(which, `${id}-${atEdge ? back : side}`);
+        Motion.announce(t('posts.carousel.moved', { from: from + 1, to: to + 1 }));
+    },
+
+    removeSlide(which, id) {
+        const list = this.slideList(which);
+        const index = list.findIndex((s) => s.id === id);
+        if (index === -1) return;
+        list.splice(index, 1);
+        // Removing a button removes focus with it: land on the tile that took its place,
+        // else the one before, else the picker's own input.
+        const next = list[index] || list[index - 1];
+        const focusKey = next ? `${next.id}-remove` : `${this.SLIDE_PICKERS[this.pickerName(which)].prefix}-file`;
+        this.refreshSlides(which, focusKey);
+        Motion.announce(t('posts.carousel.removed', { n: index + 1 }));
+    },
+
+    retrySlide(which, id) {
+        const slide = this.slideList(which).find((s) => s.id === id);
+        if (!slide || slide.status !== 'failed' || !slide.file) return;
+        slide.status = 'queued';
+        slide.error = '';
+        if (!this._slideBatch) this._slideBatch = { main: null, tiktok: null };
+        if (!this._slideBatch[which]) this._slideBatch[which] = { ok: 0, failed: [] };
+        this.enqueueSlide(which, slide);
+        this.refreshSlides(which, `${id}-remove`);
+    },
+
+    // ─── Preparing an image ──────────────────────────────────────────────────
+    /** Instagram's JPEG, at no more than this width. */
+    SLIDE_MAX_WIDTH: 1440,
+    SLIDE_JPEG_QUALITY: 0.92,
+    /** The local tile preview's short side, so a slide shows before its upload finishes. */
+    SLIDE_THUMB_PX: 256,
+
+    /** Does this file need drawing again? Only a JPEG already within width and cap goes as-is. */
+    slideNeedsReencode(file, width) {
+        return !file || file.type !== 'image/jpeg'
+            || !(Number(width) <= this.SLIDE_MAX_WIDTH)
+            || !(Number(file.size) <= API.MAX_UPLOAD_BYTES);
+    },
+
+    /** Width capped at SLIDE_MAX_WIDTH, height following. Never upscales. */
+    slideTargetSize(width, height) {
+        const w = Math.max(1, Math.round(Number(width) || 1));
+        const h = Math.max(1, Math.round(Number(height) || 1));
+        if (w <= this.SLIDE_MAX_WIDTH) return { width: w, height: h };
+        return { width: this.SLIDE_MAX_WIDTH, height: Math.max(1, Math.round(h * (this.SLIDE_MAX_WIDTH / w))) };
+    },
+
+    /** `IMG_2041.PNG` → `IMG_2041.jpg`: the name says what the bytes now are. */
+    jpegFileName(name) {
+        const base = String(name || '').replace(/\.[^./\\]*$/, '').trim();
+        return `${base || 'slide'}.jpg`;
+    },
+
+    /**
+     * File → `{ dataUrl, thumb, name }`, ready for `API.uploadMedia`. Anything that is not
+     * already a JPEG within 1440px and the cap is drawn onto a canvas and encoded as JPEG
+     * at 0.92, stepping quality and then size down until it fits under the upload cap.
+     *
+     * Decoded through an `<img>`, which applies the photo's EXIF rotation, so a phone
+     * picture drawn to the canvas comes out the right way up.
+     */
+    async prepareSlideFile(file) {
+        const name = (file && file.name) || '';
+        let decoded;
+        try {
+            decoded = await this.decodeImage(file);
+        } catch {
+            throw new Error(t('posts.carousel.convertFailed', { name }));
+        }
+        const { img, url } = decoded;
+        try {
+            const width = img.naturalWidth;
+            const height = img.naturalHeight;
+            if (!width || !height) throw new Error(t('posts.carousel.convertFailed', { name }));
+            const thumb = this.slideThumb(img, width, height);
+            let blob = file;
+            if (this.slideNeedsReencode(file, width)) {
+                const size = this.slideTargetSize(width, height);
+                blob = await this.encodeSlideJpeg(img, size.width, size.height);
+                if (!blob) throw new Error(t('posts.carousel.convertFailed', { name }));
+            }
+            if (blob.size > API.MAX_UPLOAD_BYTES) throw new Error(t('posts.carousel.stillTooBig', { name }));
+            const dataUrl = await this.blobToDataUrl(blob);
+            return { dataUrl, thumb, name: this.jpegFileName(name) };
+        } finally {
+            URL.revokeObjectURL(url);
+        }
+    },
+
+    decodeImage(file) {
+        return new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(file);
+            const img = new Image();
+            img.onload = () => resolve({ img, url });
+            img.onerror = () => {
+                URL.revokeObjectURL(url);
+                reject(new Error('decode'));
+            };
+            img.src = url;
+        });
+    },
+
+    /**
+     * The quality steps first, then the size: most photos fit at 0.92, and a smaller
+     * image is a bigger loss than a slightly softer one. Nine encodes at most.
+     */
+    async encodeSlideJpeg(img, width, height) {
+        let blob = null;
+        for (const scale of [1, 0.8, 0.64]) {
+            const w = Math.max(1, Math.round(width * scale));
+            const h = Math.max(1, Math.round(height * scale));
+            for (const quality of [this.SLIDE_JPEG_QUALITY, 0.82, 0.72]) {
+                blob = await this.drawJpeg(img, w, h, quality);
+                if (blob && blob.size <= API.MAX_UPLOAD_BYTES) return blob;
+            }
+        }
+        return blob;
+    },
+
+    /** The canvas for one encode, filled white first: JPEG has no alpha, and a transparent PNG would come out black. */
+    drawToCanvas(img, width, height) {
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, width, height);
+        return canvas;
+    },
+
+    drawJpeg(img, width, height, quality) {
+        const canvas = this.drawToCanvas(img, width, height);
+        if (!canvas) return Promise.resolve(null);
+        return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', quality));
+    },
+
+    /** A small JPEG data URL for the tile — `safeUrl` takes `data:image/jpeg`, and it is a few KB. */
+    slideThumb(img, width, height) {
+        const scale = Math.min(1, this.SLIDE_THUMB_PX / Math.min(width, height));
+        const canvas = this.drawToCanvas(img, Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale)));
+        if (!canvas) return '';
+        try {
+            return canvas.toDataURL('image/jpeg', 0.8);
+        } catch {
+            return '';
+        }
+    },
+
+    blobToDataUrl(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(reader.error || new Error('read'));
+            reader.readAsDataURL(blob);
+        });
     },
 
     mediaFields(post) {
@@ -1409,7 +2377,30 @@ const PostsPage = {
                 <p class="form-hint">${t('posts.uploadHint')}</p>
             </div>
 
+            ${this.carouselFields()}
             ${this.coverStep(post)}
+        `;
+    },
+
+    /**
+     * What replaces the single media field when the type is Carousel: the slide picker,
+     * and — only with "Also send to TikTok" — a collapsed second picker for TikTok's own
+     * 9:16 set. Both start hidden; `applyTypeMatrix()` shows whichever applies.
+     */
+    carouselFields() {
+        return html`
+            <div class="form-group hidden" id="carousel-group">
+                ${this.slidePicker('main')}
+            </div>
+            <details class="form-group slide-alt hidden" id="tiktok-slides-group">
+                <summary class="form-label tiktok-app-summary">
+                    <i data-lucide="chevron-down" aria-hidden="true"></i>
+                    <span>${t('posts.carousel.tiktokDifferent')}</span>
+                    <span class="field-count" id="post-tiktok-slides-summary"></span>
+                </summary>
+                <p class="form-hint">${t('posts.carousel.tiktokDifferentHint')}</p>
+                ${this.slidePicker('tiktok')}
+            </details>
         `;
     },
 
@@ -1694,6 +2685,7 @@ const PostsPage = {
         // the past for a "1 hour from now" default).
         const defaultTime = UI.toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000));
         this.resetTikTokComposer(null);
+        this.resetSlides(null);
 
         UI.showModal(html`
             ${this.modalHeader(t('posts.createTitle'))}
@@ -1718,8 +2710,9 @@ const PostsPage = {
                 <div class="form-group">
                     <label class="form-label" for="post-caption">${t('posts.caption')}</label>
                     <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
-                              placeholder="${t('posts.captionPlaceholder')}" data-guard-dirty required></textarea>
+                              placeholder="${t('posts.captionPlaceholder')}" data-input="posts:captionInput" data-guard-dirty required></textarea>
                 </div>
+                ${this.tiktokTitleField()}
                 ${this.mediaFields(null)}
                 ${this.scheduleFields(defaultTime)}
                 <div class="form-group switch-row">
@@ -1766,8 +2759,10 @@ const PostsPage = {
         // publishes identically to both platforms.
         const postType = post.post_type === 'reel' ? 'video' : post.post_type;
         const platform = post.platform;
-        // A TikTok row starts from the options it was saved with.
+        // A TikTok row starts from the options it was saved with; a carousel
+        // from its saved slides, in order.
         this.resetTikTokComposer(post);
+        this.resetSlides(post);
 
         UI.showModal(html`
             ${this.modalHeader(t('posts.editTitle'))}
@@ -1792,8 +2787,9 @@ const PostsPage = {
                 <div class="form-group">
                     <label class="form-label" for="post-caption">${t('posts.caption')}</label>
                     <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
-                              data-guard-dirty required>${post.caption || ''}</textarea>
+                              data-input="posts:captionInput" data-guard-dirty required>${post.caption || ''}</textarea>
                 </div>
+                ${this.tiktokTitleField()}
                 ${this.mediaFields({ ...post, post_type: postType })}
                 ${this.scheduleFields(defaultTime)}
                 ${this.tiktokConsentHost()}
@@ -1840,17 +2836,15 @@ const PostsPage = {
             typeSelect.value = allowed.has('image') ? 'image' : Array.from(allowed)[0];
         }
 
-        // Facebook alone supports text-only feed posts.
-        const mediaInput = document.getElementById('post-media-url');
-        if (mediaInput) mediaInput.required = !(platform === 'facebook' && typeSelect.value === 'feed');
-
         this.applyTypeMatrix();
     },
 
     /**
      * The cover step only makes sense for video on Instagram/Facebook — TikTok
-     * picks its own cover in its editor. The TikTok switch only makes sense for
-     * a video headed to Meta; the TikTok panel shows whenever TikTok is a target.
+     * picks its own cover in its editor. The TikTok switch is offered for any
+     * type TikTok takes (video, image, carousel) headed to Meta; the TikTok
+     * panel shows whenever TikTok is a target. A carousel swaps the single
+     * media field for the slide picker, and a TikTok photo post gets a title.
      */
     applyTypeMatrix() {
         const typeSelect = document.getElementById('post-type-select');
@@ -1858,17 +2852,39 @@ const PostsPage = {
         if (!typeSelect || !coverGroup) return;
         const platformSelect = document.getElementById('post-platform-select');
         const platform = platformSelect ? platformSelect.value : '';
-        const isVideo = typeSelect.value === 'video';
+        const type = typeSelect.value;
+        const isVideo = type === 'video';
+        const isCarousel = type === 'carousel';
+
+        // One media field or the slide picker, never both. Facebook alone
+        // supports text-only feed posts; a carousel's media is its slides.
+        const mediaGroup = document.getElementById('media-url-group');
+        const carouselGroup = document.getElementById('carousel-group');
+        if (mediaGroup) mediaGroup.classList.toggle('hidden', isCarousel);
+        if (carouselGroup) carouselGroup.classList.toggle('hidden', !isCarousel);
+        const mediaInput = document.getElementById('post-media-url');
+        if (mediaInput) mediaInput.required = !isCarousel && !(platform === 'facebook' && type === 'feed');
 
         const alsoGroup = document.getElementById('tiktok-also-group');
         const also = document.getElementById('post-also-tiktok');
-        const offerAlso = isVideo && platform !== 'tiktok';
+        const offerAlso = platform !== 'tiktok' && this.typeAllowedOn(type, 'tiktok');
         if (alsoGroup) alsoGroup.classList.toggle('hidden', !offerAlso);
         if (also && !offerAlso) also.checked = false;
 
         const info = document.getElementById('tiktok-info');
         const toTikTok = this.composerTargetsTikTok();
         if (info) info.classList.toggle('hidden', !toTikTok);
+
+        // The sibling's own 9:16 set exists only for a carousel that also goes to TikTok.
+        const alsoOn = !!(also && also.checked && !also.disabled);
+        const ownSet = document.getElementById('tiktok-slides-group');
+        if (ownSet) ownSet.classList.toggle('hidden', !(isCarousel && alsoOn));
+
+        this._ttPhoto = this.isPhotoType(type);
+        const titleGroup = document.getElementById('tiktok-title-group');
+        if (titleGroup) titleGroup.classList.toggle('hidden', !(toTikTok && this._ttPhoto));
+        this.refreshTitleCount();
+        this.refreshTikTokInbox();
 
         // Direct Post: the creator info is fetched the moment TikTok becomes a
         // target (not at page load — it is live), and the panel follows the
@@ -1881,6 +2897,12 @@ const PostsPage = {
         const showCover = isVideo && platform !== 'tiktok';
         coverGroup.classList.toggle('hidden', !showCover);
         if (showCover) this.refreshCoverPreview();
+
+        // The limit follows the platform: 10 with Instagram or Facebook, 35 for TikTok alone.
+        if (isCarousel) {
+            this.refreshSlides('main');
+            this.refreshSlides('tiktok');
+        }
     },
 
     toggleScheduleTime(publishNow) {
@@ -1912,7 +2934,7 @@ const PostsPage = {
             cover_url: postType === 'video' && platform !== 'tiktok' && coverUrl ? coverUrl : null,
         };
         // Only the create form has the switch; FormData omits an unchecked box.
-        if (data.get('also_tiktok') === 'on' && postType === 'video' && platform !== 'tiktok') {
+        if (data.get('also_tiktok') === 'on' && platform !== 'tiktok' && this.typeAllowedOn(postType, 'tiktok')) {
             payload.also_tiktok = true;
         }
         return payload;
@@ -1931,13 +2953,14 @@ const PostsPage = {
      * post has no inbox step, and TikTok's guidelines require saying that the
      * video can take a few minutes to process before it shows on the profile.
      */
-    tiktokOutcomeText(status, mode) {
+    tiktokOutcomeText(status, mode, photo) {
         if (mode === 'direct') {
-            return status === 'PUBLISHED' ? t('posts.tiktok.postedNoId') : t('posts.tiktok.direct.processingToast');
+            if (status === 'PUBLISHED') return t('posts.tiktok.postedNoId');
+            return photo ? t('posts.tiktok.direct.processingToastPhoto') : t('posts.tiktok.direct.processingToast');
         }
-        if (status === 'IN_INBOX') return t('posts.tiktok.sentToInbox');
+        if (status === 'IN_INBOX') return photo ? t('posts.tiktok.sentToInboxPhoto') : t('posts.tiktok.sentToInbox');
         if (status === 'PUBLISHED') return t('posts.publishedOk');
-        return t('posts.tiktok.processingToast');
+        return photo ? t('posts.tiktok.processingToastPhoto') : t('posts.tiktok.processingToast');
     },
 
     /**
@@ -1981,10 +3004,13 @@ const PostsPage = {
 
         const field = fieldId ? document.getElementById(fieldId) : null;
         if (field) {
+            // A field inside a closed <details> (TikTok's own images) cannot take focus.
+            const details = typeof field.closest === 'function' ? field.closest('details') : null;
+            if (details && !details.open) details.open = true;
             UI.markInvalid(field, stripId);
             return; // focusing the field already scrolls it into view
         }
-        host.scrollIntoView({ block: 'nearest' });
+        if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
     },
 
     async handleCreate(form, event) {
@@ -2006,12 +3032,14 @@ const PostsPage = {
             return;
         }
 
-        // Direct Post: nothing leaves until TikTok's rules are met.
-        const blocked = this.attachTikTokOptions(payload);
+        // A carousel: the right number of slides, every one of them uploaded.
+        // Then Direct Post: nothing leaves until TikTok's rules are met.
+        const blocked = this.attachSlides(payload) || this.attachTikTokOptions(payload);
         if (blocked) {
             this.showFormError(blocked.message, blocked.field, '');
             return;
         }
+        const photo = this.isPhotoType(payload.post_type);
 
         // Was the one hand-rolled busy state left on this screen: no `aria-busy`,
         // and `buttonSpinner()` with no argument relabels the button "Loading",
@@ -2037,14 +3065,17 @@ const PostsPage = {
             }
 
             const tiktokRow = this.tiktokRowOf(result);
-            const tiktokMode = payload.tiktok_options || this.tiktokRowMode(tiktokRow) === 'direct' ? 'direct' : 'inbox';
+            // `mode` is what the options say, not merely whether any were sent: a photo
+            // post's inbox options carry its title too.
+            const sentMode = payload.tiktok_options && payload.tiktok_options.mode;
+            const tiktokMode = sentMode === 'direct' || (!sentMode && this.tiktokRowMode(tiktokRow) === 'direct') ? 'direct' : 'inbox';
             if (publishNow && tiktokRow && tiktokRow.status === 'FAILED') {
                 // The Instagram/Facebook half went out; say plainly that TikTok did not.
                 UI.toast(t('posts.tiktok.failedToast', { message: tiktokRow.error_log || t('error.unexpected') }), 'error');
             } else if (publishNow && tiktokRow) {
-                UI.toast(this.tiktokOutcomeText(tiktokRow.status, tiktokMode));
-            } else if (!publishNow && payload.tiktok_options) {
-                UI.toast(t('posts.tiktok.direct.scheduledToast'));
+                UI.toast(this.tiktokOutcomeText(tiktokRow.status, tiktokMode, photo));
+            } else if (!publishNow && sentMode === 'direct') {
+                UI.toast(photo ? t('posts.tiktok.direct.scheduledToastPhoto') : t('posts.tiktok.direct.scheduledToast'));
             } else {
                 UI.toast(publishNow ? t('posts.publishedOk') : t('posts.scheduledOk'));
             }
@@ -2074,7 +3105,7 @@ const PostsPage = {
         }
 
         const payload = { ...this.formPayload(form), scheduled_time: scheduledTime };
-        const blocked = this.attachTikTokOptions(payload);
+        const blocked = this.attachSlides(payload) || this.attachTikTokOptions(payload);
         if (blocked) {
             this.showFormError(blocked.message, blocked.field, '');
             return;
@@ -2153,7 +3184,7 @@ const PostsPage = {
 
             const direct = this.tiktokRowMode(result) === 'direct' || this.tiktokRowMode(post) === 'direct';
             UI.toast(result && result.platform === 'tiktok'
-                ? this.tiktokOutcomeText(result.status, direct ? 'direct' : 'inbox')
+                ? this.tiktokOutcomeText(result.status, direct ? 'direct' : 'inbox', this.isPhotoType(post.post_type))
                 : t('posts.publishedOk'));
             await this.render();
         } catch (err) {
@@ -2224,9 +3255,10 @@ const PostsPage = {
      * required, was a post scheduled with no media at all while the progress
      * spinner was still turning.
      *
-     * A count rather than a flag because the media file and the cover file are
-     * two independent inputs that can both be uploading at once, and the first
-     * to finish must not unlock the form while the second is still going.
+     * A count rather than a flag because the media file, the cover file and
+     * every carousel slide are independent uploads that can all be in flight at
+     * once, and the first to finish must not unlock the form while another is
+     * still going. A queued slide counts from the moment it is queued.
      */
     _uploadsInFlight: 0,
 
@@ -2349,7 +3381,7 @@ const PostsPage = {
 };
 
 /**
- * The three `data-input` handlers on this screen all do work that must not sit
+ * Three of the `data-input` handlers on this screen do work that must not sit
  * on the typing path, so they are debounced here rather than inside the
  * methods — the methods stay directly callable from the code that needs them
  * to run at once (form open, upload complete).
@@ -2361,6 +3393,10 @@ const PostsPage = {
  *     field's current value, which STARTS A NETWORK REQUEST per keystroke: a
  *     40-character URL fired up to 40 image loads, 39 of them for prefixes
  *     that were never a real URL. 280ms, comfortably past a typing pause.
+ *
+ * The other two — captionInput and tiktokTitle — are NOT debounced on purpose:
+ * each is a string slice and a one-line counter, and a title that lagged
+ * behind the caption it is copied from would read as not following it at all.
  */
 const debouncedScheduleNote = Motion.debounce(() => PostsPage.refreshScheduleNote(), 120);
 const debouncedUrlInput = Motion.debounce((el) => PostsPage.handleUrlInput(el), 280);
@@ -2385,4 +3421,11 @@ UI.registerActions('posts', {
     tiktokChange: () => PostsPage.onTikTokChange(),
     tiktokDelivery: (el) => PostsPage.onTikTokDelivery(el),
     retryTikTokCreator: () => PostsPage.loadTikTokCreator(true),
+    tiktokTitle: (el) => PostsPage.onTikTokTitle(el),
+    captionInput: (el) => PostsPage.onCaptionInput(el),
+    pickSlides: (el) => PostsPage.pickSlides(el),
+    moveSlide: (el) => PostsPage.moveSlide(el.dataset.picker, el.dataset.slide, Number(el.dataset.dir)),
+    removeSlide: (el) => PostsPage.removeSlide(el.dataset.picker, el.dataset.slide),
+    retrySlide: (el) => PostsPage.retrySlide(el.dataset.picker, el.dataset.slide),
+    downloadAll: (el) => PostsPage.downloadAll(el),
 });

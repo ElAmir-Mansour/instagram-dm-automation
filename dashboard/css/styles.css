@@ -602,6 +602,8 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
 .publish-error-head i[data-lucide] { inline-size: 18px; block-size: 18px; }
 .cover-step-head i[data-lucide] { inline-size: 17px; block-size: 17px; }
 .cover-tile-frame i[data-lucide] { inline-size: 20px; block-size: 20px; }
+.slide-thumb > i[data-lucide] { inline-size: 24px; block-size: 24px; }
+.slide-state i[data-lucide] { inline-size: 14px; block-size: 14px; }
 .schedule-truth i[data-lucide] { inline-size: 16px; block-size: 16px; }
 .chat-empty i[data-lucide] { inline-size: 46px; block-size: 46px; }
 .panel-head i[data-lucide] { inline-size: 20px; block-size: 20px; }
@@ -1683,6 +1685,135 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .tiktok-app-summary::-webkit-details-marker { display: none; }
 .tiktok-app-summary svg { width: 16px; height: 16px; transition: transform var(--motion-fast); }
 details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
+
+/* ─── Carousel slides ────────────────────────────────────────────────────────
+   The composer's multi-image picker (the carousel itself, and the optional 9:16
+   set for TikTok) and the post card's strip. Slide order is reading order: the
+   grid flows from the inline start, so slide 1 sits on the right in Arabic,
+   and the move buttons' arrows — mirrored under RTL — point where the slide
+   will go. Thumbnails sit on `--surface-solid`: an image frame is opaque, per
+   DESIGN.md, or the photo reads washed out through the glass. */
+
+/* A label with a count at the far end: the slide picker and the TikTok title. */
+.field-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: var(--space-3);
+    margin-block-end: var(--space-2);
+}
+.field-head .form-label { margin: 0; }
+.field-count {
+    font-size: var(--fs-100);
+    font-weight: var(--fw-semibold);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.field-count.is-warning { color: var(--warning-text); }
+
+.slide-picker { display: flex; flex-direction: column; gap: var(--space-2); }
+.slide-picker .field-head { margin: 0; }
+.slide-picker .form-hint { margin: 0; }
+.slide-rule { margin: 0; font-size: var(--fs-100); color: var(--warning-text); }
+.slide-progress { margin: 0; font-size: var(--fs-100); color: var(--text-default); }
+.slide-rule:empty, .slide-progress:empty { display: none; }
+
+.slide-strip {
+    list-style: none; margin: 0; padding: 0;
+    display: grid;
+    /* 140px is three 44px buttons and their two gaps: every tile keeps a full
+       tap target for earlier, later and remove, at any modal width. */
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: var(--space-3);
+}
+.slide-strip:empty { display: none; }
+.slide-tile { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
+.slide-thumb {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--surface-solid);
+    border: 1px solid var(--border-subtle);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted);
+}
+.slide-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.slide-thumb > svg { width: 24px; height: 24px; }
+.slide-num {
+    position: absolute;
+    inset-block-start: var(--space-1);
+    inset-inline-start: var(--space-1);
+    display: inline-flex; align-items: center; justify-content: center;
+    min-inline-size: 24px; block-size: 24px;
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-pill);
+    background: var(--surface-solid);
+    color: var(--text-strong);
+    font-size: var(--fs-100);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+    box-shadow: var(--elev-1);
+}
+/* In-flight and failed: a solid chip along the bottom edge, never text laid
+   straight over a photo, whose colours nobody can promise contrast against. */
+.slide-state {
+    position: absolute;
+    inset-inline: var(--space-1);
+    inset-block-end: var(--space-1);
+    display: flex; align-items: center; justify-content: center; gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-xs);
+    background: var(--surface-solid);
+    color: var(--text-default);
+    font-size: var(--fs-100);
+    box-shadow: var(--elev-1);
+}
+.slide-state svg { width: 14px; height: 14px; flex-shrink: 0; }
+.slide-tile.is-working .slide-thumb img { opacity: 0.6; }
+.slide-tile.is-failed .slide-thumb { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.slide-state--failed { color: var(--danger-text); }
+/* The failed chip is the retry itself, at a full tap target. */
+.slide-retry {
+    min-block-size: var(--tap-target);
+    color: var(--danger-text);
+    font-weight: var(--fw-semibold);
+    cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard);
+}
+.slide-retry:hover { background: color-mix(in srgb, var(--danger) 12%, var(--surface-solid)); }
+.slide-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-1); }
+.slide-actions .icon-btn { inline-size: 100%; }
+
+/* TikTok's own 9:16 set, collapsed under the carousel until asked for. */
+.slide-alt > summary { min-block-size: var(--tap-target); margin: 0; }
+.slide-alt > summary .field-count { margin-inline-start: auto; }
+.slide-alt[open] > summary { margin-block-end: var(--space-2); }
+.slide-alt > .form-hint { margin-block: 0 var(--space-3); }
+
+/* On a post card: the first four slides and "+N", at one cell size whatever
+   the count, so two cards side by side compare at a glance. */
+.post-slides {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-2);
+}
+.post-slide {
+    aspect-ratio: 1;
+    border-radius: var(--radius-xs);
+    overflow: hidden;
+    background: var(--surface-solid);
+    border: 1px solid var(--border-subtle);
+}
+.post-slide img { width: 100%; height: 100%; object-fit: cover; }
+.post-slide-more {
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface-glass-hover);
+    color: var(--text-strong);
+    font-size: var(--fs-200);
+    font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+}
+/* The photo kit's one-at-a-time downloads, numbered in slide order. */
+.slide-downloads { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
 /* ─── Inbox ──────────────────────────────────────────────────────────────── */
 .inbox-layout {

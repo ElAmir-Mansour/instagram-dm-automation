@@ -70,6 +70,63 @@ interface PostsApi {
     tiktokPostMode(): string;
     privacyLabel(level: string): string;
     formatDuration(sec: number): string;
+    // Carousel + TikTok photo posts
+    posts: Array<Record<string, unknown>>;
+    typeOptions(platform: string, selected: string): { toString(): string };
+    typeAllowedOn(type: string, platform: string): boolean;
+    _slides: { main: Slide[]; tiktok: Slide[] } | null;
+    _uploadsInFlight: number;
+    _ttPhoto: boolean;
+    _ttTitle: string;
+    _ttTitleTouched: boolean;
+    DOWNLOAD_SPACING_MS: number;
+    resetSlides(post: Record<string, unknown> | null): void;
+    resetTikTokComposer(post: Record<string, unknown> | null): void;
+    slideLimits(which: string, platform?: string): SlideLimits;
+    validateSlides(slides: unknown, limits: SlideLimits, opts?: Record<string, unknown>): SlideValidation;
+    slideCountMarkup(which: string, platform: string): { toString(): string };
+    slideTile(which: string, slide: Slide, index: number, total: number): { toString(): string };
+    pickSlides(input: unknown): void;
+    moveSlide(which: string, id: string, delta: number): void;
+    removeSlide(which: string, id: string): void;
+    retrySlide(which: string, id: string): void;
+    prepareSlideFile: (file: unknown) => Promise<{ dataUrl: string; thumb: string; name: string }>;
+    slideTargetSize(width: number, height: number): { width: number; height: number };
+    slideNeedsReencode(file: unknown, width: number): boolean;
+    jpegFileName(name: string): string;
+    showCreateModal(): void;
+    showEditModal(id: string): void;
+    applyTypeMatrix(): void;
+    handleCreate(form: unknown, event: unknown): Promise<void>;
+    handleEdit(form: unknown, event: unknown): Promise<void>;
+    tiktokTitleFromCaption(caption: string): string;
+    clipUtf16(text: string, max: number): string;
+    validateTikTokTitle(value: string): { ok: boolean; title?: string; message?: string };
+    titleCountMarkup(value: string): { toString(): string };
+    onCaptionInput(el: unknown): void;
+    onTikTokTitle(el: unknown): void;
+    renderTikTokManual(post: Record<string, unknown>, withHint?: boolean): { toString(): string };
+    downloadAll(el: unknown): void;
+}
+
+interface Slide { id: string; file: unknown; name: string; url: string; thumb: string; status: string; error: string }
+interface SlideLimits { min: number; max: number; target: string }
+type SlideValidation =
+    | { ok: true; urls: string[] }
+    | { ok: false; code: string; message: string };
+
+/**
+ * `new FormData(form)` for a fake form: the fields a real one would have read. Lets the
+ * REAL submit handlers run, so the payload under test is the one `handleCreate` builds.
+ */
+class FakeFormData {
+    private readonly fields: Record<string, unknown>;
+    constructor(form: { fields?: Record<string, unknown> } | null) {
+        this.fields = (form && form.fields) || {};
+    }
+    get(name: string): unknown {
+        return Object.prototype.hasOwnProperty.call(this.fields, name) ? this.fields[name] : null;
+    }
 }
 
 interface DirectState {
@@ -185,6 +242,7 @@ interface Loaded {
     Posts: PostsApi;
     UI: UiApi;
     t: Translate;
+    I18N: { lang: string };
     Activity: ActivityApi;
     Inbox: InboxApi;
     Ai: AiApi;
@@ -194,6 +252,8 @@ interface Loaded {
     api: Record<string, (...args: unknown[]) => unknown>;
     /** Every loadData() call the page made, so a re-fetch is observable. */
     loads: number[];
+    /** Every toast the page raised, in order. */
+    toasts: Array<{ message: string; type?: string }>;
 }
 
 function load(): Loaded {
@@ -237,6 +297,7 @@ function load(): Loaded {
         }),
         Admin: { emptyState: () => '', confirm: noop },
         App: { currentTheme: () => 'auto', navigate: noop },
+        FormData: FakeFormData,
     };
     ctx.globalThis = ctx;
     vm.createContext(ctx);
@@ -255,11 +316,11 @@ function load(): Loaded {
         vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     }
 
-    const { PostsPage, ActivityPage, InboxPage, AiSettingsPage, SettingsPage, UI, t } = vm.runInContext(
-        '({ PostsPage, ActivityPage, InboxPage, AiSettingsPage, SettingsPage, UI, t })', ctx
+    const { PostsPage, ActivityPage, InboxPage, AiSettingsPage, SettingsPage, UI, t, I18N } = vm.runInContext(
+        '({ PostsPage, ActivityPage, InboxPage, AiSettingsPage, SettingsPage, UI, t, I18N })', ctx
     ) as {
         PostsPage: PostsApi; ActivityPage: ActivityApi; InboxPage: InboxApi;
-        AiSettingsPage: AiApi; SettingsPage: SettingsApi; UI: UiApi; t: Translate;
+        AiSettingsPage: AiApi; SettingsPage: SettingsApi; UI: UiApi; t: Translate; I18N: { lang: string };
     };
 
     // loadData() writes markup and is not what these tests are about; the FACT
@@ -267,9 +328,15 @@ function load(): Loaded {
     const loads: number[] = [];
     ActivityPage.loadData = (): unknown => { loads.push(ActivityPage.currentPage); return undefined; };
 
+    // The real toast needs a container this DOM does not have; what was said is the point.
+    const toasts: Array<{ message: string; type?: string }> = [];
+    (UI as unknown as { toast: (message: unknown, type?: string) => void }).toast = (message, type) => {
+        toasts.push({ message: String(message), type });
+    };
+
     return {
-        Posts: PostsPage, UI, t, Activity: ActivityPage, Inbox: InboxPage, Ai: AiSettingsPage,
-        Settings: SettingsPage, dom, api, loads,
+        Posts: PostsPage, UI, t, I18N, Activity: ActivityPage, Inbox: InboxPage, Ai: AiSettingsPage,
+        Settings: SettingsPage, dom, api, loads, toasts,
     };
 }
 
@@ -1191,5 +1258,821 @@ describe('PostsPage — choosing direct post or drafts until TikTok approves the
         }
         const published = String(Posts.renderScheduledCard({ ...base, status: 'PUBLISHED' }));
         assert.ok(!published.includes(t('posts.tiktok.download')), 'published: nothing left to do by hand');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Carousel posts: the picker in the composer, how many slides each target takes, what the
+ * submit sends, TikTok's options for photo posts, and the card. The backend is built in
+ * parallel against a fixed API contract, so these pin the dashboard's half of it — through
+ * the REAL submit handlers where the payload is concerned, with FormData and the upload
+ * call stubbed rather than a copy of the payload logic.
+ */
+
+/** A slide already on the server, shaped as the page itself holds one. */
+const readySlide = (id: string, url: string): Slide => ({ id, file: null, name: '', url, thumb: '', status: 'ready', error: '' });
+
+/** `n` ready slides: s1 → https://cdn.test/1.jpg, … */
+const readySlides = (n: number): Slide[] =>
+    Array.from({ length: n }, (_, i) => readySlide(`s${i + 1}`, `https://cdn.test/${i + 1}.jpg`));
+
+/** A form for the real submit handlers: what its FormData reads, and a submit button. */
+function fakeForm(fields: Record<string, unknown>, id?: string): Record<string, unknown> {
+    const button = { disabled: false, innerHTML: '' };
+    return { fields, dataset: { id }, querySelector: () => button };
+}
+
+const submitEvent = { preventDefault: (): void => {} };
+
+/** Let the upload queue's promise chains run out. */
+async function settle(rounds = 20): Promise<void> {
+    for (let i = 0; i < rounds; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** What the page sent, as a plain object of THIS realm (the page builds it in the vm's). */
+const plainJson = (value: unknown): Record<string, unknown> => JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+
+/** An element whose classList really holds classes, for the show/hide logic. */
+type ClassyEl = FakeEl & { required?: boolean; has(cls: string): boolean };
+function classyEl(id: string, props: Record<string, unknown> = {}): ClassyEl {
+    const classes = new Set<string>();
+    const el = fakeEl(id) as ClassyEl;
+    el.classList = {
+        toggle: (name: string, on?: boolean) => {
+            const want = on === undefined ? !classes.has(name) : on;
+            if (want) classes.add(name); else classes.delete(name);
+        },
+        add: (name: string) => { classes.add(name); },
+        remove: (name: string) => { classes.delete(name); },
+        contains: () => false,
+    };
+    el.has = (cls: string) => classes.has(cls);
+    return Object.assign(el, props);
+}
+
+const photoCreator = {
+    nickname: 'ElAmir',
+    username: 'elamir.ai',
+    avatarUrl: 'https://p16.tiktokcdn.com/avatar.jpg',
+    privacyLevelOptions: ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'],
+    commentDisabled: false,
+    duetDisabled: false,
+    stitchDisabled: false,
+    maxVideoPostDurationSec: 600,
+};
+
+describe('PostsPage — the Carousel post type', () => {
+    it('is offered for Instagram, Facebook, both and TikTok, labelled as the brief names it', () => {
+        const { Posts, t, I18N } = load();
+        for (const platform of ['instagram', 'facebook', 'both', 'tiktok']) {
+            assert.equal(Posts.typeAllowedOn('carousel', platform), true, `carousel on ${platform}`);
+            const option = String(Posts.typeOptions(platform, 'carousel')).match(/<option value="carousel"([^>]*)>([^<]*)<\/option>/);
+            assert.ok(option, `${platform}: the option is rendered`);
+            assert.ok(/\bselected\b/.test(option[1] ?? ''), `${platform}: and can be selected`);
+            assert.ok(!/\b(hidden|disabled)\b/.test(option[1] ?? ''), `${platform}: and is not hidden`);
+            assert.equal((option[2] ?? '').trim(), t('posts.type.carousel'));
+        }
+        assert.equal(t('posts.type.carousel'), 'كاروسيل (عدة صور)');
+        I18N.lang = 'en';
+        assert.equal(t('posts.type.carousel'), 'Carousel (multiple images)');
+    });
+
+    it('lets TikTok take a single image as well as a video — and still no story or text post', () => {
+        const { Posts } = load();
+        assert.equal(Posts.typeAllowedOn('image', 'tiktok'), true);
+        assert.equal(Posts.typeAllowedOn('video', 'tiktok'), true);
+        assert.equal(Posts.typeAllowedOn('story', 'tiktok'), false);
+        assert.equal(Posts.typeAllowedOn('feed', 'tiktok'), false);
+        assert.equal(Posts.typeAllowedOn('carousel', 'mastodon'), false);
+    });
+
+    it('gives the composer a multi-image picker that takes JPEG, PNG and WebP only', () => {
+        const { Posts, dom } = load();
+        dom.set('modal-overlay', fakeEl('modal-overlay'));
+        dom.set('modal-content', fakeEl('modal-content'));
+        Posts.showCreateModal();
+        const markup = dom.get('modal-content')!.innerHTML;
+
+        const picker = markup.match(/<input[^>]*id="post-carousel-file"[^>]*>/);
+        assert.ok(picker, 'the carousel picker is in the composer');
+        assert.ok(/\bmultiple\b/.test(picker[0]), 'it takes several files at once');
+        assert.ok(picker[0].includes('accept="image/jpeg,image/png,image/webp"'));
+        assert.ok(picker[0].includes('data-change="posts:pickSlides"'));
+        // Hidden until the type is Carousel; the single field stays for everything else.
+        assert.ok(markup.includes('<div class="form-group hidden" id="carousel-group">'));
+        assert.ok(markup.includes('id="post-media-file"'));
+        // And the collapsed 9:16 set for TikTok, with a picker of its own.
+        assert.ok(/<details class="form-group slide-alt hidden" id="tiktok-slides-group">/.test(markup));
+        assert.ok(markup.includes('id="post-tiktok-slides-file"'));
+    });
+
+    it('swaps the single media field for the picker, and back, as the type changes', () => {
+        const { Posts, dom } = load();
+        const el = (id: string, props: Record<string, unknown> = {}): ClassyEl => {
+            const e = classyEl(id, props);
+            dom.set(id, e);
+            return e;
+        };
+        const type = el('post-type-select', { value: 'carousel' });
+        el('post-platform-select', { value: 'instagram' });
+        el('cover-url-group');
+        const media = el('media-url-group');
+        const carousel = el('carousel-group');
+        const mediaInput = el('post-media-url', { required: true });
+        const alsoGroup = el('tiktok-also-group');
+        const also = el('post-also-tiktok', { checked: true });
+        const ownSet = el('tiktok-slides-group');
+        const title = el('tiktok-title-group');
+
+        Posts.applyTypeMatrix();
+        assert.equal(media.has('hidden'), true, 'the single field goes');
+        assert.equal(carousel.has('hidden'), false, 'the picker comes');
+        assert.equal(mediaInput.required, false, 'and the hidden field is not required');
+        assert.equal(alsoGroup.has('hidden'), false, '"Also send to TikTok" is offered for a carousel');
+        assert.equal(ownSet.has('hidden'), false, 'and with it on, TikTok’s own 9:16 set');
+        assert.equal(title.has('hidden'), false, 'a photo post to TikTok has a title');
+
+        type.value = 'video';
+        Posts.applyTypeMatrix();
+        assert.equal(media.has('hidden'), false);
+        assert.equal(carousel.has('hidden'), true);
+        assert.equal(mediaInput.required, true);
+        assert.equal(ownSet.has('hidden'), true, 'TikTok’s own images belong to a carousel');
+        assert.equal(title.has('hidden'), true, 'a video has no title field');
+
+        type.value = 'story';
+        Posts.applyTypeMatrix();
+        assert.equal(alsoGroup.has('hidden'), true, 'TikTok takes no story');
+        assert.equal(also.checked, false);
+    });
+});
+
+describe('PostsPage — how many slides a carousel takes', () => {
+    it('2-10 with Instagram or Facebook in it, 2-35 for TikTok alone, and 35 for TikTok’s own set', () => {
+        const { Posts } = load();
+        for (const platform of ['instagram', 'facebook', 'both']) {
+            const limits = Posts.slideLimits('main', platform);
+            assert.equal(limits.min, 2, platform);
+            assert.equal(limits.max, 10, platform);
+        }
+        assert.equal(Posts.slideLimits('main', 'tiktok').max, 35);
+        assert.equal(Posts.slideLimits('tiktok', 'both').max, 35, 'the sibling’s own images are a TikTok post');
+    });
+
+    it('accepts exactly the range, and names what is wrong outside it', () => {
+        const { Posts, t } = load();
+        const meta = Posts.slideLimits('main', 'instagram');
+        const tiktok = Posts.slideLimits('main', 'tiktok');
+        assert.ok(Posts.validateSlides(readySlides(2), meta).ok);
+        assert.ok(Posts.validateSlides(readySlides(10), meta).ok);
+        assert.ok(Posts.validateSlides(readySlides(35), tiktok).ok);
+
+        const one = Posts.validateSlides(readySlides(1), meta);
+        assert.equal(!one.ok && one.code, 'tooFew');
+        assert.equal(!one.ok && one.message, t('posts.carousel.tooFew'));
+        const none = Posts.validateSlides([], meta);
+        assert.equal(!none.ok && none.code, 'tooFew', 'an empty carousel is too few, not fine');
+
+        const eleven = Posts.validateSlides(readySlides(11), meta);
+        assert.equal(!eleven.ok && eleven.message, t('posts.carousel.tooManyMeta', { max: 10, n: 11 }));
+        assert.ok(t('posts.carousel.tooManyMeta', { max: 10, n: 11 }).includes('11'), 'and says how many there are');
+        const thirtySix = Posts.validateSlides(readySlides(36), tiktok);
+        assert.equal(!thirtySix.ok && thirtySix.message, t('posts.carousel.tooManyTikTok', { max: 35, n: 36 }));
+    });
+
+    it('refuses a slide that failed or is still on its way, even when the count is right', () => {
+        const { Posts, t } = load();
+        const meta = Posts.slideLimits('main', 'instagram');
+        const failed = readySlides(3);
+        failed[1]!.status = 'failed';
+        const f = Posts.validateSlides(failed, meta);
+        assert.equal(!f.ok && f.code, 'failed');
+        assert.equal(!f.ok && f.message, t('posts.carousel.hasFailed'));
+
+        for (const status of ['queued', 'preparing', 'uploading']) {
+            const busy = readySlides(3);
+            busy[2]!.status = status;
+            busy[2]!.url = '';
+            const b = Posts.validateSlides(busy, meta);
+            assert.equal(!b.ok && b.code, 'uploading', status);
+        }
+    });
+
+    it('lets TikTok’s own set be empty — the carousel’s images go instead — but not a single image', () => {
+        const { Posts, t } = load();
+        const limits = Posts.slideLimits('tiktok');
+        const empty = Posts.validateSlides([], limits, { optional: true, own: true });
+        assert.ok(empty.ok);
+        assert.equal(JSON.stringify(empty.ok && empty.urls), '[]');
+        const one = Posts.validateSlides(readySlides(1), limits, { optional: true, own: true });
+        assert.equal(!one.ok && one.message, t('posts.carousel.tiktokTooFew'));
+    });
+
+    it('shows the count against the limit that applies: N/10, or N/35 for TikTok alone', () => {
+        const { Posts } = load();
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(3));
+        const count = (platform: string): string => String(Posts.slideCountMarkup('main', platform));
+        assert.ok(count('instagram').includes('3/10'));
+        assert.ok(count('both').includes('3/10'));
+        assert.ok(count('tiktok').includes('3/35'));
+        // Isolated, so "3/10" is not reordered by the Arabic around it.
+        assert.ok(count('instagram').includes('<bdi class="ltr-text" dir="ltr">3/10</bdi>'));
+    });
+
+    it('blocks the submit outside the range, marks the picker, and sends nothing', async () => {
+        const { Posts, dom, api, t } = load();
+        const sent: unknown[] = [];
+        api.createScheduledPost = (body: unknown) => { sent.push(body); return Promise.resolve({ id: 'n1' }); };
+        const errorHost = fakeEl('post-form-error');
+        dom.set('post-form-error', errorHost);
+        const picker = fakeEl('post-carousel-file');
+        dom.set('post-carousel-file', picker);
+
+        const fields = { platform: 'both', post_type: 'carousel', caption: 'c', media_url: '', cover_url: '', scheduled_time: '2027-03-04T18:20' };
+        for (const [n, message] of [
+            [1, t('posts.carousel.tooFew')],
+            [11, t('posts.carousel.tooManyMeta', { max: 10, n: 11 })],
+        ] as Array<[number, string]>) {
+            picker.removeAttribute('aria-invalid');
+            Posts.resetSlides(null);
+            Posts._slides!.main.push(...readySlides(n));
+            await Posts.handleCreate(fakeForm(fields), submitEvent);
+            assert.ok(errorHost.innerHTML.includes(message), `${n} slides: the reason is shown`);
+            assert.equal(picker.getAttribute('aria-invalid'), 'true', `${n} slides: on the picker`);
+        }
+        assert.equal(sent.length, 0, 'nothing is sent outside the range');
+
+        // The same eleven are fine for TikTok alone.
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(11));
+        await Posts.handleCreate(fakeForm({ ...fields, platform: 'tiktok' }), submitEvent);
+        assert.equal(sent.length, 1, 'TikTok takes eleven');
+        assert.equal((plainJson(sent[0]).media_urls as unknown[]).length, 11);
+    });
+});
+
+describe('PostsPage — carousel uploads', () => {
+    type Upload = Record<string, unknown>;
+    const file = (name: string, type = 'image/jpeg'): Record<string, unknown> => ({ name, type, size: 1000 });
+
+    /**
+     * The canvas step is not in this DOM, so `prepareSlideFile` is stubbed to what it
+     * returns; the upload call is stubbed and recorded. With `manual`, each upload waits
+     * until the test releases it, so the order they finish in is the test's to choose.
+     */
+    function uploader(Posts: PostsApi, api: Loaded['api'], manual: boolean): { uploads: Upload[]; release: Array<() => void> } {
+        const uploads: Upload[] = [];
+        const release: Array<() => void> = [];
+        Posts.prepareSlideFile = async (f: unknown) => {
+            const name = String((f as { name: string }).name);
+            return { dataUrl: `data:image/jpeg;base64,${Buffer.from(name).toString('base64')}`, thumb: '', name: Posts.jpegFileName(name) };
+        };
+        api.uploadMedia = (body: unknown) => {
+            const b = body as Upload;
+            uploads.push(b);
+            const answer = { url: `https://cdn.test/${String(b.filename)}` };
+            if (!manual) return Promise.resolve(answer);
+            return new Promise((resolve) => { release.push(() => resolve(answer)); });
+        };
+        return { uploads, release };
+    }
+
+    const platform = (dom: Map<string, FakeEl>, value: string): void => {
+        dom.set('post-platform-select', Object.assign(fakeEl('post-platform-select'), { value }));
+    };
+
+    it('uploads each picked image as a JPEG, one call each, and keeps pick order when they finish out of order', async () => {
+        const { Posts, api, dom } = load();
+        platform(dom, 'instagram');
+        const { uploads, release } = uploader(Posts, api, true);
+        Posts.resetSlides(null);
+        Posts._uploadsInFlight = 0;
+        const input = {
+            dataset: { picker: 'main' },
+            files: [file('one.png', 'image/png'), file('two.webp', 'image/webp'), file('three.jpg')],
+            value: 'C:\\fakepath\\one.png',
+        };
+        Posts.pickSlides(input);
+        assert.equal(input.value, '', 'the input is cleared, so the same file can be picked again');
+        assert.equal(Posts._uploadsInFlight, 3, 'every queued slide holds the submit');
+
+        await settle();
+        assert.equal(uploads.length, 2, 'two at a time; the third waits for a free slot');
+        release[1]!();              // the SECOND finishes first
+        await settle();
+        release[0]!();
+        await settle();
+        assert.equal(uploads.length, 3);
+        release[2]!();
+        await settle();
+
+        const slides = Posts._slides!.main;
+        assert.equal(JSON.stringify(slides.map((s) => s.status)), JSON.stringify(['ready', 'ready', 'ready']));
+        assert.equal(JSON.stringify(slides.map((s) => s.url)), JSON.stringify([
+            'https://cdn.test/one.jpg', 'https://cdn.test/two.jpg', 'https://cdn.test/three.jpg',
+        ]), 'slide order is pick order, not finishing order');
+        for (const u of uploads) {
+            assert.equal(u.mime_type, 'image/jpeg', 'Instagram takes JPEG only');
+            assert.ok(String(u.filename).endsWith('.jpg'));
+            assert.ok(String(u.base64_data).startsWith('data:image/jpeg;base64,'));
+        }
+        assert.equal(Posts._uploadsInFlight, 0, 'and the submit is released');
+    });
+
+    it('takes only as many as the target has room for, and says how many it left out', async () => {
+        const { Posts, api, dom, toasts, t } = load();
+        platform(dom, 'both');
+        uploader(Posts, api, false);
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(8));
+        Posts.pickSlides({ dataset: { picker: 'main' }, files: ['a', 'b', 'c', 'd', 'e'].map((n) => file(`${n}.jpg`)), value: '' });
+        await settle();
+        assert.equal(Posts._slides!.main.length, 10, 'room for two');
+        assert.ok(toasts.some((x) => x.type === 'error' && x.message === t('posts.carousel.skipped', { count: 3, max: 10 })));
+
+        // TikTok alone has room for 35.
+        platform(dom, 'tiktok');
+        Posts.pickSlides({ dataset: { picker: 'main' }, files: ['f', 'g', 'h'].map((n) => file(`${n}.jpg`)), value: '' });
+        await settle();
+        assert.equal(Posts._slides!.main.length, 13);
+    });
+
+    it('refuses a file that is not JPEG, PNG or WebP, by name, and takes the rest', () => {
+        const { Posts, api, dom, toasts, t } = load();
+        platform(dom, 'instagram');
+        uploader(Posts, api, false);
+        Posts.resetSlides(null);
+        Posts.pickSlides({ dataset: { picker: 'main' }, files: [file('moving.gif', 'image/gif'), file('ok.png', 'image/png')], value: '' });
+        assert.equal(Posts._slides!.main.length, 1);
+        assert.ok(toasts.some((x) => x.message === t('posts.carousel.notImage', { name: 'moving.gif' })));
+    });
+
+    it('a failed upload fails its own tile, gives the submit back, and can be retried', async () => {
+        const { Posts, api, dom, toasts } = load();
+        platform(dom, 'instagram');
+        let attempt = 0;
+        Posts.prepareSlideFile = async () => ({ dataUrl: 'data:image/jpeg;base64,AA==', thumb: '', name: 'a.jpg' });
+        api.uploadMedia = () => {
+            attempt += 1;
+            return attempt === 1 ? Promise.reject(new Error('HTTP 502')) : Promise.resolve({ url: 'https://cdn.test/a.jpg' });
+        };
+        Posts.resetSlides(null);
+        Posts._uploadsInFlight = 0;
+        Posts.pickSlides({ dataset: { picker: 'main' }, files: [file('a.png', 'image/png')], value: '' });
+        await settle();
+
+        const slide = Posts._slides!.main[0];
+        assert.ok(slide);
+        assert.equal(slide.status, 'failed');
+        assert.equal(slide.error, 'HTTP 502');
+        assert.equal(Posts._uploadsInFlight, 0, 'a failure does not hold the submit');
+        assert.ok(toasts.some((x) => x.type === 'error' && x.message.includes('HTTP 502')), 'one toast, with the reason');
+        assert.ok(String(Posts.slideTile('main', slide, 0, 1)).includes('data-action="posts:retrySlide"'), 'the tile offers a retry');
+
+        Posts.retrySlide('main', slide.id);
+        await settle();
+        assert.equal(slide.status, 'ready');
+        assert.equal(slide.url, 'https://cdn.test/a.jpg');
+    });
+
+    it('an upload the last modal left running can neither land in this one nor release its submit', async () => {
+        const { Posts, api, dom } = load();
+        platform(dom, 'instagram');
+        const { release } = uploader(Posts, api, true);
+        Posts.resetSlides(null);
+        Posts._uploadsInFlight = 0;
+        Posts.pickSlides({ dataset: { picker: 'main' }, files: [file('old.jpg')], value: '' });
+        await settle();
+
+        // The modal closes and a new one opens while that upload is still out.
+        Posts.resetSlides(null);
+        Posts._uploadsInFlight = 0;
+        Posts.pickSlides({ dataset: { picker: 'main' }, files: [file('new.jpg')], value: '' });
+        await settle();
+        assert.equal(Posts._uploadsInFlight, 1);
+
+        release[0]!();   // the OLD upload lands
+        await settle();
+        assert.equal(Posts._uploadsInFlight, 1, 'still held for this modal’s own upload');
+        assert.equal(JSON.stringify(Posts._slides!.main.map((s) => s.name)), JSON.stringify(['new.jpg']));
+
+        release[1]!();
+        await settle();
+        assert.equal(Posts._uploadsInFlight, 0);
+        assert.equal(Posts._slides!.main[0]!.url, 'https://cdn.test/new.jpg');
+    });
+
+    it('prepares: a JPEG within 1440px and the cap goes as-is; anything else is re-encoded, never upscaled', () => {
+        const { Posts, api } = load();
+        const cap = 3.2 * 1024 * 1024;
+        // The cap dashboard/js/api.js declares; the stubbed API here would answer with a function.
+        (api as unknown as Record<string, unknown>).MAX_UPLOAD_BYTES = cap;
+        assert.equal(Posts.slideNeedsReencode({ type: 'image/jpeg', size: 1000 }, 1440), false);
+        assert.equal(Posts.slideNeedsReencode({ type: 'image/jpeg', size: 1000 }, 1441), true, 'wider than 1440px');
+        assert.equal(Posts.slideNeedsReencode({ type: 'image/jpeg', size: cap + 1 }, 800), true, 'over the upload cap');
+        assert.equal(Posts.slideNeedsReencode({ type: 'image/png', size: 1000 }, 800), true, 'a PNG becomes a JPEG');
+        assert.equal(Posts.slideNeedsReencode({ type: 'image/webp', size: 1000 }, 800), true, 'so does a WebP');
+
+        const size = (w: number, h: number): string => JSON.stringify(Posts.slideTargetSize(w, h));
+        assert.equal(size(4000, 3000), JSON.stringify({ width: 1440, height: 1080 }));
+        assert.equal(size(3000, 4000), JSON.stringify({ width: 1440, height: 1920 }));
+        assert.equal(size(1080, 1920), JSON.stringify({ width: 1080, height: 1920 }), 'a 9:16 phone shot is not wider than 1440');
+        assert.equal(size(800, 600), JSON.stringify({ width: 800, height: 600 }), 'never upscaled');
+
+        assert.equal(Posts.jpegFileName('IMG_2041.PNG'), 'IMG_2041.jpg');
+        assert.equal(Posts.jpegFileName('cover.final.webp'), 'cover.final.jpg');
+        assert.equal(Posts.jpegFileName(''), 'slide.jpg');
+    });
+});
+
+describe('PostsPage — slide order', () => {
+    /** One button of a tile, whole: its opening tag and what is inside it. */
+    function button(markup: string, dir: string): string {
+        const m = markup.match(new RegExp(`<button[^>]*data-dir="${dir}"[^>]*>[\\s\\S]*?</button>`));
+        assert.ok(m, `the ${dir} button is rendered`);
+        return m[0];
+    }
+
+    it('move earlier and move later swap neighbours; the first cannot go earlier, nor the last later', () => {
+        const { Posts, t } = load();
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(3));
+        const order = (): string => JSON.stringify(Posts._slides!.main.map((s) => s.id));
+        Posts.moveSlide('main', 's3', -1);
+        assert.equal(order(), JSON.stringify(['s1', 's3', 's2']));
+        Posts.moveSlide('main', 's1', 1);
+        assert.equal(order(), JSON.stringify(['s3', 's1', 's2']));
+        Posts.moveSlide('main', 's3', -1);   // already first
+        Posts.moveSlide('main', 's2', 1);    // already last
+        assert.equal(order(), JSON.stringify(['s3', 's1', 's2']), 'the ends do not wrap');
+
+        const [first, , last] = Posts._slides!.main;
+        const firstTile = String(Posts.slideTile('main', first!, 0, 3));
+        const lastTile = String(Posts.slideTile('main', last!, 2, 3));
+        assert.ok(/\bdisabled\b/.test(button(firstTile, '-1')), 'slide 1 cannot move earlier');
+        assert.ok(!/\bdisabled\b/.test(button(firstTile, '1')));
+        assert.ok(/\bdisabled\b/.test(button(lastTile, '1')), 'the last slide cannot move later');
+        // Numbered, and every button names its slide.
+        assert.ok(firstTile.includes('<span class="slide-num" aria-hidden="true">1</span>'));
+        assert.ok(button(firstTile, '1').includes(`aria-label="${t('posts.carousel.moveLater', { n: 1 })}"`));
+    });
+
+    it('points each arrow where its slide goes, in Arabic as in English', () => {
+        // "Earlier" is arrow-left and "later" arrow-right. The strip flows from the inline
+        // start, so under RTL slide 1 is on the right — and the stylesheet mirrors both
+        // arrows there, so "earlier" points right. Unmirrored it would point at the END.
+        const { Posts } = load();
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(2));
+        const tile = String(Posts.slideTile('main', Posts._slides!.main[0]!, 0, 2));
+        assert.ok(button(tile, '-1').includes('data-lucide="arrow-left"'), 'earlier is arrow-left');
+        assert.ok(button(tile, '1').includes('data-lucide="arrow-right"'), 'later is arrow-right');
+        const css = readFileSync('dashboard/css/styles.css', 'utf8');
+        for (const icon of ['arrow-left', 'arrow-right']) {
+            assert.ok(css.includes(`html[dir='rtl'] [data-lucide='${icon}']`), `${icon} mirrors under RTL`);
+        }
+    });
+
+    it('remove drops the slide, and the rest renumber', () => {
+        const { Posts, t } = load();
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(3));
+        Posts.removeSlide('main', 's2');
+        assert.equal(JSON.stringify(Posts._slides!.main.map((s) => s.url)), JSON.stringify(['https://cdn.test/1.jpg', 'https://cdn.test/3.jpg']));
+        const second = String(Posts.slideTile('main', Posts._slides!.main[1]!, 1, 2));
+        assert.ok(second.includes(`aria-label="${t('posts.carousel.remove', { n: 2 })}"`), 'the old slide 3 is slide 2 now');
+    });
+});
+
+describe('PostsPage — the carousel payload on submit', () => {
+    const fields = {
+        platform: 'instagram', post_type: 'carousel', caption: 'سطر العنوان\nبقية النص',
+        media_url: 'https://stale.test/single.jpg', cover_url: '', scheduled_time: '2027-03-04T18:20',
+    };
+
+    function capture(api: Loaded['api']): unknown[] {
+        const sent: unknown[] = [];
+        api.createScheduledPost = (body: unknown) => {
+            sent.push(body);
+            return Promise.resolve({ id: 'n1', platform: 'instagram', status: 'PENDING' });
+        };
+        return sent;
+    }
+
+    it('sends media_urls in slide order after a move — and no media_url, which the server sets itself', async () => {
+        const { Posts, api, UI } = load();
+        const sent = capture(api);
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(3));
+        Posts.moveSlide('main', 's3', -1);
+        await Posts.handleCreate(fakeForm(fields), submitEvent);
+
+        assert.equal(sent.length, 1);
+        const body = plainJson(sent[0]);
+        assert.equal(JSON.stringify(body.media_urls), JSON.stringify(['https://cdn.test/1.jpg', 'https://cdn.test/3.jpg', 'https://cdn.test/2.jpg']));
+        assert.equal('media_url' in body, false, 'a stale single-media value never rides along');
+        assert.equal(body.post_type, 'carousel');
+        assert.equal(body.platform, 'instagram');
+        assert.equal(body.cover_url, null);
+        assert.equal(body.scheduled_time, UI.fromLocalInputValue('2027-03-04T18:20'));
+        assert.equal('tiktok_options' in body, false);
+        assert.equal('tiktok_media_urls' in body, false);
+    });
+
+    it('"Also send to TikTok" sends the same images by default, and tiktok_media_urls when TikTok has its own', async () => {
+        const { Posts, api, dom, t } = load();
+        const sent = capture(api);
+        // An inbox-only connection: a photo post's options are its title and nothing else.
+        Posts.tiktok = { connection: { connected: true, canUpload: true, postMode: 'inbox' } };
+        Posts.resetTikTokComposer(null);
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(3));
+        Posts._ttTitle = 'سطر العنوان';
+        const carousel = readySlides(3).map((s) => s.url);
+
+        await Posts.handleCreate(fakeForm({ ...fields, platform: 'both', also_tiktok: 'on' }), submitEvent);
+        const same = plainJson(sent[0]);
+        assert.equal(same.also_tiktok, true);
+        assert.equal(JSON.stringify(same.media_urls), JSON.stringify(carousel));
+        assert.equal('tiktok_media_urls' in same, false, 'no set of its own: the sibling takes the carousel’s images');
+        assert.equal(JSON.stringify(same.tiktok_options), JSON.stringify({ mode: 'inbox', title: 'سطر العنوان' }));
+
+        Posts._slides!.tiktok.push(readySlide('t1', 'https://cdn.test/tall-1.jpg'), readySlide('t2', 'https://cdn.test/tall-2.jpg'));
+        await Posts.handleCreate(fakeForm({ ...fields, platform: 'both', also_tiktok: 'on' }), submitEvent);
+        const own = plainJson(sent[1]);
+        assert.equal(JSON.stringify(own.tiktok_media_urls), JSON.stringify(['https://cdn.test/tall-1.jpg', 'https://cdn.test/tall-2.jpg']));
+        assert.equal(JSON.stringify(own.media_urls), JSON.stringify(carousel), 'the carousel keeps its own images');
+
+        // Without the switch, TikTok's set is never sent.
+        await Posts.handleCreate(fakeForm({ ...fields, platform: 'both' }), submitEvent);
+        const metaOnly = plainJson(sent[2]);
+        assert.equal('also_tiktok' in metaOnly, false);
+        assert.equal('tiktok_media_urls' in metaOnly, false);
+
+        // A TikTok set of one is refused, on its own picker.
+        dom.set('post-form-error', fakeEl('post-form-error'));
+        Posts._slides!.tiktok.splice(1);
+        await Posts.handleCreate(fakeForm({ ...fields, platform: 'both', also_tiktok: 'on' }), submitEvent);
+        assert.equal(sent.length, 3);
+        assert.ok(dom.get('post-form-error')!.innerHTML.includes(t('posts.carousel.tiktokTooFew')));
+    });
+
+    it('a TikTok-only carousel sends media_urls and direct options with its title and music — never Duet or Stitch', async () => {
+        const { Posts, api } = load();
+        const sent = capture(api);
+        Posts.tiktok = { connection: { connected: true, canUpload: false, canDirectPost: true, postMode: 'direct', audited: true } };
+        Posts.resetTikTokComposer(null);
+        Posts.tiktokCreator = { status: 'ready', data: { postMode: 'direct', audited: true, creator: photoCreator } };
+        Posts._ttChoices = {
+            ...Posts.TIKTOK_DEFAULT_CHOICES, privacy_level: 'PUBLIC_TO_EVERYONE',
+            allow_comment: true, allow_duet: true, allow_stitch: true, consent: true,
+        };
+        Posts._ttTitle = 'سطر العنوان';
+        Posts.resetSlides(null);
+        Posts._slides!.main.push(...readySlides(12));
+
+        await Posts.handleCreate(fakeForm({ ...fields, platform: 'tiktok' }), submitEvent);
+        assert.equal(sent.length, 1, 'twelve is fine for TikTok alone');
+        const body = plainJson(sent[0]);
+        assert.equal((body.media_urls as unknown[]).length, 12);
+        assert.deepEqual(body.tiktok_options, {
+            privacy_level: 'PUBLIC_TO_EVERYONE', allow_comment: true,
+            brand_organic: false, brand_content: false, is_aigc: false, consent: true,
+            auto_add_music: true, mode: 'direct', title: 'سطر العنوان',
+        });
+        const options = body.tiktok_options as Record<string, unknown>;
+        assert.equal('allow_duet' in options, false, 'TikTok has no Duet for photos');
+        assert.equal('allow_stitch' in options, false, 'nor Stitch');
+    });
+
+    it('editing a carousel starts from its saved slides, in order, and sends the new order', async () => {
+        const { Posts, api, dom } = load();
+        dom.set('modal-overlay', fakeEl('modal-overlay'));
+        dom.set('modal-content', fakeEl('modal-content'));
+        const urls = ['https://cdn.test/a.jpg', 'https://cdn.test/b.jpg', 'https://cdn.test/c.jpg'];
+        Posts.posts = [{
+            id: 'c1', platform: 'instagram', post_type: 'carousel', status: 'PENDING', caption: 'c',
+            media_url: urls[0], media_urls: urls, scheduled_time: '2027-03-04T18:20:00.000Z',
+        }];
+        Posts.showEditModal('c1');
+        const markup = dom.get('modal-content')!.innerHTML;
+        const shown = [...markup.matchAll(/<li class="slide-tile[^"]*"[\s\S]*?<img src="([^"]+)"/g)].map((m) => m[1]);
+        assert.equal(JSON.stringify(shown), JSON.stringify(urls), 'the saved slides, in order');
+
+        const put: Array<{ id: unknown; body: unknown }> = [];
+        api.updateScheduledPost = (id: unknown, body: unknown) => { put.push({ id, body }); return Promise.resolve({}); };
+        Posts.moveSlide('main', Posts._slides!.main[2]!.id, -1);
+        await Posts.handleEdit(fakeForm({ ...fields, caption: 'نص جديد', media_url: urls[0] }, 'c1'), submitEvent);
+
+        assert.equal(put.length, 1);
+        assert.equal(put[0]!.id, 'c1');
+        const body = plainJson(put[0]!.body);
+        assert.equal(JSON.stringify(body.media_urls), JSON.stringify([urls[0], urls[2], urls[1]]));
+        assert.equal(body.caption, 'نص جديد');
+        assert.equal('media_url' in body, false);
+    });
+});
+
+describe('PostsPage — TikTok options for photo posts', () => {
+    const photo = { audited: true, photo: true };
+
+    it('drops Duet and Stitch, and adds "Auto-add music", on by default', () => {
+        const { Posts, t } = load();
+        const form = String(Posts.tiktokDirectForm(Posts.tiktokDirectState(photoCreator, null, photo)));
+        assert.ok(!form.includes('id="tiktok-allow-duet"'), 'no Duet for photos');
+        assert.ok(!form.includes('id="tiktok-allow-stitch"'), 'no Stitch for photos');
+        assert.ok(form.includes('id="tiktok-allow-comment"'), 'comments stay');
+        const music = form.match(/<input[^>]*id="tiktok-auto-music"[^>]*>/);
+        assert.ok(music, 'the music switch is there');
+        assert.ok(/\bchecked\b/.test(music[0]), 'and on by default');
+        assert.ok(form.includes(t('posts.tiktok.direct.autoMusic')));
+        assert.ok(!form.includes('tiktok-duration-note'), 'and no video length limit');
+
+        // The video form is as it was: Duet, Stitch, no music.
+        const video = String(Posts.tiktokDirectForm(Posts.tiktokDirectState(photoCreator, null, { audited: true })));
+        assert.ok(video.includes('id="tiktok-allow-duet"') && video.includes('id="tiktok-allow-stitch"'));
+        assert.ok(!video.includes('id="tiktok-auto-music"'));
+    });
+
+    it('keeps privacy with no default, comments off, disclosure and consent — worded for a post, not a video', () => {
+        const { Posts, t } = load();
+        const state = Posts.tiktokDirectState(photoCreator, null, photo);
+        assert.equal(state.privacy, '');
+        assert.equal(state.comment.checked, false);
+        const form = String(Posts.tiktokDirectForm(state));
+        assert.ok(form.includes(t('posts.tiktok.direct.privacyPhoto')));
+        assert.ok(form.includes(t('posts.tiktok.direct.disclose')));
+        const consent = String(Posts.tiktokConsentBlock(state));
+        assert.ok(consent.includes(t('posts.tiktok.direct.consentPhoto')));
+        assert.ok(!consent.includes(t('posts.tiktok.direct.consent')), 'not "this video"');
+        assert.ok(consent.includes('music-usage-confirmation'), 'the declaration is still above the submit');
+
+        const missing = Posts.validateTikTokOptions(photoCreator, { privacy_level: 'PUBLIC_TO_EVERYONE' }, photo);
+        assert.equal(!missing.ok && missing.message, t('posts.tiktok.direct.consentRequiredPhoto'));
+    });
+
+    it('sends no allow_duet or allow_stitch for photos, and auto_add_music as chosen', () => {
+        const { Posts } = load();
+        const chosen = { privacy_level: 'PUBLIC_TO_EVERYONE', consent: true, allow_duet: true, allow_stitch: true };
+        const on = Posts.validateTikTokOptions(photoCreator, chosen, photo);
+        assert.ok(on.ok);
+        assert.deepEqual(JSON.parse(JSON.stringify(on.ok && on.options)), {
+            privacy_level: 'PUBLIC_TO_EVERYONE', allow_comment: false,
+            brand_organic: false, brand_content: false, is_aigc: false, consent: true, auto_add_music: true,
+        });
+        const off = Posts.validateTikTokOptions(photoCreator, { ...chosen, auto_add_music: false }, photo);
+        assert.equal(off.ok && off.options.auto_add_music, false);
+        // A long "video" length means nothing to a photo post.
+        assert.ok(Posts.validateTikTokOptions(photoCreator, chosen, { ...photo, durationSec: 9999 }).ok);
+    });
+
+    it('offers the delivery choice exactly as for video, and a draft sends only its mode and title', () => {
+        const { Posts, dom } = load();
+        Posts.tiktok = { connection: { connected: true, canUpload: true, canDirectPost: true, postMode: 'direct', audited: false } };
+        Posts._ttDelivery = '';
+        const blocked = Posts.attachTikTokOptions({ platform: 'tiktok', post_type: 'carousel' });
+        assert.equal(blocked && blocked.field, 'tiktok-delivery-direct', 'no default delivery for photos either');
+
+        Posts._ttDelivery = 'inbox';
+        const title = Object.assign(fakeEl('tiktok-title'), { value: 'عنوان الصور' });
+        dom.set('tiktok-title', title);
+        const draft: Record<string, unknown> = { platform: 'tiktok', post_type: 'image' };
+        assert.equal(Posts.attachTikTokOptions(draft), null);
+        assert.equal(JSON.stringify(draft.tiktok_options), JSON.stringify({ mode: 'inbox', title: 'عنوان الصور' }));
+
+        // An empty title is left out: the server then takes the caption's first line.
+        title.value = '   ';
+        const untitled: Record<string, unknown> = { platform: 'tiktok', post_type: 'image' };
+        assert.equal(Posts.attachTikTokOptions(untitled), null);
+        assert.equal(JSON.stringify(untitled.tiktok_options), JSON.stringify({ mode: 'inbox' }));
+    });
+
+    it('the title: from the caption’s first line, following it until edited, counted in UTF-16 units', () => {
+        const { Posts, dom } = load();
+        assert.equal(Posts.tiktokTitleFromCaption('  أول سطر  \nالسطر الثاني'), 'أول سطر');
+        assert.equal(Posts.tiktokTitleFromCaption('x'.repeat(120)).length, 90, 'clipped to what TikTok takes');
+        // Never half an emoji: 89 letters and one 2-unit emoji is 91 units, and the cut drops the emoji whole.
+        assert.equal(Posts.clipUtf16(`${'a'.repeat(89)}😀`, 90), 'a'.repeat(89));
+
+        const input = fakeEl('tiktok-title');
+        const count = fakeEl('tiktok-title-count');
+        dom.set('tiktok-title', input);
+        dom.set('tiktok-title-count', count);
+        Posts.resetTikTokComposer(null);
+        Posts.onCaptionInput({ value: 'عرض اليوم\nالتفاصيل' });
+        assert.equal(input.value, 'عرض اليوم', 'it follows the caption');
+        assert.ok(count.innerHTML.includes('9/90'), `the count is the title’s .length: ${count.innerHTML}`);
+
+        Posts.onTikTokTitle({ value: 'عنواني' });
+        input.value = 'عنواني';
+        Posts.onCaptionInput({ value: 'نص آخر' });
+        assert.equal(input.value, 'عنواني', 'an edited title is the operator’s: the caption no longer overwrites it');
+
+        // Emptied, it hands itself back to the caption.
+        Posts.onTikTokTitle({ value: '' });
+        Posts.onCaptionInput({ value: 'نص آخر' });
+        assert.equal(input.value, 'نص آخر');
+
+        // `.length` counts UTF-16 units, as TikTok's limit does: one emoji is 2.
+        assert.ok(String(Posts.titleCountMarkup('😀')).includes('2/90'));
+    });
+
+    it('blocks a title over 90, on its own field', () => {
+        const { Posts, dom, t } = load();
+        Posts.tiktok = { connection: { connected: true, canUpload: true, postMode: 'inbox' } };
+        dom.set('tiktok-title', Object.assign(fakeEl('tiktok-title'), { value: 'ت'.repeat(91) }));
+        const blocked = Posts.attachTikTokOptions({ platform: 'tiktok', post_type: 'carousel' });
+        assert.ok(blocked);
+        assert.equal(blocked.field, 'tiktok-title');
+        assert.equal(blocked.message, t('posts.tiktok.titleTooLong', { max: 90, n: 91 }));
+        assert.ok(Posts.validateTikTokTitle('ت'.repeat(90)).ok, 'exactly 90 is fine');
+        // A video has no title field, so there is no title to check.
+        assert.equal(Posts.attachTikTokOptions({ platform: 'tiktok', post_type: 'video' }), null);
+    });
+
+    it('an edit starts from the saved title and music choice, and a row without a title from its caption', () => {
+        const { Posts } = load();
+        Posts.resetTikTokComposer({
+            platform: 'tiktok', post_type: 'carousel', caption: 'سطر\nثان',
+            platform_options: { mode: 'inbox', title: 'العنوان المحفوظ' },
+        });
+        assert.equal(Posts._ttTitle, 'العنوان المحفوظ');
+        assert.equal(Posts._ttTitleTouched, true, 'a saved title is the operator’s own');
+        assert.equal(Posts._ttPhoto, true);
+
+        Posts.resetTikTokComposer({ platform: 'tiktok', post_type: 'image', caption: 'سطر\nثان', platform_options: null });
+        assert.equal(Posts._ttTitle, 'سطر');
+        assert.equal(Posts._ttTitleTouched, false);
+
+        assert.equal(Posts.tiktokChoicesFrom({ mode: 'direct', privacy_level: 'SELF_ONLY', auto_add_music: false }).auto_add_music, false);
+        assert.equal(Posts.tiktokChoicesFrom({ mode: 'direct', privacy_level: 'SELF_ONLY' }).auto_add_music, true);
+    });
+});
+
+describe('PostsPage — carousel cards', () => {
+    const urls = Array.from({ length: 7 }, (_, i) => `https://msg-response-auto.vercel.app/api/uploads/0b8a7a0e-3c1f-4f7e-9d0a-00000000000${i}`);
+    const row = {
+        id: 'k1', platform: 'instagram', post_type: 'carousel', status: 'PENDING', caption: 'c',
+        media_url: urls[0], media_urls: urls, scheduled_time: '2027-03-04T18:20:00.000Z',
+    };
+
+    it('says Carousel · N, and shows the first four slides plus +N', () => {
+        const { Posts, t } = load();
+        const card = String(Posts.renderScheduledCard(row));
+        assert.equal(t('posts.carousel.badge', { n: 7 }), 'كاروسيل · 7');
+        assert.ok(card.includes(t('posts.carousel.badge', { n: 7 })));
+        const thumbs = [...card.matchAll(/<li class="post-slide">\s*<img src="([^"]+)"/g)].map((m) => m[1]);
+        assert.equal(JSON.stringify(thumbs), JSON.stringify(urls.slice(0, 4)), 'the first four, in order');
+        assert.ok(card.includes('<bdi class="ltr-text" dir="ltr">+3</bdi>'), '+3 for the rest, isolated from the Arabic');
+        assert.ok(card.includes(t('posts.carousel.more', { count: 3 })), 'and said in words');
+        assert.ok(!card.includes('post-media-frame'), 'not a single-image frame as well');
+
+        const small = String(Posts.renderScheduledCard({ ...row, media_urls: urls.slice(0, 3) }));
+        assert.equal([...small.matchAll(/<li class="post-slide">/g)].length, 3);
+        assert.ok(!small.includes('post-slide-more'), 'nothing more to count');
+        // Every other row is exactly as before.
+        const single = String(Posts.renderScheduledCard({ ...row, post_type: 'image', media_urls: null }));
+        assert.ok(single.includes('post-media-frame'));
+        assert.ok(!single.includes('post-slides'));
+    });
+
+    it('a TikTok photo post not yet live: every image a real download, in order, plus Download all and Copy caption', () => {
+        const { Posts, t } = load();
+        const card = String(Posts.renderScheduledCard({ ...row, platform: 'tiktok' }));
+        const links = [...card.matchAll(/<a class="btn btn-secondary btn-sm" href="([^"]+)" download="([^"]+)" data-slide-download/g)];
+        assert.equal(JSON.stringify(links.map((m) => m[1])), JSON.stringify(urls), 'every image, in slide order');
+        assert.equal(JSON.stringify(links.map((m) => m[2])), JSON.stringify(urls.map((_, i) => `slide-0${i + 1}`)), 'named to sort in order');
+        assert.ok(card.includes('data-action="posts:downloadAll"'));
+        assert.ok(card.includes(t('posts.tiktok.downloadAll')));
+        assert.ok(card.includes(`data-copy="${row.caption}"`), 'Copy caption');
+        assert.ok(!card.includes(t('posts.tiktok.download')), 'not "Download video"');
+
+        const one = String(Posts.renderScheduledCard({ ...row, platform: 'tiktok', post_type: 'image', media_urls: null }));
+        assert.ok(one.includes(t('posts.tiktok.downloadImage')));
+        assert.ok(one.includes(`href="${urls[0]}" download="slide-01"`));
+        assert.ok(!one.includes('data-action="posts:downloadAll"'), 'one image has nothing to download "all" of');
+
+        const live = String(Posts.renderScheduledCard({ ...row, platform: 'tiktok', status: 'PUBLISHED' }));
+        assert.ok(!live.includes('data-slide-download'), 'published: nothing left to do by hand');
+    });
+
+    it('Download all clicks the kit’s own anchors in order, and holds its button until the last', async () => {
+        const { Posts } = load();
+        Posts.DOWNLOAD_SPACING_MS = 0;
+        const clicked: string[] = [];
+        const anchors = ['a', 'b', 'c'].map((name) => ({ click: (): void => { clicked.push(name); } }));
+        const kit = { querySelectorAll: (sel: string) => (sel === 'a[data-slide-download]' ? anchors : []) };
+        const trigger = Object.assign(fakeEl('download-all'), {
+            closest: (sel: string) => (sel === '[data-photo-kit]' ? kit : null),
+            style: {},
+        });
+        Posts.downloadAll(trigger);
+        assert.equal(trigger.disabled, true, 'held while the downloads fire');
+        await settle(3);
+        assert.equal(JSON.stringify(clicked), JSON.stringify(['a', 'b', 'c']));
+        assert.equal(trigger.disabled, false, 'and released after the last');
     });
 });
