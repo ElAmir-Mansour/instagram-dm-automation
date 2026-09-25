@@ -1084,3 +1084,351 @@ Inspect production configuration without deploying:
 ```bash
 vercel env pull .env.local --environment=production
 ```
+
+---
+
+## Carousel Studio
+
+The Studio's own guide is [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md): what each part does,
+every setting, and a symptom table written for the creator. This section is the operator's side of
+the same symptoms: what to run, what healthy looks like, and what to do when it isn't.
+
+Three things to know before touching anything:
+
+- **The Studio has its own queue**, `studio_jobs` (migration v21), and only the worker on the Mac
+  drains it. `/api/jobs/drain` and the cron never touch it; nothing on Vercel runs these jobs
+  (`src/config/migration_v21_studio.sql:8-13`).
+- **Prefer the dashboard's buttons to SQL writes.** A button goes through the same code as the
+  worker, side effects included: a failed index marks its lesson failed, a new render supersedes
+  the pending ones. An `UPDATE` does only what it says. The few writes below are marked, and say
+  what they skip.
+- **The SQL reads every tenant.** Run it in the Supabase SQL editor, or `psql "$DATABASE_URL"`. With
+  more than one tenant, add `AND creator_id = '<id>'` (from `SELECT id, name FROM creators;`).
+
+### The worker, from the Mac
+
+```bash
+launchctl print gui/$(id -u)/com.aicourse.studio-worker | grep -E 'state|pid'   # running? "state = running" and a pid
+tail -f ~/Library/Logs/aicourse-studio-worker.log                                  # follow it live
+grep -E 'failed|rejected|stalled|interrupted|config:' ~/Library/Logs/aicourse-studio-worker.log | tail -40
+launchctl kickstart -k gui/$(id -u)/com.aicourse.studio-worker                     # restart it
+
+# From the worker's folder, ~/Desktop/AI Course/aicourse-captions:
+scripts/install-studio-worker.sh           # (re)install the launchd agent: after a Node upgrade or a moved folder
+node scripts/studio-worker.mjs --drain     # run in the foreground until the queue is empty (stop the agent first)
+scripts/uninstall-studio-worker.sh         # remove the agent; the log is kept
+```
+
+An idle worker polls silently, so a quiet log is not a dead worker; `last_seen_at` (below) is the
+signal. Every step of a job is one timestamped line, prefixed with the job's kind and the first 8
+characters of its id, for example `index_lesson 1a2b3c4d: uploading the 0.6 MB proxy to Gemini:
+45%`. The worker README's *Troubleshooting* table maps its log lines to fixes.
+
+On the app's side, the Vercel logs (filter on `studio.`) carry `studio.worker_auth_rejected` (a
+worker with a stale or revoked token, with the reason and path), `studio.job_claimed`,
+`studio.job_completed`, `studio.job_failed`, `studio.job_exhausted`, `studio.render_dropped`,
+`studio.ai_request_failed` (one per model that refused), `studio.ai_usage`,
+`studio.draft_generated`, `studio.generate_failed` and `studio.schema_missing`. Every Studio route
+answers 503 *"The database is missing migration v21…"* until `npm run migrate` has run.
+
+### "The worker is offline"
+
+```sql
+-- Every live worker, and whether the app counts it online (an authenticated call within 90 s)
+SELECT c.name AS tenant, w.name AS worker, w.created_at, w.last_seen_at,
+       now() - w.last_seen_at AS ago,
+       coalesce(now() - w.last_seen_at < interval '90 seconds', false) AS online
+  FROM studio_workers w
+  JOIN creators c ON c.id = w.creator_id
+ WHERE w.revoked_at IS NULL
+ ORDER BY w.last_seen_at DESC NULLS LAST;
+```
+
+| What you see | What it means | Do |
+|---|---|---|
+| `ago` of seconds, `online` true | Healthy. An idle worker calls at least every 30 s, a busy one at least every 20 s | Nothing |
+| `ago` of minutes or hours | The Mac is asleep, off or logged out (the agent only runs in a logged-in session), or the worker stopped | On the Mac: `launchctl print …`, then the log's last lines |
+| `last_seen_at` is NULL | The token has never been used | Check `token` and `appUrl` in `studio.config.json`; run `node scripts/studio-worker.mjs --drain` and read it |
+| The worker is running, its log says *the app rejected the worker token (HTTP 401)*, and Vercel logs `studio.worker_auth_rejected` | The token was revoked, mistyped, or belongs to a deactivated tenant | Settings → Workers → **Create worker** (owner), paste the new token; it is picked up at the next poll |
+| No row at all | No worker, or every worker revoked | Create one (owner role) |
+
+A worker's name in this table is the label typed at **Create worker**. The `name` in its config
+file is only for its own log.
+
+### "A lesson won't index" / "Indexing is stuck"
+
+```sql
+-- The library at a glance
+SELECT status, count(*) FROM course_lessons GROUP BY status ORDER BY status;
+
+-- Every lesson that isn't indexed, with the reason
+SELECT id, lesson_no, title, status, left(error, 200) AS error, updated_at
+  FROM course_lessons
+ WHERE status <> 'indexed'
+ ORDER BY section_no NULLS LAST, length(lesson_no), lesson_no;
+
+-- Indexed lessons and their moments: 12 to 30 each; "clean" are the usable screenshots
+SELECT l.lesson_no, l.title, count(m.id) AS moments,
+       count(m.id) FILTER (WHERE m.clean) AS clean, l.indexed_at
+  FROM course_lessons l
+  LEFT JOIN lesson_moments m ON m.lesson_id = l.id
+ WHERE l.status = 'indexed'
+ GROUP BY l.id
+ ORDER BY l.section_no NULLS LAST, length(l.lesson_no), l.lesson_no;
+```
+
+| The lesson's `error` contains | Cause | Do |
+|---|---|---|
+| `HTTP 429` | Every model in the indexer's chain (`gemini-3.5-flash` → `gemini-3.6-flash` → `gemini-3-flash-preview`) has spent its daily free quota | After the reset (midnight Pacific: 10:00 Riyadh in US summer time, 11:00 otherwise), press **Index missing**. Nothing re-queues failed lessons by itself. The lasting fix is billing (guide §8) |
+| `HTTP 503` or `HTTP 500` | Gemini overloaded, or failing on its side. Each model was retried twice, then the next | Index it again later |
+| `HTTP 400` from every model | The request itself is refused (Gemini 3's `minItems`/`maxItems` 400 was one) | The worker log has one *trying the next model* line per model with Google's message. A code fix in `scripts/studio/gemini.mjs` |
+| `unusable twice` | Too few usable moments, or times past the end, twice | Index it again |
+| `outside the course root`, `not found` | The video moved, or `courseRoot` doesn't contain the library folder | Fix the path, scan again |
+| `stalled` | The upload saw two minutes of silence (Mac asleep, network gone) | Index it again |
+| `stopped reporting on this job 3 times` | The worker died on it three times | The log around those claim times |
+
+A lesson sitting on **Indexing…** has an open job, or should have:
+
+```sql
+-- Lessons marked indexing, with their open job
+SELECT l.id AS lesson, l.lesson_no, l.title, l.updated_at,
+       j.id AS job, j.status AS job_status, j.attempts, j.progress,
+       now() - j.heartbeat_at AS since_heartbeat
+  FROM course_lessons l
+  LEFT JOIN studio_jobs j
+         ON j.kind = 'index_lesson' AND j.status IN ('pending', 'claimed')
+        AND j.payload->>'lessonId' = l.id::text
+ WHERE l.status = 'indexing'
+ ORDER BY l.updated_at;
+```
+
+- `pending`: waiting for the worker. It is offline, or busy: by default it runs one job at a time.
+- `claimed`, with `since_heartbeat` under a minute: running, and `progress` names the step. An
+  upload at 20 to 30 KB/s is slow, not stuck.
+- `claimed`, with `since_heartbeat` over 15 minutes: its worker died. The job is handed out again at
+  the next claim, and failed after three claims (`src/services/studio/jobs.ts:145-203`).
+- `job` NULL: nothing will ever finish it. **Write:** put it back and queue it again with **Index
+  missing**:
+
+  ```sql
+  UPDATE course_lessons SET status = 'new', error = NULL, updated_at = now()
+   WHERE id = '<lesson id>' AND status = 'indexing';
+  ```
+
+**Re-index a lesson that is already indexed** (the dashboard only offers the button for lessons that
+are not). Either from the dashboard's browser console, which goes through the API as your session:
+
+```js
+const { lessons } = await API.getStudioLessons();
+await API.indexStudioLesson(lessons.find((l) => l.lesson_no === '4.3').id);
+```
+
+or, **write**, mark it not indexed and press **Index missing**; its notes and moments stay until the
+new index replaces them:
+
+```sql
+UPDATE course_lessons SET status = 'new', updated_at = now() WHERE id = '<lesson id>';
+```
+
+**Cancel an index backlog**, for instance after the quota is spent and every queued lesson would
+fail anyway. **Write:** it fails every *queued* index job (a running one is left alone) and puts
+each lesson back to *Not indexed yet*; `applyFailure` is not involved, so nothing else changes:
+
+```sql
+WITH cancelled AS (
+    UPDATE studio_jobs
+       SET status = 'failed', error = 'Cancelled by hand', updated_at = now()
+     WHERE kind = 'index_lesson' AND status = 'pending'
+ RETURNING payload->>'lessonId' AS lesson_id
+)
+UPDATE course_lessons SET status = 'new', error = NULL, updated_at = now()
+ WHERE id::text IN (SELECT lesson_id FROM cancelled);
+```
+
+### "Scan is greyed out" / "The scan found nothing"
+
+**Scan library** is greyed out when the tenant has no library folder. No row here means the
+defaults, which have none:
+
+```sql
+SELECT c.name AS tenant, s.library->>'root' AS library_root, s.updated_at
+  FROM studio_settings s
+  JOIN creators c ON c.id = s.creator_id;
+```
+
+Fix it in Studio → Settings → **Library folder**. The folder must sit inside the worker's
+`courseRoot`, or the worker refuses the scan.
+
+A scan that ran and added nothing has usually **failed on the Mac, which marks nothing anywhere
+else**: no lesson and no draft carries its error. Only its job row and the worker's log do:
+
+```sql
+SELECT status, left(error, 300) AS error, payload->>'root' AS root,
+       result->>'lessons' AS lessons_upserted, result->'skipped' AS skipped,
+       created_at, updated_at
+  FROM studio_jobs
+ WHERE kind = 'scan_library'
+ ORDER BY created_at DESC
+ LIMIT 5;
+```
+
+`payload.root is outside the course root` means the Settings folder is not inside `courseRoot`;
+`payload.root not found` means it doesn't exist on that Mac. On success, `lessons_upserted` counts
+the lessons the scan wrote, and `skipped` lists entries the app refused. The worker's log says how
+many videos it looked at: `scan: 34 lessons among 35 videos in /Users/elamir/Desktop/AI Course` on
+2026-09-24. Fewer lessons than videos is usually the naming rules (guide §4).
+
+### "Generation failed"
+
+The draft's error says what happened. Recent failures, and anything still writing:
+
+```sql
+SELECT id, status, left(error, 300) AS error, input->'lessonIds' AS lessons,
+       input->>'angle' AS angle, input->>'slides' AS slides, created_at, updated_at
+  FROM carousel_drafts
+ WHERE status IN ('failed', 'generating')
+ ORDER BY created_at DESC
+ LIMIT 10;
+```
+
+| `error` begins | Cause | Do |
+|---|---|---|
+| `Writing the carousel failed: Gemini request failed [HTTP 429]` | The writer's chain (`gemini-3.1-pro-preview` → `3.7-flash` → `3.6-flash` → `3.8-flash`) has spent its daily quota; on the free tier the Pro model has none at all | The reset, or billing (guide §8) |
+| `… [HTTP 404]` | The error is the last model's, so every model answered 404: gone, or closed to this key | Vercel: one `studio.ai_request_failed` per model, with `model`, `http_status` and Google's `message`. If all are gone, update `STUDIO_MODELS` (`src/services/studio/generate.ts:153`) |
+| `… [HTTP 400]` | Every model refused the request, so the request is at fault | The same log lines. A code fix, as stripping `minItems`/`maxItems` was (`withoutArrayBounds`, `src/services/studio/generate.ts:231`) |
+| `… [HTTP 500]` | Google's side. The writer retries a 500 once, from the first model; it does not skip to the next | Generate again |
+| `… Missing GEMINI_API_KEY environment variable.` | The app's environment has no key | Set it in Vercel and redeploy |
+| `… The draft still breaks N rule(s) after M repair round(s): …` | The model could not meet the rules within the 120 s budget | Generate again. Vercel's `studio.draft_generated` has `rounds`, `problems_left` and `ms` |
+| `Writing this draft never finished: the request was cut off.` (status `generating` in the table, older than 10 minutes) | The serverless invocation died mid-write; the API presents the row as failed without rewriting it | Delete it from the dashboard and generate again |
+
+### "A draft is stuck on Rendering"
+
+```sql
+-- Rendering drafts, each with its latest render job: the only one whose result can land
+SELECT d.id AS draft, d.updated_at AS draft_updated,
+       j.id AS job, j.status AS job_status, j.attempts, j.progress,
+       now() - j.heartbeat_at AS since_heartbeat, left(j.error, 200) AS job_error
+  FROM carousel_drafts d
+  LEFT JOIN LATERAL (
+        SELECT * FROM studio_jobs j
+         WHERE j.kind = 'render_carousel' AND j.payload->>'draftId' = d.id::text
+         ORDER BY j.created_at DESC, j.id DESC
+         LIMIT 1
+  ) j ON TRUE
+ WHERE d.status = 'rendering'
+ ORDER BY d.updated_at;
+
+-- The queue as the worker sees it: what is running, then what it takes next, in claim order
+SELECT id, kind, status, attempts, progress, now() - heartbeat_at AS since_heartbeat, created_at,
+       coalesce(payload->>'lesson_no', payload->>'draftId', payload->>'root') AS about
+  FROM studio_jobs
+ WHERE status IN ('pending', 'claimed')
+ ORDER BY status = 'claimed' DESC,
+          CASE kind WHEN 'render_carousel' THEN 0 WHEN 'scan_library' THEN 1 ELSE 2 END,
+          created_at;
+```
+
+| `job_status` | Meaning | Do |
+|---|---|---|
+| `pending` | Waiting. The worker is offline, or finishing the job it has: renders go next but never interrupt one (`indexConcurrency: 1` is one job at a time) | Start the worker, or let the running job end |
+| `claimed`, heartbeat fresh | Drawing. `progress` names the step: `extracting shot 1/2`, `rendering ig 3/8`, `uploading slide 9/16` | Wait. About 170 s on a 20 to 30 KB/s uplink, mostly the uploads |
+| `claimed`, heartbeat over 15 minutes | Its worker died. It is handed out again at the next claim and failed after three | Queue a fresh render (below) rather than wait |
+| `failed`, `Superseded by a newer render…` | A newer render replaced it | Only the latest counts; that is the one shown |
+
+To queue a fresh render of a draft that is not failed (the dashboard only shows **Render again** on
+failed drafts), save it from the editor, or run this in the dashboard's console. Pending renders of
+the same draft are superseded, and a late result from the old claim is dropped when it arrives:
+
+```js
+await API.renderStudioDraft('<draft id>');
+```
+
+### "Problems to fix" on save
+
+A refused save is `400 { error, problems[] }` from `PATCH /api/studio/drafts/:id`, and nothing is
+saved. The messages come from `validateCarousel` (`src/services/studio/rules.ts:276`) and name their
+slide and field: `slide 3 (point).title: 45 > 40 «…»` is 45 UTF-16 units against a limit of 40. The
+editor pins each one to its field. The one that surprises people: after the keyword is changed, the
+Instagram caption must carry the tenant's `cta.instagramAsk` line with the *new* keyword, or the
+save fails with *instagram caption is missing the keyword ask «…»*.
+
+### "Comments on the new post get the wrong DM" (keyword clash)
+
+Matching is substring by default, so a live campaign on a shorter word answers inside a longer one.
+At scheduling, an existing campaign that already answers the keyword means no new one is created
+(`planCampaign`, `src/services/studio/schedule.ts:100`). Which active campaigns could answer a given
+keyword (replace `تمام`; approximate, because the app also normalises Arabic letter forms and
+tatweel before it compares):
+
+```sql
+SELECT DISTINCT c.id, c.trigger_keyword, c.match_mode, c.post_id, c.created_at
+  FROM campaigns c
+ CROSS JOIN LATERAL unnest(string_to_array(c.trigger_keyword, ',')) AS t(word)
+ WHERE c.is_active AND trim(t.word) <> ''
+   AND (trim(t.word) = 'تمام'
+        OR (c.match_mode = 'substring' AND strpos('تمام', trim(t.word)) > 0));
+```
+
+What scheduling decided is in the audit log, with the draft's schedule:
+
+```sql
+SELECT created_at, actor_email, target_id AS draft,
+       detail->>'campaign_id' AS campaign, detail->>'campaign_created' AS created,
+       detail->>'tiktok' AS tiktok, detail->>'scheduled_time' AS scheduled_time
+  FROM audit_log
+ WHERE action = 'studio.schedule'
+ ORDER BY created_at DESC
+ LIMIT 10;
+```
+
+`created = false` with a campaign id means that older campaign answers this post's keyword, with its
+own DM. Switch it to `word` matching on the Campaigns page, or give the carousel a keyword it doesn't
+contain; for a post already scheduled, create the campaign for its keyword by hand.
+
+### "The TikTok batch was refused" / "TikTok posts failed"
+
+```sql
+-- Scheduled drafts with a TikTok intent, and where their TikTok post stands
+SELECT d.id AS draft, d.carousel->>'keyword' AS keyword,
+       d.schedule->>'scheduled_time' AS meta_time, d.schedule->>'tiktok' AS tiktok,
+       d.schedule->>'tiktok_row_id' AS tiktok_post, d.schedule->>'tiktok_public_done' AS made_public,
+       p.status AS tiktok_status, left(p.error_log, 200) AS tiktok_error
+  FROM carousel_drafts d
+  LEFT JOIN scheduled_posts p ON p.id::text = d.schedule->>'tiktok_row_id'
+ WHERE d.status = 'scheduled' AND d.schedule->>'tiktok' <> 'none'
+ ORDER BY d.schedule->>'scheduled_time' DESC;
+
+-- The TikTok connection the batch needs: active, with video.publish in its scopes
+SELECT c.name AS tenant, pc.status, pc.scopes, left(pc.last_error, 200) AS last_error, pc.updated_at
+  FROM platform_connections pc
+  JOIN creators c ON c.id = pc.creator_id
+ WHERE pc.platform = 'tiktok';
+```
+
+| Symptom | Cause | Do |
+|---|---|---|
+| 409 *"TikTok is not connected. Connect it in Settings first."* | No `active` TikTok connection | Connect TikTok in Settings |
+| 409 *"Direct Post is not available: switch it on in Settings → TikTok app, then reconnect TikTok."* | `tiktok.direct_post_enabled` is off, or the connection's `scopes` lack `video.publish` | A platform admin switches Direct Post on in Settings → TikTok app; then reconnect TikTok so the new scope is granted |
+| Fewer sent than queued | Each draft that can't go is skipped with its reason and stays queued; the rest go (`runTikTokBatch`, `src/services/studio/schedule.ts:226`) | The API's answer lists them, `skipped: [{ draftId, error }]`: the browser's network panel shows it for the `tiktok/batch` request. The audit row only counts them. Fix, and press again |
+| `tiktok_error` mentions a private account (`unaudited_client_can_only_post_to_private_accounts`) | While unaudited, direct posts are `SELF_ONLY`, and TikTok takes them only from a private account | Set the TikTok account private, retry the posts from Posts, then make them public |
+| `tiktok_error` mentions a verified URL prefix (`url_ownership_unverified`) | TikTok fetches photos only from a URL prefix verified in its developer portal | Verify the app's address under URL properties ([`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md)), then retry |
+
+The batch writes each row due now, 40 s apart, so they publish on the next sweeps like any due post
+(§4.1, §5.1). TikTok's side of all of this, connecting, Direct Post, the audit, is in
+[`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md).
+
+### The audit trail
+
+The Studio audits its settings, its workers, and everything that creates posts or campaigns:
+
+```sql
+SELECT created_at, actor_email, action, target_type, target_id, detail
+  FROM audit_log
+ WHERE action LIKE 'studio.%'
+ ORDER BY created_at DESC
+ LIMIT 20;
+```
+
+The actions are `studio.settings_write`, `studio.worker_create`, `studio.worker_revoke`,
+`studio.schedule` and `studio.tiktok_batch` (`src/services/audit.ts:111-119`). A worker's token is
+never in the detail, only its name.
