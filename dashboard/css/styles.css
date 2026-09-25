@@ -3588,3 +3588,307 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
     .studio-indeterminate span { animation: none; inline-size: 100%; opacity: 0.5; }
     .studio-meter::-webkit-progress-value { transition: none; }
 }
+
+/* ─── Help Center (#/help) ──────────────────────────────────────────────────
+   Mobile first: one column, and the route decides which half shows, the list
+   (#/help) or the article (#/help/<slug>). From 1100px the list sits beside the
+   article, and because the grid follows the document's direction it is on the
+   right in Arabic and on the left in English with no extra rule. Logical
+   properties only, like the rest of this file. */
+.help-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+    align-items: start;
+}
+.help-layout[data-view='article'] .help-nav { display: none; }
+.help-layout[data-view='index'] .help-main { display: none; }
+.help-nav { display: flex; flex-direction: column; gap: var(--space-4); min-inline-size: 0; }
+.help-main { min-inline-size: 0; }
+.help-list-host:focus { outline: none; }
+
+.help-group-title {
+    font-size: var(--fs-100);
+    font-weight: var(--fw-semibold);
+    color: var(--text-muted);
+    margin-block: var(--space-4) var(--space-2);
+}
+.help-group:first-child .help-group-title { margin-block-start: 0; }
+.help-list, .help-results, .help-cards, .help-related-list {
+    list-style: none; margin: 0; padding: 0;
+    display: grid; gap: var(--space-1);
+}
+.help-item, .help-result {
+    display: flex; align-items: flex-start; gap: var(--space-3);
+    padding: var(--space-3);
+    min-block-size: var(--tap-target);
+    border-radius: var(--radius-md);
+    color: var(--text-default);
+    text-decoration: none;
+    transition: background var(--motion-fast) var(--ease-standard);
+}
+.help-item:hover, .help-result:hover { background: var(--surface-glass-hover); }
+.help-item[aria-current='page'] { background: var(--accent-soft); }
+.help-item [data-lucide] { inline-size: 18px; block-size: 18px; color: var(--text-muted); margin-block-start: 2px; }
+.help-item[aria-current='page'] [data-lucide] { color: var(--accent-text); }
+.help-item-text { display: flex; flex-direction: column; gap: 2px; min-inline-size: 0; }
+.help-item-title { font-size: var(--fs-200); font-weight: var(--fw-medium); color: var(--text-strong); }
+.help-item-summary { font-size: var(--fs-100); color: var(--text-muted); line-height: var(--lh-normal); }
+
+.help-results-count { font-size: var(--fs-100); color: var(--text-muted); margin: 0 0 var(--space-2); }
+.help-result { flex-direction: column; gap: 2px; }
+.help-result-title { font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.help-result-section { font-size: var(--fs-100); color: var(--accent-text); }
+.help-result-snippet { font-size: var(--fs-100); color: var(--text-default); line-height: var(--lh-normal); }
+mark.help-hit {
+    background: var(--accent-soft);
+    color: var(--text-strong);
+    border-radius: 3px;
+    padding-inline: 1px;
+}
+.help-empty {
+    display: flex; flex-direction: column; gap: var(--space-2);
+    padding: var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--surface-glass);
+    border: 1px solid var(--border-subtle);
+}
+.help-empty-title { margin: 0; font-weight: var(--fw-semibold); color: var(--text-strong); }
+.help-notice {
+    margin: 0 0 var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--warning-soft);
+    color: var(--text-default);
+    font-size: var(--fs-200);
+}
+
+/* The reading pane: one readable measure, whatever the column's width. */
+.help-article, .help-welcome {
+    padding: var(--space-4);
+    max-inline-size: calc(var(--measure) + 2 * var(--space-6));
+}
+.help-back {
+    display: inline-flex; align-items: center; gap: var(--space-2);
+    min-block-size: var(--tap-target);
+    margin-block-end: var(--space-2);
+    font-size: var(--fs-200);
+    color: var(--accent-text);
+    text-decoration: none;
+}
+.help-back [data-lucide] { inline-size: 16px; block-size: 16px; }
+.help-kicker { margin: 0; font-size: var(--fs-100); font-weight: var(--fw-semibold); color: var(--text-muted); }
+.help-article-title {
+    font-size: var(--fs-500);
+    line-height: var(--lh-tight);
+    color: var(--text-strong);
+    margin-block: var(--space-1) var(--space-2);
+    scroll-margin-block-start: calc(var(--header-height) + var(--space-4));
+}
+.help-lede { margin: 0; font-size: var(--fs-300); line-height: var(--lh-normal); color: var(--text-muted); }
+.help-subhead { font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); margin-block: var(--space-5) var(--space-3); }
+
+.help-toc {
+    margin-block: var(--space-5) 0;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--surface-glass);
+    border: 1px solid var(--border-subtle);
+}
+.help-toc-title { font-size: var(--fs-100); font-weight: var(--fw-semibold); color: var(--text-muted); margin: 0 0 var(--space-2); }
+.help-toc-list { margin: 0; padding-inline-start: var(--space-5); display: grid; gap: var(--space-1); font-size: var(--fs-200); }
+.help-toc-list a, .help-inline-link { color: var(--accent-text); text-underline-offset: 2px; }
+.help-toc-list a { text-decoration: none; }
+.help-toc-list a:hover { text-decoration: underline; }
+
+.help-section { margin-block-start: var(--space-6); scroll-margin-block-start: calc(var(--header-height) + var(--space-4)); }
+.help-section-title {
+    display: flex; align-items: center; gap: var(--space-2);
+    font-size: var(--fs-400);
+    color: var(--text-strong);
+    margin: 0 0 var(--space-3);
+    scroll-margin-block-start: calc(var(--header-height) + var(--space-4));
+}
+.help-anchor {
+    display: inline-flex; align-items: center; justify-content: center;
+    inline-size: 28px; block-size: 28px; flex-shrink: 0;
+    border-radius: var(--radius-xs);
+    color: var(--text-muted);
+    transition: opacity var(--motion-fast) var(--ease-standard);
+}
+.help-anchor [data-lucide] { inline-size: 15px; block-size: 15px; }
+.help-anchor:hover { color: var(--accent-text); background: var(--surface-glass-hover); }
+@media (hover: hover) {
+    .help-anchor { opacity: 0; }
+    .help-section-title:hover .help-anchor, .help-anchor:focus-visible { opacity: 1; }
+}
+
+.help-section p, .help-ul, .help-ol {
+    font-size: var(--fs-300);
+    line-height: var(--lh-loose);
+    color: var(--text-default);
+    margin: 0 0 var(--space-3);
+}
+.help-ul, .help-ol { padding-inline-start: var(--space-5); display: grid; gap: var(--space-2); }
+.help-article strong { font-weight: var(--fw-semibold); color: var(--text-strong); }
+.help-article code, .help-welcome code {
+    padding: 1px 5px;
+    border-radius: var(--radius-xs);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    overflow-wrap: anywhere;
+}
+.help-code { margin: var(--space-3) 0 var(--space-4); }
+.help-code figcaption { font-size: var(--fs-100); color: var(--text-muted); margin-block-end: var(--space-1); }
+/* `dir="ltr"` is on the <pre> itself: a command reads left to right in either
+   language, and it scrolls inside its own box rather than widening the page. */
+.help-code pre {
+    margin: 0;
+    padding: var(--space-3);
+    max-inline-size: 100%;
+    overflow-x: auto;
+    border-radius: var(--radius-sm);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    font-size: var(--fs-100);
+    line-height: var(--lh-normal);
+    color: var(--text-strong);
+}
+.help-code pre code { padding: 0; border: 0; background: none; overflow-wrap: normal; }
+
+.help-callout {
+    display: flex; align-items: flex-start; gap: var(--space-3);
+    margin: var(--space-3) 0 var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--info-soft);
+    border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
+}
+.help-callout [data-lucide] { inline-size: 18px; block-size: 18px; margin-block-start: 3px; color: var(--info-text); }
+.help-callout p { margin: 0; font-size: var(--fs-200); line-height: var(--lh-normal); }
+.help-callout--tip { background: var(--success-soft); border-color: color-mix(in srgb, var(--success) 30%, transparent); }
+.help-callout--tip [data-lucide] { color: var(--success-text); }
+.help-callout--warn { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.help-callout--warn [data-lucide] { color: var(--warning-text); }
+
+.help-dl { margin: 0 0 var(--space-4); display: grid; }
+.help-dl-row {
+    display: grid; gap: var(--space-1);
+    padding-block: var(--space-3);
+    border-block-end: 1px solid var(--border-subtle);
+}
+.help-dl-row:last-child { border-block-end: 0; }
+.help-dl dt { font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.help-dl dd { margin: 0; font-size: var(--fs-200); line-height: var(--lh-normal); color: var(--text-default); }
+
+.help-qa { display: grid; gap: var(--space-2); margin: 0 0 var(--space-4); }
+.help-qa-item {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-glass);
+}
+.help-qa-item > summary {
+    cursor: pointer;
+    padding: var(--space-3) var(--space-4);
+    min-block-size: var(--tap-target);
+    font-size: var(--fs-200);
+    font-weight: var(--fw-medium);
+    color: var(--text-strong);
+    line-height: var(--lh-normal);
+}
+.help-qa-item[open] > summary { border-block-end: 1px solid var(--border-subtle); }
+.help-qa-answer { padding: var(--space-3) var(--space-4) var(--space-1); }
+.help-qa-answer p, .help-qa-answer .help-ul { font-size: var(--fs-200); line-height: var(--lh-normal); }
+
+.help-related { margin-block-start: var(--space-6); }
+.help-related-list { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-2); }
+.help-related-link, .help-card {
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-3);
+    min-block-size: var(--tap-target);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-glass);
+    color: var(--text-strong);
+    font-size: var(--fs-200);
+    text-decoration: none;
+    transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+.help-related-link:hover, .help-card:hover { background: var(--surface-glass-hover); border-color: var(--border-strong); }
+.help-related-link [data-lucide], .help-card [data-lucide] { inline-size: 18px; block-size: 18px; color: var(--accent-text); }
+
+.help-cards { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--space-3); }
+.help-card { flex-direction: column; align-items: flex-start; gap: var(--space-1); padding: var(--space-4); }
+.help-card-title { font-weight: var(--fw-semibold); }
+.help-card-summary { font-size: var(--fs-100); color: var(--text-muted); line-height: var(--lh-normal); }
+
+.help-feedback {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3);
+    margin-block-start: var(--space-6);
+    padding-block-start: var(--space-5);
+    border-block-start: 1px solid var(--border-subtle);
+}
+.help-feedback-q { margin: 0; font-weight: var(--fw-medium); color: var(--text-strong); }
+.help-feedback .btn[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+.help-feedback-thanks { margin: 0; inline-size: 100%; font-size: var(--fs-200); color: var(--text-muted); }
+.help-feedback-thanks:empty { display: none; }
+
+.help-next {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+    column-gap: var(--space-3);
+    margin-block-start: var(--space-5);
+    padding: var(--space-4);
+    color: var(--text-strong);
+    text-decoration: none;
+}
+.help-next:hover { border-color: var(--border-strong); }
+.help-next-label { font-size: var(--fs-100); color: var(--text-muted); }
+.help-next-title { grid-row: 2; font-weight: var(--fw-semibold); }
+.help-next [data-lucide] { grid-row: 1 / span 2; grid-column: 2; inline-size: 18px; block-size: 18px; color: var(--accent-text); }
+
+/* The contextual "?" links other screens carry (UI.helpLink). Small, quiet, and
+   still a 24px target. */
+.help-link {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    min-block-size: 24px;
+    font-size: var(--fs-100);
+    color: var(--accent-text);
+    text-decoration: none;
+    border-radius: var(--radius-xs);
+}
+.help-link:hover span { text-decoration: underline; text-underline-offset: 2px; }
+.help-link [data-lucide] { inline-size: 14px; block-size: 14px; }
+.help-link--icon {
+    justify-content: center;
+    inline-size: 28px; block-size: 28px;
+    border-radius: var(--radius-pill);
+    color: var(--text-muted);
+}
+.help-link--icon:hover { color: var(--accent-text); background: var(--surface-glass-hover); }
+.help-link--icon [data-lucide] { inline-size: 16px; block-size: 16px; }
+/* The composer's line under the carousel hint: snug to the hint it follows. */
+.slide-help { margin-block: var(--space-1) 0; }
+
+@media (min-width: 560px) {
+    .help-article, .help-welcome { padding: var(--space-5); }
+    .help-dl-row { grid-template-columns: minmax(9rem, 13rem) minmax(0, 1fr); gap: var(--space-4); }
+}
+
+@media (min-width: 1100px) {
+    .help-layout { grid-template-columns: minmax(240px, 280px) minmax(0, 1fr); }
+    .help-layout[data-view='article'] .help-nav { display: flex; }
+    .help-layout[data-view='index'] .help-main { display: block; }
+    .help-nav {
+        position: sticky;
+        inset-block-start: calc(var(--header-height) + var(--space-4));
+        max-block-size: calc(100dvh - var(--header-height) - var(--space-7));
+        overflow-y: auto;
+        padding: 2px;
+    }
+    .help-item-summary, .help-back { display: none; }
+    .help-article, .help-welcome { padding: var(--space-6); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .help-item, .help-result, .help-anchor, .help-related-link, .help-card { transition: none; }
+}

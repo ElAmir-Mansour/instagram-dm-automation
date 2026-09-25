@@ -1916,6 +1916,11 @@ const PostsPage = {
                        data-change="posts:pickSlides" data-picker="${this.pickerName(which)}"
                        aria-describedby="${p}-hint ${p}-rule">
                 <p class="form-hint" id="${p}-hint">${t('posts.carousel.hint')}</p>
+                ${which === 'tiktok' ? '' : html`
+                    <!-- Outside the hint the input is described by, and in a new tab:
+                         this is a modal, and leaving it would drop the uploads. -->
+                    <p class="slide-help">${UI.helpLink('scheduling#carousels', t('help.link.carousel'), { newTab: true })}</p>
+                `}
                 <p class="slide-rule" id="${p}-rule"></p>
                 <p class="slide-progress" id="${p}-progress"></p>
                 <ol class="slide-strip" id="${p}-strip" aria-label="${label}">${this.slideTiles(which)}</ol>

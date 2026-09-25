@@ -778,6 +778,7 @@ const StudioPage = {
                         <span class="health-dot" aria-hidden="true"></span>
                         ${online ? t('studio.worker.online') : t('studio.worker.offline')}
                     </span>
+                    ${UI.helpLink('worker', t('help.link.worker'), { iconOnly: true, className: 'studio-worker-help' })}
                     ${worker.name ? html`<span class="text-meta" dir="auto">${worker.name}</span>` : ''}
                     <span class="text-meta" title="${seen ? seen.title : ''}">
                         ${seen ? t('studio.worker.lastSeen', { when: seen.text }) : t('studio.worker.neverSeen')}
@@ -822,6 +823,7 @@ const StudioPage = {
                             action: 'studio:retryWorker', id: 'studio-worker-retry',
                         })}
                         <a class="btn btn-ghost btn-sm" href="#/studio?tab=settings&amp;focus=workers">${t('studio.worker.manage')}</a>
+                        ${UI.helpLink('worker#install', t('help.link.workerInstall'))}
                     </div>
                 </div>
             </div>
@@ -850,6 +852,7 @@ const StudioPage = {
                 <p class="studio-status-head">
                     <strong class="studio-status-count">${UI.ltr(`${UI.formatNumber(indexed)}/${UI.formatNumber(total)}`)}</strong>
                     <span>${t('studio.library.indexedLabel')}</span>
+                    ${UI.helpLink('library', t('help.link.library'), { iconOnly: true, className: 'studio-library-help' })}
                 </p>
                 ${total && indexed < total ? this.meterMarkup(indexed, total, t('studio.library.meterLabel'), 'studio-library-meter') : ''}
                 ${indexing || failed ? html`
@@ -1385,6 +1388,8 @@ const StudioPage = {
                         <p class="form-hint" id="studio-accent-hint">${t('studio.new.accentHint')}</p>
                     </fieldset>
                     <p class="form-hint">${t('studio.new.remembered')}</p>
+                    <!-- A new tab: the form keeps what was typed, and so does this one. -->
+                    <p>${UI.helpLink('create#options', t('help.link.options'), { newTab: true, className: 'studio-options-help' })}</p>
                 </div>
             </details>
         `;
@@ -5164,7 +5169,10 @@ const StudioPage = {
         if (!container) return;
         const focus = UI.captureFocus(container);
         container.innerHTML = esc(html`
-            <div class="page-toolbar">${this.tabsMarkup('settings')}</div>
+            <div class="page-toolbar">
+                ${this.tabsMarkup('settings')}
+                ${UI.helpLink('studio-settings', t('help.link.studioSettings'), { newTab: true, className: 'studio-settings-help' })}
+            </div>
             ${this.settingsWork ? html`
                 <form id="studio-settings-form" class="studio-settings" data-submit="studio:saveSettings" novalidate>
                     <section class="surface pad-5" id="sts-section-brand" aria-labelledby="sts-brand-title">${this.brandSectionMarkup()}</section>
@@ -5762,7 +5770,7 @@ const StudioPage = {
     workersMarkup() {
         return html`
             <h2 class="section-title" id="sts-workers-title">${t('studio.workers.title')}</h2>
-            <p class="form-hint">${t('studio.workers.intro')}</p>
+            <p class="form-hint">${t('studio.workers.intro')} ${UI.helpLink('worker', t('help.link.worker'), { newTab: true })}</p>
             ${this.newWorker ? this.newWorkerMarkup(this.newWorker) : ''}
             ${this.workersError && !this.workers.length
                 ? this.errorHost(this.workersError, t('studio.workers.loadFailed'), 'page')

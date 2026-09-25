@@ -54,6 +54,10 @@ const App = {
         analytics: { src: 'analytics', page: () => AnalyticsPage },
         activity: { src: 'activity', page: () => ActivityPage },
         settings: { src: 'settings', page: () => SettingsPage },
+        // The Help Center owns sub-routes (`#/help/<slug>#<section>`) and
+        // handles them itself through `onHashChange`, so opening an article
+        // never tears the page down and rebuilds it.
+        help: { src: 'help', page: () => HelpPage },
         // ─── Platform administration ─────────────────────────────────────────
         // `navAs` points a page with no nav item of its own at the item that
         // should read as current while it is open — otherwise the active
@@ -68,7 +72,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '7.5',
+    ASSET_VERSION: '7.6',
 
     _modules: Object.create(null),
 
@@ -231,10 +235,7 @@ const App = {
         });
 
         // Hash router — refresh lands on the same page, Back moves between pages
-        window.addEventListener('hashchange', () => {
-            if (!API.token) return;
-            this.show(this.pageFromHash());
-        });
+        window.addEventListener('hashchange', () => this.onHashChange());
 
         UI.icons();
 
@@ -335,9 +336,38 @@ const App = {
         if (this.currentPage) this.show(this.currentPage);
     },
 
+    /**
+     * The page is the first path segment of the hash: `#/tenant_detail?id=…`,
+     * `#/help/worker#security` and `#/help` all name their page before the
+     * first `/`, `?` or `#`. What follows belongs to the page to read.
+     */
     pageFromHash() {
-        const raw = (location.hash || '').replace(/^#\/?/, '').split('?')[0];
+        const raw = (location.hash || '').replace(/^#\/?/, '').split(/[/?#]/)[0];
         return this.pages[raw] ? raw : this.DEFAULT_PAGE;
+    },
+
+    /**
+     * A hash change inside the page that is already open goes to that page
+     * when it asks for it (`onHashChange`), so an article link in the Help
+     * Center moves the reader without a teardown, a skeleton and a rebuild.
+     * Every other change is a navigation, exactly as before.
+     */
+    onHashChange() {
+        if (!API.token) return;
+        const page = this.pageFromHash();
+        if (page === this.currentPage) {
+            let instance = null;
+            try { instance = this.pages[page].page(); } catch { instance = null; }
+            if (instance && typeof instance.onHashChange === 'function') {
+                try {
+                    instance.onHashChange();
+                    return;
+                } catch (err) {
+                    console.warn('In-page route failed, re-rendering:', err);
+                }
+            }
+        }
+        this.show(page);
     },
 
     /**
@@ -420,11 +450,13 @@ const App = {
         this.applyChrome();
 
         const page = this.pageFromHash();
-        // Normalise the PAGE part only. `#/tenant_detail?id=…` is a legitimate
-        // deep link and rewriting it to `#/tenant_detail` would throw the id
-        // away on every reload and every bookmarked link.
-        const pagePart = String(location.hash || '').split('?')[0];
-        if (pagePart !== `#/${page}`) {
+        // Normalise the PAGE part only. `#/tenant_detail?id=…` and
+        // `#/help/worker#security` are legitimate deep links, and rewriting
+        // them to their bare page would throw the id, the article and the
+        // section away on every reload and every bookmarked link.
+        const hash = String(location.hash || '');
+        const head = hash.replace(/^#\/?/, '').split(/[/?#]/)[0];
+        if (!hash.startsWith(`#/${page}`) || head !== page) {
             // Normalise without adding a history entry AND without firing
             // hashchange (which would render the page a second time).
             const query = String(location.hash || '').split('?')[1];

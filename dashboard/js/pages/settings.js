@@ -415,7 +415,7 @@ const SettingsPage = {
             <section class="section">
                 <h2 class="section-title">${t('settings.tiktok.title')}</h2>
                 <div class="settings-card surface">
-                    <p class="form-hint mbe-4">${this.tiktokIntro(c)}</p>
+                    <p class="form-hint mbe-4">${this.tiktokIntro(c)} ${UI.helpLink('tiktok', t('help.link.tiktok'), { className: 'settings-tiktok-help' })}</p>
                     ${body}
                     ${isAdmin ? this.tiktokAppBlock(tiktokApp, tiktokAppError, !!(tiktok && tiktok.appConfigured)) : ''}
                 </div>

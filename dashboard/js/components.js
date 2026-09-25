@@ -418,6 +418,33 @@ const UI = {
         return UI.ltr(UI.formatNumber(value));
     },
 
+    // ─── Contextual help ────────────────────────────────────────────────────
+    /**
+     * A small link into the Help Center, next to the control it explains.
+     *
+     * `target` is `'slug'` or `'slug#section'`, written as a literal at every
+     * call site so `src/dashboard/help.test.ts` can find each one and check
+     * that the article and the section exist. Anything else renders nothing:
+     * a help link to nowhere is worse than no link.
+     *
+     * `label` is the visible text (an i18n string naming the topic, so two
+     * links on one screen never share the name "Learn more").
+     *   - `iconOnly`: a "?" beside a status pill, named by `label`.
+     *   - `newTab`: for links inside a modal or an unsaved form, where leaving
+     *     the page would drop what the operator typed. The session token is in
+     *     localStorage, so the new tab opens signed in.
+     */
+    helpLink(target, label, opts) {
+        const o = opts || {};
+        const m = /^([a-z0-9-]+)(?:#([a-z0-9-]+))?$/.exec(String(target || ''));
+        if (!m) return '';
+        const href = `#/help/${m[1]}${m[2] ? `#${m[2]}` : ''}`;
+        const text = label || t('help.link.learnMore');
+        const name = o.newTab ? `${text} ${t('help.link.newTab')}` : text;
+        const cls = `help-link${o.iconOnly ? ' help-link--icon' : ''}${o.className ? ` ${o.className}` : ''}`;
+        return html`<a class="${cls}" href="${href}"${o.newTab ? html.raw(' target="_blank" rel="noopener"') : ''}${o.iconOnly ? html` aria-label="${name}" title="${text}"` : ''}><i data-lucide="circle-help" aria-hidden="true"></i>${o.iconOnly ? '' : html`<span>${text}</span>`}${o.newTab && !o.iconOnly ? html`<span class="sr-only"> ${t('help.link.newTab')}</span>` : ''}</a>`;
+    },
+
     formatNumber(value) {
         const n = Number(value);
         if (!Number.isFinite(n)) return '—';
