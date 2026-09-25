@@ -302,6 +302,8 @@ node scripts/diagnose.mjs        # read the `publish` section
 Healthy is `✔ publish  no stranded, overdue or failed scheduled posts`, with a `DETAIL` line
 of counts by status. Today: `PENDING=6  PUBLISHED=10`.
 
+**A TikTok post** has its own statuses (`PROCESSING`, `IN_INBOX`) and its own failure modes: §10.
+
 ### 4.1 It is probably the cron granularity
 
 The Vercel cron runs **once daily at 00:00 UTC** — a Hobby-plan limit (`vercel.json` `crons`) —
@@ -757,7 +759,312 @@ in the public repo's history (`src/config/env.ts:45-49`).
 
 ---
 
-## 10. Before you touch anything: the checks that are free
+## 10. TikTok
+
+Setup, the developer portal, app review and every error code are in
+[`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md) (tracked with `git add -f`, since `docs/` is
+gitignored). This section works backwards from a symptom; the forward walk is FLOWS.md §6, and
+§3.6 for photo posts.
+
+**The ground rule from the top of this file applies to TikTok too.** `GET /api/jobs/drain` and
+`GET /api/cron/publish` publish every due post, TikTok rows included, so neither is a test.
+**Publish now** on one card is the narrow lever: it claims that one row and nothing else
+(`src/routes/api.ts:2535-2562`).
+
+The states a TikTok row moves through, and what moves it:
+
+| Status | Means | Moved on by |
+|---|---|---|
+| `PENDING` | due later — or **held** by the 5-draft limit, with "Waiting for TikTok: …" in `error_log` | a drain or the daily cron claims it (`src/routes/api.ts:789-795`) |
+| `PUBLISHING` | claimed, being sent | the publish call. A dead one is released only by the daily cron, after 15 minutes (§4.2) |
+| `PROCESSING` | TikTok has it | the 12 s poll inside the publish call, the webhook, or the sweep on every drain (`src/services/tiktokPublish.ts:582-641`) |
+| `IN_INBOX` | an inbox draft, waiting for the creator | the creator posting it in TikTok |
+| `PUBLISHED` | TikTok said `PUBLISH_COMPLETE` | — |
+| `FAILED` | `error_log` says why | **Publish now**, or edit and save |
+
+Every query in this section is a read-only `SELECT`: paste it into the Supabase SQL editor, or run
+it through the read-only session as in §2.1. Start with the last twenty TikTok rows:
+
+```sql
+SELECT id, status, post_type, scheduled_time, attempts,
+       platform_options->>'mode' AS mode, platform_options->>'privacy_level' AS privacy,
+       external_publish_id IS NOT NULL AS reached_tiktok, published_post_id,
+       claimed_at, status_checked_at, left(error_log, 160) AS error_log
+  FROM scheduled_posts
+ WHERE platform = 'tiktok'
+ ORDER BY scheduled_time DESC
+ LIMIT 20;
+```
+
+and the connection:
+
+```sql
+SELECT status, scopes, display_name, refresh_expires_at, last_refreshed_at,
+       refresh_claimed_at, left(last_error, 160) AS last_error
+  FROM platform_connections
+ WHERE platform = 'tiktok';
+```
+
+### 10.1 "A TikTok post failed."
+
+Read `error_log` — on the card, or in the first query. It starts with the step that failed
+(`TikTok post init:`, `TikTok photo post:`, `TikTok upload init:` …), then a plain sentence
+(`toTikTokError`, `src/services/tiktok.ts:140-164`):
+
+| `error_log` contains | Go to |
+|---|---|
+| "…direct posts only work when your TikTok account is set to private…" | §10.2 |
+| "…can only be private (Only me)…" | §10.2 |
+| "…can only fetch photos from a verified URL prefix…" or "…could not fetch the photos…" | §10.3 |
+| "reconnect TikTok", or "TikTok is not connected for this account" | §10.4 |
+| "TikTok rate limit reached — it will be retried." | **Not retried if it was the init** — photo inits allow 6 a minute. Wait a minute, then **Publish now** |
+| "TikTok did not confirm this upload within 24 hours…" | §10.7 |
+| "Waiting for TikTok: *n* drafts…" — status `PENDING`, not `FAILED` | §10.5: held, not failed |
+| anything else | the full tables, `docs/TIKTOK_GUIDE.md` §11 |
+
+**Before you retry, look at `external_publish_id`** (`reached_tiktok` in the query). Non-NULL
+means that attempt reached TikTok. A retry asks TikTok about that `publish_id` first: a video
+whose upload finished, or a photo post TikTok has not failed, is settled from TikTok's answer
+instead of being sent again (`src/services/tiktokPublish.ts:430-441`, `:515-528`). **That column is
+what stops a duplicate post — do not clear it to "start clean".** Only when TikTok itself reports
+the old attempt as failed does a retry make a new post.
+
+Two ways to retry:
+
+- **Publish now** on the card — claims a `PENDING` or `FAILED` row, publishes it at once and waits
+  up to 12 s for TikTok's verdict (`src/routes/api.ts:2551-2556`, `src/services/tiktokPublish.ts:45`).
+- **Edit and save** — flips `FAILED → PENDING` (`src/routes/api.ts:2471`), and the next drain takes
+  it. Edits are refused once a row is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`:2395-2398`).
+
+**No TikTok init is retried on failure** — a 5xx may already have created the post or the draft
+(`src/services/tiktok.ts:362-372`, `:501-504`, `:582-585`). The one exception is an inbox video
+whose caption TikTok refuses as invalid, which is sent once more without it. So a `FAILED` TikTok
+row stays `FAILED` until someone acts; nothing re-queues it.
+
+### 10.2 The post is "Only me" — or refused because the account is public
+
+Three symptoms, one cause: TikTok has not audited the app yet.
+
+| Symptom | Means | Fix |
+|---|---|---|
+| The post is live, but only you can see it | expected — every direct post is Only me until the audit | make it public by hand: open the post → ⋯ → Privacy settings → Everyone |
+| `FAILED`: "Until TikTok approves this app, direct posts only work when your TikTok account is set to private…" (`unaudited_client_can_only_post_to_private_accounts`) | the account was public when the post went out | account private → **Publish now** → wait for `PUBLISHED` → account public → make the post public |
+| Refused at scheduling with "Until TikTok approves this app, direct posts can only be private (Only me).", or `FAILED` with "…can only be private (Only me) — edit the post." | a privacy wider than Only me — or Audited was ticked and later unticked | edit the post and choose Only me (`src/services/tiktokPublish.ts:94-96`, `:290-292`) |
+
+Before switching the account back to public after a run of posts, make sure nothing is still going
+out:
+
+```sql
+SELECT id, status, post_type, scheduled_time
+  FROM scheduled_posts
+ WHERE platform = 'tiktok'
+   AND platform_options->>'mode' = 'direct'
+   AND status IN ('PENDING', 'PUBLISHING', 'PROCESSING')
+ ORDER BY scheduled_time;
+```
+
+Empty is safe. A row due later will fail if the account is public by then. The whole workflow is
+`docs/TIKTOK_GUIDE.md` §6.3. Once the audit passes, tick Audited (guide §5.2) — and note that posts
+scheduled before the tick keep Only me until they are edited.
+
+### 10.3 `url_ownership_unverified`, or "TikTok could not fetch the photos"
+
+Photo posts only. TikTok pulls each image itself, from `<Public site address>/api/uploads/<uuid>.jpg`
+(`.webp` for WebP), and only from the URL prefix verified in its portal
+(`src/services/tiktokPublish.ts:396-400`). Check in this order:
+
+1. **Is the prefix verified?** Portal → URL properties → `https://msg-response-auto.vercel.app/`
+   shows verified. If not, guide §2.5.
+2. **Is every verification file still served?**
+
+   ```sql
+   SELECT key, left(value, 300) AS value
+     FROM app_settings
+    WHERE key IN ('tiktok.verification_filename', 'tiktok.verification_history');
+   ```
+
+   then, for each file name:
+
+   ```bash
+   curl -fsS https://msg-response-auto.vercel.app/tiktokAbC123.txt
+   ```
+
+   Healthy: the file's one line. A `404` means that name is no longer saved — the history keeps the
+   last ten only (`src/services/appSettings.ts:196-206`). Save it again.
+3. **Is the Public site address that same origin?**
+
+   ```sql
+   SELECT value FROM app_settings WHERE key = 'app.public_base_url';
+   ```
+
+   It must be `https://msg-response-auto.vercel.app`. NULL falls back to `PUBLIC_BASE_URL`; with
+   both unset, photo posts fail with "…none is set — add it in Settings → TikTok app."
+   (`src/services/tiktokPublish.ts:397-399`).
+4. **Does every image answer?**
+
+   ```sql
+   SELECT unnest(COALESCE(media_urls, ARRAY[media_url])) AS url
+     FROM scheduled_posts
+    WHERE id = '<post id>';
+   ```
+
+   then, for each `…/api/uploads/<uuid>`:
+
+   ```bash
+   curl -sI https://msg-response-auto.vercel.app/api/uploads/<uuid>.jpg | grep -iE '^(HTTP|content-type)'
+   ```
+
+   Healthy: `200` with `image/jpeg` or `image/webp`. A `404` means the upload was deleted after the
+   post was scheduled: upload the image again and edit the post.
+
+Then **Publish now**.
+
+### 10.4 "Reconnect TikTok" / the token is invalid
+
+Symptom: the Settings card says **Needs reconnecting** with "Last problem: …"; TikTok posts fail
+with "…reconnect TikTok in Settings." or "TikTok is not connected for this account — connect it
+in Settings."; scheduling a TikTok post is refused with a 409.
+
+What does it: a refresh or a publish call answered with `access_token_invalid`, `invalid_grant`,
+`scope_not_authorized` or `scope_permission_missed` marks the connection `invalid`
+(`src/services/tiktok.ts:95-100`, `src/services/tiktokConnections.ts:273-286`, `:360-367`).
+Transient failures never do (`:288-290`). The daily cron refreshes every active connection, so a
+revoked account usually shows up the morning after (`src/routes/api.ts:890`).
+
+| Cause | Tell |
+|---|---|
+| the yearly expiry | `refresh_expires_at` has passed — the card warned for 30 days before |
+| the creator removed the app in TikTok | no row at all: `authorization.removed` deleted it. If that webhook was refused (§10.6), the row stays until the next refresh fails with `invalid_grant` |
+| the client key or secret changed — sandbox ↔ production | every connection fails its next refresh with `invalid_grant` (guide §8.3) |
+| a scope was withdrawn in the portal | `scope_not_authorized` |
+
+**Fix: the workspace owner presses Reconnect** (Settings → TikTok). There is nothing else — a dead
+refresh token cannot be revived. Then retry the posts that failed in the meantime with **Publish
+now**. Connect's own error toasts (cancelled, link expired, account in another workspace, exchange
+refused) are in guide §4.2; the log line `tiktok.oauth_callback_failed` carries TikTok's reason.
+
+Two sentences that look like this and are not:
+
+- "The TikTok token is being refreshed by another request — retry in a moment." — another
+  invocation held the refresh claim (`src/services/tiktokConnections.ts:322`). Retry. A claim older
+  than 2 minutes is taken over (`:31`, `:252`).
+- "This post is set to post directly, but TikTok has not granted direct posting — reconnect TikTok
+  in Settings." — the connection predates the Direct Post switch. Reconnect once
+  (`src/services/tiktokPublish.ts:497-499`); the token was never dead.
+
+### 10.5 "The drafts never showed up."
+
+Inbox mode (`video.upload`). **Known and unresolved.** On 2026-09-23/24 TikTok reported six drafts
+as delivered — the rows went to `IN_INBOX` — and none was ever found: no notification on the phone,
+nothing among TikTok Studio's drafts on the web. `IN_INBOX` records what TikTok said, not what
+anyone can see.
+
+What it costs meanwhile:
+
+- Each one counts against TikTok's 5 unposted drafts per 24 hours, and at five the app **holds** the
+  next inbox post: status back to `PENDING`, `error_log` "Waiting for TikTok: *n* drafts from the last
+  24 hours…", log line `cron.publish_held_tiktok_inbox`, and **Publish now** answers 409
+  (`src/services/tiktokPublish.ts:486-491`, `:555-563`; `src/routes/api.ts:816-819`, `:2593-2596`).
+- The rows stay `IN_INBOX`. The sweep asks about them every 10 minutes for 7 days, then stops
+  (`src/services/tiktokPublish.ts:594-598`).
+- Nothing in the app can list or delete a TikTok draft.
+
+What is counted right now — the same query as `pendingInboxShares`
+(`src/services/tiktokPublish.ts:190-201`), and the number on the Settings card's "Drafts waiting in
+your TikTok inbox (last 24 hours)":
+
+```sql
+SELECT status, count(*)
+  FROM scheduled_posts
+ WHERE platform = 'tiktok'
+   AND COALESCE(platform_options->>'mode', 'inbox') = 'inbox'
+   AND status IN ('PUBLISHING', 'PROCESSING', 'IN_INBOX')
+   AND claimed_at > NOW() - INTERVAL '24 hours'
+ GROUP BY status;
+```
+
+**Fix: switch to Direct Post** (guide §5.1) and post with the private-account workflow (guide §6.3).
+Direct posts do not count against the draft limit, and a held inbox post can be edited to "Post
+directly to my profile". If you do test inbox mode again, check that the card's display name is the
+account open on the phone, and that the TikTok app is current — 31.8 or newer for photo drafts
+(`app_version_check_failed`).
+
+### 10.6 The webhook signature
+
+Symptom: the Vercel logs show `tiktok.webhook_signature_rejected { has_header, app_configured }`
+and TikTok's deliveries get a `401` (`src/routes/tiktok.ts:157-165`). As with Meta (§2.3), a
+rejection writes nothing, so the logs are the only evidence.
+
+It costs less than on the Meta side. The webhook is one of three writers; the inline poll and the
+sweep still settle every post, only later (FLOWS.md §6.5). The real loss is
+`authorization.removed`: when a creator removes the app in TikTok, the stored connection is not
+deleted until its next refresh fails — and `/data-deletion` promises that deletion.
+
+| `has_header` | `app_configured` | Cause |
+|---|---|---|
+| `false` | — | not TikTok, or something on the way stripped the header |
+| `true` | `false` | no client key and secret saved (guide §3) |
+| `true` | `true` | TikTok signs with a different secret from the one saved — most likely the **sandbox versus production** secret, or a secret reset in the portal |
+
+The signature is HMAC-SHA256 of `"<t>.<raw body>"` keyed with the **client secret**
+(`src/services/tiktok.ts:766-789`). To prove the saved secret is the portal's, sign a harmless body
+with the secret copied from the portal and send it. Its event name is one the app does not know,
+so it is acknowledged and ignored, and nothing is written (`src/services/tiktokPublish.ts:662-663`):
+
+```bash
+read -rs TT_SECRET && export TT_SECRET   # paste the portal's client secret; it is not echoed
+node --input-type=module -e "
+import crypto from 'crypto';
+const body = JSON.stringify({ event: 'probe.signature_check', content: '{}' });
+const t = Math.floor(Date.now() / 1000);
+const s = crypto.createHmac('sha256', process.env.TT_SECRET).update(t + '.' + body).digest('hex');
+const r = await fetch('https://msg-response-auto.vercel.app/api/tiktok/webhook', {
+  method: 'POST', headers: { 'Content-Type': 'application/json', 'Tiktok-Signature': 't=' + t + ',s=' + s }, body });
+console.log(r.status, await r.text());"
+unset TT_SECRET
+```
+
+- `200 {"received":true}` — the saved secret is that portal app's. If TikTok's real deliveries are
+  still refused, they come from the *other* app: sandbox versus production.
+- `401` — the saved secret is different. Paste the portal's into Settings → TikTok app → Client
+  secret → **Save TikTok app**, and run the probe again.
+
+Also confirm the portal's webhook URL is exactly `https://msg-response-auto.vercel.app/api/tiktok/webhook`.
+Healthy deliveries log `tiktok.webhook_applied` with an `outcome` such as `post_published`;
+`ignored:unknown_publish_id` is normal for a post this app did not send
+(`src/services/tiktokPublish.ts:655-686`).
+
+### 10.7 A status stuck in `PROCESSING` (or `PUBLISHING`)
+
+```sql
+SELECT id, status, post_type, claimed_at, status_checked_at,
+       external_publish_id IS NOT NULL AS reached_tiktok, left(error_log, 120) AS err
+  FROM scheduled_posts
+ WHERE platform = 'tiktok' AND status IN ('PUBLISHING', 'PROCESSING', 'IN_INBOX')
+ ORDER BY claimed_at;
+```
+
+| What you see | Means | Do |
+|---|---|---|
+| `PROCESSING`, `status_checked_at` recent | the sweep is asking and TikTok is still working | wait. After 24 h of silence the sweep fails it with "TikTok did not confirm this upload within 24 hours…" (`src/services/tiktokPublish.ts:617-620`) |
+| `PROCESSING`, `status_checked_at` old or NULL | nothing is asking: no drain has run. The sweep runs only inside `/api/jobs/drain` and the daily cron (`src/routes/api.ts:373`, `:894`) | check the drainers (§5.1); a working webhook would have moved it anyway (§10.6) |
+| `PROCESSING`, `status_checked_at` advancing but never settling, `tiktok.reconcile_row_failed` in the logs | the status call itself fails, usually on the token | §10.4; the next sweep settles it |
+| `PUBLISHING`, `claimed_at` more than 15 minutes ago | the invocation died mid-send, and only the daily cron releases it back to `PENDING` (`src/routes/api.ts:845-852`) | wait for 00:00 UTC, or call `/api/cron/publish` knowing it publishes everything due (§4.2). With `reached_tiktok` true, the retry asks TikTok before sending anything again |
+| `IN_INBOX` | an inbox draft waiting for the creator, not stuck | §10.5 |
+
+To make the sweep run now — it also publishes every due post and runs queued DM jobs, as §1 warns:
+
+```bash
+curl -fsS -H "Authorization: Bearer $CRON_SECRET" https://msg-response-auto.vercel.app/api/jobs/drain
+```
+
+Export the current `CRON_SECRET` first; the copy in `.env` was not updated when it was rotated on
+2026-09-22. The response ends with `"tiktok":{"checked":N,"settled":N,"gaveUp":N}` — `settled`
+counts rows that moved.
+
+---
+
+## 11. Before you touch anything: the checks that are free
 
 ```bash
 npm run typecheck    # tsc --noEmit
