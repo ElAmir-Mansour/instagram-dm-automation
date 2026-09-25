@@ -130,8 +130,8 @@ describe('scheduleDraft', () => {
 
         const [meta] = inserts();
         assert.equal(inserts().length, 1);
-        assert.match(meta!.sql, /VALUES \(\$1, \$2, 'carousel', \$3, \$4, \$5::text\[\], \$6, 'PENDING', NULL, \$7, \$8::jsonb\)/);
-        const [creator, platform, caption, mediaUrl, mediaUrls, when, groupId, options] = meta!.params;
+        assert.match(meta!.sql, /VALUES \(\$1, \$2, 'carousel', \$3, \$4, \$5::text\[\], \$6, 'PENDING', NULL, \$7, \$8::jsonb, \$9::jsonb\)/);
+        const [creator, platform, caption, mediaUrl, mediaUrls, when, groupId, options, metaOptions] = meta!.params;
         assert.equal(creator, TENANT);
         assert.equal(platform, 'both');
         assert.equal(caption, CAROUSEL.captions.instagram);
@@ -140,6 +140,8 @@ describe('scheduleDraft', () => {
         assert.equal((when as Date).toISOString(), WHEN);
         assert.match(groupId, UUID);
         assert.equal(options, null);
+        // No altText from the writer: the cover's own words stand in; the bare cta has none.
+        assert.deepEqual(JSON.parse(metaOptions), { alt_texts: ['عنوان'] });
 
         assert.equal(outcome.draft.status, 'scheduled');
         assert.deepEqual(outcome.draft.schedule, {
@@ -304,6 +306,36 @@ describe('runTikTokBatch', () => {
         queued = [queuedDraft(D1, [up(TT1), up(TT2)])];
         await assert.rejects(runTikTokBatch(TENANT, NOW), isStudioError(409));
         assert.ok(!statements.some((s) => /FOR UPDATE/.test(s.sql)));
+        assert.equal(inserts().length, 0);
+    });
+});
+
+describe('scheduleDraft — Instagram reach levers (GROWTH.md §4)', () => {
+    const metaOptionsOf = () => JSON.parse(inserts()[0]!.params[8]);
+
+    it('carries the writer’s alt text for each slide onto the Meta row', async () => {
+        draft = draftRow({
+            carousel: {
+                ...CAROUSEL,
+                slides: [{ kind: 'cover', title: 'عنوان', altText: 'غلاف: خمس نصائح للبرومبت' }, { kind: 'cta', altText: 'اكتب دفتر' }],
+            },
+        });
+        await scheduleDraft(TENANT, DRAFT, { scheduled_time: WHEN, tiktok: 'none' });
+        assert.deepEqual(metaOptionsOf(), { alt_texts: ['غلاف: خمس نصائح للبرومبت', 'اكتب دفتر'] });
+    });
+
+    it('takes the schedule panel’s own alt texts and collaborators over the writer’s', async () => {
+        await scheduleDraft(TENANT, DRAFT, {
+            scheduled_time: WHEN, tiktok: 'none', alt_texts: ['one', ''], collaborators: ['@Partner.One'],
+        });
+        assert.deepEqual(metaOptionsOf(), { alt_texts: ['one'], collaborators: ['partner.one'] });
+    });
+
+    it('refuses more than 3 collaborators before writing anything', async () => {
+        await assert.rejects(
+            scheduleDraft(TENANT, DRAFT, { scheduled_time: WHEN, tiktok: 'none', collaborators: ['a', 'b', 'c', 'd'] }),
+            (err: unknown) => err instanceof StudioError && err.status === 400 && /at most 3 collaborators/.test(err.message),
+        );
         assert.equal(inserts().length, 0);
     });
 });

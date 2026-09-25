@@ -13,17 +13,19 @@
 import crypto from 'crypto';
 import { queryRows } from '../../db/query.js';
 import type {
-    CampaignRow, CarouselDraftRow, DraftSchedule, DraftTikTokIntent, ScheduledPostRow, TikTokPostOptions,
+    CampaignRow, CarouselDraftRow, DraftSchedule, DraftTikTokIntent, MetaPostOptions, ScheduledPostRow, TikTokPostOptions,
 } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
 import { getTikTokPostingFlags, type TikTokPostingFlags } from '../appSettings.js';
 import { matchCampaign } from '../matching.js';
+import { validateMetaOptions } from '../metaOptions.js';
 import { validatePostMedia } from '../postMedia.js';
 import { getConnection } from '../tiktokConnections.js';
 import { validateTikTokOptions } from '../tiktokPublish.js';
 import type { Carousel } from './carouselTypes.js';
 import { type Exec, isPlainObject, StudioError, unique, withTransaction } from './common.js';
 import { presentDraft, type Draft } from './drafts.js';
+import { altTextFor } from './generate.js';
 
 /** Between the batch's rows. TikTok allows its photo init 6 calls a minute per token. */
 export const BATCH_STAGGER_MS = 40_000;
@@ -72,15 +74,18 @@ async function checkedMedia(platform: 'both' | 'tiktok', urls: unknown): Promise
 async function insertPost(exec: Exec, row: {
     creatorId: string; platform: 'both' | 'tiktok'; caption: string; mediaUrl: string; mediaUrls: string[];
     when: Date; groupId: string; options: TikTokPostOptions | null;
+    /** Instagram's reach levers (v22), for the Meta row only. */
+    metaOptions?: MetaPostOptions | null;
 }): Promise<ScheduledPostRow> {
     // The column list and order of POST /posts/scheduled's insert, so the two cannot drift.
     const { rows } = await exec.query<ScheduledPostRow>(
         `INSERT INTO scheduled_posts
-             (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options)
-         VALUES ($1, $2, 'carousel', $3, $4, $5::text[], $6, 'PENDING', NULL, $7, $8::jsonb) RETURNING *`,
+             (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options)
+         VALUES ($1, $2, 'carousel', $3, $4, $5::text[], $6, 'PENDING', NULL, $7, $8::jsonb, $9::jsonb) RETURNING *`,
         [
             row.creatorId, row.platform, row.caption, row.mediaUrl, row.mediaUrls, row.when, row.groupId,
             row.options ? JSON.stringify(row.options) : null,
+            row.platform !== 'tiktok' && row.metaOptions ? JSON.stringify(row.metaOptions) : null,
         ]
     );
     if (!rows[0]) throw new Error('scheduled_posts insert returned no row.');
@@ -144,6 +149,14 @@ export async function scheduleDraft(creatorId: string, draftId: string, body: un
     const { carousel, render } = draft;
 
     const meta = await checkedMedia('both', render.ig);
+    // Instagram's reach levers for the Meta row (GROWTH.md §4): an alt text per slide — the
+    // schedule panel's when it sends its own, else the writer's, else the slide's own words — and
+    // collaborators when chosen. Checked like the composer's: POST /posts/scheduled's rules.
+    const metaOptions = validateMetaOptions({
+        alt_texts: b.alt_texts !== undefined ? b.alt_texts : carousel.slides.slice(0, meta.mediaUrls.length).map(altTextFor),
+        collaborators: b.collaborators,
+    }, { platform: 'both', postType: 'carousel', slideCount: meta.mediaUrls.length });
+    if (!metaOptions.ok) throw new StudioError(400, metaOptions.error);
     let tiktokMedia: { mediaUrl: string; mediaUrls: string[] } | null = null;
     let tiktokOptions: TikTokPostOptions | null = null;
     if (tiktok !== 'none') {
@@ -172,6 +185,7 @@ export async function scheduleDraft(creatorId: string, draftId: string, body: un
         const rows = [await insertPost(client, {
             creatorId, platform: 'both', caption: carousel.captions.instagram,
             mediaUrl: meta.mediaUrl, mediaUrls: meta.mediaUrls, when, groupId, options: null,
+            metaOptions: metaOptions.options,
         })];
         if (tiktok === 'scheduled' && tiktokMedia) {
             rows.push(await insertPost(client, {

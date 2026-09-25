@@ -186,8 +186,30 @@ export interface ScheduledPostRow {
     status_checked_at: Timestamptz | null;
     /** v19. TikTok per-post options; NULL means inbox mode. See `TikTokPostOptions`. */
     platform_options: TikTokPostOptions | null;
+    /** v22. Instagram reach levers; NULL when none were chosen. See `MetaPostOptions`. */
+    meta_options: MetaPostOptions | null;
     created_at: Timestamptz;
 }
+
+/**
+ * The Instagram reach levers a Meta row carries in `meta_options` (v22, GROWTH.md §4). Each is
+ * optional, validated by `validateMetaOptions` (src/services/metaOptions.ts), and applied at
+ * publish time only where Instagram takes it, so an edit that changes the post type leaves
+ * the stored value harmless rather than wrong.
+ */
+export interface MetaPostOptions {
+    /** A single image's alt text, ≤ 1000 characters (Instagram's limit). */
+    alt_text?: string;
+    /** A carousel's, aligned with `media_urls`; null or absent for a slide with none. */
+    alt_texts?: (string | null)[];
+    /** Up to 3 Instagram usernames, without the @. Feed image, reel or carousel. */
+    collaborators?: string[];
+    /** Reels only: shown to non-followers first. */
+    trial_reel?: { graduation: TrialReelGraduation };
+}
+
+/** `trial_params.graduation_strategy`: graduate by hand in the app, or automatically on performance. */
+export type TrialReelGraduation = 'MANUAL' | 'SS_PERFORMANCE';
 
 /**
  * What a TikTok row carries in `platform_options` (v19). Direct Post takes every choice TikTok's
@@ -571,4 +593,159 @@ export interface StudioWorkerRow {
     last_seen_at: Timestamptz | null;
     created_at: Timestamptz;
     revoked_at: Timestamptz | null;
+}
+
+// ─── Growth & SEO hub (v22, GROWTH.md) ──────────────────────────────────────────────────
+
+export type InsightPlatform = 'instagram' | 'facebook' | 'tiktok';
+
+/**
+ * One post's numbers. Every key is optional because a metric the platform did not return is
+ * ABSENT, never 0: the API reports it as null, and "unknown" never reads as "nobody saw it".
+ */
+export interface PostMetrics {
+    views?: number;
+    reach?: number;
+    likes?: number;
+    comments?: number;
+    saved?: number;
+    shares?: number;
+    total_interactions?: number;
+    follows?: number;
+    profile_visits?: number;
+    /** Instagram `ig_reels_avg_watch_time`; Facebook `post_video_avg_time_watched`. Milliseconds. */
+    avg_watch_time_ms?: number;
+    /** Instagram `ig_reels_video_view_total_time`, milliseconds. */
+    video_view_total_time_ms?: number;
+    /** Facebook `post_video_views` (3-second plays). */
+    video_views?: number;
+    reposts?: number;
+    /** Facebook: `post_clicks`. */
+    clicks?: number;
+}
+
+export interface PostInsightRow {
+    id: string;
+    creator_id: string;
+    platform: InsightPlatform;
+    /** The platform's id, so posts published outside the app count too. */
+    media_id: string;
+    /** The app's own row, when the app published it. */
+    scheduled_post_id: string | null;
+    /** REELS, CAROUSEL_ALBUM, IMAGE, VIDEO, TEXT. */
+    media_type: string | null;
+    permalink: string | null;
+    caption: string | null;
+    thumbnail_url: string | null;
+    published_at: Timestamptz | null;
+    metrics: PostMetrics;
+    fetched_at: Timestamptz;
+}
+
+/**
+ * One account-day. `followers` is the follower total: Instagram's `followers_count` on the day a
+ * sync ran, Facebook's `page_follows` (a running total, never summed).
+ */
+export interface AccountDayMetrics {
+    followers?: number;
+    reach?: number;
+    views?: number;
+    accounts_engaged?: number;
+    /** Instagram `profile_views` (total_value); Facebook `page_views_total`. */
+    profile_views?: number;
+    follows?: number;
+    unfollows?: number;
+    website_clicks?: number;
+    total_interactions?: number;
+    likes?: number;
+    comments?: number;
+    saves?: number;
+    shares?: number;
+    profile_links_taps?: number;
+    /** Instagram `reach` / `views` with `breakdown=follow_type`: who the content reached. */
+    reach_followers?: number;
+    reach_non_followers?: number;
+    views_followers?: number;
+    views_non_followers?: number;
+    /** Instagram `reach` with `breakdown=media_product_type`: REEL, POST, CAROUSEL_CONTAINER, STORY. */
+    reach_by_surface?: Record<string, number>;
+    /** Instagram `follower_count` (100+ followers only): new followers that day. */
+    new_followers?: number;
+    /** Facebook `page_post_engagements`. */
+    post_engagements?: number;
+}
+
+/**
+ * `day` is selected as `to_char(day, 'YYYY-MM-DD')` everywhere: pg's default parser turns a
+ * DATE into a Date at LOCAL midnight, which shifts a day on any server not running in UTC.
+ */
+export interface AccountInsightsDailyRow {
+    creator_id: string;
+    platform: InsightPlatform | string;
+    day: string;
+    metrics: AccountDayMetrics;
+}
+
+export interface HashtagSet {
+    name: string;
+    /** Each with its leading #. */
+    tags: string[];
+}
+
+export interface GrowthAudience {
+    /** ISO 3166-1 alpha-2, upper case, e.g. 'SA'. */
+    countries?: string[];
+    /** ISO 639-1, lower case, e.g. 'ar'. */
+    languages?: string[];
+    /** IANA, e.g. 'Asia/Riyadh'. The best-times heatmap is drawn in it. */
+    timezone?: string;
+}
+
+export interface GrowthSettings {
+    keywords: string[];
+    hashtag_sets: HashtagSet[];
+    /** Instagram usernames, lower case, without the @. */
+    competitors: string[];
+    audience: GrowthAudience;
+}
+
+/** A platform's state, as `/api/growth/status` reports it. */
+export type GrowthPlatformStatus = 'ok' | 'missing_permission' | 'not_connected';
+
+/** What one sync of one platform did. */
+export interface GrowthPlatformSync {
+    status: GrowthPlatformStatus | 'error';
+    /** post_insights rows written. */
+    posts: number;
+    /** Of those, rows whose insights edge answered. */
+    with_insights: number;
+    /** account_insights_daily rows written. */
+    days: number;
+    /** A usage header passed 80%, or Meta throttled: the optional calls stopped early. */
+    throttled: boolean;
+    error: string | null;
+}
+
+/** `growth_settings.last_sync`: the last run, so the status endpoint can report it without Meta. */
+export interface GrowthSyncState {
+    finished_at: string;
+    instagram: GrowthPlatformSync;
+    facebook: GrowthPlatformSync;
+    /** From `debug_token`, or null when it could not be asked. */
+    scopes: string[] | null;
+    missing: string[];
+    /**
+     * Metric names Meta refused (#100) under this API version, by request kind (`ig_feed`,
+     * `fb_post`, …), so later runs don't ask again. Cleared when `API_VERSION` changes.
+     */
+    unsupported?: { version: string; metrics: Record<string, string[]> };
+    /** Followers when the sync ran, per platform, for the "100+ followers" notes. */
+    followers?: { instagram: number | null; facebook: number | null };
+}
+
+export interface GrowthSettingsRow extends GrowthSettings {
+    creator_id: string;
+    updated_at: Timestamptz | null;
+    last_sync_at: Timestamptz | null;
+    last_sync: GrowthSyncState | null;
 }
