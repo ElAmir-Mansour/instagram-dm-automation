@@ -209,6 +209,39 @@
      ground and not a hand-mixed tint. Still no amber, still no warning stripe.
 
   ═══════════════════════════════════════════════════════════════════════════
+  WHAT CHANGED ON 2026-09-25 — TikTok, carousels and Carousel Studio
+  ═══════════════════════════════════════════════════════════════════════════
+
+  The product grew three things the page did not sell: TikTok as a third
+  platform, carousel posts, and Carousel Studio. What was added, and the
+  rules it follows:
+
+  1. TWO BANDS FOR THE STUDIO, between the Arabic band and the dashboard.
+     The first takes the hero's own shape one step down (copy at the reading
+     start, an artifact at the reading end); the second, "How the Studio
+     works", reuses the loop's numbered rail because the Studio is a sequence
+     too. The rail's scroll reveal is NOT reused: `.studio-steps` opts out,
+     so the page still has exactly one motion moment.
+  2. THE SLIDES ARE CSS. Three 4:5 tiles and no image request, exposed to
+     assistive technology as ONE role="img" whose label says what it shows.
+     The screenshot tile is pinned LTR: it is a picture of a screen, and a
+     picture does not mirror.
+  3. TIKTOK IN THE EYEBROW, AND THE LOOP SCOPED. With three platforms named
+     above the headline, "a keyword in a comment" could be read as covering
+     TikTok. It does not: the comment-to-DM path is Meta-only. So the loop's
+     lead now says "on Instagram and Facebook", and the refusals say it again.
+  4. THE DASHBOARD LIST went from four rows to six (carousels, TikTok), and
+     "Scheduled posts" names all three platforms.
+  5. A NEW REFUSAL: no public TikTok auto-posting until TikTok approves the
+     app. It is a limit of TikTok's audit, not of the code, and the page says
+     whose decision it is.
+  6. NO NAV LINK. The bar is byte-identical across all five public pages and
+     measured 365px of 375 at its tightest, so a third link does not fit; the
+     hero lede links to the Studio in-page instead. The SHARED footer still
+     reads "Instagram and Facebook" and names only Meta's trademarks —
+     changing it means changing all five pages, which this change does not.
+
+  ═══════════════════════════════════════════════════════════════════════════
 
   EVERY CLAIM BELOW EXISTS IN THE CODE. The evidence, per claim:
 
@@ -268,6 +301,63 @@
         DESIGN.md §5
     open source, MIT, self-hostable
         LICENSE, README.md
+
+  Added 2026-09-25:
+    TikTok publishing through the official Content Posting API, video and
+    photo posts, beside Instagram and Facebook from one entry
+        src/services/tiktok.ts, src/services/tiktokPublish.ts; photo posts
+        through /v2/post/publish/content/init/ (commit 8be1837); the
+        composer's "Also send to TikTok" (c634559)
+    the controls TikTok requires: privacy with no default, interactions,
+    commercial-content disclosure, explicit consent
+        the Direct Post panel in dashboard/js/pages/posts.js (1bf9e8a),
+        re-validated server-side by validateTikTokOptions in tiktokPublish.ts
+    until TikTok audits the app, a direct post is "Only me" on a private
+    account, or goes to the creator's TikTok drafts
+        CLAUDE.md "TikTok" and "Direct Post (v19)"; src/services/studio/
+        schedule.ts:8-11; i18n studio.tiktok.batchPrivate
+    carousels of 2-10 images on Instagram and Facebook, 2-35 on TikTok, with
+    an optional 9:16 set of TikTok's own
+        src/services/postMedia.ts (the counts); posts.js tiktok_media_urls
+    Studio: up to three lessons or an idea; the keyword suggested when left
+    empty
+        dashboard/js/pages/studio.js; i18n studio.new.fromLesson/fromIdea,
+        studio.new.keywordHint
+    every slide but the cover and the ask cites its sources, a slide with no
+    source is repaired or dropped, and the writer is told to invent nothing
+        src/services/studio/generate.ts:357 (sources), :932 (a slide with none
+        is a hard problem), :1078 (drop); src/services/studio/prompts.ts:314
+    the screenshots are real frames from the lesson's video
+        STUDIO.md §7 "Shots" and §9: ffmpeg, at the moment's own timestamp
+    brand kit, voice guide, calls to action per platform
+        src/services/studio/settingsTypes.ts (BrandKit, VoiceProfile, CtaConfig)
+    a keyword and a DM with every carousel; a campaign that already answers
+    the keyword is reused rather than duplicated
+        generate.ts (the draft's campaign); schedule.ts planCampaign() :95-110
+    Plan my week: proposals on the next free slots, kept or dropped, then all
+    written with one click
+        src/services/studio/drafts.ts planDrafts() :687-723; studio.js planWeek
+    TikTok's copy of a Studio carousel is scheduled with it, or queued and
+    sent as a batch while the app is unaudited
+        schedule.ts TIKTOK_INTENTS ('none' | 'queue' | 'scheduled')
+    renders at 4:5 for Instagram and 9:16 for TikTok
+        aicourse-captions src/carousel/types.ts:5-6 (1080×1350, 1080×1920)
+    the worker: full videos never leave the computer, the AI gets a small
+    preview, and nothing listens for a connection
+        aicourse-captions scripts/studio/proxy.mjs (PROXY_ARGS: 1 fps, 640px,
+        mono audio) and scripts/studio-worker.mjs:343-393; STUDIO.md, "The
+        worker only ever calls out"; no createServer or listen() anywhere in
+        the worker, which claims its jobs by POST /api/studio/worker/claim
+
+  AND DELIBERATELY NOT CLAIMED, on the same terms as the list further down:
+    · No time for a Studio draft. The dashboard says up to two minutes each,
+      and that depends on Gemini and on the worker being switched on.
+    · Not that the preview is deleted. The worker deletes it best-effort and
+      Gemini expires it after 48 hours either way; "only small previews go to
+      the AI" is true regardless, so it is the claim.
+    · No model name. The writer walks a chain of models that has already had
+      to change once (cec898d); a name here would be a second copy to forget.
+    · Nothing about TikTok comments or TikTok messages. There is no such path.
 
   ONE CLAIM WAS MOVED BECAUSE IT WAS IN THE WRONG PLACE. The previous version
   attached the automated-service disclosure to step 2, the campaign private
@@ -354,6 +444,19 @@
       --text-muted on --surface-glass on --surface-sunken (the refusal marks,
       a graphic, so the floor is 3:1 rather than 4.5:1)
           7.19 dark · 4.59 light
+  Added 2026-09-25, for the Studio's slides. The slide is opaque
+  --surface-sunken with grid lines of --surface-glass, so the stack below it
+  does not matter, and every pair is measured ON A LINE, the worst case:
+      --text-strong  on a line        14.56 dark · 12.91 light
+      --text-default on a line        10.42 dark ·  8.71 light
+      --accent-text on --accent-soft on a line (the sign-off, the keyword)
+                                       5.98 dark ·  5.13 light
+      --text-strong on --surface-sunken (the timestamp chip)
+                                      17.60 dark · 14.40 light
+  --text-muted is kept OFF the slides on purpose: on a line in light it is
+  4.59, which passes, but by less than the grid is worth. The captions under
+  the slides are --text-muted on the card, measured at the corner sheen's
+  peak: 5.85 dark · 5.86 light (7.20 dark away from the sheen).
   The tightest of all of them is 4.84:1, in light, and the floor is 4.5.
   The one non-text colour is the heart glyph, --danger as a fill: 4.47:1 dark
   and 3.45:1 light against the card, both clear of the 3:1 floor for a
@@ -370,7 +473,7 @@
          carry a full light theme as a peer of dark. -->
     <meta name="color-scheme" content="dark light">
     <title>أوتوريبلاي برو — من تعليق إلى محادثة · AutoReply Pro</title>
-    <meta name="description" content="أوتوريبلاي برو: يردّ تلقائياً على تعليقات إنستجرام وفيسبوك برسالة خاصة، ويجيب عن الرسائل بالذكاء الاصطناعي، وينشر المجدول — بالعربية أولاً. AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, then answers the conversation with AI.">
+    <meta name="description" content="أوتوريبلاي برو: يردّ تلقائياً على تعليقات إنستجرام وفيسبوك برسالة خاصة، ويجيب عن الرسائل بالذكاء الاصطناعي، وينشر المجدول على إنستجرام وفيسبوك وتيك توك، ويحوّل دروسك المصوّرة إلى كاروسيل — بالعربية أولاً. AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, answers the conversation with AI, and publishes to Instagram, Facebook and TikTok, including carousels its Studio writes from your video lessons.">
 
     <!-- One design system in this repo, not three. Same file the dashboard,
          /pricing, /privacy and dashboard/eid.html load, so the front door and
@@ -1156,6 +1259,187 @@
             text-align: center;
         }
 
+        /* ─── Carousel Studio ──────────────────────────────────────────────────
+           The one new product surface on the page, so it is introduced in the
+           hero's own shape one step down: copy at the reading start, an
+           artifact at the reading end. The artifact is, again, the thing the
+           product EMITS (three slides of a carousel) rather than a picture of
+           the editor, for the same reason the hero shows a conversation and not
+           the inbox. */
+        .studio-grid {
+            display: grid;
+            gap: clamp(var(--space-6), 4vw, var(--space-7));
+            align-items: center;
+            margin-block-end: var(--space-6);
+        }
+        @media (min-width: 62rem) {
+            .studio-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+        }
+        .studio-grid .lede { margin-block-end: 0; }
+        /* Capped for the stacked layout: at tablet width a full-bleed card made
+           each slide 220px wide around 12px of text, which reads as empty. */
+        .studio-art { max-inline-size: 34rem; }
+
+        /* The slides. Three 4:5 tiles, the ratio the Studio renders for
+           Instagram, drawn in CSS and nothing else: no image request, nothing
+           to decode, and they take their theme from the tokens like everything
+           else. To assistive technology they are ONE picture (role="img", with
+           a label that says what it shows); the words inside are illustration.
+           Nothing inside a slide is --text-muted: see the header for the pairs. */
+        .slides {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: var(--space-3);
+        }
+        .slide-cell { display: flex; flex-direction: column; gap: var(--space-2); }
+        .slide {
+            aspect-ratio: 4 / 5;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-2);
+            padding: var(--space-3);
+            border-radius: var(--radius-md);
+            /* The Studio's one theme is a grid. A square grid is symmetric, so
+               this is the one gradient on the page that needs no :dir() rule.
+               The lines are --surface-glass, the faintest tint in tokens.css,
+               and every text colour here was measured ON a line, the worst case. */
+            background-color: var(--surface-sunken);
+            background-image:
+                linear-gradient(var(--surface-glass) 1px, transparent 1px),
+                linear-gradient(90deg, var(--surface-glass) 1px, transparent 1px);
+            background-size: 0.875rem 0.875rem;
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            font-size: var(--lp-micro);
+            line-height: var(--lp-lh-ui);
+            color: var(--text-default);
+        }
+        /* The accent edge is a logical BORDER, not an inset shadow with an x
+           offset: a border follows the radius and lands on the reading-start
+           edge in both directions from one declaration. */
+        .slide-cover { border-inline-start: 3px solid var(--accent); }
+        .slide-sig {
+            align-self: flex-start;
+            padding: 0 var(--space-2);
+            border-radius: var(--radius-pill);
+            background: var(--accent-soft);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
+            color: var(--accent-text);
+            font-weight: var(--fw-semibold);
+        }
+        .slide-title {
+            margin-block-start: auto;
+            font-size: clamp(0.8125rem, 0.72rem + 0.4vw, 1.0625rem);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-head);
+            color: var(--text-strong);
+            text-wrap: balance;
+        }
+        /* A frame from the lesson, drawn as a small window with the video's
+           clock in its corner. It is a picture OF a screen, and a picture does
+           not mirror, so it is pinned left-to-right: the window buttons and the
+           timestamp sit where the recording has them, in both documents. */
+        .shot {
+            direction: ltr;
+            position: relative;
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            padding: 0.4rem;
+            border-radius: var(--radius-xs);
+            background: var(--surface-solid);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+        }
+        .shot-bar {
+            inline-size: 1.3rem;
+            block-size: 0.3rem;
+            background: radial-gradient(circle at 0.15rem 50%, var(--border-strong) 0.15rem, transparent 0.16rem) 0 0 / 0.5rem 100% repeat-x;
+        }
+        .shot-row {
+            inline-size: 80%;
+            block-size: 0.3rem;
+            border-radius: var(--radius-pill);
+            background: var(--border-strong);
+        }
+        .shot-row + .shot-row { inline-size: 55%; background: var(--border-subtle); }
+        /* The thing the lesson is pointing at. */
+        .shot-hit {
+            inline-size: 45%;
+            block-size: 0.65rem;
+            margin-block-start: 0.15rem;
+            border-radius: var(--radius-xs);
+            background: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-ring);
+        }
+        .shot-time {
+            position: absolute;
+            inset-block-end: 0.3rem;
+            inset-inline-end: 0.3rem;
+            padding: 0 0.3rem;
+            border-radius: var(--radius-xs);
+            background: var(--surface-sunken);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-strong);
+            /* Latin digits on purpose: DESIGN.md §5, as on the loop's nodes. */
+            font-family: var(--font-latin);
+            font-size: var(--lp-micro);
+            line-height: var(--lp-lh-ui);
+            font-variant-numeric: tabular-nums;
+        }
+        .slide-text { color: var(--text-default); }
+        .slide-ask {
+            margin-block-start: auto;
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+        }
+        .slide-sub { margin-block-end: auto; color: var(--text-default); }
+        .slide-cap {
+            font-size: var(--lp-micro);
+            line-height: var(--lp-lh-ui);
+            color: var(--text-muted);
+        }
+
+        /* The Studio's closing detail list ends its band, and a .more row
+           carries its own bottom padding, which is exactly the unaccounted gap
+           the 2026-09-22 pass removed from the rest of the page. A closing rule
+           makes the section end at a border box again. */
+        .more-end { border-block-end: 1px solid var(--border-subtle); }
+
+        /* The worker, in one friendly line and one detail. A card rather than
+           a fourth beat: it is not a step, it is where step two's heavy work
+           happens, and it is the Studio's one trust statement. The laptop is a
+           symmetric glyph, so nothing here needs mirroring. */
+        .helper {
+            display: flex;
+            align-items: flex-start;
+            gap: var(--space-4);
+            margin-block-start: var(--space-7);
+            padding: clamp(var(--space-4), 2.5vw, var(--space-5));
+            max-inline-size: 52rem;
+        }
+        .helper-icon {
+            flex: none;
+            display: grid;
+            place-items: center;
+            inline-size: 2.75rem;
+            block-size: 2.75rem;
+            border-radius: var(--radius-md);
+            background: var(--accent-soft);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
+            color: var(--accent-text);
+        }
+        .helper-icon svg { inline-size: 1.35rem; block-size: 1.35rem; }
+        .helper p { margin: 0; max-inline-size: 62ch; }
+        /* A sentence, not a heading: it runs to four lines at 375px, and at
+           --lp-lh-head (1.15 in Latin) four bold lines set solid. Body leading. */
+        .helper .helper-line {
+            margin-block-end: var(--space-2);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-body);
+            color: var(--text-strong);
+        }
+        .helper .helper-detail { color: var(--text-muted); }
+
         /* ─── Capabilities ─────────────────────────────────────────────────────
            Two cards and four rows, not six cards. The two that carry the
            product get weight; the four that support it get a list. Equal
@@ -1487,9 +1771,12 @@
             from { opacity: 0; transform: translateY(14px); filter: blur(6px); }
             to   { opacity: 1; transform: none; filter: blur(0); }
         }
+        /* The comment loop's rail ONLY. "How the Studio works" reuses the rail's
+           markup, and it stays still on purpose: two reveals would make the
+           page's one motion moment into a pattern, and a pattern is decoration. */
         @supports (animation-timeline: view()) {
             @media (prefers-reduced-motion: no-preference) {
-                .beat {
+                .loop:not(.studio-steps) > .beat {
                     animation: lp-reveal linear both;
                     animation-timeline: view();
                     animation-range: entry 10% cover 30%;
@@ -1518,6 +1805,11 @@
                Pricing and Sign in on every phone. The shared chrome block
                squeezes the bar instead; see its 375px section. */
             .hero { padding-block-start: var(--space-6); }
+            /* A pill that wraps becomes a lozenge. With three platforms in it,
+               the English eyebrow measured 329px against a 328px column at
+               360px wide; 12px of inline padding instead of 16 keeps it on one
+               line from 353px up. 320 wraps, as the bar does. */
+            .eyebrow { padding-inline: var(--space-3); }
             .artifact { padding: var(--space-4); }
             .btn { flex: 1 1 100%; }
             .beat { padding-inline-start: calc(var(--space-5) + var(--space-3)); }
@@ -1544,6 +1836,12 @@
                 border-block-start: 1px solid var(--border-subtle);
             }
             .figures dt { flex: none; min-inline-size: 3.5ch; margin-block-end: 0; }
+            /* Three slides across 343px leaves each one ~98px wide; the gap and
+               the inner padding come down so the text keeps its 12px floor. */
+            .slides { gap: var(--space-2); }
+            .slide { padding: var(--space-2); }
+            .helper { gap: var(--space-3); padding: var(--space-4); }
+            .helper-icon { inline-size: 2.25rem; block-size: 2.25rem; }
             .terms { padding: var(--space-5) var(--space-4); }
             .cta { padding: var(--space-6) var(--space-5); }
         }
@@ -2041,11 +2339,13 @@
                 <section class="hero" aria-labelledby="hero-ar">
                     <div class="hero-grid">
                         <div>
-                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>إنستجرام وفيسبوك · بالعربية أولاً</p>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>إنستجرام وفيسبوك وتيك توك · بالعربية أولاً</p>
                             <h1 id="hero-ar">من تعليق إلى محادثة خاصة</h1>
                             <p class="lede">
                                 كلمةٌ مفتاحية في تعليق تُرسل الرسالة الخاصة، وتنشر الردّ العام،
                                 وتسجّل الإعجاب. وما يأتي بعدها يتولّاه الذكاء الاصطناعي بتعليماتك أنت.
+                                و<a href="#carousel-studio-ar">استوديو الكاروسيل</a> يحوّل دروسك
+                                المصوّرة إلى منشورات لإنستجرام وفيسبوك وتيك توك.
                             </p>
                             <div class="cta-row">
                                 <a class="btn btn-primary" href="/pricing">اطّلع على الباقات</a>
@@ -2083,7 +2383,7 @@
                 <!-- ─── The loop ─────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="loop-ar">
                     <h2 id="loop-ar">ماذا يحدث حين يعلّق أحدهم</h2>
-                    <p class="prose lead">ثلاث خطوات، والأولى وحدها من العميل. الباقي يجري من تلقاء نفسه:</p>
+                    <p class="prose lead">ثلاث خطوات على إنستجرام وفيسبوك، والأولى وحدها من العميل. الباقي يجري من تلقاء نفسه:</p>
 
                     <ol class="loop">
                         <li class="beat">
@@ -2172,6 +2472,171 @@
                     </p>
                 </section>
 
+                <!-- ─── Carousel Studio ──────────────────────────────────── -->
+                <section class="band" aria-labelledby="studio-ar">
+                    <!-- The in-page anchor is the grid, not the h2: jumping to the
+                         h2 would park the eyebrow above it under the sticky bar. -->
+                    <div class="studio-grid" id="carousel-studio-ar">
+                        <div>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>جديد · استوديو الكاروسيل</p>
+                            <h2 id="studio-ar">من درسٍ مصوَّر إلى كاروسيل</h2>
+                            <p class="lede">
+                                اختر درساً من دورتك، فيكتب الذكاء الاصطناعي الكاروسيل مما يشرحه
+                                ذلك الدرس فعلاً، وفيه لقطات حقيقية من الفيديو نفسه — بهويّتك أنت،
+                                وجاهزاً للجدولة.
+                            </p>
+                        </div>
+
+                        <aside class="card artifact studio-art" aria-label="مثال: كاروسيل من درس واحد">
+                            <p class="artifact-label">ثلاث شرائح من كاروسيل واحد</p>
+                            <div class="slides" role="img" aria-label="غلاف بعنوان الدرس، ثم شريحة من الدرس فيها لقطة من الفيديو، ثم شريحة ختام تطلب كتابة «دليل» في التعليقات.">
+                                <div class="slide-cell">
+                                    <div class="slide slide-cover">
+                                        <span class="slide-sig">علامتك</span>
+                                        <span class="slide-title">ابنِ وكيلك الأول</span>
+                                    </div>
+                                    <span class="slide-cap">الغلاف</span>
+                                </div>
+                                <div class="slide-cell">
+                                    <div class="slide">
+                                        <span class="shot">
+                                            <span class="shot-bar"></span>
+                                            <span class="shot-row"></span>
+                                            <span class="shot-row"></span>
+                                            <span class="shot-hit"></span>
+                                            <span class="shot-time">04:12</span>
+                                        </span>
+                                        <span class="slide-text">أعطِ الوكيل أداته الأولى</span>
+                                    </div>
+                                    <span class="slide-cap">من الدرس</span>
+                                </div>
+                                <div class="slide-cell">
+                                    <div class="slide">
+                                        <span class="slide-ask">اكتب <span class="kw">دليل</span> في التعليقات</span>
+                                        <span class="slide-sub">ويوصلك الرابط بالخاص</span>
+                                    </div>
+                                    <span class="slide-cap">الختام</span>
+                                </div>
+                            </div>
+                            <ul class="receipts">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    لقطات حقيقية من الفيديو
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    كلمة مفتاحية ورسالتها الخاصة
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    <span><bdi dir="ltr">4:5</bdi> لإنستجرام و<bdi dir="ltr">9:16</bdi> لتيك توك</span>
+                                </li>
+                            </ul>
+                        </aside>
+                    </div>
+
+                    <dl class="more more-end">
+                        <div>
+                            <dt>هويّتك وصوتك</dt>
+                            <dd>
+                                ألوانك وخطوطك وتوقيعك على كل شريحة، ودليلُ أسلوبٍ يكتب به الذكاء
+                                الاصطناعي بصوتك أنت ولهجتك أنت.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>دعواتك أنت إلى الفعل</dt>
+                            <dd>
+                                الشريحة الأخيرة، وسطر التعليق، والرسالة الخاصة، كلها بالكلمات التي
+                                تضعها في الإعدادات: سطرٌ لإنستجرام، وسطرٌ لتيك توك.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>كلمة مفتاحية لكل منشور</dt>
+                            <dd>
+                                كل كاروسيل يأتي بكلمته المفتاحية ورسالتها الخاصة، فيصبّ المنشور في
+                                الحلقة التي أعلاه. وإن كانت لك حملة تجيب عن الكلمة نفسها، أُعيد
+                                استخدامها بدل إنشاء أخرى.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>خطّط أسبوعي</dt>
+                            <dd>
+                                زرٌّ واحد يقترح منشورات الأسبوع من دروسك، موزّعةً على مواعيد نشرك
+                                الفارغة. تُبقي ما يعجبك، وتكتبها كلها بضغطة واحدة.
+                            </dd>
+                        </div>
+                    </dl>
+                </section>
+
+                <!-- ─── How the Studio works ─────────────────────────────── -->
+                <section class="band" aria-labelledby="studio-how-ar">
+                    <h2 id="studio-how-ar">كيف يعمل الاستوديو</h2>
+                    <p class="prose lead">ثلاث خطوات، الأولى والأخيرة منها لك، والتي بينهما على الذكاء الاصطناعي:</p>
+
+                    <!-- The loop's rail, reused because this is a sequence too.
+                         .studio-steps opts it out of the scroll reveal. -->
+                    <ol class="loop studio-steps">
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">1</span>
+                            <div>
+                                <h3>اختر درساً</h3>
+                                <p>
+                                    من مكتبة دروسك: درسٌ واحد أو حتى ثلاثة، أو فكرة تكتبها أنت. وإن
+                                    تركت الكلمة المفتاحية فارغة، اقترحها الاستوديو.
+                                </p>
+                            </div>
+                            <p class="detail">
+                                <span>ابدأ</span>
+                                <span class="chip">من درس</span>
+                                <span class="chip">من فكرة</span>
+                            </p>
+                        </li>
+
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">2</span>
+                            <div>
+                                <h3>يكتب الذكاء الاصطناعي الشرائح</h3>
+                                <p>
+                                    مما يشرحه الدرس فعلاً: كل شريحة بين الغلاف والختام تستند إلى
+                                    ملاحظات الدرس أو لحظاته، وما لا مصدر له يُعاد أو يُحذف. واللقطات
+                                    إطاراتٌ حقيقية من فيديو الدرس نفسه، لا صورٌ مولَّدة.
+                                </p>
+                            </div>
+                            <p class="detail">
+                                القاعدة التي يكتب بها: لا ميزة ولا رقم ولا نتيجة لم يذكرها الدرس.
+                            </p>
+                        </li>
+
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">3</span>
+                            <div>
+                                <h3>راجِع وجدوِل</h3>
+                                <p>
+                                    تعدّل أي شريحة في معاينة بحجم الهاتف، ثم تختار موعداً من مواعيدك،
+                                    فيُنشر فيه الكاروسيل على إنستجرام وفيسبوك، وتُنشأ معه حملة كلمته
+                                    المفتاحية.
+                                </p>
+                            </div>
+                            <p class="detail">
+                                ولتيك توك نسخةٌ طولية <bdi dir="ltr">9:16</bdi> تُجدوَل معه، أو
+                                تنتظر في طابور تُرسله بنفسك إلى أن يوافق تيك توك على التطبيق.
+                            </p>
+                        </li>
+                    </ol>
+
+                    <div class="card helper">
+                        <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="4" width="16" height="11" rx="2"/><path d="M2 19h20"/></svg></span>
+                        <div>
+                            <p class="helper-line">«العامل» مساعدٌ صغير على جهازك، يتولّى العمل الثقيل بجوار فيديوهاتك.</p>
+                            <p class="helper-detail">
+                                فيديوهاتك الكاملة لا تُرفع إلى أي مكان، وما يصل الذكاء الاصطناعي
+                                معاينات صغيرة منها فقط. وهو يتّصل بالخارج ولا يستقبل شيئاً، فلا شيء
+                                على جهازك مكشوف.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- ─── Capabilities ─────────────────────────────────────── -->
                 <section class="band" aria-labelledby="does-ar">
                     <h2 id="does-ar">وما الذي في لوحة التحكم</h2>
@@ -2206,9 +2671,27 @@
                         <div>
                             <dt>جدولة المنشورات</dt>
                             <dd>
-                                صور ومقاطع فيديو، إلى إنستجرام أو فيسبوك أو كليهما من إدخال واحد.
-                                والفيديو يُنشر على إنستجرام ريلز ويظهر في الصفحة الرئيسية أيضاً،
-                                لا في تبويب الريلز وحده.
+                                صور ومقاطع فيديو وكاروسيل، إلى إنستجرام وفيسبوك وتيك توك من إدخال
+                                واحد. والفيديو يُنشر على إنستجرام ريلز ويظهر في الصفحة الرئيسية
+                                أيضاً، لا في تبويب الريلز وحده.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>منشورات الكاروسيل</dt>
+                            <dd>
+                                من صورتين إلى عشر على إنستجرام وفيسبوك، وحتى 35 على تيك توك، من
+                                محرّر واحد، ولتيك توك مجموعة طولية <bdi dir="ltr">9:16</bdi> خاصة به
+                                إن شئت. تضع الصور بنفسك، أو يكتبها الاستوديو من دروسك.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>النشر على تيك توك</dt>
+                            <dd>
+                                عبر واجهة النشر الرسمية من تيك توك
+                                (<bdi lang="en" dir="ltr">Content Posting API</bdi>): فيديو وكاروسيل
+                                صور، ومعهما ما يشترطه تيك توك على كل منشور: من يراه، وكيف يتفاعل
+                                الناس معه، والإفصاح عن المحتوى التجاري، وموافقتك الصريحة. والنشر
+                                العلني التلقائي ينتظر موافقة تيك توك على التطبيق، كما في الأسفل.
                             </dd>
                         </div>
                         <div>
@@ -2308,6 +2791,20 @@
                             <div>
                                 <dt>
                                     <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+                                    على تيك توك، لا نشر علني تلقائي حتى الآن
+                                </dt>
+                                <dd>
+                                    تيك توك يراجع التطبيق قبل أن يسمح له بالنشر للعموم. وإلى أن يوافق
+                                    على هذا التطبيق، إمّا أن يُنشر منشور تيك توك بخصوصية «أنا فقط»،
+                                    ولا يقبلها تيك توك إلا على حساب خاص، وإمّا أن يصل إلى مسودّاتك
+                                    لتنشره بنفسك من تطبيق تيك توك. ومتى تأتي الموافقة فذلك قرار تيك
+                                    توك، لا قرارنا. أمّا حلقة التعليق والرسالة الخاصة فتعمل على
+                                    إنستجرام وفيسبوك وحدهما.
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>
+                                    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
                                     لا ضمان لوقت التشغيل ولا للتسليم
                                 </dt>
                                 <dd>
@@ -2366,11 +2863,13 @@
                 <section class="hero" aria-labelledby="hero-en">
                     <div class="hero-grid">
                         <div>
-                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Instagram and Facebook · Arabic-first</p>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Instagram, Facebook, TikTok · Arabic-first</p>
                             <h1 id="hero-en">A comment becomes a conversation</h1>
                             <p class="lede">
                                 A keyword in a comment sends the private message, posts the public
                                 reply, and likes the comment. AI answers whatever they say next.
+                                And <a href="#carousel-studio-en">Carousel Studio</a> turns your video
+                                lessons into posts for Instagram, Facebook and TikTok.
                             </p>
                             <div class="cta-row">
                                 <a class="btn btn-primary" href="/pricing">See the plans</a>
@@ -2408,7 +2907,7 @@
                 <!-- ─── The loop ─────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="loop-en">
                     <h2 id="loop-en">What happens when someone comments</h2>
-                    <p class="prose lead">Three steps, and the first is the only one the customer does. The rest runs on its own:</p>
+                    <p class="prose lead">Three steps on Instagram and Facebook, and the first is the only one the customer does. The rest runs on its own:</p>
 
                     <ol class="loop">
                         <li class="beat">
@@ -2514,6 +3013,177 @@
                     </p>
                 </section>
 
+                <!-- ─── Carousel Studio ──────────────────────────────────── -->
+                <section class="band" aria-labelledby="studio-en">
+                    <!-- The in-page anchor is the grid, not the h2: jumping to the
+                         h2 would park the eyebrow above it under the sticky bar. -->
+                    <div class="studio-grid" id="carousel-studio-en">
+                        <div>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>New · Carousel Studio</p>
+                            <h2 id="studio-en">A lesson becomes a carousel</h2>
+                            <p class="lede">
+                                Pick a lesson from your course and the AI writes the carousel from
+                                what that lesson actually teaches, with real screenshots from the
+                                video itself — in your brand, and ready to schedule.
+                            </p>
+                        </div>
+
+                        <aside class="card artifact studio-art" aria-label="Example: a carousel made from one lesson">
+                            <p class="artifact-label">Three slides from one carousel</p>
+                            <div class="slides" role="img" aria-label="A cover with the lesson's title, then a slide from the lesson with a screenshot from the video, then a closing slide asking people to comment “guide”.">
+                                <div class="slide-cell">
+                                    <div class="slide slide-cover">
+                                        <span class="slide-sig">Your brand</span>
+                                        <span class="slide-title">Build your first agent</span>
+                                    </div>
+                                    <span class="slide-cap">Cover</span>
+                                </div>
+                                <div class="slide-cell">
+                                    <div class="slide">
+                                        <span class="shot">
+                                            <span class="shot-bar"></span>
+                                            <span class="shot-row"></span>
+                                            <span class="shot-row"></span>
+                                            <span class="shot-hit"></span>
+                                            <span class="shot-time">04:12</span>
+                                        </span>
+                                        <span class="slide-text">Give the agent its first tool</span>
+                                    </div>
+                                    <span class="slide-cap">From the lesson</span>
+                                </div>
+                                <div class="slide-cell">
+                                    <div class="slide">
+                                        <span class="slide-ask">Comment <span class="kw">guide</span></span>
+                                        <span class="slide-sub">and I'll DM you the link</span>
+                                    </div>
+                                    <span class="slide-cap">The ask</span>
+                                </div>
+                            </div>
+                            <ul class="receipts">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Real frames from your video
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    A keyword and its private message
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    4:5 for Instagram, 9:16 for TikTok
+                                </li>
+                            </ul>
+                        </aside>
+                    </div>
+
+                    <dl class="more more-end">
+                        <div>
+                            <dt>Your brand, your voice</dt>
+                            <dd>
+                                Your colours, fonts and sign-off on every slide, and a voice guide
+                                the AI writes to — in your own voice and your own dialect.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Your own calls to action</dt>
+                            <dd>
+                                The last slide, the caption line and the private message all use
+                                the words you set in Settings: one line for Instagram, one for
+                                TikTok.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>A keyword for every post</dt>
+                            <dd>
+                                Every carousel comes with its own keyword and the private message
+                                it sends, so the post feeds the loop above. If a campaign of yours
+                                already answers that word, it is reused instead of duplicated.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Plan my week</dt>
+                            <dd>
+                                One button proposes the week's posts from your lessons, spread
+                                across your free posting slots. Keep the ones you like, and write
+                                them all with one click.
+                            </dd>
+                        </div>
+                    </dl>
+                </section>
+
+                <!-- ─── How the Studio works ─────────────────────────────── -->
+                <section class="band" aria-labelledby="studio-how-en">
+                    <h2 id="studio-how-en">How the Studio works</h2>
+                    <p class="prose lead">Three steps. The first and the last are yours; the one in between is the AI's:</p>
+
+                    <!-- The loop's rail, reused because this is a sequence too.
+                         .studio-steps opts it out of the scroll reveal. -->
+                    <ol class="loop studio-steps">
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">1</span>
+                            <div>
+                                <h3>Pick a lesson</h3>
+                                <p>
+                                    From your lesson library: one lesson or up to three, or an idea
+                                    you write yourself. Leave the keyword empty and the Studio
+                                    suggests one.
+                                </p>
+                            </div>
+                            <p class="detail">
+                                <span>Start</span>
+                                <span class="chip">From a lesson</span>
+                                <span class="chip">From an idea</span>
+                            </p>
+                        </li>
+
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">2</span>
+                            <div>
+                                <h3>The AI writes the slides</h3>
+                                <p>
+                                    From what the lesson actually teaches: every slide between the
+                                    cover and the ask rests on the lesson's notes or its moments,
+                                    and a slide with no source is rewritten or dropped. The
+                                    screenshots are real frames from the lesson's own video, not
+                                    generated images.
+                                </p>
+                            </div>
+                            <p class="detail">
+                                The rule it writes by: no feature, number or result the lesson
+                                does not state.
+                            </p>
+                        </li>
+
+                        <li class="beat">
+                            <span class="beat-num" aria-hidden="true">3</span>
+                            <div>
+                                <h3>Review and schedule</h3>
+                                <p>
+                                    Edit any slide in a phone-sized preview, then pick one of your
+                                    slots: the carousel goes out on Instagram and Facebook, and its
+                                    keyword campaign is set up with it.
+                                </p>
+                            </div>
+                            <p class="detail">
+                                TikTok gets its own 9:16 version, scheduled with it, or held in a
+                                queue you send yourself until TikTok approves the app.
+                            </p>
+                        </li>
+                    </ol>
+
+                    <div class="card helper">
+                        <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="4" width="16" height="11" rx="2"/><path d="M2 19h20"/></svg></span>
+                        <div>
+                            <p class="helper-line">The worker is a small helper on your computer that does the heavy work, right next to your videos.</p>
+                            <p class="helper-detail">
+                                Your full videos never upload anywhere; only small previews go to
+                                the AI. And it only ever calls out, so nothing on your computer is
+                                exposed.
+                            </p>
+                        </div>
+                    </div>
+                </section>
+
                 <!-- ─── Capabilities ─────────────────────────────────────── -->
                 <section class="band" aria-labelledby="does-en">
                     <h2 id="does-en">And what is in the dashboard</h2>
@@ -2551,9 +3221,27 @@
                         <div>
                             <dt>Scheduled posts</dt>
                             <dd>
-                                Images and video, to Instagram or Facebook or both from one entry.
-                                Video publishes to Instagram as a reel and appears in the main
-                                feed too, not only in the Reels tab.
+                                Images, video and carousels, to Instagram, Facebook and TikTok from
+                                one entry. Video publishes to Instagram as a reel and appears in the
+                                main feed too, not only in the Reels tab.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Carousel posts</dt>
+                            <dd>
+                                Two to ten images on Instagram and Facebook, up to 35 on TikTok,
+                                from one composer — and TikTok can take its own 9:16 set. Add the
+                                images yourself, or let the Studio write them from your lessons.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>TikTok publishing</dt>
+                            <dd>
+                                Through TikTok's official Content Posting API: video and photo
+                                carousels, with the controls TikTok requires on every post — who
+                                can see it, how people can interact with it, disclosure of branded
+                                content, and your explicit consent. Public auto-posting waits on
+                                TikTok's approval of the app; more on that below.
                             </dd>
                         </div>
                         <div>
@@ -2648,6 +3336,20 @@
                                     A scheduled post joins a queue that is drained on an interval, not
                                     on the minute. If minute-level timing matters to you, this is not
                                     what the software does today.
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>
+                                    <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg></span>
+                                    No public auto-posting to TikTok, yet
+                                </dt>
+                                <dd>
+                                    TikTok reviews an app before it lets it post publicly. Until it
+                                    approves this one, a TikTok post either goes up as “Only me”,
+                                    which TikTok accepts only on a private account, or lands in your
+                                    TikTok drafts for you to post from the app. When that approval
+                                    comes is TikTok's decision, not ours. The comment-to-message loop
+                                    itself runs on Instagram and Facebook only.
                                 </dd>
                             </div>
                             <div>
