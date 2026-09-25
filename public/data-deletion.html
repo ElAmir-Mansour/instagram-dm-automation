@@ -5,16 +5,21 @@
   ═══════════════════════════════════════════════════════════════════════════
 
   Bilingual in one file for the same reason as public/privacy.html: `/data-deletion`
-  is one hardcoded Express route (src/index.ts:105-107) and `public/**` has no
+  is one hardcoded Express route (src/index.ts:142-144) and `public/**` has no
   static handler, so a second file would be unreachable in production. No JS =
   both languages shown, each with its own lang/dir.
 
   ───────────────────────────────────────────────────────────────────────────
   OPERATOR CHECKLIST — what a deletion request actually has to touch.
-  There is no self-service endpoint and no admin route that does this
-  (src/routes/admin.ts has tenant/user routes only), so it is a manual
-  operation. Clearing `messages.text` alone does NOT honour the request,
-  because the same text exists in two other places:
+  There is no self-service endpoint, so a person carries every request out.
+  CORRECTED 2026-09-25: this note used to say there was no admin route. There
+  is one — GET /api/admin/erasure/preview, then POST /api/admin/erasure with
+  the preview's token, platform admin only (src/routes/admin.ts:1243-1336,
+  src/services/erasure.ts). It deletes items 1, 2, 4, 5 and 6 below in one
+  audited transaction (executeErasure(), erasure.ts:422-443). IT DOES NOT
+  TOUCH item 3: failed `jobs` rows keep their verbatim copy and still have to
+  be cleared by hand. Clearing `messages.text` alone does NOT honour the
+  request, because the same text exists in two other places:
 
     1. messages.text            — the message body           (src/webhook/messaging.ts:175-189)
     2. messages.raw_payload     — a verbatim second copy     (same INSERT; JSONB)
@@ -31,20 +36,77 @@
   `interactions.sender_username` for comments. A row in `jobs` is found by
   payload->'sender'->>'id' or payload->'value'->'from'->>'username'.
 
-  TIKTOK (added 2026-09-23) — account-owner data, and the one deletion on this
-  page that is NOT manual. Section 6 promises that either route deletes the
-  stored TikTok connection with nobody acting by hand:
-    · Settings → disconnect: revoke with TikTok (/v2/oauth/revoke/), then
-      delete the platform_connections row (src/config/migration_v18_tiktok.sql);
-    · the authorization.removed webhook: the same deletion.
-  Both are implemented in src/services/tiktokConnections.ts: disconnect()
-  (revoke is best-effort, the DELETE is not) and deleteConnectionByOpenId(),
-  which the webhook calls via applyWebhookEvent() in tiktokPublish.ts.
-  Reconciled 2026-09-23 — the webhook used to keep a 'revoked' tombstone.
+  TIKTOK (2026-09-23, re-checked 2026-09-25) — account-owner data, and the
+  deletion on this page that needs nobody to act by hand. Section 6 promises
+  that either route deletes the stored TikTok connection:
+    · Settings → Disconnect: revoke with TikTok (/v2/oauth/revoke/,
+      revokeToken(), src/services/tiktok.ts:267-273), BEST EFFORT — a failed
+      revoke is logged and the DELETE still runs — then delete the
+      platform_connections row: disconnect(),
+      src/services/tiktokConnections.ts:376-393; route
+      src/routes/tiktok.ts:287-306 (workspace owner);
+    · the authorization.removed webhook: the same row deleted outright —
+      deleteConnectionByOpenId(), tiktokConnections.ts:401-406, called by
+      applyWebhookEvent(), src/services/tiktokPublish.ts:656-660, behind the
+      signature check at src/routes/tiktok.ts:153-165.
+  Section 6 also says what neither route reaches, and the code agrees:
+    · scheduled_posts rows stay until the owner deletes them
+      (DELETE /api/posts/scheduled/:id, src/routes/api.ts:2492-2516), and
+      deleting one deletes the row, NOT its media_uploads files;
+    · the audit_log row Connect writes with the TikTok display name and
+      scopes (src/routes/tiktok.ts:135-144) — nothing in src/ ever deletes
+      from audit_log.
 
-  OWNER: a contact email is still missing and is marked on the page. Do not let
-  it ship unfilled. Nothing on this page states a legal basis or a jurisdiction,
-  because neither is established anywhere in the code.
+  CAROUSEL STUDIO (added 2026-09-25) — section 7. Account-owner data; the
+  schema is src/config/migration_v21_studio.sql, the contract STUDIO.md.
+    · course_lessons (number, section, title, the video's path on the
+      creator's computer, duration, Gemini's notes): upserted by a scan and
+      never deleted by one (applyScan(), src/services/studio/jobs.ts:342;
+      STUDIO.md §5). There is no delete route for a lesson (the routes are
+      src/routes/studio.ts:194-338). Gone only with the workspace: ON DELETE
+      CASCADE from creators (migration_v21_studio.sql:26).
+    · lesson_moments (what is on screen, with a thumbnail URL): replaced
+      wholesale on each re-index (applyIndex(), jobs.ts:468-495, DELETE at
+      :478); otherwise cascade from course_lessons (migration_v21:51).
+    · thumbnails and rendered slides are media_uploads rows stored under the
+      worker's tenant (src/routes/studio.ts:176-183), so they cascade with
+      the workspace (migration_v12_tenancy.sql:54). A re-index does NOT
+      delete the old thumbnails.
+    · carousel_drafts: DELETE /api/studio/drafts/:id deletes the draft and its
+      render's uploads unless a scheduled post names them, and is REFUSED once
+      the draft is scheduled (deleteDraft(), src/services/studio/drafts.ts:
+      656-666; deleteUnreferencedUploads(), jobs.ts:542-563). A new render
+      deletes the previous one's uploads on the same terms, and a dropped
+      render its own (applyRender(), jobs.ts:592-597 and :606-610). Otherwise
+      cascade from creators (migration_v21:77).
+    · studio_jobs keep each request forever — a render job's payload holds the
+      carousel's text and shots (renderPayload(), drafts.ts:359-385), an index
+      job the lesson's path and title — and deleting a draft only fails its
+      PENDING renders (cancelRenders(), jobs.ts:112-119). Cascade from
+      creators only (migration_v21:101).
+    · The optional clean-up the page mentions is pruneOrphanedMedia(),
+      src/services/retention.ts:220-279: OFF unless MEDIA_RETENTION_DAYS is
+      set (floor 7 days). Whether it is set in production is not known from
+      here, so the page promises nothing from it.
+    · There is NO code path that deletes a creators row (no DELETE FROM
+      creators anywhere in src/), so "when the account itself is deleted"
+      means a manual operation, and the page says so.
+    · "Full videos never leave the computer; the worker sends Gemini a small
+      preview": STUDIO.md §9 (a 640px, 1 fps proxy) and the sourcing note in
+      public/landing.html. The page deliberately does NOT claim the preview
+      is deleted (the worker's delete is best effort; see landing.html). The
+      app itself sends Gemini text only: notes, moment descriptions, the
+      idea and product facts (src/services/studio/prompts.ts:149-212,
+      generate.ts:242-262).
+
+  OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
+    · Contact email for deletion requests: elamirmansour@outlook.com —
+      section 2 (the first route) and section 8, both languages.
+    · Operator: ElAmir Mansour — section 8.
+    · Nothing on this page states a legal basis or a jurisdiction: none has
+      been supplied, and none is established anywhere in the code. The
+      visible "editorial note" boxes were removed; TikTok's reviewers read
+      this page.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -196,18 +258,6 @@
         .callout.warn { border-inline-start-color: var(--warning, #9a6408); }
         .callout > :last-child { margin-bottom: 0; }
 
-        .todo {
-            padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
-            margin: var(--space-5, 1.5rem) 0 0;
-            border-radius: var(--radius-md, 14px);
-            border: 1px dashed var(--warning, #9a6408);
-            background: var(--warning-soft, rgba(154, 100, 8, 0.12));
-            color: var(--text-default, #3c4558);
-            font-size: var(--fs-200, 0.875rem);
-        }
-        .todo strong { color: var(--warning-text, #7d5106); }
-        .todo > :last-child { margin-bottom: 0; }
-
         .divider {
             height: 1px;
             border: 0;
@@ -238,29 +288,31 @@
            SHARED SITE CHROME · CSS
            ═══════════════════════════════════════════════════════════════════
 
-           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES:
-           landing.html, pricing.html, privacy.html and data-deletion.html.
+           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES:
+           landing.html, pricing.html, privacy.html, terms.html and
+           data-deletion.html. (It said four until 2026-09-25; terms.html was
+           the fifth copy all along.)
 
-           There is no build step and no templating in this project — the four
-           pages are standalone files behind four hardcoded Express routes in
+           There is no build step and no templating in this project — the five
+           pages are standalone files behind five hardcoded Express routes in
            src/index.ts, and public/** has no static handler — so the only way
            to share chrome is to duplicate it. It is duplicated DELIBERATELY
            and character for character, which is what makes drift findable:
-           diff the block between any two of the four files and identical is
+           diff the block between any two of the five files and identical is
            the expected result. Change one copy and you have to change all
-           four. The markers around it exist so a diff can be taken
+           five. The markers around it exist so a diff can be taken
            mechanically.
 
            WHY IT IS LAST IN EVERY <style>. It owns .skip, .topbar, .wordmark,
            .headtools, .headnav, .langswitch, .pagefoot and the .t-* language
-           filter outright, and it has to win on all four pages regardless of
+           filter outright, and it has to win on all five pages regardless of
            what each page declares above it. Every page-local rule for those
            selectors was deleted rather than left to lose the cascade quietly.
 
            IT READS EXACTLY TWO THINGS from the page it is pasted into:
            --page-max and --page-gutter, the width and gutter of that page's
-           content column. The four columns genuinely differ (70rem, 64rem,
-           52rem, 52rem) and a full-bleed bar whose wordmark does not sit on
+           content column. The columns genuinely differ (70rem, 64rem,
+           52rem) and a full-bleed bar whose wordmark does not sit on
            the same vertical as the text beneath it looks like an accident.
            Both have fallbacks, so the block still renders correctly on a page
            that forgets to declare them.
@@ -494,7 +546,7 @@
         }
 
         /* ─── The footer ───────────────────────────────────────────────────────
-           It carries all four public pages plus the dashboard and the repo, so
+           It carries all five public pages plus the dashboard and the repo, so
            every page can reach every other page from the bottom as well as the
            top. It sits inside each page's own .shell, which is why it has no
            max-width of its own: it inherits the column it belongs to.
@@ -504,9 +556,34 @@
            two of them that a visitor reaches from Meta's own settings link, the
            thing at the bottom of the page was thinner than the bar at the top.
            It now carries a masthead — the wordmark again, and one line saying
-           what this is — three named groups of links, and the legal line, with a
+           what this is — named groups of links, and the legal line, with a
            hairline between each of the three. The wordmark's repeat is the point:
            the bottom of the page should say whose page it is.
+
+           2026-09-25: FIVE GROUPS, because a customer looks here for five
+           things — what the product is (Product), how to learn it (Resources),
+           the paperwork (Legal), a person (Contact) and the proof (Follow: the
+           founder's accounts, which are where the app's own work is published).
+           Product and Resources link into landing.html with LANGUAGE-NEUTRAL
+           fragments (/#features, /#faq …): this block is one string on five
+           pages and in two languages, so it cannot name #faq-ar or #faq-en.
+           landing.html resolves the neutral name to the visible language's
+           section on load and rewrites these hrefs when the language changes;
+           with JavaScript off, a neutral fragment lands at the top of `/`,
+           where both languages are showing anyway.
+           The contact address is the operator's, on all five pages, and
+           `data-contact-email` marks it so the next change finds every copy. It
+           is not wrapped in <bdi>: an address is one unbroken left-to-right run
+           (the @ and the dot sit between Latin letters and resolve with them),
+           so it renders correctly inside the Arabic footer as it is. It is also
+           the widest thing in the footer — about 185px at 14px, against 144px
+           columns at 375px — so on a phone the Contact group takes a row of its
+           own, and overflow-wrap is the net under that, never a scrollbar.
+           The © row carries a second language switch. It is the same two
+           buttons with the same data-set-lang, so every page's own switch
+           script binds it with no change (they all select [data-set-lang]),
+           and it is a role="group", not a <nav>, so the page does not gain a
+           second landmark with the same name as the bar's.
 
            Every rule below is scoped under .pagefoot rather than written as a
            bare class, and that is load-bearing: ".pagefoot a" is (0,1,1) and
@@ -557,7 +634,7 @@
             border-block-start: 1px solid var(--border-subtle);
             border-block-end: 1px solid var(--border-subtle);
         }
-        .pagefoot .foot-cols nav { display: flex; flex-direction: column; }
+        .pagefoot .foot-cols > * { display: flex; flex-direction: column; }
         /* A <p>, not an <h*>: these four pages have four different heading
            outlines and a privacy policy does not need three more h2s under its
            footer. aria-labelledby can point at any element, so the group still
@@ -581,7 +658,54 @@
             font-weight: var(--fw-semibold);
         }
         .pagefoot p { max-width: 70ch; margin: 0; }
-        .pagefoot .foot-legal { margin-block-start: var(--space-5); }
+        .pagefoot .foot-legal { margin-block-start: var(--space-3); }
+        .pagefoot .foot-mail { overflow-wrap: anywhere; }
+
+        /* Follow: three logos, 44px square each, in the default text colour
+           rather than the link colour — a row of three accent-blue logos reads
+           as an advert. They are glyphs and are NEVER mirrored: a logo is not
+           a direction. Each link's name is real text (.foot-sr), in the same
+           two <bdi>s every other label here uses, so the language filter hides
+           the other language's name from assistive technology too. */
+        .pagefoot .foot-social { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+        .pagefoot .foot-social a {
+            justify-content: center;
+            min-width: var(--tap-target);
+            border-radius: var(--radius-sm);
+            color: var(--text-default);
+            transition: background var(--nav-t) var(--nav-ease),
+                        color var(--nav-t) var(--nav-ease);
+        }
+        .pagefoot .foot-social a:hover { background: var(--surface-glass); color: var(--text-strong); }
+        .pagefoot .foot-social svg { inline-size: 1.25rem; block-size: 1.25rem; }
+        .pagefoot .foot-note { max-width: 24ch; }
+        .pagefoot .foot-sr {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* The © line and the footer's language switch share one row, at the
+           two ends of it in either direction (space-between is logical). */
+        .pagefoot .foot-base {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-3) var(--space-5);
+            margin-block-start: var(--space-5);
+        }
+        .pagefoot .foot-copy { color: var(--text-default); }
+
+        @media (max-width: 30rem) {
+            .pagefoot .foot-contact { grid-column: 1 / -1; }
+        }
 
         /* ─── The language filter ──────────────────────────────────────────────
            No attribute (JavaScript off or failed) = both languages visible,
@@ -664,17 +788,19 @@
     <!-- ═══════════════════════════════════════════════════════════════════════
          SHARED SITE CHROME · NAVBAR
          ═══════════════════════════════════════════════════════════════════════
-         MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES: landing.html,
-         pricing.html, privacy.html and data-deletion.html. No build step, no
-         templating — see the CSS block of the same name at the end of <style>
-         for why the four copies exist and what to do when one of them changes.
+         MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES: landing.html,
+         pricing.html, privacy.html, terms.html and data-deletion.html. No
+         build step, no templating — see the CSS block of the same name at the
+         end of <style> for why the five copies exist and what to do when one
+         of them changes.
 
-         THE ONE INTENDED DIFFERENCE between the four copies is
+         THE ONE INTENDED DIFFERENCE between the five copies is
          `aria-current="page"` on the link that points at the page you are
          reading. On landing.html that is the wordmark; on pricing.html the
-         Pricing link. /privacy and /data-deletion are not destinations in the
-         bar, so on those two pages nothing here carries it — their footer link
-         does instead. Anything else that differs is drift.
+         Pricing link. /privacy, /terms and /data-deletion are not
+         destinations in the bar, so on those three pages nothing here carries
+         it — their footer link does instead. Anything else that differs is
+         drift.
          ═══════════════════════════════════════════════════════════════════════ -->
     <!-- The skip link is part of the chrome, so it is part of this block. It was
          three different strings before: landing.html isolated both labels in
@@ -719,7 +845,7 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>حذف بياناتك</h1>
-                <p class="stamp">آخر تحديث: 23 سبتمبر 2026</p>
+                <p class="stamp">آخر تحديث: 25 سبتمبر 2026</p>
 
                 <p>
                     إن علّقت على منشور أو أرسلت رسالة خاصة إلى حساب يستخدم «أوتوريبلاي برو»،
@@ -728,7 +854,8 @@
                 </p>
                 <p>
                     تفاصيل ما يُجمَع ومدة الاحتفاظ به في <a href="/privacy">سياسة الخصوصية</a>.
-                    وإن كنت صاحب حساب وتريد إزالة حساب تيك توك ربطته، فالقسم 6 مخصّص لك.
+                    وإن كنت صاحب حساب، فالقسم 6 يشرح إزالة حساب تيك توك ربطته، والقسم 7 يشرح بيانات
+                    «استوديو الكاروسيل».
                 </p>
 
                 <h2>1. ما هو المخزَّن عنك</h2>
@@ -736,7 +863,9 @@
                     <li>
                         <strong>إن علّقت:</strong> اسم المستخدم الظاهر على إنستجرام (أو الاسم
                         المعروض على فيسبوك)، ومعرّف التعليق، ومعرّف المنشور، ووقت التفاعل،
-                        وحالة الإرسال. <strong>نصّ تعليقك نفسه غير مخزَّن.</strong>
+                        وحالة الإرسال. <strong>ولا يُحفَظ نصّ تعليقك في سجلّ النشاط</strong>؛ يبقى في
+                        طابور المعالجة، ويُحذف بعد 7 أيام من معالجته، أو يبقى إلى أن يُحذف يدوياً إن
+                        فشلت معالجته.
                     </li>
                     <li>
                         <strong>إن أرسلت رسالة خاصة:</strong> نصّ رسائلك كما كتبتها، ونصّ الردود
@@ -746,16 +875,23 @@
                     <li>
                         <strong>إن ربطتَ حساباً على تيك توك</strong> (لأصحاب الحسابات فقط): معرّف
                         الحساب <span class="code" lang="en" dir="ltr">open_id</span> والاسم المعروض
-                        ورابط الصورة الرمزية، ورمزا الوصول والتحديث مشفّرَين، والفيديوهات التي جدولتها
-                        وحالة نشرها. القسم 6 يشرح كيف تُزيلها.
+                        ورابط الصورة الرمزية، ورمزا الوصول والتحديث مشفّرَين، والفيديوهات والصور التي
+                        جدولتها مع أوصافها وإعدادات نشرها، وحالة نشرها. القسم 6 يشرح كيف تُزيلها.
+                    </li>
+                    <li>
+                        <strong>إن استخدمت «استوديو الكاروسيل»</strong> (لأصحاب الحسابات فقط): دروس
+                        دورتك كما وجدها الاستوديو وملاحظاتها، واللقطات المختارة منها مع صورها المصغّرة،
+                        ومسودّات الكاروسيل وشرائحها المُصمَّمة. القسم 7 يشرح ما يُحذف منها ومتى.
                     </li>
                 </ul>
 
                 <h2>2. كيف تطلب الحذف</h2>
                 <ol class="steps">
                     <li>
-                        اختر أي طريق من الاثنين: <strong>ردّ على الحساب نفسه</strong> الذي راسلك
-                        على إنستجرام أو فيسبوك واطلب حذف بياناتك؛ أو افتح موضوعاً على
+                        اختر أي طريق من الثلاثة: <strong>راسلنا</strong> على
+                        <a href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>؛
+                        أو <strong>ردّ على الحساب نفسه</strong> الذي راسلك على إنستجرام أو فيسبوك
+                        واطلب حذف بياناتك؛ أو افتح موضوعاً على
                         <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني للمشروع</a>.
                     </li>
                     <li>
@@ -770,8 +906,8 @@
                 <div class="callout warn">
                     <p>
                         متتبّع المشكلات <strong>علني ويقرأه أي شخص</strong>. لا تكتب فيه شيئاً لا
-                        تريده منشوراً. إن كان طلبك يتضمّن معلومات شخصية، فالردّ على الحساب مباشرةً
-                        هو الطريق الأنسب.
+                        تريده منشوراً. إن كان طلبك يتضمّن معلومات شخصية، فالبريد الإلكتروني أو الردّ
+                        على الحساب مباشرةً هو الطريق الأنسب.
                     </p>
                 </div>
                 <p>
@@ -817,7 +953,7 @@
                     </li>
                     <li>
                         <strong>جوجل:</strong> لتوليد الردّ الآلي، أُرسل نصّ رسالتك إلى واجهة
-                        Gemini API. نسخة جوجل تخضع
+                        <bdi lang="en" dir="ltr">Gemini API</bdi>. نسخة جوجل تخضع
                         <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">لشروط جوجل</a>
                         و<a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصيتها</a>،
                         ولا نستطيع حذفها نيابةً عنك. (لا يُرسَل اسمك ولا معرّف حسابك إلى جوجل —
@@ -844,8 +980,8 @@
                 <ul>
                     <li>
                         <strong>افصل تيك توك من الإعدادات.</strong> افتح <strong>الإعدادات</strong> في
-                        لوحة التحكم وافصل تيك توك. يُلغي التطبيق رمزه لدى تيك توك، فيُسحَب الوصول من
-                        جهة تيك توك ومن جهتنا معاً، ثم يحذف الاتصال المخزَّن: معرّف
+                        لوحة التحكم وافصل تيك توك. يطلب التطبيق من تيك توك إلغاء رمزه، فيُسحَب الوصول
+                        من جهة تيك توك أيضاً، ثم يحذف الاتصال المخزَّن سواء أجاب تيك توك أم لا: معرّف
                         <span class="code" lang="en" dir="ltr">open_id</span>، والاسم المعروض، ورابط
                         الصورة الرمزية، ورمزي الوصول والتحديث المشفّرين.
                     </li>
@@ -858,27 +994,70 @@
                     </li>
                 </ul>
                 <p>
-                    بعد الفصل لا يُرفَع إلى ذلك الحساب على تيك توك أي شيء آخر. وتبقى المنشورات التي
-                    جدولتها في لوحة التحكم فيها إلى أن تحذفها، كمنشورات إنستغرام وفيسبوك. أمّا ما لا يصل إليه
-                    الحذف: الفيديوهات التي رُفعت من قبل موجودة في صندوق الوارد لديك على تيك توك، أو في
-                    ملفك إن كنت نشرتها، وهذه نسخة تيك توك؛ احذفها من تيك توك نفسه. وما يحتفظ به تيك توك
-                    من سجلّات يخضع
-                    <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">لسياسة خصوصية تيك توك</a>.
+                    بعد الفصل لا يُنشَر على ذلك الحساب في تيك توك ولا يُرسَل إليه أي شيء آخر. وتبقى
+                    المنشورات التي جدولتها في لوحة التحكم فيها إلى أن تحذفها، كمنشورات إنستجرام وفيسبوك.
+                    وحذف المنشور يحذفه هو، لا الفيديو أو الصور التي استخدمها: تبقى هذه الملفات محفوظة لدى
+                    الأداة إلى أن يُحذف الحساب نفسه (القسم 7)، ما لم يزلها قبل ذلك تنظيف اختياري للملفات
+                    القديمة غير المستخدمة إن فعّله المُشغّل.
                 </p>
-
-                <h2>7. للتواصل</h2>
                 <p>
-                    للسؤال عن طلب حذف قائم، أو عن أي شيء في هذه الصفحة، استخدم أحد الطريقين في
-                    القسم 2.
+                    أمّا ما لا يصل إليه الحذف: ما نشرته من قبل موجود على ملفك في تيك توك، وما أُرسل إلى
+                    مسودّاتك موجود في صندوق الوارد لديك، وهذه نسخة تيك توك؛ احذفها من تيك توك نفسه. وما
+                    يحتفظ به تيك توك من سجلّات يخضع
+                    <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">لسياسة خصوصية تيك توك</a>.
+                    ويبقى في سجلّ التدقيق لدى الأداة قيدٌ لكل مرة رُبط فيها تيك توك، فيه الاسم المعروض
+                    للحساب والصلاحيات الممنوحة، ولا تحذف الأداة من هذا السجلّ شيئاً.
                 </p>
 
-                <div class="todo">
-                    <p><strong>ملاحظة تحريرية — على مُشغّل الخدمة إكمالها:</strong></p>
-                    <ul>
-                        <li>بريد إلكتروني لطلبات الحذف: <span class="code">[غير مُحدَّد بعد]</span></li>
-                        <li>اسم الشخص أو الجهة التي تُشغّل الخدمة: <span class="code">[غير مُحدَّد بعد]</span></li>
-                    </ul>
-                </div>
+                <h2>7. بيانات «استوديو الكاروسيل»</h2>
+                <p>
+                    هذا القسم لأصحاب الحسابات الذين يستخدمون «استوديو الكاروسيل».
+                    <strong>فيديوهاتك الكاملة لا تغادر جهازك:</strong> «العامل» الذي يعمل عليه لا يرسل
+                    إلى <bdi lang="en" dir="ltr">Gemini</bdi> من جوجل إلا معاينة صغيرة منخفضة الدقة من كل
+                    درس ليفهرسه. وما يصل إلى الأداة نفسها هو ما يلي، وهذا ما يحدث له:
+                </p>
+                <ul>
+                    <li>
+                        <strong>الدروس وملاحظاتها:</strong> رقم كل درس وعنوانه وقسمه ومدته، ومسار ملف
+                        الفيديو على جهازك، والملاحظات التي كُتبت عنه عند فهرسته. لا يوجد زرّ يحذف درساً،
+                        ولا يحذف فحصٌ جديد للمجلد درساً قديماً: تُحذف الدروس وملاحظاتها فقط عند حذف الحساب
+                        نفسه.
+                    </li>
+                    <li>
+                        <strong>اللقطات وصورها المصغّرة:</strong> وصفٌ لما يظهر على الشاشة في لحظات مختارة
+                        من كل درس، مع صورة مصغّرة لكل لقطة. تُستبدل لقطات الدرس كلها كلما أُعيدت فهرسته،
+                        وتُحذف مع الدرس عند حذف الحساب. أمّا الصور المصغّرة القديمة فلا تحذفها إعادة
+                        الفهرسة: تبقى محفوظة إلى أن يُحذف الحساب، ما لم يزلها قبل ذلك تنظيف اختياري للملفات
+                        القديمة غير المستخدمة إن فعّله المُشغّل.
+                    </li>
+                    <li>
+                        <strong>المسودّات وشرائحها:</strong> نصّ كل كاروسيل وإعداداته، وشرائحه المُصمَّمة
+                        لإنستجرام وتيك توك. حذف المسودّة يحذفها ويحذف شرائحها، إلا ما يستخدمه منشور مجدول،
+                        وكلما أُعيد تصميمها حُذفت شرائحها السابقة بالشرط نفسه. ولا يمكن حذف مسودّة بعد
+                        جدولتها، لأنها سجلّ ما نُشر؛ فتبقى هي وشرائحها إلى أن يُحذف الحساب.
+                    </li>
+                    <li>
+                        <strong>طابور العمل:</strong> يحتفظ الاستوديو بكل طلب أرسله إلى «العامل»، وطلب
+                        تصميم المسودّة يحمل نسخة من نصّها. لا تُحذف هذه الطلبات مع المسودّة، بل عند حذف
+                        الحساب فقط.
+                    </li>
+                </ul>
+                <p>
+                    وحذف الحساب يعني حذف مساحة العمل نفسها من قاعدة البيانات، ولا يوجد له زرّ: يُنفَّذ
+                    يدوياً عند الطلب (القسم 8). وما يصل إلى جوجل — المعاينة التي يرسلها «العامل»، ونصوص
+                    الملاحظات واللقطات التي ترسلها الأداة لكتابة كل كاروسيل — يخضع
+                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">لشروط جوجل</a>،
+                    لا لهذه الصفحة.
+                </p>
+
+                <h2>8. للتواصل</h2>
+                <p>
+                    يُشغّل «أوتوريبلاي برو» الأمير منصور (<bdi lang="en" dir="ltr">ElAmir Mansour</bdi>)،
+                    وهو مَن يتلقّى طلبات الحذف وينفّذها. للسؤال عن طلب حذف قائم، أو عن أي شيء في هذه
+                    الصفحة، راسله على
+                    <a href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>،
+                    أو استخدم أحد الطريقين الآخرين في القسم 2.
+                </p>
             </article>
 
             <hr class="divider">
@@ -886,7 +1065,7 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Deleting your data</h1>
-                <p class="stamp">Last updated: 23 September 2026</p>
+                <p class="stamp">Last updated: 25 September 2026</p>
 
                 <p>
                     If you commented on a post or sent a direct message to an account running
@@ -896,8 +1075,9 @@
                 </p>
                 <p>
                     What is collected, and for how long, is set out in the
-                    <a href="/privacy">privacy policy</a>. If you are an account owner removing a
-                    TikTok account you connected, section 6 is for you.
+                    <a href="/privacy">privacy policy</a>. If you are an account owner, section 6
+                    covers removing a TikTok account you connected, and section 7 covers the
+                    Carousel Studio's data.
                 </p>
 
                 <h2>1. What is stored about you</h2>
@@ -906,7 +1086,9 @@
                         <strong>If you commented:</strong> your public Instagram username (or
                         your Facebook display name), the comment ID, the post ID, the time of
                         the interaction, and the delivery status.
-                        <strong>The text of your comment is not stored.</strong>
+                        <strong>The text of your comment is not kept in the activity log</strong>; it stays in
+                        the processing queue, deleted 7 days after it has been processed, or kept
+                        until it is removed by hand if processing failed.
                     </li>
                     <li>
                         <strong>If you sent a direct message:</strong> the text of your messages
@@ -917,17 +1099,25 @@
                     <li>
                         <strong>If you connected a TikTok account</strong> (account owners only):
                         the account's <span class="code">open_id</span>, display name and avatar
-                        URL, the encrypted access and refresh tokens, the videos you scheduled, and
-                        their publish status. Section 6 explains how to remove it.
+                        URL, the encrypted access and refresh tokens, the videos and photos you
+                        scheduled with their captions and post settings, and their publish status.
+                        Section 6 explains how to remove it.
+                    </li>
+                    <li>
+                        <strong>If you use the Carousel Studio</strong> (account owners only): your
+                        course lessons as the Studio found them and their notes, the moments picked
+                        out of them with their thumbnails, and your carousel drafts and their
+                        rendered slides. Section 7 explains what is deleted, and when.
                     </li>
                 </ul>
 
                 <h2>2. How to request deletion</h2>
                 <ol class="steps">
                     <li>
-                        Pick either route: <strong>reply to the same account</strong> that
-                        messaged you on Instagram or Facebook and ask for your data to be
-                        deleted; or open an issue on the
+                        Pick any of three routes: <strong>email</strong>
+                        <a href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>;
+                        <strong>reply to the same account</strong> that messaged you on Instagram or
+                        Facebook and ask for your data to be deleted; or open an issue on the
                         <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">project's public issue tracker</a>.
                     </li>
                     <li>
@@ -944,7 +1134,7 @@
                     <p>
                         The issue tracker is <strong>public and readable by anyone</strong>. Do
                         not put anything in it you would not want published. If your request
-                        involves personal details, replying to the account directly is the
+                        involves personal details, email or a direct reply to the account is the
                         better route.
                     </p>
                 </div>
@@ -1023,8 +1213,8 @@
                     <li>
                         <strong>Disconnect TikTok in Settings.</strong> Open
                         <strong>Settings</strong> in the dashboard and disconnect TikTok. The app
-                        revokes its token with TikTok, so access is withdrawn at TikTok's end as
-                        well as ours, and then deletes the stored connection: the
+                        asks TikTok to revoke its token, so access is withdrawn at TikTok's end too,
+                        and then deletes the stored connection whether or not TikTok answers: the
                         <span class="code">open_id</span>, display name, avatar URL, and the
                         encrypted access and refresh tokens.
                     </li>
@@ -1036,28 +1226,79 @@
                     </li>
                 </ul>
                 <p>
-                    Once disconnected, nothing more is uploaded to that TikTok account. Posts you
-                    scheduled in the dashboard stay there until you delete them, like your Instagram
-                    and Facebook posts. What deletion cannot reach: videos already uploaded sit in
-                    your TikTok inbox, or on your profile if you posted them. That copy is TikTok's;
-                    delete it in TikTok.
-                    Whatever records TikTok keeps itself are governed by
-                    <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">TikTok's privacy policy</a>.
+                    Once disconnected, nothing more is posted or sent to that TikTok account. Posts
+                    you scheduled in the dashboard stay there until you delete them, like your
+                    Instagram and Facebook posts. Deleting a post deletes the post alone, not the
+                    video or photos it used: those files stay stored with the app until the account
+                    itself is deleted (section 7), unless an optional clean-up of old, unused files
+                    removes them first, if the operator has switched it on.
                 </p>
-
-                <h2>7. Contact</h2>
                 <p>
-                    To ask about a deletion request already made, or about anything on this page,
-                    use either route in section 2.
+                    What deletion cannot reach: what you already posted is on your TikTok profile,
+                    and what was sent to your drafts is in your TikTok inbox. That copy is TikTok's;
+                    delete it in TikTok. Whatever records TikTok keeps itself are governed by
+                    <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">TikTok's privacy policy</a>.
+                    And the app's audit log keeps an entry for each time TikTok was connected, with
+                    the account's display name and the scopes granted; the app never deletes from
+                    that log.
                 </p>
 
-                <div class="todo">
-                    <p><strong>Editorial note — for the operator to complete:</strong></p>
-                    <ul>
-                        <li>A contact email address for deletion requests: <span class="code">[not yet supplied]</span></li>
-                        <li>The name of the person or entity operating the service: <span class="code">[not yet supplied]</span></li>
-                    </ul>
-                </div>
+                <h2>7. Carousel Studio data</h2>
+                <p>
+                    This section is for account owners who use the Carousel Studio.
+                    <strong>Your full videos never leave your computer:</strong> the worker that runs
+                    there sends Google's Gemini only a small, low-resolution preview of each lesson
+                    to index it. What reaches the app itself is the following, and this is what
+                    happens to it:
+                </p>
+                <ul>
+                    <li>
+                        <strong>Lessons and their notes:</strong> each lesson's number, title,
+                        section and length, the path of its video file on your computer, and the
+                        notes written about it when it was indexed. There is no button that deletes a
+                        lesson, and a new scan of the folder never deletes an old one: lessons and
+                        their notes are deleted only when the account itself is deleted.
+                    </li>
+                    <li>
+                        <strong>Moments and their thumbnails:</strong> the screenshots the Studio
+                        picks out of each lesson — a description of what is on screen at that moment,
+                        with a thumbnail of it. A lesson's moments are all replaced whenever it is
+                        indexed again, and are deleted with the lesson when the account is deleted.
+                        Re-indexing does not delete the old thumbnails, though: they stay stored until
+                        the account is deleted, unless an optional clean-up of old, unused files
+                        removes them first, if the operator has switched it on.
+                    </li>
+                    <li>
+                        <strong>Drafts and their slides:</strong> each carousel's text and settings,
+                        and its rendered slides for Instagram and TikTok. Deleting a draft deletes it
+                        and its slides, except any a scheduled post uses, and rendering it again
+                        deletes its previous slides on the same terms. A draft cannot be deleted once
+                        it has been scheduled, because it is the record of what was posted, so it and
+                        its slides stay until the account is deleted.
+                    </li>
+                    <li>
+                        <strong>The work queue:</strong> the Studio keeps every request it sent the
+                        worker, and a request to render a draft carries a copy of its text. These
+                        requests are not deleted with the draft, only when the account is deleted.
+                    </li>
+                </ul>
+                <p>
+                    Deleting the account means deleting the workspace itself from the database.
+                    There is no button for it: it is done by hand, on request (section 8). What
+                    reaches Google — the preview the worker sends, and the notes and moment
+                    descriptions the app sends to write each carousel — is governed by
+                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">Google's terms</a>,
+                    not by this page.
+                </p>
+
+                <h2>8. Contact</h2>
+                <p>
+                    AutoReply Pro is operated by ElAmir Mansour, who receives and carries out
+                    deletion requests. To ask about a deletion request already made, or about
+                    anything on this page, email
+                    <a href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>, or use
+                    either of the other routes in section 2.
+                </p>
             </article>
 
         </main>
@@ -1065,28 +1306,30 @@
         <!-- ═══════════════════════════════════════════════════════════════════
              SHARED SITE CHROME · FOOTER
              ═══════════════════════════════════════════════════════════════════
-             MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES, on the same
+             MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES, on the same
              terms as the navbar above and the CSS block at the end of <style>.
 
-             It carries every public page plus the dashboard and the repo, so
-             the navigation graph is complete from the bottom of any page as
-             well as from the top: four pages, and from each of them all three
-             others plus /dashboard. Before this, /pricing reached neither home
+             It carries every public page plus the dashboard, the help centre,
+             the landing page's own sections and the repo, so the navigation
+             graph is complete from the bottom of any page as well as from the
+             top. Before the first version of it, /pricing reached neither home
              nor sign-in, and /privacy and /data-deletion reached only each
              other.
 
-             THE STRUCTURE IS NEW. The same links used to be one flat row above
-             one legal line — the correct content in a footer too thin to carry
-             it, at the bottom of two documents a visitor reaches from Meta's
-             own settings link. They are now three named groups under a
-             masthead, with the wordmark repeated so the bottom of the page
-             says whose page it is. /privacy and /data-deletion sit together
-             under "Policies", which is also what replaced the four-card
-             "Where to go next" grid that used to duplicate this footer on the
-             landing page.
+             FIVE NAMED GROUPS under a masthead, with the wordmark repeated so
+             the bottom of the page says whose page it is: Product, Resources,
+             Legal, Follow and Contact. Contact is LAST in the source on
+             purpose: the address is the widest item in the footer, so at 375px
+             it takes a row of its own, and a full-row item anywhere earlier
+             would leave a hole in the two-column grid above it.
+             The Product and Resources links into the landing page use
+             language-neutral fragments (/#faq, not /#faq-en) — see the CSS
+             block for how landing.html resolves them.
 
-             THE ONE INTENDED DIFFERENCE between the four copies is
-             `aria-current="page"` on this page's own link.
+             THE ONE INTENDED DIFFERENCE between the five copies is
+             `aria-current="page"` on this page's own link: the wordmark here
+             on landing.html (it links to `/`), Pricing on pricing.html, and
+             the page's own Legal link on the other three.
              ═══════════════════════════════════════════════════════════════════ -->
         <footer class="pagefoot">
             <div class="foot-top">
@@ -1095,39 +1338,64 @@
                     <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
                 </a>
                 <p class="foot-what">
-                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة، على إنستجرام وفيسبوك، بالعربية أولاً.</bdi>
-                    <bdi class="t-en" lang="en" dir="ltr">A comment becomes a private conversation, on Instagram and Facebook, Arabic-first.</bdi>
+                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة على إنستجرام وفيسبوك، ونشرٌ مجدول يصل تيك توك أيضاً، واستوديو للكاروسيل. بالعربية أولاً.</bdi>
+                    <bdi class="t-en" lang="en" dir="ltr">Comments into private conversations on Instagram and Facebook, scheduled posts that reach TikTok too, and a Carousel Studio. Arabic-first.</bdi>
                 </p>
             </div>
 
             <div class="foot-cols">
                 <nav aria-labelledby="foot-h-product">
                     <p class="foot-h" id="foot-h-product"><bdi class="t-ar" lang="ar">المنتج</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Product</bdi></p>
-                    <a href="/"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
+                    <a href="/#features"><bdi class="t-ar" lang="ar">الميزات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Features</bdi></a>
+                    <a href="/#carousel-studio"><bdi class="t-ar" lang="ar">استوديو الكاروسيل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Carousel Studio</bdi></a>
+                    <a href="/#tiktok"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></a>
                     <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
-                    <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
+                    <a href="/dashboard"><bdi class="t-ar" lang="ar">تسجيل الدخول</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Sign in</bdi></a>
                 </nav>
-                <nav aria-labelledby="foot-h-policies">
-                    <p class="foot-h" id="foot-h-policies"><bdi class="t-ar" lang="ar">السياسات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Policies</bdi></p>
-                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
-                    <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
-                    <a href="/data-deletion" aria-current="page"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
-                </nav>
-                <nav aria-labelledby="foot-h-source">
-                    <p class="foot-h" id="foot-h-source"><bdi class="t-ar" lang="ar">المصدر</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source</bdi></p>
+                <nav aria-labelledby="foot-h-resources">
+                    <p class="foot-h" id="foot-h-resources"><bdi class="t-ar" lang="ar">الموارد</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Resources</bdi></p>
+                    <a href="/dashboard#/help"><bdi class="t-ar" lang="ar">مركز المساعدة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Help Center</bdi></a>
+                    <a href="/#how-it-works"><bdi class="t-ar" lang="ar">كيف يعمل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">How it works</bdi></a>
+                    <a href="/#studio-how"><bdi class="t-ar" lang="ar">كيف يعمل الاستوديو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">How the Studio works</bdi></a>
+                    <a href="/#faq"><bdi class="t-ar" lang="ar">الأسئلة الشائعة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">FAQ</bdi></a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
                 </nav>
+                <nav aria-labelledby="foot-h-legal">
+                    <p class="foot-h" id="foot-h-legal"><bdi class="t-ar" lang="ar">الشؤون القانونية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Legal</bdi></p>
+                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
+                    <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
+                    <a href="/data-deletion" aria-current="page"><bdi class="t-ar" lang="ar">حذف البيانات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Data deletion</bdi></a>
+                </nav>
+                <div class="foot-follow" role="group" aria-labelledby="foot-h-follow">
+                    <p class="foot-h" id="foot-h-follow"><bdi class="t-ar" lang="ar">تابعنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Follow</bdi></p>
+                    <div class="foot-social">
+                        <a href="https://www.instagram.com/elamir.mansour/" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.6" fill="currentColor"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">إنستجرام</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Instagram</bdi></span></a>
+                        <a href="https://www.tiktok.com/@elamir_mansour" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></span></a>
+                        <a href="https://www.facebook.com/ElAmirMahmoudMansour" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">فيسبوك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Facebook</bdi></span></a>
+                    </div>
+                    <p class="foot-note"><bdi class="t-ar" lang="ar" dir="rtl">حسابات المؤسس، وعليها يُنشر ما يصنعه التطبيق.</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">The founder's accounts, where the app's own work is published.</bdi></p>
+                </div>
+                <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
+                    <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
+                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
+                </div>
+            </div>
+
+            <div class="foot-base">
+                <p class="foot-copy">© 2026 <bdi class="t-ar" lang="ar">أوتوريبلاي برو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">AutoReply Pro</bdi></p>
+                <div class="langswitch" role="group" aria-label="اللغة · Language">
+                    <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
+                    <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
+                </div>
             </div>
             <p class="foot-legal">
-                <!-- These two were plain <span>s with no lang or dir on three of
-                     the four pages. Inside an RTL page an English sentence's
-                     final full stop is a neutral character, so it was reordered
-                     to the other end of the line and the footer rendered
-                     ".by Meta". <bdi> is an isolate AND an element, which is why
-                     it is used here rather than unicode-bidi: isolate, which the
-                     W3C notes may be ignored. -->
-                <bdi class="t-ar" lang="ar" dir="rtl">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة <bdi lang="en" dir="ltr">Meta</bdi>، ولا ترتبط هذه الأداة بها.</bdi>
-                <bdi class="t-en" lang="en" dir="ltr">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</bdi>
+                <!-- <bdi>, not <span>, with lang and dir: inside an RTL page an
+                     English sentence's final full stop is a neutral character and
+                     is reordered to the other end of the line — which is how this
+                     line once rendered ".by Meta". -->
+                <bdi class="t-ar" lang="ar" dir="rtl">إنستجرام وفيسبوك وتيك توك علاماتٌ تجارية مملوكة لأصحابها، ولا ترتبط هذه الأداة بشركة <bdi lang="en" dir="ltr">Meta</bdi> ولا بتيك توك، ولا تحظى بتأييد أيٍّ منهما.</bdi>
+                <bdi class="t-en" lang="en" dir="ltr">Instagram, Facebook and TikTok are trademarks of their respective owners. AutoReply Pro is not affiliated with, or endorsed by, Meta or TikTok.</bdi>
             </p>
         </footer>
     </div>
