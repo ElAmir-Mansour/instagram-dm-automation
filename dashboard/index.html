@@ -26,8 +26,8 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=7.6">
-    <link rel="stylesheet" href="/dashboard/css/styles.css?v=7.6">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=7.7">
+    <link rel="stylesheet" href="/dashboard/css/styles.css?v=7.7">
 
     <script>
         /* Applied before first paint so a pinned light theme never flashes dark.
@@ -66,7 +66,7 @@
                known page list rather than interpolated into a path. */
             try {
                 var PAGES = ['overview', 'campaigns', 'posts', 'studio', 'inbox', 'ai_settings',
-                             'analytics', 'activity', 'settings', 'help', 'operations', 'tenants',
+                             'analytics', 'growth', 'activity', 'settings', 'help', 'operations', 'tenants',
                              'tenant_detail', 'users', 'jobs', 'audit', 'erasure'];
                 /* The page is the first segment: #/help/worker#security is "help". */
                 var want = (location.hash || '').replace(/^#\/?/, '').split(/[\/?#]/)[0];
@@ -78,10 +78,10 @@
                     link.href = href;
                     document.head.appendChild(link);
                 };
-                preload('/dashboard/js/pages/' + page + '.js?v=7.6');
+                preload('/dashboard/js/pages/' + page + '.js?v=7.7');
                 /* The articles live in their own file, which the help page
                    loads before it paints: fetch both at once. */
-                if (page === 'help') preload('/dashboard/js/help-content.js?v=7.6');
+                if (page === 'help') preload('/dashboard/js/help-content.js?v=7.7');
             } catch (e) { /* the module still loads, just a beat later */ }
         }());
     </script>
@@ -176,6 +176,13 @@
                 <a href="#/analytics" class="nav-item" data-page="analytics">
                     <i data-lucide="bar-chart-3" aria-hidden="true"></i>
                     <span data-i18n="nav.analytics">التحليلات</span>
+                </a>
+                <!-- Beside Analytics on purpose: that is how the automation performs,
+                     this is how the content performs (Meta insights), plus the SEO
+                     tools and the AI coach. -->
+                <a href="#/growth" class="nav-item" data-page="growth">
+                    <i data-lucide="trending-up" aria-hidden="true"></i>
+                    <span data-i18n="nav.growth">النمو والتسويق</span>
                 </a>
                 <a href="#/activity" class="nav-item" data-page="activity">
                     <i data-lucide="scroll-text" aria-hidden="true"></i>
@@ -322,17 +329,17 @@
          pure functions. Note this does NOT let cdn.jsdelivr.net leave the CSP:
          Lucide still loads from there. -->
 
-    <script defer src="/dashboard/js/i18n.js?v=7.6"></script>
-    <script defer src="/dashboard/js/api.js?v=7.6"></script>
-    <script defer src="/dashboard/js/components.js?v=7.6"></script>
-    <script defer src="/dashboard/js/motion.js?v=7.6"></script>
-    <script defer src="/dashboard/js/charts.js?v=7.6"></script>
+    <script defer src="/dashboard/js/i18n.js?v=7.7"></script>
+    <script defer src="/dashboard/js/api.js?v=7.7"></script>
+    <script defer src="/dashboard/js/components.js?v=7.7"></script>
+    <script defer src="/dashboard/js/motion.js?v=7.7"></script>
+    <script defer src="/dashboard/js/charts.js?v=7.7"></script>
     <!-- Not a page: the administration foundation (Admin.confirm, which replaces
          window.confirm for destructive actions anywhere) plus the health strip,
          which has to be available on a page whose own module does not know
          about it. Small, and needed off the admin screens, so it is eager. -->
-    <script defer src="/dashboard/js/pages/admin_common.js?v=7.6"></script>
-    <script defer src="/dashboard/js/app.js?v=7.6"></script>
+    <script defer src="/dashboard/js/pages/admin_common.js?v=7.7"></script>
+    <script defer src="/dashboard/js/app.js?v=7.7"></script>
 
 </body>
 </html>

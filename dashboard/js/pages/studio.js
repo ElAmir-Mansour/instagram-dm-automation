@@ -2842,8 +2842,14 @@ const StudioPage = {
         const caps = (this.work && this.work.carousel && this.work.carousel.captions) || {};
         const lang = this.contentLang();
         const line = String((tab === 'tt' ? caps.tiktokTitle : caps.instagram) || '').split('\n')[0];
+        // The writer's alt text for this slide (GROWTH.md §4), when the draft carries one. It is
+        // what Instagram's screen readers and search will read, so the preview uses it as the
+        // image's own alt and shows it under the phone, where the operator can check it.
+        const altText = slide && typeof slide.altText === 'string' ? slide.altText.trim() : '';
+        const anyAlt = !!(this.work && this.work.carousel && Array.isArray(this.work.carousel.slides)
+            && this.work.carousel.slides.some((s) => s && typeof s.altText === 'string' && s.altText.trim()));
         const stage = url
-            ? html`<img src="${url}" alt="${t('studio.preview.slideAlt', { n: i + 1, total: count, kind: this.kindLabel(slide && slide.kind) })}" decoding="async">`
+            ? html`<img src="${url}" alt="${altText || t('studio.preview.slideAlt', { n: i + 1, total: count, kind: this.kindLabel(slide && slide.kind) })}" decoding="async">`
             : this.wireframeMarkup(slide, busy);
         return html`
             <div class="phone phone--${tab}" id="studio-phone">
@@ -2873,6 +2879,13 @@ const StudioPage = {
                     </button>
                 </div>
                 ${line ? html`<p class="phone-caption user-content" dir="auto" lang="${lang}">${tab === 'ig' && brand ? html`<strong dir="auto">${brand}</strong> ` : ''}${line}</p>` : ''}
+                ${tab === 'ig' && anyAlt ? html`
+                    <p class="phone-alt" id="studio-alt-preview">
+                        <strong>${t('studio.preview.altText')}</strong>
+                        ${altText ? html`<span class="user-content" dir="auto" lang="${lang}">${altText}</span>` : html`<span class="text-meta">${t('studio.preview.altTextNone')}</span>`}
+                        ${UI.helpLink('seo#alt-text', t('help.link.altText'), { iconOnly: true })}
+                    </p>
+                ` : ''}
             </div>
         `;
     },

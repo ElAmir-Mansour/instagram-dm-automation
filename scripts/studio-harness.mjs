@@ -17,9 +17,13 @@
  *   /harness?s=ready&to=/studio?draft=d-ready  # the editor on a rendered draft
  *   /harness?lang=en&to=/help                  # the Help Center, which needs no fixtures
  *   /harness?lang=ar&to=/help/worker%23security  # a deep link to one section (%23 is the anchor's #)
+ *   /harness?growth=missing&lang=ar&to=/growth # the Growth hub with the insights permission missing
  *
  * Query options: `s` scenario, `lang` ar|en, `to` the hash route, `theme` light|dark,
- * `gen` seconds a generation takes (default 8), `render` seconds a render takes (default 6).
+ * `gen` seconds a generation takes (default 8), `render` seconds a render takes (default 6),
+ * `growth` the Growth fixture (full | small | missing | empty, default small), `coach` seconds
+ * the Growth Coach takes (default 7). POST /api/posts/scheduled is echoed, and the last body the
+ * composer sent is at GET /api/harness/last-post.
  *
  * The session: the dashboard keeps its bearer token in localStorage under `auth_token`
  * (api.js reads it at load, before anything renders). `/harness` injects a script at the top
@@ -393,6 +397,11 @@ function buildState(name, opts = {}) {
         failPatch: !!o.failPatch,
         genMs: Math.max(0, Number(opts.gen ?? 8)) * 1000,
         renderMs: Math.max(1, Number(opts.render ?? 6)) * 1000,
+        // Growth & SEO hub: its own scenario, and how long the coach "thinks".
+        growth: buildGrowth(opts.growth || 'small'),
+        coachMs: Math.max(0, Number(opts.coach ?? 7)) * 1000,
+        /** The last body POSTed to /api/posts/scheduled, so the composer's payload can be read back. */
+        lastPost: null,
     };
     // The `problems` scenario ships a draft that already breaks rules, so the live counters
     // show it before saving and PATCH answers with the real problem list.
@@ -800,6 +809,335 @@ async function studioApi(method, parts, query, body) {
     return refuse(404, `No such Studio route: ${method} /api/studio/${parts.join('/')}`);
 }
 
+// ─── Growth & SEO hub (GROWTH.md §3) ────────────────────────────────────────────────────
+// Its own dimension, `growth=`, beside the Studio scenario: /harness?growth=small&to=/growth.
+// Seeded pseudo-random, so a screenshot today matches one tomorrow.
+const GROWTH_SCENARIOS = {
+    full: 'An established account: 30 posts with every metric, 90 days of trend, follower series, competitors',
+    small: 'Today’s real shape: 36 followers, so no follower series; 99% of reach is new people; FB views 3.3× IG',
+    missing: 'The token lacks instagram_manage_insights and read_insights: likes and comments only',
+    empty: 'Permissions fine, nothing synced yet: no posts, no numbers, no settings',
+};
+
+function seeded(seed) {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6D2B79F5) >>> 0;
+        let x = Math.imul(a ^ (a >>> 15), 1 | a);
+        x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
+        return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+const GROWTH_CAPTIONS = [
+    'الدردشة ماتت… وبدأ عصر الوكيل ⚡\nالفرق اللي أغلب الناس ما انتبهوا له',
+    '٥ برومبتات تخلّي ChatGPT يكتب مثلك بالضبط\nاحفظ المنشور وجرّبها الليلة',
+    'كيف تبني متجر إلكتروني كامل ببرومبت واحد؟',
+    'NotebookLM: حوّل أي كتاب لبودكاست في دقيقتين',
+    'أكبر ٣ أخطاء في كتابة البرومبت (والحل)',
+    'هرم السياق: القالب اللي أستخدمه كل يوم',
+    'شغّل الذكاء الاصطناعي على جهازك بدون إنترنت',
+    'سيرتك الذاتية في ٤ خطوات مع Opal',
+    'Gemini أو ChatGPT؟ جربتهم على نفس المهمة',
+    'الوكيل الذكي يرتب لك رحلتك كاملة… شوف النتيجة',
+    'قبل ما تدفع على أي أداة ذكاء اصطناعي، شوف هذا',
+    'Veo: فيديو كامل من جملة واحدة',
+    'Stitch: من رسمة على ورقة إلى تطبيق شغّال',
+    'ليش إجابات الذكاء الاصطناعي عامة؟ السبب في سؤالك',
+    '',
+];
+
+const GROWTH_IDS = 'CxQ1Rt,CxR8Lm,CxT2Pq,CxV9Wd,CxX4Hn,CxZ7Kb,Cy1bFs,Cy3eJv,Cy5hMx,Cy7kQz,Cy9nTc,CzBqWf,CzDtZi,CzFw2l,CzHz5o'.split(',');
+
+/** One post_insights row plus engagement_rate, in the shape GET /growth/posts returns. */
+function growthPost(rand, i, o) {
+    const platform = o.platform;
+    const kind = o.kind; // 'REELS' | 'CAROUSEL_ALBUM' | 'IMAGE' | 'VIDEO'
+    const published = new Date(Date.now() - o.ageMs);
+    const thumbs = IG_FILES.length ? IG_FILES : [];
+    const thumb = o.thumbs && thumbs.length ? `/api/uploads/ig-${thumbs[i % thumbs.length]}` : null;
+    const code = `${GROWTH_IDS[i % GROWTH_IDS.length]}${i}`;
+    const permalink = platform === 'facebook'
+        ? `https://www.facebook.com/100560442828593/posts/${10000 + i}`
+        : `https://www.instagram.com/${kind === 'REELS' ? 'reel' : 'p'}/${code}/`;
+    const m = o.metrics;
+    const interactions = m.likes === null ? null : m.likes + m.comments + (m.saved || 0) + (m.shares || 0);
+    return {
+        id: `pi-${i}`, creator_id: 't-harness', platform, media_id: `1789${String(4000000 + i * 7919)}`,
+        scheduled_post_id: i % 3 === 0 ? `sp-${i}` : null, media_type: kind, permalink,
+        caption: GROWTH_CAPTIONS[i % GROWTH_CAPTIONS.length], thumbnail_url: thumb,
+        published_at: published.toISOString(),
+        metrics: { ...m, total_interactions: interactions },
+        fetched_at: iso(-2 * HOUR),
+        engagement_rate: interactions !== null && m.reach ? Math.round((interactions / m.reach) * 10000) / 10000 : null,
+    };
+}
+
+/** When a post goes out: mostly the tenant's two slots (13:00 / 21:00 Riyadh = 10:00Z / 18:00Z). */
+function postAge(rand, dayBack) {
+    const at = new Date();
+    at.setUTCDate(at.getUTCDate() - dayBack);
+    const slot = rand();
+    const hour = slot < 0.45 ? 18 : slot < 0.8 ? 10 : 6 + Math.floor(rand() * 16);
+    at.setUTCHours(hour, Math.floor(rand() * 50), 0, 0);
+    return Math.max(HOUR, Date.now() - at.getTime());
+}
+
+function buildGrowthPosts(name) {
+    const rand = seeded(name === 'small' ? 36 : name === 'missing' ? 46 : 1240);
+    if (name === 'empty') return [];
+    const count = name === 'missing' ? 46 : 30;
+    const span = name === 'missing' ? 120 : 45;
+    const posts = [];
+    for (let i = 0; i < count; i++) {
+        const dayBack = Math.round((i / count) * span + rand() * 1.2);
+        const fb = name !== 'missing' && rand() < 0.3;
+        const roll = rand();
+        const kind = fb ? (roll < 0.55 ? 'VIDEO' : 'IMAGE') : roll < 0.42 ? 'REELS' : roll < 0.78 ? 'CAROUSEL_ALBUM' : 'IMAGE';
+        const video = kind === 'REELS' || kind === 'VIDEO';
+        let metrics;
+        if (name === 'missing') {
+            metrics = {
+                views: null, reach: null, likes: 1 + Math.floor(rand() * 3), comments: rand() < 0.15 ? 1 : 0,
+                saved: null, shares: null, follows: null, profile_visits: null, avg_watch_time_ms: null,
+            };
+        } else if (name === 'small') {
+            // Reels average ~128 views, carousels ~39; Facebook's videos travel further (FB is 3.3× IG over 28 days).
+            const base = fb ? (kind === 'VIDEO' ? 520 : 180) : kind === 'REELS' ? 128 : kind === 'CAROUSEL_ALBUM' ? 39 : 24;
+            const views = Math.max(3, Math.round(base * (0.45 + rand() * 1.1)));
+            const reach = Math.max(2, Math.round(views * (0.72 + rand() * 0.2)));
+            metrics = {
+                views, reach, likes: Math.floor(rand() * 4), comments: rand() < 0.08 ? 1 : 0,
+                saved: rand() < 0.3 ? 1 : 0, shares: rand() < 0.2 ? 1 : 0, follows: rand() < 0.1 ? 1 : 0,
+                profile_visits: Math.floor(rand() * 3),
+                avg_watch_time_ms: video && !fb ? Math.round(2100 + rand() * 2400) : null,
+            };
+        } else {
+            const base = fb ? (kind === 'VIDEO' ? 4200 : 900) : kind === 'REELS' ? 2600 : kind === 'CAROUSEL_ALBUM' ? 1100 : 520;
+            const spike = rand() < 0.1 ? 3 + rand() * 4 : 1;
+            const views = Math.round(base * (0.4 + rand() * 1.2) * spike);
+            const reach = Math.round(views * (0.62 + rand() * 0.2));
+            const likes = Math.round(reach * (0.025 + rand() * 0.035));
+            metrics = {
+                views, reach, likes, comments: Math.round(reach * rand() * 0.008),
+                saved: Math.round(reach * (kind === 'CAROUSEL_ALBUM' ? 0.012 + rand() * 0.02 : rand() * 0.008)),
+                shares: Math.round(reach * (kind === 'REELS' ? 0.004 + rand() * 0.012 : rand() * 0.004)),
+                follows: Math.round(reach * rand() * 0.003), profile_visits: Math.round(reach * (0.01 + rand() * 0.02)),
+                avg_watch_time_ms: video && !fb ? Math.round(3800 + rand() * 7000) : null,
+            };
+        }
+        posts.push(growthPost(rand, i, { platform: fb ? 'facebook' : 'instagram', kind, ageMs: postAge(rand, dayBack), metrics, thumbs: !fb }));
+    }
+    return posts.sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
+}
+
+/** 90 days of account insights, oldest first; the overview slices it. */
+function buildGrowthTrend(name) {
+    const rand = seeded(name === 'small' ? 360 : 12400);
+    if (name === 'empty' || name === 'missing') return [];
+    const out = [];
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    let followers = 1150;
+    for (let d = 89; d >= 0; d--) {
+        const day = new Date(today.getTime() - d * 24 * HOUR).toISOString().slice(0, 10);
+        const weekend = [4, 5].includes(new Date(`${day}T12:00:00Z`).getUTCDay());
+        if (name === 'small') {
+            const views = Math.round((weekend ? 95 : 70) * (0.5 + rand() * 1.2) + (rand() < 0.1 ? 260 : 0));
+            out.push({ day, reach: Math.round(views * (0.7 + rand() * 0.15)), views, followers: null });
+        } else {
+            followers += Math.round(rand() * 2.4) - (rand() < 0.15 ? 1 : 0);
+            const views = Math.round((weekend ? 2100 : 1500) * (0.55 + rand() * 0.9) + (rand() < 0.08 ? 6000 : 0));
+            out.push({ day, reach: Math.round(views * (0.6 + rand() * 0.15)), views, followers });
+        }
+    }
+    // A day the sync missed: a gap in the line, not a zero.
+    if (out.length > 12) { out[out.length - 12].reach = null; out[out.length - 12].views = null; }
+    return out;
+}
+
+function growthSettingsFixture(name) {
+    if (name === 'empty') return { keywords: [], hashtag_sets: [], competitors: [], audience: {} };
+    return {
+        keywords: name === 'missing' ? ['ذكاء اصطناعي', 'برومبت'] : ['ذكاء اصطناعي', 'برومبت', 'وكيل ذكي', 'ChatGPT بالعربي', 'NotebookLM'],
+        hashtag_sets: name === 'missing' ? [] : [
+            { name: 'ذكاء اصطناعي', tags: ['الذكاء_الاصطناعي', 'AgenticAI', 'برومبت', 'تقنية', 'ChatGPT'] },
+            { name: 'للطلاب', tags: ['طلاب', 'دراسة', 'NotebookLM', 'تعلم_ذاتي'] },
+            { name: 'كل شيء (قديمة)', tags: ['ذكاء_اصطناعي', 'تقنية', 'تعلم', 'برمجة', 'مستقبل', 'ريلز', 'اكسبلور', 'السعودية'] },
+        ],
+        competitors: name === 'missing' ? ['ai.arabic'] : ['ai.arabic', 'techwithsara', 'promptsbyomar'],
+        audience: { countries: ['SA', 'AE', 'EG'], languages: ['ar'], timezone: 'Asia/Riyadh' },
+    };
+}
+
+function buildGrowth(name) {
+    const key = Object.prototype.hasOwnProperty.call(GROWTH_SCENARIOS, name) ? name : 'small';
+    const followers = key === 'full' ? 1240 : key === 'empty' ? null : key === 'missing' ? 36 : 36;
+    return {
+        name: key,
+        followers,
+        status: key === 'missing'
+            ? { instagram: 'missing_permission', facebook: 'missing_permission', tiktok: 'unavailable', missing: ['instagram_manage_insights', 'read_insights'], lastSync: iso(-5 * HOUR) }
+            : { instagram: 'ok', facebook: 'ok', tiktok: 'unavailable', missing: [], lastSync: key === 'empty' ? null : iso(-3 * HOUR) },
+        posts: buildGrowthPosts(key),
+        trend: buildGrowthTrend(key),
+        settings: growthSettingsFixture(key),
+        followSplit: key === 'full' ? { FOLLOWER: 11800, NON_FOLLOWER: 27400 } : key === 'small' ? { FOLLOWER: 17, NON_FOLLOWER: 1704 } : null,
+    };
+}
+
+function growthOverview(g, days) {
+    const since = Date.now() - days * 24 * HOUR;
+    const posts = g.posts.filter((p) => Date.parse(p.published_at) >= since);
+    const trend = g.trend.slice(-days);
+    const sum = (rows, key) => rows.reduce((n, r) => n + (Number.isFinite(r[key]) ? r[key] : 0), 0);
+    const measured = (rows, key) => rows.some((r) => r[key] !== null && r[key] !== undefined);
+    const withMetrics = posts.filter((p) => p.metrics.reach !== null);
+    const followerRows = trend.filter((r) => r.followers !== null);
+    const types = new Map();
+    posts.forEach((p) => {
+        const t = types.get(p.media_type) || { type: p.media_type, posts: 0, views: 0, rate: 0, measured: 0 };
+        t.posts += 1;
+        if (p.metrics.views !== null) { t.views += p.metrics.views; t.rate += p.engagement_rate || 0; t.measured += 1; }
+        types.set(p.media_type, t);
+    });
+    // The server's own grid, [weekday][hour] in UTC; the page builds its own from the posts.
+    const best = Array.from({ length: 7 }, () => Array(24).fill(0));
+    withMetrics.forEach((p) => { const d = new Date(p.published_at); best[d.getUTCDay()][d.getUTCHours()] += p.metrics.views || 0; });
+    const interactions = withMetrics.reduce((n, p) => n + (p.metrics.total_interactions || 0), 0);
+    const reachPosts = withMetrics.reduce((n, p) => n + p.metrics.reach, 0);
+    return {
+        kpis: {
+            followers: g.followers,
+            followers_delta: followerRows.length > 1 ? followerRows[followerRows.length - 1].followers - followerRows[0].followers : null,
+            reach: measured(trend, 'reach') ? Math.round(sum(trend, 'reach') * 0.82) : null,
+            views: measured(trend, 'views') ? sum(trend, 'views') : null,
+            engagement_rate: reachPosts ? Math.round((interactions / reachPosts) * 10000) / 10000 : null,
+            saves: withMetrics.length ? withMetrics.reduce((n, p) => n + (p.metrics.saved || 0), 0) : null,
+            shares: withMetrics.length ? withMetrics.reduce((n, p) => n + (p.metrics.shares || 0), 0) : null,
+            profile_visits: withMetrics.length ? withMetrics.reduce((n, p) => n + (p.metrics.profile_visits || 0), 0) : null,
+        },
+        trend,
+        best_times: withMetrics.length ? best : null,
+        top_posts: withMetrics.slice().sort((a, b) => b.metrics.views - a.metrics.views).slice(0, 5),
+        by_type: [...types.values()].map((t) => ({
+            type: t.type, posts: t.posts,
+            avg_views: t.measured ? Math.round(t.views / t.measured) : null,
+            avg_engagement: t.measured ? Math.round((t.rate / t.measured) * 10000) / 10000 : null,
+        })),
+        reach_by_follow_type: g.followSplit,
+    };
+}
+
+const COMPETITORS = {
+    'ai.arabic': { followers: 48200, media_count: 612, base: 1900 },
+    techwithsara: { followers: 12900, media_count: 288, base: 420 },
+    promptsbyomar: { followers: 3100, media_count: 97, base: 140 },
+};
+
+function competitorRows(g) {
+    const rand = seeded(7);
+    return g.settings.competitors.map((username) => {
+        const c = COMPETITORS[username];
+        if (!c) return { username, error: 'not_found' };
+        return {
+            username, followers: c.followers, media_count: c.media_count,
+            recent: [0, 1, 2].map((k) => ({
+                permalink: `https://www.instagram.com/p/${username.replace(/\W/g, '')}${k}/`,
+                like_count: Math.round(c.base * (0.5 + rand())), comments_count: Math.round(c.base * 0.04 * (0.5 + rand())),
+                media_type: k === 1 ? 'CAROUSEL_ALBUM' : 'VIDEO', timestamp: iso(-(k * 2 + 1) * 24 * HOUR), caption: 'منشور حديث',
+            })),
+            avg_engagement: null,
+        };
+    });
+}
+
+function coachAnswer(g) {
+    if (g.name === 'missing') {
+        return {
+            summary: 'أرقام الوصول والمشاهدات غير متاحة بعد لأن الرمز ينقصه إذن الإحصاءات، فهذه الخطة مبنية على تاريخ منشوراتك ونصوصها فقط. تنشر بانتظام (٤٦ منشوراً)، لكن التفاعل منخفض: إعجابان تقريباً لكل منشور وتعليقات شبه معدومة.',
+            wins: ['تنشر بانتظام، مرتين إلى ثلاث في الأسبوع.', 'مواضيعك محددة وواضحة: أدوات الذكاء الاصطناعي بالعربي.'],
+            problems: ['لا نعرف كم شخصاً رأى منشوراتك: أضف إذن الإحصاءات لتظهر الأرقام.', 'السطر الأول غالباً عنوان عام ولا يحتوي كلمة يبحث عنها الناس.', 'لا دعوة واضحة للتعليق، فالتعليقات شبه صفر.'],
+            actions: [
+                { title: 'أضف إذن instagram_manage_insights إلى الرمز', why: 'بدونه لا يمكن معرفة ما ينجح.', how: 'اتبع الخطوات في تنبيه الأذونات أعلى الصفحة.', effort: 'low', impact: 'high' },
+                { title: 'ابدأ كل نص بكلمة يبحث عنها جمهورك', why: 'بحث إنستجرام يقرأ أول سطر.', how: 'استخدم «ذكاء اصطناعي» أو «برومبت» في أول ٥ كلمات.', effort: 'low', impact: 'med' },
+                { title: 'اختم بسؤال يطلب رأياً', why: 'التعليقات ترفع الوصول.', how: 'مثل: «أي أداة تستخدم أنت؟»', effort: 'low', impact: 'med' },
+            ],
+            experiments: [{ hypothesis: 'الريلز القصيرة تجذب أكثر من الصور.', how: 'انشر ٤ ريلز و٤ صور خلال أسبوعين.', measure: 'قارن الإعجابات والتعليقات بعد إضافة الإذن.' }],
+        };
+    }
+    return {
+        summary: '٩٩٪ ممن يرون محتواك لا يتابعونك، يعني إنستجرام يعرض ريلزك على جمهور جديد. المشكلة أنهم لا يبقون: متوسط المشاهدة ٣ ثوانٍ تقريباً، والريلز تحصل على ثلاثة أضعاف مشاهدات الكاروسيل.',
+        wins: ['الريلز تحصل على أكثر من ثلاثة أضعاف مشاهدات الكاروسيل.', 'منشورات البرومبتات الجاهزة هي الأكثر حفظاً.', 'فيديوهات فيسبوك تصل أبعد من إنستجرام بثلاثة أضعاف.'],
+        problems: ['متوسط المشاهدة حوالي ٣ ثوانٍ: أغلب الناس يمرّون قبل الفكرة الأساسية.', 'الكاروسيل لا يصل لغير المتابعين تقريباً.', 'أوقات النشر ثابتة، فلا نعرف إن كانت هناك أوقات أفضل.'],
+        actions: [
+            { title: 'افتح كل ريل بالنتيجة في أول ثانيتين', why: 'المشاهدة تنتهي عند ٣ ثوانٍ تقريباً.', how: 'ابدأ بلقطة النتيجة النهائية ثم اشرح كيف وصلت لها.', effort: 'med', impact: 'high' },
+            { title: 'حوّل أقوى كاروسيل إلى ريل', why: 'الريلز تصل لجمهور جديد أكثر بكثير.', how: 'خذ «٥ برومبتات» واعرضها كنص على الشاشة مع صوتك.', effort: 'med', impact: 'high' },
+            { title: 'ضع كلمة البحث في أول سطر وعلى الشاشة', why: 'بحث إنستجرام يقرأ النص والنص الظاهر في الفيديو.', how: 'استخدم «برومبت» أو «ذكاء اصطناعي» في أول ٥ كلمات.', effort: 'low', impact: 'med' },
+            { title: 'جرّب الريلز التجريبية للمواضيع الجديدة', why: 'تختبر الفكرة على غير المتابعين قبل متابعيك.', how: 'فعّل «انشرها ريلز تجريبية» عند الجدولة.', effort: 'low', impact: 'low' },
+        ],
+        experiments: [
+            { hypothesis: 'نص كبير على الشاشة في الثانية الأولى يرفع متوسط المشاهدة.', how: 'انشر ريلين متشابهين: واحد بنص افتتاحي وواحد بدونه.', measure: 'متوسط المشاهدة ونسبة من شاهد أكثر من ٣ ثوانٍ.' },
+            { hypothesis: 'النشر الساعة ٩ مساءً يصل أكثر من ١ ظهراً.', how: 'انشر ٦ منشورات في كل وقت خلال ٣ أسابيع.', measure: 'متوسط الوصول لكل وقت.' },
+        ],
+    };
+}
+
+async function growthApi(method, parts, query, body) {
+    const g = state.growth;
+    const [head, sub] = parts;
+    const days = Math.min(365, Math.max(1, Number(query.get('days')) || 28));
+    if (method === 'GET' && head === 'status') return ok(clone(g.status));
+    if (method === 'POST' && head === 'sync') {
+        await sleep(1500);
+        const last = Date.parse(g.status.lastSync || '');
+        if (Number.isFinite(last) && Date.now() - last < 10 * MIN) return refuse(429, 'Synced less than 10 minutes ago.');
+        g.status.lastSync = iso();
+        return ok({ synced: { instagram: g.posts.filter((p) => p.platform === 'instagram').length, facebook: g.posts.filter((p) => p.platform === 'facebook').length }, lastSync: g.status.lastSync });
+    }
+    if (method === 'GET' && head === 'overview') return ok(growthOverview(g, days));
+    if (method === 'GET' && head === 'posts') {
+        const since = Date.now() - days * 24 * HOUR;
+        return ok({ posts: g.posts.filter((p) => Date.parse(p.published_at) >= since) });
+    }
+    if (method === 'POST' && head === 'coach') {
+        await sleep(state.coachMs);
+        return ok(coachAnswer(g));
+    }
+    if (head === 'settings') {
+        if (method === 'GET') return ok({ settings: clone(g.settings) });
+        if (method === 'PUT') {
+            const b = body && typeof body === 'object' ? body : {};
+            const next = { ...g.settings };
+            for (const k of ['keywords', 'hashtag_sets', 'competitors', 'audience']) if (b[k] !== undefined) next[k] = clone(b[k]);
+            if (!Array.isArray(next.keywords) || next.keywords.length > 30) return refuse(400, 'keywords must be at most 30 terms.');
+            g.settings = next;
+            return ok({ settings: clone(g.settings) });
+        }
+    }
+    if (method === 'POST' && head === 'keywords' && sub === 'suggest') {
+        await sleep(1500);
+        const topic = String((body && body.topic) || '').trim();
+        if (!topic) return refuse(400, 'topic is required');
+        return ok({
+            keywords: [
+                { term: 'برومبت', why: 'كلمة قصيرة يكتبها المبتدئون في البحث كثيراً.' },
+                { term: 'ذكاء اصطناعي للطلاب', why: `مرتبطة مباشرة بموضوع «${topic}».` },
+                { term: 'شات جي بي تي بالعربي', why: 'كثيرون يبحثون بالاسم مكتوباً بالعربي.' },
+                { term: 'أدوات ذكاء اصطناعي مجانية', why: 'نية واضحة: يبحث عن أدوات يجربها.' },
+                { term: 'NotebookLM', why: 'اسم أداة يبحث عنه الطلاب تحديداً.' },
+            ],
+            hashtags: ['الذكاء_الاصطناعي', 'برومبت', 'طلاب', 'تعلم', 'AI', 'ChatGPT'],
+        });
+    }
+    if (method === 'GET' && head === 'competitors') {
+        await sleep(900);
+        if (g.name === 'missing') return ok({ status: 'missing_permission', competitors: [] });
+        return ok(competitorRows(g));
+    }
+    return refuse(404, `No such Growth route: ${method} /api/growth/${parts.join('/')}`);
+}
+
 // ─── HTTP ───────────────────────────────────────────────────────────────────────────────
 const SESSION = {
     userId: 'u-harness', role: 'platform_admin', tenantId: 't-harness', tenantRole: 'owner',
@@ -852,7 +1190,7 @@ async function shell(res, seed) {
         if (seed.lang) localStorage.setItem('dashboard_lang', seed.lang);
         if (seed.theme) localStorage.setItem('dashboard_theme', seed.theme);
         else if (seed.reset) localStorage.removeItem('dashboard_theme');
-        if (seed.reset) Object.keys(localStorage).filter(function (k) { return k.indexOf('studio:') === 0; })
+        if (seed.reset) Object.keys(localStorage).filter(function (k) { return k.indexOf('studio:') === 0 || k.indexOf('growth:') === 0; })
             .forEach(function (k) { localStorage.removeItem(k); });
         if (seed.to) history.replaceState(null, '', '/dashboard/#' + seed.to);
     } catch (e) { /* private mode: the login screen shows instead */ }
@@ -896,6 +1234,14 @@ Add <code>&amp;gen=30</code> for a slower generation, <code>&amp;render=20</code
 <div class="wrap"><table><thead><tr><th>Scenario</th><th>What it shows</th><th colspan="3">Open</th></tr></thead>
 <tbody>${Object.entries(SCENARIOS).map(([k, s]) => row(k, s)).join('')}</tbody></table></div>
 <p>Images: ${IG_FILES.length} Instagram and ${TT_FILES.length} TikTok renders, ${SHOT_FILES.length} lesson frames.</p>
+<h2>Growth &amp; SEO hub</h2>
+<p>Fixtures for <code>#/growth</code> (GROWTH.md §3), chosen with <code>growth=</code>. Add <code>&amp;coach=20</code> for a
+slower coach. <code>/api/harness/last-post</code> shows the last body the post composer sent.</p>
+<div class="wrap"><table><thead><tr><th>Growth</th><th>What it shows</th><th colspan="3">Open</th></tr></thead><tbody>${Object.entries(GROWTH_SCENARIOS).map(([k, label]) => `
+    <tr><th scope="row"><code>${k}</code></th><td>${label}</td>
+    <td><a href="/harness?growth=${k}&lang=en&to=/growth">English</a></td>
+    <td><a href="/harness?growth=${k}&lang=ar&to=/growth">العربية</a></td>
+    <td><a href="/harness?growth=${k}&lang=ar&to=${encodeURIComponent('/growth?tab=seo')}">SEO</a></td></tr>`).join('')}</tbody></table></div>
 <h2>Help Center</h2>
 <p>The articles are static (<code>dashboard/js/help-content.js</code>), so any scenario serves them. Deep links put the
 section after a second <code>#</code>, written <code>%23</code> inside <code>to=</code>.</p>
@@ -913,7 +1259,12 @@ const server = createServer(async (req, res) => {
     try {
         if (path === '/' || path === '/index.html') return send(res, 200, indexPage(), TYPES['.html']);
         if (path === '/harness') {
-            buildState(url.searchParams.get('s') || 'ready', { gen: url.searchParams.get('gen') ?? undefined, render: url.searchParams.get('render') ?? undefined });
+            buildState(url.searchParams.get('s') || 'ready', {
+                gen: url.searchParams.get('gen') ?? undefined,
+                render: url.searchParams.get('render') ?? undefined,
+                growth: url.searchParams.get('growth') ?? undefined,
+                coach: url.searchParams.get('coach') ?? undefined,
+            });
             const lang = ['ar', 'en'].includes(url.searchParams.get('lang')) ? url.searchParams.get('lang') : '';
             const theme = ['light', 'dark'].includes(url.searchParams.get('theme')) ? url.searchParams.get('theme') : '';
             const to = url.searchParams.get('to') || '/studio';
@@ -934,6 +1285,21 @@ const server = createServer(async (req, res) => {
                 console.log(`${method} ${path} → ${out.status}`);
                 return send(res, out.status, out.body);
             }
+            if (parts[0] === 'growth') {
+                const body = ['POST', 'PUT', 'PATCH'].includes(method) ? await readJson(req) : {};
+                const out = await growthApi(method, parts.slice(1), url.searchParams, body);
+                console.log(`${method} ${path}${url.search} → ${out.status}`);
+                return send(res, out.status, out.body);
+            }
+            // The composer's payload, echoed: POST it from the Posts page, then read it back at
+            // GET /api/harness/last-post to see exactly what the dashboard sent.
+            if (parts[0] === 'posts' && parts[1] === 'scheduled' && !parts[2] && method === 'POST') {
+                const body = await readJson(req);
+                state.lastPost = body;
+                console.log(`POST ${path} ${JSON.stringify(body)}`);
+                return send(res, 201, { id: `sp-${Date.now()}`, status: 'PENDING', ...body });
+            }
+            if (parts[0] === 'harness' && parts[1] === 'last-post') return send(res, 200, { body: state.lastPost });
             // Everything else the shell might ask for: an empty, successful answer.
             return send(res, 200, method === 'GET' ? {} : { ok: true });
         }

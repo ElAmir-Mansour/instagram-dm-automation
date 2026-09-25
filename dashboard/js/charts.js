@@ -31,6 +31,8 @@
  *               way to show a two-part split: the eye compares angles badly,
  *               and it costs a whole card to say "59 and 37".
  * `sparkline` — a thin trend line for when a trend is real (>= 3 points).
+ * `lineChart` — the Growth trend: a daily line with a zero-based axis, gaps left as
+ *               gaps, and HTML labels. See its own comment for the geometry.
  *
  * ─── Two things every chart here does that the canvas could not ──────────────
  *
@@ -279,5 +281,130 @@ const Charts = {
                               stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
                 </svg>
             </div>`;
+    },
+
+    /**
+     * A round top for a y-axis: 37 → 40, 1234 → 1500. Never zero, so a flat
+     * line of zeros still has an axis to sit on.
+     */
+    niceCeil(value) {
+        const v = Number(value);
+        if (!Number.isFinite(v) || v <= 0) return 10;
+        const target = v * 1.05;
+        const mag = Math.pow(10, Math.floor(Math.log10(target)));
+        const f = target / mag;
+        const step = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((s) => s >= f - 1e-9) || 10;
+        return step * mag;
+    },
+
+    /**
+     * A daily line — the Growth trend. `points` are `{ day, value }` oldest first, and a
+     * null value is a GAP: the line stops and starts again rather than drawing a slope
+     * across days nobody measured (the same honesty rule as `dayStrip`). A run of one
+     * day is a dot. Fewer than two measured days is not a trend, and says so.
+     *
+     * Geometry, and why it looks like this:
+     *   - Each day owns an equal SLOT and its point sits at the slot's centre, so the HTML
+     *     date labels underneath (one equal flex cell per day) line up with the points at
+     *     any width. The axis labels are HTML for the same reason as the day strip's:
+     *     glyphs inside a stretched viewBox stretch with it.
+     *   - `preserveAspectRatio="none"` fills the card; `vector-effect="non-scaling-stroke"`
+     *     keeps the line 2px however far it stretches, and a dot is a zero-length round-capped
+     *     stroke, which stays a circle where an SVG `<circle>` would become an ellipse.
+     *   - Time runs toward the reading edge: oldest at the start, most recent at the end —
+     *     so in Arabic the x coordinates are mirrored, and the HTML rows (which follow the
+     *     document's direction) agree with them without any `dir` override.
+     *   - The y-axis starts at zero. A line that starts at its own minimum turns 36 → 38
+     *     followers into a cliff.
+     */
+    lineChart(points, options) {
+        const opts = options || {};
+        const rows = (Array.isArray(points) ? points : []).map((p) => {
+            const raw = p ? p.value : null;
+            const n = raw === null || raw === undefined || raw === '' ? NaN : Number(raw);
+            return { day: p ? p.day : null, value: Number.isFinite(n) ? n : null };
+        });
+        const present = rows.filter((r) => r.value !== null);
+        if (present.length < 2) return Charts._empty(opts.emptyMessage || '');
+
+        const fmt = typeof opts.format === 'function' ? opts.format : (v) => UI.formatNumber(v);
+        const W = 600, H = 160, TOP = 8, BOTTOM = H - 8;
+        const n = rows.length;
+        const slot = W / n;
+        const rtl = I18N.isRtl();
+        const peak = Math.max(...present.map((r) => r.value));
+        const top = Charts.niceCeil(peak);
+        const xOf = (i) => {
+            const x = (i + 0.5) * slot;
+            return Number((rtl ? W - x : x).toFixed(2));
+        };
+        const yOf = (v) => Number((BOTTOM - (Math.max(0, v) / top) * (BOTTOM - TOP)).toFixed(2));
+        const stroke = Charts.token(opts.token || '--accent', '#0071e3');
+        const grid = Charts.token('--chart-grid', 'rgba(255,255,255,0.08)');
+
+        // Contiguous runs of measured days: each is its own line; a lone day is a dot.
+        const runs = [];
+        let cur = [];
+        rows.forEach((r, i) => {
+            if (r.value === null) {
+                if (cur.length) runs.push(cur);
+                cur = [];
+            } else {
+                cur.push(i);
+            }
+        });
+        if (cur.length) runs.push(cur);
+        const lines = runs.filter((run) => run.length > 1);
+        const linePath = lines.map((run) => run.map((i, k) => `${k ? 'L' : 'M'}${xOf(i)},${yOf(rows[i].value)}`).join(' ')).join(' ');
+        const areaPath = lines.map((run) => {
+            const first = run[0];
+            const last = run[run.length - 1];
+            return `M${xOf(first)},${BOTTOM} ${run.map((i) => `L${xOf(i)},${yOf(rows[i].value)}`).join(' ')} L${xOf(last)},${BOTTOM} Z`;
+        }).join(' ');
+        const lastIndex = rows.reduce((at, r, i) => (r.value === null ? at : i), -1);
+        const dots = runs.filter((run) => run.length === 1).map((run) => run[0]);
+        if (lastIndex >= 0 && !dots.includes(lastIndex)) dots.push(lastIndex);
+
+        const dayText = (d) => (d ? UI.formatDayShort(d) : '');
+        const hits = rows.map((r, i) => {
+            const x = rtl ? W - (i + 1) * slot : i * slot;
+            return html`<rect x="${x.toFixed(2)}" y="0" width="${slot.toFixed(2)}" height="${H}" fill="transparent"><title>${dayText(r.day)}: ${r.value === null ? '—' : fmt(r.value)}</title></rect>`;
+        });
+
+        // At most five dates, evenly spaced, always the first and the last. Every other one is
+        // `is-minor`, which a phone hides, so three dates share 300px instead of five.
+        const count = Math.min(n, n <= 7 ? n : 5);
+        const shown = new Map();
+        for (let k = 0; k < count; k++) shown.set(count === 1 ? 0 : Math.round((k * (n - 1)) / (count - 1)), k);
+        const labels = rows.map((r, i) => {
+            const cls = [i === 0 ? 'is-first' : i === n - 1 ? 'is-last' : '', shown.has(i) && shown.get(i) % 2 === 1 && i !== n - 1 ? 'is-minor' : '']
+                .filter(Boolean).join(' ');
+            return html`<span class="${cls}">${shown.has(i) ? dayText(r.day) : ''}</span>`;
+        });
+
+        return html`
+            <div class="chart-line">
+                <div class="chart-line-y" aria-hidden="true">
+                    <span>${fmt(top)}</span><span>${fmt(top / 2)}</span><span>${fmt(0)}</span>
+                </div>
+                <svg class="chart-line-svg" viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none"
+                     role="img" aria-label="${opts.label || ''}" focusable="false">
+                    <line x1="0" x2="${W}" y1="${TOP}" y2="${TOP}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
+                    <line x1="0" x2="${W}" y1="${(TOP + BOTTOM) / 2}" y2="${(TOP + BOTTOM) / 2}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
+                    <line x1="0" x2="${W}" y1="${BOTTOM}" y2="${BOTTOM}" stroke="${grid}" vector-effect="non-scaling-stroke"></line>
+                    ${areaPath ? html`<path class="chart-line-area" d="${areaPath}" fill="${stroke}" fill-opacity="0.12"></path>` : ''}
+                    ${linePath ? html`<path class="chart-line-path" d="${linePath}" fill="none" stroke="${stroke}" stroke-width="2"
+                          stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"></path>` : ''}
+                    ${dots.map((i) => html`<path class="chart-line-dot" d="M${xOf(i)},${yOf(rows[i].value)}h0" stroke="${stroke}" stroke-width="7"
+                          stroke-linecap="round" vector-effect="non-scaling-stroke"></path>`)}
+                    ${hits}
+                </svg>
+                <div class="chart-line-x" aria-hidden="true">${labels}</div>
+            </div>
+            ${Charts._srTable(
+                opts.label || '',
+                [opts.dayHeader || 'Day', opts.valueHeader || 'Value'],
+                rows.map((r) => [dayText(r.day), r.value === null ? '—' : fmt(r.value)])
+            )}`;
     },
 };

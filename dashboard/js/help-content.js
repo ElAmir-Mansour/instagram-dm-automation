@@ -36,6 +36,7 @@ const HelpContent = {
     groups: [
         { id: 'start', title: { ar: 'البداية', en: 'Getting started' } },
         { id: 'meta', title: { ar: 'إنستجرام وفيسبوك', en: 'Instagram & Facebook' } },
+        { id: 'growth', title: { ar: 'النمو والتسويق', en: 'Growth & reach' } },
         { id: 'tiktok', title: { ar: 'تيك توك', en: 'TikTok' } },
         { id: 'studio', title: { ar: 'استوديو الكاروسيل', en: 'Carousel Studio' } },
         { id: 'more', title: { ar: 'الذكاء الاصطناعي والحلول', en: 'AI, fixes and questions' } },
@@ -126,6 +127,7 @@ const HelpContent = {
                                 ['صندوق الرسائل', 'محادثات عملائك. تقدر ترد بنفسك، وأي رد يدوي يوقف الرد الآلي في تلك المحادثة.'],
                                 ['إعدادات الذكاء الاصطناعي', 'شخصية الوكيل، ومعلوماته، والنموذج، ومكان تجربته.'],
                                 ['التحليلات', 'أداء الأتمتة بالأرقام.'],
+                                ['النمو والتسويق', 'أرقام محتواك، وخطة مدرب النمو، وأدوات السيو.'],
                                 ['سجل النشاط', 'كل تعليق ورسالة وحالتها، لحظة بلحظة.'],
                                 ['الإعدادات', 'رمز الوصول، ورمز التحقق، وتيك توك، والمظهر واللغة.'],
                                 ['المساعدة', 'هنا: كل الشروحات، بالعربي والإنجليزي.'],
@@ -140,6 +142,7 @@ const HelpContent = {
                                 ['DM Inbox', 'Your customer conversations. You can reply yourself, and a manual reply pauses the AI in that conversation.'],
                                 ['AI Settings', 'The agent’s voice, what it knows, the model, and a sandbox to try it.'],
                                 ['Analytics', 'How the automation is performing, in numbers.'],
+                                ['Growth', 'How your content performs, the Growth Coach’s plan, and the SEO tools.'],
                                 ['Activity Log', 'Every comment and message and what happened to it, as it happens.'],
                                 ['Settings', 'The access token, the webhook verify token, TikTok, appearance and language.'],
                                 ['Help', 'You are here: every guide, in Arabic and English.'],
@@ -616,6 +619,334 @@ const HelpContent = {
                                 ['Failed', 'Nothing was deleted: the post is still in the queue with the reason it failed. Fix the media or caption and publish again.'],
                                 ['TikTok is processing', 'TikTok has it and is preparing it, which usually takes under a minute.'],
                                 ['In your TikTok inbox', 'It reached your TikTok drafts, and you post it from the app.'],
+                            ] },
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 4a. Growth & insights ───────────────────────────────────────────
+        {
+            slug: 'growth',
+            group: 'growth',
+            icon: 'trending-up',
+            title: { ar: 'النمو والإحصاءات', en: 'Growth & insights' },
+            summary: {
+                ar: 'وش يعني كل رقم في صفحة النمو، وكيف تضيف أذونات الإحصاءات، وكيف تقرأ خطة المدرب.',
+                en: 'What each number on the Growth page means, how to add the insights permissions, and how to read the coach’s plan.',
+            },
+            related: ['seo', 'connect-meta', 'scheduling'],
+            sections: [
+                {
+                    id: 'metrics',
+                    title: { ar: 'وش يعني كل رقم؟', en: 'What each number means' },
+                    body: {
+                        ar: [
+                            'كل الأرقام في **الأداء** عن الفترة اللي تختارها فوق: آخر 7 أيام أو 28 أو 90.',
+                            { dl: [
+                                ['المتابعون', 'كم حساب يتابعك الآن، والفرق عن بداية الفترة.'],
+                                ['الوصول', 'كم حساب مختلف شاف منشوراتك. اللي شاف المنشور ثلاث مرات ينحسب مرة وحدة.'],
+                                ['المشاهدات', 'كم مرة انعرض محتواك، والمشاهدات المتكررة من نفس الشخص كلها تنحسب.'],
+                                ['معدل التفاعل', 'التفاعلات (إعجاب وتعليق وحفظ ومشاركة) مقسومة على الوصول: من اللي شافوا المنشور، كم واحد تفاعل؟'],
+                                ['الحفظ', 'كم مرة حفظ الناس منشورك يرجعون له. من أقوى الإشارات أن المحتوى مفيد.'],
+                                ['المشاركات', 'كم مرة أرسلوا منشورك لغيرهم. هكذا يوصل محتواك لناس ما يتابعونك.'],
+                                ['متوسط المشاهدة', 'كم ثانية يشاهدون ريلزك في المتوسط. أول ثلاث ثوانٍ تقرر يكملون أو يمرّون.'],
+                                ['من يراك', 'الوصول مقسوم بين متابعيك وأشخاص جدد. لو أغلبه أشخاص جدد، فإنستجرام يعرض محتواك خارج دائرتك، والمطلوب تخليهم يكملون المشاهدة.'],
+                            ] },
+                            { note: 'الشرطة «—» معناها أن الرقم ما انقاس، مو أنه صفر. جنبها مكتوب السبب: إذن ناقص، أو ما صارت مزامنة، أو إنستجرام ما يعطي هذا الرقم لحسابك.' },
+                        ],
+                        en: [
+                            'Every number under **Performance** covers the period you pick at the top: the last 7, 28 or 90 days.',
+                            { dl: [
+                                ['Followers', 'How many accounts follow you now, and the change since the start of the period.'],
+                                ['Reach', 'How many different accounts saw your posts. Someone who saw a post three times counts once.'],
+                                ['Views', 'How many times your content was shown, counting repeat views by the same person.'],
+                                ['Engagement rate', 'Interactions (likes, comments, saves, shares) divided by reach: of the people who saw a post, how many did something?'],
+                                ['Saves', 'How often people saved a post to come back to. One of the strongest signs that content is useful.'],
+                                ['Shares', 'How often people sent a post to someone else. This is how your content reaches people who do not follow you.'],
+                                ['Avg. watch time', 'How many seconds people watch your reels, on average. The first three seconds decide whether they stay.'],
+                                ['Who sees you', 'Reach split between your followers and new people. When most of it is new people, Instagram is already showing you beyond your circle, and the job is to keep them watching.'],
+                            ] },
+                            { note: 'A dash “—” means the number was not measured, not that it is zero. The reason is written beside it: a missing permission, no sync yet, or a number Instagram does not give for your account.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'permissions',
+                    title: { ar: 'كيف تضيف أذونات الإحصاءات', en: 'Adding the insights permissions' },
+                    body: {
+                        ar: [
+                            'أرقام الوصول والمشاهدات والحفظ والمشاركات تحتاج إذنين في رمز ميتا، غير الأذونات اللي يحتاجها الرد الآلي:',
+                            { dl: [
+                                ['`instagram_manage_insights`', 'إحصاءات منشورات إنستجرام وحسابك: الوصول والمشاهدات والحفظ والمشاركات ومتوسط المشاهدة.'],
+                                ['`read_insights`', 'إحصاءات صفحة فيسبوك ومنشوراتها.'],
+                            ] },
+                            'لو ناقصين، يظهر تنبيه فوق صفحة **النمو والتسويق** يسمّيهم. الحل رمز جديد فيه كل الأذونات:',
+                            { ol: [
+                                'افتح أداة Graph API Explorer في حساب المطوّر عند ميتا، واختر تطبيقك.',
+                                'اختر رمز مستخدم، وفعّل الإذنين فوق **مع كل الأذونات اللي عندك الآن**، واضغط إنشاء الرمز.',
+                                'حوّله إلى رمز صفحة دائم بنفس الطريقة اللي سويتها أول مرة: [[connect-meta#token-health]].',
+                                'في **الإعدادات** الصق الرمز الجديد في **تحديث رمز الوصول** واضغط **تحقّق واحفظ**.',
+                                'ارجع لصفحة **النمو والتسويق** واضغط **مزامنة**.',
+                            ] },
+                            { warn: 'ركّب الرمز الجديد قبل ما تلغي القديم. ميتا ما تلغي الرمز القديم لما تصدر جديد، فالرد الآلي يظل شغّال طول الوقت.' },
+                            { tip: 'مقارنة المنافسين تستخدم ميزة Business Discovery في إنستجرام، ولو رمزك ما يسمح بها يظهر لك تنبيه في قسم **المنافسون** نفسه.' },
+                        ],
+                        en: [
+                            'Reach, views, saves and shares need two permissions on the Meta token, on top of the ones the auto-replies use:',
+                            { dl: [
+                                ['`instagram_manage_insights`', 'Insights for your Instagram posts and account: reach, views, saves, shares and watch time.'],
+                                ['`read_insights`', 'Insights for your Facebook Page and its posts.'],
+                            ] },
+                            'When they are missing, a notice at the top of the **Growth** page names them. The fix is a new token that carries everything:',
+                            { ol: [
+                                'Open the Graph API Explorer in your Meta developer account and choose your app.',
+                                'Pick a User token, tick the two permissions above **together with every permission you have now**, and generate the token.',
+                                'Exchange it for a permanent Page token, the same way you did the first time: [[connect-meta#token-health]].',
+                                'In **Settings**, paste the new token into **Update access token** and press **Validate & save**.',
+                                'Go back to **Growth** and press **Sync**.',
+                            ] },
+                            { warn: 'Install the new token before you revoke the old one. Meta does not revoke a token when it issues a new one, so the auto-replies keep working throughout.' },
+                            { tip: 'Comparing competitors uses Instagram’s Business Discovery. If your token cannot use it, the **Competitors** section says so itself.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'small-accounts',
+                    title: { ar: 'تحت 100 متابع', en: 'Under 100 followers' },
+                    body: {
+                        ar: [
+                            'إنستجرام ما يعطي بعض الأرقام إلا بعد ما يوصل حسابك 100 متابع: خط المتابعين اليومي، وكم تابعك وكم ألغى، وتوزيع جمهورك، وأوقات تواجد متابعيك.',
+                            'هذا مو خطأ ولا إذن ناقص. تشوف مكانها ملاحظة هادئة، وعدد متابعيك نفسه يظل ظاهراً، والوصول والمشاهدات متاحة من أول يوم.',
+                        ],
+                        en: [
+                            'Instagram holds some numbers back until an account reaches 100 followers: the daily followers line, follows and unfollows, the audience breakdown, and when your followers are online.',
+                            'This is not an error or a missing permission. You see a calm note in their place, your follower count still shows, and reach and views are available from day one.',
+                        ],
+                    },
+                },
+                {
+                    id: 'best-times',
+                    title: { ar: 'أفضل أوقات النشر', en: 'Best times to post' },
+                    body: {
+                        ar: [
+                            'الخريطة مبنية على **منشوراتك أنت**: كل منشور يقع في يومه وساعته بتوقيت حسابك، والمربع الأغمق هو الساعة اللي أعطت منشوراتها أكثر مشاهدات في المتوسط. لو الإحصاءات مقفلة، تُبنى من الإعجابات والتعليقات بدالها.',
+                            { ul: [
+                                'التوقيت هو توقيت الجمهور المحفوظ للحساب، ولو ما فيه توقيت محفوظ فتوقيت متصفحك، ومكتوب تحت الخريطة أيهما.',
+                                'المربع الفاضي معناه أنك ما نشرت في هذه الساعة، مو أنها ساعة سيئة.',
+                                'مع منشورات قليلة، منشور واحد ناجح يلوّن ساعته. انشر في أوقات مختلفة وتتضح الصورة.',
+                            ] },
+                        ],
+                        en: [
+                            'The map is built from **your own posts**: each post lands on its weekday and hour in your account’s time zone, and the darkest square is the hour whose posts got the most views on average. When insights are locked, it is built from likes and comments instead.',
+                            { ul: [
+                                'The time zone is the audience time zone saved for the account, or your browser’s when none is saved, and the line under the map says which.',
+                                'An empty square means you have not posted at that hour, not that the hour is bad.',
+                                'With few posts, one hit colours its hour. Post at different times and the picture sharpens.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'coach',
+                    title: { ar: 'كيف تقرأ خطة المدرب', en: 'Reading the coach’s plan' },
+                    body: {
+                        ar: [
+                            'اضغط **اكتب لي خطة** في **مدرب النمو الذكي**. يقرأ أرقام الفترة ونصوص منشوراتك وإعداداتك، ويكتب بلغة حسابك. تأخذ عادةً أقل من دقيقة، وتقدر تطلع من الصفحة وترجع تلقاها جاهزة.',
+                            { dl: [
+                                ['الملخص', 'جملتين عن وضعك الآن.'],
+                                ['ما الذي ينجح / ما الذي يعيقك', 'أشياء محددة من منشوراتك، مو نصائح عامة.'],
+                                ['افعل هذه أولاً', 'خطوات مرتبة: الأكبر أثراً أولاً، ولو تساوى الأثر فالأقل جهداً. شارة **الأثر** و**الجهد** على كل خطوة.'],
+                                ['تجارب تستحق المحاولة', 'فرضية، وكيف تجرّبها، وكيف تقيس النتيجة. جرّب تغييراً واحداً كل مرة عشان تعرف وش اللي أثّر.'],
+                            ] },
+                            { note: 'لو الأرقام مقفلة، المدرب يشتغل من تاريخ منشوراتك ونصوصها ويقول لك وش ما يقدر يشوفه. وتذكّر أنها مكتوبة بالذكاء الاصطناعي: قارنها بأرقامك قبل ما تعمل بها.' },
+                        ],
+                        en: [
+                            'Press **Write my plan** in the **AI Growth Coach**. It reads the period’s numbers, your captions and your settings, and writes in your account’s language. It usually takes under a minute, and you can leave the page and come back to find it ready.',
+                            { dl: [
+                                ['Summary', 'Two sentences on where you stand.'],
+                                ['What is working / What is holding you back', 'Specific things from your posts, not general advice.'],
+                                ['Do these first', 'Ordered steps: biggest impact first, and among equals the least effort first. Each carries an **Impact** and an **Effort** chip.'],
+                                ['Experiments worth trying', 'A hypothesis, how to test it, and how to measure it. Change one thing at a time, so you know what made the difference.'],
+                            ] },
+                            { note: 'When the numbers are locked, the coach works from your post history and captions and tells you what it cannot see. It is written by AI: check it against your own numbers before acting on it.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'sync',
+                    title: { ar: 'المزامنة', en: 'Syncing' },
+                    body: {
+                        ar: [
+                            'الأرقام تتحدّث تلقائياً مرة في اليوم. لو تبيها الآن اضغط **مزامنة**، ومسموح مرة كل عشر دقائق. تحت الزر مكتوب متى كانت آخر مزامنة.',
+                            'تيك توك ما تُقرأ أرقامه بعد: تطبيق تيك توك يحتاج صلاحيات إضافية أولاً، والصفحة تقول ذلك بدل ما تعرض أصفاراً.',
+                        ],
+                        en: [
+                            'The numbers refresh on their own once a day. To fetch them now, press **Sync**, which is allowed once every ten minutes. The time of the last sync is shown beside the button.',
+                            'TikTok is not measured yet: the TikTok app needs extra scopes first, and the page says so rather than showing zeros.',
+                        ],
+                    },
+                },
+            ],
+        },
+        // ─── 4b. Instagram & TikTok SEO ──────────────────────────────────────
+        {
+            slug: 'seo',
+            group: 'growth',
+            icon: 'search',
+            title: { ar: 'السيو في إنستجرام وتيك توك', en: 'Instagram & TikTok SEO' },
+            summary: {
+                ar: 'كيف يلقاك الناس في البحث: الكلمات في أول سطر، والنص على الشاشة، والنص البديل، والوسوم، والريلز التجريبية، والمنشورات المشتركة، والاستمرارية.',
+                en: 'How people find you in search: keywords in the first line, on-screen text, alt text, hashtags, trial reels, collab posts and posting consistency.',
+            },
+            related: ['growth', 'scheduling', 'create'],
+            sections: [
+                {
+                    id: 'keywords',
+                    title: { ar: 'الكلمات في أول سطر', en: 'Keywords in the first line' },
+                    body: {
+                        ar: [
+                            'بحث إنستجرام وتيك توك يقرأ نص المنشور، وأهم جزء فيه أول سطر. حط كلمة أو كلمتين يكتبها جمهورك فعلاً، بشكل طبيعي في جملة، مو قائمة كلمات.',
+                            { ul: [
+                                'احفظ كلماتك في **السيو والوصول** ← **الكلمات المفتاحية**. كاتب الاستوديو يستخدمها في أول سطر من نصوص الكاروسيل.',
+                                'زر **اقترح** يعطيك أفكاراً من الذكاء الاصطناعي عن موضوع تكتبه. هي أفكار، مو أرقام بحث: جرّب كل كلمة في بحث إنستجرام وشوف وش يطلع قبل ما تعتمدها.',
+                                'اكتب الكلمة بالطريقة اللي يكتبها جمهورك: «ذكاء اصطناعي» غير «AI»، وكثير يبحثون بالعربي.',
+                            ] },
+                        ],
+                        en: [
+                            'Instagram and TikTok search read a post’s caption, and the part that matters most is the first line. Put one or two words your audience really types there, naturally, in a sentence, not as a list.',
+                            { ul: [
+                                'Save your keywords under **SEO & reach** → **Keywords**. The Studio writer uses them in the first line of carousel captions.',
+                                '**Suggest** gives you AI ideas for a topic you type. They are ideas, not search-volume data: try each one in Instagram search and see what comes up before you rely on it.',
+                                'Write a keyword the way your audience writes it: an Arabic term and its English version are two different searches, and many people search in Arabic.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'on-screen-text',
+                    title: { ar: 'النص على الشاشة', en: 'On-screen text' },
+                    body: {
+                        ar: [
+                            'المنصات تقرأ الكلام المكتوب على الفيديو والصورة، وتيك توك يسمع الكلام المنطوق بعد. قل كلمتك في أول ثوانٍ واكتبها على الشاشة، وخلّها في عنوان أول شريحة من الكاروسيل.',
+                            { tip: 'النص الكبير في أول ثانية يخدم مرتين: البحث يقرأه، واللي يمرّ بسرعة يعرف عن وش الفيديو فيوقف.' },
+                        ],
+                        en: [
+                            'The platforms read the words written on a video or an image, and TikTok listens to what is said as well. Say your keyword in the first seconds, write it on screen, and put it in the title of a carousel’s first slide.',
+                            { tip: 'Big text in the first second does two jobs: search reads it, and someone scrolling past sees what the video is about and stops.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'alt-text',
+                    title: { ar: 'النص البديل', en: 'Alt text' },
+                    body: {
+                        ar: [
+                            'النص البديل وصف قصير لما في الصورة. قارئ الشاشة يقرؤه للمكفوفين، وبحث إنستجرام يستخدمه عشان يفهم منشورك.',
+                            { ul: [
+                                'في **جدولة منشور** يظهر حقل **النص البديل** للصورة، وحقل لكل شريحة في الكاروسيل، بنفس ترتيب الشرائح. الحد 200 حرف.',
+                                'صف اللي فعلاً في الصورة: «شاشة محادثة مع وكيل ذكي يكتب خطة من ثلاث خطوات»، مو «أفضل كورس ذكاء اصطناعي».',
+                                'حط كلمتك لو تناسب الوصف، وبدون وسوم.',
+                                'النص البديل للصور والكاروسيل على إنستجرام. الريلز ما تأخذ نصاً بديلاً.',
+                            ] },
+                            { note: 'الاستوديو يكتب نصاً بديلاً لكل شريحة لما يتوفر، وتشوفه تحت معاينة الجوال في محرر الكاروسيل.' },
+                        ],
+                        en: [
+                            'Alt text is a short description of what is in an image. Screen readers read it out to blind users, and Instagram search uses it to understand your post.',
+                            { ul: [
+                                'In **Schedule a post**, the **Alt text** field appears for an image, and one field per slide for a carousel, in slide order. The limit is 200 characters.',
+                                'Describe what is really in the picture: “A chat window where an AI agent writes a three-step plan”, not “The best AI course”.',
+                                'Include your keyword if it fits the description, and no hashtags.',
+                                'Alt text is for Instagram images and carousels. Reels do not take alt text.',
+                            ] },
+                            { note: 'The Studio writes alt text for each slide when it can, and shows it under the phone preview in the carousel editor.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'hashtags',
+                    title: { ar: 'من 3 إلى 5 وسوم', en: '3 to 5 hashtags' },
+                    body: {
+                        ar: [
+                            'الوسوم الكثيرة ما عادت ترفع الوصول. استخدم من 3 إلى 5 وسوم محددة تصف موضوع المنشور، بدل ثلاثين وسماً عاماً مثل «اكسبلور».',
+                            { ul: [
+                                'في **مجموعات الوسوم** احفظ مجموعة لكل موضوع تنشر عنه، واضغط **انسخ** وقت الكتابة.',
+                                'المجموعة اللي فيها أكثر من 5 وسوم تنعلّم لك عشان تختصرها.',
+                                'الوسم المحدد («برومبتات_للطلاب») يوصلك لناس يدورون موضوعك بالضبط؛ العام يضيع بين ملايين المنشورات.',
+                            ] },
+                        ],
+                        en: [
+                            'Piling on hashtags no longer lifts reach. Use 3 to 5 specific hashtags that describe the post’s topic, instead of thirty generic ones like “explore”.',
+                            { ul: [
+                                'Under **Hashtag sets**, save one set per topic you post about, and press **Copy** when you write.',
+                                'A set with more than 5 hashtags is flagged, so you can trim it.',
+                                'A specific hashtag reaches the people looking for exactly your topic; a generic one gets lost among millions of posts.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'trial-reels',
+                    title: { ar: 'الريلز التجريبية', en: 'Trial reels' },
+                    body: {
+                        ar: [
+                            'الريل التجريبي يظهر أولاً لناس ما يتابعونك، وما يظهر لمتابعيك ولا في شبكة حسابك. تعرف منه هل الفكرة تجذب جمهوراً جديداً بدون ما تخاطر بمتابعيك.',
+                            { dl: [
+                                ['أقرر بنفسي متى تظهر للمتابعين', 'تشوف أرقامه، وتقرر أنت من إنستجرام هل تشاركه مع متابعيك.'],
+                                ['تظهر للمتابعين تلقائياً إذا نجحت', 'إنستجرام يشاركه مع متابعيك بنفسه لو أداؤه كان جيداً.'],
+                            ] },
+                            'فعّله من **انشرها ريلز تجريبية** لما يكون المنشور فيديو على إنستجرام.',
+                            { note: 'إنستجرام ما يتيح الريلز التجريبية لكل الحسابات. لو رفضها لحسابك، الريل ينشر بشكل عادي وتنكتب الملاحظة على المنشور.' },
+                        ],
+                        en: [
+                            'A trial reel is shown to people who do not follow you first, and not to your followers or on your profile grid. It tells you whether an idea pulls in new people without risking your followers’ attention.',
+                            { dl: [
+                                ['I decide when my followers see it', 'You watch its numbers and decide in Instagram whether to share it with your followers.'],
+                                ['Share it with my followers automatically if it does well', 'Instagram shares it with your followers itself when it performs well.'],
+                            ] },
+                            'Switch it on with **Post as a trial reel** when the post is a video going to Instagram.',
+                            { note: 'Instagram does not offer trial reels to every account. If it refuses one for yours, the reel publishes normally and the post records why.' },
+                        ],
+                    },
+                },
+                {
+                    id: 'collabs',
+                    title: { ar: 'المنشورات المشتركة', en: 'Collab posts' },
+                    body: {
+                        ar: [
+                            'في حقل **المتعاونون** اكتب حتى 3 حسابات. كل حساب يوصله طلب، ولو قبل يظهر المنشور في حسابه وحسابك، ولجمهوركما معاً.',
+                            { ul: [
+                                'أفضل تعاون مع حساب جمهوره قريب من جمهورك، مو بالضرورة الأكبر.',
+                                'اكتب اسم المستخدم كما هو، مثل `@partner`. الحسابات لازم تكون عامة.',
+                            ] },
+                        ],
+                        en: [
+                            'In the **Collaborators** field, name up to 3 accounts. Each one gets an invite, and once they accept, the post appears on their profile and yours, to both audiences.',
+                            { ul: [
+                                'The best collab is with an account whose audience is close to yours, not necessarily the biggest one.',
+                                'Type the username as it is, like `@partner`. The accounts must be public.',
+                            ] },
+                        ],
+                    },
+                },
+                {
+                    id: 'consistency',
+                    title: { ar: 'الاستمرارية', en: 'Posting consistency' },
+                    body: {
+                        ar: [
+                            'المنصات تكافئ الحساب اللي ينشر بانتظام. جدول ثابت يناسبك أفضل من دفعة كبيرة ثم غياب.',
+                            { ul: [
+                                'اختر وقتين أو ثلاثة من **أفضل أوقات النشر** والتزم بها، والاستوديو يقترح مواعيد من جدولك.',
+                                'قيّم التغيير على 28 يوماً، مو على منشور واحد.',
+                                'غيّر شيئاً واحداً كل مرة، مثل تجارب المدرب، عشان تعرف وش اللي أثّر.',
+                            ] },
+                        ],
+                        en: [
+                            'The platforms reward an account that posts regularly. A steady schedule you can keep beats a burst followed by silence.',
+                            { ul: [
+                                'Pick two or three slots from **Best times to post** and stick to them; the Studio suggests slots from your schedule.',
+                                'Judge a change over 28 days, not over one post.',
+                                'Change one thing at a time, like the coach’s experiments, so you know what made the difference.',
                             ] },
                         ],
                     },
