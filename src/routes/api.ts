@@ -11,7 +11,7 @@ import {
     sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
     API_VERSION, MediaProcessingTimeoutError, resumeInstagramContainer,
 } from '../services/instagram.js';
-import { generateAiResponse } from '../services/ai.js';
+import { DEFAULT_MODEL, generateAiResponse, resolveModel } from '../services/ai.js';
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
     assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache,
@@ -3049,14 +3049,18 @@ router.get('/settings/ai', async (req, res) => {
             res.json({
                 system_prompt: 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.',
                 knowledge_base: '',
-                model: 'gemini-2.5-flash',
+                model: DEFAULT_MODEL,
                 temperature: 0.7,
                 is_active: true
             });
             return;
         }
 
-        res.json(agentRes.rows[0]);
+        // The model the agent actually answers with, not the raw column. A value the supported
+        // list no longer has falls back at reply time, and the dashboard's picker holds only
+        // that list's options, so the raw value would render as an empty selection.
+        const agent = agentRes.rows[0];
+        res.json({ ...agent, model: resolveModel(agent.model) });
     } catch (err) {
         log('error', 'api.ai_settings_read_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch AI settings.' });
@@ -3094,7 +3098,9 @@ router.post('/settings/ai', canOperate, async (req, res) => {
                 creatorId,
                 system_prompt,
                 knowledge_base || '',
-                model || 'gemini-2.5-flash',
+                // Stored as it will run: a retired or mistyped model would fall back at reply
+                // time anyway, and saving the fallback keeps the row honest about it.
+                resolveModel(model),
                 finalTemperature,
                 is_active !== false
             ]

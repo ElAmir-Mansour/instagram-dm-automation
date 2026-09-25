@@ -146,7 +146,7 @@ with a comment correctly labelling it a stopgap. Two distinct constraints were b
 against each other:
 
 - **Meta's webhook timeout is ~20s**, and redelivers on timeout. A Gemini call is 2-8s
-  (`ai.ts:38` caps it at 30s), plus one or more Meta sends with retries and backoff
+  (`ai.ts:88` caps it at 30s), plus one or more Meta sends with retries and backoff
   (`http.ts:52-72`, up to 3 retries at 0.5/1/2s base with jitter). A batch of several DMs
   comfortably exceeds 20s.
 - **Vercel freezes the invocation after the response.** Work after `res.send()` is not
@@ -320,13 +320,13 @@ therefore unusually easy to fix.
 
 ### 4.1 Where the tokens go
 
-Every call to `generateAiResponse` (`ai.ts:169`) sends:
+Every call to `generateAiResponse` (`ai.ts:343`) sends:
 
 | Component | Resent every call? | Rough size |
 |---|---|---|
 | System prompt | **yes** | 200-500 tokens |
 | Knowledge base (`ai_agents.knowledge_base`) | **yes** | 1,000-5,000+ tokens, grows |
-| Fixed Arabic instructions (`ai.ts:245`) | **yes** | ~150 tokens |
+| Fixed Arabic instructions (`ai.ts:417`) | **yes** | ~150 tokens |
 | Response schema (`RESPONSE_SCHEMA`) | **yes** | ~400 tokens |
 | Conversation history (`HISTORY_WINDOW = 8`) | partially | 200-800 tokens |
 | Current user message | no | 10-50 tokens |
@@ -334,7 +334,7 @@ Every call to `generateAiResponse` (`ai.ts:169`) sends:
 Arabic tokenises at roughly **2-2.5× more tokens per character than English** — Arabic script
 is poorly covered by BPE vocabularies trained predominantly on English, so words fragment into
 many subword pieces. Both the knowledge base and the system prompt here are Arabic
-(`ai.ts:205`, `ai.ts:245`), so the multiplier applies to the largest, most-repeated component.
+(`ai.ts:291`, `ai.ts:417`), so the multiplier applies to the largest, most-repeated component.
 
 **Net: the static prefix is roughly 80-90% of input tokens on every single DM.** The variable
 part — what the customer actually said — is a rounding error.
@@ -355,7 +355,7 @@ The absolute numbers are small at one tenant. They matter for two reasons: the r
 invariant to scale, and adoption cost grows with knowledge-base size and tenant count. Doing
 it at one tenant is a day; doing it at fifty is a migration.
 
-`ai.ts:27-35` already identifies this. It should be the next non-structural piece of work.
+`ai.ts:77-85` already identifies this. It should be the next non-structural piece of work.
 
 ### 4.3 Measure first — now possible
 
@@ -368,12 +368,15 @@ estimates.
 
 - **`HISTORY_WINDOW` was trimmed 15 → 8.** Correct direction. With caching in place the
   history is the *only* uncached part, so it becomes the thing to tune, not the prefix.
-- **`gemini-2.5-flash-lite`** is already in `SUPPORTED_MODELS` (`ai.ts:16`) and is several
+- **`gemini-2.5-flash-lite`** is already in `SUPPORTED_MODELS` (`ai.ts:41`) and is several
   times cheaper. For keyword-triggered FAQ answering against a fixed knowledge base, it is
-  very likely sufficient. A/B it — this is a settings change, not code.
+  very likely sufficient. A/B it — this is a settings change, not code. Try a carousel reply
+  before anything else, though: on 2026-09-25 both 3.x Flash-Lite models fell into repetition
+  loops on the carousel schema in most runs (the numbers are on `DEFAULT_MODEL` in `ai.ts`).
+  2.5 Flash-Lite was not tested.
 - **Do not send the response schema when it is not needed.** Most replies are
   `message_type: "text"`; the carousel and quick-reply branches of `RESPONSE_SCHEMA`
-  (`ai.ts:68-119`) are ~400 tokens sent on every call to support a minority of responses. A
+  (`ai.ts:122-173`) are ~400 tokens sent on every call to support a minority of responses. A
   two-tier approach (cheap text-only schema, retry with the full schema when the model asks
   for structure) is possible but adds a round-trip. **Lower priority than caching** — caching
   makes the schema free anyway, since it is part of the static prefix.

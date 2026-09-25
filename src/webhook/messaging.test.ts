@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import axios from 'axios';
 import { after, before, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
+import { DEFAULT_MODEL } from '../services/ai.js';
 import { metaHttp } from '../services/http.js';
 import type { Creator } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
@@ -247,13 +248,13 @@ async function runDm(
     scenario: Scenario = {},
     options?: { lastAttempt: boolean },
     entryId = 'ig-page-1'
-): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; error: any }> {
+): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; geminiUrls: string[]; error: any }> {
     const {
         creator = CREATOR,
         conversation = { id: 'conv-1', is_bot_active: true, ai_disclosed_at: null },
         inboundInsert = [{ id: 'msg-1' }],
         resumeClaim = [],
-        agent = { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: 'gemini-2.5-flash', temperature: 0.7 },
+        agent = { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7 },
         history = [],
         creatorQuotaCount = 1,
         appQuotaCount = 1,
@@ -266,6 +267,8 @@ async function runDm(
     // The request body Gemini was actually handed. Recorded because one bug in this file is
     // only visible in the payload: a story mention used to append an empty `user` part.
     const geminiPayloads: any[] = [];
+    // The URL carries the model, so it is the only place a model choice is visible.
+    const geminiUrls: string[] = [];
     let geminiCalls = 0;
 
     // First match wins, so the specific patterns come before the general ones.
@@ -298,9 +301,10 @@ async function runDm(
         const { rows = [], rowCount } = route[1];
         return { rows, rowCount: rowCount ?? rows.length };
     };
-    (axios as any).post = async (_url: string, payload: any) => {
+    (axios as any).post = async (url: string, payload: any) => {
         geminiCalls++;
         geminiPayloads.push(payload);
+        geminiUrls.push(url);
         return gemini();
     };
     (metaHttp as any).post = async (url: string, body: any) => {
@@ -321,7 +325,7 @@ async function runDm(
         else process.env.GEMINI_API_KEY = originalKey;
     }
 
-    return { executed, sends, geminiCalls, geminiPayloads, error };
+    return { executed, sends, geminiCalls, geminiPayloads, geminiUrls, error };
 }
 
 const textEvent = (over: Record<string, unknown> = {}) => ({
@@ -749,5 +753,29 @@ describe('handleMessagingEvent — what reaches Gemini', () => {
 
         assert.equal(error, null);
         assert.equal(sends.length, 1);
+    });
+
+    it('answers an agent still set to a retired model, on the default model', async () => {
+        // gemini-1.5-flash stayed on the supported list, and in the dashboard's picker, after
+        // Google stopped serving it, so an agent saved with it sent every DM to a model that
+        // answers 404. The row is not rewritten; the reply just goes to a model that exists.
+        const { geminiUrls, sends, error } = await runDm(textEvent(), {
+            agent: { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: 'gemini-1.5-flash', temperature: 0.7 },
+        });
+
+        assert.equal(error, null);
+        assert.equal(sends.length, 1, 'the customer still gets a reply');
+        assert.deepEqual(geminiUrls, [
+            `https://generativelanguage.googleapis.com/v1beta/models/${DEFAULT_MODEL}:generateContent`,
+        ]);
+    });
+
+    it('asks for the model the agent chose when it is a supported one', async () => {
+        const { geminiUrls } = await runDm(textEvent(), {
+            agent: { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: 'gemini-3.8-flash', temperature: 0.7 },
+        });
+
+        assert.equal(geminiUrls.length, 1);
+        assert.match(geminiUrls[0]!, /\/models\/gemini-3\.8-flash:generateContent$/);
     });
 });

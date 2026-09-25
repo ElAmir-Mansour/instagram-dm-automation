@@ -591,53 +591,53 @@ bot should have answered after all.
 ### 2.7 — Gemini
 
 **`src/webhook/messaging.ts:306`** — `generateAiResponse(conversationId, dm.text || dm.payload,
-creator.id)`, at **`src/services/ai.ts:289`**. Timed and logged as `ai.replied` with
+creator.id)`, at **`src/services/ai.ts:343`**. Timed and logged as `ai.replied` with
 `duration_ms` (**`src/webhook/messaging.ts:307-311`**), because this is both the dominant
 marginal cost of the product and the reason the webhook cannot finish inside Meta's timeout.
 
-**`decideAgent`** — **`src/services/ai.ts:280`**, called at **`src/services/ai.ts:318`**. The
+**`decideAgent`** — **`src/services/ai.ts:334`**, called at **`src/services/ai.ts:372`**. The
 whole safety rule, and both halves of it have been wrong in production:
 
 | stored row | sandbox? | decision |
 |---|---|---|
-| any | yes (`overrides !== undefined`, **`ai.ts:316`**) | speak, with the row or a fallback persona (**`ai.ts:281-283`**) |
-| none | no | **`{ speak: false, reason: 'unconfigured' }`** (**`ai.ts:284`**) |
-| `is_active === false` | no | `{ speak: false, reason: 'disabled' }` (**`ai.ts:285`**) |
-| otherwise | no | speak (**`ai.ts:286`**) |
+| any | yes (`overrides !== undefined`, **`ai.ts:370`**) | speak, with the row or a fallback persona (**`ai.ts:335-337`**) |
+| none | no | **`{ speak: false, reason: 'unconfigured' }`** (**`ai.ts:338`**) |
+| `is_active === false` | no | `{ speak: false, reason: 'disabled' }` (**`ai.ts:339`**) |
+| otherwise | no | speak (**`ai.ts:340`**) |
 
 The `is_active` filter used to be in the WHERE clause, so a *disabled* agent returned zero rows
 and was indistinguishable from an *unconfigured* one — and a `|| default` then answered the
 customer anyway with a generic persona, so the toggle changed *who* replied rather than
-*whether anyone did*. It is now selected, not filtered on (**`src/services/ai.ts:306-310`**).
+*whether anyone did*. It is now selected, not filtered on (**`src/services/ai.ts:360-364`**).
 The unconfigured case is the more dangerous of the two and was fixed later: a tenant created
 through `POST /api/admin/tenants` has no `ai_agents` row at all, so there was no `is_active` for
 the off switch to be false on, and their bot answered real customers in a persona nobody chose
 while every layer reported success.
 
 `decideAgent` returning `speak: false` makes `generateAiResponse` return **`null`**
-(**`src/services/ai.ts:326`**), logged `warn` for unconfigured and `debug` for disabled
-(**:323**). The caller honours it at **`src/webhook/messaging.ts:315-319`**: log
+(**`src/services/ai.ts:379`**), logged `warn` for unconfigured and `debug` for disabled
+(**:377**). The caller honours it at **`src/webhook/messaging.ts:315-319`**: log
 `ai.agent_disabled`, `markHandled`, send nothing. **Every other failure throws** — there is no
 fallback persona and no fixed promotional reply.
 
-**History window** — **`src/services/ai.ts:330-337`**: the last `HISTORY_WINDOW = 8`
-(**`src/services/ai.ts:35`**) messages for this conversation, `ORDER BY created_at DESC`, then
-reversed into chronological order (**:340**). Trimmed from 15 because the system prompt and the
+**History window** — **`src/services/ai.ts:384-391`**: the last `HISTORY_WINDOW = 8`
+(**`src/services/ai.ts:85`**) messages for this conversation, `ORDER BY created_at DESC`, then
+reversed into chronological order (**:394**). Trimmed from 15 because the system prompt and the
 entire knowledge base are re-sent verbatim on every call, and Arabic runs ~2-2.5× more tokens
 per character than English. The current message is appended only if it is not already the last
-row (**:352-358**).
+row (**:406-412**).
 
-**`responseSchema`** — `RESPONSE_SCHEMA` at **`src/services/ai.ts:68`**, passed with
+**`responseSchema`** — `RESPONSE_SCHEMA` at **`src/services/ai.ts:122`**, passed with
 `responseMimeType: "application/json"` in `generationConfig`
-(**`src/services/ai.ts:379-383`**). It constrains `message_type` to
+(**`src/services/ai.ts:433-437`**). It constrains `message_type` to
 `text | quick_reply | carousel` and describes Meta's own limits inline (quick-reply titles ≤ 20
 chars, carousel titles ≤ 80, 2-10 cards).
 
-**Temperature** — **`src/services/ai.ts:370`** uses `Number.isFinite(agent.temperature)`, not
+**Temperature** — **`src/services/ai.ts:424`** uses `Number.isFinite(agent.temperature)`, not
 `|| 0.7`. The old form turned a deliberate `0` — the setting you pick precisely to stop the agent
 improvising about prices — back into 0.7.
 
-**The API key travels in a header, not a query string** — **`src/services/ai.ts:389-392`**:
+**The API key travels in a header, not a query string** — **`src/services/ai.ts:443-446`**:
 
 ```js
 axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout: GEMINI_TIMEOUT_MS })
@@ -645,19 +645,19 @@ axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout: GEMIN
 
 Not `?key=`. Query strings end up in proxy logs, browser referrers and error reporters far more
 readily than headers do — and an axios error carries `config.url`, so the old form leaked the
-key into anything that logged one. The catch block at **`src/services/ai.ts:458-465`** logs
+key into anything that logged one. The catch block at **`src/services/ai.ts:512-519`** logs
 narrow fields for the same reason, never the error object.
 
-`GEMINI_TIMEOUT_MS = 30_000` (**`src/services/ai.ts:38`**) — Gemini can sit on a request
+`GEMINI_TIMEOUT_MS = 30_000` (**`src/services/ai.ts:88`**) — Gemini can sit on a request
 indefinitely; a serverless invocation cannot.
 
-**Token usage** is logged as `ai.usage` (**`src/services/ai.ts:400-410`**) including
+**Token usage** is logged as `ai.usage` (**`src/services/ai.ts:454-464`**) including
 `cached_tokens`, because `prompt_tokens` is mostly the static prefix and that is precisely the
 number that says whether Gemini context caching is worth turning on.
 
 ### 2.8 — `coerceAiResponse`
 
-**`src/services/ai.ts:141`**, called at **`src/services/ai.ts:438`**. `responseSchema` is a
+**`src/services/ai.ts:195`**, called at **`src/services/ai.ts:492`**. `responseSchema` is a
 strong constraint, not a guarantee. Every one of these used to reach `toMetaMessage` unchecked:
 
 - `message_type: "carousel"` with `carousel_elements` absent or empty → Meta answers "param
@@ -668,16 +668,16 @@ strong constraint, not a guarantee. Every one of these used to reach `toMetaMess
   `dm.pipeline_failed` with a message about `substring` and no mention of Gemini.
 - A model that ignores the enum and invents a fourth `message_type`.
 
-Every case degrades to plain text (**`src/services/ai.ts:184`**) rather than throwing: the
+Every case degrades to plain text (**`src/services/ai.ts:238`**) rather than throwing: the
 person gets the words the model wrote, which is what they were waiting for, and the structure
 was always a presentation detail. Numbers and booleans are coerced to string, objects and arrays
-are not (**:146-148**) — `String({})` is `[object Object]`, worse than nothing. A downgrade logs
-`ai.response_downgraded` (**:176**).
+are not (**:200-202**) — `String({})` is `[object Object]`, worse than nothing. A downgrade logs
+`ai.response_downgraded` (**:230**).
 
-Two guards after it: **`src/services/ai.ts:443`** throws when a `text` response has no usable
+Two guards after it: **`src/services/ai.ts:497`** throws when a `text` response has no usable
 text (an empty reply is a failure, not a message — sending it produces a Meta rejection
 attributed to the send rather than the model, and writing it to `messages` would feed a blank
-turn back as history), and `enforceMetaConstraints` (**`src/services/ai.ts:190`**) truncates to
+turn back as history), and `enforceMetaConstraints` (**`src/services/ai.ts:244`**) truncates to
 Meta's limits.
 
 Back in the pipeline, **`src/webhook/messaging.ts:322`** maps to the wire format with
@@ -1656,8 +1656,8 @@ error, and several write **no row at all**.
 | 2 | no creator — **`messaging.ts:257`** | `dm.no_creator` | no |
 | 2 | already handled / live claim — **`messaging.ts:286`** | `dm.duplicate_ignored` | inbound row only |
 | 2 | bot paused — **`messaging.ts:295`** | `dm.bot_paused` | inbound row, `handled_at` set |
-| 2 | **no `ai_agents` row** — **`ai.ts:323`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
-| 2 | agent switched off — **`ai.ts:323`** | `ai.disabled` (`debug`) | same |
+| 2 | **no `ai_agents` row** — **`ai.ts:377`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
+| 2 | agent switched off — **`ai.ts:377`** | `ai.disabled` (`debug`) | same |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
 | 5 | budget spent — **`runner.ts:145`** | `job.drain_complete` (`budgetExhausted: true`) | jobs stay `pending` |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
