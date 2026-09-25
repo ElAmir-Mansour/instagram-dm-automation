@@ -490,6 +490,34 @@ async function waitForContainer(containerId: string, accessToken: string, pollBu
     }
 }
 
+/**
+ * Pick up a container an earlier attempt left processing, and publish it once Instagram has
+ * finished it, without uploading the video again. Throws {@link MediaProcessingTimeoutError}
+ * while it is still processing. Returns null when the container can no longer be used (ERROR,
+ * EXPIRED, or gone: containers expire after 24 hours), so the caller creates a new one.
+ */
+export async function resumeInstagramContainer(
+    instagramId: string,
+    containerId: string,
+    accessToken: string,
+    pollBudgetMs: number = DEFAULT_CONTAINER_POLL_BUDGET_MS
+): Promise<{ id: string } | null> {
+    try {
+        await waitForContainer(containerId, accessToken, pollBudgetMs);
+    } catch (err) {
+        if (err instanceof MediaProcessingTimeoutError) throw err;
+        log('warn', 'publish.container_resume_unusable', { container_id: containerId, reason: (err as Error)?.message });
+        return null;
+    }
+    try {
+        const publishRes = await publishContainer(instagramId, containerId, accessToken);
+        log('info', 'publish.instagram_success', { ig_media_id: publishRes?.data?.id, resumed: true });
+        return publishRes?.data;
+    } catch (error: any) {
+        throw metaFailure('Instagram Publish Failed', error);
+    }
+}
+
 /** `media_publish` a finished container, riding out the not-ready race. */
 async function publishContainer(instagramId: string, containerId: string, accessToken: string) {
     log('info', 'publish.container_publishing', { container_id: containerId });

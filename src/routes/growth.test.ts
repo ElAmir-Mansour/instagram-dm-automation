@@ -12,7 +12,7 @@ import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import { metaHttp } from '../services/http.js';
 import { API_VERSION } from '../services/instagram.js';
-import apiRouter, { attemptPublish } from './api.js';
+import apiRouter, { attemptPublish, IG_PROCESSING_MAX_ATTEMPTS, InstagramProcessingHeldError } from './api.js';
 import { growthRouter } from './growth.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -286,5 +286,75 @@ describe('GET /cron/publish — the growth sweep', () => {
         assert.equal(res.statusCode, 200);
         assert.ok(logs.some((l) => l.event === 'growth.cron_list_failed'));
         assert.equal(logs.find((l) => l.event === 'cron.growth_sync')?.fields.skippedReason, 'could not list tenants');
+    });
+});
+
+// ─── attemptPublish: a reel Instagram is still processing ───────────────────────────────
+
+describe('attemptPublish — a reel Instagram is still processing', () => {
+    const creator = { id: null, page_access_token: 'tok', instagram_page_id: 'ig-1', facebook_page_id: 'page-1' };
+    const reel = (fields: Record<string, unknown> = {}) => ({
+        id: POST_ID, platform: 'both', post_type: 'video', caption: 'c', media_url: 'https://cdn/v.mp4',
+        cover_url: null, published_post_id: null, media_urls: null, meta_options: null, attempts: 0, ...fields,
+    });
+    let status: Record<string, string> = {};
+    let calls: { url: string; body: any }[] = [];
+    let next = 9;
+
+    beforeEach(() => {
+        status = {};
+        calls = [];
+        next = 9;
+        (metaHttp as any).post = async (url: string, body: any) => {
+            calls.push({ url, body });
+            if (url === `${BASE}/page-1/videos`) return { data: { id: 'fb-video-1' } };
+            if (url === `${BASE}/ig-1/media`) return { data: { id: `container-${next++}` } };
+            if (url === `${BASE}/ig-1/media_publish`) return { data: { id: `ig-${body.creation_id}` } };
+            throw new Error(`no Meta POST arranged for ${url}`);
+        };
+        (metaHttp as any).get = async (url: string) => {
+            const id = url.slice(url.lastIndexOf('/') + 1);
+            return { data: { status_code: status[id] ?? 'IN_PROGRESS', status: status[id] ?? 'In Progress' } };
+        };
+    });
+
+    it('holds it: PENDING again with the container kept, and Facebook recorded so it is not repeated', async () => {
+        const err = await attemptPublish(reel(), creator, { pollBudgetMs: 5 }).then(() => null, (e) => e);
+        assert.ok(err instanceof InstagramProcessingHeldError);
+        const held = writes(/SET status = 'PENDING', claimed_at = NULL, external_publish_id = \$1/)[0]!;
+        assert.deepEqual(held.params.slice(0, 2), ['IGC:container-9', 'FB:fb-video-1']);
+        assert.match(held.params[2], /still processing/);
+        assert.equal(writes(/SET status = 'FAILED'/).length, 0, 'not a failure');
+    });
+
+    it('publishes the saved container on the next sweep, uploading nothing again', async () => {
+        status['container-9'] = 'FINISHED';
+        const ids = await attemptPublish(
+            reel({ external_publish_id: 'IGC:container-9', published_post_id: 'FB:fb-video-1', attempts: 1 }), creator, { pollBudgetMs: 5 });
+        assert.deepEqual(ids, { fbId: 'fb-video-1', igId: 'ig-container-9' });
+        assert.equal(calls.some((c) => c.url.endsWith('/videos')), false, 'Facebook is not posted twice');
+        assert.equal(calls.some((c) => c.url === `${BASE}/ig-1/media`), false, 'no new container');
+        const done = writes(/SET status = 'PUBLISHED'/)[0]!;
+        assert.equal(done.params[0], 'FB:fb-video-1 | IG:ig-container-9');
+        assert.match(done.sql, /external_publish_id = CASE WHEN external_publish_id LIKE 'IGC:%' THEN NULL/);
+    });
+
+    it('starts over with a new container when the saved one expired', async () => {
+        status['container-9'] = 'EXPIRED';
+        status['container-10'] = 'FINISHED';
+        next = 10;
+        const ids = await attemptPublish(
+            reel({ external_publish_id: 'IGC:container-9', published_post_id: 'FB:fb-video-1', attempts: 2 }), creator, { pollBudgetMs: 5 });
+        assert.equal(ids.igId, 'ig-container-10');
+        assert.equal(calls.filter((c) => c.url === `${BASE}/ig-1/media`).length, 1, 'one fresh container');
+    });
+
+    it('fails the post once it has been processing for too many sweeps', async () => {
+        const err = await attemptPublish(
+            reel({ external_publish_id: 'IGC:container-9', published_post_id: 'FB:fb-video-1', attempts: IG_PROCESSING_MAX_ATTEMPTS }),
+            creator, { pollBudgetMs: 5 }).then(() => null, (e) => e);
+        assert.ok(err && !(err instanceof InstagramProcessingHeldError));
+        const failed = writes(/SET status = 'FAILED'/)[0]!;
+        assert.match(failed.params[0], /^Partially published \(FB:fb-video-1\)/);
     });
 });
