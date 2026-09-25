@@ -15,6 +15,8 @@
  *   /harness?s=ready&lang=en&to=/studio        # the create step, in English
  *   /harness?s=offline&lang=ar                 # worker offline, in Arabic
  *   /harness?s=ready&to=/studio?draft=d-ready  # the editor on a rendered draft
+ *   /harness?lang=en&to=/help                  # the Help Center, which needs no fixtures
+ *   /harness?lang=ar&to=/help/worker%23security  # a deep link to one section (%23 is the anchor's #)
  *
  * Query options: `s` scenario, `lang` ar|en, `to` the hash route, `theme` light|dark,
  * `gen` seconds a generation takes (default 8), `render` seconds a render takes (default 6).
@@ -858,6 +860,16 @@ async function shell(res, seed) {
     send(res, 200, index.replace('<head>', `<head>\n${script}`), TYPES['.html']);
 }
 
+/** The Help Center views worth opening by hand: the front page, an article, a section, a miss. */
+const HELP_LINKS = [
+    ['All articles', '/help'],
+    ['What is the worker?', '/help/worker'],
+    ['Worker → Security (deep link)', '/help/worker#security'],
+    ['TikTok → Until TikTok approves the app', '/help/tiktok#before-approval'],
+    ['Troubleshooting', '/help/troubleshooting'],
+    ['An article that does not exist', '/help/no-such-article'],
+];
+
 function indexPage() {
     const row = (key, s) => `
         <tr><th scope="row"><code>${key}</code></th><td>${s.label}</td>
@@ -884,6 +896,13 @@ Add <code>&amp;gen=30</code> for a slower generation, <code>&amp;render=20</code
 <div class="wrap"><table><thead><tr><th>Scenario</th><th>What it shows</th><th colspan="3">Open</th></tr></thead>
 <tbody>${Object.entries(SCENARIOS).map(([k, s]) => row(k, s)).join('')}</tbody></table></div>
 <p>Images: ${IG_FILES.length} Instagram and ${TT_FILES.length} TikTok renders, ${SHOT_FILES.length} lesson frames.</p>
+<h2>Help Center</h2>
+<p>The articles are static (<code>dashboard/js/help-content.js</code>), so any scenario serves them. Deep links put the
+section after a second <code>#</code>, written <code>%23</code> inside <code>to=</code>.</p>
+<div class="wrap"><table><thead><tr><th>Page</th><th colspan="2">Open</th></tr></thead><tbody>${HELP_LINKS.map(([label, to]) => `
+    <tr><th scope="row">${label}</th>
+    <td><a href="/harness?s=ready&lang=en&to=${encodeURIComponent(to)}">English</a></td>
+    <td><a href="/harness?s=ready&lang=ar&to=${encodeURIComponent(to)}">العربية</a></td></tr>`).join('')}</tbody></table></div>
 </main></body></html>`;
 }
 
