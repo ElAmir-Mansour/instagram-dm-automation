@@ -55,7 +55,8 @@ CREATE INDEX IF NOT EXISTS idx_post_insights_scheduled_post
 -- ── Per-account metrics, by day ──────────────────────────────────────────────────────────
 -- { followers, reach, views, accounts_engaged, profile_views, follows, unfollows,
 --   website_clicks, … }. `followers` is the account's follower total on the day a sync ran;
--- `profile_views` and `website_clicks` stay absent (retired by Meta on 2025-01-08).
+-- `profile_views` and `website_clicks` still answer with metric_type=total_value on v26 (verified
+-- live 2026-09-25); like every metric, they are absent when Meta returns nothing.
 CREATE TABLE IF NOT EXISTS account_insights_daily (
     creator_id  UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
     platform    TEXT NOT NULL,
