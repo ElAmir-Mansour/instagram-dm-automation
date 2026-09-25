@@ -6,6 +6,7 @@ import type { Carousel, Slide } from './carouselTypes.js';
 import { ARABIC_EXAMPLES, ENGLISH_EXAMPLES } from './examples.js';
 import {
     StudioGenerationError,
+    altTextFor,
     chooseKeyword,
     generateDraft,
     normalizeInstagramCaption,
@@ -26,7 +27,7 @@ import {
     type Moment,
 } from './generate.js';
 import { buildDm } from './prompts.js';
-import { fillKeyword, validateCarousel } from './rules.js';
+import { ALT_TEXT_BUDGET, fillKeyword, validateCarousel } from './rules.js';
 import { DEFAULT_PALETTE } from './settingsTypes.js';
 import { ELAMIR_SETTINGS as AR, ENGLISH_SETTINGS as EN, SECTION_8_DM } from './testFixtures.js';
 
@@ -676,5 +677,57 @@ describe('planWeek', () => {
 
     it('needs lessons to plan from', async () => {
         await assert.rejects(planWeek(2, [], ctx(), { callModel: fakeModel({ proposals: [] }).call }), StudioGenerationError);
+    });
+});
+
+// ─── Alt text and the Growth settings (GROWTH.md §4) ────────────────────────────────────────
+
+describe('generateDraft: alt text and SEO', () => {
+    it('keeps each slide’s altText, on one line, cut to the 200 budget', async () => {
+        const flat = toFlat(localAI);
+        flat.slides[0]!.altText = '  غلاف عن  الذكاء المحلي\nعلى جهازك ';
+        flat.slides[1]!.altText = 'ن'.repeat(260);
+        const m = fakeModel(flat);
+        const out = await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx(), { callModel: m.call });
+        assert.equal(m.requests.length, 1, 'a long alt text is trimmed, not sent back for a repair round');
+        assert.equal(out.carousel.slides[0]!.altText, 'غلاف عن الذكاء المحلي على جهازك');
+        assert.equal(out.carousel.slides[1]!.altText!.length <= ALT_TEXT_BUDGET, true);
+        assert.equal(out.carousel.slides[2]!.altText, undefined, 'none written, none invented here');
+        assert.deepEqual(validateCarousel(out.carousel, new Set(Object.keys(out.shots)), AR), []);
+    });
+
+    it('asks for alt text in the schema and the field guide', async () => {
+        const m = fakeModel(toFlat(localAI));
+        await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx(), { callModel: m.call });
+        const slide = m.requests[0]!.schema.properties!.slides!.items!;
+        assert.ok(slide.properties!.altText, 'altText is in the slide schema');
+        assert.ok(!slide.required!.includes('altText'), 'but optional');
+        assert.match(m.requests[0]!.system, /every slide: altText ≤ 200/);
+    });
+
+    it('works the tenant’s search keywords into the brief, and its hashtag sets', async () => {
+        const m = fakeModel(toFlat(localAI));
+        await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx({ seo: { keywords: ['ذكاء اصطناعي', 'برومبت'], hashtags: ['#ذكاء_اصطناعي', '#AI'] } }), { callModel: m.call });
+        const brief = m.requests[0]!.turns[0]!.text;
+        assert.match(brief, /Search terms this audience types: «ذكاء اصطناعي», «برومبت»/);
+        assert.match(brief, /Instagram caption's first line/);
+        assert.match(brief, /from this creator's sets.*#ذكاء_اصطناعي #AI/);
+
+        const plain = fakeModel(toFlat(localAI));
+        await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx(), { callModel: plain.call });
+        assert.doesNotMatch(plain.requests[0]!.turns[0]!.text, /Search terms this audience types/, 'no settings, no line');
+    });
+
+    it('falls back to the slide’s own words when a slide has no alt text', () => {
+        assert.equal(altTextFor({ kind: 'cover', title: 'شغّل الذكاء على جهازك', subtitle: 'بدون إنترنت' }), 'شغّل الذكاء على جهازك — بدون إنترنت');
+        assert.equal(altTextFor({ kind: 'list', title: 'Tools', items: [{ text: 'LM Studio' }, { text: 'Ollama' }] }), 'Tools — LM Studio · Ollama');
+        assert.equal(altTextFor({ kind: 'point', title: 't', altText: 'the writer’s' }), 'the writer’s');
+        assert.equal(altTextFor({ kind: 'cta' }), '');
+    });
+
+    it('holds a stored alt text to its budget in the rules', () => {
+        const c: Carousel = { ...structuredClone(localAI), slides: localAI.slides.map((s, i) => (i === 0 ? { ...s, altText: 'x'.repeat(201) } : s)) };
+        const shots = new Set(localAI.slides.flatMap((s) => ('shot' in s && s.shot ? [s.shot.name] : [])));
+        assert.ok(validateCarousel(c, shots, AR).some((p) => /slide 1 \(cover\)\.altText: 201 > 200/.test(p)));
     });
 });

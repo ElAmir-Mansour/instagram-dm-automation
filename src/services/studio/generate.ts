@@ -40,6 +40,7 @@ import {
     type PlanCatalog,
 } from './prompts.js';
 import {
+    ALT_TEXT_BUDGET,
     BUDGETS,
     CAPTION_LIMITS,
     COUNTS,
@@ -124,6 +125,11 @@ export type GenContext = {
     /** Superseded by `settings.brand.palette` (v1.1); used only when that is empty. */
     palette?: string[];
     settings: StudioSettings;
+    /**
+     * The tenant's Growth settings (GROWTH.md §4): search keywords to work into the caption's first
+     * line and the slides where they fit, and the hashtags to choose the caption's from.
+     */
+    seo?: { keywords: string[]; hashtags: string[] };
 };
 
 export type Campaign = { keyword: string; variants: string[]; dm: string; create: boolean };
@@ -381,6 +387,7 @@ export const SLIDE_SCHEMA: GeminiSchema = obj({
     value: str(`stat: ≤ ${B.stat.value}`),
     caption: str(`shot: ≤ ${B.shot.caption}`),
     promise: str(`cta: ≤ ${B.cta.promise}`),
+    altText: str(`every slide: ≤ ${ALT_TEXT_BUDGET}, one plain sentence on what the slide shows and says, for screen readers and Instagram search`),
 }, ['kind', 'sources']);
 
 export const DRAFT_SCHEMA: GeminiSchema = obj({
@@ -673,9 +680,18 @@ function citedSources(raw: unknown, catalog: Catalog): string[] {
 
 /**
  * A flat slide from the model as a typed `Slide`. `pick` resolves a momentId to a shot name, or
- * null, which drops the shot: a `shot` slide without one becomes a `point`.
+ * null, which drops the shot: a `shot` slide without one becomes a `point`. The alt text rides
+ * along on every kind.
  */
 function toSlide(raw: unknown, pick: (momentId: unknown) => string | null): Slide {
+    const slide = slideBody(raw, pick);
+    // Cut to the budget here, at a word, not left for a repair round: nobody sees alt text on the
+    // slide, so a trim costs nothing, where asking the model again costs half a minute.
+    const altText = line(isObj(raw) ? raw.altText : undefined);
+    return altText ? { ...slide, altText: trimText(altText, ALT_TEXT_BUDGET) } : slide;
+}
+
+function slideBody(raw: unknown, pick: (momentId: unknown) => string | null): Slide {
     const f = isObj(raw) ? raw : {};
     const kind: SlideKind = (SLIDE_KINDS as readonly unknown[]).includes(f.kind) ? (f.kind as SlideKind) : 'point';
     const title = line(f.title) ?? '';
@@ -1022,7 +1038,7 @@ function assemble(raw: unknown, env: DraftEnv): Candidate {
 // ─── Safe fixes ─────────────────────────────────────────────────────────────────────────────
 
 function withoutShot(s: Slide): Slide {
-    if (s.kind === 'shot') return compact({ kind: 'point' as const, title: s.title, body: s.caption });
+    if (s.kind === 'shot') return compact({ kind: 'point' as const, title: s.title, body: s.caption, altText: s.altText });
     const copy = { ...s } as Slide & { shot?: ShotRef };
     delete copy.shot;
     return copy;
@@ -1069,7 +1085,34 @@ function fixSlideText(slides: Slide[], settings: StudioSettings, offset = 0): vo
             else delete f.holder[f.key];
         }
         if (s.kind === 'cover' && s.highlight && !s.title.includes(s.highlight)) delete s.highlight;
+        if (typeof s.altText === 'string') {
+            const alt = trimText(oneLine(s.altText), ALT_TEXT_BUDGET);
+            if (alt) s.altText = alt;
+            else delete s.altText;
+        }
     });
+}
+
+/**
+ * A slide's alt text: the writer's, else the slide's own words (title, then its main line), cut to
+ * the budget. Used when a draft is scheduled, so every Instagram slide carries one without the
+ * writer ever being asked to repair a missing line.
+ */
+export function altTextFor(s: Slide): string {
+    if (typeof s.altText === 'string' && s.altText.trim()) return trimText(oneLine(s.altText), ALT_TEXT_BUDGET);
+    const parts: (string | undefined)[] = [];
+    switch (s.kind) {
+        case 'cover': parts.push(s.title, s.subtitle); break;
+        case 'point': parts.push(s.title, s.body); break;
+        case 'list': parts.push(s.title, s.items.map((i) => i.text).join(' · ')); break;
+        case 'compare': parts.push(s.title, `${s.left.label} / ${s.right.label}`); break;
+        case 'steps': parts.push(s.title, s.steps.map((st) => st.title).join(' · ')); break;
+        case 'prompt': parts.push(s.title, s.label); break;
+        case 'stat': parts.push(`${s.value} ${s.label}`, s.body); break;
+        case 'shot': parts.push(s.title, s.caption); break;
+        case 'cta': parts.push(s.promise); break;
+    }
+    return trimText(oneLine(parts.filter((p): p is string => Boolean(p?.trim())).join(' — ')), ALT_TEXT_BUDGET);
 }
 
 function finalize(cand: Candidate, env: DraftEnv): Candidate {
@@ -1139,6 +1182,7 @@ export async function generateDraft(input: DraftInput, sources: GenSource[], ctx
         text: draftUserPrompt({
             input, catalog: env.catalog, slides: env.target, keyword: fixed?.keyword ?? null,
             activeKeywords: activeKeywordList(env.active).map((k) => k.raw), recentTopics: ctx.recentTopics ?? [],
+            seo: ctx.seo,
         }),
     }];
 

@@ -52,6 +52,10 @@ const App = {
         inbox: { src: 'inbox', page: () => InboxPage },
         ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
         analytics: { src: 'analytics', page: () => AnalyticsPage },
+        // Right after Analytics: that screen is the automation's numbers, this one the
+        // content's (Meta insights), plus the SEO tools and the coach. `?tab=seo` is its
+        // second view and is handled in place through `onHashChange`.
+        growth: { src: 'growth', page: () => GrowthPage },
         activity: { src: 'activity', page: () => ActivityPage },
         settings: { src: 'settings', page: () => SettingsPage },
         // The Help Center owns sub-routes (`#/help/<slug>#<section>`) and
@@ -72,7 +76,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '7.6',
+    ASSET_VERSION: '7.7',
 
     _modules: Object.create(null),
 

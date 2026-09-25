@@ -1793,9 +1793,12 @@ const PostsPage = {
         }
     },
 
-    /** A slide that is already on the server — an edit's saved `media_urls`. */
-    readySlide(url) {
-        return { id: `slide-${++this._slideCounter}`, file: null, name: '', url: String(url), thumb: '', status: 'ready', error: '' };
+    /** A slide that is already on the server — an edit's saved `media_urls`, with its saved alt text. */
+    readySlide(url, alt) {
+        return {
+            id: `slide-${++this._slideCounter}`, file: null, name: '', url: String(url), thumb: '', status: 'ready', error: '',
+            alt: typeof alt === 'string' ? alt.slice(0, this.ALT_MAX) : '',
+        };
     },
 
     /**
@@ -1809,8 +1812,10 @@ const PostsPage = {
         this._slideActive = 0;
         this._slideBatch = { main: null, tiktok: null };
         const saved = post && post.post_type === 'carousel' && Array.isArray(post.media_urls) ? post.media_urls : [];
+        // Paired BEFORE the filter, so a bad entry cannot shift every later slide's alt text.
+        const alts = this.reachOptionsOf(post).alt_texts;
         this._slides = {
-            main: saved.filter((u) => typeof u === 'string' && u).map((u) => this.readySlide(u)),
+            main: saved.map((u, i) => [u, alts[i]]).filter(([u]) => typeof u === 'string' && u).map(([u, alt]) => this.readySlide(u, alt)),
             tiktok: [],
         };
     },
@@ -1869,6 +1874,12 @@ const PostsPage = {
         if (!main.ok) return { message: main.message, field: `${this.SLIDE_PICKERS.main.prefix}-file` };
         delete payload.media_url;
         payload.media_urls = main.urls;
+        // Aligned with media_urls by construction: the same list, read once, in slide order.
+        // Instagram only: alt text is an Instagram field, and a slide left empty is sent as ''.
+        if (this.isInstagramTarget(payload.platform)) {
+            const alts = this.slideList('main').map((sl) => this.cleanAlt(sl.alt));
+            if (alts.some(Boolean)) payload.alt_texts = alts;
+        }
 
         if (payload.also_tiktok === true) {
             const own = this.validateSlides(this.slideList('tiktok'), this.slideLimits('tiktok'), { optional: true, own: true });
@@ -1931,7 +1942,7 @@ const PostsPage = {
 
     /** One line per slide, in order: a queued slide counts before it has a URL. */
     slideGuardValue(which) {
-        return this.slideList(which).map((s) => s.url || s.id).join('\n');
+        return this.slideList(which).map((s) => `${s.url || s.id}${s.alt ? `\t${s.alt}` : ''}`).join('\n');
     },
 
     slideTiles(which) {
@@ -2042,6 +2053,8 @@ const PostsPage = {
         if (name === 'tiktok') {
             const summary = document.getElementById('post-tiktok-slides-summary');
             if (summary) summary.innerHTML = esc(list.length ? this.slideCountMarkup(name, platform) : '');
+        } else {
+            this.refreshSlideAlts();
         }
 
         if (keep) {
@@ -2384,7 +2397,250 @@ const PostsPage = {
 
             ${this.carouselFields()}
             ${this.coverStep(post)}
+            ${this.reachFields(post)}
         `;
+    },
+
+    // ─── Reach on Instagram: alt text, collaborators, trial reels (GROWTH.md §4) ─
+    /**
+     * Three levers the Content Publishing API offers, each optional and each validated again on
+     * the server, which publishes without any field Instagram refuses for the account:
+     *   - `alt_text` on an image, `alt_texts[]` on a carousel, aligned with `media_urls`;
+     *   - `collaborators`: up to three usernames, invited to a collab post;
+     *   - `trial_reel: { graduation }` on a reel, shown to non-followers first.
+     * Shown only while Instagram is a target and the type takes the field; `applyTypeMatrix`
+     * decides, and the payload builder re-checks the same rules so a hidden field is never sent.
+     */
+    ALT_MAX: 200,
+    COLLAB_MAX: 3,
+    COLLAB_RE: /^[a-z0-9._]{1,30}$/,
+    TRIAL_GRADUATIONS: Object.freeze(['MANUAL', 'SS_PERFORMANCE']),
+
+    isInstagramTarget(platform) {
+        return platform === 'instagram' || platform === 'both';
+    },
+
+    /**
+     * A row's reach levers as the composer's shape. The server keeps them in `meta_options`
+     * (migration v22), never in `platform_options`, which is TikTok's.
+     */
+    reachOptionsOf(post) {
+        const mo = post && post.meta_options && typeof post.meta_options === 'object' ? post.meta_options : {};
+        const pick = (k) => (post && post[k] !== undefined && post[k] !== null ? post[k] : mo[k]);
+        const trial = pick('trial_reel');
+        return {
+            alt_text: typeof pick('alt_text') === 'string' ? pick('alt_text') : '',
+            alt_texts: Array.isArray(pick('alt_texts')) ? pick('alt_texts').map((a) => (typeof a === 'string' ? a : '')) : [],
+            collaborators: Array.isArray(pick('collaborators')) ? pick('collaborators').map((u) => String(u || '').replace(/^@+/, '')).filter(Boolean) : [],
+            trial_reel: trial && typeof trial === 'object' && this.TRIAL_GRADUATIONS.includes(trial.graduation) ? { graduation: trial.graduation } : null,
+        };
+    },
+
+    cleanAlt(value) {
+        return String(value || '').replace(/\s+/g, ' ').trim().slice(0, this.ALT_MAX);
+    },
+
+    /** "@a, b @c" → { list: ['a','b','c'], invalid: [], count: 3 }. Pure, so the rules are pinned by tests. */
+    parseCollaborators(raw) {
+        const parts = String(raw || '').split(/[\s,،]+/).map((x) => x.trim().replace(/^@+/, '').toLowerCase()).filter(Boolean);
+        const unique = [...new Set(parts)];
+        const invalid = unique.filter((u) => !this.COLLAB_RE.test(u));
+        return { list: unique.filter((u) => this.COLLAB_RE.test(u)), invalid, count: unique.length };
+    },
+
+    collabProblem(parsed) {
+        if (parsed.invalid.length) return t('posts.reach.collabInvalid', { name: `@${parsed.invalid[0]}` });
+        if (parsed.count > this.COLLAB_MAX) return t('posts.reach.collabTooMany', { n: parsed.count });
+        return '';
+    },
+
+    /**
+     * Adds `alt_text`, `collaborators` and `trial_reel` where they apply, or says why the post
+     * cannot go. `alt_texts` rides with the slides in `attachSlides`, so it cannot drift from them.
+     *
+     * @returns {{ message: string, field: string }|null}
+     */
+    attachReach(payload, form) {
+        if (!this.isInstagramTarget(payload.platform)) return null;
+        const data = new FormData(form);
+        const type = payload.post_type;
+        if (type === 'image') {
+            const raw = String(data.get('alt_text') || '');
+            if (raw.trim().length > this.ALT_MAX) return { message: t('posts.reach.altTooLong', { max: this.ALT_MAX }), field: 'post-alt-text' };
+            const alt = this.cleanAlt(raw);
+            if (alt) payload.alt_text = alt;
+        }
+        if (type === 'image' || type === 'carousel' || type === 'video') {
+            const parsed = this.parseCollaborators(data.get('collaborators'));
+            const problem = this.collabProblem(parsed);
+            if (problem) return { message: problem, field: 'post-collaborators' };
+            if (parsed.list.length) payload.collaborators = parsed.list;
+        }
+        if (type === 'video' && data.get('trial_reel') === 'on') {
+            const graduation = String(data.get('trial_graduation') || '');
+            payload.trial_reel = { graduation: this.TRIAL_GRADUATIONS.includes(graduation) ? graduation : 'MANUAL' };
+        }
+        return null;
+    },
+
+    countText(n, max) {
+        return t('posts.reach.altCount', { n: UI.formatNumber(n), max: UI.formatNumber(max) });
+    },
+
+    reachFields(post) {
+        const saved = this.reachOptionsOf(post);
+        const alt = saved.alt_text.slice(0, this.ALT_MAX);
+        const collab = saved.collaborators.map((u) => `@${u}`).join(', ');
+        const trial = saved.trial_reel;
+        const auto = trial && trial.graduation === 'SS_PERFORMANCE';
+        return html`
+            <div class="reach-fields hidden" id="reach-fields">
+                <p class="reach-title"><i data-lucide="trending-up" aria-hidden="true"></i> ${t('posts.reach.title')}</p>
+
+                <div class="form-group hidden" id="reach-alt-group">
+                    <div class="field-head">
+                        <label class="form-label" for="post-alt-text">${t('posts.reach.altText')} <span class="label-optional">${t('common.optional')}</span></label>
+                        <span class="field-count" id="post-alt-count">${this.countText(alt.length, this.ALT_MAX)}</span>
+                    </div>
+                    <textarea class="field-textarea user-content reach-alt" id="post-alt-text" name="alt_text" dir="auto" rows="2"
+                              maxlength="${this.ALT_MAX}" placeholder="${t('posts.reach.altPlaceholder')}"
+                              data-input="posts:altInput" data-guard-dirty aria-describedby="post-alt-hint">${alt}</textarea>
+                    <p class="form-hint" id="post-alt-hint">${t('posts.reach.altHint')}</p>
+                    <p class="reach-learn">${UI.helpLink('seo#alt-text', t('help.link.altText'), { newTab: true })}</p>
+                </div>
+
+                <div class="form-group hidden" id="reach-alts-group">
+                    <p class="form-label" id="post-slide-alts-label">${t('posts.reach.altSlides')} <span class="label-optional">${t('common.optional')}</span></p>
+                    <p class="form-hint">${t('posts.reach.altSlidesHint')}</p>
+                    <ol class="slide-alts" id="post-slide-alts" aria-labelledby="post-slide-alts-label">${this.slideAltRows()}</ol>
+                    <p class="reach-learn">${UI.helpLink('seo#alt-text', t('help.link.altText'), { newTab: true })}</p>
+                </div>
+
+                <div class="form-group hidden" id="reach-collab-group">
+                    <div class="field-head">
+                        <label class="form-label" for="post-collaborators">${t('posts.reach.collaborators')} <span class="label-optional">${t('common.optional')}</span></label>
+                        <span class="field-count" id="post-collab-count">${t('posts.reach.collabCount', { n: UI.formatNumber(saved.collaborators.length) })}</span>
+                    </div>
+                    <input class="field" id="post-collaborators" name="collaborators" dir="ltr" autocomplete="off" spellcheck="false"
+                           value="${collab}" placeholder="@partner, @friend" data-input="posts:collabInput" data-guard-dirty
+                           aria-describedby="post-collab-hint post-collab-problem">
+                    <p class="form-hint" id="post-collab-hint">${t('posts.reach.collabHint')}</p>
+                    <p class="form-hint text-warning hidden" id="post-collab-problem" role="status"></p>
+                    <p class="reach-learn">${UI.helpLink('seo#collabs', t('help.link.collabs'), { newTab: true })}</p>
+                </div>
+
+                <div class="form-group hidden" id="reach-trial-group">
+                    <div class="switch-row">
+                        <label class="switch" for="post-trial-reel">
+                            <span class="sr-only">${t('posts.reach.trial')}</span>
+                            <input type="checkbox" id="post-trial-reel" name="trial_reel" data-change="posts:trialToggle" data-guard-dirty
+                                   aria-describedby="post-trial-hint" ${trial ? html.raw('checked') : ''}>
+                            <span class="switch-track"></span>
+                        </label>
+                        <span class="switch-text">
+                            <span class="switch-label">${t('posts.reach.trial')}</span>
+                            <span class="form-hint" id="post-trial-hint">${t('posts.reach.trialHint')}</span>
+                        </span>
+                    </div>
+                    <fieldset class="reach-trial-options ${trial ? '' : html.raw('hidden')}" id="reach-trial-options">
+                        <legend class="form-label">${t('posts.reach.graduation')}</legend>
+                        <label class="reach-radio"><input type="radio" name="trial_graduation" value="MANUAL" ${auto ? '' : html.raw('checked')}> ${t('posts.reach.gradManual')}</label>
+                        <label class="reach-radio"><input type="radio" name="trial_graduation" value="SS_PERFORMANCE" ${auto ? html.raw('checked') : ''}> ${t('posts.reach.gradPerformance')}</label>
+                    </fieldset>
+                    <p class="reach-learn">${UI.helpLink('seo#trial-reels', t('help.link.trialReels'), { newTab: true })}</p>
+                </div>
+            </div>
+        `;
+    },
+
+    /** One alt-text field per carousel slide, in slide order, keyed by the slide (not its index). */
+    slideAltRows() {
+        return this.slideList('main').map((slide, i) => {
+            const n = i + 1;
+            const src = safeUrl(slide.thumb || slide.url);
+            const alt = String(slide.alt || '');
+            const id = `post-slide-alt-${slide.id}`;
+            return html`
+                <li class="slide-alt-row">
+                    <span class="slide-alt-thumb" aria-hidden="true">${src ? html`<img src="${src}" alt="">` : UI.formatNumber(n)}</span>
+                    <div class="slide-alt-body">
+                        <div class="field-head">
+                            <label class="form-label" for="${id}">${t('posts.reach.altSlide', { n })}</label>
+                            <span class="field-count" id="${id}-count">${this.countText(alt.length, this.ALT_MAX)}</span>
+                        </div>
+                        <input class="field user-content" id="${id}" dir="auto" maxlength="${this.ALT_MAX}" autocomplete="off"
+                               value="${alt}" data-input="posts:slideAltInput" data-slide="${slide.id}">
+                    </div>
+                </li>
+            `;
+        });
+    },
+
+    /** Repaint the rows from the slides (order, adds, removes), keeping focus and the caret. */
+    refreshSlideAlts() {
+        const host = document.getElementById('post-slide-alts');
+        if (!host) return;
+        const focus = UI.captureFocus(host);
+        host.innerHTML = esc(this.slideAltRows());
+        UI.icons(host);
+        UI.restoreFocus(focus);
+    },
+
+    onSlideAlt(el) {
+        const slide = this.slideList('main').find((x) => x.id === (el && el.dataset ? el.dataset.slide : ''));
+        if (!slide) return;
+        slide.alt = String(el.value || '').slice(0, this.ALT_MAX);
+        const count = document.getElementById(`post-slide-alt-${slide.id}-count`);
+        if (count) count.textContent = this.countText(slide.alt.length, this.ALT_MAX);
+        const guard = document.getElementById(`${this.SLIDE_PICKERS.main.prefix}-urls`);
+        if (guard) guard.value = this.slideGuardValue('main');
+    },
+
+    onAltInput(el) {
+        const count = document.getElementById('post-alt-count');
+        if (count && el) count.textContent = this.countText(String(el.value || '').length, this.ALT_MAX);
+    },
+
+    onCollabInput(el) {
+        const parsed = this.parseCollaborators(el ? el.value : '');
+        const count = document.getElementById('post-collab-count');
+        if (count) {
+            count.textContent = t('posts.reach.collabCount', { n: UI.formatNumber(parsed.count) });
+            count.classList.toggle('is-warning', parsed.count > this.COLLAB_MAX || parsed.invalid.length > 0);
+        }
+        const problem = document.getElementById('post-collab-problem');
+        if (problem) {
+            const text = this.collabProblem(parsed);
+            problem.textContent = text;
+            problem.classList.toggle('hidden', !text);
+        }
+    },
+
+    onTrialToggle(el) {
+        const options = document.getElementById('reach-trial-options');
+        if (options) options.classList.toggle('hidden', !(el && el.checked));
+    },
+
+    /** Which reach fields apply to this platform and type — the one reading of the rules above. */
+    reachVisibility(platform, type) {
+        const ig = this.isInstagramTarget(platform);
+        return {
+            alt: ig && type === 'image',
+            alts: ig && type === 'carousel',
+            collab: ig && (type === 'image' || type === 'carousel' || type === 'video'),
+            trial: ig && type === 'video',
+        };
+    },
+
+    applyReachMatrix(platform, type) {
+        const v = this.reachVisibility(platform, type);
+        const toggle = (id, on) => { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !on); };
+        toggle('reach-alt-group', v.alt);
+        toggle('reach-alts-group', v.alts);
+        toggle('reach-collab-group', v.collab);
+        toggle('reach-trial-group', v.trial);
+        toggle('reach-fields', v.alt || v.alts || v.collab || v.trial);
+        if (v.alts) this.refreshSlideAlts();
     },
 
     /**
@@ -2903,6 +3159,8 @@ const PostsPage = {
         coverGroup.classList.toggle('hidden', !showCover);
         if (showCover) this.refreshCoverPreview();
 
+        this.applyReachMatrix(platform, type);
+
         // The limit follows the platform: 10 with Instagram or Facebook, 35 for TikTok alone.
         if (isCarousel) {
             this.refreshSlides('main');
@@ -3039,7 +3297,7 @@ const PostsPage = {
 
         // A carousel: the right number of slides, every one of them uploaded.
         // Then Direct Post: nothing leaves until TikTok's rules are met.
-        const blocked = this.attachSlides(payload) || this.attachTikTokOptions(payload);
+        const blocked = this.attachSlides(payload) || this.attachTikTokOptions(payload) || this.attachReach(payload, form);
         if (blocked) {
             this.showFormError(blocked.message, blocked.field, '');
             return;
@@ -3110,7 +3368,7 @@ const PostsPage = {
         }
 
         const payload = { ...this.formPayload(form), scheduled_time: scheduledTime };
-        const blocked = this.attachSlides(payload) || this.attachTikTokOptions(payload);
+        const blocked = this.attachSlides(payload) || this.attachTikTokOptions(payload) || this.attachReach(payload, form);
         if (blocked) {
             this.showFormError(blocked.message, blocked.field, '');
             return;
@@ -3433,4 +3691,8 @@ UI.registerActions('posts', {
     removeSlide: (el) => PostsPage.removeSlide(el.dataset.picker, el.dataset.slide),
     retrySlide: (el) => PostsPage.retrySlide(el.dataset.picker, el.dataset.slide),
     downloadAll: (el) => PostsPage.downloadAll(el),
+    altInput: (el) => PostsPage.onAltInput(el),
+    slideAltInput: (el) => PostsPage.onSlideAlt(el),
+    collabInput: (el) => PostsPage.onCollabInput(el),
+    trialToggle: (el) => PostsPage.onTrialToggle(el),
 });

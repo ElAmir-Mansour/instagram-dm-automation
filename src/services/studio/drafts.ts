@@ -19,6 +19,7 @@ import type {
 } from '../../db/rows.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
+import { seoForWriter } from '../growth/settings.js';
 import type { Carousel, Slide } from './carouselTypes.js';
 import {
     type Exec, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN, withTransaction,
@@ -396,9 +397,10 @@ function firstLine(text: string | null): string | null {
  *   - recentAccents: the accents of the last 2 scheduled drafts
  *   - activeKeywords: every comma-separated trigger of every active campaign
  *   - palette: the tenant's brand palette
+ *   - seo: the Growth settings' search keywords and hashtags (GROWTH.md §4); empty when unset
  */
 export async function buildGenContext(creatorId: string, settings?: StudioSettings): Promise<GenContext> {
-    const [studio, drafts, captions, accents, campaigns] = await Promise.all([
+    const [studio, drafts, captions, accents, campaigns, seo] = await Promise.all([
         settings ?? getStudioSettings(creatorId),
         queryRows<{ title: string | null; idea: string | null }>(
             `SELECT carousel->'slides'->0->>'title' AS title, input->>'idea' AS idea
@@ -422,6 +424,8 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
         queryRows<{ trigger_keyword: string | null }>(
             'SELECT trigger_keyword FROM campaigns WHERE creator_id = $1 AND is_active = TRUE', [creatorId]
         ),
+        // Fail-soft: without migration v22, or on a read error, the writer just gets no SEO hints.
+        seoForWriter(creatorId),
     ]);
     const topics = [
         ...drafts.map((d) => d.title?.trim() || d.idea?.trim() || null),
@@ -434,6 +438,7 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
             .map((k) => k.trim()).filter(Boolean)),
         palette: [...studio.brand.palette],
         settings: studio,
+        seo,
     };
 }
 

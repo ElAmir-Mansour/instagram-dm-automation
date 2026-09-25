@@ -42,6 +42,11 @@ import {
 import { getTikTokPostingFlags } from '../services/appSettings.js';
 import { postModeFor } from './tiktok.js';
 import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
+import { formatPublishedIds, publishedPlatforms } from '../services/publishedIds.js';
+import { droppedLeversNote, reachOptionsFor, sendsMetaOptions, validateMetaOptions } from '../services/metaOptions.js';
+import type { DroppedReachOption } from '../services/instagram.js';
+import { growthRouter } from './growth.js';
+import { syncAllTenants } from '../services/growth/sync.js';
 
 
 const router = Router();
@@ -378,34 +383,10 @@ router.get('/jobs/drain', async (req, res) => {
 
 // ─── Cron: Publish Scheduled Posts ──────────────────────────────────────────
 
-/**
- * Which platforms a row has already been published to.
- *
- * `published_post_id` holds `FB:<id>`, `IG:<id>` or `FB:<id> | IG:<id>`. That string was only
- * ever written on full success, which hid a real problem: on `platform = 'both'`, Facebook is
- * published first, so a Facebook success followed by an Instagram failure threw away the
- * Facebook post id and recorded the row as FAILED. The post *was* live on Facebook. Editing
- * the row (which flips FAILED back to PENDING) then republished it, so the honest-looking
- * "retry" duplicated the Facebook post on the live account — the exact outcome the atomic
- * claim beside it was written to prevent.
- *
- * Recording the partial success and reading it back on the next attempt is what makes a retry
- * finish the job instead of doing half of it twice.
- */
-export function publishedPlatforms(publishedPostId: unknown): { fb: string | null; ig: string | null } {
-    if (typeof publishedPostId !== 'string') return { fb: null, ig: null };
-    const fb = /(?:^|\s)FB:([^\s|]+)/.exec(publishedPostId);
-    const ig = /(?:^|\s)IG:([^\s|]+)/.exec(publishedPostId);
-    return { fb: fb?.[1] ?? null, ig: ig?.[1] ?? null };
-}
-
-/** The `FB:… | IG:…` string, from whatever ids exist. Empty when neither does. */
-export function formatPublishedIds(fbId: string | null, igId: string | null): string {
-    if (fbId && igId) return `FB:${fbId} | IG:${igId}`;
-    if (fbId) return `FB:${fbId}`;
-    if (igId) return `IG:${igId}`;
-    return '';
-}
+// `publishedPlatforms` / `formatPublishedIds` — the `FB:… | IG:…` bookkeeping, and the incident
+// it exists for — live in src/services/publishedIds.ts, so the Growth sync can read them too.
+// Re-exported here, where every existing caller and test imports them from.
+export { formatPublishedIds, publishedPlatforms };
 
 /**
  * A scheduled post's target platforms, validated against what this service can actually do.
@@ -508,7 +489,7 @@ export interface PublishSweepResult {
 type PublishTarget = Pick<
     ScheduledPostRow,
     'id' | 'platform' | 'post_type' | 'caption' | 'media_url' | 'cover_url' | 'published_post_id'
-> & { media_urls?: ScheduledPostRow['media_urls'] };
+> & { media_urls?: ScheduledPostRow['media_urls']; meta_options?: ScheduledPostRow['meta_options'] };
 
 /**
  * The creator fields `attemptPublish` needs to reach Meta. `id` is nullable here — unlike
@@ -578,6 +559,8 @@ export async function attemptPublish(
     let fbId: string | null = already.fb;
     let igId: string | null = already.ig;
     const postType = post.post_type as 'image' | 'video' | 'reel' | 'story' | 'feed';
+    // Reach levers Instagram refused for this account. The post still goes out; the row says so.
+    let dropped: DroppedReachOption[] = [];
 
     try {
         // Fail closed. A platform this function does not publish to used to match neither
@@ -630,8 +613,10 @@ export async function attemptPublish(
                 throw new Error('Text posts are Facebook-only — Instagram needs an image or a video.');
             }
             log('info', 'publish.instagram_start', { post_id: post.id });
+            // Alt text, collaborators, trial reel (GROWTH.md §4) — whichever fit this row now.
+            const reach = reachOptionsFor(post.platform, post.post_type, post.meta_options);
             const igRes = slides
-                ? await publishInstagramCarousel(creator.instagram_page_id, post.caption || '', slides, token)
+                ? await publishInstagramCarousel(creator.instagram_page_id, post.caption || '', slides, token, undefined, reach)
                 : await publishInstagramPost(
                     creator.instagram_page_id,
                     postType,
@@ -640,9 +625,17 @@ export async function attemptPublish(
                     token,
                     // `cover_url` is the reason a reel does not get a black tile in the
                     // profile grid. It survives create, edit and publish-now.
-                    post.cover_url
+                    post.cover_url,
+                    undefined,
+                    reach
                 );
             igId = igRes.id;
+            dropped = Array.isArray(igRes.dropped) ? igRes.dropped : [];
+            if (dropped.length) {
+                log('warn', 'publish.reach_options_dropped', {
+                    post_id: post.id, fields: dropped.map((d) => d.field), reason: dropped[0]!.reason,
+                });
+            }
             log('info', 'publish.instagram_done', { post_id: post.id, ig_media_id: igId });
         } else if (igId) {
             log('info', 'publish.instagram_skipped_already_live', {
@@ -650,11 +643,14 @@ export async function attemptPublish(
             });
         }
 
+        // `error_log` on a PUBLISHED row is a note, not a failure: a lever Instagram refused and
+        // the post went out without. The Posts screen only shows `error_log` on FAILED and
+        // PENDING rows, so the note never reads as an error there.
         await pool.query(
             `UPDATE scheduled_posts
-             SET status = 'PUBLISHED', published_post_id = $1, error_log = NULL
+             SET status = 'PUBLISHED', published_post_id = $1, error_log = $3
              WHERE id = $2`,
-            [formatPublishedIds(fbId, igId), post.id]
+            [formatPublishedIds(fbId, igId), post.id, droppedLeversNote(dropped)]
         );
 
         return { fbId, igId };
@@ -892,6 +888,16 @@ router.get('/cron/publish', async (req, res) => {
             log('info', 'cron.tiktok_refresh', { ...tiktokRefresh });
         }
         await reconcileTikTokPosts(25);
+
+        // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
+        // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
+        // or a missing permission must not turn a publish sweep that already ran into a 500.
+        try {
+            const growth = await syncAllTenants();
+            if (growth.tenants > 0 || growth.skippedReason) log('info', 'cron.growth_sync', { ...growth });
+        } catch (growthErr) {
+            log('error', 'cron.growth_sync_failed', describeError(growthErr));
+        }
 
         // `heldForInactiveTenant` rides on both branches: "nothing to publish" is exactly the
         // answer that would otherwise hide a disabled tenant's whole backlog.
@@ -1335,6 +1341,9 @@ router.use('/tiktok', tiktokRouter);
 
 // Carousel Studio (STUDIO.md) — tenant-scoped, operator role; carries its own guards.
 router.use('/studio', studioRouter);
+
+// Growth & SEO hub (GROWTH.md §3) — tenant-scoped, operator role, like the Studio.
+router.use('/growth', growthRouter);
 
 // ─── In-tenant role guards ──────────────────────────────────────────────────
 //
@@ -2196,6 +2205,16 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
             res.status(400).json({ error: media.error });
             return;
         }
+        // Instagram's reach levers (GROWTH.md §4): alt text, collaborators, trial reel. Checked
+        // now, like the media; a lever this post's type can't use is dropped, not refused.
+        const metaOptions = validateMetaOptions(req.body, {
+            platform, postType: post_type,
+            slideCount: post_type === 'carousel' ? (media.mediaUrls?.length ?? null) : null,
+        });
+        if (!metaOptions.ok) {
+            res.status(400).json({ error: metaOptions.error });
+            return;
+        }
         // The TikTok sibling may bring its own images — 9:16 versions of the same slides — and
         // otherwise shares the Meta row's, checked against TikTok's rules rather than Meta's.
         const ownTikTokList = req.body?.tiktok_media_urls;
@@ -2273,14 +2292,16 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
                 const rowMedia = target === 'tiktok' && tiktokMedia ? tiktokMedia : media;
                 const inserted = await client.query(
                     `INSERT INTO scheduled_posts
-                         (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options)
-                     VALUES ($1, $2, $3, $4, $5, $6::text[], $7, 'PENDING', $8, $9, $10::jsonb) RETURNING *`,
+                         (creator_id, platform, post_type, caption, media_url, media_urls, scheduled_time, status, cover_url, group_id, platform_options, meta_options)
+                     VALUES ($1, $2, $3, $4, $5, $6::text[], $7, 'PENDING', $8, $9, $10::jsonb, $11::jsonb) RETURNING *`,
                     [
                         creatorId, target, post_type, caption || null, rowMedia.mediaUrl, rowMedia.mediaUrls, when,
                         // A cover image is an Instagram/Facebook concept; TikTok picks its own.
                         target === 'tiktok' ? null : (cover_url || null),
                         groupId,
                         target === 'tiktok' && tiktokOptions ? JSON.stringify(tiktokOptions) : null,
+                        // Instagram's levers belong to the Meta row only, never its TikTok sibling.
+                        target !== 'tiktok' && metaOptions.options ? JSON.stringify(metaOptions.options) : null,
                     ]
                 );
                 rows.push(inserted.rows[0]);
@@ -2382,8 +2403,8 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
         // The guard has to run against the EFFECTIVE combination, not the body: every column
         // below is `COALESCE($n, column)`, so a PUT sending only `platform` still has a
         // post_type, and it is the one already on the row. Read it first.
-        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type' | 'status' | 'media_url' | 'media_urls'>>(
-            'SELECT platform, post_type, status, media_url, media_urls FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
+        const current = await queryOne<Pick<ScheduledPostRow, 'platform' | 'post_type' | 'status' | 'media_url' | 'media_urls' | 'meta_options'>>(
+            'SELECT platform, post_type, status, media_url, media_urls, meta_options FROM scheduled_posts WHERE id = $1 AND creator_id = $2',
             [id, tenantId]
         );
         if (!current) {
@@ -2456,6 +2477,25 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
             tiktokOptionsJson = JSON.stringify(checked.options);
         }
 
+        // Instagram's reach levers, merged over what the row already carries: a field the PUT
+        // leaves out keeps its value, and null clears it. Checked against the EFFECTIVE row, for
+        // the same two-step-edit reason as the media above.
+        const metaTouched = sendsMetaOptions(req.body);
+        let metaOptionsJson: string | null = null;
+        if (metaTouched) {
+            const slides = mediaUrlsParam ?? current.media_urls;
+            const checked = validateMetaOptions(req.body, {
+                platform: effectivePlatform, postType: effectiveType,
+                slideCount: effectiveType === 'carousel' ? (slides?.length ?? null) : null,
+                current: current.meta_options ?? null,
+            });
+            if (!checked.ok) {
+                res.status(400).json({ error: checked.error });
+                return;
+            }
+            metaOptionsJson = checked.options ? JSON.stringify(checked.options) : null;
+        }
+
         // cover_url was destructured and then dropped, so editing a reel silently kept its old
         // cover — which for a video fading up from black is the black frame 0.
         const result = await pool.query(
@@ -2468,6 +2508,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                  cover_url = COALESCE($6, cover_url),
                  platform_options = COALESCE($9::jsonb, platform_options),
                  media_urls = CASE WHEN $10::boolean THEN $11::text[] ELSE media_urls END,
+                 meta_options = CASE WHEN $12::boolean THEN $13::jsonb ELSE meta_options END,
                  status = CASE WHEN status = 'FAILED' THEN 'PENDING' ELSE status END
              WHERE id = $7 AND creator_id = $8 RETURNING *`,
             [
@@ -2475,6 +2516,7 @@ router.put('/posts/scheduled/:id', canOperate, async (req, res) => {
                 // Rewritten whenever the media could have changed: a row that is no longer a
                 // carousel must not keep a list that would be read as slides if it became one again.
                 mediaTouched, mediaUrlsParam,
+                metaTouched, metaOptionsJson,
             ]
         );
 

@@ -164,7 +164,7 @@ function load(lang: 'ar' | 'en' = 'ar', hash = '#/help', extra: string[] = []): 
 const textOf = (markup: string): string => markup.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
 const REQUIRED = [
-    'getting-started', 'connect-meta', 'campaigns', 'scheduling', 'tiktok', 'studio', 'worker',
+    'getting-started', 'connect-meta', 'campaigns', 'scheduling', 'growth', 'seo', 'tiktok', 'studio', 'worker',
     'library', 'create', 'studio-schedule', 'studio-settings', 'ai-usage', 'troubleshooting', 'faq',
 ];
 
@@ -403,7 +403,7 @@ describe('Help Center — deep links', () => {
 });
 
 describe('Help Center — every article in both languages', () => {
-    it('has the fourteen articles the Help Center promises, each slug once', () => {
+    it('has the sixteen articles the Help Center promises, each slug once', () => {
         const s = load();
         const slugs = Array.from(s.content.articles, (a) => String(a.slug));
         assert.deepEqual(slugs, REQUIRED);

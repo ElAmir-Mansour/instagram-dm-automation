@@ -77,6 +77,13 @@ export const COUNTS = {
 
 export const CAPTION_LIMITS = { tiktokTitle: 90, tiktok: 4000, instagram: 2200, hashtags: 30 } as const;
 
+/**
+ * A slide's alt text (GROWTH.md §4): the Studio's budget. Instagram takes up to 1000; 200 keeps it
+ * to a sentence or two, which is what a screen reader should read and what search indexes. Not a
+ * rendered field, so it is outside `slideTextFields` and the Latin-digit test.
+ */
+export const ALT_TEXT_BUDGET = 200;
+
 /** Arabic text uses Arabic-Indic digits; Latin digits are fine inside Latin runs ("Gemini 2.5"). */
 const LATIN_DIGIT_BESIDE_ARABIC = /[؀-ۿ]\s*[0-9]|[0-9]\s*[؀-ۿ]/;
 
@@ -220,6 +227,12 @@ function checkSlide(problems: string[], p: string, s: unknown, shotNames: Readon
         }
         if (v.length > f.max) problems.push(`${f.label}: ${v.length} > ${f.max} «${v}»`);
         if (digits && f.digits && LATIN_DIGIT_BESIDE_ARABIC.test(v)) problems.push(`${f.label}: Latin digit next to Arabic text «${v}»`);
+    }
+
+    // Alt text is optional on every kind; when present it is text within its budget.
+    if (s.altText !== undefined && s.altText !== null) {
+        if (typeof s.altText !== 'string') problems.push(`${p}.altText: must be text`);
+        else if (s.altText.length > ALT_TEXT_BUDGET) problems.push(`${p}.altText: ${s.altText.length} > ${ALT_TEXT_BUDGET} «${s.altText}»`);
     }
 
     // Shots: cover and point may carry one, a shot slide must.

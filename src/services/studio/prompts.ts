@@ -11,7 +11,7 @@
  */
 import type { Carousel, Slide } from './carouselTypes.js';
 import { builtInExamples } from './examples.js';
-import { BUDGETS, CAPTION_LIMITS, COUNTS, fillKeyword } from './rules.js';
+import { ALT_TEXT_BUDGET, BUDGETS, CAPTION_LIMITS, COUNTS, fillKeyword } from './rules.js';
 import type { StudioSettings } from './settingsTypes.js';
 import type { DraftInput, GenSource, LessonRow, Moment } from './generate.js';
 
@@ -229,6 +229,7 @@ export function fieldGuide(lang: LanguageKit): string {
         `- stat: value ≤ ${B.stat.value} (${lang.statRule}), label ≤ ${B.stat.label}, body ≤ ${B.stat.body}`,
         `- shot: title ≤ ${B.shot.title}, momentId (required), caption ≤ ${B.shot.caption}`,
         `- cta: promise ≤ ${B.cta.promise}`,
+        `- every slide: altText ≤ ${ALT_TEXT_BUDGET} — one plain sentence on what the slide shows and says, for screen readers and Instagram search. Name the topic in the words people search for; no hashtags, no emoji.`,
         'Leave out every field a kind doesn\'t use.',
     ].join('\n');
 }
@@ -353,6 +354,23 @@ export const ANGLE_GUIDE: Record<NonNullable<DraftInput['angle']>, string> = {
 const bullets = (xs: readonly string[], max = 20): string =>
     strings(xs).slice(0, max).map((x) => `- ${oneLine(x)}`).join('\n') || '- (none)';
 
+/**
+ * The tenant's Growth settings as writing instructions (GROWTH.md §4): search terms for the
+ * caption's first line and the slides, and hashtag sets to choose from. Empty when there are none.
+ */
+export function seoLines(seo: { keywords: readonly string[]; hashtags: readonly string[] } | undefined): string[] {
+    const keywords = strings(seo?.keywords).slice(0, 12);
+    const hashtags = strings(seo?.hashtags).slice(0, CAPTION_LIMITS.hashtags);
+    return [
+        ...(keywords.length ? [
+            `Search terms this audience types: ${keywords.map((k) => `«${oneLine(k)}»`).join(', ')}. Work one or two of them, word for word, into the Instagram caption's first line, and onto slides and alt text where they read naturally. Never force one in, and never add a term the topic doesn't cover.`,
+        ] : []),
+        ...(hashtags.length ? [
+            `Hashtags: take the Instagram caption's hashtags from this creator's sets, choosing the ones that fit this topic: ${hashtags.join(' ')}`,
+        ] : []),
+    ];
+}
+
 export function draftUserPrompt(args: {
     input: DraftInput;
     catalog: Catalog;
@@ -360,6 +378,7 @@ export function draftUserPrompt(args: {
     keyword: string | null;
     activeKeywords: readonly string[];
     recentTopics: readonly string[];
+    seo?: { keywords: readonly string[]; hashtags: readonly string[] };
 }): string {
     const { input, catalog, slides, keyword, activeKeywords, recentTopics } = args;
     const angle = input.angle && ANGLE_GUIDE[input.angle] ? input.angle : 'auto';
@@ -372,6 +391,7 @@ export function draftUserPrompt(args: {
         `Slides: exactly ${slides} (cover, ${slides - 2} in between, cta).`,
         input.idea?.trim() ? `The creator's idea: ${oneLine(input.idea)}` : 'No idea given: find the most useful, most save-worthy angle in the notes.',
         keywordRule,
+        ...seoLines(args.seo),
         `Recent posts (don't repeat their hook or angle):\n${bullets(recentTopics)}`,
         catalog.hasCleanMoment ? 'Use 1–3 of the clean moments as screenshots.' : 'There are no clean moments: use no momentId at all.',
         '',

@@ -346,6 +346,29 @@ const API = {
     getStudioSettings: () => API.request('/studio/settings'),
     /** Partial merge on the server; the dashboard sends whole sections. */
     saveStudioSettings: (data) => API.request('/studio/settings', { method: 'PUT', body: JSON.stringify(data) }),
+    // ─── Growth & SEO hub (GROWTH.md §3) ────────────────────────────────────
+    // Session + canOperate, tenant-scoped. Anything the API could not measure comes back
+    // null, never 0, and the page shows it as missing rather than as a number.
+    /** `{ instagram, facebook, tiktok, missing: string[], lastSync }` */
+    getGrowthStatus: () => API.request('/growth/status'),
+    /** Fetch fresh insights from Meta. Once per ten minutes per tenant; sooner is a 429. */
+    syncGrowth: () => API.request('/growth/sync', { method: 'POST' }),
+    getGrowthOverview: (days) => API.request(`/growth/overview?days=${encodeURIComponent(days)}`),
+    getGrowthPosts: (days, sort) => API.request(
+        `/growth/posts?days=${encodeURIComponent(days)}&sort=${encodeURIComponent(sort || 'views')}`
+    ),
+    /** Gemini reads the metrics, captions and settings: most of a minute, synchronously. */
+    growthCoach: (data) => API.request('/growth/coach', { method: 'POST', body: JSON.stringify(data || {}) }),
+    getGrowthSettings: () => API.request('/growth/settings'),
+    /** The whole settings: keywords, hashtag_sets, competitors, audience. */
+    saveGrowthSettings: (data) => API.request('/growth/settings', { method: 'PUT', body: JSON.stringify(data) }),
+    /** `{ keywords: { term, why }[], hashtags: string[] }` — ideas to verify, not search-volume data. */
+    suggestGrowthKeywords: (topic) => API.request('/growth/keywords/suggest', {
+        method: 'POST', body: JSON.stringify({ topic }),
+    }),
+    /** Instagram Business Discovery for each saved competitor username. */
+    getGrowthCompetitors: () => API.request('/growth/competitors'),
+
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
     createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),

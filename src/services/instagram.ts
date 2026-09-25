@@ -1,4 +1,4 @@
-import { metaHttp, withRetry } from './http.js';
+import { isTokenDeathError, metaErrorCode, metaHttp, withRetry } from './http.js';
 import { log } from '../utils/log.js';
 
 /** Shape of a Graph API version string. Anything else would build a URL Meta 404s. */
@@ -83,7 +83,7 @@ export class MetaApiError extends Error {
 }
 
 /** `[Private Reply Failed: ... (Code: 190)]` — the shape the dashboard has always shown. */
-function metaFailure(prefix: string, error: any): MetaApiError {
+export function metaFailure(prefix: string, error: any): MetaApiError {
     const metaError = error?.response?.data?.error;
     return new MetaApiError(
         `${prefix}: ${metaError?.message || error?.message} (Code: ${metaError?.code ?? 'N/A'})`,
@@ -91,7 +91,91 @@ function metaFailure(prefix: string, error: any): MetaApiError {
     );
 }
 
-const GRAPH_BASE = `https://graph.facebook.com/${API_VERSION}`;
+export const GRAPH_BASE = `https://graph.facebook.com/${API_VERSION}`;
+
+// ─── Reach levers (GROWTH.md §4) ────────────────────────────────────────────────────────
+//
+// Only what the Content Publishing API documents (src/services/growth/README.md §1):
+// `alt_text` on a single image or an image child of a carousel, `collaborators` (≤ 3) on an
+// image, a reel or a carousel parent, and `trial_params` on a reel. All optional.
+
+/** The levers one publish sends. Built from `scheduled_posts.meta_options` by `reachOptionsFor`. */
+export interface InstagramReachOptions {
+    /** A single image's alt text. */
+    altText?: string;
+    /** A carousel's, aligned with its images; a blank entry sends none for that slide. */
+    altTexts?: readonly (string | null | undefined)[];
+    collaborators?: readonly string[];
+    trialReel?: { graduation: 'MANUAL' | 'SS_PERFORMANCE' };
+}
+
+/** A lever Instagram refused for this account. The post was published without it. */
+export interface DroppedReachOption {
+    field: 'alt_text' | 'collaborators' | 'trial_params';
+    reason: string;
+}
+
+/** Throttling: the request was fine, so retrying it without a lever proves nothing. */
+const THROTTLE_CODES = new Set([4, 17, 32, 613, 80001, 80002]);
+
+/**
+ * Whether a failed container create may have been refused for a lever it carried: a 4xx that is
+ * not a dead token and not throttling. Meta names no field consistently in these errors, so the
+ * test is the retry itself — if the create succeeds without the levers, they were the problem.
+ */
+function mayBeLeverRefusal(err: any): boolean {
+    const status = err?.response?.status;
+    if (typeof status !== 'number' || status < 400 || status >= 500) return false;
+    if (isTokenDeathError(err)) return false;
+    const code = metaErrorCode(err);
+    return !(typeof code === 'number' && THROTTLE_CODES.has(code));
+}
+
+function refusalReason(err: any): string {
+    const metaError = err?.response?.data?.error;
+    return `${metaError?.message || err?.message || 'refused'} (Code: ${metaError?.code ?? 'N/A'})`;
+}
+
+/**
+ * Create one container, returning its id. When the create fails and the payload carries levers
+ * (`optional`), it is retried ONCE without them, and each is recorded in `dropped`: an account
+ * that can't take a trial reel or a collaborator should still get its post. A lever already in
+ * `dropped` is not sent again, so a carousel asks about alt text once, not once per slide.
+ */
+async function createContainer(
+    url: string,
+    payload: Record<string, unknown>,
+    optional: readonly DroppedReachOption['field'][],
+    headers: Record<string, string>,
+    label: string,
+    dropped: DroppedReachOption[]
+): Promise<string> {
+    const body = { ...payload };
+    for (const d of dropped) delete body[d.field];
+    const present = optional.filter((field) => body[field] !== undefined);
+
+    try {
+        const res = await withRetry(() => metaHttp.post(url, body, { headers }), { label });
+        return res.data.id;
+    } catch (err: any) {
+        if (!present.length || !mayBeLeverRefusal(err)) throw err;
+        const reason = refusalReason(err);
+        log('warn', 'publish.reach_option_refused', { label, fields: present, reason });
+        const without = { ...body };
+        for (const field of present) delete without[field];
+        const res = await withRetry(
+            () => metaHttp.post(url, without, { headers }),
+            { label: `${label}[without ${present.join(',')}]` }
+        );
+        for (const field of present) dropped.push({ field, reason });
+        return res.data.id;
+    }
+}
+
+/** A publish's result, with the levers Instagram refused when there were any. */
+function withDropped(data: any, dropped: DroppedReachOption[]): any {
+    return dropped.length ? { ...data, dropped } : data;
+}
 
 /**
  * How long to wait for Instagram to finish transcoding an uploaded video.
@@ -464,13 +548,20 @@ export async function publishInstagramPost(
      * Overall wall-clock budget for the container status poll. Defaults low enough to finish
      * inside a serverless invocation; raise it from a long-running worker.
      */
-    pollBudgetMs: number = DEFAULT_CONTAINER_POLL_BUDGET_MS
+    pollBudgetMs: number = DEFAULT_CONTAINER_POLL_BUDGET_MS,
+    /**
+     * Alt text (image), collaborators (image, reel) and a trial reel (reel). A lever Instagram
+     * refuses for this account is dropped on one retry and reported in the result's `dropped`.
+     */
+    reach: InstagramReachOptions = {}
 ) {
     const createUrl = `${GRAPH_BASE}/${instagramId}/media`;
     let createPayload: any = {};
 
     if (type === 'image') {
         createPayload = { image_url: mediaUrl, caption: caption };
+        if (reach.altText) createPayload.alt_text = reach.altText;
+        if (reach.collaborators?.length) createPayload.collaborators = [...reach.collaborators];
     } else if (type === 'video' || type === 'reel') {
         createPayload = { media_type: 'REELS', video_url: mediaUrl, caption: caption };
         if (coverUrl) {
@@ -482,6 +573,8 @@ export async function publishInstagramPost(
         }
         // Without this a reel only appears in the Reels tab, not the main feed.
         createPayload.share_to_feed = true;
+        if (reach.collaborators?.length) createPayload.collaborators = [...reach.collaborators];
+        if (reach.trialReel) createPayload.trial_params = { graduation_strategy: reach.trialReel.graduation };
     } else if (type === 'story') {
         const isVideo = mediaUrl.match(/\.(mp4|mov|avi|wmv)/i);
         if (isVideo) {
@@ -491,16 +584,14 @@ export async function publishInstagramPost(
         }
     }
 
+    const dropped: DroppedReachOption[] = [];
     try {
         // Step 1: Create media container
         log('info', 'publish.container_creating', { post_type: type });
-        const createRes = await withRetry(
-            () => metaHttp.post(createUrl, createPayload, {
-                headers: { Authorization: `Bearer ${accessToken}` }
-            }),
-            { label: `ig-create-container[${type}]` }
+        const containerId = await createContainer(
+            createUrl, createPayload, ['alt_text', 'collaborators', 'trial_params'],
+            { Authorization: `Bearer ${accessToken}` }, `ig-create-container[${type}]`, dropped
         );
-        const containerId = createRes.data.id;
         log('info', 'publish.container_created', { container_id: containerId });
 
         if (type !== 'image') {
@@ -512,7 +603,7 @@ export async function publishInstagramPost(
         const publishRes = await publishContainer(instagramId, containerId, accessToken);
 
         log('info', 'publish.instagram_success', { ig_media_id: publishRes?.data?.id });
-        return publishRes?.data; // returns { id: "media_id" }
+        return withDropped(publishRes?.data, dropped); // { id: "media_id" }, plus `dropped` when a lever was refused
     } catch (error: any) {
         // The timeout carries the container id and last known status, which is what lets the
         // caller requeue rather than guess; flattening it into a string Error loses that.
@@ -538,40 +629,43 @@ export async function publishInstagramCarousel(
     caption: string,
     imageUrls: readonly string[],
     accessToken: string,
-    pollBudgetMs: number = DEFAULT_CONTAINER_POLL_BUDGET_MS
+    pollBudgetMs: number = DEFAULT_CONTAINER_POLL_BUDGET_MS,
+    /** Alt text per slide (on each child) and collaborators (on the parent). See publishInstagramPost. */
+    reach: InstagramReachOptions = {}
 ) {
     if (imageUrls.length < 2 || imageUrls.length > 10) {
         throw new Error(`Instagram Publish Failed: a carousel takes 2 to 10 images — this one has ${imageUrls.length}.`);
     }
     const createUrl = `${GRAPH_BASE}/${instagramId}/media`;
     const headers = { Authorization: `Bearer ${accessToken}` };
+    const dropped: DroppedReachOption[] = [];
 
     try {
         log('info', 'publish.container_creating', { post_type: 'carousel', items: imageUrls.length });
         const children: string[] = [];
         for (const [index, imageUrl] of imageUrls.entries()) {
             // A retried child is at worst an orphan container, which expires unpublished.
-            const childRes = await withRetry(
-                () => metaHttp.post(createUrl, { image_url: imageUrl, is_carousel_item: true }, { headers }),
-                { label: `ig-create-carousel-item[${index + 1}/${imageUrls.length}]` }
-            );
-            children.push(childRes.data.id);
+            const child: Record<string, unknown> = { image_url: imageUrl, is_carousel_item: true };
+            const altText = reach.altTexts?.[index];
+            if (typeof altText === 'string' && altText.trim()) child.alt_text = altText;
+            children.push(await createContainer(
+                createUrl, child, ['alt_text'], headers,
+                `ig-create-carousel-item[${index + 1}/${imageUrls.length}]`, dropped
+            ));
         }
 
-        const parentRes = await withRetry(
-            () => metaHttp.post(createUrl, {
-                media_type: 'CAROUSEL', children: children.join(','), caption,
-            }, { headers }),
-            { label: 'ig-create-container[carousel]' }
+        const parent: Record<string, unknown> = { media_type: 'CAROUSEL', children: children.join(','), caption };
+        if (reach.collaborators?.length) parent.collaborators = [...reach.collaborators];
+        const containerId = await createContainer(
+            createUrl, parent, ['collaborators'], headers, 'ig-create-container[carousel]', dropped
         );
-        const containerId = parentRes.data.id;
         log('info', 'publish.container_created', { container_id: containerId, children: children.length });
 
         await waitForContainer(containerId, accessToken, pollBudgetMs);
         const publishRes = await publishContainer(instagramId, containerId, accessToken);
 
         log('info', 'publish.instagram_success', { ig_media_id: publishRes?.data?.id });
-        return publishRes?.data; // returns { id: "media_id" }
+        return withDropped(publishRes?.data, dropped); // { id: "media_id" }, plus `dropped` when a lever was refused
     } catch (error: any) {
         if (error instanceof MediaProcessingTimeoutError) throw error;
 
