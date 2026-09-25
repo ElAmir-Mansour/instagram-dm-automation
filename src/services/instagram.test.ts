@@ -598,6 +598,110 @@ describe('publishFacebookCarousel', () => {
         assert.ok(err instanceof MetaApiError);
         assert.equal(err.metaCode, 324);
         assert.match(err.message, /Facebook Publish Failed/);
+    });
+});
+
+describe('reach levers — alt text, collaborators, trial reels (GROWTH.md §4)', () => {
+    const creates = () => posts().filter((c) => c.url === `${BASE}/ig-1/media`);
+    function arrange(refuse?: (body: any) => Error | null) {
+        let child = 0;
+        onPost = async (url, body) => {
+            if (url.endsWith('/media')) {
+                const err = refuse?.(body);
+                if (err) throw err;
+                return { data: { id: body.is_carousel_item ? `child-${++child}` : 'container-1' } };
+            }
+            if (url.endsWith('/media_publish')) return { data: { id: 'ig-media-1' } };
+            throw new Error(`unexpected ${url}`);
+        };
+        onGet = async () => ({ data: { status_code: 'FINISHED' } });
+    }
+
+    it('sends alt_text and collaborators on an image container', async () => {
+        arrange();
+        const result = await publishInstagramPost('ig-1', 'image', 'c', 'https://cdn/p.jpg', TOKEN, null, undefined, {
+            altText: 'A prompt on a dark slide', collaborators: ['partner.one'],
+        });
+        assert.deepEqual(result, { id: 'ig-media-1' }, 'nothing refused: the result is unchanged');
+        assert.deepEqual(creates()[0]!.body, {
+            image_url: 'https://cdn/p.jpg', caption: 'c', alt_text: 'A prompt on a dark slide', collaborators: ['partner.one'],
+        });
+    });
+
+    it('sends collaborators and trial_params on a reel, and nothing on a story', async () => {
+        arrange();
+        await publishInstagramPost('ig-1', 'video', 'c', 'https://cdn/v.mp4', TOKEN, null, undefined, {
+            collaborators: ['a'], trialReel: { graduation: 'SS_PERFORMANCE' }, altText: 'ignored on a reel',
+        });
+        const reel = creates()[0]!.body as any;
+        assert.deepEqual(reel.trial_params, { graduation_strategy: 'SS_PERFORMANCE' });
+        assert.deepEqual(reel.collaborators, ['a']);
+        assert.equal(reel.share_to_feed, true);
+        assert.equal('alt_text' in reel, false, 'Instagram takes no alt text on reels');
+
+        calls = [];
+        await publishInstagramPost('ig-1', 'story', '', 'https://cdn/s.jpg', TOKEN, null, undefined, { collaborators: ['a'], altText: 'x' });
+        assert.deepEqual(creates()[0]!.body, { media_type: 'STORIES', image_url: 'https://cdn/s.jpg' });
+    });
+
+    it('puts alt text on each carousel child by slide, and collaborators on the parent only', async () => {
+        arrange();
+        await publishInstagramCarousel('ig-1', 'c', ['https://cdn/1.jpg', 'https://cdn/2.jpg', 'https://cdn/3.jpg'], TOKEN, undefined, {
+            altTexts: ['first', null, 'third'], collaborators: ['a', 'b'],
+        });
+        const bodies = creates().map((c) => c.body as any);
+        assert.deepEqual(bodies.slice(0, 3).map((b) => b.alt_text), ['first', undefined, 'third']);
+        assert.ok(bodies.slice(0, 3).every((b) => !('collaborators' in b)));
+        assert.deepEqual(bodies[3].collaborators, ['a', 'b']);
+    });
+
+    it('publishes without the levers when Instagram refuses them, once, and says which', async () => {
+        arrange((body) => (body.trial_params ? metaError(100, 'Trial reels are not available for this account') : null));
+        const result = await publishInstagramPost('ig-1', 'video', 'c', 'https://cdn/v.mp4', TOKEN, null, undefined, {
+            trialReel: { graduation: 'MANUAL' }, collaborators: ['a'],
+        });
+        assert.equal(result.id, 'ig-media-1');
+        assert.deepEqual(result.dropped.map((d: any) => d.field), ['collaborators', 'trial_params']);
+        assert.match(result.dropped[0].reason, /not available for this account \(Code: 100\)/);
+        assert.equal(creates().length, 2, 'one refusal, one retry');
+        const retry = creates()[1]!.body as any;
+        assert.equal('trial_params' in retry || 'collaborators' in retry, false);
+        assert.equal(retry.share_to_feed, true, 'the rest of the payload is untouched');
+    });
+
+    it('asks a carousel about alt text once, not once per slide', async () => {
+        arrange((body) => (body.alt_text ? metaError(100, 'Invalid parameter') : null));
+        const result = await publishInstagramCarousel('ig-1', 'c', ['https://cdn/1.jpg', 'https://cdn/2.jpg'], TOKEN, undefined, {
+            altTexts: ['one', 'two'],
+        });
+        assert.deepEqual(result.dropped.map((d: any) => d.field), ['alt_text']);
+        assert.equal(creates().length, 4, 'child 1 refused and retried, child 2 sent without, then the parent');
+        assert.equal('alt_text' in (creates()[2]!.body as any), false);
+    });
+
+    it('does not retry a dead token, or a create that fails with no lever on it', async () => {
+        arrange(() => metaError(190, 'Error validating access token'));
+        const dead = await publishInstagramPost('ig-1', 'image', 'c', 'https://cdn/p.jpg', TOKEN, null, undefined, { altText: 'x' })
+            .then(() => null, (e) => e);
+        assert.ok(dead instanceof MetaApiError);
+        assert.equal(dead.metaCode, 190);
+        assert.equal(creates().length, 1);
+
+        calls = [];
+        arrange(() => metaError(9004, 'Only photo or video can be accepted'));
+        const bare = await publishInstagramPost('ig-1', 'image', 'c', 'https://cdn/p.jpg', TOKEN).then(() => null, (e) => e);
+        assert.equal(bare.metaCode, 9004);
+        assert.equal(creates().length, 1, 'nothing to drop, so nothing to retry');
+    });
+
+    it('fails with the retry’s error when the post is refused without the levers too', async () => {
+        let n = 0;
+        arrange(() => metaError(++n === 1 ? 100 : 36003, n === 1 ? 'first' : 'the real problem'));
+        const err = await publishInstagramPost('ig-1', 'image', 'c', 'https://cdn/p.jpg', TOKEN, null, undefined, { altText: 'x' })
+            .then(() => null, (e) => e);
+        assert.ok(err instanceof MetaApiError);
+        assert.equal(err.metaCode, 36003);
+        assert.match(err.message, /the real problem/);
         assert.ok(!posts().some((c) => c.url.endsWith('/feed')), 'no feed post without every photo');
     });
 });

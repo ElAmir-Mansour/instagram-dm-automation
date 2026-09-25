@@ -78,8 +78,8 @@
   language section. Do not let them ship unfilled:
     1. The three prices, the currency, and the billing period.
     2. What a connected account beyond the tier's count costs on Agency.
-    3. The support channel (email, WhatsApp, Instagram handle) and the
-       response time you are willing to commit to.
+    3. The response time you are willing to commit to, if any. The support
+       channel was supplied on 2026-09-25: email, elamirmansour@outlook.com.
     4. The cadence of the campaign review on Growth and Agency (monthly?
        quarterly?), and the notice period for cancelling.
     5. Whether onboarding is charged separately, and the current lead time —
@@ -529,29 +529,31 @@
            SHARED SITE CHROME · CSS
            ═══════════════════════════════════════════════════════════════════
 
-           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES:
-           landing.html, pricing.html, privacy.html and data-deletion.html.
+           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES:
+           landing.html, pricing.html, privacy.html, terms.html and
+           data-deletion.html. (It said four until 2026-09-25; terms.html was
+           the fifth copy all along.)
 
-           There is no build step and no templating in this project — the four
-           pages are standalone files behind four hardcoded Express routes in
+           There is no build step and no templating in this project — the five
+           pages are standalone files behind five hardcoded Express routes in
            src/index.ts, and public/** has no static handler — so the only way
            to share chrome is to duplicate it. It is duplicated DELIBERATELY
            and character for character, which is what makes drift findable:
-           diff the block between any two of the four files and identical is
+           diff the block between any two of the five files and identical is
            the expected result. Change one copy and you have to change all
-           four. The markers around it exist so a diff can be taken
+           five. The markers around it exist so a diff can be taken
            mechanically.
 
            WHY IT IS LAST IN EVERY <style>. It owns .skip, .topbar, .wordmark,
            .headtools, .headnav, .langswitch, .pagefoot and the .t-* language
-           filter outright, and it has to win on all four pages regardless of
+           filter outright, and it has to win on all five pages regardless of
            what each page declares above it. Every page-local rule for those
            selectors was deleted rather than left to lose the cascade quietly.
 
            IT READS EXACTLY TWO THINGS from the page it is pasted into:
            --page-max and --page-gutter, the width and gutter of that page's
-           content column. The four columns genuinely differ (70rem, 64rem,
-           52rem, 52rem) and a full-bleed bar whose wordmark does not sit on
+           content column. The columns genuinely differ (70rem, 64rem,
+           52rem) and a full-bleed bar whose wordmark does not sit on
            the same vertical as the text beneath it looks like an accident.
            Both have fallbacks, so the block still renders correctly on a page
            that forgets to declare them.
@@ -785,7 +787,7 @@
         }
 
         /* ─── The footer ───────────────────────────────────────────────────────
-           It carries all four public pages plus the dashboard and the repo, so
+           It carries all five public pages plus the dashboard and the repo, so
            every page can reach every other page from the bottom as well as the
            top. It sits inside each page's own .shell, which is why it has no
            max-width of its own: it inherits the column it belongs to.
@@ -795,9 +797,34 @@
            two of them that a visitor reaches from Meta's own settings link, the
            thing at the bottom of the page was thinner than the bar at the top.
            It now carries a masthead — the wordmark again, and one line saying
-           what this is — three named groups of links, and the legal line, with a
+           what this is — named groups of links, and the legal line, with a
            hairline between each of the three. The wordmark's repeat is the point:
            the bottom of the page should say whose page it is.
+
+           2026-09-25: FIVE GROUPS, because a customer looks here for five
+           things — what the product is (Product), how to learn it (Resources),
+           the paperwork (Legal), a person (Contact) and the proof (Follow: the
+           founder's accounts, which are where the app's own work is published).
+           Product and Resources link into landing.html with LANGUAGE-NEUTRAL
+           fragments (/#features, /#faq …): this block is one string on five
+           pages and in two languages, so it cannot name #faq-ar or #faq-en.
+           landing.html resolves the neutral name to the visible language's
+           section on load and rewrites these hrefs when the language changes;
+           with JavaScript off, a neutral fragment lands at the top of `/`,
+           where both languages are showing anyway.
+           The contact address is the operator's, on all five pages, and
+           `data-contact-email` marks it so the next change finds every copy. It
+           is not wrapped in <bdi>: an address is one unbroken left-to-right run
+           (the @ and the dot sit between Latin letters and resolve with them),
+           so it renders correctly inside the Arabic footer as it is. It is also
+           the widest thing in the footer — about 185px at 14px, against 144px
+           columns at 375px — so on a phone the Contact group takes a row of its
+           own, and overflow-wrap is the net under that, never a scrollbar.
+           The © row carries a second language switch. It is the same two
+           buttons with the same data-set-lang, so every page's own switch
+           script binds it with no change (they all select [data-set-lang]),
+           and it is a role="group", not a <nav>, so the page does not gain a
+           second landmark with the same name as the bar's.
 
            Every rule below is scoped under .pagefoot rather than written as a
            bare class, and that is load-bearing: ".pagefoot a" is (0,1,1) and
@@ -848,7 +875,7 @@
             border-block-start: 1px solid var(--border-subtle);
             border-block-end: 1px solid var(--border-subtle);
         }
-        .pagefoot .foot-cols nav { display: flex; flex-direction: column; }
+        .pagefoot .foot-cols > * { display: flex; flex-direction: column; }
         /* A <p>, not an <h*>: these four pages have four different heading
            outlines and a privacy policy does not need three more h2s under its
            footer. aria-labelledby can point at any element, so the group still
@@ -872,7 +899,54 @@
             font-weight: var(--fw-semibold);
         }
         .pagefoot p { max-width: 70ch; margin: 0; }
-        .pagefoot .foot-legal { margin-block-start: var(--space-5); }
+        .pagefoot .foot-legal { margin-block-start: var(--space-3); }
+        .pagefoot .foot-mail { overflow-wrap: anywhere; }
+
+        /* Follow: three logos, 44px square each, in the default text colour
+           rather than the link colour — a row of three accent-blue logos reads
+           as an advert. They are glyphs and are NEVER mirrored: a logo is not
+           a direction. Each link's name is real text (.foot-sr), in the same
+           two <bdi>s every other label here uses, so the language filter hides
+           the other language's name from assistive technology too. */
+        .pagefoot .foot-social { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+        .pagefoot .foot-social a {
+            justify-content: center;
+            min-width: var(--tap-target);
+            border-radius: var(--radius-sm);
+            color: var(--text-default);
+            transition: background var(--nav-t) var(--nav-ease),
+                        color var(--nav-t) var(--nav-ease);
+        }
+        .pagefoot .foot-social a:hover { background: var(--surface-glass); color: var(--text-strong); }
+        .pagefoot .foot-social svg { inline-size: 1.25rem; block-size: 1.25rem; }
+        .pagefoot .foot-note { max-width: 24ch; }
+        .pagefoot .foot-sr {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* The © line and the footer's language switch share one row, at the
+           two ends of it in either direction (space-between is logical). */
+        .pagefoot .foot-base {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-3) var(--space-5);
+            margin-block-start: var(--space-5);
+        }
+        .pagefoot .foot-copy { color: var(--text-default); }
+
+        @media (max-width: 30rem) {
+            .pagefoot .foot-contact { grid-column: 1 / -1; }
+        }
 
         /* ─── The language filter ──────────────────────────────────────────────
            No attribute (JavaScript off or failed) = both languages visible,
@@ -958,17 +1032,19 @@
     <!-- ═══════════════════════════════════════════════════════════════════════
          SHARED SITE CHROME · NAVBAR
          ═══════════════════════════════════════════════════════════════════════
-         MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES: landing.html,
-         pricing.html, privacy.html and data-deletion.html. No build step, no
-         templating — see the CSS block of the same name at the end of <style>
-         for why the four copies exist and what to do when one of them changes.
+         MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES: landing.html,
+         pricing.html, privacy.html, terms.html and data-deletion.html. No
+         build step, no templating — see the CSS block of the same name at the
+         end of <style> for why the five copies exist and what to do when one
+         of them changes.
 
-         THE ONE INTENDED DIFFERENCE between the four copies is
+         THE ONE INTENDED DIFFERENCE between the five copies is
          `aria-current="page"` on the link that points at the page you are
          reading. On landing.html that is the wordmark; on pricing.html the
-         Pricing link. /privacy and /data-deletion are not destinations in the
-         bar, so on those two pages nothing here carries it — their footer link
-         does instead. Anything else that differs is drift.
+         Pricing link. /privacy, /terms and /data-deletion are not
+         destinations in the bar, so on those three pages nothing here carries
+         it — their footer link does instead. Anything else that differs is
+         drift.
          ═══════════════════════════════════════════════════════════════════════ -->
     <!-- The skip link is part of the chrome, so it is part of this block. It was
          three different strings before: landing.html isolated both labels in
@@ -1231,8 +1307,8 @@
                                 <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
                             </tr>
                             <tr>
-                                <th scope="row">قناة الدعم وزمن الاستجابة</th>
-                                <td colspan="3"><span class="code">[غير مُحدَّد بعد]</span></td>
+                                <th scope="row">قناة الدعم</th>
+                                <td colspan="3">البريد: <a data-contact-email href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a></td>
                             </tr>
                         </tbody>
 
@@ -1377,7 +1453,7 @@
                         بالسعر والمدة المتوقعة للربط قبل أي التزام.
                     </p>
                     <ul>
-                        <li>البريد أو واتساب أو حساب إنستجرام: <span class="code">[غير مُحدَّد بعد]</span></li>
+                        <li>البريد: <a data-contact-email href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a></li>
                         <li>
                             للأسئلة التقنية:
                             <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني</a>
@@ -1391,7 +1467,7 @@
                     <ul>
                         <li>أسعار الباقات الثلاث، والعملة، ومدة الاشتراك.</li>
                         <li>سعر الحساب الإضافي في باقة الوكالات.</li>
-                        <li>قناة الدعم وزمن الاستجابة الذي تقبل الالتزام به.</li>
+                        <li>زمن الاستجابة الذي تقبل الالتزام به، إن أردت أن تَعِد بزمن. (قناة الدعم الآن هي البريد.)</li>
                         <li>دورية «المراجعة الدورية»، ومدة الإشعار قبل الإلغاء.</li>
                         <li>هل يُحتسب الإعداد الأولي بأجر منفصل؟ وما المدة المتوقعة للربط اليوم؟</li>
                     </ul>
@@ -1628,8 +1704,8 @@
                                 <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
                             </tr>
                             <tr>
-                                <th scope="row">Support channel and response time</th>
-                                <td colspan="3"><span class="code">[not yet supplied]</span></td>
+                                <th scope="row">Support channel</th>
+                                <td colspan="3">Email: <a data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a></td>
                             </tr>
                         </tbody>
 
@@ -1785,7 +1861,7 @@
                         get connected, before you commit to anything.
                     </p>
                     <ul>
-                        <li>Email, WhatsApp or Instagram: <span class="code">[not yet supplied]</span></li>
+                        <li>Email: <a data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a></li>
                         <li>
                             For technical questions:
                             <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">the public issue tracker</a>
@@ -1799,7 +1875,7 @@
                     <ul>
                         <li>The three prices, the currency, and the billing period.</li>
                         <li>The price of an extra account on the Agency plan.</li>
-                        <li>The support channel and the response time you are willing to commit to.</li>
+                        <li>The response time you are willing to commit to, if you want to promise one. (The support channel is now email.)</li>
                         <li>How often the "regular review" happens, and the notice period for cancelling.</li>
                         <li>Whether initial setup is charged separately, and the lead time to get connected today.</li>
                     </ul>
@@ -1815,28 +1891,30 @@
         <!-- ═══════════════════════════════════════════════════════════════════
              SHARED SITE CHROME · FOOTER
              ═══════════════════════════════════════════════════════════════════
-             MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES, on the same
+             MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES, on the same
              terms as the navbar above and the CSS block at the end of <style>.
 
-             It carries every public page plus the dashboard and the repo, so
-             the navigation graph is complete from the bottom of any page as
-             well as from the top: four pages, and from each of them all three
-             others plus /dashboard. Before this, /pricing reached neither home
+             It carries every public page plus the dashboard, the help centre,
+             the landing page's own sections and the repo, so the navigation
+             graph is complete from the bottom of any page as well as from the
+             top. Before the first version of it, /pricing reached neither home
              nor sign-in, and /privacy and /data-deletion reached only each
              other.
 
-             THE STRUCTURE IS NEW. The same links used to be one flat row above
-             one legal line — the correct content in a footer too thin to carry
-             it, at the bottom of two documents a visitor reaches from Meta's
-             own settings link. They are now three named groups under a
-             masthead, with the wordmark repeated so the bottom of the page
-             says whose page it is. /privacy and /data-deletion sit together
-             under "Policies", which is also what replaced the four-card
-             "Where to go next" grid that used to duplicate this footer on the
-             landing page.
+             FIVE NAMED GROUPS under a masthead, with the wordmark repeated so
+             the bottom of the page says whose page it is: Product, Resources,
+             Legal, Follow and Contact. Contact is LAST in the source on
+             purpose: the address is the widest item in the footer, so at 375px
+             it takes a row of its own, and a full-row item anywhere earlier
+             would leave a hole in the two-column grid above it.
+             The Product and Resources links into the landing page use
+             language-neutral fragments (/#faq, not /#faq-en) — see the CSS
+             block for how landing.html resolves them.
 
-             THE ONE INTENDED DIFFERENCE between the four copies is
-             `aria-current="page"` on this page's own link.
+             THE ONE INTENDED DIFFERENCE between the five copies is
+             `aria-current="page"` on this page's own link: the wordmark here
+             on landing.html (it links to `/`), Pricing on pricing.html, and
+             the page's own Legal link on the other three.
              ═══════════════════════════════════════════════════════════════════ -->
         <footer class="pagefoot">
             <div class="foot-top">
@@ -1845,39 +1923,64 @@
                     <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
                 </a>
                 <p class="foot-what">
-                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة، على إنستجرام وفيسبوك، بالعربية أولاً.</bdi>
-                    <bdi class="t-en" lang="en" dir="ltr">A comment becomes a private conversation, on Instagram and Facebook, Arabic-first.</bdi>
+                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة على إنستجرام وفيسبوك، ونشرٌ مجدول يصل تيك توك أيضاً، واستوديو للكاروسيل. بالعربية أولاً.</bdi>
+                    <bdi class="t-en" lang="en" dir="ltr">Comments into private conversations on Instagram and Facebook, scheduled posts that reach TikTok too, and a Carousel Studio. Arabic-first.</bdi>
                 </p>
             </div>
 
             <div class="foot-cols">
                 <nav aria-labelledby="foot-h-product">
                     <p class="foot-h" id="foot-h-product"><bdi class="t-ar" lang="ar">المنتج</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Product</bdi></p>
-                    <a href="/"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
+                    <a href="/#features"><bdi class="t-ar" lang="ar">الميزات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Features</bdi></a>
+                    <a href="/#carousel-studio"><bdi class="t-ar" lang="ar">استوديو الكاروسيل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Carousel Studio</bdi></a>
+                    <a href="/#tiktok"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></a>
                     <a href="/pricing" aria-current="page"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
-                    <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
+                    <a href="/dashboard"><bdi class="t-ar" lang="ar">تسجيل الدخول</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Sign in</bdi></a>
                 </nav>
-                <nav aria-labelledby="foot-h-policies">
-                    <p class="foot-h" id="foot-h-policies"><bdi class="t-ar" lang="ar">السياسات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Policies</bdi></p>
-                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
-                    <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
-                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
-                </nav>
-                <nav aria-labelledby="foot-h-source">
-                    <p class="foot-h" id="foot-h-source"><bdi class="t-ar" lang="ar">المصدر</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source</bdi></p>
+                <nav aria-labelledby="foot-h-resources">
+                    <p class="foot-h" id="foot-h-resources"><bdi class="t-ar" lang="ar">الموارد</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Resources</bdi></p>
+                    <a href="/dashboard#/help"><bdi class="t-ar" lang="ar">مركز المساعدة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Help Center</bdi></a>
+                    <a href="/#how-it-works"><bdi class="t-ar" lang="ar">كيف يعمل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">How it works</bdi></a>
+                    <a href="/#studio-how"><bdi class="t-ar" lang="ar">كيف يعمل الاستوديو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">How the Studio works</bdi></a>
+                    <a href="/#faq"><bdi class="t-ar" lang="ar">الأسئلة الشائعة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">FAQ</bdi></a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
                 </nav>
+                <nav aria-labelledby="foot-h-legal">
+                    <p class="foot-h" id="foot-h-legal"><bdi class="t-ar" lang="ar">الشؤون القانونية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Legal</bdi></p>
+                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
+                    <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
+                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف البيانات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Data deletion</bdi></a>
+                </nav>
+                <div class="foot-follow" role="group" aria-labelledby="foot-h-follow">
+                    <p class="foot-h" id="foot-h-follow"><bdi class="t-ar" lang="ar">تابعنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Follow</bdi></p>
+                    <div class="foot-social">
+                        <a href="https://www.instagram.com/elamir.mansour/" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.6" fill="currentColor"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">إنستجرام</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Instagram</bdi></span></a>
+                        <a href="https://www.tiktok.com/@elamir_mansour" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></span></a>
+                        <a href="https://www.facebook.com/ElAmirMahmoudMansour" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">فيسبوك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Facebook</bdi></span></a>
+                    </div>
+                    <p class="foot-note"><bdi class="t-ar" lang="ar" dir="rtl">حسابات المؤسس، وعليها يُنشر ما يصنعه التطبيق.</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">The founder's accounts, where the app's own work is published.</bdi></p>
+                </div>
+                <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
+                    <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
+                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
+                </div>
+            </div>
+
+            <div class="foot-base">
+                <p class="foot-copy">© 2026 <bdi class="t-ar" lang="ar">أوتوريبلاي برو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">AutoReply Pro</bdi></p>
+                <div class="langswitch" role="group" aria-label="اللغة · Language">
+                    <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
+                    <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
+                </div>
             </div>
             <p class="foot-legal">
-                <!-- These two were plain <span>s with no lang or dir on three of
-                     the four pages. Inside an RTL page an English sentence's
-                     final full stop is a neutral character, so it was reordered
-                     to the other end of the line and the footer rendered
-                     ".by Meta". <bdi> is an isolate AND an element, which is why
-                     it is used here rather than unicode-bidi: isolate, which the
-                     W3C notes may be ignored. -->
-                <bdi class="t-ar" lang="ar" dir="rtl">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة <bdi lang="en" dir="ltr">Meta</bdi>، ولا ترتبط هذه الأداة بها.</bdi>
-                <bdi class="t-en" lang="en" dir="ltr">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</bdi>
+                <!-- <bdi>, not <span>, with lang and dir: inside an RTL page an
+                     English sentence's final full stop is a neutral character and
+                     is reordered to the other end of the line — which is how this
+                     line once rendered ".by Meta". -->
+                <bdi class="t-ar" lang="ar" dir="rtl">إنستجرام وفيسبوك وتيك توك علاماتٌ تجارية مملوكة لأصحابها، ولا ترتبط هذه الأداة بشركة <bdi lang="en" dir="ltr">Meta</bdi> ولا بتيك توك، ولا تحظى بتأييد أيٍّ منهما.</bdi>
+                <bdi class="t-en" lang="en" dir="ltr">Instagram, Facebook and TikTok are trademarks of their respective owners. AutoReply Pro is not affiliated with, or endorsed by, Meta or TikTok.</bdi>
             </p>
         </footer>
     </div>

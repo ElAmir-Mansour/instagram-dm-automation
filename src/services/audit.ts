@@ -117,6 +117,8 @@ export const AUDIT_ACTIONS = {
     studioSchedule: 'studio.schedule',
     /** The queued TikTok carousels went out as a batch of rows due now. */
     studioTikTokBatch: 'studio.tiktok_batch',
+    /** Growth keywords, hashtag sets, competitors or audience changed (GROWTH.md). */
+    growthSettingsWrite: 'growth.settings_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

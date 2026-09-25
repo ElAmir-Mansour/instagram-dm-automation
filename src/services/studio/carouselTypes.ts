@@ -1,7 +1,11 @@
 // Copied verbatim from aicourse-captions/src/carousel/types.ts (the design's schema, STUDIO.md §1).
-// Keep the two in sync: the budgets below are the templates' hard limits. The one Studio
-// difference is semantic, not structural: `ShotRef.name` keys the draft's `shots` map
-// (`m-<momentId>`), not the static shot library the comment below mentions.
+// Keep the two in sync: the budgets below are the templates' hard limits. Two Studio
+// differences:
+//   - semantic: `ShotRef.name` keys the draft's `shots` map (`m-<momentId>`), not the static shot
+//     library the comment below mentions;
+//   - structural, and additive: `SlideMeta.altText` (GROWTH.md §4). The templates never render
+//     it, so the renderer's copy of this file does not need it; a carousel carrying it renders
+//     exactly as before.
 
 /**
  * The contract between the carousel copy (`posts/*.ts`) and the slide templates.
@@ -29,7 +33,19 @@ export type ShotRef = {
   focusY?: number;
 };
 
-export type Slide =
+/**
+ * What every slide may carry beside its copy. Not rendered: it travels with the slide to the
+ * scheduled post, where Instagram takes it as the image's `alt_text`.
+ */
+export type SlideMeta = {
+  /**
+   * ≤ 200 (`ALT_TEXT_BUDGET`; Instagram itself takes up to 1000). What the slide shows and says,
+   * for screen readers and Instagram search.
+   */
+  altText?: string;
+};
+
+export type Slide = SlideMeta & (
   /** Slide 1. Stops the scroll: one promise, one highlighted phrase. */
   | {
       kind: "cover";
@@ -121,7 +137,8 @@ export type Slide =
       kind: "cta";
       /** ≤ 40. The payoff line above the ask, e.g. "شرحته خطوة بخطوة في الكورس". */
       promise?: string;
-    };
+    }
+);
 
 export type Carousel = {
   /** PascalCase, unique. Used in composition ids and output paths. */

@@ -5,7 +5,7 @@
   ═══════════════════════════════════════════════════════════════════════════
 
   WHY THIS PAGE IS BILINGUAL IN ONE FILE, not two.
-  `/privacy` is served by a single hardcoded Express route (src/index.ts:92-94)
+  `/privacy` is served by a single hardcoded Express route (src/index.ts:103-105)
   and `public/**` has no static handler, so a second file (privacy-ar.html)
   would be unreachable in production. Both languages therefore live here.
   Without JavaScript both are shown, each with its own lang/dir; with it, the
@@ -15,33 +15,85 @@
   EVERY FACTUAL CLAIM BELOW IS TRACEABLE TO CODE. Cited inline as file:line.
   If the pipeline changes, this page is wrong until it is changed too.
 
-  OWNER: THINGS ONLY YOU CAN SUPPLY — see the marked note at the end of each
-  language, and do not let them ship unfilled:
-    1. A contact email address for privacy and deletion requests.
-    2. The name of the person or entity that operates the service, and the
-       country whose law applies. No legal basis or jurisdiction is asserted
-       anywhere on this page because none could be established from the code.
-    3. Confirmation that RAW_PAYLOAD_RETENTION_DAYS is still 30 in production.
-       This page publishes "30 days" as a promise; the code enforces only a
-       7-day floor (src/services/retention.ts:34) and is a NO-OP when the
-       variable is unset (src/services/retention.ts:84). Change the variable
-       and this page becomes untrue.
+  OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
+    1. Contact email: elamirmansour@outlook.com — section 9, both languages,
+       as a mailto: link. The same address as the footer's data-contact-email.
+    2. Operator and data controller: ElAmir Mansour — named in section 9.
+       THE COUNTRY WHOSE LAW APPLIES HAS NOT BEEN SUPPLIED. No governing law,
+       jurisdiction or legal basis for processing is stated anywhere on this
+       page, because none has been supplied or could be established from the
+       code, and none may be invented. The visible "editorial note" boxes that
+       used to say so were removed (TikTok's reviewers read this page); the
+       reminder now lives in an HTML comment at the end of section 9.
+    3. STILL OPEN: confirmation that RAW_PAYLOAD_RETENTION_DAYS is still 30 in
+       production. This page publishes "30 days" as a promise; the code
+       enforces only a 7-day floor (src/services/retention.ts:34) and is a
+       NO-OP when the variable is unset (src/services/retention.ts:84). Change
+       the variable and this page becomes untrue.
 
-  TIKTOK (added 2026-09-23) — THE ONE PART WRITTEN AHEAD OF THE CODE.
-  The TikTok claims (section 1 "When the account owner connects TikTok", and
-  the TikTok lines in sections 2, 4, 5 and 7) come from the owner's spec and
-  src/config/migration_v18_tiktok.sql, not from a finished integration. They
-  promise, and the code on feat/tiktok has to deliver:
-    · scopes user.info.basic and video.upload, and no others;
-    · tokens stored enc:v1 (AES-256-GCM, src/config/crypto.ts);
-    · videos go to the owner's TikTok INBOX, never Direct Post;
-    · disconnect revokes with TikTok and DELETES the connection
-      (disconnect() in src/services/tiktokConnections.ts), and the
-      authorization.removed webhook deletes the same row
-      (deleteConnectionByOpenId(), same file) — reconciled 2026-09-23; the
-      webhook used to keep a 'revoked' tombstone with open_id/name/avatar;
-    · scheduled_posts rows are the owner's own content, like their Meta posts:
-      they are NOT deleted on disconnect, and the page now says so.
+  TIKTOK — REWRITTEN 2026-09-25 AGAINST THE SHIPPED INTEGRATION. The version
+  of 2026-09-23 was written ahead of the code and promised two scopes and
+  inbox-only uploads; the product now posts directly. Section 1 "When the
+  account owner connects TikTok" and the TikTok lines in sections 2, 4, 5 and
+  7 claim the following, and the code does it (docs/TIKTOK_GUIDE.md is the
+  operator's version of the same facts):
+    · scopes user.info.basic, video.upload and video.publish, and no others:
+      tiktokScopes(), src/services/tiktok.ts:53-56, requested at Connect,
+      src/routes/tiktok.ts:273-279. Today's switches (Direct Post on, not
+      audited) ask for all three. AFTER THE AUDIT tiktokScopes() stops asking
+      for video.upload, and "three scopes" becomes an over-statement: change
+      section 1 to user.info.basic + video.publish when Audited is ticked;
+    · the profile stored — open_id, display name, avatar URL:
+      completeConnection(), src/services/tiktokConnections.ts:142-204;
+    · creator_info read live and NEVER STORED: queryCreatorInfo(),
+      tiktok.ts:466-488, called only at src/routes/tiktok.ts:249 (the
+      composer's panel) and tiktokPublish.ts:311, :406 (publish-time checks);
+    · Direct Post of videos and photo carousels, or a draft in the TikTok
+      inbox, fixed per post at scheduling: src/routes/api.ts:2240-2254; the
+      inits are tiktok.ts:373-412 (inbox video), :505-532 (direct video) and
+      :586-617 (photos, DIRECT_POST or MEDIA_UPLOAD);
+    · no publish time exists in TikTok's API, so a post goes out when the
+      drain next runs: publishDuePosts() at src/routes/api.ts:365, and
+      docs/TIKTOK_GUIDE.md §1;
+    · until the audit every direct post is SELF_ONLY, checked at scheduling
+      (validateTikTokOptions(), tiktokPublish.ts:94-96) and again at publish
+      (checkedPrivacy(), :290-292); TikTok itself refuses a public account
+      (unaudited_client_can_only_post_to_private_accounts, tiktok.ts:118-119);
+    · privacy, comments/Duet/Stitch, commercial-content disclosure and consent
+      are chosen per direct post in the composer (validateTikTokOptions(),
+      tiktokPublish.ts:73-135; the labels, dashboard/js/i18n.js:2592-2656)
+      and re-checked against a fresh creator_info at publish
+      (startDirectPost(), tiktokPublish.ts:304-330). EXCEPTION: Carousel
+      Studio posts carry fixed options — SELF_ONLY until audited and
+      PUBLIC_TO_EVERYONE after, comments on, brand_organic ("Your brand") on —
+      and the operator's click is the consent (studioTikTokOptions(),
+      src/services/studio/schedule.ts:39-50). An inbox draft carries none of
+      them: TikTok's editor asks (docs/TIKTOK_GUIDE.md §6.1);
+    · a video's bytes are pushed by the app (FILE_UPLOAD, read from the media
+      store by loadMedia(), tiktokPublish.ts:207-221); photos are PULLED by
+      TikTok from <public site address>/api/uploads/<id>.jpg|.webp, the prefix
+      verified in the portal (tiktokPhotoUrls(), tiktokPublish.ts:384-401;
+      served by src/routes/api.ts:940). Both live in media_uploads
+      (PostgresMediaStore, src/services/storage.ts);
+    · status comes from the signed post.publish.* webhooks (route
+      src/routes/tiktok.ts:153-180; applyWebhookEvent(),
+      tiktokPublish.ts:644-686) and from reconcileTikTokPosts() on every drain
+      and the daily cron (tiktokPublish.ts:582; src/routes/api.ts:373, :894).
+      A post id is stored only for a public post (applyStatus(),
+      tiktokPublish.ts:254-263);
+    · tokens stored enc:v1, AES-256-GCM: encryptSecret(),
+      src/config/crypto.ts:43-45, called at tiktokConnections.ts:191-192 and
+      :225-226;
+    · Disconnect revokes with TikTok (best effort) and DELETES the row:
+      disconnect(), tiktokConnections.ts:376-393; the authorization.removed
+      webhook deletes the same row: deleteConnectionByOpenId(), :401-406, via
+      applyWebhookEvent(), tiktokPublish.ts:656-660;
+    · NOT deleted by either route, and section 4 says so: the owner's
+      scheduled_posts rows, and the audit_log row Connect writes with the
+      account's display name and scopes (src/routes/tiktok.ts:135-144).
+      Nothing in src/ ever deletes from audit_log.
+    · Still true, and still said: no scope reads comments or messages, and no
+      TikTok viewer's data reaches the app.
   Grep the function names rather than trusting line numbers.
   ═══════════════════════════════════════════════════════════════════════════
 -->
@@ -180,21 +232,6 @@
         }
         .callout > :last-child { margin-bottom: 0; }
 
-        /* Placeholders the operator must fill. Marked to be impossible to miss
-           rather than quietly plausible — an invented email would be worse than
-           a visible gap. */
-        .todo {
-            padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
-            margin: var(--space-5, 1.5rem) 0 0;
-            border-radius: var(--radius-md, 14px);
-            border: 1px dashed var(--warning, #9a6408);
-            background: var(--warning-soft, rgba(154, 100, 8, 0.12));
-            color: var(--text-default, #3c4558);
-            font-size: var(--fs-200, 0.875rem);
-        }
-        .todo strong { color: var(--warning-text, #7d5106); }
-        .todo > :last-child { margin-bottom: 0; }
-
         .divider {
             height: 1px;
             border: 0;
@@ -224,29 +261,31 @@
            SHARED SITE CHROME · CSS
            ═══════════════════════════════════════════════════════════════════
 
-           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES:
-           landing.html, pricing.html, privacy.html and data-deletion.html.
+           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES:
+           landing.html, pricing.html, privacy.html, terms.html and
+           data-deletion.html. (It said four until 2026-09-25; terms.html was
+           the fifth copy all along.)
 
-           There is no build step and no templating in this project — the four
-           pages are standalone files behind four hardcoded Express routes in
+           There is no build step and no templating in this project — the five
+           pages are standalone files behind five hardcoded Express routes in
            src/index.ts, and public/** has no static handler — so the only way
            to share chrome is to duplicate it. It is duplicated DELIBERATELY
            and character for character, which is what makes drift findable:
-           diff the block between any two of the four files and identical is
+           diff the block between any two of the five files and identical is
            the expected result. Change one copy and you have to change all
-           four. The markers around it exist so a diff can be taken
+           five. The markers around it exist so a diff can be taken
            mechanically.
 
            WHY IT IS LAST IN EVERY <style>. It owns .skip, .topbar, .wordmark,
            .headtools, .headnav, .langswitch, .pagefoot and the .t-* language
-           filter outright, and it has to win on all four pages regardless of
+           filter outright, and it has to win on all five pages regardless of
            what each page declares above it. Every page-local rule for those
            selectors was deleted rather than left to lose the cascade quietly.
 
            IT READS EXACTLY TWO THINGS from the page it is pasted into:
            --page-max and --page-gutter, the width and gutter of that page's
-           content column. The four columns genuinely differ (70rem, 64rem,
-           52rem, 52rem) and a full-bleed bar whose wordmark does not sit on
+           content column. The columns genuinely differ (70rem, 64rem,
+           52rem) and a full-bleed bar whose wordmark does not sit on
            the same vertical as the text beneath it looks like an accident.
            Both have fallbacks, so the block still renders correctly on a page
            that forgets to declare them.
@@ -480,7 +519,7 @@
         }
 
         /* ─── The footer ───────────────────────────────────────────────────────
-           It carries all four public pages plus the dashboard and the repo, so
+           It carries all five public pages plus the dashboard and the repo, so
            every page can reach every other page from the bottom as well as the
            top. It sits inside each page's own .shell, which is why it has no
            max-width of its own: it inherits the column it belongs to.
@@ -490,9 +529,34 @@
            two of them that a visitor reaches from Meta's own settings link, the
            thing at the bottom of the page was thinner than the bar at the top.
            It now carries a masthead — the wordmark again, and one line saying
-           what this is — three named groups of links, and the legal line, with a
+           what this is — named groups of links, and the legal line, with a
            hairline between each of the three. The wordmark's repeat is the point:
            the bottom of the page should say whose page it is.
+
+           2026-09-25: FIVE GROUPS, because a customer looks here for five
+           things — what the product is (Product), how to learn it (Resources),
+           the paperwork (Legal), a person (Contact) and the proof (Follow: the
+           founder's accounts, which are where the app's own work is published).
+           Product and Resources link into landing.html with LANGUAGE-NEUTRAL
+           fragments (/#features, /#faq …): this block is one string on five
+           pages and in two languages, so it cannot name #faq-ar or #faq-en.
+           landing.html resolves the neutral name to the visible language's
+           section on load and rewrites these hrefs when the language changes;
+           with JavaScript off, a neutral fragment lands at the top of `/`,
+           where both languages are showing anyway.
+           The contact address is the operator's, on all five pages, and
+           `data-contact-email` marks it so the next change finds every copy. It
+           is not wrapped in <bdi>: an address is one unbroken left-to-right run
+           (the @ and the dot sit between Latin letters and resolve with them),
+           so it renders correctly inside the Arabic footer as it is. It is also
+           the widest thing in the footer — about 185px at 14px, against 144px
+           columns at 375px — so on a phone the Contact group takes a row of its
+           own, and overflow-wrap is the net under that, never a scrollbar.
+           The © row carries a second language switch. It is the same two
+           buttons with the same data-set-lang, so every page's own switch
+           script binds it with no change (they all select [data-set-lang]),
+           and it is a role="group", not a <nav>, so the page does not gain a
+           second landmark with the same name as the bar's.
 
            Every rule below is scoped under .pagefoot rather than written as a
            bare class, and that is load-bearing: ".pagefoot a" is (0,1,1) and
@@ -543,7 +607,7 @@
             border-block-start: 1px solid var(--border-subtle);
             border-block-end: 1px solid var(--border-subtle);
         }
-        .pagefoot .foot-cols nav { display: flex; flex-direction: column; }
+        .pagefoot .foot-cols > * { display: flex; flex-direction: column; }
         /* A <p>, not an <h*>: these four pages have four different heading
            outlines and a privacy policy does not need three more h2s under its
            footer. aria-labelledby can point at any element, so the group still
@@ -567,7 +631,54 @@
             font-weight: var(--fw-semibold);
         }
         .pagefoot p { max-width: 70ch; margin: 0; }
-        .pagefoot .foot-legal { margin-block-start: var(--space-5); }
+        .pagefoot .foot-legal { margin-block-start: var(--space-3); }
+        .pagefoot .foot-mail { overflow-wrap: anywhere; }
+
+        /* Follow: three logos, 44px square each, in the default text colour
+           rather than the link colour — a row of three accent-blue logos reads
+           as an advert. They are glyphs and are NEVER mirrored: a logo is not
+           a direction. Each link's name is real text (.foot-sr), in the same
+           two <bdi>s every other label here uses, so the language filter hides
+           the other language's name from assistive technology too. */
+        .pagefoot .foot-social { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+        .pagefoot .foot-social a {
+            justify-content: center;
+            min-width: var(--tap-target);
+            border-radius: var(--radius-sm);
+            color: var(--text-default);
+            transition: background var(--nav-t) var(--nav-ease),
+                        color var(--nav-t) var(--nav-ease);
+        }
+        .pagefoot .foot-social a:hover { background: var(--surface-glass); color: var(--text-strong); }
+        .pagefoot .foot-social svg { inline-size: 1.25rem; block-size: 1.25rem; }
+        .pagefoot .foot-note { max-width: 24ch; }
+        .pagefoot .foot-sr {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* The © line and the footer's language switch share one row, at the
+           two ends of it in either direction (space-between is logical). */
+        .pagefoot .foot-base {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-3) var(--space-5);
+            margin-block-start: var(--space-5);
+        }
+        .pagefoot .foot-copy { color: var(--text-default); }
+
+        @media (max-width: 30rem) {
+            .pagefoot .foot-contact { grid-column: 1 / -1; }
+        }
 
         /* ─── The language filter ──────────────────────────────────────────────
            No attribute (JavaScript off or failed) = both languages visible,
@@ -653,17 +764,19 @@
     <!-- ═══════════════════════════════════════════════════════════════════════
          SHARED SITE CHROME · NAVBAR
          ═══════════════════════════════════════════════════════════════════════
-         MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES: landing.html,
-         pricing.html, privacy.html and data-deletion.html. No build step, no
-         templating — see the CSS block of the same name at the end of <style>
-         for why the four copies exist and what to do when one of them changes.
+         MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES: landing.html,
+         pricing.html, privacy.html, terms.html and data-deletion.html. No
+         build step, no templating — see the CSS block of the same name at the
+         end of <style> for why the five copies exist and what to do when one
+         of them changes.
 
-         THE ONE INTENDED DIFFERENCE between the four copies is
+         THE ONE INTENDED DIFFERENCE between the five copies is
          `aria-current="page"` on the link that points at the page you are
          reading. On landing.html that is the wordmark; on pricing.html the
-         Pricing link. /privacy and /data-deletion are not destinations in the
-         bar, so on those two pages nothing here carries it — their footer link
-         does instead. Anything else that differs is drift.
+         Pricing link. /privacy, /terms and /data-deletion are not
+         destinations in the bar, so on those three pages nothing here carries
+         it — their footer link does instead. Anything else that differs is
+         drift.
          ═══════════════════════════════════════════════════════════════════════ -->
     <!-- The skip link is part of the chrome, so it is part of this block. It was
          three different strings before: landing.html isolated both labels in
@@ -708,15 +821,15 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة الخصوصية</h1>
-                <p class="stamp">آخر تحديث: 23 سبتمبر 2026</p>
+                <p class="stamp">آخر تحديث: 25 سبتمبر 2026</p>
 
                 <p>
                     «أوتوريبلاي برو» أداة تُشغّلها صاحبة أو صاحب حساب واحد على إنستجرام وفيسبوك،
                     وتقوم مع مَن يعلّق أو يراسل ذلك الحساب بأمرين فقط: الردّ الآلي على التعليقات
                     التي تُطابِق كلمة مفتاحية محدّدة مسبقاً، والردّ على الرسائل الخاصة الواردة إليه.
-                    وإن ربط صاحب الحساب حساباً على تيك توك أيضاً، فهي ترفع إليه الفيديوهات التي
-                    يجدولها، ولا تفعل هناك شيئاً غير ذلك. لا تقوم الأداة بأي نشاط إعلاني أو تسويقي
-                    موجّه، ولا تبيع البيانات.
+                    وإن ربط صاحب الحساب حساباً على تيك توك أيضاً، فهي تنشر عليه الفيديوهات وكاروسيلات
+                    الصور التي يجدولها، أو ترسلها إلى مسودّاته فيه، ولا تفعل هناك شيئاً غير ذلك. لا
+                    تقوم الأداة بأي نشاط إعلاني أو تسويقي موجّه، ولا تبيع البيانات.
                 </p>
                 <p>
                     هذه الصفحة تصف ما يحدث لبياناتك أنت — بوصفك مَن علّق على منشور أو أرسل رسالة
@@ -731,8 +844,9 @@
                     الوصول إلى تيك توك عبر تطبيق منفصل مُسجَّل في «منصّة مطوّري تيك توك»
                     (<bdi lang="en" dir="ltr">TikTok for Developers</bdi>)، باستخدام
                     <span class="code" lang="en" dir="ltr">Login Kit</span>
-                    و<span class="code" lang="en" dir="ltr">Content Posting API</span> الرسميتين من
-                    تيك توك.
+                    و<span class="code" lang="en" dir="ltr">Content Posting API</span>
+                    و<span class="code" lang="en" dir="ltr">Webhooks</span>، وكلها من منتجات تيك توك
+                    الرسمية.
                 </p>
 
                 <div class="callout">
@@ -758,8 +872,9 @@
                         الإرسال، ونصّ أي خطأ أعادته ميتا.
                     </li>
                     <li>
-                        <strong>لا يُخزَّن نصّ تعليقك.</strong> يُقارَن بالكلمات المفتاحية في الذاكرة
-                        أثناء المعالجة ثم يُهمل؛ لا يوجد في قاعدة البيانات عمود يحتفظ به.
+                        <strong>لا يُحفَظ نصّ تعليقك في سجلّ النشاط.</strong> يبقى في طابور المعالجة، ضمن
+                        نسخة الحدث التي أرسلتها ميتا: يُحذف تلقائياً بعد 7 أيام من معالجته، ويبقى
+                        إلى أن يُحذف يدوياً إن فشلت معالجته.
                     </li>
                     <li>
                         <strong>يُخزَّن لمدة 48 ساعة:</strong> معرّف حسابك عند ميتا مع وقت الإرسال،
@@ -793,9 +908,10 @@
 
                 <h3>عندما يربط صاحب الحساب تيك توك</h3>
                 <p>
-                    هذا الجزء يخصّ بيانات صاحب الحساب نفسه. تطلب الأداة من تيك توك صلاحيتين فقط، لا
+                    هذا الجزء يخصّ بيانات صاحب الحساب نفسه. تطلب الأداة من تيك توك ثلاث صلاحيات، لا
                     غير: <span class="code" lang="en" dir="ltr">user.info.basic</span>
-                    و<span class="code" lang="en" dir="ltr">video.upload</span>. ولا تسمح أيٌّ منهما
+                    و<span class="code" lang="en" dir="ltr">video.upload</span>
+                    و<span class="code" lang="en" dir="ltr">video.publish</span>. ولا تسمح أيٌّ منها
                     بقراءة التعليقات أو الرسائل أو أي حساب آخر، فلا تصلنا أي بيانات عن مشاهدي تيك توك
                     إطلاقاً.
                 </p>
@@ -809,18 +925,45 @@
                     <li>
                         <strong>يُخزَّن مشفّراً:</strong> رمزا الوصول والتحديث
                         (<bdi lang="en" dir="ltr">OAuth</bdi>) اللذان يُصدرهما تيك توك، مشفّرَين أثناء
-                        التخزين بخوارزمية AES-256-GCM (القسم 7).
+                        التخزين بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi> (القسم 7).
                     </li>
                     <li>
-                        <strong>الفيديوهات التي يجدولها صاحب الحساب</strong> وأوصافها تُخزَّن لتُرفَع في
-                        موعدها، وتُرفَع إلى تيك توك عبر <span class="code" lang="en" dir="ltr">Content Posting API</span>
-                        (صلاحية <span class="code" lang="en" dir="ltr">video.upload</span>) إلى صندوق
-                        الوارد في حسابه على تيك توك، ويُرسَل الوصف معها حيث يقبله تيك توك. يراجع صاحب الحساب كل فيديو وينشره بنفسه من تطبيق
-                        تيك توك؛ لا يُنشَر شيء علناً نيابةً عنه.
+                        <strong>يُقرأ ولا يُخزَّن:</strong> قبل كل نشر مباشر تقرأ الأداة من تيك توك
+                        إعدادات النشر في الحساب — اسمه، ومَن يُسمح بأن يشاهد منشوراته، وهل أوقف صاحبه
+                        التعليقات أو الثنائي (<bdi lang="en" dir="ltr">Duet</bdi>) أو الدمج
+                        (<bdi lang="en" dir="ltr">Stitch</bdi>)، وأطول مدة فيديو مسموحة له — لتعرض
+                        خيارات المنشور، ثم لتتحقّق منها مجدداً وقت النشر.
                     </li>
                     <li>
-                        <strong>نتائج حالة النشر:</strong> ما يُبلغ به تيك توك عن كل عملية رفع — قيد
-                        المعالجة، أو وصل إلى صندوق الوارد، أو فشل — مع نصّ أي خطأ أعاده تيك توك.
+                        <strong>الفيديوهات والصور التي يجدولها صاحب الحساب</strong> وأوصافها تُخزَّن
+                        لتُنشَر في موعدها. ولا تقبل واجهة تيك توك موعداً للنشر، فيخرج المنشور حين يعمل
+                        طابور الأداة بعد موعده، لا بدقّة الدقيقة. بصلاحية
+                        <span class="code" lang="en" dir="ltr">video.publish</span> يُنشَر مباشرةً على
+                        حسابه في تيك توك («النشر المباشر»)؛ وبصلاحية
+                        <span class="code" lang="en" dir="ltr">video.upload</span> يُرسَل إلى مسودّاته
+                        في تيك توك (صندوق الوارد)، فيُكمله وينشره بنفسه من تطبيق تيك توك. ملف الفيديو
+                        ترسله الأداة إلى تيك توك، أمّا الصور فيجلبها تيك توك بنفسه من عنوان الأداة على
+                        الويب، وهو عنوان مُوثَّق في بوابة مطوّري تيك توك.
+                    </li>
+                    <li>
+                        <strong>إلى أن تعتمد تيك توك التطبيق</strong> بعد مراجعته، يُنشَر كل منشور مباشر
+                        بخصوصية «أنا فقط»، ولا يقبله تيك توك إلا والحساب نفسه مضبوط على «خاص». فلا
+                        يُنشَر شيء علناً نيابةً عن صاحب الحساب قبل ذلك.
+                    </li>
+                    <li>
+                        <strong>إعدادات كل منشور مباشر:</strong> مَن يمكنه مشاهدته، والسماح بالتعليقات
+                        والثنائي والدمج، والإفصاح عن المحتوى التجاري، وموافقة صاحب الحساب الصريحة على
+                        النشر — يختارها كلها بنفسه في الأداة قبل جدولة المنشور. أمّا منشورات «استوديو
+                        الكاروسيل» فتحمل إعدادات ثابتة: «أنا فقط» إلى أن تعتمد تيك توك التطبيق و«الجميع»
+                        بعد ذلك، والتعليقات مسموحة، ووسم الترويج لعلامته التجارية؛ وضغطته لإرسالها هي
+                        موافقته. وإعدادات المسودّة يختارها في تيك توك نفسه.
+                    </li>
+                    <li>
+                        <strong>نتائج حالة النشر:</strong> ما يُبلغ به تيك توك عن كل منشور — قيد
+                        المعالجة، أو وصل إلى المسودّات، أو نُشر، أو فشل — مع نصّ أي خطأ أعاده تيك توك،
+                        ومعرّف المنشور على تيك توك إن كان علنياً. تصل الحالة عبر إشعارات تيك توك
+                        (<span class="code" lang="en" dir="ltr">post.publish.*</span>)، ويسأل عنها
+                        طابور الأداة أيضاً في كل مرة يعمل.
                     </li>
                 </ul>
                 <p>
@@ -828,7 +971,7 @@
                     اتصال تيك توك عندما يفصله صاحب الحساب</strong> — الخطوات في
                     <a href="/data-deletion">صفحة حذف البيانات</a>. أمّا المنشورات المجدولة التي
                     أنشأها صاحب الحساب في لوحة التحكم، ومنها حالة نشرها على تيك توك، فتبقى فيها إلى أن
-                    يحذفها بنفسه، كما هو الحال مع منشورات إنستغرام وفيسبوك.
+                    يحذفها بنفسه، كما هو الحال مع منشورات إنستجرام وفيسبوك.
                 </p>
 
                 <h2>2. لماذا نستخدم هذه البيانات</h2>
@@ -837,7 +980,7 @@
                     <li>إرسال الردّ الآلي إليك، علناً على التعليق أو في رسالة خاصة.</li>
                     <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
-                    <li>رفع الفيديوهات التي يجدولها صاحب الحساب إلى صندوق الوارد في حسابه على تيك توك، وإظهار ما إذا نجحت كل عملية رفع.</li>
+                    <li>نشر الفيديوهات وكاروسيلات الصور التي يجدولها صاحب الحساب على حسابه في تيك توك، أو إرسالها إلى مسودّاته فيه، وإظهار ما أبلغ به تيك توك عن كل منشور.</li>
                     <li>تشخيص الأعطال: معرفة سبب فشل ردّ لم يصل.</li>
                 </ul>
 
@@ -845,7 +988,7 @@
                 <p>
                     الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي، لا إنسان. لتوليد الردّ،
                     يُرسَل <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
-                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">واجهة Gemini API</a>
+                    <a href="https://ai.google.dev/gemini-api/terms" target="_blank" rel="noopener noreferrer">واجهة <bdi lang="en" dir="ltr">Gemini API</bdi></a>
                     من جوجل.
                 </p>
                 <p>
@@ -883,7 +1026,9 @@
                         <strong>اتصال تيك توك</strong> — معرّف <span class="code" lang="en" dir="ltr">open_id</span>
                         والاسم المعروض ورابط الصورة الرمزية والرمزان: يبقى ما دام تيك توك مربوطاً،
                         ويُحذف عندما يفصله صاحب الحساب، سواء من الإعدادات في لوحة التحكم أو من «إدارة
-                        أذونات التطبيقات» في تيك توك نفسه.
+                        أذونات التطبيقات» في تيك توك نفسه. لكن سجلّ التدقيق في الأداة — وهو سجلّ
+                        للإجراءات الإدارية لا تحذف الأداة منه شيئاً — يحتفظ بقيد لكل مرة رُبط فيها تيك
+                        توك، فيه الاسم المعروض للحساب والصلاحيات الممنوحة.
                     </li>
                 </ul>
 
@@ -897,25 +1042,26 @@
                     </li>
                     <li>
                         <strong>تيك توك</strong> — فقط إن ربطه صاحب الحساب. منه تأتي بيانات الملف
-                        الأساسية للحساب، وإليه تُرفَع الفيديوهات التي يجدولها صاحب الحساب وأوصافها. لا يُرسَل إلى
+                        الأساسية للحساب وإعدادات النشر فيه، وإليه تُنشَر الفيديوهات والصور التي يجدولها
+                        صاحب الحساب وأوصافها، أو تُرسَل إلى مسودّاته. لا يُرسَل إلى
                         تيك توك أي شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك.
                         <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية تيك توك</a>.
                     </li>
                     <li>
-                        <strong>جوجل</strong> — تتلقّى واجهة Gemini API نصوص الرسائل الخاصة كما
+                        <strong>جوجل</strong> — تتلقّى واجهة <bdi lang="en" dir="ltr">Gemini API</bdi> نصوص الرسائل الخاصة كما
                         هو موضّح في القسم 3.
                         <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية جوجل</a>.
                     </li>
                     <li>
-                        <strong>Supabase</strong> — استضافة قاعدة البيانات التي يُخزَّن فيها كل ما
+                        <strong><bdi lang="en" dir="ltr">Supabase</bdi></strong> — استضافة قاعدة البيانات التي يُخزَّن فيها كل ما
                         سبق.
-                        <a href="https://supabase.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية Supabase</a>.
+                        <a href="https://supabase.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Supabase</bdi></a>.
                     </li>
                     <li>
-                        <strong>Vercel</strong> — استضافة التطبيق. تتلقّى Vercel أيضاً سجلّات
+                        <strong><bdi lang="en" dir="ltr">Vercel</bdi></strong> — استضافة التطبيق. تتلقّى <bdi lang="en" dir="ltr">Vercel</bdi> أيضاً سجلّات
                         التشغيل، وهي تحتوي على أسماء المستخدمين ومعرّفات ميتا وحالات الأخطاء،
                         ولا تحتوي على نصوص الرسائل.
-                        <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية Vercel</a>.
+                        <a href="https://vercel.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية <bdi lang="en" dir="ltr">Vercel</bdi></a>.
                     </li>
                 </ul>
 
@@ -927,14 +1073,14 @@
 
                 <h2>7. كيف تُحفَظ البيانات</h2>
                 <ul>
-                    <li>كل الاتصالات تجري عبر HTTPS.</li>
+                    <li>كل الاتصالات تجري عبر <bdi lang="en" dir="ltr">HTTPS</bdi>.</li>
                     <li>
                         كل إشعار وارد من ميتا يُتحقَّق من توقيعه قبل معالجته، فلا يمكن لطرف آخر
                         أن يُدخل أحداثاً مزيّفة إلى النظام.
                     </li>
                     <li>
                         رمز وصول ميتا الخاص بصاحب الحساب، ورمزا الوصول والتحديث الخاصان بتيك توك،
-                        <strong>تُشفَّر قبل التخزين</strong> بخوارزمية AES-256-GCM، ومفتاح التشفير
+                        <strong>تُشفَّر قبل التخزين</strong> بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi>، ومفتاح التشفير
                         محفوظ خارج قاعدة البيانات.
                     </li>
                     <li>لوحة التحكم — وهي المكان الوحيد الذي تُقرأ منه المحادثات — محميّة بكلمة مرور.</li>
@@ -952,8 +1098,17 @@
                 </p>
 
                 <h2>9. للتواصل</h2>
+                <p>
+                    يُشغّل «أوتوريبلاي برو» الأمير منصور (<bdi lang="en" dir="ltr">ElAmir Mansour</bdi>)،
+                    وهو المتحكّم في البيانات الموصوفة في هذه الصفحة.
+                </p>
                 <p>لأي سؤال عن هذه السياسة أو عن بياناتك:</p>
                 <ul>
+                    <li>
+                        راسله على
+                        <a href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>؛
+                        أو
+                    </li>
                     <li>ردّ على الحساب نفسه الذي راسلك على إنستجرام أو فيسبوك؛ أو</li>
                     <li>
                         افتح موضوعاً على
@@ -961,20 +1116,10 @@
                         — وهو علني، فلا تكتب فيه معلومات شخصية.
                     </li>
                 </ul>
-
-                <div class="todo">
-                    <p>
-                        <strong>ملاحظة تحريرية — على مُشغّل الخدمة إكمالها:</strong>
-                    </p>
-                    <ul>
-                        <li>بريد إلكتروني للتواصل بشأن الخصوصية وطلبات الحذف: <span class="code">[غير مُحدَّد بعد]</span></li>
-                        <li>اسم الشخص أو الجهة التي تُشغّل الخدمة، والدولة التي يسري قانونها: <span class="code">[غير مُحدَّد بعد]</span></li>
-                    </ul>
-                    <p>
-                        لم يُذكر في هذه الصفحة أي أساس قانوني للمعالجة ولا أي قانون واجب التطبيق،
-                        لأن شيئاً من ذلك غير موجود في الكود ولا يصحّ اختراعه.
-                    </p>
-                </div>
+                <!-- OWNER, NOT FOR PUBLICATION: the country whose law applies has not
+                     been supplied, so no governing law, jurisdiction or legal basis for
+                     processing is stated on this page, and none may be invented. When it
+                     is decided, add it here in both languages. -->
             </article>
 
             <hr class="divider">
@@ -982,16 +1127,17 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Privacy Policy</h1>
-                <p class="stamp">Last updated: 23 September 2026</p>
+                <p class="stamp">Last updated: 25 September 2026</p>
 
                 <p>
                     AutoReply Pro is a tool operated by the owner of a single Instagram and
                     Facebook account. With the people who comment on or message that account, it
                     does two things: it replies automatically to comments that match a keyword the
                     owner configured, and it answers direct messages sent to the account. If the
-                    owner also connects a TikTok account, it uploads the videos the owner schedules
-                    to it, and does nothing else there. It runs no advertising or marketing
-                    targeting, and it does not sell data.
+                    owner also connects a TikTok account, it posts the videos and photo carousels
+                    the owner schedules to that account, or sends them to its drafts, and does
+                    nothing else there. It runs no advertising or marketing targeting, and it does
+                    not sell data.
                 </p>
                 <p>
                     This page describes what happens to <em>your</em> data — as someone who
@@ -1006,8 +1152,9 @@
                     <span class="code">AutoResponseBot</span>, which is the name Meta holds;
                     <strong>AutoReply Pro</strong> is the name of the product itself. TikTok
                     access goes through a separate app registered on TikTok for Developers, using
-                    TikTok's official <span class="code">Login Kit</span> and
-                    <span class="code">Content Posting API</span>.
+                    TikTok's official <span class="code">Login Kit</span>,
+                    <span class="code">Content Posting API</span> and
+                    <span class="code">Webhooks</span>.
                 </p>
 
                 <div class="callout">
@@ -1033,9 +1180,10 @@
                         the delivery status, and the text of any error Meta returned.
                     </li>
                     <li>
-                        <strong>The text of your comment is not stored.</strong> It is matched
-                        against keywords in memory while the event is processed and then
-                        discarded; no database column holds it.
+                        <strong>The text of your comment is not kept in the activity log.</strong> It
+                        is held in the processing queue, inside the copy of the event Meta sent:
+                        deleted automatically 7 days after it has been processed, but kept until
+                        it is removed by hand if processing failed.
                     </li>
                     <li>
                         <strong>Stored for 48 hours:</strong> your Meta-scoped account ID and a
@@ -1070,9 +1218,10 @@
 
                 <h3>When the account owner connects TikTok</h3>
                 <p>
-                    This part is about the account owner's own data. The app asks TikTok for two
-                    scopes and no others: <span class="code">user.info.basic</span> and
-                    <span class="code">video.upload</span>. Neither lets it read comments,
+                    This part is about the account owner's own data. The app asks TikTok for three
+                    scopes and no others: <span class="code">user.info.basic</span>,
+                    <span class="code">video.upload</span> and
+                    <span class="code">video.publish</span>. None of them lets it read comments,
                     messages, or anyone else's account, so no TikTok viewer's data reaches us at
                     all.
                 </p>
@@ -1088,17 +1237,47 @@
                         token TikTok issues, encrypted at rest with AES-256-GCM (section 7).
                     </li>
                     <li>
-                        <strong>The videos the owner schedules</strong>, and their captions, are
-                        stored so they can be uploaded at the scheduled time, and are uploaded to
-                        TikTok through the Content Posting API
-                        (<span class="code">video.upload</span>) into the owner's TikTok inbox,
-                        with the caption sent along where TikTok accepts it. The owner reviews and posts each one in the TikTok
-                        app; nothing is posted publicly on their behalf.
+                        <strong>Read, not stored:</strong> before every direct post, the app reads
+                        the account's posting options from TikTok — its name, who its posts may be
+                        shown to, whether its owner has switched off comments, Duet or Stitch, and
+                        the longest video it may post — to offer the post's settings, and to check
+                        them again at posting time.
+                    </li>
+                    <li>
+                        <strong>The videos and photos the owner schedules</strong>, and their
+                        captions, are stored so they can go out at the scheduled time. TikTok's API
+                        takes no publish time, so a post goes out when the app's queue next runs
+                        after that time, not to the minute. With
+                        <span class="code">video.publish</span> it is posted straight to the owner's
+                        TikTok account (Direct Post); with <span class="code">video.upload</span> it
+                        is sent to their TikTok drafts (inbox), where they finish and post it in the
+                        TikTok app. The app sends a video's file to TikTok; photos are fetched by
+                        TikTok itself from the app's own web address, which is verified in TikTok's
+                        developer portal.
+                    </li>
+                    <li>
+                        <strong>Until TikTok approves the app</strong> after its review, every
+                        direct post is private (Only me), and TikTok accepts one only while the
+                        account itself is set to private. Nothing is posted publicly on the owner's
+                        behalf before then.
+                    </li>
+                    <li>
+                        <strong>Each direct post's settings:</strong> who can see it, whether
+                        comments, Duet and Stitch are allowed, the commercial-content disclosure,
+                        and the owner's explicit consent to post it — all chosen by the owner in the
+                        app before the post is scheduled. Carousel Studio posts carry fixed
+                        settings instead: Only me until TikTok approves the app and Everyone after,
+                        comments allowed, and labelled as promoting the owner's own brand; the
+                        owner's click to send them is the consent. A draft's settings are chosen in
+                        TikTok itself.
                     </li>
                     <li>
                         <strong>Publish status results:</strong> what TikTok reports back about each
-                        upload — still processing, delivered to the inbox, or failed — with the
-                        text of any error TikTok returned.
+                        post — still processing, delivered to the drafts, published, or failed —
+                        with the text of any error TikTok returned, and TikTok's post ID if the
+                        post is public. The status arrives through TikTok's webhooks
+                        (<span class="code">post.publish.*</span>), and the app's queue also asks
+                        for it each time it runs.
                     </li>
                 </ul>
                 <p>
@@ -1116,7 +1295,7 @@
                     <li>To send you the automated reply, publicly under the comment or as a direct message.</li>
                     <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
-                    <li>To upload the videos the account owner schedules to their own TikTok inbox, and to show them whether each upload went through.</li>
+                    <li>To post the videos and photo carousels the account owner schedules to their own TikTok account, or send them to its drafts, and to show them what TikTok reported about each one.</li>
                     <li>To diagnose faults: to find out why a reply that should have arrived did not.</li>
                 </ul>
 
@@ -1166,7 +1345,10 @@
                         <strong>The TikTok connection</strong> — the <span class="code">open_id</span>,
                         display name, avatar URL, and both tokens: kept while TikTok is connected,
                         and deleted when the owner disconnects it, either from Settings in the
-                        dashboard or from "Manage app permissions" in TikTok itself.
+                        dashboard or from "Manage app permissions" in TikTok itself. The app's audit
+                        log, though — a record of administrative actions that the app never clears —
+                        keeps an entry for each time TikTok was connected, with the account's display
+                        name and the scopes granted.
                     </li>
                 </ul>
 
@@ -1180,8 +1362,9 @@
                     </li>
                     <li>
                         <strong>TikTok</strong> — only if the account owner connects it. The
-                        account's basic profile comes from TikTok, and the owner's scheduled videos
-                        and their captions are uploaded to it. Nothing about people who comment or message on Instagram
+                        account's basic profile and posting options come from TikTok, and the
+                        owner's scheduled videos, photos and captions are posted to it, or sent to
+                        its drafts. Nothing about people who comment or message on Instagram
                         or Facebook is sent to TikTok.
                         <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">TikTok's privacy policy</a>.
                     </li>
@@ -1237,8 +1420,13 @@
                 </p>
 
                 <h2>9. Contact</h2>
+                <p>
+                    AutoReply Pro is operated by ElAmir Mansour, who is the data controller for the
+                    data described on this page.
+                </p>
                 <p>For any question about this policy or about your data:</p>
                 <ul>
+                    <li>Email <a href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>; or</li>
                     <li>Reply to the same Instagram or Facebook account that messaged you; or</li>
                     <li>
                         Open an issue on the
@@ -1246,19 +1434,9 @@
                         — it is public, so do not put personal information in it.
                     </li>
                 </ul>
-
-                <div class="todo">
-                    <p><strong>Editorial note — for the operator to complete:</strong></p>
-                    <ul>
-                        <li>A contact email address for privacy and deletion requests: <span class="code">[not yet supplied]</span></li>
-                        <li>The name of the person or entity operating the service, and the country whose law applies: <span class="code">[not yet supplied]</span></li>
-                    </ul>
-                    <p>
-                        No legal basis for processing and no governing law are stated anywhere on
-                        this page, because neither could be established from the code and neither
-                        may be invented.
-                    </p>
-                </div>
+                <!-- OWNER, NOT FOR PUBLICATION: see the matching note at the end of the
+                     Arabic section 9. No governing law, jurisdiction or legal basis is
+                     stated, because the country whose law applies has not been supplied. -->
             </article>
 
         </main>
@@ -1266,28 +1444,30 @@
         <!-- ═══════════════════════════════════════════════════════════════════
              SHARED SITE CHROME · FOOTER
              ═══════════════════════════════════════════════════════════════════
-             MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES, on the same
+             MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES, on the same
              terms as the navbar above and the CSS block at the end of <style>.
 
-             It carries every public page plus the dashboard and the repo, so
-             the navigation graph is complete from the bottom of any page as
-             well as from the top: four pages, and from each of them all three
-             others plus /dashboard. Before this, /pricing reached neither home
+             It carries every public page plus the dashboard, the help centre,
+             the landing page's own sections and the repo, so the navigation
+             graph is complete from the bottom of any page as well as from the
+             top. Before the first version of it, /pricing reached neither home
              nor sign-in, and /privacy and /data-deletion reached only each
              other.
 
-             THE STRUCTURE IS NEW. The same links used to be one flat row above
-             one legal line — the correct content in a footer too thin to carry
-             it, at the bottom of two documents a visitor reaches from Meta's
-             own settings link. They are now three named groups under a
-             masthead, with the wordmark repeated so the bottom of the page
-             says whose page it is. /privacy and /data-deletion sit together
-             under "Policies", which is also what replaced the four-card
-             "Where to go next" grid that used to duplicate this footer on the
-             landing page.
+             FIVE NAMED GROUPS under a masthead, with the wordmark repeated so
+             the bottom of the page says whose page it is: Product, Resources,
+             Legal, Follow and Contact. Contact is LAST in the source on
+             purpose: the address is the widest item in the footer, so at 375px
+             it takes a row of its own, and a full-row item anywhere earlier
+             would leave a hole in the two-column grid above it.
+             The Product and Resources links into the landing page use
+             language-neutral fragments (/#faq, not /#faq-en) — see the CSS
+             block for how landing.html resolves them.
 
-             THE ONE INTENDED DIFFERENCE between the four copies is
-             `aria-current="page"` on this page's own link.
+             THE ONE INTENDED DIFFERENCE between the five copies is
+             `aria-current="page"` on this page's own link: the wordmark here
+             on landing.html (it links to `/`), Pricing on pricing.html, and
+             the page's own Legal link on the other three.
              ═══════════════════════════════════════════════════════════════════ -->
         <footer class="pagefoot">
             <div class="foot-top">
@@ -1296,39 +1476,64 @@
                     <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
                 </a>
                 <p class="foot-what">
-                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة، على إنستجرام وفيسبوك، بالعربية أولاً.</bdi>
-                    <bdi class="t-en" lang="en" dir="ltr">A comment becomes a private conversation, on Instagram and Facebook, Arabic-first.</bdi>
+                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة على إنستجرام وفيسبوك، ونشرٌ مجدول يصل تيك توك أيضاً، واستوديو للكاروسيل. بالعربية أولاً.</bdi>
+                    <bdi class="t-en" lang="en" dir="ltr">Comments into private conversations on Instagram and Facebook, scheduled posts that reach TikTok too, and a Carousel Studio. Arabic-first.</bdi>
                 </p>
             </div>
 
             <div class="foot-cols">
                 <nav aria-labelledby="foot-h-product">
                     <p class="foot-h" id="foot-h-product"><bdi class="t-ar" lang="ar">المنتج</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Product</bdi></p>
-                    <a href="/"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
+                    <a href="/#features"><bdi class="t-ar" lang="ar">الميزات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Features</bdi></a>
+                    <a href="/#carousel-studio"><bdi class="t-ar" lang="ar">استوديو الكاروسيل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Carousel Studio</bdi></a>
+                    <a href="/#tiktok"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></a>
                     <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
-                    <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
+                    <a href="/dashboard"><bdi class="t-ar" lang="ar">تسجيل الدخول</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Sign in</bdi></a>
                 </nav>
-                <nav aria-labelledby="foot-h-policies">
-                    <p class="foot-h" id="foot-h-policies"><bdi class="t-ar" lang="ar">السياسات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Policies</bdi></p>
-                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
-                    <a href="/privacy" aria-current="page"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
-                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
-                </nav>
-                <nav aria-labelledby="foot-h-source">
-                    <p class="foot-h" id="foot-h-source"><bdi class="t-ar" lang="ar">المصدر</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source</bdi></p>
+                <nav aria-labelledby="foot-h-resources">
+                    <p class="foot-h" id="foot-h-resources"><bdi class="t-ar" lang="ar">الموارد</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Resources</bdi></p>
+                    <a href="/dashboard#/help"><bdi class="t-ar" lang="ar">مركز المساعدة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Help Center</bdi></a>
+                    <a href="/#how-it-works"><bdi class="t-ar" lang="ar">كيف يعمل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">How it works</bdi></a>
+                    <a href="/#studio-how"><bdi class="t-ar" lang="ar">كيف يعمل الاستوديو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">How the Studio works</bdi></a>
+                    <a href="/#faq"><bdi class="t-ar" lang="ar">الأسئلة الشائعة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">FAQ</bdi></a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
                 </nav>
+                <nav aria-labelledby="foot-h-legal">
+                    <p class="foot-h" id="foot-h-legal"><bdi class="t-ar" lang="ar">الشؤون القانونية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Legal</bdi></p>
+                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
+                    <a href="/privacy" aria-current="page"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
+                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف البيانات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Data deletion</bdi></a>
+                </nav>
+                <div class="foot-follow" role="group" aria-labelledby="foot-h-follow">
+                    <p class="foot-h" id="foot-h-follow"><bdi class="t-ar" lang="ar">تابعنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Follow</bdi></p>
+                    <div class="foot-social">
+                        <a href="https://www.instagram.com/elamir.mansour/" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.6" fill="currentColor"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">إنستجرام</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Instagram</bdi></span></a>
+                        <a href="https://www.tiktok.com/@elamir_mansour" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></span></a>
+                        <a href="https://www.facebook.com/ElAmirMahmoudMansour" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">فيسبوك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Facebook</bdi></span></a>
+                    </div>
+                    <p class="foot-note"><bdi class="t-ar" lang="ar" dir="rtl">حسابات المؤسس، وعليها يُنشر ما يصنعه التطبيق.</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">The founder's accounts, where the app's own work is published.</bdi></p>
+                </div>
+                <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
+                    <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
+                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
+                </div>
+            </div>
+
+            <div class="foot-base">
+                <p class="foot-copy">© 2026 <bdi class="t-ar" lang="ar">أوتوريبلاي برو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">AutoReply Pro</bdi></p>
+                <div class="langswitch" role="group" aria-label="اللغة · Language">
+                    <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
+                    <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
+                </div>
             </div>
             <p class="foot-legal">
-                <!-- These two were plain <span>s with no lang or dir on three of
-                     the four pages. Inside an RTL page an English sentence's
-                     final full stop is a neutral character, so it was reordered
-                     to the other end of the line and the footer rendered
-                     ".by Meta". <bdi> is an isolate AND an element, which is why
-                     it is used here rather than unicode-bidi: isolate, which the
-                     W3C notes may be ignored. -->
-                <bdi class="t-ar" lang="ar" dir="rtl">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة <bdi lang="en" dir="ltr">Meta</bdi>، ولا ترتبط هذه الأداة بها.</bdi>
-                <bdi class="t-en" lang="en" dir="ltr">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</bdi>
+                <!-- <bdi>, not <span>, with lang and dir: inside an RTL page an
+                     English sentence's final full stop is a neutral character and
+                     is reordered to the other end of the line — which is how this
+                     line once rendered ".by Meta". -->
+                <bdi class="t-ar" lang="ar" dir="rtl">إنستجرام وفيسبوك وتيك توك علاماتٌ تجارية مملوكة لأصحابها، ولا ترتبط هذه الأداة بشركة <bdi lang="en" dir="ltr">Meta</bdi> ولا بتيك توك، ولا تحظى بتأييد أيٍّ منهما.</bdi>
+                <bdi class="t-en" lang="en" dir="ltr">Instagram, Facebook and TikTok are trademarks of their respective owners. AutoReply Pro is not affiliated with, or endorsed by, Meta or TikTok.</bdi>
             </p>
         </footer>
     </div>
