@@ -2420,11 +2420,14 @@ const PostsPage = {
         return platform === 'instagram' || platform === 'both';
     },
 
-    /** Whatever a row carries, top-level or in `platform_options`, as the composer's shape. */
+    /**
+     * A row's reach levers as the composer's shape. The server keeps them in `meta_options`
+     * (migration v22), never in `platform_options`, which is TikTok's.
+     */
     reachOptionsOf(post) {
-        const po = post && post.platform_options && typeof post.platform_options === 'object' ? post.platform_options : {};
-        const pick = (k) => (post && post[k] !== undefined && post[k] !== null ? post[k] : po[k]);
-        const trial = pick('trial_reel') || (po.trial_params && po.trial_params.graduation_strategy ? { graduation: po.trial_params.graduation_strategy } : null);
+        const mo = post && post.meta_options && typeof post.meta_options === 'object' ? post.meta_options : {};
+        const pick = (k) => (post && post[k] !== undefined && post[k] !== null ? post[k] : mo[k]);
+        const trial = pick('trial_reel');
         return {
             alt_text: typeof pick('alt_text') === 'string' ? pick('alt_text') : '',
             alt_texts: Array.isArray(pick('alt_texts')) ? pick('alt_texts').map((a) => (typeof a === 'string' ? a : '')) : [],

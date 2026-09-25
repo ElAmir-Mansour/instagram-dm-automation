@@ -26,8 +26,8 @@
  *
  * ─── Units the contract leaves open, pinned here ────────────────────────────
  *   - `engagement_rate` (KPI, PostInsight) and `by_type[].avg_engagement` are read as a RATIO
- *     (0.042 = 4.2%). A value above 1 cannot be a ratio of reach, so it is taken as a percentage
- *     already — see `ratePercent`.
+ *     (0.042 = 4.2%), always: the server computes interactions / reach. On a tiny reach a ratio can
+ *     pass 1 (6 interactions on 5 accounts is 120%), so nothing above 1 is reinterpreted.
  *   - Best times are built HERE from our own posts, in the tenant's time zone
  *     (`postsHeatGrid`): Instagram's online_followers is empty for small accounts, and a grid
  *     whose zone is not in the contract cannot be labelled with local hours honestly. The
@@ -36,8 +36,9 @@
  *   - Under 100 followers Instagram withholds the daily follower series and its change. That is
  *     a calm note ("after 100 followers"), never an error or an empty chart.
  *   - Watch time is `metrics.avg_watch_time_ms` (or Meta's `ig_reels_avg_watch_time`), in ms.
- *   - Reach by follow_type (FOLLOWER / NON_FOLLOWER) is read from `overview.reach_by_follow_type`,
- *     as an object or as `[{ follow_type, value }]` — see `followSplit` for every shape accepted.
+ *   - Reach by follow_type is `overview.audience_split.reach` ({ followers, non_followers }),
+ *     Instagram's FOLLOWER / NON_FOLLOWER split over the window — see `followSplit`.
+ *   - The coach's `post_notes` ({ media_id, note }) are the Posts table's "why it worked" line.
  *
  * ─── The coach keeps going when you leave ───────────────────────────────────
  * POST /coach is one request that can take most of a minute. It belongs to this object, not to
@@ -549,11 +550,11 @@ const GrowthPage = {
         return followers !== null && followers < this.SMALL_ACCOUNT_FOLLOWERS;
     },
 
-    /** A rate as a percentage: a ratio (0.042) or, above 1, a percentage already (4.2). */
+    /** A rate as a percentage. The API sends a ratio (0.042 = 4.2%), which can pass 1 on a tiny reach. */
     ratePercent(value) {
         const n = this.num(value);
         if (n === null) return null;
-        return n <= 1 ? n * 100 : n;
+        return n * 100;
     },
 
     _decimal: null,
@@ -995,10 +996,7 @@ const GrowthPage = {
             }
             return null;
         };
-        const candidates = [
-            pick(o.reach_by_follow_type), pick(o.follow_type), pick(k.reach_by_follow_type),
-            pick({ followers: k.reach_followers !== undefined ? k.reach_followers : k.reach_follower, non_followers: k.reach_non_followers !== undefined ? k.reach_non_followers : k.reach_non_follower }),
-        ];
+        const candidates = [pick(o.audience_split && o.audience_split.reach)];
         const found = candidates.find((c) => c && this.num(c.followers) !== null && this.num(c.nonFollowers) !== null);
         if (!found) return null;
         const followers = Math.max(0, found.followers);
@@ -1152,6 +1150,7 @@ const GrowthPage = {
 
     postIdentity(post) {
         const line = this.captionLine(post.caption);
+        const note = this.coachNote(post);
         const link = safeUrl(post.permalink);
         const where = this.platformKey(post.platform) === 'facebook' ? t('common.facebook') : t('common.instagram');
         return html`
@@ -1159,6 +1158,7 @@ const GrowthPage = {
                 ${this.thumbMarkup(post)}
                 <span class="growth-post-text">
                     <span class="growth-post-caption user-content" dir="auto">${line || t('growth.posts.noCaption')}</span>
+                    ${note ? html`<span class="growth-post-note" dir="auto" title="${t('growth.posts.coachNote')}"><i data-lucide="lightbulb" aria-hidden="true"></i><span>${note}</span></span>` : ''}
                     <span class="growth-post-meta">
                         <span class="chip">${this.typeLabel(this.typeKey(post.media_type))}</span>${this.platformTag(post.platform)}
                         ${link ? html`<a class="growth-permalink" href="${link}" target="_blank" rel="noopener noreferrer">
@@ -1623,7 +1623,19 @@ const GrowthPage = {
             experiments: (Array.isArray(r.experiments) ? r.experiments : [])
                 .filter((e) => e && typeof e === 'object' && (text(e.hypothesis) || text(e.how)))
                 .map((e) => ({ hypothesis: text(e.hypothesis), how: text(e.how), measure: text(e.measure) })),
+            // "Why it worked", one line per post, keyed by the platform's media id.
+            notes: (Array.isArray(r.post_notes) ? r.post_notes : [])
+                .filter((n) => n && typeof n === 'object' && text(String(n.media_id || '')) && text(n.note))
+                .map((n) => ({ media_id: String(n.media_id).trim(), note: text(n.note) })),
         };
+    },
+
+    /** The coach's note for one post, or ''. */
+    coachNote(post) {
+        const notes = this.coach && Array.isArray(this.coach.notes) ? this.coach.notes : [];
+        const id = post && post.media_id !== undefined && post.media_id !== null ? String(post.media_id) : '';
+        const hit = id ? notes.find((n) => n.media_id === id) : null;
+        return hit ? hit.note : '';
     },
 
     /**
@@ -1732,6 +1744,7 @@ const GrowthPage = {
             if (tenant === this._tenantEpoch) {
                 this.stopCoachTicker();
                 this.paintRegion('growth-coach', this.coachMarkup());
+                if (this.coachState === 'ready') this.paintRegion('growth-posts', this.postsMarkup());
             }
         }
     },

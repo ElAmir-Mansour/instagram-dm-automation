@@ -1025,7 +1025,9 @@ function growthOverview(g, days) {
             avg_views: t.measured ? Math.round(t.views / t.measured) : null,
             avg_engagement: t.measured ? Math.round((t.rate / t.measured) * 10000) / 10000 : null,
         })),
-        reach_by_follow_type: g.followSplit,
+        audience_split: g.followSplit
+            ? { reach: { followers: g.followSplit.FOLLOWER, non_followers: g.followSplit.NON_FOLLOWER }, views: { followers: null, non_followers: null } }
+            : null,
     };
 }
 
@@ -1079,6 +1081,10 @@ function coachAnswer(g) {
         experiments: [
             { hypothesis: 'نص كبير على الشاشة في الثانية الأولى يرفع متوسط المشاهدة.', how: 'انشر ريلين متشابهين: واحد بنص افتتاحي وواحد بدونه.', measure: 'متوسط المشاهدة ونسبة من شاهد أكثر من ٣ ثوانٍ.' },
             { hypothesis: 'النشر الساعة ٩ مساءً يصل أكثر من ١ ظهراً.', how: 'انشر ٦ منشورات في كل وقت خلال ٣ أسابيع.', measure: 'متوسط الوصول لكل وقت.' },
+        ],
+        post_notes: [
+            { media_id: '17894000000', note: 'فتح بالنتيجة في أول ثانية، فبقي الناس أطول.' },
+            { media_id: '17894007919', note: 'سؤال في آخر النص جاب تعليقات أكثر من المعتاد.' },
         ],
     };
 }

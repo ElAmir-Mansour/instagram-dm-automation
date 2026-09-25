@@ -259,7 +259,7 @@ const fullOverview = (): Json => ({
         { type: 'REELS', posts: 10, avg_views: 128, avg_engagement: 0.019 },
         { type: 'CAROUSEL_ALBUM', posts: 10, avg_views: 39, avg_engagement: 0.123 },
     ],
-    reach_by_follow_type: { FOLLOWER: 17, NON_FOLLOWER: 1704 },
+    audience_split: { reach: { followers: 17, non_followers: 1704 }, views: { followers: 144, non_followers: 2202 } },
 });
 
 const fullSettings = (): Json => ({
@@ -503,6 +503,22 @@ describe('GrowthPage — sorting and filtering the posts', () => {
         s.Page.destroy();
     });
 
+    it('shows the coach’s "why it worked" note on the post it names, and on no other', () => {
+        const s = loadGrowth('en');
+        s.Page.coach = s.Page.normalizeCoach({
+            summary: 'x',
+            post_notes: [{ media_id: '1789', note: 'Opened on the result.' }, { media_id: '', note: 'no id' }, { note: 'no id either' }],
+        });
+        assert.equal(s.Page.coach.notes.length, 1, 'a note has to name a post');
+        const post = { caption: 'c', platform: 'instagram', media_type: 'REELS' };
+        const hit = String(s.Page.postIdentity({ ...post, media_id: '1789' }));
+        const miss = String(s.Page.postIdentity({ ...post, media_id: '999' }));
+        assert.ok(hit.includes('class="growth-post-note"') && hit.includes('Opened on the result.'));
+        assert.equal(miss.includes('growth-post-note'), false);
+        s.Page.coach = null;
+        assert.equal(String(s.Page.postIdentity({ ...post, media_id: '1789' })).includes('growth-post-note'), false, 'no coach, no note');
+    });
+
     it('draws the engagement bar from the reading start, and a missing rate as a dash with no bar', () => {
         const ar = loadGrowth('ar');
         const en = loadGrowth('en');
@@ -515,7 +531,7 @@ describe('GrowthPage — sorting and filtering the posts', () => {
         assert.equal(none.includes('growth-bar'), false);
         assert.ok(none.includes('—'));
         assert.equal(en.Page.formatRate(0.042), '4.2%', 'a ratio');
-        assert.equal(en.Page.formatRate(4.2), '4.2%', 'already a percentage');
+        assert.equal(en.Page.formatRate(1.2), '120%', 'a ratio above 1 on a tiny reach is still a ratio');
         assert.equal(en.Page.formatRate(null), '—');
         assert.equal(en.Page.formatSeconds(3240), '3.2s');
         assert.equal(ar.Page.formatSeconds(3240), '3.2 ث');
@@ -668,7 +684,7 @@ describe('GrowthPage — the AI Growth Coach', () => {
         assert.equal(c.actions[3].impact, 'med');
         assert.equal(c.experiments.length, 1);
         assert.equal(s.Page.level('huge'), null);
-        assert.deepEqual(plain(s.Page.normalizeCoach(null)), { summary: '', wins: [], problems: [], actions: [], experiments: [] });
+        assert.deepEqual(plain(s.Page.normalizeCoach(null)), { summary: '', wins: [], problems: [], actions: [], experiments: [], notes: [] });
     });
 
     it('orders actions by the chips they show: impact first, then the least effort', () => {
@@ -1030,7 +1046,7 @@ describe('PostsPage — Instagram reach fields in the composer payload', () => {
         s.Page.posts = [{
             id: 'c1', platform: 'instagram', post_type: 'carousel', status: 'PENDING', caption: 'c',
             media_url: urls[0], media_urls: urls, scheduled_time: '2027-03-04T18:20:00.000Z',
-            platform_options: { alt_texts: ['first slide', 'second slide'], collaborators: ['partner'] },
+            meta_options: { alt_texts: ['first slide', 'second slide'], collaborators: ['partner'] },
         }];
         s.Page.showEditModal('c1');
         assert.deepEqual(s.Page._slides.main.map((x: Json) => x.alt), ['first slide', 'second slide']);
