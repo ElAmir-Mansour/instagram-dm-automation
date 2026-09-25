@@ -20,6 +20,7 @@ import { requireLiveSession, resolveTenant } from '../services/tenant.js';
 import { pool } from '../config/db.js';
 import adminRouter from './admin.js';
 import { setLogSink } from '../utils/log.js';
+import { DEFAULT_MODEL } from '../services/ai.js';
 import apiRouter, {
     exportScopeFor, formatPublishedIds, parseExportDownload, publishDuePosts, publishedPlatforms,
     splitDueByTenantActivity, unsupportedAfterEdit, unsupportedPlatformCombination,
@@ -342,6 +343,16 @@ describe('publishDuePosts — a disabled tenant', () => {
     });
 });
 
+/** The final handler for one route on the API router. */
+function handlerFor(method: string, path: string) {
+    const stack = (apiRouter as unknown as {
+        stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: Function }> } }>;
+    }).stack;
+    const layer = stack.find((l) => l.route?.path === path && l.route.methods[method]);
+    assert.ok(layer, `${method.toUpperCase()} ${path} must be mounted`);
+    return layer!.route!.stack[layer!.route!.stack.length - 1]!.handle;
+}
+
 /**
  * That the edit guard is actually CALLED by the edit route.
  *
@@ -351,16 +362,6 @@ describe('publishDuePosts — a disabled tenant', () => {
  * the handler is pulled off the router's own stack and run against a stubbed pool.
  */
 describe('PUT /posts/scheduled/:id — the edit-time platform guard', () => {
-    /** The final handler for one route on the API router. */
-    function handlerFor(method: string, path: string) {
-        const stack = (apiRouter as unknown as {
-            stack: Array<{ route?: { path: string; methods: Record<string, boolean>; stack: Array<{ handle: Function }> } }>;
-        }).stack;
-        const layer = stack.find((l) => l.route?.path === path && l.route.methods[method]);
-        assert.ok(layer, `${method.toUpperCase()} ${path} must be mounted`);
-        return layer!.route!.stack[layer!.route!.stack.length - 1]!.handle;
-    }
-
     /** Run the handler with `pool.query` answering from `rows`, and collect the response. */
     async function runEdit(body: Record<string, unknown>, current: Record<string, unknown> | null) {
         const res = {
@@ -416,6 +417,88 @@ describe('PUT /posts/scheduled/:id — the edit-time platform guard', () => {
 
         assert.equal(res.statusCode, 404);
         assert.ok(!statements.some((sql) => /UPDATE scheduled_posts/.test(sql)));
+    });
+});
+
+/**
+ * GET and POST /settings/ai — which model the AI Settings screen shows, and which it saves.
+ *
+ * The picker can only display a model it has an option for, and it has exactly the supported
+ * list. So GET hands it the model the agent actually runs on rather than the raw column — a
+ * row naming a retired model otherwise loaded as an empty selection — and POST stores the
+ * model it will run on, not a name that would fall back on every DM.
+ */
+describe('/settings/ai — the model shown and saved', () => {
+    let restoreSink: (() => void) | undefined;
+    beforeEach(() => {
+        // resolveModel warns about unknown models by design; that is not what is under test.
+        const previous = setLogSink(() => {});
+        restoreSink = () => setLogSink(previous);
+    });
+    afterEach(() => restoreSink?.());
+
+    async function call(method: 'get' | 'post', stored: Record<string, unknown> | null, body: Record<string, unknown> = {}) {
+        const res = {
+            statusCode: 200,
+            body: null as any,
+            status(code: number) { this.statusCode = code; return this; },
+            json(payload: unknown) { this.body = payload; return this; },
+        };
+        const statements: Array<{ sql: string; params: unknown[] }> = [];
+        const original = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            statements.push({ sql, params });
+            if (/SELECT \* FROM ai_agents/.test(sql)) return { rows: stored ? [stored] : [], rowCount: stored ? 1 : 0 };
+            if (/INSERT INTO ai_agents/.test(sql)) return { rows: [{ creator_id: params[0], model: params[3] }], rowCount: 1 };
+            throw new Error(`no result arranged for SQL: ${sql}`);
+        };
+        try {
+            await handlerFor(method, '/settings/ai')(
+                { params: {}, body, session: { userId: 'u-1', role: 'user', tenantId: TENANT_A } },
+                res,
+                () => {}
+            );
+        } finally {
+            (pool as unknown as { query: unknown }).query = original;
+        }
+        return { res, statements };
+    }
+
+    const row = { creator_id: TENANT_A, is_active: true, system_prompt: 'p', knowledge_base: 'k', temperature: 0.2 };
+
+    it('shows a stored model Google retired as the default it now runs on', async () => {
+        const { res } = await call('get', { ...row, model: 'gemini-1.5-flash' });
+
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.model, DEFAULT_MODEL);
+        assert.equal(res.body.system_prompt, 'p', 'the rest of the row is passed through untouched');
+        assert.equal(res.body.temperature, 0.2);
+    });
+
+    it('shows a supported stored model as it is', async () => {
+        const { res } = await call('get', { ...row, model: 'gemini-3.8-flash' });
+        assert.equal(res.body.model, 'gemini-3.8-flash');
+    });
+
+    it('shows the default for a tenant with no agent row yet', async () => {
+        const { res } = await call('get', null);
+        assert.equal(res.body.model, DEFAULT_MODEL);
+    });
+
+    it('saves a retired or mistyped model as the default it would run on', async () => {
+        for (const model of ['gemini-1.5-flash', 'gemini-2.0-flash', 'Gemini 2.5 Flash', undefined]) {
+            const { res, statements } = await call('post', null, { system_prompt: 'p', model });
+            const insert = statements.find((st) => /INSERT INTO ai_agents/.test(st.sql));
+
+            assert.equal(res.statusCode, 200, String(model));
+            assert.equal(insert?.params[3], DEFAULT_MODEL, String(model));
+        }
+    });
+
+    it('saves a supported model as chosen', async () => {
+        const { statements } = await call('post', null, { system_prompt: 'p', model: 'gemini-3.5-flash-lite' });
+        const insert = statements.find((st) => /INSERT INTO ai_agents/.test(st.sql));
+        assert.equal(insert?.params[3], 'gemini-3.5-flash-lite');
     });
 });
 

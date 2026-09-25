@@ -92,7 +92,7 @@ one rather than serving with a missing secret (`src/config/env.ts`):
 | `META_VERIFY_TOKEN` | Webhook verification handshake |
 | `META_APP_SECRET` | Facebook app's webhook signing secret |
 | `INSTAGRAM_APP_SECRET` | **A different app's secret.** "Instagram API with Instagram Login" is a separate Meta app and signs its own webhooks |
-| `GEMINI_API_KEY` | Gemini, for DM replies |
+| `GEMINI_API_KEY` | Gemini, for DM replies and the Studio. Now a fallback: a key a platform admin saves on **Operations → Gemini API key** takes over for every tenant, without a redeploy, and this variable is no longer required at boot |
 | `DASHBOARD_PASSWORD` | Dashboard login, and the session-token signing key. Cannot be `admin` — that value is in this repo's public history |
 | `CRON_SECRET` | Bearer guarding `/api/cron/publish` and `/api/jobs/drain`. `openssl rand -hex 32` |
 

@@ -146,7 +146,7 @@ with a comment correctly labelling it a stopgap. Two distinct constraints were b
 against each other:
 
 - **Meta's webhook timeout is ~20s**, and redelivers on timeout. A Gemini call is 2-8s
-  (`ai.ts:38` caps it at 30s), plus one or more Meta sends with retries and backoff
+  (`ai.ts:89` caps it at 30s), plus one or more Meta sends with retries and backoff
   (`http.ts:52-72`, up to 3 retries at 0.5/1/2s base with jitter). A batch of several DMs
   comfortably exceeds 20s.
 - **Vercel freezes the invocation after the response.** Work after `res.send()` is not
@@ -320,13 +320,13 @@ therefore unusually easy to fix.
 
 ### 4.1 Where the tokens go
 
-Every call to `generateAiResponse` (`ai.ts:169`) sends:
+Every call to `generateAiResponse` (`ai.ts:354`) sends:
 
 | Component | Resent every call? | Rough size |
 |---|---|---|
 | System prompt | **yes** | 200-500 tokens |
 | Knowledge base (`ai_agents.knowledge_base`) | **yes** | 1,000-5,000+ tokens, grows |
-| Fixed Arabic instructions (`ai.ts:245`) | **yes** | ~150 tokens |
+| Fixed Arabic instructions (`ai.ts:428`) | **yes** | ~150 tokens |
 | Response schema (`RESPONSE_SCHEMA`) | **yes** | ~400 tokens |
 | Conversation history (`HISTORY_WINDOW = 8`) | partially | 200-800 tokens |
 | Current user message | no | 10-50 tokens |
@@ -334,7 +334,7 @@ Every call to `generateAiResponse` (`ai.ts:169`) sends:
 Arabic tokenises at roughly **2-2.5× more tokens per character than English** — Arabic script
 is poorly covered by BPE vocabularies trained predominantly on English, so words fragment into
 many subword pieces. Both the knowledge base and the system prompt here are Arabic
-(`ai.ts:205`, `ai.ts:245`), so the multiplier applies to the largest, most-repeated component.
+(`ai.ts:302`, `ai.ts:428`), so the multiplier applies to the largest, most-repeated component.
 
 **Net: the static prefix is roughly 80-90% of input tokens on every single DM.** The variable
 part — what the customer actually said — is a rounding error.
@@ -355,7 +355,7 @@ The absolute numbers are small at one tenant. They matter for two reasons: the r
 invariant to scale, and adoption cost grows with knowledge-base size and tenant count. Doing
 it at one tenant is a day; doing it at fifty is a migration.
 
-`ai.ts:27-35` already identifies this. It should be the next non-structural piece of work.
+`ai.ts:78-86` already identifies this. It should be the next non-structural piece of work.
 
 ### 4.3 Measure first — now possible
 
@@ -368,12 +368,15 @@ estimates.
 
 - **`HISTORY_WINDOW` was trimmed 15 → 8.** Correct direction. With caching in place the
   history is the *only* uncached part, so it becomes the thing to tune, not the prefix.
-- **`gemini-2.5-flash-lite`** is already in `SUPPORTED_MODELS` (`ai.ts:16`) and is several
+- **`gemini-2.5-flash-lite`** is already in `SUPPORTED_MODELS` (`ai.ts:42`) and is several
   times cheaper. For keyword-triggered FAQ answering against a fixed knowledge base, it is
-  very likely sufficient. A/B it — this is a settings change, not code.
+  very likely sufficient. A/B it — this is a settings change, not code. Try a carousel reply
+  before anything else, though: on 2026-09-25 both 3.x Flash-Lite models fell into repetition
+  loops on the carousel schema in most runs (the numbers are on `DEFAULT_MODEL` in `ai.ts`).
+  2.5 Flash-Lite was not tested.
 - **Do not send the response schema when it is not needed.** Most replies are
   `message_type: "text"`; the carousel and quick-reply branches of `RESPONSE_SCHEMA`
-  (`ai.ts:68-119`) are ~400 tokens sent on every call to support a minority of responses. A
+  (`ai.ts:133-184`) are ~400 tokens sent on every call to support a minority of responses. A
   two-tier approach (cheap text-only schema, retry with the full schema when the model asks
   for structure) is possible but adds a round-trip. **Lower priority than caching** — caching
   makes the schema free anyway, since it is part of the static prefix.
@@ -790,13 +793,13 @@ plaintext (`scripts/diagnose.mjs:381-385`).
 **Consequence:** losing `TOKEN_ENCRYPTION_KEY` is unrecoverable — every tenant must paste a
 fresh token. That is the accepted price of the key not being in the database. It is also why
 the key is deliberately *not* required at startup but *is* required to write a token, and the
-endpoints say so (`routes/admin.ts:139-147`).
+endpoints say so (`routes/admin.ts:426-435`, `:652-660`).
 
 ### ADR-8 — One cross-tenant admin surface, 404 rather than 403
 
 **Chosen:** `src/routes/admin.ts`, mounted at `/api/admin` inside `requireAuth` +
 `requireLiveSession` and gated again on `role === 'platform_admin'`
-(`routes/api.ts:742`, `routes/admin.ts:49-57`). Dashboard screens **Tenants** and **Users**,
+(`routes/api.ts:742`, `routes/admin.ts:84-92`). Dashboard screens **Tenants** and **Users**,
 hidden unless the session says admin (`dashboard/js/app.js:53-54`, `:341`).
 
 **Rationale:** two things had no home. Creating a creator had no UI and no API at all — a fresh
@@ -813,10 +816,10 @@ session may not act as (`services/tenant.ts:296-298`).
 with a 24h TTL, so before this column a leaked token simply could not be taken back. Bumping it
 invalidates every session a user holds, checked against the database on each request so a
 revoked membership takes effect immediately rather than at expiry
-(`routes/admin.ts:310-344`, `services/tenant.ts:211-222`).
+(`routes/admin.ts:385-419`, `services/tenant.ts:211-222`).
 
 **Rejected — a token re-check endpoint in this increment.** `GET /api/admin/tenants` *reads*
-`token_status` and `last_webhook_at` (`routes/admin.ts:71-106`); nothing re-asks Meta. Passive
+`token_status` and `last_webhook_at` (`routes/admin.ts:74-109`); nothing re-asks Meta. Passive
 detection covers the important case — every send path calls `noteMetaFailure`, so a revoked
 token flips the row on the first real failure (`services/tokenHealth.ts:47-73`) — but a token
 that dies while the account is quiet still reads stale until someone opens the page or runs
@@ -825,7 +828,7 @@ that dies while the account is quiet still reads stale until someone opens the p
 **Rejected — deriving `last_webhook_at` from a dedicated column.** Derived instead from
 `GREATEST(max(interactions.timestamp), max(messages.created_at))`, which needs no writer
 changes and reports correctly for a tenant that only ever receives one of the two kinds
-(`routes/admin.ts:96-103`, rationale at `:61-70`). The limitation is stated in §5.4's terms: a comment matching no
+(`routes/admin.ts:99-106`, rationale at `:64-73`). The limitation is stated in §5.4's terms: a comment matching no
 campaign writes no `interactions` row, so this column can look stale on a perfectly healthy
 tenant. `jobs` is the unambiguous signal.
 

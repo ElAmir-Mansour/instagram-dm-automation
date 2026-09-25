@@ -34,6 +34,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import vm from 'node:vm';
+import { DEFAULT_MODEL, SUPPORTED_MODELS } from '../services/ai.js';
 
 interface PublishWindow { isPast: boolean; from: Date; until: Date; frequent: boolean }
 
@@ -186,6 +187,7 @@ interface InboxApi {
 
 interface AiApi {
     loadSettings(): Promise<void>;
+    shell(): { toString(): string };
 }
 
 interface FakeEl {
@@ -744,6 +746,30 @@ describe('AiSettingsPage — Save survives a failed load followed by a retry', (
         await Ai.loadSettings();
         assert.equal(dom.get('save-settings-btn')!.disabled, false, 'a successful retry must make Save usable again');
         assert.equal(dom.get('system-prompt-text')!.value, 'p', 'and the form must actually hold the loaded prompt');
+    });
+});
+
+describe('AiSettingsPage — the model picker', () => {
+    /** The option values of #model-selector, in the order the operator sees them. */
+    function pickerOptions(): string[] {
+        const { Ai } = load();
+        const select = String(Ai.shell()).match(/<select[^>]*\bid="model-selector"[^>]*>([\s\S]*?)<\/select>/);
+        assert.ok(select, 'the form must have a model picker');
+        return [...select[1]!.matchAll(/<option\b[^>]*\bvalue="([^"]*)"/g)].map((m) => m[1]!);
+    }
+
+    it('offers exactly the models the server will run', () => {
+        // Two hand-kept lists, this one and SUPPORTED_MODELS in src/services/ai.ts, and they
+        // had drifted: the picker offered two of the eight models the server accepted. A row
+        // saved with any of the other six loaded as an empty selection, and saving the form
+        // then quietly replaced it with the default.
+        const offered = pickerOptions();
+        assert.deepEqual([...offered].sort(), [...SUPPORTED_MODELS].sort());
+        assert.equal(new Set(offered).size, offered.length, 'no model is offered twice');
+    });
+
+    it('lists the default first, so the form reads right before the settings arrive', () => {
+        assert.equal(pickerOptions()[0], DEFAULT_MODEL);
     });
 });
 

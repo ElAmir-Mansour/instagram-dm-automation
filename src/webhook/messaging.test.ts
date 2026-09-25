@@ -21,6 +21,9 @@ import assert from 'node:assert/strict';
 import axios from 'axios';
 import { after, before, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
+import { encryptSecret } from '../config/crypto.js';
+import { DEFAULT_MODEL } from '../services/ai.js';
+import { MISSING_GEMINI_KEY } from '../services/appSettings.js';
 import { metaHttp } from '../services/http.js';
 import type { Creator } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
@@ -223,7 +226,14 @@ interface Scenario {
     gemini?: () => Promise<any>;
     /** What the Send API answers with, or throws. */
     send?: (url: string, body: any) => Promise<any>;
+    /** A key saved on the Operations screen, stored as it really is: encrypted. Absent = none. */
+    savedGeminiKey?: string;
+    /** GEMINI_API_KEY for this run; null = unset. Default 'test-key'. */
+    envGeminiKey?: string | null;
 }
+
+/** Any 32 bytes of hex: enough to encrypt and decrypt a saved key inside one run. */
+const TEST_ENCRYPTION_KEY = 'ab'.repeat(32);
 
 const CREATOR = {
     id: 'creator-1',
@@ -247,18 +257,20 @@ async function runDm(
     scenario: Scenario = {},
     options?: { lastAttempt: boolean },
     entryId = 'ig-page-1'
-): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; error: any }> {
+): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; geminiUrls: string[]; geminiKeys: string[]; error: any }> {
     const {
         creator = CREATOR,
         conversation = { id: 'conv-1', is_bot_active: true, ai_disclosed_at: null },
         inboundInsert = [{ id: 'msg-1' }],
         resumeClaim = [],
-        agent = { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: 'gemini-2.5-flash', temperature: 0.7 },
+        agent = { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7 },
         history = [],
         creatorQuotaCount = 1,
         appQuotaCount = 1,
         gemini = geminiSaying({ message_type: 'text', text: 'أهلاً بك' }),
         send = async () => ({ data: { message_id: 'sent-1' } }),
+        savedGeminiKey,
+        envGeminiKey = 'test-key',
     } = scenario;
 
     const executed: Executed[] = [];
@@ -266,10 +278,21 @@ async function runDm(
     // The request body Gemini was actually handed. Recorded because one bug in this file is
     // only visible in the payload: a story mention used to append an empty `user` part.
     const geminiPayloads: any[] = [];
+    // The URL carries the model, so it is the only place a model choice is visible.
+    const geminiUrls: string[] = [];
+    // And the header carries the key: which of the saved one and GEMINI_API_KEY answered.
+    const geminiKeys: string[] = [];
     let geminiCalls = 0;
+
+    const originalEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
+    if (savedGeminiKey !== undefined) process.env.TOKEN_ENCRYPTION_KEY = TEST_ENCRYPTION_KEY;
+    const savedKeyRows = savedGeminiKey !== undefined
+        ? [{ value: encryptSecret(savedGeminiKey), is_secret: true }]
+        : [];
 
     // First match wins, so the specific patterns come before the general ones.
     const routes: Array<[RegExp, { rows?: any[]; rowCount?: number }]> = [
+        [/FROM app_settings WHERE key/, { rows: savedKeyRows }],
         [/FROM creators\s+WHERE is_active/, { rows: creator ? [creator] : [] }],
         [/UPDATE creators/, { rowCount: 1 }],
         [/INSERT INTO conversations/, { rows: conversation ? [conversation] : [] }],
@@ -289,7 +312,8 @@ async function runDm(
     const originalAxiosPost = axios.post;
     const originalMetaPost = metaHttp.post;
     const originalKey = process.env.GEMINI_API_KEY;
-    process.env.GEMINI_API_KEY = 'test-key';
+    if (envGeminiKey === null) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = envGeminiKey;
 
     (pool as any).query = async (sql: string, params: any[] = []) => {
         executed.push({ sql, params });
@@ -298,9 +322,11 @@ async function runDm(
         const { rows = [], rowCount } = route[1];
         return { rows, rowCount: rowCount ?? rows.length };
     };
-    (axios as any).post = async (_url: string, payload: any) => {
+    (axios as any).post = async (url: string, payload: any, config: any) => {
         geminiCalls++;
         geminiPayloads.push(payload);
+        geminiUrls.push(url);
+        geminiKeys.push(config?.headers?.['x-goog-api-key']);
         return gemini();
     };
     (metaHttp as any).post = async (url: string, body: any) => {
@@ -319,9 +345,11 @@ async function runDm(
         (metaHttp as any).post = originalMetaPost;
         if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
         else process.env.GEMINI_API_KEY = originalKey;
+        if (originalEncryptionKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+        else process.env.TOKEN_ENCRYPTION_KEY = originalEncryptionKey;
     }
 
-    return { executed, sends, geminiCalls, geminiPayloads, error };
+    return { executed, sends, geminiCalls, geminiPayloads, geminiUrls, geminiKeys, error };
 }
 
 const textEvent = (over: Record<string, unknown> = {}) => ({
@@ -749,5 +777,71 @@ describe('handleMessagingEvent — what reaches Gemini', () => {
 
         assert.equal(error, null);
         assert.equal(sends.length, 1);
+    });
+
+    it('answers an agent still set to a retired model, on the default model', async () => {
+        // gemini-1.5-flash stayed on the supported list, and in the dashboard's picker, after
+        // Google stopped serving it, so an agent saved with it sent every DM to a model that
+        // answers 404. The row is not rewritten; the reply just goes to a model that exists.
+        const { geminiUrls, sends, error } = await runDm(textEvent(), {
+            agent: { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: 'gemini-1.5-flash', temperature: 0.7 },
+        });
+
+        assert.equal(error, null);
+        assert.equal(sends.length, 1, 'the customer still gets a reply');
+        assert.deepEqual(geminiUrls, [
+            `https://generativelanguage.googleapis.com/v1beta/models/${DEFAULT_MODEL}:generateContent`,
+        ]);
+    });
+
+    it('asks for the model the agent chose when it is a supported one', async () => {
+        const { geminiUrls } = await runDm(textEvent(), {
+            agent: { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: 'gemini-3.8-flash', temperature: 0.7 },
+        });
+
+        assert.equal(geminiUrls.length, 1);
+        assert.match(geminiUrls[0]!, /\/models\/gemini-3\.8-flash:generateContent$/);
+    });
+});
+
+/**
+ * Which Gemini key a reply is sent with. One key serves every tenant: the one a platform admin
+ * saved on the Operations screen, else GEMINI_API_KEY (src/services/appSettings.ts).
+ */
+describe('handleMessagingEvent — the Gemini key', () => {
+    it('answers with the key saved on the Operations screen, over GEMINI_API_KEY', async () => {
+        const { geminiKeys, sends, error } = await runDm(textEvent(), { savedGeminiKey: 'AIza-saved-from-operations' });
+
+        assert.equal(error, null);
+        assert.equal(sends.length, 1);
+        assert.deepEqual(geminiKeys, ['AIza-saved-from-operations']);
+    });
+
+    it('answers with GEMINI_API_KEY while nothing is saved', async () => {
+        const { geminiKeys } = await runDm(textEvent());
+        assert.deepEqual(geminiKeys, ['test-key']);
+    });
+
+    it('sends nothing, and says where to add a key, when there is none anywhere', async () => {
+        const { geminiCalls, sends, executed } = await runDm(textEvent(), { envGeminiKey: null });
+
+        assert.equal(geminiCalls, 0);
+        assert.equal(sends.length, 0, 'no reply is invented without a model behind it');
+        assert.ok(!executed.some((e) => /'outbound'/.test(e.sql)), 'and no outbound turn is recorded');
+        assert.match(MISSING_GEMINI_KEY, /Operations screen/);
+        assert.match(MISSING_GEMINI_KEY, /GEMINI_API_KEY/);
+    });
+
+    it('needs no key at all for an agent that is switched off', async () => {
+        // The lookup comes after the decision to speak: a disabled agent must stay silent the
+        // same way with or without a key, and must not cost a read of app_settings.
+        const { executed, geminiCalls, error } = await runDm(textEvent(), {
+            envGeminiKey: null,
+            agent: { is_active: false, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7 },
+        });
+
+        assert.equal(error, null);
+        assert.equal(geminiCalls, 0);
+        assert.ok(!executed.some((e) => /FROM app_settings/.test(e.sql)));
     });
 });

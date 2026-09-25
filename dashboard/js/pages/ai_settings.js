@@ -151,9 +151,22 @@ const AiSettingsPage = {
                         <div class="form-grid">
                             <div class="form-group">
                                 <label class="form-label" for="model-selector">${t('ai.model')}</label>
+                                <!-- Exactly SUPPORTED_MODELS in src/services/ai.ts, the
+                                     default first; screens.test.ts fails if they drift.
+                                     This still offered Gemini 1.5 Flash after Google
+                                     stopped serving it, and choosing it would have
+                                     failed every DM. -->
                                 <select class="select" id="model-selector">
                                     <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
-                                    <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                                    <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+                                    <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
+                                    <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
+                                    <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+                                    <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
+                                    <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option>
+                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
+                                    <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
+                                    <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -246,7 +259,11 @@ const AiSettingsPage = {
             toggle.checked = settings.is_active !== false;
             prompt.value = settings.system_prompt || '';
             knowledge.value = settings.knowledge_base || '';
-            model.value = settings.model || 'gemini-2.5-flash';
+            // No fallback literal: the server sends the model the agent actually runs on (a
+            // stored one it no longer supports comes back as the default), so the value is
+            // always one of the options. The old `|| 'gemini-2.5-flash'` was a second copy of
+            // the default, free to drift from the server's.
+            model.value = settings.model;
             slider.value = temperature;
             this.updateTemperature(temperature);
 

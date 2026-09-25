@@ -2,6 +2,7 @@ import axios from 'axios';
 import { queryOne, queryRows } from '../db/query.js';
 import type { AiAgentRow, MessageRow } from '../db/rows.js';
 import { log } from '../utils/log.js';
+import { getGeminiKey, MISSING_GEMINI_KEY } from './appSettings.js';
 
 /** The two columns the history window actually needs. */
 type HistoryRow = Pick<MessageRow, 'direction' | 'text'>;
@@ -9,19 +10,69 @@ type HistoryRow = Pick<MessageRow, 'direction' | 'text'>;
 /**
  * `ai_agents.model` is dashboard-settable and gets interpolated straight into the request
  * path, so it is checked against a list rather than trusted. An unrecognised value falls back
- * instead of throwing: a typo in Settings should not take every DM reply down with it.
+ * instead of throwing: a typo in Settings should not take every DM reply down with it — and
+ * neither should a model Google retires, which is what an unrecognised value usually turns
+ * out to be.
+ *
+ * Checked against Google's models, pricing and deprecations pages on 2026-09-25:
+ *
+ *   - The 1.5 and 2.0 families that used to be here are gone. 2.0 Flash and 2.0 Flash-Lite
+ *     shut down on 2026-06-01 and no 1.5 model is listed at all; `generateContent` on
+ *     `gemini-2.0-flash` or `gemini-1.5-flash` answers 404. While they were on this list, a
+ *     row naming one was passed straight through, so every DM failed. Now it falls back, and
+ *     the Settings screen shows the default in its place. (Production had no such row.)
+ *   - The 2.5 models stay, with a caveat: Google now serves them only to users who have used
+ *     them before ("For any new projects, use our latest models: 3.5 Flash-Lite or 3.8
+ *     Flash"). This deployment's key has.
+ *   - `gemini-3.1-pro-preview` has no free tier. On a free-tier key it answers 429 every time,
+ *     which for a DM means no reply at all.
+ *
+ * The dashboard's model picker (dashboard/js/pages/ai_settings.js) offers exactly this list,
+ * and src/dashboard/screens.test.ts fails if the two drift apart.
  */
-const SUPPORTED_MODELS = new Set([
+export const SUPPORTED_MODELS: ReadonlySet<string> = new Set([
     'gemini-2.5-flash',
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-3.5-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.1-flash-lite',
+    'gemini-3.1-pro-preview',
     'gemini-2.5-flash-lite',
     'gemini-2.5-pro',
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-lite',
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-8b',
-    'gemini-1.5-pro'
 ]);
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+
+/**
+ * What an agent runs on when its row names no model, or one this list no longer knows. The
+ * column default (`ai_agents.model`, schema_migration_v2.sql) is the same value, and a new
+ * tenant's agent row relies on it, so changing this means a migration for that too.
+ *
+ * Still 2.5 Flash, although Google points new projects at 3.5 Flash-Lite or 3.8 Flash. Both
+ * were tried on 2026-09-25 with this file's exact request, using the seeded persona asked for
+ * the course links — which the prompt tells the model to answer with a carousel:
+ *
+ *   - 3.5 Flash-Lite came back clean only 3 times in 12 runs. 7 degenerated into repetition
+ *     inside a card (one letter or phrase thousands of times, then unrelated text), 1 hit the
+ *     30s timeout, and 1 finished without its text being captured. Temperature 1.0, which
+ *     Google advises for Gemini 3, did not stop it, and neither did turning thinking on. 3.1
+ *     Flash-Lite looped in both of its runs. A plain text answer was fine: the trouble is in
+ *     the structured replies.
+ *   - 3.8 Flash answered 503 to all three requests.
+ *   - 2.5 Flash answered both of its runs cleanly, in about 9s, thinking ~1,400 tokens first.
+ *
+ * It also keeps the DM bot's allowance to itself. Gemini's limits are per project and per
+ * model, and on the free tier a Flash model allows about 20 requests a day
+ * (docs/STUDIO_GUIDE.md §8) — on 2026-09-24 the Studio's indexer spent it and the bot had
+ * nothing left. The Studio writer (`STUDIO_MODELS` in studio/generate.ts, shared by the Growth
+ * coach and keyword tools) runs 3.1 Pro and 3.6-3.8 Flash, and the indexer 3.5, 3.6 and 3
+ * Flash, so none of them draws on 2.5 Flash. ai.test.ts holds that line.
+ *
+ * Price is no reason to move either: 2.5 Flash is $0.30 in and $2.50 out per million tokens,
+ * the same as 3.5 Flash-Lite. 3.8 Flash is $0.75 / $3.75 and doubles on 2027-01-01, as do 3.6
+ * and 3.7 Flash.
+ */
+export const DEFAULT_MODEL = 'gemini-2.5-flash';
 const DEFAULT_TEMPERATURE = 0.7;
 
 /**
@@ -37,12 +88,26 @@ const HISTORY_WINDOW = 8;
 /** Gemini can sit on a request indefinitely; a serverless invocation cannot. */
 const GEMINI_TIMEOUT_MS = 30_000;
 
-function resolveModel(configured: unknown): string {
+/**
+ * The model a stored `ai_agents.model` value actually runs on. The Settings API uses it too,
+ * so the dashboard shows and saves the model that answers, never one that does not.
+ */
+export function resolveModel(configured: unknown): string {
     if (typeof configured === 'string' && SUPPORTED_MODELS.has(configured)) return configured;
     if (configured) {
         log('warn', 'ai.unknown_model', { configured, fallback: DEFAULT_MODEL });
     }
     return DEFAULT_MODEL;
+}
+
+/**
+ * Every model the DM bot could answer with right now: the default, plus each agent's model as
+ * it resolves. A new Gemini key is tried on these before it is saved (src/services/geminiKey.ts),
+ * so at most three: each try spends a request of that model's allowance.
+ */
+export async function dmModelsInUse(): Promise<string[]> {
+    const rows = await queryRows<Pick<AiAgentRow, 'model'>>('SELECT DISTINCT model FROM ai_agents');
+    return [...new Set([DEFAULT_MODEL, ...rows.map((row) => resolveModel(row.model))])].slice(0, 3);
 }
 
 export interface AiResponse {
@@ -292,11 +357,6 @@ export async function generateAiResponse(
     creatorId: string,
     overrides?: { system_prompt?: string; knowledge_base?: string }
 ): Promise<AiResponse | null> {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error('Missing GEMINI_API_KEY environment variable.');
-    }
-
     // 1. Fetch AI Agent Settings
     //    Deliberately unfiltered by is_active: the filter used to be in the WHERE clause, so a
     //    disabled agent returned zero rows and was indistinguishable from an unconfigured one.
@@ -325,6 +385,11 @@ export async function generateAiResponse(
         return null;
     }
     const agent = decision.agent;
+
+    // Only once the agent is going to speak: a switched-off agent needs no key. The key saved
+    // on the Operations screen wins over GEMINI_API_KEY (src/services/appSettings.ts).
+    const gemini = await getGeminiKey();
+    if (!gemini) throw new Error(MISSING_GEMINI_KEY);
 
     // 2. Fetch recent conversation history
     const historyRows = await queryRows<HistoryRow>(
@@ -387,7 +452,7 @@ export async function generateAiResponse(
         // referrers and error reporters far more readily than headers do — and an axios error
         // carries `config.url`, so the old form leaked the key into anything that logged one.
         const response = await axios.post(url, payload, {
-            headers: { 'x-goog-api-key': apiKey },
+            headers: { 'x-goog-api-key': gemini.key },
             timeout: GEMINI_TIMEOUT_MS
         });
         const rawJsonText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;

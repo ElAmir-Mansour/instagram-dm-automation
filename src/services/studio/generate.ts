@@ -21,6 +21,7 @@
  * network.
  */
 import axios from 'axios';
+import { getGeminiKey, MISSING_GEMINI_KEY } from '../appSettings.js';
 import type { Carousel, ShotRef, Slide } from './carouselTypes.js';
 import {
     buildCatalog,
@@ -245,8 +246,11 @@ export function withoutArrayBounds<T>(schema: T): T {
 }
 
 export async function callGemini(req: ModelRequest): Promise<unknown> {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) throw new ModelError('Missing GEMINI_API_KEY environment variable.', false);
+    // The platform's key, the same one the DM bot answers with: the one saved on the Operations
+    // screen, else GEMINI_API_KEY (src/services/appSettings.ts).
+    const gemini = await getGeminiKey();
+    if (!gemini) throw new ModelError(MISSING_GEMINI_KEY, false);
+    const apiKey = gemini.key;
     const payload = {
         systemInstruction: { parts: [{ text: req.system }] },
         contents: req.turns.map((t) => ({ role: t.role, parts: [{ text: t.text }] })),

@@ -15,8 +15,11 @@
  * are unit-tested in src/services/{adminGuards,erasure}.test.ts.
  */
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import axios from 'axios';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Request, Response } from 'express';
+import { pool } from '../config/db.js';
+import { setLogSink } from '../utils/log.js';
 import adminRouter from './admin.js';
 
 interface Reply {
@@ -84,6 +87,9 @@ const ROUTES: Array<[string, string, Record<string, unknown>?]> = [
     ['GET', '/erasure/preview', { handle: 'someone' }],
     ['POST', '/erasure'],
     ['GET', '/audit'],
+    ['GET', '/gemini-key'],
+    ['PUT', '/gemini-key'],
+    ['DELETE', '/gemini-key'],
 ];
 
 describe('the platform_admin gate', () => {
@@ -320,5 +326,186 @@ describe('audit', () => {
 
         assert.equal(reply.status, 400);
         assert.match(reply.body.error, /Unknown action filter/);
+    });
+});
+
+/**
+ * PUT/DELETE /gemini-key — the one key every tenant's DM replies and the Studio run on.
+ *
+ * Unlike the rest of this file these reach SQL, so the pool is stubbed with a small in-memory
+ * `app_settings` and Google is stubbed at axios. What is pinned is the promise the Operations
+ * screen makes: a key is never written unless Google accepted it and ran the DM bot's models,
+ * it is stored encrypted, and neither the response nor the audit row ever carries it.
+ */
+describe('the Gemini key', () => {
+    const KEY = 'AIza.fake.pasted-on-operations.test';
+    let store: Map<string, { value: string; is_secret: boolean }>;
+    let statements: Array<{ sql: string; params: unknown[] }>;
+    let probed: Array<{ url: string; key: unknown }>;
+    let agentModels: Array<string | null>;
+    let google: { list: () => unknown; model: () => unknown };
+    const restore: Array<() => void> = [];
+
+    const googleSays = (status: number, message: string) => () => {
+        throw Object.assign(new Error(`Request failed with status code ${status}`), {
+            response: { status, data: { error: { code: status, message } } },
+        });
+    };
+
+    beforeEach(() => {
+        store = new Map();
+        statements = [];
+        probed = [];
+        agentModels = ['gemini-2.5-flash'];
+        google = { list: () => ({ status: 200, data: {} }), model: () => ({ status: 200, data: {} }) };
+
+        const originalQuery = pool.query;
+        const originalGet = axios.get;
+        const originalPost = axios.post;
+        const originalEnv = { gemini: process.env.GEMINI_API_KEY, enc: process.env.TOKEN_ENCRYPTION_KEY };
+        const previousSink = setLogSink(() => {});
+        process.env.TOKEN_ENCRYPTION_KEY = 'ef'.repeat(32);
+        process.env.GEMINI_API_KEY = 'AIza-the-environment-one';
+
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            statements.push({ sql, params });
+            if (/SELECT DISTINCT model FROM ai_agents/.test(sql)) return { rows: agentModels.map((model) => ({ model })), rowCount: agentModels.length };
+            if (/SELECT value, is_secret FROM app_settings/.test(sql)) {
+                const row = store.get(String(params[0]));
+                return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+            }
+            if (/INSERT INTO app_settings/.test(sql)) {
+                store.set(String(params[0]), { value: String(params[1]), is_secret: params[2] === true });
+                return { rows: [], rowCount: 1 };
+            }
+            if (/DELETE FROM app_settings/.test(sql)) {
+                const had = store.delete(String(params[0]));
+                return { rows: [], rowCount: had ? 1 : 0 };
+            }
+            if (/INSERT INTO audit_log/.test(sql)) return { rows: [{ id: 'audit-1' }], rowCount: 1 };
+            throw new Error(`no result arranged for SQL: ${sql}`);
+        };
+        (axios as any).get = async (url: string, config: any) => {
+            probed.push({ url, key: config?.headers?.['x-goog-api-key'] });
+            return google.list();
+        };
+        (axios as any).post = async (url: string, _body: unknown, config: any) => {
+            probed.push({ url, key: config?.headers?.['x-goog-api-key'] });
+            return google.model();
+        };
+
+        restore.push(() => {
+            (pool as unknown as { query: unknown }).query = originalQuery;
+            (axios as any).get = originalGet;
+            (axios as any).post = originalPost;
+            setLogSink(previousSink);
+            for (const [name, value] of [['GEMINI_API_KEY', originalEnv.gemini], ['TOKEN_ENCRYPTION_KEY', originalEnv.enc]] as const) {
+                if (value === undefined) delete process.env[name];
+                else process.env[name] = value;
+            }
+        });
+    });
+
+    afterEach(() => { while (restore.length) restore.pop()!(); });
+
+    const auditRows = () => statements.filter((st) => /INSERT INTO audit_log/.test(st.sql));
+
+    it('refuses a blank or plainly malformed paste before asking Google anything', async () => {
+        for (const apiKey of [undefined, '', '   ', 'short', 'AIza has a space in it 0123456789', 42]) {
+            const reply = await call('PUT', '/gemini-key', { session: ADMIN, body: { apiKey } });
+            assert.equal(reply.status, 400, JSON.stringify(apiKey));
+        }
+        assert.deepEqual(probed, []);
+        assert.equal(store.size, 0);
+    });
+
+    it('saves a key Google accepts, encrypted, and answers with a masked hint only', async () => {
+        const reply = await call('PUT', '/gemini-key', { session: ADMIN, body: { apiKey: `  ${KEY}\n` } });
+
+        assert.equal(reply.status, 200);
+        const stored = store.get('gemini.api_key');
+        assert.ok(stored, 'the key must be written');
+        assert.equal(stored!.is_secret, true);
+        assert.match(stored!.value, /^enc:v1:/, 'stored encrypted, like the Meta page token');
+        assert.ok(!stored!.value.includes(KEY));
+
+        assert.equal(reply.body.source, 'database');
+        assert.equal(reply.body.envFallback, true);
+        assert.ok(!JSON.stringify(reply.body).includes(KEY), 'the response must never carry the key');
+        assert.ok(reply.body.preview.startsWith('AIz'));
+    });
+
+    it('tries the new key, in a header, on the models the DM bot answers with', async () => {
+        // The default, plus every agent's model as it resolves: a retired one resolves to the
+        // default, so it costs no extra request.
+        agentModels = ['gemini-3.8-flash', 'gemini-1.5-flash', null];
+        const reply = await call('PUT', '/gemini-key', { session: ADMIN, body: { apiKey: KEY } });
+
+        assert.equal(reply.status, 200);
+        assert.deepEqual(reply.body.checkedModels, ['gemini-2.5-flash', 'gemini-3.8-flash']);
+        assert.deepEqual(
+            probed.map((p) => p.url.replace('https://generativelanguage.googleapis.com/v1beta', '')),
+            ['/models?pageSize=1', '/models/gemini-2.5-flash:generateContent', '/models/gemini-3.8-flash:generateContent'],
+        );
+        assert.ok(probed.every((p) => p.key === KEY && !p.url.includes(KEY)));
+    });
+
+    it('writes nothing when Google refuses the key or cannot run the DM bot\'s model', async () => {
+        for (const refusal of [
+            { list: googleSays(400, 'API key not valid. Please pass a valid API key.'), model: () => ({}) },
+            { list: () => ({}), model: googleSays(404, 'models/gemini-2.5-flash is not found for API version v1beta.') },
+        ]) {
+            google = refusal;
+            const reply = await call('PUT', '/gemini-key', { session: ADMIN, body: { apiKey: KEY } });
+
+            assert.equal(reply.status, 400);
+            assert.match(reply.body.error, /API key not valid|cannot run gemini-2\.5-flash/);
+        }
+        assert.equal(store.size, 0, 'the key in use must keep answering');
+        assert.deepEqual(auditRows(), []);
+    });
+
+    it('answers 502, and writes nothing, when Google cannot be asked', async () => {
+        google.list = googleSays(503, 'The service is currently unavailable.');
+        const reply = await call('PUT', '/gemini-key', { session: ADMIN, body: { apiKey: KEY } });
+
+        assert.equal(reply.status, 502);
+        assert.equal(store.size, 0);
+    });
+
+    it('saves a key whose quota is spent for today, and says so', async () => {
+        google.model = googleSays(429, 'You exceeded your current quota.');
+        const reply = await call('PUT', '/gemini-key', { session: ADMIN, body: { apiKey: KEY } });
+
+        assert.equal(reply.status, 200);
+        assert.deepEqual(reply.body.quotaSpent, ['gemini-2.5-flash']);
+        assert.ok(store.has('gemini.api_key'));
+    });
+
+    it('audits the save and the removal as facts, never as the key', async () => {
+        await call('PUT', '/gemini-key', { session: ADMIN, body: { apiKey: KEY } });
+        const removed = await call('DELETE', '/gemini-key', { session: ADMIN });
+
+        assert.equal(removed.status, 200);
+        assert.deepEqual(removed.body, { source: 'env', preview: null, envFallback: true });
+        assert.equal(store.size, 0);
+
+        const rows = auditRows();
+        assert.equal(rows.length, 2);
+        assert.deepEqual(rows.map((row) => row.params[2]), ['settings.gemini_key_write', 'settings.gemini_key_write']);
+        for (const row of rows) assert.ok(!JSON.stringify(row.params).includes(KEY));
+        assert.match(String(rows[0]!.params[5]), /"change":"saved"/);
+        assert.match(String(rows[1]!.params[5]), /"change":"removed"/);
+    });
+
+    it('reports which key is answering without sending either one', async () => {
+        const before = await call('GET', '/gemini-key', { session: ADMIN });
+        assert.deepEqual(before.body, { source: 'env', preview: null, envFallback: true });
+
+        await call('PUT', '/gemini-key', { session: ADMIN, body: { apiKey: KEY } });
+        const after = await call('GET', '/gemini-key', { session: ADMIN });
+        assert.equal(after.body.source, 'database');
+        assert.ok(!JSON.stringify(after.body).includes(KEY));
+        assert.ok(!JSON.stringify(after.body).includes('environment-one'));
     });
 });

@@ -741,9 +741,9 @@ without ever splitting an emoji or a `[placeholder]`, and a highlight the trim c
 hard problem that survives all that fails the draft with *"Writing the carousel failed: The draft
 still breaks N rule(s) after M repair round(s): …"*.
 
-*Operator: the writer's model chain* is `STUDIO_MODELS` (`src/services/studio/generate.ts:153`):
+*Operator: the writer's model chain* is `STUDIO_MODELS` (`src/services/studio/generate.ts:154`):
 `gemini-3.1-pro-preview` → `gemini-3.7-flash` → `gemini-3.6-flash` → `gemini-3.8-flash`, called
-with the app's `GEMINI_API_KEY`. A model answering **400, 404, 429 or 503** hands the call to the
+with the app's Gemini key (the one saved on **Operations**, else `GEMINI_API_KEY`). A model answering **400, 404, 429 or 503** hands the call to the
 next one. A **500** or a dropped connection stops the chain where it is, and counts as retryable,
 as does a 429 or 503 from the last model: the first call is then retried once, from the top of the
 chain, if at least 50 s of the budget remain. A timeout is not retried (each call's timeout is what
@@ -1154,7 +1154,7 @@ await API.saveStudioSettings({ examples: null });      // back to the built-in e
 
 | Where | What | Why the Studio cares |
 |---|---|---|
-| Vercel environment, `GEMINI_API_KEY` | The app's Gemini key, shared with the DM bot | The writer. The worker has its own key, `geminiApiKey`, in its config |
+| **Operations → Gemini API key** (platform admin), else the Vercel environment's `GEMINI_API_KEY` | The app's Gemini key, shared with the DM bot | The writer. The worker has its own key, `geminiApiKey`, in its config |
 | Settings → **TikTok app (platform admin)** → **Public site address** (`app.public_base_url`, else `PUBLIC_BASE_URL`, else the request's own host) | The app's public address | Every image a worker uploads is served from it. With none at all, uploads fail: *"No public address for this app: set it in Settings → TikTok app."* |
 | Settings → **TikTok app (platform admin)** → Direct Post switches | *Direct Post is switched on…* and *TikTok has approved this app…* | Whether the TikTok batch can run at all, and whether **Post to TikTok at the same time** is offered |
 | Vercel environment, `MEDIA_RETENTION_DAYS` | Opt-in sweep of old, unreferenced uploads | It keeps every draft's current render and every moment's thumbnail; unset, nothing is swept |
@@ -1223,7 +1223,7 @@ estimate.
 2. Next to the key's project, choose **Set up billing**, or link a billing account to that project
    in the Google Cloud console under **Billing**.
 3. Nothing changes in the app or on the Mac: the same keys keep working, with the paid limits. If
-   the app's `GEMINI_API_KEY` and the worker's `geminiApiKey` belong to different projects, enable
+   the app's Gemini key and the worker's `geminiApiKey` belong to different projects, enable
    billing on both.
 
 A budget alert in Google Cloud Billing (**Budgets & alerts**) is cheap insurance.
@@ -1288,7 +1288,7 @@ Studio*](../VERIFYING.md#verifying-the-carousel-studio).
 | Symptom | Cause | Fix |
 |---|---|---|
 | **Failed**: *Writing the carousel failed: Gemini request failed [HTTP 429]: …* | The writer's chain has spent its daily quota. On the free tier the Pro model always does, then each Flash model | Wait for the reset, or enable billing (section 8) |
-| **Failed** with *[HTTP 404]* | The error shown is the last model's, so every model in the chain answered 404: they are gone, or closed to this key | On Vercel, one `studio.ai_request_failed` line per model says which. If they are all gone, the names in `STUDIO_MODELS` (`src/services/studio/generate.ts:153`) need updating: a code change |
+| **Failed** with *[HTTP 404]* | The error shown is the last model's, so every model in the chain answered 404: they are gone, or closed to this key | On Vercel, one `studio.ai_request_failed` line per model says which. If they are all gone, the names in `STUDIO_MODELS` (`src/services/studio/generate.ts:154`) need updating: a code change |
 | **Failed** with *[HTTP 400]* | Every model refused the request. A 400 that every model gives is the request's fault, not the models' | The per-model message in `studio.ai_request_failed`; a code fix, like stripping `minItems`/`maxItems` was |
 | **Failed** with *[HTTP 500]* | Google's side. The writer retries a 500 once but does not skip to the next model | Generate again |
 | **Failed**: *The draft still breaks N rule(s) after M repair round(s): …* | The model could not meet the rules in the time allowed, usually a limit or the keyword | Generate again. Or type the keyword yourself, ask for fewer slides, or pick an angle |

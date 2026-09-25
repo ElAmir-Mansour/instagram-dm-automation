@@ -9,7 +9,8 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { setLogSink } from '../utils/log.js';
-import { coerceAiResponse, decideAgent } from './ai.js';
+import { coerceAiResponse, decideAgent, DEFAULT_MODEL, resolveModel, SUPPORTED_MODELS } from './ai.js';
+import { STUDIO_MODELS } from './studio/generate.js';
 import { toMetaMessage } from '../webhook/meta-payload.js';
 
 // The downgrade path logs a warning by design; keep the assertions readable.
@@ -128,7 +129,7 @@ describe('decideAgent', () => {
         is_active: true,
         system_prompt: 'a real persona',
         knowledge_base: 'real facts',
-        model: 'gemini-2.5-flash',
+        model: DEFAULT_MODEL,
         temperature: 0.2,
     };
 
@@ -189,5 +190,74 @@ describe('decideAgent', () => {
 
         assert.equal(decision.speak, true);
         assert.equal(decision.speak && decision.agent.system_prompt, 'a real persona');
+    });
+});
+
+/** Runs `fn` with the log captured, and returns the parsed lines. */
+function captureLog(fn: () => void): Array<Record<string, unknown>> {
+    const lines: Array<Record<string, unknown>> = [];
+    const previous = setLogSink((_level, line) => { lines.push(JSON.parse(line)); });
+    try {
+        fn();
+    } finally {
+        setLogSink(previous);
+    }
+    return lines;
+}
+
+/**
+ * Which model a stored `ai_agents.model` actually runs on.
+ *
+ * The supported list is all that stands between a dashboard-settable string and the request
+ * path, and it is also what went stale: it kept the Gemini 1.5 and 2.0 models after Google
+ * stopped serving them, so a row naming one went out as-is and every DM on it failed.
+ */
+describe('resolveModel', () => {
+    it('runs every supported model as stored', () => {
+        for (const model of SUPPORTED_MODELS) assert.equal(resolveModel(model), model);
+    });
+
+    it('answers a retired model with the default, and says so in the log', () => {
+        // Every one of these was on the list until 2026-09-25, and the dashboard picker
+        // offered gemini-1.5-flash by name. Google answers 404 for them now.
+        for (const retired of ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']) {
+            const lines = captureLog(() => assert.equal(resolveModel(retired), DEFAULT_MODEL, retired));
+            assert.deepEqual(
+                lines.map((l) => [l.level, l.event, l.configured, l.fallback]),
+                [['warn', 'ai.unknown_model', retired, DEFAULT_MODEL]],
+                'a stale row must be findable in the logs, not silently papered over',
+            );
+        }
+    });
+
+    it('falls back without a warning when no model is stored', () => {
+        // NULL is what the column holds when nobody chose; a warning on every DM would be noise.
+        for (const nothing of [null, undefined, '']) {
+            const lines = captureLog(() => assert.equal(resolveModel(nothing), DEFAULT_MODEL));
+            assert.deepEqual(lines, [], JSON.stringify(nothing));
+        }
+    });
+
+    it('falls back on anything that is not a supported model id', () => {
+        for (const junk of ['Gemini 2.5 Flash', 'GEMINI-2.5-FLASH', 42, { model: DEFAULT_MODEL }]) {
+            captureLog(() => assert.equal(resolveModel(junk), DEFAULT_MODEL, JSON.stringify(junk)));
+        }
+    });
+});
+
+describe('DEFAULT_MODEL', () => {
+    it('is itself on the supported list', () => {
+        assert.ok(SUPPORTED_MODELS.has(DEFAULT_MODEL));
+    });
+
+    it('is a model the Studio never calls, so a carousel cannot spend a reply', () => {
+        // Gemini's limits are per project and per model, and on the free tier a Flash model
+        // allows about 20 requests a day. On 2026-09-24 the indexer ran on the DM bot's model
+        // and spent its allowance, and the bot had nothing left for the day
+        // (docs/STUDIO_GUIDE.md §8). The writer's chain is importable; the indexer's lives in
+        // the Studio worker, in another repository, so it is copied from STUDIO.md §9.
+        const indexerModels = ['gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3-flash-preview'];
+        assert.ok(!STUDIO_MODELS.includes(DEFAULT_MODEL), `${DEFAULT_MODEL} is in the Studio writer's chain`);
+        assert.ok(!indexerModels.includes(DEFAULT_MODEL), `${DEFAULT_MODEL} is in the Studio indexer's chain`);
     });
 });
