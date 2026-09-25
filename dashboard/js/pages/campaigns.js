@@ -82,6 +82,7 @@ const CampaignsPage = {
                      the page <h1> and no way to reach the grid by heading. -->
                 <h2 class="page-toolbar-count">${t('campaigns.count', { count: campaigns.length })}</h2>
                 <div class="toolbar-actions">
+                    ${UI.helpLink('campaigns#matching', t('help.link.matching'), { className: 'campaigns-help' })}
                     ${UI.button({
                         variant: 'secondary', size: 'sm', icon: 'upload', label: t('campaigns.import'),
                         action: 'campaigns:triggerCSVSelect', id: 'campaigns-import',
@@ -436,7 +437,7 @@ const CampaignsPage = {
                     <i data-lucide="${hasProblem ? 'alert-triangle' : 'search-check'}" aria-hidden="true"></i>
                     ${t('campaigns.match.title')}
                 </h4>
-                <p>${t('campaigns.match.explain')}</p>
+                <p>${t('campaigns.match.explain')} ${UI.helpLink('campaigns#matching', t('help.link.matching'), { newTab: true })}</p>
                 <div id="match-inspector-verdict" aria-live="polite">${verdict}</div>
             </div>
         `;
