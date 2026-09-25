@@ -9,7 +9,7 @@ import {
 import axios from 'axios';
 import {
     sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
-    API_VERSION,
+    API_VERSION, MediaProcessingTimeoutError, resumeInstagramContainer,
 } from '../services/instagram.js';
 import { generateAiResponse } from '../services/ai.js';
 import {
@@ -489,7 +489,13 @@ export interface PublishSweepResult {
 type PublishTarget = Pick<
     ScheduledPostRow,
     'id' | 'platform' | 'post_type' | 'caption' | 'media_url' | 'cover_url' | 'published_post_id'
-> & { media_urls?: ScheduledPostRow['media_urls']; meta_options?: ScheduledPostRow['meta_options'] };
+> & {
+    media_urls?: ScheduledPostRow['media_urls'];
+    meta_options?: ScheduledPostRow['meta_options'];
+    /** `IGC:<container id>` while Instagram is still processing an earlier attempt's video. */
+    external_publish_id?: ScheduledPostRow['external_publish_id'];
+    attempts?: ScheduledPostRow['attempts'];
+};
 
 /**
  * The creator fields `attemptPublish` needs to reach Meta. `id` is nullable here — unlike
@@ -532,6 +538,26 @@ export class PublishAttemptError extends Error {
 }
 
 /**
+ * Instagram was still processing the video when the poll budget ran out. Not a failure: the row
+ * is PENDING again with the container saved as `IGC:<id>` (and whatever already went live kept in
+ * `published_post_id`), and the next sweep publishes that same container, uploading nothing twice.
+ * Measured 2026-09-26: 10 MB reels outlast the 25 s budget, then finish within a minute or two.
+ */
+export class InstagramProcessingHeldError extends PublishAttemptError {}
+
+/** The `external_publish_id` prefix for a Meta row's Instagram container that is still processing. */
+export const IG_CONTAINER_PREFIX = 'IGC:';
+/** Sweeps a still-processing reel is given before it is failed: at the worker's minute, about 15 minutes. */
+export const IG_PROCESSING_MAX_ATTEMPTS = 15;
+
+/** The container id an earlier attempt left processing, or null. */
+export function savedIgContainer(externalPublishId: unknown): string | null {
+    return typeof externalPublishId === 'string' && externalPublishId.startsWith(IG_CONTAINER_PREFIX)
+        ? externalPublishId.slice(IG_CONTAINER_PREFIX.length) || null
+        : null;
+}
+
+/**
  * Publish whatever platforms a post is still missing, and record the outcome.
  *
  * Extracted from `publishDuePosts()`'s loop body so `POST /posts/scheduled/:id/publish-now`
@@ -551,7 +577,9 @@ export class PublishAttemptError extends Error {
  */
 export async function attemptPublish(
     post: PublishTarget,
-    creator: PublishCreator
+    creator: PublishCreator,
+    /** How long to wait on Instagram's processing; the default suits a serverless invocation. */
+    opts: { pollBudgetMs?: number } = {}
 ): Promise<{ fbId: string | null; igId: string | null }> {
     // Anything a previous attempt already got live. Re-publishing it would duplicate a real
     // post on a real account, which cannot be undone from here.
@@ -615,8 +643,12 @@ export async function attemptPublish(
             log('info', 'publish.instagram_start', { post_id: post.id });
             // Alt text, collaborators, trial reel (GROWTH.md §4) — whichever fit this row now.
             const reach = reachOptionsFor(post.platform, post.post_type, post.meta_options);
-            const igRes = slides
-                ? await publishInstagramCarousel(creator.instagram_page_id, post.caption || '', slides, token, undefined, reach)
+            // A container an earlier sweep left processing is published as it is, not uploaded again.
+            const saved = savedIgContainer(post.external_publish_id);
+            let igRes: any = saved ? await resumeInstagramContainer(creator.instagram_page_id, saved, token, opts.pollBudgetMs) : null;
+            if (saved) log('info', igRes ? 'publish.instagram_resumed' : 'publish.instagram_resume_restarted', { post_id: post.id, container_id: saved });
+            igRes ??= slides
+                ? await publishInstagramCarousel(creator.instagram_page_id, post.caption || '', slides, token, opts.pollBudgetMs, reach)
                 : await publishInstagramPost(
                     creator.instagram_page_id,
                     postType,
@@ -626,7 +658,7 @@ export async function attemptPublish(
                     // `cover_url` is the reason a reel does not get a black tile in the
                     // profile grid. It survives create, edit and publish-now.
                     post.cover_url,
-                    undefined,
+                    opts.pollBudgetMs,
                     reach
                 );
             igId = igRes.id;
@@ -648,13 +680,27 @@ export async function attemptPublish(
         // PENDING rows, so the note never reads as an error there.
         await pool.query(
             `UPDATE scheduled_posts
-             SET status = 'PUBLISHED', published_post_id = $1, error_log = $3
+             SET status = 'PUBLISHED', published_post_id = $1, error_log = $3,
+                 external_publish_id = CASE WHEN external_publish_id LIKE 'IGC:%' THEN NULL ELSE external_publish_id END
              WHERE id = $2`,
             [formatPublishedIds(fbId, igId), post.id, droppedLeversNote(dropped)]
         );
 
         return { fbId, igId };
     } catch (err: any) {
+        // Still processing: hold the row, keep the container, and let the next sweep finish it.
+        if (err instanceof MediaProcessingTimeoutError && (post.attempts ?? 0) < IG_PROCESSING_MAX_ATTEMPTS) {
+            const live = formatPublishedIds(fbId, igId);
+            const note = `Instagram is still processing the video; the next sweep publishes it${live ? ` (already live: ${live})` : ''}.`;
+            await pool.query(
+                `UPDATE scheduled_posts
+                 SET status = 'PENDING', claimed_at = NULL, external_publish_id = $1, published_post_id = $2, error_log = $3
+                 WHERE id = $4`,
+                [IG_CONTAINER_PREFIX + err.containerId, live || null, note, post.id]
+            );
+            throw new InstagramProcessingHeldError(note, fbId, igId, err);
+        }
+
         // A dead token stops every publish, not just this one.
         if (creator.id) await noteMetaFailure(creator.id, err);
 
@@ -812,6 +858,11 @@ export async function publishDuePosts(): Promise<PublishSweepResult> {
             if (err instanceof TikTokInboxFullError) {
                 // Held, not failed — the row is PENDING again and goes out once a draft clears.
                 log('warn', 'cron.publish_held_tiktok_inbox', { post_id: post.id });
+                continue;
+            }
+            if (err instanceof InstagramProcessingHeldError) {
+                // Held, not failed — the next sweep publishes the same container.
+                log('info', 'cron.publish_held_ig_processing', { post_id: post.id, fb_post_id: err.fbId });
                 continue;
             }
             // The publisher has already written the FAILED row — for Meta, with whatever
@@ -2632,7 +2683,7 @@ router.post('/posts/scheduled/:id/publish-now', canOperate, async (req, res) => 
                 facebook_page_id: post.facebook_page_id,
             });
         } catch (err: any) {
-            if (err instanceof TikTokInboxFullError) {
+            if (err instanceof TikTokInboxFullError || err instanceof InstagramProcessingHeldError) {
                 // Not a failure: the row is PENDING again with the reason on it.
                 res.status(409).json({ error: err.message });
                 return;
