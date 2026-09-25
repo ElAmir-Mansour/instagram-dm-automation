@@ -112,6 +112,7 @@ function postLine(p: PostInsight, timezone: string): string {
         `views ${fmt(m.views)}`, `reach ${fmt(m.reach)}`, `likes ${fmt(m.likes)}`, `comments ${fmt(m.comments)}`,
         `saved ${fmt(m.saved)}`, `shares ${fmt(m.shares)}`,
         ...(m.avg_watch_time_ms !== null ? [`avg watch ${seconds(m.avg_watch_time_ms)}`] : []),
+        ...(m.skip_rate !== null && m.skip_rate !== undefined ? [`skipped in 3s ${fmt(m.skip_rate)}%`] : []),
         ...(m.follows !== null ? [`follows ${fmt(m.follows)}`] : []),
     ].join(', ');
     return `- id ${p.media_id} [${p.platform} ${p.media_type ?? '?'} ${when}] ${numbers} | «${clip(p.caption, 140)}»`;
@@ -145,7 +146,7 @@ export function coachPrompt(input: {
         const group = posts.filter((p) => (p.media_type ?? 'UNKNOWN') === type);
         const pick = (f: (p: PostInsight) => number | null | undefined) =>
             median(group.map(f).filter((x): x is number => typeof x === 'number'));
-        lines.push(`- ${type}: ${group.length} posts, median views ${fmt(pick((p) => p.metrics.views))}, median reach ${fmt(pick((p) => p.metrics.reach))}, median interactions ${fmt(pick((p) => p.interactions))}${type === 'REELS' || type === 'VIDEO' ? `, median avg watch ${seconds(pick((p) => p.metrics.avg_watch_time_ms))}` : ''}`);
+        lines.push(`- ${type}: ${group.length} posts, median views ${fmt(pick((p) => p.metrics.views))}, median reach ${fmt(pick((p) => p.metrics.reach))}, median interactions ${fmt(pick((p) => p.interactions))}${type === 'REELS' || type === 'VIDEO' ? `, median avg watch ${seconds(pick((p) => p.metrics.avg_watch_time_ms))}` : ''}${type === 'REELS' ? `, median skipped in 3s ${fmt(pick((p) => p.metrics.skip_rate))}%` : ''}`);
     }
 
     const reposts = repostGroups(posts);
@@ -193,7 +194,7 @@ Write every field in ${name}, plainly, as one practitioner to another. Metric na
 ## Rules
 - Ground every claim in the numbers given. Quote the number. Never invent a figure, a benchmark or a trend the data doesn't show.
 - When a number is missing, say it's missing and why (a permission, fewer than 100 followers), and coach from what is there: the post history, types, captions and timing.
-- Find the bottleneck the data shows before advising. When most reach already comes from non-followers, distribution is not the problem — retention and conversion are. For reels, an average watch time of a few seconds means the first 3 seconds don't hold: coach the hook, the opening frame, on-screen text and pacing, not hashtags or posting volume.
+- Find the bottleneck the data shows before advising. When most reach already comes from non-followers, distribution is not the problem — retention and conversion are. For reels, an average watch time of a few seconds means the first 3 seconds don't hold: coach the hook, the opening frame, on-screen text and pacing, not hashtags or posting volume. "skipped in 3s" is Instagram's own count of the views that left within 3 seconds: the lower, the stronger the hook. Compare reels by it.
 - A reel posted again under the same caption is a repost: judge reposting by the views each copy got, and say whether it is worth continuing.
 - Actions are concrete and doable this week, highest impact first; each names the number behind it. Experiments change one variable, say how many posts to run, and name the metric that decides them.
 - post_notes: only for posts in the list, by their exact id.

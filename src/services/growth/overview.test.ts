@@ -93,6 +93,18 @@ describe('buildOverview', () => {
         assert.equal(o.kpi_sources.profile_visits, null);
     });
 
+    it('reports the median skip rate of the reels, per type too, and null when no reel has one', () => {
+        const o = buildOverview(base({ posts: [
+            post({ views: 100, skip_rate: 86.5 }), post({ views: 150, skip_rate: 63.8 }), post({ views: 90, skip_rate: 92 }),
+            post({ views: 20 }, { media_type: 'CAROUSEL_ALBUM' }),
+        ] }), 'instagram');
+        assert.equal(o.kpis.skip_rate, 86.5, 'the median of 63.8, 86.5 and 92; the carousel has none');
+        assert.equal(o.by_type.find((t) => t.type === 'REELS')!.avg_skip_rate, 80.8);
+        assert.equal(o.by_type.find((t) => t.type === 'CAROUSEL_ALBUM')!.avg_skip_rate, null);
+        const none = buildOverview(base({ posts: [post({ views: 20 }, { media_type: 'IMAGE' })] }), 'instagram');
+        assert.equal(none.kpis.skip_rate, null);
+    });
+
     it('falls back to the posts when there are no account days', () => {
         const o = buildOverview(base({ posts: [post({ reach: 10, views: 12, likes: 1 }), post({ reach: 30, views: 40, likes: 3 })] }), 'instagram');
         assert.equal(o.kpis.reach, 40);

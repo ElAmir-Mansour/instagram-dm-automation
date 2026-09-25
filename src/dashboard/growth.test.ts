@@ -292,12 +292,12 @@ const escaped = (text: string): string => text.replace(/[&<>"'`]/g, (c) => ({ '&
 
 // ─────────────────────────────────────────────────────────────────────────────────────────
 describe('GrowthPage — every state renders something true', () => {
-    it('full data: seven KPI cards, the trend line, who sees you, best times, by type and the posts', async () => {
+    it('full data: eight KPI cards, the trend line, who sees you, best times, by type and the posts', async () => {
         const s = loadGrowth('en');
         stubGrowth(s);
         const page = await renderPage(s);
 
-        assert.equal(count(page, 'class="stat-card surface growth-kpi'), 7, 'followers, reach, views, ER, saves, shares, watch time');
+        assert.equal(count(page, 'class="stat-card surface growth-kpi'), 8, 'followers, reach, views, ER, saves, shares, watch time, skip rate');
         assert.ok(page.includes('1,240'), 'followers');
         assert.ok(page.includes('<bdi class="ltr-text" dir="ltr">+32</bdi>'), 'the delta keeps its sign, isolated');
         assert.ok(page.includes('5.3%'), 'a ratio of 0.053 reads as 5.3%');
@@ -346,9 +346,9 @@ describe('GrowthPage — every state renders something true', () => {
         assert.ok(page.includes(s.t('growth.best.basisInteractions', { posts: s.t('growth.posts.count', { count: 6, n: '6' }) })),
             'best times fall back to likes and comments, and say so');
         assert.ok(page.includes(s.t('growth.banner.tiktok')));
-        // Six posts × views, reach, saves, shares and watch time: all unmeasured, all dashes. The
+        // Six posts × views, reach, saves, shares, watch time and skip rate: all unmeasured, all dashes. The
         // comments column is a real 0 and stays one: measured zero and "not measured" differ.
-        assert.equal(count(page, '<td class="cell-num">—</td>'), 30, 'no unmeasured value is drawn as 0');
+        assert.equal(count(page, '<td class="cell-num">—</td>'), 36, 'no unmeasured value is drawn as 0');
         assert.equal(count(page, '<span class="growth-er is-missing">—</span>'), 12, 'nor a rate, in the table or the cards');
     });
 
@@ -1147,7 +1147,7 @@ describe('Growth — every string in Arabic and English, and the page wired into
         assert.ok(at('data-page="analytics"') < at('data-page="growth"') && at('data-page="growth"') < at('data-page="activity"'));
         assert.match(index, /var PAGES = \[[^\]]*'growth'/);
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '7.7');
-        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['7.7']);
+        assert.equal(version, '7.8');
+        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['7.8']);
     });
 });

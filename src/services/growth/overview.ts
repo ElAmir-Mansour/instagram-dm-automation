@@ -30,6 +30,7 @@ export type OverviewPlatform = (typeof GROWTH_PLATFORMS)[number] | 'all';
 /** The metric keys every PostInsight carries, null when unavailable, so the table's columns are stable. */
 export const POST_METRIC_KEYS = [
     'views', 'reach', 'likes', 'comments', 'saved', 'shares', 'total_interactions', 'follows', 'profile_visits', 'avg_watch_time_ms',
+    'skip_rate',
 ] as const;
 
 export type PostInsight = Omit<PostInsightRow, 'metrics' | 'published_at' | 'fetched_at'> & {
@@ -41,6 +42,14 @@ export type PostInsight = Omit<PostInsightRow, 'metrics' | 'published_at' | 'fet
 };
 
 const round = (n: number, places = 4): number => Math.round(n * 10 ** places) / 10 ** places;
+
+/** The median skip rate of the posts that report one (reels), to one decimal; null when none do. */
+function medianSkip(posts: readonly PostInsight[]): number | null {
+    const v = posts.map((p) => p.metrics.skip_rate).filter((x): x is number => typeof x === 'number' && Number.isFinite(x)).sort((a, b) => a - b);
+    if (!v.length) return null;
+    const mid = Math.floor(v.length / 2);
+    return round(v.length % 2 ? v[mid]! : (v[mid - 1]! + v[mid]!) / 2, 1);
+}
 const has = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
 
 /** Meta's aggregate when there is one, else the sum of whatever counts exist; null when none do. */
@@ -173,6 +182,8 @@ export interface Overview {
         posts: number;
         /** Share of reach from accounts that don't follow (Instagram's follow_type split), 0–1. */
         non_follower_reach_share: number | null;
+        /** Median `skip_rate` over the window's reels: % of views gone within 3 seconds, 0–100. */
+        skip_rate: number | null;
     };
     kpi_sources: Record<'reach' | 'views' | 'saves' | 'shares' | 'profile_visits', 'account' | 'posts' | null>;
     /** Instagram's follower / non-follower split over the window. */
@@ -189,6 +200,7 @@ export interface Overview {
     by_type: {
         type: string; posts: number; avg_views: number | null; avg_engagement: number | null;
         avg_reach: number | null; avg_interactions: number | null; avg_watch_time_ms: number | null;
+        avg_skip_rate: number | null;
     }[];
     by_platform: { platform: string; posts: number; followers: number | null; views: number | null; reach: number | null; avg_views: number | null }[];
     /** Why a number is empty, by key, e.g. `follows`: "Instagram shares this once…". */
@@ -268,6 +280,7 @@ export function buildOverview(input: OverviewInput, platform: OverviewPlatform):
             avg_reach: meanOf(group, (p) => p.metrics.reach),
             avg_interactions: meanOf(group, (p) => p.interactions),
             avg_watch_time_ms: meanOf(group, (p) => p.metrics.avg_watch_time_ms, 0),
+            avg_skip_rate: meanOf(group, (p) => p.metrics.skip_rate, 1),
         };
     }).sort((a, b) => b.posts - a.posts);
 
@@ -315,6 +328,7 @@ export function buildOverview(input: OverviewInput, platform: OverviewPlatform):
             interactions: sumOf(inWindow, (p) => p.interactions),
             posts: inWindow.length,
             non_follower_reach_share: splitTotal > 0 ? round((split.reach.non_followers ?? 0) / splitTotal) : null,
+            skip_rate: medianSkip(inWindow),
         },
         kpi_sources: { reach: reach.source, views: views.source, saves: saves.source, shares: shares.source, profile_visits: visits.source },
         audience_split: splitKnown ? split : null,
@@ -398,6 +412,7 @@ export async function getOverview(creatorId: string, query: { days?: unknown; pl
 
 export const POST_SORTS = [
     'published_at', 'views', 'reach', 'likes', 'comments', 'saved', 'shares', 'engagement_rate', 'interactions', 'avg_watch_time_ms',
+    'skip_rate',
 ] as const;
 
 /** Sorted descending, unknowns last. */

@@ -64,7 +64,7 @@ growth_settings (
 | GET `/api/growth/competitors` | Instagram **Business Discovery** for each competitor username: `{ username, followers, media_count, recent: { permalink, like_count, comments_count, media_type, timestamp, caption }[], avg_engagement }[]`. Reports `missing_permission` if the token can't. |
 
 ## 4. Reach levers at publish time (only what the official APIs support; verify each in the docs)
-- **Alt text** on image and carousel slides (`alt_text`), which is SEO for Instagram search. The Studio writes one per slide.
+- **Alt text** on image and carousel slides (`alt_text`), for accessibility. Instagram's help treats it as an accessibility feature and documents no search role, so the product never sells it as SEO. The Studio writes one per slide.
 - **Collaborators** (`collaborators`: up to 3 usernames) for Collab posts, so they're shown to both audiences.
 - **Trial reels** (`trial_params` with a graduation strategy), which show a reel to non-followers first. Offer it only if the Content Publishing API supports it for this account type.
 - **Keywords:** the Studio writer puts 1–2 of the tenant's `keywords` naturally into the caption's first line, and into the on-slide text where it fits. Hashtags come from `hashtag_sets`.

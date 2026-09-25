@@ -210,27 +210,42 @@ describe('attemptPublish — a lever Instagram refuses', () => {
         cover_url: null, published_post_id: null, media_urls: null, meta_options: meta_options as never,
     });
 
+    let publishCalls = 0;
     beforeEach(() => {
+        publishCalls = 0;
         (metaHttp as any).post = async (url: string, body: any) => {
             if (url === `${BASE}/ig-1/media`) {
                 if (body.trial_params) {
                     throw Object.assign(new Error('bad'), { response: { status: 400, data: { error: { code: 100, message: 'Trial reels are unavailable' } } } });
                 }
+                if (body.collaborators) {
+                    throw Object.assign(new Error('bad'), { response: { status: 400, data: { error: { code: 100, message: 'Collaborators are unavailable' } } } });
+                }
                 return { data: { id: 'container-1' } };
             }
-            if (url === `${BASE}/ig-1/media_publish`) return { data: { id: 'ig-reel-1' } };
+            if (url === `${BASE}/ig-1/media_publish`) { publishCalls++; return { data: { id: 'ig-reel-1' } }; }
             throw new Error(`no Meta POST arranged for ${url}`);
         };
         (metaHttp as any).get = async () => ({ data: { status_code: 'FINISHED' } });
     });
 
     it('publishes without it and keeps a note on the PUBLISHED row', async () => {
-        const ids = await attemptPublish(reel({ trial_reel: { graduation: 'MANUAL' } }), creator);
+        const ids = await attemptPublish(reel({ collaborators: ['partner'] }), creator);
         assert.deepEqual(ids, { fbId: null, igId: 'ig-reel-1' });
         const done = writes(/SET status = 'PUBLISHED'/)[0]!;
         assert.equal(done.params[0], 'IG:ig-reel-1');
-        assert.match(done.params[2], /^Published without the trial reel: Instagram refused it for this account — Trial reels are unavailable/);
+        assert.match(done.params[2], /^Published without collaborators: Instagram refused it for this account — Collaborators are unavailable/);
         assert.ok(logs.some((l) => l.event === 'publish.reach_options_dropped'));
+    });
+
+    it('fails a refused trial reel instead of posting it to followers, and says why', async () => {
+        const err = await attemptPublish(reel({ trial_reel: { graduation: 'MANUAL' } }), creator).then(() => null, (e) => e);
+        assert.ok(err, 'the attempt fails');
+        const failed = writes(/SET status = 'FAILED'/)[0]!;
+        assert.match(failed.params[0], /Trial Reel .* NOT published/);
+        assert.match(failed.params[0], /Trial reels are unavailable/);
+        assert.equal(writes(/SET status = 'PUBLISHED'/).length, 0);
+        assert.equal(publishCalls, 0, 'nothing went live');
     });
 
     it('writes no note when nothing was refused', async () => {

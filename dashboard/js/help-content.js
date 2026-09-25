@@ -796,8 +796,8 @@ const HelpContent = {
             icon: 'search',
             title: { ar: 'السيو في إنستجرام وتيك توك', en: 'Instagram & TikTok SEO' },
             summary: {
-                ar: 'كيف يلقاك الناس في البحث: الكلمات في أول سطر، والنص على الشاشة، والنص البديل، والوسوم، والريلز التجريبية، والمنشورات المشتركة، والاستمرارية.',
-                en: 'How people find you in search: keywords in the first line, on-screen text, alt text, hashtags, trial reels, collab posts and posting consistency.',
+                ar: 'كيف يلقاك الناس في البحث: الكلمات في أول سطر، والنص على الشاشة، والوسوم، والريلز التجريبية، والمنشورات المشتركة، والاستمرارية. ومعها النص البديل لمن لا يرى الصورة.',
+                en: 'How people find you in search: keywords in the first line, on-screen text, hashtags, trial reels, collab posts and posting consistency. Plus alt text, for people who can’t see the image.',
             },
             related: ['growth', 'scheduling', 'create'],
             sections: [
@@ -842,7 +842,7 @@ const HelpContent = {
                     title: { ar: 'النص البديل', en: 'Alt text' },
                     body: {
                         ar: [
-                            'النص البديل وصف قصير لما في الصورة. قارئ الشاشة يقرؤه للمكفوفين، وبحث إنستجرام يستخدمه عشان يفهم منشورك.',
+                            'النص البديل وصف قصير لما في الصورة، يقرؤه قارئ الشاشة لمن لا يرى الصورة. إنستجرام يقدّمه كميزة وصول، ولا يذكر رسمياً أن له دوراً في البحث.',
                             { ul: [
                                 'في **جدولة منشور** يظهر حقل **النص البديل** للصورة، وحقل لكل شريحة في الكاروسيل، بنفس ترتيب الشرائح. الحد 200 حرف.',
                                 'صف اللي فعلاً في الصورة: «شاشة محادثة مع وكيل ذكي يكتب خطة من ثلاث خطوات»، مو «أفضل كورس ذكاء اصطناعي».',
@@ -852,7 +852,7 @@ const HelpContent = {
                             { note: 'الاستوديو يكتب نصاً بديلاً لكل شريحة لما يتوفر، وتشوفه تحت معاينة الجوال في محرر الكاروسيل.' },
                         ],
                         en: [
-                            'Alt text is a short description of what is in an image. Screen readers read it out to blind users, and Instagram search uses it to understand your post.',
+                            'Alt text is a short description of what is in an image, read out by screen readers to people who can’t see it. Instagram presents it as an accessibility feature and doesn’t officially say it affects search.',
                             { ul: [
                                 'In **Schedule a post**, the **Alt text** field appears for an image, and one field per slide for a carousel, in slide order. The limit is 200 characters.',
                                 'Describe what is really in the picture: “A chat window where an AI agent writes a three-step plan”, not “The best AI course”.',
