@@ -346,6 +346,9 @@ async function readInstagramDays(
 
 // ─── Facebook ────────────────────────────────────────────────────────────────────────────
 
+/** Posts per page of the Facebook list. See syncFacebook for why it is this small. */
+export const FB_POSTS_PAGE_SIZE = 10;
+
 async function syncFacebook(pageId: string, ctx: PlatformCtx): Promise<PlatformOutcome> {
     const result = platformResult(ctx.insights === false ? 'missing_permission' : 'ok');
     const { graph } = ctx;
@@ -358,10 +361,13 @@ async function syncFacebook(pageId: string, ctx: PlatformCtx): Promise<PlatformO
         const stop = { max: MAX_MEDIA, oldest: ctx.now.getTime() - MAX_MEDIA_AGE_DAYS * 86_400_000, timeKey: 'created_time' };
         let raw: any[];
         try {
-            raw = await listPages(graph, `${pageId}/posts`, { fields: FB_POST_FIELDS, limit: 50 }, stop);
+            // Small pages on purpose. With the attachments expansion Meta took 14s for 50 posts, 8.9s
+            // for 25 and 2.9s for 10 (measured 2026-09-25); metaHttp gives up at 10s.
+            raw = await listPages(graph, `${pageId}/posts`, { fields: FB_POST_FIELDS, limit: FB_POSTS_PAGE_SIZE }, stop);
         } catch (err) {
-            // A refused field is not a dead Page: try the minimal list before giving up.
-            if (isTokenDeathError(err) || graphFailure(err).status === null) throw err;
+            // A refused field or a slow expansion is not a dead Page: try the minimal list (3.4s for
+            // 50) before giving up.
+            if (isTokenDeathError(err)) throw err;
             log('warn', 'growth.fb_post_fields_refused', { creator_id: ctx.creatorId, reason: graphFailure(err).message });
             raw = await listPages(graph, `${pageId}/posts`, { fields: FB_POST_BASIC_FIELDS, limit: 50 }, stop);
         }
