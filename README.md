@@ -11,6 +11,8 @@ dashboard at `/dashboard`.
 **Proving it works end to end:** [`VERIFYING.md`](VERIFYING.md).
 **Why it is shaped this way:** [`ARCHITECTURE.md`](ARCHITECTURE.md).
 **What actually happens, hop by hop:** [`FLOWS.md`](FLOWS.md).
+**The Carousel Studio, in depth (what a worker is, every setting, troubleshooting):** [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md).
+**TikTok, end to end:** [`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md).
 
 ---
 
@@ -26,8 +28,20 @@ dashboard at `/dashboard`.
 - **Durable job queue** — every webhook delivery is written to Postgres before Meta is
   acknowledged, then drained within a time budget. Retries with jittered backoff, a stale-claim
   reaper, and queue-level deduplication on top of row-level claims
-- **Scheduled publishing** — images, videos and reels to Instagram, Facebook, or both, with an
-  atomic claim so overlapping runs cannot double-publish, and partial-publish recovery
+- **Scheduled publishing** — images, videos, reels and carousels to Instagram, Facebook, or both,
+  and to TikTok, with an atomic claim so overlapping runs cannot double-publish, and
+  partial-publish recovery
+- **Carousel posts** — 2 to 10 images as one Instagram and Facebook post (`post_type =
+  'carousel'`), and 2 to 35 as a TikTok photo carousel. The count and the formats (JPEG for
+  Instagram, JPEG or WebP for TikTok) are checked when the post is saved, not at publish time
+- **TikTok** — videos and photo carousels, sent to the creator's TikTok inbox by default, or
+  posted directly with Direct Post (`video.publish`) once it is switched on. Direct posts stay
+  private ("Only me") until TikTok audits the app. See [`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md)
+- **Carousel Studio** — turns course videos into branded carousels for Instagram, Facebook and
+  TikTok. A worker on the creator's Mac indexes each lesson with Gemini and renders the slides
+  with Remotion; the app writes the copy from the lesson's notes, checks it against the design's
+  rules, and schedules it with its keyword → DM campaign. Per-account brand, voice, product and
+  posting times. See [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md)
 - **Gemini DM replies** — structured output, conversation history, per-thread bot toggle, and
   the automated-service disclosure Meta requires
 - **Managed multi-tenancy** — `users`, `memberships`, identity-carrying sessions, per-tenant
@@ -39,8 +53,10 @@ dashboard at `/dashboard`.
 
 ## Dashboard
 
-At `/dashboard`. Overview, Campaigns, Analytics, Activity Log, Scheduled Posts, Inbox,
-AI Settings, Settings — plus **Tenants** and **Users** for a platform admin.
+At `/dashboard`. Overview, Campaigns, Analytics, Activity Log, Scheduled Posts, **Studio**
+(the Carousel Studio: the lesson library, drafts and editor, plus its own Settings tab with the
+brand kit, voice, product, posting times, library folder and workers), Inbox, AI Settings,
+Settings — plus **Tenants** and **Users** for a platform admin.
 
 ---
 
