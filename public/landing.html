@@ -240,6 +240,61 @@
      hero lede links to the Studio in-page instead. The SHARED footer still
      reads "Instagram and Facebook" and names only Meta's trademarks —
      changing it means changing all five pages, which this change does not.
+     (Superseded by the pass below, which did change all five.)
+
+  ═══════════════════════════════════════════════════════════════════════════
+  WHAT CHANGED ON 2026-09-25, SECOND PASS — everything a customer asks
+  ═══════════════════════════════════════════════════════════════════════════
+
+  The page sold the mechanism and left a buyer's practical questions to
+  /pricing or to nobody: who it is for, what they need, what it runs on, what
+  happens to their videos and tokens, whether they can cancel. Five bands were
+  added and two extended; the order is now hero, who it is for, the loop,
+  Arabic, the Studio, how the Studio works, the real work, the dashboard,
+  platforms, security, what you pay for, the refusals, questions, the close.
+
+  1. THE FOOTER (shared, all five pages, byte-identical, hashes re-checked):
+     five groups — Product, Resources, Legal, Follow, Contact — the
+     operator's address, the founder's three accounts as inline-SVG logos
+     with real-text names, a © row with a second language switch, and a legal
+     line that names TikTok's trademark as well as Meta's. Its landing links
+     are language-neutral (/#faq); the script at the end of this file
+     resolves them. The navbar is untouched apart from its comment.
+  2. THE REAL WORK. Seven 540px WebP files in public/samples/ (about 115 KB
+     together), served by the CDN through a /samples/(.*) route that
+     vercel.json did not have — `/(.*)` sent everything to the function,
+     whose Express app has no static handler for public/, so without the
+     route every image would have 404'd. Only the visible language's copies
+     load: the other document is display:none and the images are lazy.
+     HOW IT IS WORDED, AND WHY. The fourteen carousels were rendered by
+     aicourse-captions scripts/render-carousels.mjs from
+     src/carousel/posts/*.ts, committed at 31e2c34 (2026-09-24 19:52), which
+     is BEFORE the Studio's worker existed (d45cd48, 21:45 the same day); three
+     of them are the Studio's own built-in examples
+     (src/services/studio/examples.ts). So the page says what is provable —
+     made from the course's lessons, frames from its videos (scripts/
+     extract-shots.py, shots-spec.json), drawn by the slide templates the
+     Studio renders with — and not that the Studio's writer produced them.
+     If they are later regenerated through the Studio, that sentence is the
+     one to change. Twice a day is the Instagram/Facebook schedule
+     (scripts/seed-studio-settings.mjs:95, 13:00 and 21:00); TikTok received
+     its fourteen in one batch, 40 seconds apart, as Only me, made public by
+     hand (docs/TIKTOK_GUIDE.md §6.3), so the page does not put TikTok on the
+     twice-daily schedule.
+  3. WHO IT IS FOR, PLATFORMS, SECURITY and QUESTIONS are new bands; the
+     dashboard list gained the Studio, the activity log, several accounts
+     and team roles, and connection health; "what you pay for" gained the
+     three plan NAMES and what differs between them — still no price.
+  4. THE CONTACT ADDRESS is the operator's own, supplied 2026-09-25, and
+     every copy carries data-contact-email so the next change finds them all.
+
+  No new colour pair. Every text/ground pair in the new bands is one already
+  used above: --text-strong / --text-default / --text-muted on a card or on
+  the page, --accent-text on --accent-soft (the eyebrow's pair) for the
+  first live link, and --text-strong on a --surface-glass tint —
+  .btn-secondary's pair on the page, and the same tint over a card for the
+  plan names and the FAQ's hover. The images carry no text of the page's;
+  their own contrast is the published slides'.
 
   ═══════════════════════════════════════════════════════════════════════════
 
@@ -348,6 +403,38 @@
         mono audio) and scripts/studio-worker.mjs:343-393; STUDIO.md, "The
         worker only ever calls out"; no createServer or listen() anywhere in
         the worker, which claims its jobs by POST /api/studio/worker/claim
+
+  Added 2026-09-25, second pass:
+    what leaves the computer: the preview for the AI, moment thumbnails, the
+    finished slides
+        aicourse-captions scripts/studio-worker.mjs:376 (the proxy, to
+        Gemini), :404 (thumbnails, to the app), :481 (slides, to the app)
+    several accounts from one sign-in; roles owner, operator, viewer
+        src/services/tenant.ts:260-263 (TenantRole, ROLES), resolveTenant;
+        CLAUDE.md "Multi-tenant as of v12"
+    the activity log: status, failure reason, search, filters by status,
+    platform and campaign
+        dashboard/js/pages/activity.js (currentStatus, currentSearch,
+        currentPlatform, currentCampaignId; error_log at :249, :274)
+    connection health, and TikTok's checked daily
+        public/pricing.html FAQ ("the dashboard shows the access token's
+        state and can re-check it"); refreshAllConnections, called by the
+        daily cron (docs/TIKTOK_GUIDE.md §8.1)
+    Meta AND TikTok tokens encrypted with AES-256-GCM
+        src/config/crypto.ts; src/services/tiktokConnections.ts:191-192,
+        :225-226 (encryptSecret on both tokens)
+    TikTok: at most five pending drafts in 24 hours, held rather than failed
+        src/services/tiktokPublish.ts:169-178
+    no password asked for, on any platform
+        public/terms.html §3
+    Instagram needs a professional account linked to a Page, admin on both
+        public/pricing.html FAQ ("What do I need before starting?")
+    billing arranged directly, its terms agreed before starting
+        public/pricing.html "What this does not promise" (no self-signup,
+        billing between us) and its editorial note (the notice period is
+        the operator's to set, so the page promises agreement, not a period)
+    the Studio's worker is Mac-only today
+        aicourse-captions scripts/install-studio-worker.sh (launchd)
 
   AND DELIBERATELY NOT CLAIMED, on the same terms as the list further down:
     · No time for a Studio draft. The dashboard says up to two minutes each,
@@ -1747,6 +1834,265 @@
            rule that makes a group read as a group. */
         .lead { margin-block-end: var(--space-6); }
 
+        /* ─── Who it is for ────────────────────────────────────────────────────
+           Three audiences in ONE card with hairlines between the cells — the
+           constants card's construction, because three answers to one question
+           are one object, not three tiles. The icons reuse .helper-icon, so the
+           page has one icon tile, not two. None of the three glyphs carries a
+           reading direction, so nothing here mirrors. */
+        .aud { margin: 0; padding: 0; list-style: none; display: grid; }
+        .aud > li { padding: clamp(var(--space-5), 3vw, var(--space-6)); }
+        .aud > li + li { border-block-start: 1px solid var(--border-subtle); }
+        .aud .helper-icon { margin-block-end: var(--space-4); }
+        .aud p { margin: 0; color: var(--text-default); }
+        @media (min-width: 52rem) {
+            .aud { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+            .aud > li + li { border-block-start: 0; border-inline-start: 1px solid var(--border-subtle); }
+        }
+
+        /* ─── Made with AutoReply Pro — the real work ──────────────────────────
+           The page's only photographs, and they are proof rather than
+           decoration: slides this app actually published. Static WebP under
+           public/samples/, 540px wide at quality 72, served by the CDN through
+           the /samples/(.*) route in vercel.json — never from media_uploads,
+           which is a database table. Every <img> is lazy, async-decoded and
+           carries its real width and height, so nothing shifts when it lands;
+           the frame is --surface-solid, DESIGN.md's ground for image frames,
+           so an image still loading is a quiet tile rather than a hole.
+
+           THE ROWS SCROLL SIDEWAYS ONLY WHERE THEY HAVE TO. A flex row with
+           logical properties starts at the reading start in both directions,
+           and an overflow container under dir=rtl opens scrolled to its right
+           edge, so the row is RTL-aware without a single :dir() rule.
+           scroll-snap-type uses the logical `inline` axis for the same reason.
+           Each scroller is a keyboard stop (tabindex="0", role="group" and a
+           name), because a region that only a pointer can scroll is closed to
+           everyone else. The page never scrolls sideways: only the rows do. */
+        .tally {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--space-3) var(--space-6);
+            margin: 0 0 var(--space-6);
+            padding: 0;
+        }
+        .tally > div { display: flex; align-items: baseline; gap: var(--space-2); }
+        .tally dt {
+            font-family: var(--font-latin);
+            font-size: var(--lp-h3);
+            font-weight: var(--fw-semibold);
+            line-height: 1.1;
+            font-variant-numeric: tabular-nums;
+            color: var(--text-strong);
+        }
+        .tally dd { margin: 0; font-size: var(--lp-ui); line-height: var(--lp-lh-ui); color: var(--text-muted); }
+
+        .seq { padding: clamp(var(--space-4), 3vw, var(--space-6)); margin-block-end: var(--space-5); }
+        .seq h3 { margin-block-end: var(--space-1); }
+        .seq-sub { margin: 0 0 var(--space-5); font-size: var(--lp-ui); line-height: var(--lp-lh-ui); color: var(--text-muted); }
+
+        .reel {
+            display: flex;
+            gap: var(--space-3);
+            margin: 0;
+            padding: 0 0 var(--space-2);
+            list-style: none;
+            overflow-x: auto;
+            overscroll-behavior-inline: contain;
+            scroll-snap-type: inline mandatory;
+            scrollbar-width: thin;
+        }
+        .reel > li { flex: none; scroll-snap-align: start; }
+        .reel figure { margin: 0; display: grid; gap: var(--space-2); }
+        .reel img {
+            display: block;
+            border-radius: var(--radius-md);
+            background: var(--surface-solid);
+            box-shadow: 0 0 0 1px var(--border-subtle);
+        }
+        .reel figcaption { font-size: var(--lp-micro); line-height: var(--lp-lh-ui); color: var(--text-muted); }
+        /* The sequence: three 4:5 slides, 72% of the card each on a phone so
+           the next one visibly waits at the edge, and one third each once
+           three fit. */
+        .seq .reel > li { inline-size: min(72%, 16rem); }
+        .seq .reel img { inline-size: 100%; block-size: auto; }
+        @media (min-width: 48rem) {
+            .seq .reel { overflow-x: visible; padding-block-end: 0; }
+            .seq .reel > li { flex: 1 1 0; inline-size: auto; }
+        }
+        /* The covers: ONE height for the row, width from each image's own
+           ratio — 4:5 covers and 9:16 TikTok slides then sit on one baseline,
+           which is also the plainest way to show that every carousel exists in
+           two sizes. The figure shrinks to its image, so each caption wraps to
+           the width of the slide above it. */
+        .covers { margin-block-end: var(--space-6); }
+        .covers .reel figure { inline-size: min-content; }
+        .covers .reel img { block-size: clamp(15rem, 58vw, 21rem); inline-size: auto; }
+
+        .live {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--space-2);
+            margin: 0 0 var(--space-5);
+            padding: 0;
+            list-style: none;
+        }
+        .live a {
+            display: inline-flex;
+            align-items: center;
+            min-height: var(--tap-target);
+            padding-inline: var(--space-4);
+            border-radius: var(--radius-pill);
+            background: var(--surface-glass);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-strong);
+            font-size: var(--lp-ui);
+            font-weight: var(--fw-medium);
+            line-height: var(--lp-lh-ui);
+            text-decoration: none;
+            transition: background var(--lp-t-hover) var(--lp-ease-quad);
+        }
+        .live a:hover { background: var(--surface-glass-hover); color: var(--text-strong); }
+        .live a.live-first {
+            background: var(--accent-soft);
+            box-shadow: inset 0 0 0 1px var(--accent-ring);
+            color: var(--accent-text);
+        }
+        .samples-note { color: var(--text-muted); }
+
+        /* ─── Platforms, and what you need ─────────────────────────────────────
+           A specification, so it is laid out as one: one card, one row per
+           platform, and in each row the same two questions in the same two
+           columns — what you need, and what works there. Platform NAMES, not
+           logos: DESIGN.md §3 keeps Meta's colours as data and never as
+           decoration, and a row of brand marks here would read as the
+           partnership the footer disclaims. */
+        .reqs { margin: 0; padding: 0; list-style: none; }
+        .reqs > li {
+            display: grid;
+            gap: var(--space-2) var(--space-6);
+            padding: var(--space-5) clamp(var(--space-5), 3vw, var(--space-6));
+        }
+        .reqs > li + li { border-block-start: 1px solid var(--border-subtle); }
+        .reqs h3 { margin: 0; font-size: 1.0625rem; }
+        .reqs p { margin: 0; }
+        .reqs .req-k {
+            margin-block-end: var(--space-1);
+            font-size: var(--lp-micro);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-ui);
+            color: var(--text-muted);
+        }
+        .reqs .req-v { color: var(--text-default); }
+        @media (min-width: 52rem) {
+            .reqs > li { grid-template-columns: 10rem minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+        }
+
+        /* ─── Security and privacy ─────────────────────────────────────────────
+           Four statements, each one a thing the code does, two by two on a
+           wide screen with hairlines between them. A raised card with accent
+           tiles, where the refusals below are a sunken panel with muted marks:
+           these are what the product DOES, and they should not look like the
+           terms. */
+        .safe { margin: 0; padding: 0; list-style: none; display: grid; }
+        .safe > li {
+            display: flex;
+            align-items: flex-start;
+            gap: var(--space-4);
+            padding: clamp(var(--space-5), 3vw, var(--space-6));
+        }
+        .safe > li + li { border-block-start: 1px solid var(--border-subtle); }
+        .safe h3 { margin: 0 0 var(--space-1); font-size: 1.0625rem; }
+        .safe p { margin: 0; color: var(--text-muted); }
+        @media (min-width: 52rem) {
+            .safe { grid-template-columns: 1fr 1fr; }
+            .safe > li + li { border-block-start: 0; }
+            .safe > li:nth-child(n + 3) { border-block-start: 1px solid var(--border-subtle); }
+            .safe > li:nth-child(even) { border-inline-start: 1px solid var(--border-subtle); }
+        }
+
+        /* ─── The plans, as a teaser ───────────────────────────────────────────
+           The three NAMES and the one sentence that says what differs, never
+           a price: prices live on /pricing, and a second copy here is a second
+           thing to forget. It closes the "what you pay for" card across both
+           halves. `.pays > div + div` would otherwise give it the second pane's
+           inline rule on a wide screen, which is why that is undone here. */
+        .pays > .plans {
+            grid-column: 1 / -1;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-4) var(--space-6);
+            border-block-start: 1px solid var(--border-subtle);
+            padding-block-start: var(--space-5);
+        }
+        @media (min-width: 52rem) {
+            .pays > .plans { border-inline-start: 0; padding-inline-start: 0; }
+        }
+        .pays > .plans p { margin: 0; max-inline-size: 58ch; }
+        .plan-names { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-3); padding: 0; list-style: none; }
+        .plan-names li {
+            padding: 0.1rem var(--space-3);
+            border-radius: var(--radius-pill);
+            background: var(--surface-glass);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-strong);
+            font-size: var(--lp-ui);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-ui);
+        }
+
+        /* ─── Questions ────────────────────────────────────────────────────────
+           <details>, so every answer is in the DOM and readable with JavaScript
+           off, as on /pricing. The marker is a plus that loses its upright bar
+           when open: the one open/closed sign that is identical in both
+           directions, where a chevron pointing along the line would need a
+           :dir() flip to keep pointing the right way. */
+        .qa { max-inline-size: 52rem; }
+        .qa details + details { border-block-start: 1px solid var(--border-subtle); }
+        .qa summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-4);
+            min-height: var(--tap-target);
+            padding: var(--space-4) clamp(var(--space-4), 3vw, var(--space-6));
+            border-radius: var(--radius-lg);
+            list-style: none;
+            cursor: pointer;
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-head);
+            color: var(--text-strong);
+            transition: background var(--lp-t-hover) var(--lp-ease-quad);
+        }
+        .qa summary::-webkit-details-marker { display: none; }
+        .qa summary:hover { background: var(--surface-glass); }
+        .qa summary::after {
+            content: '';
+            flex: none;
+            inline-size: 0.75rem;
+            block-size: 0.75rem;
+            color: var(--text-muted);
+            background:
+                linear-gradient(currentColor, currentColor) center / 100% 2px no-repeat,
+                linear-gradient(currentColor, currentColor) center / 2px 100% no-repeat;
+        }
+        .qa details[open] > summary::after {
+            background: linear-gradient(currentColor, currentColor) center / 100% 2px no-repeat;
+        }
+        .qa summary:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: -2px;
+            box-shadow: inset 0 0 0 5px var(--accent-ring);
+        }
+        .qa .qa-a {
+            padding: 0 clamp(var(--space-4), 3vw, var(--space-6)) var(--space-5);
+            max-inline-size: 64ch;
+            color: var(--text-default);
+        }
+        .qa .qa-a p { margin: 0 0 var(--space-3); }
+        .qa .qa-a > :last-child { margin-block-end: 0; }
+
         /* ─── Footer ───────────────────────────────────────────────────────── */
         .divider {
             height: 1px;
@@ -1844,34 +2190,40 @@
             .helper-icon { inline-size: 2.25rem; block-size: 2.25rem; }
             .terms { padding: var(--space-5) var(--space-4); }
             .cta { padding: var(--space-6) var(--space-5); }
+            .aud > li, .safe > li { padding: var(--space-5) var(--space-4); }
+            .safe > li { gap: var(--space-3); }
+            .reqs > li { padding: var(--space-5) var(--space-4); }
+            .seq { padding: var(--space-4); }
         }
         /* ═══════════════════════════════════════════════════════════════════
            SHARED SITE CHROME · CSS
            ═══════════════════════════════════════════════════════════════════
 
-           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES:
-           landing.html, pricing.html, privacy.html and data-deletion.html.
+           THIS BLOCK IS MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES:
+           landing.html, pricing.html, privacy.html, terms.html and
+           data-deletion.html. (It said four until 2026-09-25; terms.html was
+           the fifth copy all along.)
 
-           There is no build step and no templating in this project — the four
-           pages are standalone files behind four hardcoded Express routes in
+           There is no build step and no templating in this project — the five
+           pages are standalone files behind five hardcoded Express routes in
            src/index.ts, and public/** has no static handler — so the only way
            to share chrome is to duplicate it. It is duplicated DELIBERATELY
            and character for character, which is what makes drift findable:
-           diff the block between any two of the four files and identical is
+           diff the block between any two of the five files and identical is
            the expected result. Change one copy and you have to change all
-           four. The markers around it exist so a diff can be taken
+           five. The markers around it exist so a diff can be taken
            mechanically.
 
            WHY IT IS LAST IN EVERY <style>. It owns .skip, .topbar, .wordmark,
            .headtools, .headnav, .langswitch, .pagefoot and the .t-* language
-           filter outright, and it has to win on all four pages regardless of
+           filter outright, and it has to win on all five pages regardless of
            what each page declares above it. Every page-local rule for those
            selectors was deleted rather than left to lose the cascade quietly.
 
            IT READS EXACTLY TWO THINGS from the page it is pasted into:
            --page-max and --page-gutter, the width and gutter of that page's
-           content column. The four columns genuinely differ (70rem, 64rem,
-           52rem, 52rem) and a full-bleed bar whose wordmark does not sit on
+           content column. The columns genuinely differ (70rem, 64rem,
+           52rem) and a full-bleed bar whose wordmark does not sit on
            the same vertical as the text beneath it looks like an accident.
            Both have fallbacks, so the block still renders correctly on a page
            that forgets to declare them.
@@ -2105,7 +2457,7 @@
         }
 
         /* ─── The footer ───────────────────────────────────────────────────────
-           It carries all four public pages plus the dashboard and the repo, so
+           It carries all five public pages plus the dashboard and the repo, so
            every page can reach every other page from the bottom as well as the
            top. It sits inside each page's own .shell, which is why it has no
            max-width of its own: it inherits the column it belongs to.
@@ -2115,9 +2467,34 @@
            two of them that a visitor reaches from Meta's own settings link, the
            thing at the bottom of the page was thinner than the bar at the top.
            It now carries a masthead — the wordmark again, and one line saying
-           what this is — three named groups of links, and the legal line, with a
+           what this is — named groups of links, and the legal line, with a
            hairline between each of the three. The wordmark's repeat is the point:
            the bottom of the page should say whose page it is.
+
+           2026-09-25: FIVE GROUPS, because a customer looks here for five
+           things — what the product is (Product), how to learn it (Resources),
+           the paperwork (Legal), a person (Contact) and the proof (Follow: the
+           founder's accounts, which are where the app's own work is published).
+           Product and Resources link into landing.html with LANGUAGE-NEUTRAL
+           fragments (/#features, /#faq …): this block is one string on five
+           pages and in two languages, so it cannot name #faq-ar or #faq-en.
+           landing.html resolves the neutral name to the visible language's
+           section on load and rewrites these hrefs when the language changes;
+           with JavaScript off, a neutral fragment lands at the top of `/`,
+           where both languages are showing anyway.
+           The contact address is the operator's, on all five pages, and
+           `data-contact-email` marks it so the next change finds every copy. It
+           is not wrapped in <bdi>: an address is one unbroken left-to-right run
+           (the @ and the dot sit between Latin letters and resolve with them),
+           so it renders correctly inside the Arabic footer as it is. It is also
+           the widest thing in the footer — about 185px at 14px, against 144px
+           columns at 375px — so on a phone the Contact group takes a row of its
+           own, and overflow-wrap is the net under that, never a scrollbar.
+           The © row carries a second language switch. It is the same two
+           buttons with the same data-set-lang, so every page's own switch
+           script binds it with no change (they all select [data-set-lang]),
+           and it is a role="group", not a <nav>, so the page does not gain a
+           second landmark with the same name as the bar's.
 
            Every rule below is scoped under .pagefoot rather than written as a
            bare class, and that is load-bearing: ".pagefoot a" is (0,1,1) and
@@ -2168,7 +2545,7 @@
             border-block-start: 1px solid var(--border-subtle);
             border-block-end: 1px solid var(--border-subtle);
         }
-        .pagefoot .foot-cols nav { display: flex; flex-direction: column; }
+        .pagefoot .foot-cols > * { display: flex; flex-direction: column; }
         /* A <p>, not an <h*>: these four pages have four different heading
            outlines and a privacy policy does not need three more h2s under its
            footer. aria-labelledby can point at any element, so the group still
@@ -2192,7 +2569,54 @@
             font-weight: var(--fw-semibold);
         }
         .pagefoot p { max-width: 70ch; margin: 0; }
-        .pagefoot .foot-legal { margin-block-start: var(--space-5); }
+        .pagefoot .foot-legal { margin-block-start: var(--space-3); }
+        .pagefoot .foot-mail { overflow-wrap: anywhere; }
+
+        /* Follow: three logos, 44px square each, in the default text colour
+           rather than the link colour — a row of three accent-blue logos reads
+           as an advert. They are glyphs and are NEVER mirrored: a logo is not
+           a direction. Each link's name is real text (.foot-sr), in the same
+           two <bdi>s every other label here uses, so the language filter hides
+           the other language's name from assistive technology too. */
+        .pagefoot .foot-social { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+        .pagefoot .foot-social a {
+            justify-content: center;
+            min-width: var(--tap-target);
+            border-radius: var(--radius-sm);
+            color: var(--text-default);
+            transition: background var(--nav-t) var(--nav-ease),
+                        color var(--nav-t) var(--nav-ease);
+        }
+        .pagefoot .foot-social a:hover { background: var(--surface-glass); color: var(--text-strong); }
+        .pagefoot .foot-social svg { inline-size: 1.25rem; block-size: 1.25rem; }
+        .pagefoot .foot-note { max-width: 24ch; }
+        .pagefoot .foot-sr {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip-path: inset(50%);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        /* The © line and the footer's language switch share one row, at the
+           two ends of it in either direction (space-between is logical). */
+        .pagefoot .foot-base {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-3) var(--space-5);
+            margin-block-start: var(--space-5);
+        }
+        .pagefoot .foot-copy { color: var(--text-default); }
+
+        @media (max-width: 30rem) {
+            .pagefoot .foot-contact { grid-column: 1 / -1; }
+        }
 
         /* ─── The language filter ──────────────────────────────────────────────
            No attribute (JavaScript off or failed) = both languages visible,
@@ -2280,17 +2704,19 @@
     <!-- ═══════════════════════════════════════════════════════════════════════
          SHARED SITE CHROME · NAVBAR
          ═══════════════════════════════════════════════════════════════════════
-         MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES: landing.html,
-         pricing.html, privacy.html and data-deletion.html. No build step, no
-         templating — see the CSS block of the same name at the end of <style>
-         for why the four copies exist and what to do when one of them changes.
+         MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES: landing.html,
+         pricing.html, privacy.html, terms.html and data-deletion.html. No
+         build step, no templating — see the CSS block of the same name at the
+         end of <style> for why the five copies exist and what to do when one
+         of them changes.
 
-         THE ONE INTENDED DIFFERENCE between the four copies is
+         THE ONE INTENDED DIFFERENCE between the five copies is
          `aria-current="page"` on the link that points at the page you are
          reading. On landing.html that is the wordmark; on pricing.html the
-         Pricing link. /privacy and /data-deletion are not destinations in the
-         bar, so on those two pages nothing here carries it — their footer link
-         does instead. Anything else that differs is drift.
+         Pricing link. /privacy, /terms and /data-deletion are not
+         destinations in the bar, so on those three pages nothing here carries
+         it — their footer link does instead. Anything else that differs is
+         drift.
          ═══════════════════════════════════════════════════════════════════════ -->
     <!-- The skip link is part of the chrome, so it is part of this block. It was
          three different strings before: landing.html isolated both labels in
@@ -2380,9 +2806,41 @@
                     </div>
                 </section>
 
+                <!-- ─── Who it is for ───────────────────────────────────── -->
+                <section class="band" aria-labelledby="who-ar">
+                    <h2 id="who-ar">لمن صُنع</h2>
+                    <p class="prose lead">لكل من يبيع من حسابه، لجمهورٍ يكتب له بالعربية:</p>
+                    <ul class="card aud">
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></span>
+                            <h3>صنّاع المحتوى</h3>
+                            <p>
+                                تمتلئ التعليقات بالسؤال نفسه. كلمةٌ واحدة في الحملة تجيب عنه على
+                                الخاص، بكلماتك أنت، وأنت تصوّر المقطع التالي.
+                            </p>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21.42 10.92a1 1 0 0 0-.02-1.84L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.83l8.57 3.91a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></svg></span>
+                            <h3>بائعو الدورات</h3>
+                            <p>
+                                دروسك تصير كاروسيلات تدلّ على الدورة، وكلمةٌ في التعليقات توصل
+                                رابطها على الخاص — وهذا ما تفعله المنشورات المعروضة في الأسفل.
+                            </p>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span>
+                            <h3>المتاجر والأنشطة الصغيرة</h3>
+                            <p>
+                                «بكم؟» و«فيه توصيل؟» و«وين موقعكم؟» تصل تعليقاتٍ، والجواب يذهب إلى
+                                الخاص، بالعربية التي يكتب بها عملاؤك فعلاً.
+                            </p>
+                        </li>
+                    </ul>
+                </section>
+
                 <!-- ─── The loop ─────────────────────────────────────────── -->
-                <section class="band" aria-labelledby="loop-ar">
-                    <h2 id="loop-ar">ماذا يحدث حين يعلّق أحدهم</h2>
+                <section class="band" aria-labelledby="how-it-works-ar">
+                    <h2 id="how-it-works-ar">ماذا يحدث حين يعلّق أحدهم</h2>
                     <p class="prose lead">ثلاث خطوات على إنستجرام وفيسبوك، والأولى وحدها من العميل. الباقي يجري من تلقاء نفسه:</p>
 
                     <ol class="loop">
@@ -2637,9 +3095,78 @@
                     </div>
                 </section>
 
+                <!-- ─── Made with AutoReply Pro ─────────────────────────── -->
+                <section class="band" aria-labelledby="samples-ar">
+                    <h2 id="samples-ar">شغل حقيقي منشور</h2>
+                    <p class="prose lead">
+                        كل كاروسيل هنا حقيقي: من دروس الدورة نفسها، بلقطاتٍ من فيديوهاتها،
+                        رسمته قوالب الشرائح نفسها التي يرسم بها استوديو الكاروسيل. وينشرها هذا
+                        التطبيق على إنستجرام وفيسبوك مرتين في اليوم، ونشر نسخها الطولية على
+                        تيك توك أيضاً.
+                    </p>
+                    <dl class="tally">
+                        <div><dt>14</dt><dd>كاروسيلاً من دروس الدورة</dd></div>
+                        <div><dt>3</dt><dd>منصّات: إنستجرام وفيسبوك وتيك توك</dd></div>
+                        <div><dt>2</dt><dd>مقاسان لكلٍّ منها: <bdi dir="ltr">4:5</bdi> و<bdi dir="ltr">9:16</bdi></dd></div>
+                    </dl>
+
+                    <div class="card seq">
+                        <h3>كاروسيل واحد، شريحةً بعد شريحة</h3>
+                        <p class="seq-sub">«الدردشة ماتت… وبدأ عصر الوكيل»، من الدرس <bdi dir="ltr">1.1</bdi>: الشرائح 1 و2 و4 من 8.</p>
+                        <ol class="reel" tabindex="0" aria-label="ثلاث شرائح من كاروسيل واحد">
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-ig-01-cover.webp" width="540" height="675" loading="lazy" decoding="async" alt="شريحة الغلاف: «الدردشة ماتت… وبدأ عصر الوكيل»، فوق لقطة من الدرس 1.1 تقارن روبوت المحادثة بالوكيل.">
+                                <figcaption>1 · الغلاف</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-ig-02-compare.webp" width="540" height="675" loading="lazy" decoding="async" alt="الشريحة الثانية: روبوت المحادثة ضد الوكيل، أربعة فروق جنباً إلى جنب.">
+                                <figcaption>2 · المقارنة</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-ig-04-prompt.webp" width="540" height="675" loading="lazy" decoding="async" alt="الشريحة الرابعة: «جرّب تكلّمه كوكيل»، وبرومبت جاهز للنسخ.">
+                                <figcaption>4 · برومبت تجرّبه</figcaption>
+                            </figure></li>
+                        </ol>
+                    </div>
+
+                    <div class="covers">
+                        <h3>أغلفة أخرى، وبمقاس تيك توك</h3>
+                        <ul class="reel" tabindex="0" aria-label="أغلفة من منشورات أخرى">
+                            <li><figure>
+                                <img src="/samples/notebooklm-ig-01-cover.webp" width="540" height="675" loading="lazy" decoding="async" alt="شريحة غلاف: «٢٠٠ صفحة؟ خلّها حلقة بودكاست»، مع لقطة من درس NotebookLM.">
+                                <figcaption><bdi lang="en" dir="ltr">NotebookLM</bdi> · إنستجرام وفيسبوك</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/context-pyramid-ig-01-cover.webp" width="540" height="675" loading="lazy" decoding="async" alt="شريحة غلاف: «ليش جواب الذكاء الاصطناعي عام؟»، من درس هرم السياق.">
+                                <figcaption>هرم السياق · إنستجرام وفيسبوك</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-tt-01-cover.webp" width="540" height="960" loading="lazy" decoding="async" alt="غلاف «الدردشة ماتت… وبدأ عصر الوكيل» نفسه بمقاس تيك توك الطولي.">
+                                <figcaption>الغلاف نفسه · تيك توك</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-tt-08-ask.webp" width="540" height="960" loading="lazy" decoding="async" alt="شريحة الختام في تيك توك: «الكورس كامل بالعربي» و«رابطه في البايو» وزر المتابعة.">
+                                <figcaption>ختام تيك توك: الرابط في البايو</figcaption>
+                            </figure></li>
+                        </ul>
+                    </div>
+
+                    <ul class="live">
+                        <li><a class="live-first" href="https://www.instagram.com/p/DdreyFUDPt7/" target="_blank" rel="noopener noreferrer">أول كاروسيل، منشوراً على إنستجرام</a></li>
+                        <li><a href="https://www.instagram.com/elamir.mansour/" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">@elamir.mansour</bdi>&nbsp;على إنستجرام</a></li>
+                        <li><a href="https://www.tiktok.com/@elamir_mansour" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">@elamir_mansour</bdi>&nbsp;على تيك توك</a></li>
+                        <li><a href="https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34" target="_blank" rel="noopener noreferrer">الدورة التي تروّج لها هذه المنشورات</a></li>
+                    </ul>
+                    <p class="prose samples-note">
+                        وعلى تيك توك، إلى أن يوافق تيك توك على التطبيق، يُنشر المنشور بخصوصية
+                        «أنا فقط» ثم يُجعل عامّاً باليد، كما في «ما الذي لا نَعِد به» أدناه.
+                        والحساب حساب مؤسس المنتج، والدورة دورته.
+                    </p>
+                </section>
+
                 <!-- ─── Capabilities ─────────────────────────────────────── -->
-                <section class="band" aria-labelledby="does-ar">
-                    <h2 id="does-ar">وما الذي في لوحة التحكم</h2>
+                <section class="band" aria-labelledby="features-ar">
+                    <h2 id="features-ar">وما الذي في لوحة التحكم</h2>
 
                     <div class="duo">
                         <section class="card" aria-labelledby="f1-ar">
@@ -2669,7 +3196,7 @@
                             </dd>
                         </div>
                         <div>
-                            <dt>جدولة المنشورات</dt>
+                            <dt>جدولة المنشورات والريلز</dt>
                             <dd>
                                 صور ومقاطع فيديو وكاروسيل، إلى إنستجرام وفيسبوك وتيك توك من إدخال
                                 واحد. والفيديو يُنشر على إنستجرام ريلز ويظهر في الصفحة الرئيسية
@@ -2695,6 +3222,14 @@
                             </dd>
                         </div>
                         <div>
+                            <dt>استوديو الكاروسيل</dt>
+                            <dd>
+                                مكتبة دروسك، ومسودّاتٌ يكتبها الذكاء الاصطناعي وتعدّلها أنت،
+                                وأسبوعٌ مخطَّط بضغطة واحدة — كما في
+                                <a href="#carousel-studio-ar">الأعلى</a>.
+                            </dd>
+                        </div>
+                        <div>
                             <dt>مطابقة عربية حقيقية</dt>
                             <dd>
                                 الهمزات والتاء المربوطة والألف المقصورة والتشكيل والتطويل — كلها
@@ -2707,6 +3242,27 @@
                                 عدد التعليقات والرسائل والنسب، بالساعة وباليوم وبالحملة، وتصدير
                                 التفاعلات إلى ملف <bdi lang="en" dir="ltr">CSV</bdi> تفتحه في أي
                                 برنامج جداول.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>سجلّ النشاط</dt>
+                            <dd>
+                                كل تعليق أجابت عنه حملة، وهل خرجت رسالته أم فشلت ولماذا. تبحث فيه،
+                                وتصفّيه بالحالة والمنصّة والحملة.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>أكثر من حساب، ولفريقك دخوله</dt>
+                            <dd>
+                                تتنقّل بين حساباتك من دخول واحد، ولكلٍّ منها حملاته وصندوقه
+                                وإعداداته. ولكل شخص في فريقك دخوله ودوره: مالك أو مشغّل أو مشاهد.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>حالة الربط</dt>
+                            <dd>
+                                تعرض اللوحة إن كان ربط كل حساب ما زال صالحاً، وتعيد فحصه متى طلبت،
+                                ويُفحَص ربط تيك توك تلقائياً كل يوم.
                             </dd>
                         </div>
                     </dl>
@@ -2731,6 +3287,132 @@
                             <dd>رسائل من المحادثة يقرأها الذكاء الاصطناعي قبل أن يردّ.</dd>
                         </div>
                     </dl>
+                </section>
+
+                <!-- ─── Platforms, and what you need ────────────────────── -->
+                <section class="band" aria-labelledby="platforms-ar">
+                    <h2 id="platforms-ar">المنصّات، وما تحتاجه</h2>
+                    <p class="prose lead">ما يعمل على كل منصّة، وما يلزمك قبل أن نبدأ:</p>
+                    <ul class="card reqs">
+                        <li>
+                            <h3>إنستجرام</h3>
+                            <div>
+                                <p class="req-k">ما تحتاجه</p>
+                                <p class="req-v">
+                                    حساب احترافي (أعمال أو صانع محتوى) مرتبط بصفحة فيسبوك، وصلاحية
+                                    إدارية عليهما. الحساب الشخصي لا تسمح ميتا بأتمتته.
+                                </p>
+                            </div>
+                            <div>
+                                <p class="req-k">ما يعمل عليها</p>
+                                <p class="req-v">
+                                    من التعليق إلى الرسالة الخاصة، وردود الذكاء الاصطناعي على
+                                    الرسائل، وجدولة الصور والريلز والكاروسيل.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <h3>فيسبوك</h3>
+                            <div>
+                                <p class="req-k">ما تحتاجه</p>
+                                <p class="req-v">صفحة فيسبوك تديرها — وهي نفسها المرتبطة بحساب إنستجرام.</p>
+                            </div>
+                            <div>
+                                <p class="req-k">ما يعمل عليها</p>
+                                <p class="req-v">
+                                    تعليقات الصفحة ومحادثات ماسنجر، وجدولة المنشورات والفيديو
+                                    والكاروسيل.
+                                </p>
+                            </div>
+                        </li>
+                        <li id="tiktok-ar">
+                            <h3>تيك توك</h3>
+                            <div>
+                                <p class="req-k">ما تحتاجه</p>
+                                <p class="req-v">
+                                    حساب تيك توك تدخل إليه من صفحة تيك توك نفسها. لا نطلب كلمة مرورك
+                                    أبداً.
+                                </p>
+                            </div>
+                            <div>
+                                <p class="req-k">ما يعمل عليها</p>
+                                <p class="req-v">
+                                    النشر وحده: فيديو وكاروسيل صور. وإلى أن يوافق تيك توك على
+                                    التطبيق، يُنشر المنشور «أنا فقط» على حساب خاص، أو يصل إلى
+                                    مسودّاتك. لا تعليقات ولا رسائل على تيك توك.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <h3>استوديو الكاروسيل</h3>
+                            <div>
+                                <p class="req-k">ما تحتاجه</p>
+                                <p class="req-v">
+                                    جهاز كمبيوتر عليه «العامل» — جهاز ماك اليوم — ومجلد فيه فيديوهات
+                                    دروسك.
+                                </p>
+                            </div>
+                            <div>
+                                <p class="req-k">ما يعمل عليه</p>
+                                <p class="req-v">
+                                    يكتب الكاروسيل من دروسك ويرسمه بمقاسَي <bdi dir="ltr">4:5</bdi>
+                                    و<bdi dir="ltr">9:16</bdi>. وحين يكون الجهاز مغلقاً، تنتظر مهامّه
+                                    دورها.
+                                </p>
+                            </div>
+                        </li>
+                    </ul>
+                </section>
+
+                <!-- ─── Security and privacy ─────────────────────────────── -->
+                <section class="band" aria-labelledby="security-ar">
+                    <h2 id="security-ar">الأمان والخصوصية</h2>
+                    <ul class="card safe">
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg></span>
+                            <div>
+                                <h3>واجهات رسمية فقط</h3>
+                                <p>
+                                    إنستجرام وفيسبوك عبر واجهة ميتا الرسمية
+                                    (<bdi lang="en" dir="ltr">Graph API</bdi>)، وتيك توك عبر واجهتيه
+                                    الرسميتين للدخول والنشر. لا كلمات مرور، ولا متصفّح يتظاهر بأنه أنت.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+                            <div>
+                                <h3>رموز الوصول مشفّرة</h3>
+                                <p>
+                                    الرموز التي تُصدرها ميتا وتيك توك تُشفَّر قبل أن تُخزَّن
+                                    (<bdi lang="en" dir="ltr">AES-256-GCM</bdi>)، وتستطيع سحبها من
+                                    إعدادات حسابك نفسه في أي وقت.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="4" width="16" height="11" rx="2"/><path d="M2 19h20"/></svg></span>
+                            <div>
+                                <h3>فيديوهاتك تبقى على جهازك</h3>
+                                <p>
+                                    ما يغادر جهازك: معاينةٌ صغيرة للذكاء الاصطناعي، وصورٌ مصغّرة
+                                    للّحظات التي اختارها، والشرائح النهائية التي تُنشر. والعامل
+                                    يتّصل بالخارج ولا يستقبل شيئاً.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></span>
+                            <div>
+                                <h3>الفصل والحذف بيدك</h3>
+                                <p>
+                                    تفصل أي حساب متى شئت دون ذكر سبب. وكيف تُحذف البيانات، ومنها
+                                    بيانات تيك توك، في <a href="/data-deletion">صفحة حذف البيانات</a>،
+                                    وما يُحفَظ ومدّته في <a href="/privacy">سياسة الخصوصية</a>.
+                                </p>
+                            </div>
+                        </li>
+                    </ul>
                 </section>
 
                 <!-- ─── What you pay for ─────────────────────────────────── -->
@@ -2768,7 +3450,22 @@
                                     وجود مَن يُصلح العطل حين يقع
                                 </li>
                             </ul>
-                            <p>التفاصيل في <a href="/pricing">صفحة الأسعار</a>.</p>
+                        </div>
+                        <!-- The pricing teaser: plan NAMES and what differs, never a
+                             price — prices live on /pricing only. -->
+                        <div class="plans">
+                            <div>
+                                <ul class="plan-names" aria-label="الباقات">
+                                    <li>البداية</li>
+                                    <li>النمو</li>
+                                    <li>الوكالات</li>
+                                </ul>
+                                <p>
+                                    ثلاث باقات، والفرق بينها عدد الحسابات وعدد الأشخاص ومقدار العمل
+                                    الذي نقوم به معك — لا الميزات: في كل باقة كل ما في المنتج.
+                                </p>
+                            </div>
+                            <a class="btn btn-secondary" href="/pricing">قارن الباقات</a>
                         </div>
                     </div>
                 </section>
@@ -2828,6 +3525,122 @@
                                 </dd>
                             </div>
                         </dl>
+                    </div>
+                </section>
+
+                <!-- ─── Questions ────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="faq-ar">
+                    <h2 id="faq-ar">أسئلة تتكرّر</h2>
+                    <div class="card qa">
+                        <details>
+                            <summary>أيّ الحسابات أستطيع ربطها؟</summary>
+                            <div class="qa-a"><p>
+                                على إنستجرام: حساب احترافي (أعمال أو صانع محتوى) مرتبط بصفحة فيسبوك،
+                                مع صلاحية إدارية عليهما. وعلى فيسبوك: الصفحة نفسها. وعلى تيك توك:
+                                حسابك، بالدخول من صفحة تيك توك. أمّا الحساب الشخصي على إنستجرام فلا
+                                تسمح ميتا بأتمتته، وهذا شرطها لا شرطنا.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>هل هو رسمي؟ وهل حسابي في أمان؟</summary>
+                            <div class="qa-a">
+                                <p>
+                                    يعمل عبر الواجهات الرسمية وحدها: واجهة ميتا
+                                    (<bdi lang="en" dir="ltr">Graph API</bdi>)، وواجهتَي تيك توك
+                                    للدخول والنشر. لا نطلب كلمة مرورك، ورموز الوصول تُشفَّر قبل أن
+                                    تُخزَّن.
+                                </p>
+                                <p>
+                                    ويبقى الإرسال تحت سقف ميتا: 180 رسالة آلية في الساعة لكل حساب،
+                                    مقابل نحو 200 عندها، ورسالة آلية واحدة للشخص نفسه كل 24 ساعة. ولا
+                                    أحد يستطيع أن يَعِد بأن منصّةً لن تقيّد حساباً أبداً؛ البقاء داخل
+                                    حدودها هو ما في يد البرنامج.
+                                </p>
+                            </div>
+                        </details>
+                        <details>
+                            <summary>ما الذي يعمل على تيك توك قبل أن يوافق على التطبيق؟</summary>
+                            <div class="qa-a"><p>
+                                النشر وحده: فيديو وكاروسيل صور، مع الإعدادات التي يشترطها تيك توك
+                                على كل منشور. وإلى أن يوافق، إمّا أن يُنشر المنشور بخصوصية «أنا
+                                فقط» — ولا يقبلها تيك توك إلا والحساب خاص — وإمّا أن يصل إلى
+                                مسودّاتك لتنشره من تطبيق تيك توك. ولا يقبل تيك توك أكثر من خمس
+                                مسودّات معلّقة في 24 ساعة؛ ما يزيد عليها ينتظر، ويخرج في دورة لاحقة
+                                بعد أن تنشر إحداها. ولا أتمتة للتعليقات ولا للرسائل على تيك توك.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>هل يفهم اللهجات؟</summary>
+                            <div class="qa-a">
+                                <p>
+                                    المطابقة تقارن الكتابة لا المعنى: توحّد الهمزات والتاء المربوطة
+                                    والألف المقصورة، وتحذف التشكيل والتطويل، لكنها لا تعرف أن «بكم»
+                                    و«كم السعر» سؤال واحد. لذلك تأخذ الحملة أكثر من كلمة، فتكتب فيها
+                                    الصيغ التي يكتبها جمهورك.
+                                </p>
+                                <p>
+                                    أمّا ردود الذكاء الاصطناعي فيكتبها نموذج لغوي عام يقرأ الرسالة
+                                    كما كُتبت، بلهجتها، ويردّ بالأسلوب الذي تحدّده في تعليماتك —
+                                    بلهجتك إن شئت.
+                                </p>
+                            </div>
+                        </details>
+                        <details>
+                            <summary>ما «العامل»؟</summary>
+                            <div class="qa-a"><p>
+                                برنامج صغير يعمل على جهازك — جهاز ماك اليوم — بجوار فيديوهات دروسك.
+                                يجد الدروس، ويفهرسها بالذكاء الاصطناعي، ويلتقط الإطارات، ويرسم
+                                الشرائح؛ والتطبيق يكتب الكلمات. وهو يتّصل بالتطبيق ولا يستقبل
+                                اتصالاً، فلا شيء على جهازك مكشوف. وحين يكون الجهاز مغلقاً، تنتظر
+                                مهامّ الاستوديو إلى أن يعود.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>هل تُرفع فيديوهاتي؟</summary>
+                            <div class="qa-a"><p>
+                                لا، فيديوهاتك الكاملة تبقى على جهازك. ليفهم الدرس، يرسل العامل إلى
+                                الذكاء الاصطناعي معاينةً صغيرة منخفضة الدقة، واللقطات التي على
+                                الشرائح تُؤخذ من ملفك الأصلي على جهازك. وما يُرفع فعلاً: صورٌ مصغّرة
+                                للّحظات المختارة لتراها في اللوحة، والشرائح النهائية لأنها ما
+                                يُنشر.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>هل أستطيع الإلغاء؟</summary>
+                            <div class="qa-a"><p>
+                                نعم. تفصل أي حساب في أي وقت دون ذكر سبب، ولا يُنشر منه ولا يُرسَل
+                                بعدها شيء جديد. ولا اشتراك تلغيه من صفحة دفع: الفوترة تجري بيننا
+                                مباشرة، وشروطها — ومنها مدة الإشعار — نتّفق عليها قبل أن تبدأ.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>هل أستطيع الاشتراك بنفسي الآن؟</summary>
+                            <div class="qa-a"><p>
+                                ليس بعد. ميتا تمنح الأذونات التي يحتاجها البرنامج حساباً حساباً،
+                                فيُربط كل حساب يدوياً ومعك. اكتب لنا على
+                                <a data-contact-email href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>،
+                                ونخبرك بما يلزم وبالمدة المتوقعة قبل أي التزام.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>هل يخطئ الذكاء الاصطناعي؟</summary>
+                            <div class="qa-a"><p>
+                                قد يخطئ. الردود يكتبها نموذج لغوي
+                                (<bdi lang="en" dir="ltr">Gemini</bdi> من جوجل) بتعليماتك وبقاعدة
+                                المعلومات التي تكتبها. لذلك تستطيع إيقاف الردّ الآلي في أي محادثة
+                                والردّ بنفسك من صندوق الوارد، وأول ردّ آليّ في المحادثة يُخبر الشخص
+                                أنه يتحدّث إلى خدمة آلية. وما يُرسَل إلى جوجل لكتابة الردّ مكتوب في
+                                <a href="/privacy">سياسة الخصوصية</a>.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>كم يكلّف؟</summary>
+                            <div class="qa-a"><p>
+                                الباقات الثلاث، وما يتغيّر بينها فعلاً، في
+                                <a href="/pricing">صفحة الأسعار</a>. في كل باقة كل ميزات المنتج؛
+                                والفرق عدد الحسابات وعدد الأشخاص ومقدار العمل الذي نقوم به معك.
+                            </p></div>
+                        </details>
                     </div>
                 </section>
 
@@ -2904,9 +3717,44 @@
                     </div>
                 </section>
 
+                <!-- ─── Who it is for ───────────────────────────────────── -->
+                <section class="band" aria-labelledby="who-en">
+                    <h2 id="who-en">Who it is for</h2>
+                    <p class="prose lead">Anyone who sells from their own account, to an audience that writes in Arabic:</p>
+                    <ul class="card aud">
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></span>
+                            <h3>Creators</h3>
+                            <p>
+                                Your comments fill up with the same question. One keyword on a
+                                campaign answers it privately, in your own words, while you film
+                                the next video.
+                            </p>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21.42 10.92a1 1 0 0 0-.02-1.84L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.83l8.57 3.91a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></svg></span>
+                            <h3>Course sellers</h3>
+                            <p>
+                                Your lessons become carousels that point back to the course, and a
+                                word in the comments sends its link privately — which is what the
+                                posts further down this page do.
+                            </p>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span>
+                            <h3>Shops and small businesses</h3>
+                            <p>
+                                “How much?”, “Do you deliver?” and “Where are you?” arrive as
+                                comments, and the answer goes to their messages, in the Arabic your
+                                customers actually write.
+                            </p>
+                        </li>
+                    </ul>
+                </section>
+
                 <!-- ─── The loop ─────────────────────────────────────────── -->
-                <section class="band" aria-labelledby="loop-en">
-                    <h2 id="loop-en">What happens when someone comments</h2>
+                <section class="band" aria-labelledby="how-it-works-en">
+                    <h2 id="how-it-works-en">What happens when someone comments</h2>
                     <p class="prose lead">Three steps on Instagram and Facebook, and the first is the only one the customer does. The rest runs on its own:</p>
 
                     <ol class="loop">
@@ -3184,9 +4032,79 @@
                     </div>
                 </section>
 
+                <!-- ─── Made with AutoReply Pro ─────────────────────────── -->
+                <section class="band" aria-labelledby="samples-en">
+                    <h2 id="samples-en">Made with AutoReply Pro</h2>
+                    <p class="prose lead">
+                        Every carousel here is real: made from the course's own lessons, with
+                        frames taken from its videos, and drawn by the same slide templates
+                        Carousel Studio renders with. This app publishes them to Instagram and
+                        Facebook on a twice-daily schedule, and posted their 9:16 versions to
+                        TikTok too.
+                    </p>
+                    <dl class="tally">
+                        <div><dt>14</dt><dd>carousels from the course's lessons</dd></div>
+                        <div><dt>3</dt><dd>platforms: Instagram, Facebook and TikTok</dd></div>
+                        <div><dt>2</dt><dd>sizes of each: 4:5 and 9:16</dd></div>
+                    </dl>
+
+                    <div class="card seq">
+                        <h3>One carousel, slide by slide</h3>
+                        <p class="seq-sub">“Chat is dead, the age of the agent has begun”, from lesson 1.1: slides 1, 2 and 4 of 8, in Arabic as published.</p>
+                        <ol class="reel" tabindex="0" aria-label="Three slides from one carousel">
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-ig-01-cover.webp" width="540" height="675" loading="lazy" decoding="async" alt="Cover slide, in Arabic: “Chat is dead… and the age of the agent has begun”, over a frame from lesson 1.1 comparing chatbots with agents.">
+                                <figcaption>1 · Cover</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-ig-02-compare.webp" width="540" height="675" loading="lazy" decoding="async" alt="Slide 2, in Arabic: chatbot versus agent, four differences side by side.">
+                                <figcaption>2 · The comparison</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-ig-04-prompt.webp" width="540" height="675" loading="lazy" decoding="async" alt="Slide 4, in Arabic: “Talk to it like an agent”, with a prompt ready to copy.">
+                                <figcaption>4 · A prompt to try</figcaption>
+                            </figure></li>
+                        </ol>
+                    </div>
+
+                    <div class="covers">
+                        <h3>More covers, and the TikTok size</h3>
+                        <ul class="reel" tabindex="0" aria-label="Covers from other posts">
+                            <li><figure>
+                                <img src="/samples/notebooklm-ig-01-cover.webp" width="540" height="675" loading="lazy" decoding="async" alt="Cover slide, in Arabic: “200 pages? Make it a podcast episode”, with a screenshot from the NotebookLM lesson.">
+                                <figcaption>NotebookLM · Instagram and Facebook</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/context-pyramid-ig-01-cover.webp" width="540" height="675" loading="lazy" decoding="async" alt="Cover slide, in Arabic: “Why is the AI's answer so generic?”, from the lesson on the context pyramid.">
+                                <figcaption>The context pyramid · Instagram and Facebook</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-tt-01-cover.webp" width="540" height="960" loading="lazy" decoding="async" alt="The same “Chat is dead” cover at TikTok's 9:16 size.">
+                                <figcaption>The same cover · TikTok</figcaption>
+                            </figure></li>
+                            <li><figure>
+                                <img src="/samples/chat-vs-agent-tt-08-ask.webp" width="540" height="960" loading="lazy" decoding="async" alt="The last TikTok slide, in Arabic: “The full course in Arabic”, “Link in bio”, and a follow button.">
+                                <figcaption>TikTok's own ending: link in bio</figcaption>
+                            </figure></li>
+                        </ul>
+                    </div>
+
+                    <ul class="live">
+                        <li><a class="live-first" href="https://www.instagram.com/p/DdreyFUDPt7/" target="_blank" rel="noopener noreferrer">The first carousel, live on Instagram</a></li>
+                        <li><a href="https://www.instagram.com/elamir.mansour/" target="_blank" rel="noopener noreferrer">@elamir.mansour on Instagram</a></li>
+                        <li><a href="https://www.tiktok.com/@elamir_mansour" target="_blank" rel="noopener noreferrer">@elamir_mansour on TikTok</a></li>
+                        <li><a href="https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34" target="_blank" rel="noopener noreferrer">The course these posts promote</a></li>
+                    </ul>
+                    <p class="prose samples-note">
+                        On TikTok, until TikTok approves the app, a post goes up as “Only me” and
+                        is made public by hand, as “What this does not promise” explains below. The
+                        account is the founder's, and so is the course.
+                    </p>
+                </section>
+
                 <!-- ─── Capabilities ─────────────────────────────────────── -->
-                <section class="band" aria-labelledby="does-en">
-                    <h2 id="does-en">And what is in the dashboard</h2>
+                <section class="band" aria-labelledby="features-en">
+                    <h2 id="features-en">And what is in the dashboard</h2>
 
                     <div class="duo">
                         <section class="card" aria-labelledby="f1-en">
@@ -3219,7 +4137,7 @@
                             </dd>
                         </div>
                         <div>
-                            <dt>Scheduled posts</dt>
+                            <dt>Scheduled posts and reels</dt>
                             <dd>
                                 Images, video and carousels, to Instagram, Facebook and TikTok from
                                 one entry. Video publishes to Instagram as a reel and appears in the
@@ -3245,6 +4163,13 @@
                             </dd>
                         </div>
                         <div>
+                            <dt>Carousel Studio</dt>
+                            <dd>
+                                Your lesson library, drafts the AI writes and you edit, and a week
+                                planned in one click — as <a href="#carousel-studio-en">above</a>.
+                            </dd>
+                        </div>
+                        <div>
                             <dt>Arabic matching that works</dt>
                             <dd>
                                 Hamza forms, teh marbuta, alef maksura, diacritics and tatweel are
@@ -3256,6 +4181,30 @@
                             <dd>
                                 Comments, messages and conversion, by hour, by day and by campaign
                                 — and an interaction export as CSV that opens in any spreadsheet.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Activity log</dt>
+                            <dd>
+                                Every comment a campaign answered, and whether its message went out
+                                or failed, and why. Search it, and filter it by status, platform and
+                                campaign.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Several accounts, and logins for your team</dt>
+                            <dd>
+                                Switch between your accounts from one sign-in, each with its own
+                                campaigns, inbox and settings. Everyone on your team gets their own
+                                login and a role: owner, operator or viewer.
+                            </dd>
+                        </div>
+                        <div>
+                            <dt>Connection health</dt>
+                            <dd>
+                                The dashboard shows whether each account's connection is still
+                                valid and re-checks it when you ask, and the TikTok connection is
+                                checked automatically every day.
                             </dd>
                         </div>
                     </dl>
@@ -3280,6 +4229,135 @@
                             <dd>messages of the thread the AI reads before it answers.</dd>
                         </div>
                     </dl>
+                </section>
+
+                <!-- ─── Platforms, and what you need ────────────────────── -->
+                <section class="band" aria-labelledby="platforms-en">
+                    <h2 id="platforms-en">Platforms, and what you need</h2>
+                    <p class="prose lead">What works on each platform, and what you need before we start:</p>
+                    <ul class="card reqs">
+                        <li>
+                            <h3>Instagram</h3>
+                            <div>
+                                <p class="req-k">What you need</p>
+                                <p class="req-v">
+                                    A professional account (Business or Creator) linked to a
+                                    Facebook Page, with admin access to both. Meta does not allow
+                                    automation on a personal account.
+                                </p>
+                            </div>
+                            <div>
+                                <p class="req-k">What works there</p>
+                                <p class="req-v">
+                                    Comment-to-message campaigns, AI replies to messages, and
+                                    scheduled images, reels and carousels.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <h3>Facebook</h3>
+                            <div>
+                                <p class="req-k">What you need</p>
+                                <p class="req-v">A Facebook Page you manage — the one your Instagram account is linked to.</p>
+                            </div>
+                            <div>
+                                <p class="req-k">What works there</p>
+                                <p class="req-v">
+                                    Page comments and Messenger conversations, and scheduled posts,
+                                    video and carousels.
+                                </p>
+                            </div>
+                        </li>
+                        <li id="tiktok-en">
+                            <h3>TikTok</h3>
+                            <div>
+                                <p class="req-k">What you need</p>
+                                <p class="req-v">
+                                    A TikTok account you sign in to on TikTok's own page. We never
+                                    ask for your password.
+                                </p>
+                            </div>
+                            <div>
+                                <p class="req-k">What works there</p>
+                                <p class="req-v">
+                                    Publishing only: video and photo carousels. Until TikTok
+                                    approves the app, a post goes up as “Only me” on a private
+                                    account, or lands in your drafts. No comments or messages on
+                                    TikTok.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <h3>Carousel Studio</h3>
+                            <div>
+                                <p class="req-k">What you need</p>
+                                <p class="req-v">
+                                    A computer running the worker — a Mac, today — and a folder with
+                                    your lesson videos.
+                                </p>
+                            </div>
+                            <div>
+                                <p class="req-k">What it does</p>
+                                <p class="req-v">
+                                    Writes carousels from your lessons and draws them at 4:5 and
+                                    9:16. While the computer is off, its jobs simply wait.
+                                </p>
+                            </div>
+                        </li>
+                    </ul>
+                </section>
+
+                <!-- ─── Security and privacy ─────────────────────────────── -->
+                <section class="band" aria-labelledby="security-en">
+                    <h2 id="security-en">Security and privacy</h2>
+                    <ul class="card safe">
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg></span>
+                            <div>
+                                <h3>Official APIs only</h3>
+                                <p>
+                                    Instagram and Facebook through Meta's official Graph API; TikTok
+                                    through its official Login Kit and Content Posting API. No
+                                    passwords, and no browser pretending to be you.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span>
+                            <div>
+                                <h3>Tokens are encrypted</h3>
+                                <p>
+                                    The access tokens Meta and TikTok issue are encrypted before
+                                    they are stored (AES-256-GCM), and you can revoke them from your
+                                    own account settings at any time.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="4" y="4" width="16" height="11" rx="2"/><path d="M2 19h20"/></svg></span>
+                            <div>
+                                <h3>Your videos stay on your computer</h3>
+                                <p>
+                                    What leaves it: a small preview for the AI, small thumbnails of
+                                    the moments it picked, and the finished slides that get
+                                    published. And the worker only ever calls out; nothing connects
+                                    in.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="helper-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></span>
+                            <div>
+                                <h3>Disconnecting and deleting are yours</h3>
+                                <p>
+                                    Disconnect any account whenever you like, without giving a
+                                    reason. How data is deleted, TikTok's included, is on the
+                                    <a href="/data-deletion">data deletion page</a>; what is kept,
+                                    and for how long, is in the <a href="/privacy">privacy policy</a>.
+                                </p>
+                            </div>
+                        </li>
+                    </ul>
                 </section>
 
                 <!-- ─── What you pay for ─────────────────────────────────── -->
@@ -3317,7 +4395,23 @@
                                     Having someone who fixes it when it breaks
                                 </li>
                             </ul>
-                            <p>The detail is on the <a href="/pricing">pricing page</a>.</p>
+                        </div>
+                        <!-- The pricing teaser: plan NAMES and what differs, never a
+                             price — prices live on /pricing only. -->
+                        <div class="plans">
+                            <div>
+                                <ul class="plan-names" aria-label="Plans">
+                                    <li>Starter</li>
+                                    <li>Growth</li>
+                                    <li>Agency</li>
+                                </ul>
+                                <p>
+                                    Three plans, and what differs between them is the number of
+                                    accounts, the number of people, and how much of the work we do
+                                    with you — never the features: every plan has all of them.
+                                </p>
+                            </div>
+                            <a class="btn btn-secondary" href="/pricing">Compare the plans</a>
                         </div>
                     </div>
                 </section>
@@ -3384,6 +4478,134 @@
                     </div>
                 </section>
 
+                <!-- ─── Questions ────────────────────────────────────────── -->
+                <section class="band" aria-labelledby="faq-en">
+                    <h2 id="faq-en">Questions people ask</h2>
+                    <div class="card qa">
+                        <details>
+                            <summary>Which accounts can I connect?</summary>
+                            <div class="qa-a"><p>
+                                On Instagram, a professional account (Business or Creator) linked to
+                                a Facebook Page, with admin access to both. On Facebook, that Page.
+                                On TikTok, your account, by signing in on TikTok's own page. A
+                                personal Instagram account cannot be automated: that is Meta's rule,
+                                not ours.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>Is it official? Is my account safe?</summary>
+                            <div class="qa-a">
+                                <p>
+                                    It uses the official APIs and nothing else: Meta's Graph API, and
+                                    TikTok's Login Kit and Content Posting API. We never ask for your
+                                    password, and access tokens are encrypted before they are stored.
+                                </p>
+                                <p>
+                                    Sending stays under Meta's ceiling: at most 180 automated
+                                    messages an hour per account, against Meta's roughly 200, and
+                                    one automated message per person every 24 hours. Nobody can
+                                    promise that a platform will never restrict an account; staying
+                                    inside its limits is the part this software controls.
+                                </p>
+                            </div>
+                        </details>
+                        <details>
+                            <summary>What works on TikTok before it approves the app?</summary>
+                            <div class="qa-a"><p>
+                                Publishing, and only publishing: videos and photo carousels, with
+                                the settings TikTok requires on every post. Until TikTok approves
+                                the app, a post either goes up as “Only me” — which TikTok accepts
+                                only while the account is private — or lands in your drafts for you
+                                to post from the TikTok app. TikTok also allows at most five drafts
+                                waiting in any 24 hours; past that, a post waits and goes out on a
+                                later round, once you have posted one. There are no comment or
+                                message automations on TikTok.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>Does it understand Arabic dialects?</summary>
+                            <div class="qa-a">
+                                <p>
+                                    Matching compares spelling, not meaning. It evens out hamza,
+                                    teh marbuta and alef maksura, and strips diacritics and tatweel,
+                                    but it does not know that
+                                    <bdi class="ar" lang="ar" dir="rtl">بكم</bdi> and
+                                    <bdi class="ar" lang="ar" dir="rtl">كم السعر</bdi> ask the same
+                                    thing. So a campaign takes several keywords, and you list the
+                                    ways your audience writes.
+                                </p>
+                                <p>
+                                    The AI replies come from a general-purpose language model that
+                                    reads the message as written, dialect and all, and answers the
+                                    way your instructions say — in your own dialect, if you want.
+                                </p>
+                            </div>
+                        </details>
+                        <details>
+                            <summary>What is the worker?</summary>
+                            <div class="qa-a"><p>
+                                A small program that runs on your computer — a Mac, today — next to
+                                your lesson videos. It finds the lessons, indexes them with the AI,
+                                takes the screenshots and draws the slides; the app writes the
+                                words. It only ever calls out to the app, so nothing on your
+                                computer is exposed, and while the computer is off the Studio's
+                                jobs simply wait for it.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>Are my videos uploaded?</summary>
+                            <div class="qa-a"><p>
+                                No. Your full videos stay on your computer. To understand a lesson,
+                                the worker sends the AI a small, low-resolution preview of it, and
+                                the screenshots on the slides are taken from your original file, on
+                                your own machine. What is uploaded: small thumbnails of the chosen
+                                moments, so you can see them in the dashboard, and the finished
+                                slides, because they are what gets published.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>Can I cancel?</summary>
+                            <div class="qa-a"><p>
+                                Yes. You can disconnect any account at any time without giving a
+                                reason, and nothing new is posted or sent from it after that. There
+                                is no checkout subscription to cancel: billing is arranged with you
+                                directly, and its terms, notice included, are agreed before you
+                                start.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>Can I sign up on my own?</summary>
+                            <div class="qa-a"><p>
+                                Not yet. Meta grants the permissions this needs account by account,
+                                so every account is connected by hand, with you. Write to
+                                <a data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                                and we tell you what it would take, and how long, before you commit
+                                to anything.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>Can the AI get an answer wrong?</summary>
+                            <div class="qa-a"><p>
+                                It can. Replies are written by a language model — Google's Gemini —
+                                from your instructions and the knowledge base you write, and a model
+                                can be wrong. So you can pause the bot on any conversation and
+                                answer yourself from the inbox, and the first automated reply tells
+                                the person they are talking to an automated service. What is sent to
+                                Google to write a reply is in the <a href="/privacy">privacy policy</a>.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>How much does it cost?</summary>
+                            <div class="qa-a"><p>
+                                The three plans, and what actually changes between them, are on the
+                                <a href="/pricing">pricing page</a>. Every plan has every feature;
+                                they differ in the number of accounts, the number of people, and how
+                                much of the work we do with you.
+                            </p></div>
+                        </details>
+                    </div>
+                </section>
+
                 <!-- ─── The close ────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="cta-en">
                     <div class="cta">
@@ -3412,69 +4634,96 @@
         <!-- ═══════════════════════════════════════════════════════════════════
              SHARED SITE CHROME · FOOTER
              ═══════════════════════════════════════════════════════════════════
-             MEANT TO BE BYTE-IDENTICAL IN ALL FOUR PUBLIC PAGES, on the same
+             MEANT TO BE BYTE-IDENTICAL IN ALL FIVE PUBLIC PAGES, on the same
              terms as the navbar above and the CSS block at the end of <style>.
 
-             It carries every public page plus the dashboard and the repo, so
-             the navigation graph is complete from the bottom of any page as
-             well as from the top: four pages, and from each of them all three
-             others plus /dashboard. Before this, /pricing reached neither home
+             It carries every public page plus the dashboard, the help centre,
+             the landing page's own sections and the repo, so the navigation
+             graph is complete from the bottom of any page as well as from the
+             top. Before the first version of it, /pricing reached neither home
              nor sign-in, and /privacy and /data-deletion reached only each
              other.
 
-             THE STRUCTURE IS NEW. The same links used to be one flat row above
-             one legal line — the correct content in a footer too thin to carry
-             it, at the bottom of two documents a visitor reaches from Meta's
-             own settings link. They are now three named groups under a
-             masthead, with the wordmark repeated so the bottom of the page
-             says whose page it is. /privacy and /data-deletion sit together
-             under "Policies", which is also what replaced the four-card
-             "Where to go next" grid that used to duplicate this footer on the
-             landing page.
+             FIVE NAMED GROUPS under a masthead, with the wordmark repeated so
+             the bottom of the page says whose page it is: Product, Resources,
+             Legal, Follow and Contact. Contact is LAST in the source on
+             purpose: the address is the widest item in the footer, so at 375px
+             it takes a row of its own, and a full-row item anywhere earlier
+             would leave a hole in the two-column grid above it.
+             The Product and Resources links into the landing page use
+             language-neutral fragments (/#faq, not /#faq-en) — see the CSS
+             block for how landing.html resolves them.
 
-             THE ONE INTENDED DIFFERENCE between the four copies is
-             `aria-current="page"` on this page's own link.
+             THE ONE INTENDED DIFFERENCE between the five copies is
+             `aria-current="page"` on this page's own link: the wordmark here
+             on landing.html (it links to `/`), Pricing on pricing.html, and
+             the page's own Legal link on the other three.
              ═══════════════════════════════════════════════════════════════════ -->
         <footer class="pagefoot">
             <div class="foot-top">
-                <a class="foot-mark" href="/">
+                <a class="foot-mark" href="/" aria-current="page">
                     <bdi lang="ar" dir="rtl">أوتوريبلاي برو</bdi>
                     <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
                 </a>
                 <p class="foot-what">
-                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة، على إنستجرام وفيسبوك، بالعربية أولاً.</bdi>
-                    <bdi class="t-en" lang="en" dir="ltr">A comment becomes a private conversation, on Instagram and Facebook, Arabic-first.</bdi>
+                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة على إنستجرام وفيسبوك، ونشرٌ مجدول يصل تيك توك أيضاً، واستوديو للكاروسيل. بالعربية أولاً.</bdi>
+                    <bdi class="t-en" lang="en" dir="ltr">Comments into private conversations on Instagram and Facebook, scheduled posts that reach TikTok too, and a Carousel Studio. Arabic-first.</bdi>
                 </p>
             </div>
 
             <div class="foot-cols">
                 <nav aria-labelledby="foot-h-product">
                     <p class="foot-h" id="foot-h-product"><bdi class="t-ar" lang="ar">المنتج</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Product</bdi></p>
-                    <a href="/" aria-current="page"><bdi class="t-ar" lang="ar">الصفحة الرئيسية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Home</bdi></a>
+                    <a href="/#features"><bdi class="t-ar" lang="ar">الميزات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Features</bdi></a>
+                    <a href="/#carousel-studio"><bdi class="t-ar" lang="ar">استوديو الكاروسيل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Carousel Studio</bdi></a>
+                    <a href="/#tiktok"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></a>
                     <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
-                    <a href="/dashboard"><bdi class="t-ar" lang="ar">لوحة التحكم</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Dashboard</bdi></a>
+                    <a href="/dashboard"><bdi class="t-ar" lang="ar">تسجيل الدخول</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Sign in</bdi></a>
                 </nav>
-                <nav aria-labelledby="foot-h-policies">
-                    <p class="foot-h" id="foot-h-policies"><bdi class="t-ar" lang="ar">السياسات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Policies</bdi></p>
-                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
-                    <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
-                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف بياناتك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Delete your data</bdi></a>
-                </nav>
-                <nav aria-labelledby="foot-h-source">
-                    <p class="foot-h" id="foot-h-source"><bdi class="t-ar" lang="ar">المصدر</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source</bdi></p>
+                <nav aria-labelledby="foot-h-resources">
+                    <p class="foot-h" id="foot-h-resources"><bdi class="t-ar" lang="ar">الموارد</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Resources</bdi></p>
+                    <a href="/dashboard#/help"><bdi class="t-ar" lang="ar">مركز المساعدة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Help Center</bdi></a>
+                    <a href="/#how-it-works"><bdi class="t-ar" lang="ar">كيف يعمل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">How it works</bdi></a>
+                    <a href="/#studio-how"><bdi class="t-ar" lang="ar">كيف يعمل الاستوديو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">How the Studio works</bdi></a>
+                    <a href="/#faq"><bdi class="t-ar" lang="ar">الأسئلة الشائعة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">FAQ</bdi></a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">الكود على <bdi lang="en" dir="ltr">GitHub</bdi></bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Source on GitHub</bdi></a>
                 </nav>
+                <nav aria-labelledby="foot-h-legal">
+                    <p class="foot-h" id="foot-h-legal"><bdi class="t-ar" lang="ar">الشؤون القانونية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Legal</bdi></p>
+                    <a href="/terms"><bdi class="t-ar" lang="ar">شروط الخدمة</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Terms of service</bdi></a>
+                    <a href="/privacy"><bdi class="t-ar" lang="ar">سياسة الخصوصية</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Privacy policy</bdi></a>
+                    <a href="/data-deletion"><bdi class="t-ar" lang="ar">حذف البيانات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Data deletion</bdi></a>
+                </nav>
+                <div class="foot-follow" role="group" aria-labelledby="foot-h-follow">
+                    <p class="foot-h" id="foot-h-follow"><bdi class="t-ar" lang="ar">تابعنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Follow</bdi></p>
+                    <div class="foot-social">
+                        <a href="https://www.instagram.com/elamir.mansour/" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="0.6" fill="currentColor"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">إنستجرام</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Instagram</bdi></span></a>
+                        <a href="https://www.tiktok.com/@elamir_mansour" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></span></a>
+                        <a href="https://www.facebook.com/ElAmirMahmoudMansour" target="_blank" rel="noopener noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg><span class="foot-sr"><bdi class="t-ar" lang="ar">فيسبوك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Facebook</bdi></span></a>
+                    </div>
+                    <p class="foot-note"><bdi class="t-ar" lang="ar" dir="rtl">حسابات المؤسس، وعليها يُنشر ما يصنعه التطبيق.</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">The founder's accounts, where the app's own work is published.</bdi></p>
+                </div>
+                <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
+                    <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
+                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
+                </div>
+            </div>
+
+            <div class="foot-base">
+                <p class="foot-copy">© 2026 <bdi class="t-ar" lang="ar">أوتوريبلاي برو</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">AutoReply Pro</bdi></p>
+                <div class="langswitch" role="group" aria-label="اللغة · Language">
+                    <button type="button" data-set-lang="ar" lang="ar" aria-pressed="false">العربية</button>
+                    <button type="button" data-set-lang="en" lang="en" aria-pressed="false">English</button>
+                </div>
             </div>
             <p class="foot-legal">
-                <!-- These two were plain <span>s with no lang or dir on three of
-                     the four pages. Inside an RTL page an English sentence's
-                     final full stop is a neutral character, so it was reordered
-                     to the other end of the line and the footer rendered
-                     ".by Meta". <bdi> is an isolate AND an element, which is why
-                     it is used here rather than unicode-bidi: isolate, which the
-                     W3C notes may be ignored. -->
-                <bdi class="t-ar" lang="ar" dir="rtl">أوتوريبلاي برو — أتمتة الردود والرسائل على إنستجرام وفيسبوك. إنستجرام وفيسبوك علامتان تجاريتان مملوكتان لشركة <bdi lang="en" dir="ltr">Meta</bdi>، ولا ترتبط هذه الأداة بها.</bdi>
-                <bdi class="t-en" lang="en" dir="ltr">AutoReply Pro — comment and message automation for Instagram and Facebook. Instagram and Facebook are trademarks of Meta; this tool is not affiliated with or endorsed by Meta.</bdi>
+                <!-- <bdi>, not <span>, with lang and dir: inside an RTL page an
+                     English sentence's final full stop is a neutral character and
+                     is reordered to the other end of the line — which is how this
+                     line once rendered ".by Meta". -->
+                <bdi class="t-ar" lang="ar" dir="rtl">إنستجرام وفيسبوك وتيك توك علاماتٌ تجارية مملوكة لأصحابها، ولا ترتبط هذه الأداة بشركة <bdi lang="en" dir="ltr">Meta</bdi> ولا بتيك توك، ولا تحظى بتأييد أيٍّ منهما.</bdi>
+                <bdi class="t-en" lang="en" dir="ltr">Instagram, Facebook and TikTok are trademarks of their respective owners. AutoReply Pro is not affiliated with, or endorsed by, Meta or TikTok.</bdi>
             </p>
         </footer>
     </div>
@@ -3508,6 +4757,75 @@
 
             /* The head script already chose; reflect it on the buttons. */
             apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+        })();
+
+        /* Language-neutral fragments. The shared footer links to /#faq,
+           /#features and so on, because it is one string on five pages and in
+           two languages; the sections here are #faq-ar and #faq-en. This
+           resolves a neutral name to whichever language is showing: once on
+           arrival (from another page, or a pasted link), and on the links
+           themselves, which are rewritten whenever the language changes so a
+           click stays an ordinary fragment jump — focus moves, Back works —
+           rather than a scripted scroll. With JavaScript off, a neutral
+           fragment lands at the top of `/`, where both languages are showing. */
+        (function () {
+            var root = document.documentElement;
+            var buttons = document.querySelectorAll('[data-set-lang]');
+
+            function target(name) {
+                if (!name || document.getElementById(name)) return null;
+                var lang = root.getAttribute('data-lang') === 'en' ? 'en' : 'ar';
+                return document.getElementById(name + '-' + lang);
+            }
+            function rewrite() {
+                var links = document.querySelectorAll('a[href^="/#"], a[data-neutral]');
+                for (var i = 0; i < links.length; i++) {
+                    var name = links[i].getAttribute('data-neutral') || links[i].getAttribute('href').slice(2);
+                    var el = target(name);
+                    if (el) {
+                        links[i].setAttribute('data-neutral', name);
+                        links[i].setAttribute('href', '#' + el.id);
+                    }
+                }
+            }
+            function arrive() {
+                var name = '';
+                try { name = decodeURIComponent(location.hash.slice(1)); } catch (e) { return; }
+                var el = target(name);
+                if (!el) return;
+                try { history.replaceState(null, '', '#' + el.id); } catch (e) { /* file:// */ }
+                try { el.scrollIntoView({ block: 'start', behavior: 'instant' }); }
+                catch (e) { el.scrollIntoView(true); }
+            }
+
+            rewrite();
+            arrive();
+            window.addEventListener('hashchange', arrive);
+            for (var i = 0; i < buttons.length; i++) buttons[i].addEventListener('click', rewrite);
+        })();
+
+        /* A slide row is a keyboard stop only while it actually scrolls. The
+           markup ships tabindex="0" on every .reel, so the rows stay reachable
+           without JavaScript; this takes the stop away from a row that fits,
+           where Tab would land on something that does nothing. Widths are known
+           before the images arrive — every <img> carries its own width and
+           height — so this is right on first paint. */
+        (function () {
+            var reels = document.querySelectorAll('.reel');
+            var buttons = document.querySelectorAll('[data-set-lang]');
+            var timer = null;
+            function sync() {
+                for (var i = 0; i < reels.length; i++) {
+                    if (reels[i].scrollWidth > reels[i].clientWidth + 1) reels[i].setAttribute('tabindex', '0');
+                    else reels[i].removeAttribute('tabindex');
+                }
+            }
+            window.addEventListener('resize', function () {
+                clearTimeout(timer);
+                timer = setTimeout(sync, 150);
+            });
+            for (var i = 0; i < buttons.length; i++) buttons[i].addEventListener('click', sync);
+            sync();
         })();
     </script>
 </body>
