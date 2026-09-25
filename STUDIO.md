@@ -196,7 +196,7 @@ planWeek(count: number, lessons: LessonRow[], ctx: GenContext): Promise<Proposal
 type GenContext = { recentTopics: string[]; recentAccents: string[]; activeKeywords: string[]; palette: string[] };
 ```
 
-- **Model and call:** Gemini with `GEMINI_API_KEY`, model `gemini-2.5-pro`, `responseSchema`, a 120s timeout.
+- **Model and call:** Gemini with `GEMINI_API_KEY` through the chain `STUDIO_MODELS` in `generate.ts` (`gemini-3.1-pro-preview`, then three flash models; a 400/404/429/500/503 moves to the next). `responseSchema` is sent without `minItems`/`maxItems`, which Gemini 3 refuses. A 120s timeout. Never `gemini-2.5-flash`, which the DM bot runs on.
 - **Repair:** up to 2 rounds that send the model `validateCarousel`'s problems to fix.
 - **Style:** 3 of ElAmir's approved carousels as few-shot examples (`examples.ts`), plus the voice guide:
   - light Gulf/white dialect
@@ -246,7 +246,7 @@ https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB3
   templates read shots from props, not from the static library.
 - **Indexing:**
   - Upload the video through Gemini's Files API (resumable) and wait for `ACTIVE`.
-  - Call `gemini-2.5-flash` with a `responseSchema` for `{ notes, moments }`.
+  - Call the chain `INDEX_MODELS` (`gemini-3.5-flash`, `3.6-flash`, `3-flash-preview`) at `MEDIA_RESOLUTION_LOW`, with a `responseSchema` for `{ notes, moments }`. The upload is a 640px 1 fps proxy, not the original.
   - Delete the uploaded file afterwards.
   - Take a 480px thumbnail per moment with ffmpeg and send it through `/worker/upload`.
 - **Autostart:** launchd via `scripts/install-studio-worker.sh`, which writes

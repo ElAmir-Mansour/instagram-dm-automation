@@ -147,7 +147,7 @@ export class StudioGenerationError extends Error {
 /**
  * Tried in order. A model Google has closed to new keys answers 404, and one whose quota is spent
  * answers 429 — on a free-tier key that is 20 requests a day — so either moves on to the next
- * rather than failing the draft, as does a 503 from a model that is overloaded. None of these is `gemini-2.5-flash`: the DM bot runs on it, and a
+ * rather than failing the draft, as does a 503 or 500 from a model that is overloaded or failing. None of these is `gemini-2.5-flash`: the DM bot runs on it, and a
  * carousel must never spend the quota a customer's reply depends on.
  */
 export const STUDIO_MODELS: readonly string[] = [
@@ -273,7 +273,7 @@ export async function callGemini(req: ModelRequest): Promise<unknown> {
             // Unavailable to this key, out of quota, overloaded right now, or refusing a schema
             // feature it doesn't support (400): the next model may well answer. A 400 that is
             // really our request's fault fails on every model and surfaces from the last.
-            if ((status === 400 || status === 404 || status === 429 || status === 503) && i < STUDIO_MODELS.length - 1) continue;
+            if ((status === 400 || status === 404 || status === 429 || status === 500 || status === 503) && i < STUDIO_MODELS.length - 1) continue;
             const why = status ? ` [HTTP ${status}]` : timedOut ? ' (timed out)' : '';
             throw new ModelError(
                 `Gemini request failed${why}: ${apiError?.message || err?.message}`,

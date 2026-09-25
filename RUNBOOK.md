@@ -302,6 +302,8 @@ node scripts/diagnose.mjs        # read the `publish` section
 Healthy is `✔ publish  no stranded, overdue or failed scheduled posts`, with a `DETAIL` line
 of counts by status. Today: `PENDING=6  PUBLISHED=10`.
 
+**A TikTok post** has its own statuses (`PROCESSING`, `IN_INBOX`) and its own failure modes: §10.
+
 ### 4.1 It is probably the cron granularity
 
 The Vercel cron runs **once daily at 00:00 UTC** — a Hobby-plan limit (`vercel.json` `crons`) —
@@ -757,7 +759,312 @@ in the public repo's history (`src/config/env.ts:45-49`).
 
 ---
 
-## 10. Before you touch anything: the checks that are free
+## 10. TikTok
+
+Setup, the developer portal, app review and every error code are in
+[`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md) (tracked with `git add -f`, since `docs/` is
+gitignored). This section works backwards from a symptom; the forward walk is FLOWS.md §6, and
+§3.6 for photo posts.
+
+**The ground rule from the top of this file applies to TikTok too.** `GET /api/jobs/drain` and
+`GET /api/cron/publish` publish every due post, TikTok rows included, so neither is a test.
+**Publish now** on one card is the narrow lever: it claims that one row and nothing else
+(`src/routes/api.ts:2535-2562`).
+
+The states a TikTok row moves through, and what moves it:
+
+| Status | Means | Moved on by |
+|---|---|---|
+| `PENDING` | due later — or **held** by the 5-draft limit, with "Waiting for TikTok: …" in `error_log` | a drain or the daily cron claims it (`src/routes/api.ts:789-795`) |
+| `PUBLISHING` | claimed, being sent | the publish call. A dead one is released only by the daily cron, after 15 minutes (§4.2) |
+| `PROCESSING` | TikTok has it | the 12 s poll inside the publish call, the webhook, or the sweep on every drain (`src/services/tiktokPublish.ts:582-641`) |
+| `IN_INBOX` | an inbox draft, waiting for the creator | the creator posting it in TikTok |
+| `PUBLISHED` | TikTok said `PUBLISH_COMPLETE` | — |
+| `FAILED` | `error_log` says why | **Publish now**, or edit and save |
+
+Every query in this section is a read-only `SELECT`: paste it into the Supabase SQL editor, or run
+it through the read-only session as in §2.1. Start with the last twenty TikTok rows:
+
+```sql
+SELECT id, status, post_type, scheduled_time, attempts,
+       platform_options->>'mode' AS mode, platform_options->>'privacy_level' AS privacy,
+       external_publish_id IS NOT NULL AS reached_tiktok, published_post_id,
+       claimed_at, status_checked_at, left(error_log, 160) AS error_log
+  FROM scheduled_posts
+ WHERE platform = 'tiktok'
+ ORDER BY scheduled_time DESC
+ LIMIT 20;
+```
+
+and the connection:
+
+```sql
+SELECT status, scopes, display_name, refresh_expires_at, last_refreshed_at,
+       refresh_claimed_at, left(last_error, 160) AS last_error
+  FROM platform_connections
+ WHERE platform = 'tiktok';
+```
+
+### 10.1 "A TikTok post failed."
+
+Read `error_log` — on the card, or in the first query. It starts with the step that failed
+(`TikTok post init:`, `TikTok photo post:`, `TikTok upload init:` …), then a plain sentence
+(`toTikTokError`, `src/services/tiktok.ts:140-164`):
+
+| `error_log` contains | Go to |
+|---|---|
+| "…direct posts only work when your TikTok account is set to private…" | §10.2 |
+| "…can only be private (Only me)…" | §10.2 |
+| "…can only fetch photos from a verified URL prefix…" or "…could not fetch the photos…" | §10.3 |
+| "reconnect TikTok", or "TikTok is not connected for this account" | §10.4 |
+| "TikTok rate limit reached — it will be retried." | **Not retried if it was the init** — photo inits allow 6 a minute. Wait a minute, then **Publish now** |
+| "TikTok did not confirm this upload within 24 hours…" | §10.7 |
+| "Waiting for TikTok: *n* drafts…" — status `PENDING`, not `FAILED` | §10.5: held, not failed |
+| anything else | the full tables, `docs/TIKTOK_GUIDE.md` §11 |
+
+**Before you retry, look at `external_publish_id`** (`reached_tiktok` in the query). Non-NULL
+means that attempt reached TikTok. A retry asks TikTok about that `publish_id` first: a video
+whose upload finished, or a photo post TikTok has not failed, is settled from TikTok's answer
+instead of being sent again (`src/services/tiktokPublish.ts:430-441`, `:515-528`). **That column is
+what stops a duplicate post — do not clear it to "start clean".** Only when TikTok itself reports
+the old attempt as failed does a retry make a new post.
+
+Two ways to retry:
+
+- **Publish now** on the card — claims a `PENDING` or `FAILED` row, publishes it at once and waits
+  up to 12 s for TikTok's verdict (`src/routes/api.ts:2551-2556`, `src/services/tiktokPublish.ts:45`).
+- **Edit and save** — flips `FAILED → PENDING` (`src/routes/api.ts:2471`), and the next drain takes
+  it. Edits are refused once a row is `PUBLISHING`, `PROCESSING` or `IN_INBOX` (`:2395-2398`).
+
+**No TikTok init is retried on failure** — a 5xx may already have created the post or the draft
+(`src/services/tiktok.ts:362-372`, `:501-504`, `:582-585`). The one exception is an inbox video
+whose caption TikTok refuses as invalid, which is sent once more without it. So a `FAILED` TikTok
+row stays `FAILED` until someone acts; nothing re-queues it.
+
+### 10.2 The post is "Only me" — or refused because the account is public
+
+Three symptoms, one cause: TikTok has not audited the app yet.
+
+| Symptom | Means | Fix |
+|---|---|---|
+| The post is live, but only you can see it | expected — every direct post is Only me until the audit | make it public by hand: open the post → ⋯ → Privacy settings → Everyone |
+| `FAILED`: "Until TikTok approves this app, direct posts only work when your TikTok account is set to private…" (`unaudited_client_can_only_post_to_private_accounts`) | the account was public when the post went out | account private → **Publish now** → wait for `PUBLISHED` → account public → make the post public |
+| Refused at scheduling with "Until TikTok approves this app, direct posts can only be private (Only me).", or `FAILED` with "…can only be private (Only me) — edit the post." | a privacy wider than Only me — or Audited was ticked and later unticked | edit the post and choose Only me (`src/services/tiktokPublish.ts:94-96`, `:290-292`) |
+
+Before switching the account back to public after a run of posts, make sure nothing is still going
+out:
+
+```sql
+SELECT id, status, post_type, scheduled_time
+  FROM scheduled_posts
+ WHERE platform = 'tiktok'
+   AND platform_options->>'mode' = 'direct'
+   AND status IN ('PENDING', 'PUBLISHING', 'PROCESSING')
+ ORDER BY scheduled_time;
+```
+
+Empty is safe. A row due later will fail if the account is public by then. The whole workflow is
+`docs/TIKTOK_GUIDE.md` §6.3. Once the audit passes, tick Audited (guide §5.2) — and note that posts
+scheduled before the tick keep Only me until they are edited.
+
+### 10.3 `url_ownership_unverified`, or "TikTok could not fetch the photos"
+
+Photo posts only. TikTok pulls each image itself, from `<Public site address>/api/uploads/<uuid>.jpg`
+(`.webp` for WebP), and only from the URL prefix verified in its portal
+(`src/services/tiktokPublish.ts:396-400`). Check in this order:
+
+1. **Is the prefix verified?** Portal → URL properties → `https://msg-response-auto.vercel.app/`
+   shows verified. If not, guide §2.5.
+2. **Is every verification file still served?**
+
+   ```sql
+   SELECT key, left(value, 300) AS value
+     FROM app_settings
+    WHERE key IN ('tiktok.verification_filename', 'tiktok.verification_history');
+   ```
+
+   then, for each file name:
+
+   ```bash
+   curl -fsS https://msg-response-auto.vercel.app/tiktokAbC123.txt
+   ```
+
+   Healthy: the file's one line. A `404` means that name is no longer saved — the history keeps the
+   last ten only (`src/services/appSettings.ts:196-206`). Save it again.
+3. **Is the Public site address that same origin?**
+
+   ```sql
+   SELECT value FROM app_settings WHERE key = 'app.public_base_url';
+   ```
+
+   It must be `https://msg-response-auto.vercel.app`. NULL falls back to `PUBLIC_BASE_URL`; with
+   both unset, photo posts fail with "…none is set — add it in Settings → TikTok app."
+   (`src/services/tiktokPublish.ts:397-399`).
+4. **Does every image answer?**
+
+   ```sql
+   SELECT unnest(COALESCE(media_urls, ARRAY[media_url])) AS url
+     FROM scheduled_posts
+    WHERE id = '<post id>';
+   ```
+
+   then, for each `…/api/uploads/<uuid>`:
+
+   ```bash
+   curl -sI https://msg-response-auto.vercel.app/api/uploads/<uuid>.jpg | grep -iE '^(HTTP|content-type)'
+   ```
+
+   Healthy: `200` with `image/jpeg` or `image/webp`. A `404` means the upload was deleted after the
+   post was scheduled: upload the image again and edit the post.
+
+Then **Publish now**.
+
+### 10.4 "Reconnect TikTok" / the token is invalid
+
+Symptom: the Settings card says **Needs reconnecting** with "Last problem: …"; TikTok posts fail
+with "…reconnect TikTok in Settings." or "TikTok is not connected for this account — connect it
+in Settings."; scheduling a TikTok post is refused with a 409.
+
+What does it: a refresh or a publish call answered with `access_token_invalid`, `invalid_grant`,
+`scope_not_authorized` or `scope_permission_missed` marks the connection `invalid`
+(`src/services/tiktok.ts:95-100`, `src/services/tiktokConnections.ts:273-286`, `:360-367`).
+Transient failures never do (`:288-290`). The daily cron refreshes every active connection, so a
+revoked account usually shows up the morning after (`src/routes/api.ts:890`).
+
+| Cause | Tell |
+|---|---|
+| the yearly expiry | `refresh_expires_at` has passed — the card warned for 30 days before |
+| the creator removed the app in TikTok | no row at all: `authorization.removed` deleted it. If that webhook was refused (§10.6), the row stays until the next refresh fails with `invalid_grant` |
+| the client key or secret changed — sandbox ↔ production | every connection fails its next refresh with `invalid_grant` (guide §8.3) |
+| a scope was withdrawn in the portal | `scope_not_authorized` |
+
+**Fix: the workspace owner presses Reconnect** (Settings → TikTok). There is nothing else — a dead
+refresh token cannot be revived. Then retry the posts that failed in the meantime with **Publish
+now**. Connect's own error toasts (cancelled, link expired, account in another workspace, exchange
+refused) are in guide §4.2; the log line `tiktok.oauth_callback_failed` carries TikTok's reason.
+
+Two sentences that look like this and are not:
+
+- "The TikTok token is being refreshed by another request — retry in a moment." — another
+  invocation held the refresh claim (`src/services/tiktokConnections.ts:322`). Retry. A claim older
+  than 2 minutes is taken over (`:31`, `:252`).
+- "This post is set to post directly, but TikTok has not granted direct posting — reconnect TikTok
+  in Settings." — the connection predates the Direct Post switch. Reconnect once
+  (`src/services/tiktokPublish.ts:497-499`); the token was never dead.
+
+### 10.5 "The drafts never showed up."
+
+Inbox mode (`video.upload`). **Known and unresolved.** On 2026-09-23/24 TikTok reported six drafts
+as delivered — the rows went to `IN_INBOX` — and none was ever found: no notification on the phone,
+nothing among TikTok Studio's drafts on the web. `IN_INBOX` records what TikTok said, not what
+anyone can see.
+
+What it costs meanwhile:
+
+- Each one counts against TikTok's 5 unposted drafts per 24 hours, and at five the app **holds** the
+  next inbox post: status back to `PENDING`, `error_log` "Waiting for TikTok: *n* drafts from the last
+  24 hours…", log line `cron.publish_held_tiktok_inbox`, and **Publish now** answers 409
+  (`src/services/tiktokPublish.ts:486-491`, `:555-563`; `src/routes/api.ts:816-819`, `:2593-2596`).
+- The rows stay `IN_INBOX`. The sweep asks about them every 10 minutes for 7 days, then stops
+  (`src/services/tiktokPublish.ts:594-598`).
+- Nothing in the app can list or delete a TikTok draft.
+
+What is counted right now — the same query as `pendingInboxShares`
+(`src/services/tiktokPublish.ts:190-201`), and the number on the Settings card's "Drafts waiting in
+your TikTok inbox (last 24 hours)":
+
+```sql
+SELECT status, count(*)
+  FROM scheduled_posts
+ WHERE platform = 'tiktok'
+   AND COALESCE(platform_options->>'mode', 'inbox') = 'inbox'
+   AND status IN ('PUBLISHING', 'PROCESSING', 'IN_INBOX')
+   AND claimed_at > NOW() - INTERVAL '24 hours'
+ GROUP BY status;
+```
+
+**Fix: switch to Direct Post** (guide §5.1) and post with the private-account workflow (guide §6.3).
+Direct posts do not count against the draft limit, and a held inbox post can be edited to "Post
+directly to my profile". If you do test inbox mode again, check that the card's display name is the
+account open on the phone, and that the TikTok app is current — 31.8 or newer for photo drafts
+(`app_version_check_failed`).
+
+### 10.6 The webhook signature
+
+Symptom: the Vercel logs show `tiktok.webhook_signature_rejected { has_header, app_configured }`
+and TikTok's deliveries get a `401` (`src/routes/tiktok.ts:157-165`). As with Meta (§2.3), a
+rejection writes nothing, so the logs are the only evidence.
+
+It costs less than on the Meta side. The webhook is one of three writers; the inline poll and the
+sweep still settle every post, only later (FLOWS.md §6.5). The real loss is
+`authorization.removed`: when a creator removes the app in TikTok, the stored connection is not
+deleted until its next refresh fails — and `/data-deletion` promises that deletion.
+
+| `has_header` | `app_configured` | Cause |
+|---|---|---|
+| `false` | — | not TikTok, or something on the way stripped the header |
+| `true` | `false` | no client key and secret saved (guide §3) |
+| `true` | `true` | TikTok signs with a different secret from the one saved — most likely the **sandbox versus production** secret, or a secret reset in the portal |
+
+The signature is HMAC-SHA256 of `"<t>.<raw body>"` keyed with the **client secret**
+(`src/services/tiktok.ts:766-789`). To prove the saved secret is the portal's, sign a harmless body
+with the secret copied from the portal and send it. Its event name is one the app does not know,
+so it is acknowledged and ignored, and nothing is written (`src/services/tiktokPublish.ts:662-663`):
+
+```bash
+read -rs TT_SECRET && export TT_SECRET   # paste the portal's client secret; it is not echoed
+node --input-type=module -e "
+import crypto from 'crypto';
+const body = JSON.stringify({ event: 'probe.signature_check', content: '{}' });
+const t = Math.floor(Date.now() / 1000);
+const s = crypto.createHmac('sha256', process.env.TT_SECRET).update(t + '.' + body).digest('hex');
+const r = await fetch('https://msg-response-auto.vercel.app/api/tiktok/webhook', {
+  method: 'POST', headers: { 'Content-Type': 'application/json', 'Tiktok-Signature': 't=' + t + ',s=' + s }, body });
+console.log(r.status, await r.text());"
+unset TT_SECRET
+```
+
+- `200 {"received":true}` — the saved secret is that portal app's. If TikTok's real deliveries are
+  still refused, they come from the *other* app: sandbox versus production.
+- `401` — the saved secret is different. Paste the portal's into Settings → TikTok app → Client
+  secret → **Save TikTok app**, and run the probe again.
+
+Also confirm the portal's webhook URL is exactly `https://msg-response-auto.vercel.app/api/tiktok/webhook`.
+Healthy deliveries log `tiktok.webhook_applied` with an `outcome` such as `post_published`;
+`ignored:unknown_publish_id` is normal for a post this app did not send
+(`src/services/tiktokPublish.ts:655-686`).
+
+### 10.7 A status stuck in `PROCESSING` (or `PUBLISHING`)
+
+```sql
+SELECT id, status, post_type, claimed_at, status_checked_at,
+       external_publish_id IS NOT NULL AS reached_tiktok, left(error_log, 120) AS err
+  FROM scheduled_posts
+ WHERE platform = 'tiktok' AND status IN ('PUBLISHING', 'PROCESSING', 'IN_INBOX')
+ ORDER BY claimed_at;
+```
+
+| What you see | Means | Do |
+|---|---|---|
+| `PROCESSING`, `status_checked_at` recent | the sweep is asking and TikTok is still working | wait. After 24 h of silence the sweep fails it with "TikTok did not confirm this upload within 24 hours…" (`src/services/tiktokPublish.ts:617-620`) |
+| `PROCESSING`, `status_checked_at` old or NULL | nothing is asking: no drain has run. The sweep runs only inside `/api/jobs/drain` and the daily cron (`src/routes/api.ts:373`, `:894`) | check the drainers (§5.1); a working webhook would have moved it anyway (§10.6) |
+| `PROCESSING`, `status_checked_at` advancing but never settling, `tiktok.reconcile_row_failed` in the logs | the status call itself fails, usually on the token | §10.4; the next sweep settles it |
+| `PUBLISHING`, `claimed_at` more than 15 minutes ago | the invocation died mid-send, and only the daily cron releases it back to `PENDING` (`src/routes/api.ts:845-852`) | wait for 00:00 UTC, or call `/api/cron/publish` knowing it publishes everything due (§4.2). With `reached_tiktok` true, the retry asks TikTok before sending anything again |
+| `IN_INBOX` | an inbox draft waiting for the creator, not stuck | §10.5 |
+
+To make the sweep run now — it also publishes every due post and runs queued DM jobs, as §1 warns:
+
+```bash
+curl -fsS -H "Authorization: Bearer $CRON_SECRET" https://msg-response-auto.vercel.app/api/jobs/drain
+```
+
+Export the current `CRON_SECRET` first; the copy in `.env` was not updated when it was rotated on
+2026-09-22. The response ends with `"tiktok":{"checked":N,"settled":N,"gaveUp":N}` — `settled`
+counts rows that moved.
+
+---
+
+## 11. Before you touch anything: the checks that are free
 
 ```bash
 npm run typecheck    # tsc --noEmit
@@ -777,3 +1084,351 @@ Inspect production configuration without deploying:
 ```bash
 vercel env pull .env.local --environment=production
 ```
+
+---
+
+## Carousel Studio
+
+The Studio's own guide is [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md): what each part does,
+every setting, and a symptom table written for the creator. This section is the operator's side of
+the same symptoms: what to run, what healthy looks like, and what to do when it isn't.
+
+Three things to know before touching anything:
+
+- **The Studio has its own queue**, `studio_jobs` (migration v21), and only the worker on the Mac
+  drains it. `/api/jobs/drain` and the cron never touch it; nothing on Vercel runs these jobs
+  (`src/config/migration_v21_studio.sql:8-13`).
+- **Prefer the dashboard's buttons to SQL writes.** A button goes through the same code as the
+  worker, side effects included: a failed index marks its lesson failed, a new render supersedes
+  the pending ones. An `UPDATE` does only what it says. The few writes below are marked, and say
+  what they skip.
+- **The SQL reads every tenant.** Run it in the Supabase SQL editor, or `psql "$DATABASE_URL"`. With
+  more than one tenant, add `AND creator_id = '<id>'` (from `SELECT id, name FROM creators;`).
+
+### The worker, from the Mac
+
+```bash
+launchctl print gui/$(id -u)/com.aicourse.studio-worker | grep -E 'state|pid'   # running? "state = running" and a pid
+tail -f ~/Library/Logs/aicourse-studio-worker.log                                  # follow it live
+grep -E 'failed|rejected|stalled|interrupted|config:' ~/Library/Logs/aicourse-studio-worker.log | tail -40
+launchctl kickstart -k gui/$(id -u)/com.aicourse.studio-worker                     # restart it
+
+# From the worker's folder, ~/Desktop/AI Course/aicourse-captions:
+scripts/install-studio-worker.sh           # (re)install the launchd agent: after a Node upgrade or a moved folder
+node scripts/studio-worker.mjs --drain     # run in the foreground until the queue is empty (stop the agent first)
+scripts/uninstall-studio-worker.sh         # remove the agent; the log is kept
+```
+
+An idle worker polls silently, so a quiet log is not a dead worker; `last_seen_at` (below) is the
+signal. Every step of a job is one timestamped line, prefixed with the job's kind and the first 8
+characters of its id, for example `index_lesson 1a2b3c4d: uploading the 0.6 MB proxy to Gemini:
+45%`. The worker README's *Troubleshooting* table maps its log lines to fixes.
+
+On the app's side, the Vercel logs (filter on `studio.`) carry `studio.worker_auth_rejected` (a
+worker with a stale or revoked token, with the reason and path), `studio.job_claimed`,
+`studio.job_completed`, `studio.job_failed`, `studio.job_exhausted`, `studio.render_dropped`,
+`studio.ai_request_failed` (one per model that refused), `studio.ai_usage`,
+`studio.draft_generated`, `studio.generate_failed` and `studio.schema_missing`. Every Studio route
+answers 503 *"The database is missing migration v21…"* until `npm run migrate` has run.
+
+### "The worker is offline"
+
+```sql
+-- Every live worker, and whether the app counts it online (an authenticated call within 90 s)
+SELECT c.name AS tenant, w.name AS worker, w.created_at, w.last_seen_at,
+       now() - w.last_seen_at AS ago,
+       coalesce(now() - w.last_seen_at < interval '90 seconds', false) AS online
+  FROM studio_workers w
+  JOIN creators c ON c.id = w.creator_id
+ WHERE w.revoked_at IS NULL
+ ORDER BY w.last_seen_at DESC NULLS LAST;
+```
+
+| What you see | What it means | Do |
+|---|---|---|
+| `ago` of seconds, `online` true | Healthy. An idle worker calls at least every 30 s, a busy one at least every 20 s | Nothing |
+| `ago` of minutes or hours | The Mac is asleep, off or logged out (the agent only runs in a logged-in session), or the worker stopped | On the Mac: `launchctl print …`, then the log's last lines |
+| `last_seen_at` is NULL | The token has never been used | Check `token` and `appUrl` in `studio.config.json`; run `node scripts/studio-worker.mjs --drain` and read it |
+| The worker is running, its log says *the app rejected the worker token (HTTP 401)*, and Vercel logs `studio.worker_auth_rejected` | The token was revoked, mistyped, or belongs to a deactivated tenant | Settings → Workers → **Create worker** (owner), paste the new token; it is picked up at the next poll |
+| No row at all | No worker, or every worker revoked | Create one (owner role) |
+
+A worker's name in this table is the label typed at **Create worker**. The `name` in its config
+file is only for its own log.
+
+### "A lesson won't index" / "Indexing is stuck"
+
+```sql
+-- The library at a glance
+SELECT status, count(*) FROM course_lessons GROUP BY status ORDER BY status;
+
+-- Every lesson that isn't indexed, with the reason
+SELECT id, lesson_no, title, status, left(error, 200) AS error, updated_at
+  FROM course_lessons
+ WHERE status <> 'indexed'
+ ORDER BY section_no NULLS LAST, length(lesson_no), lesson_no;
+
+-- Indexed lessons and their moments: 12 to 30 each; "clean" are the usable screenshots
+SELECT l.lesson_no, l.title, count(m.id) AS moments,
+       count(m.id) FILTER (WHERE m.clean) AS clean, l.indexed_at
+  FROM course_lessons l
+  LEFT JOIN lesson_moments m ON m.lesson_id = l.id
+ WHERE l.status = 'indexed'
+ GROUP BY l.id
+ ORDER BY l.section_no NULLS LAST, length(l.lesson_no), l.lesson_no;
+```
+
+| The lesson's `error` contains | Cause | Do |
+|---|---|---|
+| `HTTP 429` | Every model in the indexer's chain (`gemini-3.5-flash` → `gemini-3.6-flash` → `gemini-3-flash-preview`) has spent its daily free quota | After the reset (midnight Pacific: 10:00 Riyadh in US summer time, 11:00 otherwise), press **Index missing**. Nothing re-queues failed lessons by itself. The lasting fix is billing (guide §8) |
+| `HTTP 503` or `HTTP 500` | Gemini overloaded, or failing on its side. Each model was retried twice, then the next | Index it again later |
+| `HTTP 400` from every model | The request itself is refused (Gemini 3's `minItems`/`maxItems` 400 was one) | The worker log has one *trying the next model* line per model with Google's message. A code fix in `scripts/studio/gemini.mjs` |
+| `unusable twice` | Too few usable moments, or times past the end, twice | Index it again |
+| `outside the course root`, `not found` | The video moved, or `courseRoot` doesn't contain the library folder | Fix the path, scan again |
+| `stalled` | The upload saw two minutes of silence (Mac asleep, network gone) | Index it again |
+| `stopped reporting on this job 3 times` | The worker died on it three times | The log around those claim times |
+
+A lesson sitting on **Indexing…** has an open job, or should have:
+
+```sql
+-- Lessons marked indexing, with their open job
+SELECT l.id AS lesson, l.lesson_no, l.title, l.updated_at,
+       j.id AS job, j.status AS job_status, j.attempts, j.progress,
+       now() - j.heartbeat_at AS since_heartbeat
+  FROM course_lessons l
+  LEFT JOIN studio_jobs j
+         ON j.kind = 'index_lesson' AND j.status IN ('pending', 'claimed')
+        AND j.payload->>'lessonId' = l.id::text
+ WHERE l.status = 'indexing'
+ ORDER BY l.updated_at;
+```
+
+- `pending`: waiting for the worker. It is offline, or busy: by default it runs one job at a time.
+- `claimed`, with `since_heartbeat` under a minute: running, and `progress` names the step. An
+  upload at 20 to 30 KB/s is slow, not stuck.
+- `claimed`, with `since_heartbeat` over 15 minutes: its worker died. The job is handed out again at
+  the next claim, and failed after three claims (`src/services/studio/jobs.ts:145-203`).
+- `job` NULL: nothing will ever finish it. **Write:** put it back and queue it again with **Index
+  missing**:
+
+  ```sql
+  UPDATE course_lessons SET status = 'new', error = NULL, updated_at = now()
+   WHERE id = '<lesson id>' AND status = 'indexing';
+  ```
+
+**Re-index a lesson that is already indexed** (the dashboard only offers the button for lessons that
+are not). Either from the dashboard's browser console, which goes through the API as your session:
+
+```js
+const { lessons } = await API.getStudioLessons();
+await API.indexStudioLesson(lessons.find((l) => l.lesson_no === '4.3').id);
+```
+
+or, **write**, mark it not indexed and press **Index missing**; its notes and moments stay until the
+new index replaces them:
+
+```sql
+UPDATE course_lessons SET status = 'new', updated_at = now() WHERE id = '<lesson id>';
+```
+
+**Cancel an index backlog**, for instance after the quota is spent and every queued lesson would
+fail anyway. **Write:** it fails every *queued* index job (a running one is left alone) and puts
+each lesson back to *Not indexed yet*; `applyFailure` is not involved, so nothing else changes:
+
+```sql
+WITH cancelled AS (
+    UPDATE studio_jobs
+       SET status = 'failed', error = 'Cancelled by hand', updated_at = now()
+     WHERE kind = 'index_lesson' AND status = 'pending'
+ RETURNING payload->>'lessonId' AS lesson_id
+)
+UPDATE course_lessons SET status = 'new', error = NULL, updated_at = now()
+ WHERE id::text IN (SELECT lesson_id FROM cancelled);
+```
+
+### "Scan is greyed out" / "The scan found nothing"
+
+**Scan library** is greyed out when the tenant has no library folder. No row here means the
+defaults, which have none:
+
+```sql
+SELECT c.name AS tenant, s.library->>'root' AS library_root, s.updated_at
+  FROM studio_settings s
+  JOIN creators c ON c.id = s.creator_id;
+```
+
+Fix it in Studio → Settings → **Library folder**. The folder must sit inside the worker's
+`courseRoot`, or the worker refuses the scan.
+
+A scan that ran and added nothing has usually **failed on the Mac, which marks nothing anywhere
+else**: no lesson and no draft carries its error. Only its job row and the worker's log do:
+
+```sql
+SELECT status, left(error, 300) AS error, payload->>'root' AS root,
+       result->>'lessons' AS lessons_upserted, result->'skipped' AS skipped,
+       created_at, updated_at
+  FROM studio_jobs
+ WHERE kind = 'scan_library'
+ ORDER BY created_at DESC
+ LIMIT 5;
+```
+
+`payload.root is outside the course root` means the Settings folder is not inside `courseRoot`;
+`payload.root not found` means it doesn't exist on that Mac. On success, `lessons_upserted` counts
+the lessons the scan wrote, and `skipped` lists entries the app refused. The worker's log says how
+many videos it looked at: `scan: 34 lessons among 35 videos in /Users/elamir/Desktop/AI Course` on
+2026-09-24. Fewer lessons than videos is usually the naming rules (guide §4).
+
+### "Generation failed"
+
+The draft's error says what happened. Recent failures, and anything still writing:
+
+```sql
+SELECT id, status, left(error, 300) AS error, input->'lessonIds' AS lessons,
+       input->>'angle' AS angle, input->>'slides' AS slides, created_at, updated_at
+  FROM carousel_drafts
+ WHERE status IN ('failed', 'generating')
+ ORDER BY created_at DESC
+ LIMIT 10;
+```
+
+| `error` begins | Cause | Do |
+|---|---|---|
+| `Writing the carousel failed: Gemini request failed [HTTP 429]` | The writer's chain (`gemini-3.1-pro-preview` → `3.7-flash` → `3.6-flash` → `3.8-flash`) has spent its daily quota; on the free tier the Pro model has none at all | The reset, or billing (guide §8) |
+| `… [HTTP 404]` | The error is the last model's, so every model answered 404: gone, or closed to this key | Vercel: one `studio.ai_request_failed` per model, with `model`, `http_status` and Google's `message`. If all are gone, update `STUDIO_MODELS` (`src/services/studio/generate.ts:153`) |
+| `… [HTTP 400]` | Every model refused the request, so the request is at fault | The same log lines. A code fix, as stripping `minItems`/`maxItems` was (`withoutArrayBounds`, `src/services/studio/generate.ts:231`) |
+| `… [HTTP 500]` | Google's side. The writer retries a 500 once, from the first model; it does not skip to the next | Generate again |
+| `… Missing GEMINI_API_KEY environment variable.` | The app's environment has no key | Set it in Vercel and redeploy |
+| `… The draft still breaks N rule(s) after M repair round(s): …` | The model could not meet the rules within the 120 s budget | Generate again. Vercel's `studio.draft_generated` has `rounds`, `problems_left` and `ms` |
+| `Writing this draft never finished: the request was cut off.` (status `generating` in the table, older than 10 minutes) | The serverless invocation died mid-write; the API presents the row as failed without rewriting it | Delete it from the dashboard and generate again |
+
+### "A draft is stuck on Rendering"
+
+```sql
+-- Rendering drafts, each with its latest render job: the only one whose result can land
+SELECT d.id AS draft, d.updated_at AS draft_updated,
+       j.id AS job, j.status AS job_status, j.attempts, j.progress,
+       now() - j.heartbeat_at AS since_heartbeat, left(j.error, 200) AS job_error
+  FROM carousel_drafts d
+  LEFT JOIN LATERAL (
+        SELECT * FROM studio_jobs j
+         WHERE j.kind = 'render_carousel' AND j.payload->>'draftId' = d.id::text
+         ORDER BY j.created_at DESC, j.id DESC
+         LIMIT 1
+  ) j ON TRUE
+ WHERE d.status = 'rendering'
+ ORDER BY d.updated_at;
+
+-- The queue as the worker sees it: what is running, then what it takes next, in claim order
+SELECT id, kind, status, attempts, progress, now() - heartbeat_at AS since_heartbeat, created_at,
+       coalesce(payload->>'lesson_no', payload->>'draftId', payload->>'root') AS about
+  FROM studio_jobs
+ WHERE status IN ('pending', 'claimed')
+ ORDER BY status = 'claimed' DESC,
+          CASE kind WHEN 'render_carousel' THEN 0 WHEN 'scan_library' THEN 1 ELSE 2 END,
+          created_at;
+```
+
+| `job_status` | Meaning | Do |
+|---|---|---|
+| `pending` | Waiting. The worker is offline, or finishing the job it has: renders go next but never interrupt one (`indexConcurrency: 1` is one job at a time) | Start the worker, or let the running job end |
+| `claimed`, heartbeat fresh | Drawing. `progress` names the step: `extracting shot 1/2`, `rendering ig 3/8`, `uploading slide 9/16` | Wait. About 170 s on a 20 to 30 KB/s uplink, mostly the uploads |
+| `claimed`, heartbeat over 15 minutes | Its worker died. It is handed out again at the next claim and failed after three | Queue a fresh render (below) rather than wait |
+| `failed`, `Superseded by a newer render…` | A newer render replaced it | Only the latest counts; that is the one shown |
+
+To queue a fresh render of a draft that is not failed (the dashboard only shows **Render again** on
+failed drafts), save it from the editor, or run this in the dashboard's console. Pending renders of
+the same draft are superseded, and a late result from the old claim is dropped when it arrives:
+
+```js
+await API.renderStudioDraft('<draft id>');
+```
+
+### "Problems to fix" on save
+
+A refused save is `400 { error, problems[] }` from `PATCH /api/studio/drafts/:id`, and nothing is
+saved. The messages come from `validateCarousel` (`src/services/studio/rules.ts:276`) and name their
+slide and field: `slide 3 (point).title: 45 > 40 «…»` is 45 UTF-16 units against a limit of 40. The
+editor pins each one to its field. The one that surprises people: after the keyword is changed, the
+Instagram caption must carry the tenant's `cta.instagramAsk` line with the *new* keyword, or the
+save fails with *instagram caption is missing the keyword ask «…»*.
+
+### "Comments on the new post get the wrong DM" (keyword clash)
+
+Matching is substring by default, so a live campaign on a shorter word answers inside a longer one.
+At scheduling, an existing campaign that already answers the keyword means no new one is created
+(`planCampaign`, `src/services/studio/schedule.ts:100`). Which active campaigns could answer a given
+keyword (replace `تمام`; approximate, because the app also normalises Arabic letter forms and
+tatweel before it compares):
+
+```sql
+SELECT DISTINCT c.id, c.trigger_keyword, c.match_mode, c.post_id, c.created_at
+  FROM campaigns c
+ CROSS JOIN LATERAL unnest(string_to_array(c.trigger_keyword, ',')) AS t(word)
+ WHERE c.is_active AND trim(t.word) <> ''
+   AND (trim(t.word) = 'تمام'
+        OR (c.match_mode = 'substring' AND strpos('تمام', trim(t.word)) > 0));
+```
+
+What scheduling decided is in the audit log, with the draft's schedule:
+
+```sql
+SELECT created_at, actor_email, target_id AS draft,
+       detail->>'campaign_id' AS campaign, detail->>'campaign_created' AS created,
+       detail->>'tiktok' AS tiktok, detail->>'scheduled_time' AS scheduled_time
+  FROM audit_log
+ WHERE action = 'studio.schedule'
+ ORDER BY created_at DESC
+ LIMIT 10;
+```
+
+`created = false` with a campaign id means that older campaign answers this post's keyword, with its
+own DM. Switch it to `word` matching on the Campaigns page, or give the carousel a keyword it doesn't
+contain; for a post already scheduled, create the campaign for its keyword by hand.
+
+### "The TikTok batch was refused" / "TikTok posts failed"
+
+```sql
+-- Scheduled drafts with a TikTok intent, and where their TikTok post stands
+SELECT d.id AS draft, d.carousel->>'keyword' AS keyword,
+       d.schedule->>'scheduled_time' AS meta_time, d.schedule->>'tiktok' AS tiktok,
+       d.schedule->>'tiktok_row_id' AS tiktok_post, d.schedule->>'tiktok_public_done' AS made_public,
+       p.status AS tiktok_status, left(p.error_log, 200) AS tiktok_error
+  FROM carousel_drafts d
+  LEFT JOIN scheduled_posts p ON p.id::text = d.schedule->>'tiktok_row_id'
+ WHERE d.status = 'scheduled' AND d.schedule->>'tiktok' <> 'none'
+ ORDER BY d.schedule->>'scheduled_time' DESC;
+
+-- The TikTok connection the batch needs: active, with video.publish in its scopes
+SELECT c.name AS tenant, pc.status, pc.scopes, left(pc.last_error, 200) AS last_error, pc.updated_at
+  FROM platform_connections pc
+  JOIN creators c ON c.id = pc.creator_id
+ WHERE pc.platform = 'tiktok';
+```
+
+| Symptom | Cause | Do |
+|---|---|---|
+| 409 *"TikTok is not connected. Connect it in Settings first."* | No `active` TikTok connection | Connect TikTok in Settings |
+| 409 *"Direct Post is not available: switch it on in Settings → TikTok app, then reconnect TikTok."* | `tiktok.direct_post_enabled` is off, or the connection's `scopes` lack `video.publish` | A platform admin switches Direct Post on in Settings → TikTok app; then reconnect TikTok so the new scope is granted |
+| Fewer sent than queued | Each draft that can't go is skipped with its reason and stays queued; the rest go (`runTikTokBatch`, `src/services/studio/schedule.ts:226`) | The API's answer lists them, `skipped: [{ draftId, error }]`: the browser's network panel shows it for the `tiktok/batch` request. The audit row only counts them. Fix, and press again |
+| `tiktok_error` mentions a private account (`unaudited_client_can_only_post_to_private_accounts`) | While unaudited, direct posts are `SELF_ONLY`, and TikTok takes them only from a private account | Set the TikTok account private, retry the posts from Posts, then make them public |
+| `tiktok_error` mentions a verified URL prefix (`url_ownership_unverified`) | TikTok fetches photos only from a URL prefix verified in its developer portal | Verify the app's address under URL properties ([`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md)), then retry |
+
+The batch writes each row due now, 40 s apart, so they publish on the next sweeps like any due post
+(§4.1, §5.1). TikTok's side of all of this, connecting, Direct Post, the audit, is in
+[`docs/TIKTOK_GUIDE.md`](docs/TIKTOK_GUIDE.md).
+
+### The audit trail
+
+The Studio audits its settings, its workers, and everything that creates posts or campaigns:
+
+```sql
+SELECT created_at, actor_email, action, target_type, target_id, detail
+  FROM audit_log
+ WHERE action LIKE 'studio.%'
+ ORDER BY created_at DESC
+ LIMIT 20;
+```
+
+The actions are `studio.settings_write`, `studio.worker_create`, `studio.worker_revoke`,
+`studio.schedule` and `studio.tiktok_batch` (`src/services/audit.ts:111-119`). A worker's token is
+never in the detail, only its name.
