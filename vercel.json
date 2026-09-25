@@ -37,6 +37,14 @@
       }
     },
     {
+      "src": "/samples/(.*)",
+      "dest": "public/samples/$1",
+      "headers": {
+        "Cache-Control": "public, max-age=86400",
+        "X-Content-Type-Options": "nosniff"
+      }
+    },
+    {
       "src": "/(.*)",
       "dest": "src/index.ts"
     }
