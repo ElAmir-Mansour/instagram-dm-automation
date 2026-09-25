@@ -90,7 +90,7 @@ an incident when it is still empty after a comment you posted yourself — which
 point of `VERIFYING.md`.
 
 The one caveat: if `WEBHOOK_QUEUE=off` is set in the environment, nothing is enqueued by design
-(`src/index.ts:226`, `.env.example:56-63`) and an empty table proves nothing at all. Check that
+(`src/index.ts:226`, `.env.example:57-64`) and an empty table proves nothing at all. Check that
 first.
 
 ---
@@ -248,7 +248,7 @@ marking a working token invalid sends you to regenerate something that was never
 (`src/services/tokenHealth.ts:16-18`).
 
 `GET /api/admin/tenants` shows `token_status`, `token_last_checked_at` and `token_error` per
-tenant (`src/routes/admin.ts:80-82`), but it **reads** the column — it does not re-check
+tenant (`src/routes/admin.ts:83-85`), but it **reads** the column — it does not re-check
 against Meta. There is no re-check endpoint and no scheduled check on `main`. Until there is,
 `node scripts/diagnose.mjs` is the only thing that actively asks Meta, and it only runs when
 you run it.
@@ -266,8 +266,8 @@ Two operational consequences:
   so a legacy plaintext token keeps working. `diagnose.mjs` warns when it finds one and the fix
   is to re-save the token from Settings (`scripts/diagnose.mjs:381-385`).
 - `TOKEN_ENCRYPTION_KEY` is **not** required at startup, but it **is** required to save a token
-  or create a tenant, and those endpoints say so (`src/routes/admin.ts:143-146`,
-  `.env.example:31-38`). Generate with `openssl rand -hex 32`.
+  or create a tenant, and those endpoints say so (`src/routes/admin.ts:426-435`, `:652-660`,
+  `.env.example:32-39`). Generate with `openssl rand -hex 32`.
 
 **Losing `TOKEN_ENCRYPTION_KEY` means every encrypted token is unrecoverable** and each tenant
 must paste a fresh one. It is not in the database by design — the threat model is database
@@ -487,7 +487,7 @@ SELECT id, kind, status, attempts, max_attempts, run_after, claimed_at,
 
 `WEBHOOK_QUEUE=off` in the Vercel environment reverts to processing inline with no queue, which
 is the behaviour that shipped before the queue existed (`src/index.ts:226`,
-`.env.example:56-63`). The handlers are identical either way
+`.env.example:57-64`). The handlers are identical either way
 (`src/webhook/router.ts:8-12`), so this is a rollback of the durability layer only.
 
 Remember that this also makes the §1 "empty `jobs` table" signal meaningless.
@@ -639,7 +639,7 @@ Two halves, and the Meta half has an ordering trap.
 
 Requires a `platform_admin` session. Everything under `/api/admin` returns **404, not 403**, to
 a non-admin — a non-admin has no business knowing the surface exists
-(`src/routes/admin.ts:46-55`).
+(`src/routes/admin.ts:84-92`).
 
 ```
 POST /api/admin/tenants
@@ -648,11 +648,11 @@ POST /api/admin/tenants
 
 `instagram_page_id` and `page_access_token` are both required (NOT NULL in the schema). The
 token is encrypted in the handler, so a tenant created this way **never has a plaintext token in
-the database at any point** (`src/routes/admin.ts:118-147`). A duplicate page id is a 409
-(`:171-174`).
+the database at any point** (`src/routes/admin.ts:426-435`). A duplicate page id is a 409
+(`:503`).
 
 If `TOKEN_ENCRYPTION_KEY` is unset this returns a 500 that names the problem and tells you to
-run `openssl rand -hex 32` (`src/routes/admin.ts:139-147`). Set it first.
+run `openssl rand -hex 32` (`src/routes/admin.ts:426-435`). Set it first.
 
 Then create the client's user and grant membership in one call:
 
@@ -660,10 +660,10 @@ Then create the client's user and grant membership in one call:
 POST /api/admin/users        { email, password, role: 'user', creator_id }
 ```
 
-Password minimum is 12 characters (`src/routes/admin.ts:226`, `:266-269`). A user with no
+Password minimum is 12 characters (`src/routes/admin.ts:301`, `:341-344`). A user with no
 membership can log in and reach nothing, which is why the common case grants it in the same
-request (`src/routes/admin.ts:289-297`). There is **no self-serve signup** — this endpoint is
-the only way a `users` row comes into existence (`src/routes/admin.ts:252-257`).
+request (`src/routes/admin.ts:364-372`). There is **no self-serve signup** — this endpoint is
+the only way a `users` row comes into existence (`src/routes/admin.ts:327-332`).
 
 Both are also available as dashboard screens for a `platform_admin`: **Tenants** and **Users**
 (`dashboard/js/app.js:53-54`, `dashboard/js/pages/tenants.js`, `dashboard/js/pages/users.js`).
@@ -752,10 +752,10 @@ node scripts/diagnose.mjs
 
 The app **refuses all traffic with a 503 naming the missing variable** if required environment
 variables are absent, rather than serving with a missing secret
-(`src/index.ts:23-29`, `:70-76`; the seven required vars are `src/config/env.ts:12-23`). So if
+(`src/index.ts:23-29`, `:70-76`; the seven required vars are `src/config/env.ts:12-27`). So if
 every route 503s after a rollback, read the body — it tells you which variable it is. The app
 also refuses to start if `DASHBOARD_PASSWORD` is the old published default `"admin"`, which is
-in the public repo's history (`src/config/env.ts:45-49`).
+in the public repo's history (`src/config/env.ts:49-53`).
 
 ---
 
@@ -890,7 +890,7 @@ Photo posts only. TikTok pulls each image itself, from `<Public site address>/ap
    ```
 
    Healthy: the file's one line. A `404` means that name is no longer saved — the history keeps the
-   last ten only (`src/services/appSettings.ts:196-206`). Save it again.
+   last ten only (`src/services/appSettings.ts:249-259`). Save it again.
 3. **Is the Public site address that same origin?**
 
    ```sql
@@ -1294,10 +1294,10 @@ SELECT id, status, left(error, 300) AS error, input->'lessonIds' AS lessons,
 | `error` begins | Cause | Do |
 |---|---|---|
 | `Writing the carousel failed: Gemini request failed [HTTP 429]` | The writer's chain (`gemini-3.1-pro-preview` → `3.7-flash` → `3.6-flash` → `3.8-flash`) has spent its daily quota; on the free tier the Pro model has none at all | The reset, or billing (guide §8) |
-| `… [HTTP 404]` | The error is the last model's, so every model answered 404: gone, or closed to this key | Vercel: one `studio.ai_request_failed` per model, with `model`, `http_status` and Google's `message`. If all are gone, update `STUDIO_MODELS` (`src/services/studio/generate.ts:153`) |
-| `… [HTTP 400]` | Every model refused the request, so the request is at fault | The same log lines. A code fix, as stripping `minItems`/`maxItems` was (`withoutArrayBounds`, `src/services/studio/generate.ts:231`) |
+| `… [HTTP 404]` | The error is the last model's, so every model answered 404: gone, or closed to this key | Vercel: one `studio.ai_request_failed` per model, with `model`, `http_status` and Google's `message`. If all are gone, update `STUDIO_MODELS` (`src/services/studio/generate.ts:154`) |
+| `… [HTTP 400]` | Every model refused the request, so the request is at fault | The same log lines. A code fix, as stripping `minItems`/`maxItems` was (`withoutArrayBounds`, `src/services/studio/generate.ts:232`) |
 | `… [HTTP 500]` | Google's side. The writer retries a 500 once, from the first model; it does not skip to the next | Generate again |
-| `… Missing GEMINI_API_KEY environment variable.` | The app's environment has no key | Set it in Vercel and redeploy |
+| `… No Gemini API key: save one on the Operations screen, or set GEMINI_API_KEY.` | Neither a saved key nor the environment variable is set | As a platform admin, **Operations → Gemini API key**: paste one and **Check and save**. Or set `GEMINI_API_KEY` in Vercel and redeploy |
 | `… The draft still breaks N rule(s) after M repair round(s): …` | The model could not meet the rules within the 120 s budget | Generate again. Vercel's `studio.draft_generated` has `rounds`, `problems_left` and `ms` |
 | `Writing this draft never finished: the request was cut off.` (status `generating` in the table, older than 10 minutes) | The serverless invocation died mid-write; the API presents the row as failed without rewriting it | Delete it from the dashboard and generate again |
 
@@ -1430,5 +1430,5 @@ SELECT created_at, actor_email, action, target_type, target_id, detail
 ```
 
 The actions are `studio.settings_write`, `studio.worker_create`, `studio.worker_revoke`,
-`studio.schedule` and `studio.tiktok_batch` (`src/services/audit.ts:111-119`). A worker's token is
+`studio.schedule` and `studio.tiktok_batch` (`src/services/audit.ts:113-121`). A worker's token is
 never in the detail, only its name.

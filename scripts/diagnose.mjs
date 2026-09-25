@@ -879,8 +879,10 @@ function instagramSecretAdvice() {
 
 
 function checkLocalConfig() {
+    // Not GEMINI_API_KEY: it is only the fallback for the key saved on the Operations screen,
+    // so production may rightly not have it (src/config/env.ts).
     const required = ['DATABASE_URL', 'META_VERIFY_TOKEN', 'META_APP_SECRET', 'INSTAGRAM_APP_SECRET',
-        'GEMINI_API_KEY', 'DASHBOARD_PASSWORD', 'CRON_SECRET'];
+        'DASHBOARD_PASSWORD', 'CRON_SECRET'];
     const missing = required.filter((k) => !process.env[k]);
 
     fact('config', `env source: ${envFile ?? 'process environment only'}`);

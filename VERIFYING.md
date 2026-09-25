@@ -167,7 +167,8 @@ Healthy result:
 
 If `② DM claimed` appears but `⑤ AI reply sent` never does: check `conversations.is_bot_active`
 for that thread (the watcher says when the bot is paused), that the `ai_agents` row is active
-(diagnostics report it), and `GEMINI_API_KEY` in the Vercel logs (`dm.pipeline_failed`).
+(diagnostics report it), and the Gemini key: **Operations → Gemini API key** says which key is
+answering, and a missing one shows in the Vercel logs as `dm.pipeline_failed` with *No Gemini API key*.
 
 ## Step 8 — Post-flight
 

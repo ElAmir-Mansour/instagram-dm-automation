@@ -2,6 +2,7 @@ import axios from 'axios';
 import { queryOne, queryRows } from '../db/query.js';
 import type { AiAgentRow, MessageRow } from '../db/rows.js';
 import { log } from '../utils/log.js';
+import { getGeminiKey, MISSING_GEMINI_KEY } from './appSettings.js';
 
 /** The two columns the history window actually needs. */
 type HistoryRow = Pick<MessageRow, 'direction' | 'text'>;
@@ -97,6 +98,16 @@ export function resolveModel(configured: unknown): string {
         log('warn', 'ai.unknown_model', { configured, fallback: DEFAULT_MODEL });
     }
     return DEFAULT_MODEL;
+}
+
+/**
+ * Every model the DM bot could answer with right now: the default, plus each agent's model as
+ * it resolves. A new Gemini key is tried on these before it is saved (src/services/geminiKey.ts),
+ * so at most three: each try spends a request of that model's allowance.
+ */
+export async function dmModelsInUse(): Promise<string[]> {
+    const rows = await queryRows<Pick<AiAgentRow, 'model'>>('SELECT DISTINCT model FROM ai_agents');
+    return [...new Set([DEFAULT_MODEL, ...rows.map((row) => resolveModel(row.model))])].slice(0, 3);
 }
 
 export interface AiResponse {
@@ -346,11 +357,6 @@ export async function generateAiResponse(
     creatorId: string,
     overrides?: { system_prompt?: string; knowledge_base?: string }
 ): Promise<AiResponse | null> {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error('Missing GEMINI_API_KEY environment variable.');
-    }
-
     // 1. Fetch AI Agent Settings
     //    Deliberately unfiltered by is_active: the filter used to be in the WHERE clause, so a
     //    disabled agent returned zero rows and was indistinguishable from an unconfigured one.
@@ -379,6 +385,11 @@ export async function generateAiResponse(
         return null;
     }
     const agent = decision.agent;
+
+    // Only once the agent is going to speak: a switched-off agent needs no key. The key saved
+    // on the Operations screen wins over GEMINI_API_KEY (src/services/appSettings.ts).
+    const gemini = await getGeminiKey();
+    if (!gemini) throw new Error(MISSING_GEMINI_KEY);
 
     // 2. Fetch recent conversation history
     const historyRows = await queryRows<HistoryRow>(
@@ -441,7 +452,7 @@ export async function generateAiResponse(
         // referrers and error reporters far more readily than headers do — and an axios error
         // carries `config.url`, so the old form leaked the key into anything that logged one.
         const response = await axios.post(url, payload, {
-            headers: { 'x-goog-api-key': apiKey },
+            headers: { 'x-goog-api-key': gemini.key },
             timeout: GEMINI_TIMEOUT_MS
         });
         const rawJsonText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;

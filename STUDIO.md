@@ -196,7 +196,7 @@ planWeek(count: number, lessons: LessonRow[], ctx: GenContext): Promise<Proposal
 type GenContext = { recentTopics: string[]; recentAccents: string[]; activeKeywords: string[]; palette: string[] };
 ```
 
-- **Model and call:** Gemini with `GEMINI_API_KEY` through the chain `STUDIO_MODELS` in `generate.ts` (`gemini-3.1-pro-preview`, then three flash models; a 400/404/429/500/503 moves to the next). `responseSchema` is sent without `minItems`/`maxItems`, which Gemini 3 refuses. A 120s timeout. Never `gemini-2.5-flash`, which the DM bot runs on.
+- **Model and call:** Gemini with the platform's key (saved on Operations, else `GEMINI_API_KEY`) through the chain `STUDIO_MODELS` in `generate.ts` (`gemini-3.1-pro-preview`, then three flash models; a 400/404/429/500/503 moves to the next). `responseSchema` is sent without `minItems`/`maxItems`, which Gemini 3 refuses. A 120s timeout. Never `gemini-2.5-flash`, which the DM bot runs on.
 - **Repair:** up to 2 rounds that send the model `validateCarousel`'s problems to fix.
 - **Style:** 3 of ElAmir's approved carousels as few-shot examples (`examples.ts`), plus the voice guide:
   - light Gulf/white dialect

@@ -46,11 +46,21 @@ export const APP_SETTING_KEYS = {
      * direct post to SELF_ONLY and requires the account itself to be private.
      */
     tiktokAudited: 'tiktok.audited',
+    /**
+     * The Gemini API key the whole platform runs on: every tenant's DM replies, the AI Settings
+     * test box and the Studio. Saved by a platform admin on the Operations screen, after Google
+     * has accepted it (src/services/geminiKey.ts). `GEMINI_API_KEY` is the fallback, and stays
+     * in use until a key is saved here.
+     */
+    geminiApiKey: 'gemini.api_key',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
 
-const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([APP_SETTING_KEYS.tiktokClientSecret]);
+const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
+    APP_SETTING_KEYS.tiktokClientSecret,
+    APP_SETTING_KEYS.geminiApiKey,
+]);
 
 export function isSecretSetting(key: AppSettingKey): boolean {
     return SECRET_KEYS.has(key);
@@ -94,6 +104,49 @@ export async function setSetting(
 export function maskValue(value: string): string {
     if (value.length <= 6) return '•'.repeat(value.length);
     return `${value.slice(0, 3)}${'•'.repeat(Math.max(value.length - 5, 3))}${value.slice(-2)}`;
+}
+
+/** What the DM bot and the Studio fail with when there is no key anywhere. */
+export const MISSING_GEMINI_KEY = 'No Gemini API key: save one on the Operations screen, or set GEMINI_API_KEY.';
+
+export interface GeminiKey {
+    key: string;
+    /** Which one is answering, so the Operations screen can say so. */
+    source: 'database' | 'env';
+}
+
+/**
+ * The Gemini API key: the one saved on the Operations screen, then `GEMINI_API_KEY`. Null when
+ * neither is set — callers then throw `MISSING_GEMINI_KEY`, which names both places to fix it.
+ *
+ * Read on every call, not cached: a key saved from the dashboard has to reach every warm
+ * serverless instance, and the read is one indexed row.
+ */
+export async function getGeminiKey(): Promise<GeminiKey | null> {
+    const saved = await getSetting(APP_SETTING_KEYS.geminiApiKey);
+    if (saved) return { key: saved, source: 'database' };
+    const env = process.env.GEMINI_API_KEY?.trim();
+    return env ? { key: env, source: 'env' } : null;
+}
+
+export interface GeminiKeyStatus {
+    /** Which key is answering right now, or null when there is none at all. */
+    source: 'database' | 'env' | null;
+    /** A masked hint of the saved key. An env key is never previewed, only reported present. */
+    preview: string | null;
+    /** Whether removing the saved key would fall back to `GEMINI_API_KEY` or leave nothing. */
+    envFallback: boolean;
+}
+
+/** What the Operations screen shows. Never the key itself. */
+export async function describeGeminiKey(): Promise<GeminiKeyStatus> {
+    const saved = await getSetting(APP_SETTING_KEYS.geminiApiKey);
+    const envFallback = Boolean(process.env.GEMINI_API_KEY?.trim());
+    return {
+        source: saved ? 'database' : envFallback ? 'env' : null,
+        preview: saved ? maskValue(saved) : null,
+        envFallback,
+    };
 }
 
 export interface TikTokAppConfig {

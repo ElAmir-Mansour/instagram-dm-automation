@@ -152,6 +152,10 @@ const API = {
 
     /** Platform-wide health: per-tenant rows, queue, schema, storage, hazards. */
     getAdminOps: () => API.request('/admin/ops'),
+    // The platform's Gemini key. The key itself is only ever sent, never read back.
+    getGeminiKey: () => API.request('/admin/gemini-key'),
+    saveGeminiKey: (apiKey) => API.request('/admin/gemini-key', { method: 'PUT', body: JSON.stringify({ apiKey }) }),
+    removeGeminiKey: () => API.request('/admin/gemini-key', { method: 'DELETE' }),
 
     /** Ask Meta about one tenant's token right now, rather than reading a
      *  status that can be weeks old. Returns the fresh token state. */

@@ -175,7 +175,7 @@ photo can only be *pulled* (`PULL_FROM_URL`), and TikTok pulls only from a verif
 **TikTok handed out three different files over time** — one for the Terms/Privacy URLs, one for
 the prefix, then one more for domains when Direct Post was switched on. **The app keeps serving
 all of them.** Saving a new file moves the previous one into a history (the last ten), and the
-root route answers any of them (`src/services/appSettings.ts:196-206`, `src/index.ts:117-131`).
+root route answers any of them (`src/services/appSettings.ts:249-259`, `src/index.ts:117-131`).
 The Settings form shows only the newest. To see every file being served:
 
 ```sql
@@ -212,8 +212,8 @@ shared `DASHBOARD_PASSWORD` login is a platform admin.
    | Field | What to paste | Notes |
    |---|---|---|
    | **Client key** | the client key | Shown whole once saved — it is not a secret; TikTok puts it in every authorise URL, and seeing it is how a typo gets found (`src/routes/tiktok.ts:324-326`). Must match `[A-Za-z0-9_-]{6,100}` (`:369`) |
-   | **Client secret** | the client secret | Never shown again. The field is always blank; **blank means "keep what is saved"**. Once saved it reads "Saved (abc•••yz) — leave blank to keep it". Stored encrypted, like the Meta token (`src/services/appSettings.ts:53`, `:82-89`) |
-   | **Public site address** | `https://msg-response-auto.vercel.app` | No path, no trailing slash — it is normalised to an origin, and must be `https://` (`src/services/appSettings.ts:130-140`). Every TikTok URL is built from it (§2.4, §2.5) |
+   | **Client secret** | the client secret | Never shown again. The field is always blank; **blank means "keep what is saved"**. Once saved it reads "Saved (abc•••yz) — leave blank to keep it". Stored encrypted, like the Meta token (`src/services/appSettings.ts:60-63`, `:92-99`) |
+   | **Public site address** | `https://msg-response-auto.vercel.app` | No path, no trailing slash — it is normalised to an origin, and must be `https://` (`src/services/appSettings.ts:183-193`). Every TikTok URL is built from it (§2.4, §2.5) |
 
 4. **Save TikTok app**. Healthy: the toast "TikTok app settings saved.", and the section now offers
    **Connect TikTok** to the workspace owner.
@@ -222,8 +222,8 @@ Saving the secret, and later connecting, both encrypt, so both need `TOKEN_ENCRY
 environment — the same requirement as saving a Meta token (RUNBOOK §3.2).
 
 **The database wins over the environment.** `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` and
-`PUBLIC_BASE_URL` are only fallbacks, and none is needed at boot (`src/services/appSettings.ts:110-123`,
-`:147-154`). A value from the environment is labelled "Set in the environment — saving here
+`PUBLIC_BASE_URL` are only fallbacks, and none is needed at boot (`src/services/appSettings.ts:163-176`,
+`:200-207`). A value from the environment is labelled "Set in the environment — saving here
 overrides it". With either half of the credentials missing, TikTok is simply "not set up": the
 section says "TikTok isn't set up yet…" and Connect answers 409.
 
@@ -1001,7 +1001,7 @@ connects TikTok").
 
 ## Where things live
 
-**Settings** (`app_settings`, edited in Settings → TikTok app; `src/services/appSettings.ts:17-49`):
+**Settings** (`app_settings`, edited in Settings → TikTok app; `src/services/appSettings.ts:17-56`):
 
 | Key | Holds | Env fallback |
 |---|---|---|

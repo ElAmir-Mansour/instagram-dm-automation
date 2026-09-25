@@ -17,7 +17,11 @@ const REQUIRED_VARS = [
     // this the app 403s every `object: "instagram"` webhook, which looks exactly like no
     // events arriving at all.
     { key: 'INSTAGRAM_APP_SECRET', description: 'Instagram App Secret — the second webhook signing secret' },
-    { key: 'GEMINI_API_KEY', description: 'Google Gemini API Key for AI direct messaging response generation' },
+    // Not GEMINI_API_KEY. The Gemini key can be saved on the Operations screen instead, and the
+    // env var is only its fallback (src/services/appSettings.ts). Required here, removing it
+    // after moving the key to the dashboard would 503 every route — webhooks, publishing, the
+    // dashboard itself — over a missing AI key. With no key anywhere, the DM bot and the
+    // Studio fail with an error saying where to add one, and everything else keeps running.
     { key: 'DASHBOARD_PASSWORD', description: 'Dashboard login password — also the session-token signing key' },
     { key: 'CRON_SECRET', description: 'Bearer secret guarding /api/cron/publish AND /api/jobs/drain' },
 ];

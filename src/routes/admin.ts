@@ -50,6 +50,9 @@ import {
 import {
     commitErasure, executeErasure, previewErasure, rollbackErasure,
 } from '../services/erasure.js';
+import { APP_SETTING_KEYS, describeGeminiKey, setSetting } from '../services/appSettings.js';
+import { checkGeminiKey } from '../services/geminiKey.js';
+import { dmModelsInUse } from '../services/ai.js';
 
 const router = Router();
 
@@ -138,6 +141,78 @@ router.get('/ops', async (_req, res) => {
         res.json(await getOpsSnapshot());
     } catch (err) {
         failWith(res, err, 'admin.ops_failed', 'Failed to build the ops snapshot.');
+    }
+});
+
+// ─── Gemini API key ─────────────────────────────────────────────────────────
+
+/**
+ * The one Gemini key the platform runs on: every tenant's DM replies and the Studio. It lives
+ * in `app_settings`, encrypted, with `GEMINI_API_KEY` as the fallback (src/services/appSettings.ts),
+ * so it can be replaced from the Operations screen without a redeploy.
+ *
+ * Nothing here ever sends the key back. The screen gets which key is answering, a masked hint of
+ * a saved one, and whether removing it would fall back to the environment or leave nothing.
+ */
+router.get('/gemini-key', async (_req, res) => {
+    try {
+        res.json(await describeGeminiKey());
+    } catch (err) {
+        failWith(res, err, 'admin.gemini_key_read_failed', 'Failed to read the Gemini key status.');
+    }
+});
+
+/**
+ * Save a new key — after Google has accepted it and run the DM bot's models with it
+ * (src/services/geminiKey.ts). A key that fails either check is never written, so the one in
+ * use keeps answering.
+ */
+router.put('/gemini-key', async (req, res) => {
+    const raw = (req.body ?? {}).apiKey;
+    const apiKey = typeof raw === 'string' ? raw.trim() : '';
+    if (!apiKey) {
+        res.status(400).json({ error: 'Paste the key to save. To go back to GEMINI_API_KEY, remove the saved key instead.' });
+        return;
+    }
+    // Loose on purpose — Google's answer is the real check. This only stops a paste that is
+    // plainly not one key: whitespace inside it, or a length no API key has.
+    if (apiKey.length < 20 || apiKey.length > 200 || /[^\x21-\x7e]/.test(apiKey)) {
+        res.status(400).json({ error: 'That does not look like a Gemini API key.' });
+        return;
+    }
+
+    try {
+        const models = await dmModelsInUse();
+        const check = await checkGeminiKey(apiKey, models);
+        if (!check.ok) {
+            log('warn', 'admin.gemini_key_refused', { http_status: check.status, reason: check.error });
+            res.status(check.status).json({ error: check.error });
+            return;
+        }
+
+        await setSetting(APP_SETTING_KEYS.geminiApiKey, apiKey, req.session?.userId ?? null);
+        // The fact, never the value — and named so the redaction pattern leaves it readable.
+        await audit(req, AUDIT_ACTIONS.settingsGeminiKeyWrite, 'app', null, {
+            change: 'saved', checked_models: models, quota_spent: check.quotaSpent,
+        });
+        res.json({ ...(await describeGeminiKey()), checkedModels: models, quotaSpent: check.quotaSpent });
+    } catch (err) {
+        failWith(res, err, 'admin.gemini_key_save_failed', 'Failed to save the Gemini key.');
+    }
+});
+
+/**
+ * Forget the saved key, so GEMINI_API_KEY answers again. Allowed even when there is no env key
+ * to fall back to — revoking a leaked key must not be blocked — so the screen asks first, and
+ * says which of the two outcomes this will be.
+ */
+router.delete('/gemini-key', async (req, res) => {
+    try {
+        await setSetting(APP_SETTING_KEYS.geminiApiKey, null, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.settingsGeminiKeyWrite, 'app', null, { change: 'removed' });
+        res.json(await describeGeminiKey());
+    } catch (err) {
+        failWith(res, err, 'admin.gemini_key_remove_failed', 'Failed to remove the Gemini key.');
     }
 });
 
