@@ -589,7 +589,9 @@ export async function publishInstagramPost(
         // Step 1: Create media container
         log('info', 'publish.container_creating', { post_type: type });
         const containerId = await createContainer(
-            createUrl, createPayload, ['alt_text', 'collaborators', 'trial_params'],
+            // trial_params is never dropped: a trial reel shown to followers instead is not the
+            // same post with one lever missing, it is a different decision. See the catch below.
+            createUrl, createPayload, ['alt_text', 'collaborators'],
             { Authorization: `Bearer ${accessToken}` }, `ig-create-container[${type}]`, dropped
         );
         log('info', 'publish.container_created', { container_id: containerId });
@@ -609,6 +611,14 @@ export async function publishInstagramPost(
         // caller requeue rather than guess; flattening it into a string Error loses that.
         if (error instanceof MediaProcessingTimeoutError) throw error;
 
+        // Instagram has no API to graduate a trial reel and no field that reports one, so a
+        // refused trial can't be repaired afterwards. Stop, and say what to do.
+        if (reach.trialReel && mayBeLeverRefusal(error)) {
+            throw metaFailure(
+                'Instagram Publish Failed: this reel was set as a Trial Reel and Instagram refused it, so it was NOT published. Turn Trial Reel off to post it normally',
+                error
+            );
+        }
         throw metaFailure('Instagram Publish Failed', error);
     }
 }

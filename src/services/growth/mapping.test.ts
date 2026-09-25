@@ -41,9 +41,11 @@ describe('Instagram media', () => {
             { name: 'reach', total_value: { value: 110 } },
             { name: 'ig_reels_avg_watch_time', values: [{ value: 3200 }] },
             { name: 'ig_reels_video_view_total_time', values: [{ value: 416000 }] },
+            { name: 'reels_skip_rate', values: [{ value: 86.5 }] },
             { name: 'saved', values: [] },
         ]);
-        assert.deepEqual(metrics, { views: 130, reach: 110, avg_watch_time_ms: 3200, video_view_total_time_ms: 416000 });
+        assert.deepEqual(metrics, { views: 130, reach: 110, avg_watch_time_ms: 3200, video_view_total_time_ms: 416000, skip_rate: 86.5 });
+        assert.ok((IG_REELS_METRICS as readonly string[]).includes('reels_skip_rate'), 'the sync asks for it');
         assert.equal('saved' in metrics, false, 'no value is absent, not 0');
         assert.deepEqual(insightValues('nonsense'), {});
     });

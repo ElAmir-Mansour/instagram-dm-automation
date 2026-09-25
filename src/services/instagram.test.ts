@@ -656,17 +656,29 @@ describe('reach levers — alt text, collaborators, trial reels (GROWTH.md §4)'
     });
 
     it('publishes without the levers when Instagram refuses them, once, and says which', async () => {
-        arrange((body) => (body.trial_params ? metaError(100, 'Trial reels are not available for this account') : null));
+        arrange((body) => (body.collaborators ? metaError(100, 'Collaborators are not available for this account') : null));
         const result = await publishInstagramPost('ig-1', 'video', 'c', 'https://cdn/v.mp4', TOKEN, null, undefined, {
-            trialReel: { graduation: 'MANUAL' }, collaborators: ['a'],
+            collaborators: ['a'],
         });
         assert.equal(result.id, 'ig-media-1');
-        assert.deepEqual(result.dropped.map((d: any) => d.field), ['collaborators', 'trial_params']);
+        assert.deepEqual(result.dropped.map((d: any) => d.field), ['collaborators']);
         assert.match(result.dropped[0].reason, /not available for this account \(Code: 100\)/);
         assert.equal(creates().length, 2, 'one refusal, one retry');
         const retry = creates()[1]!.body as any;
-        assert.equal('trial_params' in retry || 'collaborators' in retry, false);
+        assert.equal('collaborators' in retry, false);
         assert.equal(retry.share_to_feed, true, 'the rest of the payload is untouched');
+    });
+
+    it('never turns a refused trial reel into a normal reel: it stops, and says why', async () => {
+        arrange((body) => (body.trial_params ? metaError(100, 'Trial reels are not available for this account') : null));
+        const err = await publishInstagramPost('ig-1', 'video', 'c', 'https://cdn/v.mp4', TOKEN, null, undefined, {
+            trialReel: { graduation: 'MANUAL' }, collaborators: ['a'],
+        }).then(() => null, (e) => e);
+        assert.ok(err instanceof MetaApiError, 'the publish fails');
+        assert.match(err.message, /Trial Reel .* NOT published/);
+        assert.match(err.message, /not available for this account/);
+        assert.ok(creates().every((c) => 'trial_params' in (c.body as any)), 'no attempt without the trial');
+        assert.equal(posts().some((c) => c.url.endsWith('/media_publish')), false, 'nothing published');
     });
 
     it('asks a carousel about alt text once, not once per slide', async () => {

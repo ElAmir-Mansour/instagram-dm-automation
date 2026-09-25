@@ -19,9 +19,14 @@ export const IG_MEDIA_FIELDS = 'id,media_type,media_product_type,timestamp,like_
 
 /** FEED media (IMAGE, CAROUSEL_ALBUM): all accepted in one call. */
 export const IG_FEED_METRICS = ['views', 'reach', 'saved', 'shares', 'total_interactions', 'likes', 'comments', 'profile_visits', 'follows'] as const;
-/** REELS media: all accepted in one call. Both watch times are milliseconds. */
+/**
+ * REELS media: all accepted in one call. Both watch times are milliseconds. `reels_skip_rate` is
+ * the share of views that left within the first 3 seconds, 0–100 (verified live on v26,
+ * 2026-09-25: 62–95 on this tenant's reels). It is the hook's own number.
+ */
 export const IG_REELS_METRICS = [
     'views', 'reach', 'saved', 'shares', 'total_interactions', 'likes', 'comments', 'ig_reels_avg_watch_time', 'ig_reels_video_view_total_time',
+    'reels_skip_rate',
 ] as const;
 
 /** Account metrics, one day per request, `period=day&metric_type=total_value`. */
@@ -178,6 +183,7 @@ export function mapIgInsights(data: unknown): PostMetrics {
         profile_visits: num(v.profile_visits),
         avg_watch_time_ms: num(v.ig_reels_avg_watch_time),
         video_view_total_time_ms: num(v.ig_reels_video_view_total_time),
+        skip_rate: num(v.reels_skip_rate),
     });
 }
 

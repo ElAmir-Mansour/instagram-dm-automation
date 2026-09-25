@@ -66,7 +66,7 @@ const GrowthPage = {
     COMPETITORS_MAX: 10,
     USERNAME_RE: /^[a-z0-9._]{1,30}$/,
     TREND_METRICS: Object.freeze(['views', 'reach', 'followers']),
-    SORT_KEYS: Object.freeze(['published_at', 'views', 'reach', 'likes', 'comments', 'saved', 'shares', 'avg_watch', 'engagement_rate']),
+    SORT_KEYS: Object.freeze(['published_at', 'views', 'reach', 'likes', 'comments', 'saved', 'shares', 'avg_watch', 'skip_rate', 'engagement_rate']),
     /**
      * Instagram shares follower_count (the daily followers line), follows_and_unfollows (the
      * change) and the audience breakdowns only once an account has 100 followers. Below that
@@ -514,6 +514,12 @@ const GrowthPage = {
         return v === undefined ? null : v;
     },
 
+    /** Instagram's skip rate arrives as a percentage (74.1), not a ratio. */
+    formatSkip(value) {
+        const n = this.num(value);
+        return n === null ? '—' : this.formatRate(n / 100);
+    },
+
     /** "3.2 ث" / "3.2s" — watch time reads in seconds, with one decimal under a minute. */
     formatSeconds(ms) {
         const n = this.num(ms);
@@ -831,6 +837,8 @@ const GrowthPage = {
         Object.freeze({ key: 'saves', icon: 'bookmark' }),
         Object.freeze({ key: 'shares', icon: 'share-2' }),
         Object.freeze({ key: 'avg_watch', icon: 'timer' }),
+        // Instagram's reels_skip_rate: the hook's own number, the lower the better.
+        Object.freeze({ key: 'skip_rate', icon: 'skip-forward' }),
     ]),
 
     /**
@@ -861,14 +869,16 @@ const GrowthPage = {
         const watch = def.key === 'avg_watch' ? this.watchKpi() : null;
         const raw = watch ? watch.ms : k[def.key];
         const isRate = def.key === 'engagement_rate';
+        const isSkip = def.key === 'skip_rate';
         let value;
         if (watch) value = this.formatSeconds(raw);
+        else if (isSkip) value = this.formatSkip(raw);
         else value = isRate ? this.formatRate(raw) : this.formatCount(raw);
         const missing = this.num(raw) === null;
         const label = t(`growth.kpi.${def.key}`);
         let sub;
         if (missing) {
-            sub = html`<p class="stat-sub">${watch && !this.locked('instagram') && this.postsLoaded ? t('growth.kpi.noReels') : this.missingReason()}</p>`;
+            sub = html`<p class="stat-sub">${(watch || isSkip) && !this.locked('instagram') && this.postsLoaded ? t('growth.kpi.noReels') : this.missingReason()}</p>`;
         } else if (watch) {
             sub = html`<p class="stat-sub">${watch.n ? t('growth.kpi.watchMedian', { count: watch.n, n: UI.formatNumber(watch.n) }) : t('growth.kpi.inRange', { days: this.daysText(this.days) })}</p>`;
         } else if (def.key === 'followers') {
@@ -1170,7 +1180,7 @@ const GrowthPage = {
         `;
     },
 
-    COLUMNS: Object.freeze(['published_at', 'views', 'reach', 'likes', 'comments', 'saved', 'shares', 'avg_watch', 'engagement_rate']),
+    COLUMNS: Object.freeze(['published_at', 'views', 'reach', 'likes', 'comments', 'saved', 'shares', 'avg_watch', 'skip_rate', 'engagement_rate']),
 
     sortHeader(key) {
         const active = this.sort.key === key;
@@ -1193,6 +1203,7 @@ const GrowthPage = {
     cellValue(post, key) {
         if (key === 'published_at') return post.published_at ? UI.formatDayShort(post.published_at) : '—';
         if (key === 'avg_watch') return this.formatSeconds(this.watchMs(post));
+        if (key === 'skip_rate') return this.formatSkip(this.metric(post, key));
         return this.formatCount(this.metric(post, key));
     },
 
@@ -1229,11 +1240,12 @@ const GrowthPage = {
         `;
     },
 
-    CARD_METRICS: Object.freeze(['views', 'reach', 'likes', 'comments', 'saved', 'shares', 'avg_watch']),
+    CARD_METRICS: Object.freeze(['views', 'reach', 'likes', 'comments', 'saved', 'shares', 'avg_watch', 'skip_rate']),
 
     postCard(post, maxRate) {
         // Watch time exists for reels only; a card for an image does not carry an empty row for it.
-        const keys = this.CARD_METRICS.filter((key) => key !== 'avg_watch' || this.watchMs(post) !== null);
+        const keys = this.CARD_METRICS.filter((key) => (key !== 'avg_watch' || this.watchMs(post) !== null)
+            && (key !== 'skip_rate' || this.metric(post, 'skip_rate') !== null));
         return html`
             <li class="log-card growth-post-card">
                 ${this.postIdentity(post)}

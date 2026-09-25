@@ -617,6 +617,8 @@ export interface PostMetrics {
     avg_watch_time_ms?: number;
     /** Instagram `ig_reels_video_view_total_time`, milliseconds. */
     video_view_total_time_ms?: number;
+    /** Instagram `reels_skip_rate`: the share of a reel's views that left within 3 seconds, 0–100. */
+    skip_rate?: number;
     /** Facebook `post_video_views` (3-second plays). */
     video_views?: number;
     reposts?: number;
