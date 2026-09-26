@@ -73,7 +73,7 @@ growth_settings (
 ## 5. Dashboard: the `#/growth` page («النمو والتسويق»)
 - **Permission banner.** When `missing` isn't empty, a one-screen fix: regenerate the Meta token with `instagram_manage_insights`
   and `read_insights` (link the Help article; docs/TOKEN_GUIDE.md has the procedure).
-- **KPI cards:** followers (with Δ), reach, views, engagement rate, saves, shares. **Trend chart** (inline SVG, no library).
+- **KPI cards:** followers (with Δ), reach, views, engagement rate, saves, shares, watch time, and the **3-second skip rate** (Instagram `reels_skip_rate`: the share of a reel's views gone within 3 s, median over the window's reels, `kpis.skip_rate`; also a posts-table column and a coach input; mapped in `src/services/growth/mapping.ts`). **Trend chart** (inline SVG, no library).
 - **Posts table:** sortable, with filters by type and platform, a thumbnail, and a "why it worked" tooltip from the coach.
 - **Best times heatmap** (7×24), and **by type** (reels vs carousels vs images).
 - **AI Growth Coach:** a Generate button showing summary, wins, problems, prioritised actions and experiments.

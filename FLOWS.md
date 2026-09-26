@@ -429,6 +429,15 @@ part 2 reads worse to the recipient than stopping short. `status` stays SENT thr
 **`src/services/instagram.ts:252`** (`POST /{comment-id}/likes`, same edge on both platforms).
 Purely best-effort algorithmic boost: a failure is a `warn` (**:382**) and nothing else.
 
+### 1.18b — The DM can't be delivered: a public reply instead
+
+**`src/webhook/comments.ts:344`**. On the final-failure path only, after the row is written FAILED:
+when `shouldPostDmFallback(dmError)` (not a dead token, not 10900), it posts
+`dmFallbackReply({ dmText, isFacebook })` (**`src/webhook/errors.ts`**): the first URL in the DM on
+Facebook, "link in bio" on Instagram, in the DM's language. DM code 100 is permanent
+(**`src/webhook/errors.ts:68`**), so this doesn't wait for the ~10-minute backoff. The campaign's own
+public reply (1.19) is skipped, since it says to check the DMs.
+
 ### 1.19 — Public reply
 
 **`src/webhook/comments.ts:386`**, only when `public_reply_template` is set.
@@ -916,6 +925,29 @@ on that vocabulary, and a partially published post is genuinely not a finished o
 
 `noteMetaFailure(creator.id, err)` runs first in the catch (**:558**) — a dead token stops every
 publish, not just this one.
+
+### 3.4b — A reel Instagram is still processing, and Facebook creates
+
+(Line numbers as of 2026-09-26; `attemptPublish` itself is now at **`src/routes/api.ts:580`**.)
+
+- **Held, not failed.** When the container isn't FINISHED within the 25 s budget,
+  `MediaProcessingTimeoutError` reaches `attemptPublish`'s catch, which writes the row back to
+  `PENDING` with `external_publish_id = 'IGC:<container>'` and whatever went live in
+  `published_post_id`, then throws `InstagramProcessingHeldError` (**`src/routes/api.ts:703`**).
+  `publishDuePosts` logs it as held (**`src/routes/api.ts:867`**). The next sweep reads the saved
+  container (**`src/routes/api.ts:649`**) and calls `resumeInstagramContainer`
+  (**`src/services/instagram.ts:509`**): publish if FINISHED, start over if ERROR/EXPIRED, hold again
+  if still processing. After `IG_PROCESSING_MAX_ATTEMPTS` (15) it fails as before.
+- **Facebook creates are never repeated when they may have landed.** `publishFacebookPost` and the
+  carousel's `/feed` call `withRetry(..., { creates: true })` (**`src/services/instagram.ts:410`**,
+  **`:452`**): only a refusal (429, codes 4/17/32/613) or a connection that never went out is
+  retried. `/videos` gets 60 s, `/photos` 30 s.
+
+### 3.4c — `GET /api/uploads/:id`
+
+**`src/routes/api.ts:1007`**. A row with `storage_path` streams the object from Supabase Storage
+(`pipeline(media.body, res)`, **`src/routes/api.ts:1048`**); a legacy row serves `data`. The URL never
+changes, which is what TikTok's verified prefix and Meta's stored URLs need.
 
 ### 3.5 — Daily maintenance, only on the daily cron
 

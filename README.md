@@ -19,7 +19,9 @@ dashboard at `/dashboard`.
 ## Features
 
 - **Comment → DM automation** — keyword-triggered DMs via the Meta Graph API, with an optional
-  public reply on the comment
+  public reply on the comment. When Meta won't deliver the DM (the person can't receive messages
+  from Pages), the bot replies publicly instead: the campaign's link on Facebook, "link in bio" on
+  Instagram
 - **Instagram and Facebook** — Instagram comments/DMs and Facebook Page comments/Messenger,
   through one pipeline
 - **Arabic-first keyword matching** — Hamza variants, Teh Marbuta, Yeh, diacritics and tatweel
@@ -30,7 +32,8 @@ dashboard at `/dashboard`.
   reaper, and queue-level deduplication on top of row-level claims
 - **Scheduled publishing** — images, videos, reels and carousels to Instagram, Facebook, or both,
   and to TikTok, with an atomic claim so overlapping runs cannot double-publish, and
-  partial-publish recovery
+  partial-publish recovery. A reel Instagram is still processing is held and published from the
+  same container on the next sweep; a Facebook post that may already be live is never re-sent
 - **Carousel posts** — 2 to 10 images as one Instagram and Facebook post (`post_type =
   'carousel'`), and 2 to 35 as a TikTok photo carousel. The count and the formats (JPEG for
   Instagram, JPEG or WebP for TikTok) are checked when the post is saved, not at publish time
@@ -42,6 +45,13 @@ dashboard at `/dashboard`.
   with Remotion; the app writes the copy from the lesson's notes, checks it against the design's
   rules, and schedules it with its keyword → DM campaign. Per-account brand, voice, product and
   posting times. See [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md)
+- **Growth & SEO hub** (`#/growth`) — daily Instagram and Facebook insights (views, reach, the
+  3-second skip rate, watch time, followers vs new people), best times from your own posts, an AI
+  Growth Coach, keyword and hashtag tools, competitors via Business Discovery, and publish-time
+  reach levers (alt text, collaborators, trial reels). See [`GROWTH.md`](GROWTH.md)
+- **Media in Supabase Storage** — uploads live in a public Storage bucket, not in Postgres; every
+  URL stays `/api/uploads/<id>` on the app's domain, which streams the file. Configured in
+  Settings → Media storage
 - **Gemini DM replies** — structured output, conversation history, per-thread bot toggle, and
   the automated-service disclosure Meta requires
 - **Managed multi-tenancy** — `users`, `memberships`, identity-carrying sessions, per-tenant
@@ -119,6 +129,10 @@ a failure exits non-zero. All files are idempotent.
 
 If your database already has the current schema but no ledger, `node scripts/migrate.mjs
 --baseline` marks everything applied without running it.
+
+Migrations run to `migration_v23_media_storage.sql`; `src/config/migrations.ts`
+(`EXPECTED_MIGRATIONS`) is the canonical list. Apply them **before** deploying the code that
+needs them.
 
 ### 4. Meta access token
 

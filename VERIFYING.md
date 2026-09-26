@@ -407,6 +407,24 @@ is a rollback of the durability layer only.
 
 ---
 
+## Verifying media storage
+
+1. Settings → Media storage shows **Connected**, the `media` bucket and the space used.
+2. Upload an image in the composer. Its row in `media_uploads` has `storage_path` set and `data`
+   NULL.
+3. `curl -I https://<deployment>/api/uploads/<id>`: 200, the right Content-Type and
+   Content-Length.
+
+## Verifying publish and DM safety
+
+1. **Held reel:** after a 10 MB reel's scheduled time, its row may briefly show `PENDING` with
+   "Instagram is still processing" and `external_publish_id` `IGC:…`; within a sweep or two it is
+   `PUBLISHED` with both ids.
+2. **No duplicate Facebook post:** each published reel appears once on the Page.
+3. **DM fallback:** comment a campaign keyword from an account that can't receive Page messages;
+   the interaction is FAILED with "Replied publicly with the link instead", and a public reply
+   carries the link.
+
 ## Verifying the Carousel Studio
 
 This proves the Studio's whole path once, on the live deployment: scan the library, index one
