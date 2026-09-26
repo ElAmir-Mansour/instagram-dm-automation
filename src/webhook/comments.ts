@@ -11,7 +11,7 @@ import { getCreatorByPageId } from '../services/tenant.js';
 import { matchCampaign } from '../services/matching.js';
 import { checkFairSendQuota, canDmRecipient, recordDmSent } from '../utils/rateLimiter.js';
 import { noteMetaFailure } from '../services/tokenHealth.js';
-import { classifyDmError } from './errors.js';
+import { classifyDmError, dmFallbackReply, shouldPostDmFallback } from './errors.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
 
@@ -337,6 +337,26 @@ async function processComment(
             'UPDATE interactions SET status = $1, error_log = $2 WHERE id = $3',
             [classified.status, classified.error, interactionId]
         );
+
+        // The DM can never arrive. Reply publicly instead, so the person who asked isn't left
+        // with nothing; the campaign's own "check your DMs" reply would send them to an empty
+        // inbox, so it is skipped with everything else downstream.
+        if (shouldPostDmFallback(dmError)) {
+            try {
+                const posted = await sendPublicReply(
+                    commentId, dmFallbackReply({ dmText, isFacebook: isFacebookComment }), creator.page_access_token, isFacebookComment
+                );
+                rememberSelfAuthored(posted?.id);
+                log('info', 'dm.fallback_public_reply', { reply_comment_id: posted?.id, platform: isFacebookComment ? 'facebook' : 'instagram' });
+                await queryCount('UPDATE interactions SET error_log = $1 WHERE id = $2',
+                    [`${classified.error} Replied publicly with the link instead.`, interactionId]);
+            } catch (fallbackErr: any) {
+                log('warn', 'dm.fallback_public_reply_failed', describeError(fallbackErr));
+                await noteMetaFailure(creator.id, fallbackErr);
+                await queryCount('UPDATE interactions SET error_log = $1 WHERE id = $2',
+                    [`${classified.error} The public fallback reply failed too: ${fallbackErr?.message ?? fallbackErr}`, interactionId]);
+            }
+        }
         return; // skip everything downstream
     }
 

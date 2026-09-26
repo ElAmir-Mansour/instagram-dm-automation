@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { MetaApiError } from '../services/instagram.js';
-import { classifyDmError } from './errors.js';
+import { classifyDmError, dmFallbackReply, shouldPostDmFallback } from './errors.js';
 
 /** A bare Error carrying only the interpolated code — anything not from instagram.ts. */
 function rewrapped(code: number | 'N/A', message = 'Some Meta message'): Error {
@@ -90,5 +90,43 @@ describe('classifyDmError', () => {
         assert.equal(classifyDmError('something went wrong').error, 'something went wrong');
         assert.equal(classifyDmError(undefined).status, 'FAILED');
         assert.equal(classifyDmError(null).permanent, false);
+    });
+});
+
+describe('an undeliverable DM: the public fallback reply', () => {
+    it('treats "Invalid parameter" on a private reply as final, so the fallback is not ~10 minutes late', () => {
+        // The incident, 2026-09-26: Facebook refused a private reply with (#100) to a
+        // commenter it reports as can_reply_privately=false; every retry failed the same way.
+        const classified = classifyDmError(metaApiError(100));
+        assert.equal(classified.permanent, true);
+        assert.match(classified.error, /can't receive messages from Pages/);
+    });
+
+    it('replies publicly after a blocked or refused DM, but not for a dead token or a DM that exists', () => {
+        assert.equal(shouldPostDmFallback(metaApiError(100)), true);
+        assert.equal(shouldPostDmFallback(metaApiError(10903)), true);
+        assert.equal(shouldPostDmFallback(metaApiError(190)), false, 'the public reply would fail too');
+        assert.equal(shouldPostDmFallback(metaApiError(10900)), false, 'the comment already had its private reply');
+    });
+
+    it('on Facebook, carries the first link from the DM, clickable there', () => {
+        const text = dmFallbackReply({
+            dmText: 'أهلاً! رابط الكورس: https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34. بالتوفيق',
+            isFacebook: true,
+        });
+        assert.match(text, /ما قدرنا نرسل لك على الخاص/);
+        assert.ok(text.endsWith('https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34'), 'no trailing full stop in the URL');
+    });
+
+    it('on Instagram, points to the bio rather than pasting a link that is not clickable', () => {
+        const text = dmFallbackReply({ dmText: 'رابط الكورس: https://example.com/c', isFacebook: false });
+        assert.match(text, /الرابط في البايو/);
+        assert.equal(/https?:/.test(text), false);
+    });
+
+    it('follows the DM’s language, and still says something useful when the DM has no link', () => {
+        assert.match(dmFallbackReply({ dmText: 'Hi! Here is the course.', isFacebook: true }), /^We couldn't message you privately/);
+        assert.match(dmFallbackReply({ dmText: 'Hi! Here is the course.', isFacebook: true }), /Send us a message/);
+        assert.match(dmFallbackReply({ dmText: 'Here: https://x.test/y', isFacebook: false }), /bio/);
     });
 });
