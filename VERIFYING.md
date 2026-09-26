@@ -25,8 +25,8 @@ step 5 sends a real DM to whoever comments.
 | `node scripts/watch.mjs` — read-only | `GET /api/jobs/drain` with the bearer token — runs real handlers and sends real DMs |
 | The dashboard | Any `INSERT`/`UPDATE` against production |
 
-Both scripts hold a database session with `default_transaction_read_only = on`, verified on
-connect, so they cannot write even by accident. Neither prints a token, password or
+Both scripts run every query in its own `BEGIN READ ONLY … ROLLBACK`, checked inside the
+transaction, so they cannot write even by accident. Neither prints a token, password or
 connection string — secrets appear only as `fingerprint/length`.
 
 ---

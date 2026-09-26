@@ -6,10 +6,10 @@
  *
  *   1. Read-only database access. Both scripts are diagnostics — they must never be able to
  *      write to production, and "I only wrote SELECTs" is a promise, not a guarantee.
- *      `connectReadOnly` sets `default_transaction_read_only = on` and reads it back before
- *      returning, so the database itself refuses an INSERT/UPDATE/DELETE/DDL from these
- *      scripts even if one were introduced by accident. Verified against production: DDL and
- *      UPDATE both come back `cannot execute ... in a read-only transaction`.
+ *      `connectReadOnly` runs every statement in its own `BEGIN READ ONLY … ROLLBACK` and
+ *      checks `transaction_read_only` inside that same transaction, so the database itself
+ *      refuses an INSERT/UPDATE/DELETE/DDL from these scripts even if one were introduced by
+ *      accident — and nothing outlives the transaction on a pooled server connection.
  *   2. Secret handling. Nothing here ever returns a secret for printing — `fingerprint()`
  *      gives a stable 8-hex digest plus a length, which is enough to answer "is the value in
  *      this .env the same one production has" without putting the value anywhere.
@@ -141,16 +141,18 @@ export function decryptSecret(stored) {
 // ─── Database ───────────────────────────────────────────────────────────────────────────
 
 /**
- * A single connection that cannot write, verified before it is handed back.
+ * A connection that cannot write, checked once before it is handed back.
  *
- * A `Client` rather than a `Pool` on purpose. With a pool, `SET SESSION` has to be fired from
- * the `connect` event and is therefore unawaited — the first query can be in flight before
- * the guard lands, and a new connection created later re-runs it out of band. One client sets
- * the flag, reads it back with `SHOW transaction_read_only`, and refuses to continue unless
- * the server says `on`. So "these scripts cannot write to production" is something the
- * database asserts, not something the author remembered.
+ * Returns `{ query, end }`, not the `pg.Client`: the raw client never leaves this module, so
+ * there is no path to the database that skips the read-only transaction below.
  *
- * Diagnostics are sequential and low-volume, so there is nothing to gain from a pool.
+ * Why not a session-level `default_transaction_read_only`, which this used to set: production's
+ * DATABASE_URL is the Supabase transaction pooler (port 6543). There a session setting lands
+ * on whichever server connection ran that one statement and stays on it after this client
+ * disconnects, so the next app request handed that connection fails every write with
+ * `cannot execute ... in a read-only transaction`. It was not even a reliable guard: each
+ * autocommit statement can land on a different server connection, so the SET, the SHOW that
+ * checked it and the queries after it were not guaranteed to share one.
  */
 export async function connectReadOnly(label = 'autoreply-diagnostics') {
     if (!process.env.DATABASE_URL) {
@@ -165,14 +167,52 @@ export async function connectReadOnly(label = 'autoreply-diagnostics') {
         application_name: label,
     });
     await client.connect();
-    await client.query('SET SESSION default_transaction_read_only = on');
-
-    const check = await client.query('SHOW transaction_read_only');
-    if (check.rows[0]?.transaction_read_only !== 'on') {
+    const db = readOnly(client);
+    try {
+        // Fail once, up front, rather than as the same error on every check that follows.
+        await db.query('SELECT 1');
+    } catch (err) {
         await client.end().catch(() => {});
-        throw new Error('could not put the session in read-only mode — refusing to run against a writable connection');
+        throw err;
     }
-    return client;
+    return db;
+}
+
+/**
+ * Wrap a connected client so each statement runs alone in `BEGIN READ ONLY … ROLLBACK`.
+ *
+ * A transaction's own READ ONLY ends with the transaction, and a pooler keeps one server
+ * connection for a whole transaction, so the check and the statement share a connection and
+ * that connection goes back to the pool exactly as it came. `transaction_read_only` is read
+ * inside the transaction every time: "cannot write" is something the database asserts on
+ * the connection the statement actually ran on, not something the author remembered.
+ *
+ * One statement per transaction rather than one transaction for the run, because a failed
+ * statement aborts its transaction and `safeQuery` promises one bad check will not end the
+ * run. Diagnostics are sequential and low-volume; the two extra round trips cost nothing.
+ *
+ * Exported for the tests. Everything else should use `connectReadOnly`.
+ */
+export function readOnly(client) {
+    return {
+        async query(text, values = []) {
+            try {
+                const results = await client.query('BEGIN READ ONLY; SHOW transaction_read_only');
+                const mode = Array.isArray(results) ? results[1]?.rows[0]?.transaction_read_only : undefined;
+                if (mode !== 'on') {
+                    throw new Error('the transaction is not read-only — refusing to run against a writable connection');
+                }
+                // Extended protocol even with no parameters: the server then refuses a string
+                // holding more than one statement, so `SELECT 1; COMMIT; UPDATE …` cannot end
+                // the read-only transaction and write after it.
+                return await client.query({ text, values, queryMode: 'extended' });
+            } finally {
+                // Also after a failed BEGIN or check: a stray ROLLBACK only draws a warning.
+                await client.query('ROLLBACK');
+            }
+        },
+        end: () => client.end(),
+    };
 }
 
 /** Run a query, returning rows, or `{ error }` instead of throwing — one bad check must not end the run. */
