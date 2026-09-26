@@ -354,6 +354,28 @@ const API = {
     getStudioSettings: () => API.request('/studio/settings'),
     /** Partial merge on the server; the dashboard sends whole sections. */
     saveStudioSettings: (data) => API.request('/studio/settings', { method: 'PUT', body: JSON.stringify(data) }),
+    // ─── Monteur (MONTEUR.md §5) ────────────────────────────────────────────
+    // Session + canOperate, tenant-scoped. The worker on the creator's computer
+    // scans, transcribes and renders; these only queue that work or read it back.
+    // Its settings are the `monteur` section of PUT /studio/settings, above.
+    /** `MonteurView`: settings, timezone, runs, worker, sources, clips, lessons. */
+    getMonteur: () => API.request('/studio/monteur'),
+    /** `{ job }`: a monteur_scan now, or the one already open. 409 with no folder. */
+    runMonteur: () => API.request('/studio/monteur/run', { method: 'POST' }),
+    /** `{ job }`: a pick_folder, which opens the folder dialog on the worker's computer. */
+    pickMonteurFolder: () => API.request('/studio/monteur/pick-folder', { method: 'POST' }),
+    retryMonteurSource: (id) => API.request(`/studio/monteur/sources/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
+    /** `{ title?, copy? }`. A new title or keyword re-renders the video. */
+    updateMonteurClip: (id, data) => API.request(`/studio/monteur/clips/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: JSON.stringify(data),
+    }),
+    /** `{ scheduled_time? }` → `{ clip, scheduled_time }`. 409 unless the clip is in review. */
+    approveMonteurClip: (id, data) => API.request(`/studio/monteur/clips/${encodeURIComponent(id)}/approve`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    rejectMonteurClip: (id) => API.request(`/studio/monteur/clips/${encodeURIComponent(id)}/reject`, { method: 'POST' }),
+    /** Runs the Analyst now: `LessonsView`. */
+    refreshMonteurLessons: () => API.request('/studio/monteur/lessons/refresh', { method: 'POST' }),
     // ─── Growth & SEO hub (GROWTH.md §3) ────────────────────────────────────
     // Session + canOperate, tenant-scoped. Anything the API could not measure comes back
     // null, never 0, and the page shows it as missing rather than as a number.
