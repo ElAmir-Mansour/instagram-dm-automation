@@ -204,8 +204,14 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
  *   - `lesson_moments.thumb_url` — the thumbnails the shot picker shows. A re-index replaces
  *     the moments, so the old thumbnails fall out of this clause and are collected.
  *
- * Both tables arrive with migration v21, so this statement fails until it is applied. It fails
- * safe: a failed prune deletes nothing and is logged as `retention.media_prune_failed`.
+ * The Monteur's (v24): `clip_drafts.render` — the video and cover of every reel that is
+ * rendering (a re-render keeps the last one until the new one lands), in review (waiting for
+ * the operator's Approve) or scheduled (its post fetches them). A rejected or failed reel's files
+ * are not kept (MONTEUR.md §2).
+ *
+ * These tables arrive with migrations v21 and v24, so this statement fails until both are
+ * applied. It fails safe: a failed prune deletes nothing and is logged as
+ * `retention.media_prune_failed`.
  *
  * Opt-in, like `pruneRawPayloads`, and off by default: this is an irreversible delete of the
  * operator's own media, and it should be their decision rather than a surprise on upgrade.
@@ -259,6 +265,13 @@ export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
                            SELECT 1
                              FROM lesson_moments lm
                             WHERE lm.thumb_url LIKE '%' || m.id::text || '%'
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM clip_drafts c
+                            WHERE c.status IN ('rendering', 'review', 'scheduled')
+                              AND (COALESCE(c.render->>'video_url', '') || ' ' || COALESCE(c.render->>'cover_url', ''))
+                                  LIKE '%' || m.id::text || '%'
                        )
                      LIMIT $2
               )`,
