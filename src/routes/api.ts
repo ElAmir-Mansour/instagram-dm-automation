@@ -49,6 +49,7 @@ import { droppedLeversNote, reachOptionsFor, sendsMetaOptions, validateMetaOptio
 import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { syncAllTenants } from '../services/growth/sync.js';
+import { sweepDeadline, sweepMonteur, type MonteurSweepResult } from '../services/monteur/sweep.js';
 
 
 const router = Router();
@@ -309,15 +310,24 @@ function requireCronSecret(req: Request, res: Response, route: string): boolean 
  *   2. **A failure is always named in the body.** A 200 that silently omits the error would
  *      be exactly the invisible failure this project keeps being bitten by: the scheduler
  *      would go green forever while half the work never ran.
+ *
+ * The Monteur's pick sweep (MONTEUR.md §6) is a third outcome that never moves the status: it
+ * runs last, spends Gemini, and must not turn a drain whose queue and publishes worked into a
+ * red run, nor rescue one where both failed. It is reported in the body either way, and a
+ * failure of it by name (`monteurError`).
  */
 export function composeDrainResponse(
     jobs: Awaited<ReturnType<typeof drainWorker>> | null,
     jobsError: string | null,
     publish: PublishSweepResult | null,
-    publishError: string | null
+    publishError: string | null,
+    monteur: { result: MonteurSweepResult | null; error: string | null } | null = null
 ): { status: number; body: Record<string, unknown> } {
+    const monteurPart = monteur
+        ? { monteur: monteur.result, ...(monteur.error ? { monteurError: monteur.error } : {}) }
+        : {};
     if (jobsError && publishError) {
-        return { status: 500, body: { error: 'Drain failed.', jobsError, publishError } };
+        return { status: 500, body: { error: 'Drain failed.', jobsError, publishError, ...monteurPart } };
     }
     return {
         status: 200,
@@ -326,6 +336,7 @@ export function composeDrainResponse(
             publish,
             ...(jobsError ? { jobsError } : {}),
             ...(publishError ? { publishError } : {}),
+            ...monteurPart,
         },
     };
 }
@@ -347,6 +358,7 @@ export function composeDrainResponse(
  */
 router.get('/jobs/drain', async (req, res) => {
     if (!requireCronSecret(req, res, '/api/jobs/drain')) return;
+    const startedAt = Date.now();
 
     // The queue drain and the publish sweep are independent, and are kept independent
     // deliberately: they fail for unrelated reasons (Gemini vs Meta publishing), and one
@@ -379,7 +391,19 @@ router.get('/jobs/drain', async (req, res) => {
     // finished with. Cannot throw, and bounded to a handful of status calls.
     const tiktok = await reconcileTikTokPosts();
 
-    const { status, body } = composeDrainResponse(jobs, jobsError, publish, publishError);
+    // The Monteur's pick sweep, LAST (MONTEUR.md §6): at most one video's two Gemini calls, and
+    // the Analyst when a tenant's lessons are due, within what is left of this invocation. Its
+    // outcome is its own — composeDrainResponse never lets it move the status.
+    let monteur: MonteurSweepResult | null = null;
+    let monteurError: string | null = null;
+    try {
+        monteur = await sweepMonteur({ deadline: sweepDeadline(startedAt) });
+    } catch (err) {
+        monteurError = err instanceof Error ? err.message : String(err);
+        log('error', 'monteur.sweep_failed', describeError(err));
+    }
+
+    const { status, body } = composeDrainResponse(jobs, jobsError, publish, publishError, { result: monteur, error: monteurError });
     res.status(status).json(status === 200 ? { ...body, tiktok } : body);
 });
 
