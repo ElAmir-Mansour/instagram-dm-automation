@@ -140,8 +140,12 @@ What the app does on apply:
 - Stores `words` and `duration`, and sets the status to `transcribed`. The drain sweep (§6) takes it from there.
 
 **`monteur_render`**
-`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, brand: { accent, font, direction }, cover_at }`
-→ `{ video_url, cover_url, duration, width: 1080, height: 1920 }`
+`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction }, cover_at }`
+→ `{ video_url, tiktok_video_url: string | null, cover_url, duration, width: 1080, height: 1920 }`
+
+`cta_tiktok` makes a second MP4 from the same cut, identical except for the CTA text (e.g. «الرابط في البايو»),
+because TikTok can't auto-DM, so its copy must not say "comment X". It's null when TikTok is off.
+`cta.line1` = `cta.slide.igAsk` + «keyword»; `cta.line2` = `cta.slide.igSub`.
 
 The payload:
 - `words` are relative to the clip (0 = `start`).
@@ -154,7 +158,8 @@ The composition is `MonteurClip`, 1080×1920 at 30 fps, and its duration is `end
 - **Title (the hook):** at the top, **visible from frame 0** (no fade from black). Instagram's grid thumbnail
   is frame 0.
 - **Word captions:** in the lower third, in the style of `src/pro/WordCaptions.tsx`.
-- **CTA card:** the last 2.5 s, from `cta.line1` and `cta.line2`, in the style of `src/pro/CtaCard.tsx`.
+- **CTA:** a **lower-third overlay** for the last 2.5 s, from `cta.line1` and `cta.line2` (a full-screen card would
+  cover the payoff). The video stays visible, and the word captions move up above the band.
 
 The output:
 - **Audio:** the source's own voice, normalised in two passes to -16 LUFS / -1.5 dBTP, as in
@@ -310,6 +315,92 @@ clip's lines.
 - Pick the accent with `pickAccent`.
 - The source becomes `rendering`.
 - Log `monteur.pick` and `monteur.copy` with each call's tokens in and out.
+
+## 6.1 Prompt rules from the research review (they override §6 wherever the two differ)
+
+### Monteur
+**Schema:** `{ topic, clips: [{ start_line, end_line, title, hook_type, why, scores: { hook, alone, payoff, send } }] }`.
+- Set `propertyOrdering` explicitly, so `why` comes before `scores`.
+- Ask for up to `reels_per_video + 2` candidates, best first.
+
+**Prompt:**
+- **topic** first: the main idea, in one line.
+- **hook** 0–3:
+  - 3: the first sentence states the result, number, mistake or contrast.
+  - 2: the first line has it, after a lead-in.
+  - 1: it comes in line 2.
+  - 0: later or never.
+- **alone:**
+  - The start needs nothing said before it: no greeting, no intro, no «زي ما قلت / وبعدين / فـ».
+  - The end leaves nothing hanging.
+- **payoff:** the answer or demonstration that proves the claim.
+  - The claim is the result promised. Start on it.
+  - `end_line` is where the payoff is complete.
+- **send:** worth sending to a colleague: a tool, a prompt, a step, a number or a surprise.
+  - Motivation alone scores 0.
+- **NEVER** a clip where the speaker asks for comments, or one that repeats another clip's idea.
+- **START:** of the idea's first 3 lines, take the one that states the claim.
+- **LENGTH:** the shortest span that holds the whole payoff, within min–max seconds. Never pad.
+- **TITLE:** at most 6 words, on screen from frame 0, read with the sound off.
+  - The concrete topic plus the result, problem or mistake, not the method.
+  - Not the first spoken sentence.
+  - Tech terms in Latin script, and no hype words.
+- **hook_type** (of the spoken start line): promise, problem, intent or question.
+- **why:** at most 10 words: what the viewer gets.
+- **Invent nothing:** use only numbers, tools and results the clip actually says.
+- **Examples:** the first lines of the tenant's 2 most-viewed posts in the last 90 days, taken from `post_insights`.
+
+**Code:**
+- **Rank:** `rank = 3·hook + alone + payoff + send`.
+  - Drop `hook ≤ 1` and `alone ≤ 1`.
+  - Keep `rank ≥ 9`.
+  - The displayed `score` is `round(rank / 1.8)`.
+- **Order:** snap, then the opening guard, then length, then dedupe.
+- **Snap:** only the edges made by the 12 s forced line break.
+  - Move to the nearest punctuation or 0.3 s pause within 2 s.
+  - If there is none, drop the clip.
+- **Opening guard (Arabic):** reject a clip whose first 1–3 normalised tokens are one of وبعدين، فبعدين، عشان كذا، زي
+  ما قلت، يعني، بس, or ف followed by لما, اذا or هذا.
+- **Dedupe:** drop a clip whose text overlaps 0.6 or more with a clip that is rendering, in review or scheduled, or
+  one made in the last 90 days.
+- **Stored on `clip_drafts`,** as part of v24, which isn't deployed yet: `topic`, `hook_type` and `scores jsonb`.
+
+### Marketer
+**Per clip:** `{ first_line, body, ask_line, tiktok_body, hashtags, keyword_candidates, variants, question, pitch,
+alt_text }`.
+- **first_line:** at most 60 characters: the result or problem, naming the topic once, the way people search it.
+  - One language.
+  - Not the title.
+  - No hype, no ask.
+- **body:** 1–3 short lines: the takeaway worth forwarding. Never "share this".
+- **ask_line:** a question, then «{keyword}».
+  - It fits any of the candidates.
+  - The prompt lists the tenant's last 5 asks as "don't reuse".
+- **keyword_candidates:** one Arabic word each, 4+ letters, tied to what the DM sends.
+- **hashtags:** 3–5 topic tags, mostly Arabic.
+- **tiktok_body:** one descriptive sentence with the topic words, and no ask.
+- **alt_text:** neutral MSA, at most 2 sentences: «متحدث يشرح …» plus what the transcript says. No hashtags, no ask.
+- **Invent nothing:** only numbers, tools and results the clip says.
+
+**Code:**
+- **Instagram/Facebook:** first_line, body, then the filled ask_line, then hashtags.
+- **TikTok:** first_line, tiktok_body, `tiktokLine`, hashtags.
+- **One ask per post:** Monteur clips get no save line.
+- **ask_line:** placed exactly as written, and any other ask is stripped.
+  - Reject it if it has no `{keyword}`, or overlaps 0.6 or more with the last 5 asks.
+  - A rejected ask falls back to a built-in rotating pool of question-style asks. Never fall back to `cta.instagramAsk`.
+- **Hashtag blocklist:** #اكسبلور #explore #fyp #foryou.
+  - At most 5.
+  - At least 1 Arabic tag when the language is `ar`.
+- **Keywords:** reject any under 4 letters. Campaigns use `match_mode = 'word'`.
+- **Approve:**
+  - Never two clips from the same source on the same day.
+  - The TikTok sibling uses `render.tiktok_video_url`.
+- **Render payload:** `cta_tiktok` = `slide.ttPill` / `slide.ttSub`, but only when TikTok is on.
+
+### Deferred
+A separate Facebook first line, the Facebook no-keyword test, Trial Reels, speech-rate stats, and deduping the
+Analyst's input by media.
 
 ## 7. The daily run
 
