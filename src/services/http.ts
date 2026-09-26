@@ -101,11 +101,32 @@ export interface RetryOptions {
     retries?: number;
     baseMs?: number;
     label?: string;
+    /**
+     * The call creates something public (a Page post, a video). Then only a failure that proves
+     * Meta did nothing is retried: a rate limit it refused, or a connection that never went out.
+     * A timeout, a reset or a 5xx may come AFTER Meta made the post, and retrying those posted a
+     * reel to the Page twice on 2026-09-26 (two videos 2 s apart from one attempt).
+     */
+    creates?: boolean;
+}
+
+/** Meta refused the request outright: nothing was created, so a retry cannot duplicate. */
+const REFUSED_CODES = new Set([4, 17, 32, 613]);
+
+/** For a creating call: retry only what certainly created nothing. */
+function isSafeToRetryCreate(err: any): boolean {
+    if (isPermanentMetaError(err)) return false;
+    if (err?.response?.status === 429) return true;
+    const code = metaErrorCode(err);
+    if (typeof code === 'number' && REFUSED_CODES.has(code)) return true;
+    // Never connected, so the request never reached Meta.
+    return ['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED'].includes(err?.code);
 }
 
 /** Exponential backoff with jitter. Gives up immediately on permanent errors. */
 export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}): Promise<T> {
-    const { retries = 3, baseMs = 500, label = 'meta-call' } = opts;
+    const { retries = 3, baseMs = 500, label = 'meta-call', creates = false } = opts;
+    const retryable = creates ? isSafeToRetryCreate : isRetryable;
     let lastErr: any;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -113,7 +134,7 @@ export async function withRetry<T>(fn: () => Promise<T>, opts: RetryOptions = {}
             return await fn();
         } catch (err: any) {
             lastErr = err;
-            if (attempt === retries || !isRetryable(err)) throw err;
+            if (attempt === retries || !retryable(err)) throw err;
 
             const delay = Math.round(baseMs * 2 ** attempt * (0.5 + Math.random()));
             log('warn', 'meta.retrying', {
