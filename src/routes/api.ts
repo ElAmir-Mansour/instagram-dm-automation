@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import { pipeline } from 'node:stream/promises';
 import { pool } from '../config/db.js';
 import { isDiagnosticProbe } from '../utils/probe.js';
 import {
@@ -31,7 +32,8 @@ import type { UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
-import { getMediaStore, uploadIdFromSegment } from '../services/storage.js';
+import { getMediaStore, MediaStorageUnavailableError, uploadIdFromSegment } from '../services/storage.js';
+import { StorageApiError } from '../services/supabaseStorage.js';
 import { isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
 import adminRouter from './admin.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
@@ -919,7 +921,8 @@ router.get('/cron/publish', async (req, res) => {
         // which nothing did before. It converges rather than clearing one batch a day, and it
         // cannot throw — a retention failure must not stop the publishes below it.
         const sweep = await runRetentionSweep();
-        if (sweep.rawPayloadsCleared > 0 || sweep.jobsDeleted > 0 || sweep.moreRemaining) {
+        if (sweep.rawPayloadsCleared > 0 || sweep.jobsDeleted > 0 || sweep.mediaDeleted > 0
+            || sweep.mediaObjectsRemoved > 0 || sweep.moreRemaining) {
             log('info', 'cron.retention_sweep', { ...sweep });
         }
 
@@ -994,18 +997,27 @@ const MAX_UPLOAD_BYTES = 3.2 * 1024 * 1024;
 
 // Deliberately unauthenticated: Meta cURLs this URL itself when it ingests the media, so it
 // has to be publicly fetchable. Everything below assumes the caller is hostile.
+//
+// The URL stays on this domain even for files in Supabase Storage: TikTok pulls only from the
+// prefix verified in its portal, and Meta already holds these URLs. So a Storage object is
+// proxied, and proxied as a stream — piped through with backpressure, never read into memory —
+// because a reel is 15-30MB and a function holding it whole would also be holding it back from
+// the client until the last byte arrived. Vercel streams Node responses by default, and a
+// streamed response is not held to the 4.5MB body cap.
 router.get('/uploads/:id', async (req, res) => {
+    let id: string | null = null;
     try {
         // `<uuid>` or `<uuid>.jpg` — TikTok's photo fetcher is sent the second form. Postgres
         // raises 22P02 on a malformed uuid literal, which surfaced as a 500 for what is really
         // just a URL that cannot match anything, so anything else stops here.
-        const id = uploadIdFromSegment(req.params.id);
+        id = uploadIdFromSegment(req.params.id);
         if (!id) {
             res.status(404).send('Not Found');
             return;
         }
 
-        const media = await getMediaStore().get(id);
+        const store = await getMediaStore();
+        const media = await store.open(id, { headOnly: req.method === 'HEAD' });
 
         if (!media) {
             res.status(404).send('Not Found');
@@ -1021,10 +1033,38 @@ router.get('/uploads/:id', async (req, res) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         res.setHeader('Content-Disposition', 'inline');
         res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for 1 year
-        res.send(media.data);
+
+        // A legacy BYTEA row: exactly what this route always did.
+        if (media.kind === 'bytes') {
+            res.send(media.data);
+            return;
+        }
+
+        if (media.size !== null) res.setHeader('Content-Length', String(media.size));
+        if (!media.body) {
+            res.status(200).end();
+            return;
+        }
+        await pipeline(media.body, res);
     } catch (err) {
-        log('error', 'media.serve_failed', describeError(err));
-        res.status(500).send('Internal Server Error');
+        if (err instanceof MediaStorageUnavailableError) {
+            log('error', 'media.storage_unconfigured', { media_id: err.mediaId });
+            res.status(503).send('Service Unavailable');
+            return;
+        }
+        if ((err as { code?: string })?.code === 'ERR_STREAM_PREMATURE_CLOSE' && res.destroyed) {
+            // The client went away mid-file — a player seeking, a fetch cancelled. Not a fault.
+            log('info', 'media.serve_aborted', { media_id: id });
+            return;
+        }
+        log('error', 'media.serve_failed', { media_id: id, ...describeError(err) });
+        if (res.headersSent) {
+            // Part of the file is already out. Cut the connection so the client sees a broken
+            // transfer, never a short file that looks complete.
+            res.destroy();
+            return;
+        }
+        res.status(err instanceof StorageApiError ? 502 : 500).send(err instanceof StorageApiError ? 'Bad Gateway' : 'Internal Server Error');
     }
 });
 
@@ -2839,12 +2879,13 @@ router.post('/upload', canOperate, async (req, res) => {
             return;
         }
 
-        // Through the store rather than straight to SQL, so that moving the bytes to object
-        // storage is a change to `getMediaStore()` and nothing else.
+        // Through the store rather than straight to SQL: `getMediaStore()` puts the bytes in
+        // Supabase Storage when it is configured (Settings → Media storage), in Postgres if not.
+        // The URL is /api/uploads/<id> on this origin either way.
         //
         // `creator_id` arrived with v12. The row is still served unauthenticated by UUID —
         // Meta cURLs it — so this is attribution and cleanup-on-delete, not access control.
-        const store = getMediaStore();
+        const store = await getMediaStore();
         const { id: newUploadId } = await store.put({
             creatorId: getTenantId(req),
             filename,

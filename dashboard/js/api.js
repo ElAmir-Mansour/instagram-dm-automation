@@ -156,6 +156,10 @@ const API = {
     getGeminiKey: () => API.request('/admin/gemini-key'),
     saveGeminiKey: (apiKey) => API.request('/admin/gemini-key', { method: 'PUT', body: JSON.stringify({ apiKey }) }),
     removeGeminiKey: () => API.request('/admin/gemini-key', { method: 'DELETE' }),
+    // Where uploads are kept (Supabase Storage). The key is only ever sent, never read back.
+    getMediaStorage: () => API.request('/admin/media-storage'),
+    saveMediaStorage: (data) => API.request('/admin/media-storage', { method: 'PUT', body: JSON.stringify(data) }),
+    removeMediaStorage: () => API.request('/admin/media-storage', { method: 'DELETE' }),
 
     /** Ask Meta about one tenant's token right now, rather than reading a
      *  status that can be weeks old. Returns the fresh token state. */

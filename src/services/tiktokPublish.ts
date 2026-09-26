@@ -201,13 +201,13 @@ export async function pendingInboxShares(creatorId: string, excludePostId?: stri
 }
 
 /**
- * The bytes to upload. Our own uploads are read straight from the media store — no HTTP round
- * trip through a route whose response Vercel caps at 4.5MB. Anything else is downloaded.
+ * The bytes to upload. Our own uploads are read straight from the media store (Postgres, or
+ * Supabase Storage) rather than fetched back through our own route. Anything else is downloaded.
  */
 async function loadMedia(mediaUrl: string): Promise<{ data: Buffer; mimeType: string }> {
     const uploadId = uploadIdFromUrl(mediaUrl);
     if (uploadId) {
-        const stored = await getMediaStore().get(uploadId);
+        const stored = await (await getMediaStore()).get(uploadId);
         if (!stored) throw new Error('The uploaded video no longer exists — upload it again.');
         return { data: stored.data, mimeType: stored.mimeType };
     }

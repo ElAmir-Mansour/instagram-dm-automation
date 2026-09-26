@@ -109,6 +109,8 @@ export const AUDIT_ACTIONS = {
     settingsTikTokAppWrite: 'settings.tiktok_app_write',
     /** The platform's Gemini key was saved (after Google accepted it) or removed, from Operations. */
     settingsGeminiKeyWrite: 'settings.gemini_key_write',
+    /** The Supabase Storage config media goes to was saved (after Supabase accepted it) or removed. */
+    settingsMediaStorageWrite: 'settings.media_storage_write',
     /** A Studio worker credential was minted. Its token acts as the tenant for claims and uploads. */
     studioWorkerCreate: 'studio.worker_create',
     /** A Studio worker credential was revoked; its token stopped working at that moment. */

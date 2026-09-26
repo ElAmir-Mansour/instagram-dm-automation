@@ -103,6 +103,7 @@ beforeEach(() => {
     previousStore = setMediaStore({
         async put() { throw new Error('nothing uploads here'); },
         async get() { return null; },
+        async open() { return null; },
         async mimeTypes(ids) { return new Map(ids.filter((id) => MIMES[id]).map((id) => [id, MIMES[id]!])); },
         publicUrl: (id, origin) => `${origin}/api/uploads/${id}`,
     });

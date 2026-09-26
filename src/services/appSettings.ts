@@ -53,6 +53,17 @@ export const APP_SETTING_KEYS = {
      * in use until a key is saved here.
      */
     geminiApiKey: 'gemini.api_key',
+    /**
+     * The Supabase project that holds media, e.g. `https://abcd1234.supabase.co`. With the key
+     * below it moves new uploads out of Postgres and into the Storage bucket `media`
+     * (src/services/storage.ts). `SUPABASE_URL` is the fallback.
+     */
+    mediaStorageUrl: 'storage.supabase_url',
+    /**
+     * The key the server uses with Supabase Storage: a secret key (`sb_secret_…`) or the legacy
+     * `service_role` JWT. `SUPABASE_SERVICE_ROLE_KEY` is the fallback.
+     */
+    mediaStorageKey: 'storage.supabase_service_key',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -60,6 +71,7 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
 const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.tiktokClientSecret,
     APP_SETTING_KEYS.geminiApiKey,
+    APP_SETTING_KEYS.mediaStorageKey,
 ]);
 
 export function isSecretSetting(key: AppSettingKey): boolean {
@@ -173,6 +185,33 @@ export async function getTikTokAppConfig(): Promise<TikTokAppConfig | null> {
         clientSecret,
         source: { clientKey: dbKey ? 'database' : 'env', clientSecret: dbSecret ? 'database' : 'env' },
     };
+}
+
+export interface MediaStorageConfig {
+    /** The Supabase project's origin, normalised: `https://abcd1234.supabase.co`. */
+    url: string;
+    /** A secret key (`sb_secret_…`) or the legacy service_role JWT. */
+    key: string;
+    source: { url: 'database' | 'env'; key: 'database' | 'env' };
+}
+
+/**
+ * Supabase Storage for media: what is saved in Settings, then `SUPABASE_URL` /
+ * `SUPABASE_SERVICE_ROLE_KEY`, each half on its own. Null when either half is missing or the URL
+ * is not an https origin — and then new uploads stay in Postgres (src/services/storage.ts).
+ *
+ * Read on every call, not cached, for the same reason as the Gemini key.
+ */
+export async function getMediaStorageConfig(): Promise<MediaStorageConfig | null> {
+    const [dbUrl, dbKey] = await Promise.all([
+        getSetting(APP_SETTING_KEYS.mediaStorageUrl),
+        getSetting(APP_SETTING_KEYS.mediaStorageKey),
+    ]);
+    const rawUrl = dbUrl ?? (process.env.SUPABASE_URL?.trim() || null);
+    const url = rawUrl ? normaliseOrigin(rawUrl) : null;
+    const key = dbKey ?? (process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() || null);
+    if (!url || !key) return null;
+    return { url, key, source: { url: dbUrl ? 'database' : 'env', key: dbKey ? 'database' : 'env' } };
 }
 
 /**

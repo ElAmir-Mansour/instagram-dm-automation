@@ -9,7 +9,9 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
+import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
+import { MEDIA_BUCKET, setStorageFetch } from './supabaseStorage.js';
 import {
     JOB_PRUNE_BATCH_SIZE,
     MAX_SWEEP_PASSES,
@@ -98,6 +100,7 @@ describe('runRetentionSweep', () => {
             // Defaults to nothing-to-do, which is the real default: media retention is
             // opt-in, so every existing assertion below keeps meaning what it meant.
             pruneMedia: async () => ({ deleted: mediaCounts[mediaPass++] ?? 0, skipped: false as const }),
+            removeObjects: async () => ({ removed: 0, failed: 0, skipped: false as const }),
         };
     }
 
@@ -150,6 +153,24 @@ describe('runRetentionSweep', () => {
         assert.equal(result.moreRemaining, false);
     });
 
+    it('removes queued Storage objects once, after every pass, even with media retention off', async () => {
+        // The queue also holds objects whose rows the Studio or a tenant deletion removed, so it
+        // cannot wait for MEDIA_RETENTION_DAYS, which is off by default.
+        const order: string[] = [];
+        const deps = {
+            pruneRaw: async () => { order.push('raw'); return { cleared: order.length === 1 ? PRUNE_BATCH_SIZE : 0, skipped: false }; },
+            pruneJobs: async () => { order.push('jobs'); return { deleted: 0 }; },
+            pruneMedia: async () => { order.push('media'); return { deleted: 0 as const, skipped: true as const, reason: 'disabled' as const }; },
+            removeObjects: async () => { order.push('objects'); return { removed: 3, failed: 0, skipped: false as const }; },
+        };
+
+        const result = await runRetentionSweep(deps);
+
+        assert.deepEqual(order, ['raw', 'jobs', 'media', 'raw', 'jobs', 'media', 'objects']);
+        assert.equal(result.mediaObjectsRemoved, 3);
+        assert.equal(result.passes, 2);
+    });
+
     it('gives up after the pass cap rather than running until the invocation dies', async () => {
         // An endless supply of full batches. The cap is what stops a sweep from eating the
         // cron invocation that has scheduled posts to publish after it.
@@ -157,6 +178,7 @@ describe('runRetentionSweep', () => {
             pruneRaw: async () => ({ cleared: PRUNE_BATCH_SIZE, skipped: false }),
             pruneJobs: async () => ({ deleted: 0 }),
             pruneMedia: async () => ({ deleted: 0 as const, skipped: true as const, reason: 'disabled' as const }),
+            removeObjects: async () => ({ removed: 0, failed: 0, skipped: false as const }),
         };
         const result = await runRetentionSweep(endless);
 
@@ -278,5 +300,118 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 3);
         assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 3);
         assert.doesNotMatch(sql, /OR NOT EXISTS/);
+    });
+});
+
+/**
+ * A pruned row whose bytes are in Supabase Storage takes its object with it.
+ *
+ * The link between the two is the v23 trigger, which queues a deleted row's `storage_path` in the
+ * same transaction as the DELETE. There is no database here, so the stub plays the trigger's part
+ * (the trigger itself was run against a scratch Postgres: a DELETE queues the path, a rolled-back
+ * one queues nothing, a CASCADE from `creators` queues too). What is pinned is the sweep's half:
+ * everything the DELETE queued is removed from the bucket in the same run, and an entry leaves the
+ * queue only once Supabase has confirmed it.
+ */
+describe('the media retention sweep deletes the object as well as the row', () => {
+    const CREATOR = '11111111-1111-4111-8111-111111111111';
+    const STORED_PATH = `${CREATOR}/aaaaaaaa-0000-4000-8000-000000000001.mp4`;
+    const KEY = 'sb_secret_0123456789abcdefghijKLMNOP';
+
+    let queue: Map<string, number>;
+    let removedFromBucket: string[][];
+    let supabase: () => Response;
+    let saved: Record<string, string | undefined>;
+    let previousFetch: ReturnType<typeof setStorageFetch> = null;
+    const originalQuery = pool.query;
+    let restoreSink: (() => void) | undefined;
+
+    before(() => {
+        const previous = setLogSink(() => {});
+        restoreSink = () => setLogSink(previous);
+    });
+    after(() => restoreSink?.());
+
+    beforeEach(() => {
+        queue = new Map();
+        removedFromBucket = [];
+        supabase = () => new Response(JSON.stringify([{ name: STORED_PATH }]), { status: 200 });
+        saved = {
+            media: process.env.MEDIA_RETENTION_DAYS, raw: process.env.RAW_PAYLOAD_RETENTION_DAYS,
+            enc: process.env.TOKEN_ENCRYPTION_KEY,
+        };
+        process.env.MEDIA_RETENTION_DAYS = '30';
+        delete process.env.RAW_PAYLOAD_RETENTION_DAYS;
+        process.env.TOKEN_ENCRYPTION_KEY = 'ef'.repeat(32);
+
+        const settings = new Map([
+            ['storage.supabase_url', { value: 'https://abcd1234.supabase.co', is_secret: false }],
+            ['storage.supabase_service_key', { value: encryptSecret(KEY), is_secret: true }],
+        ]);
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: any[] = []) => {
+            const flat = sql.replace(/\s+/g, ' ').trim();
+            if (/^DELETE FROM media_uploads/.test(flat)) {
+                // Two eligible rows: one in Storage, one legacy BYTEA. The trigger queues only
+                // the first.
+                queue.set(STORED_PATH, 0);
+                return { rows: [], rowCount: 2 };
+            }
+            if (/^DELETE FROM jobs/.test(flat)) return { rows: [], rowCount: 0 };
+            if (/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/.test(flat)) {
+                const row = settings.get(String(params[0]));
+                return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+            }
+            if (/^SELECT storage_path FROM media_object_deletions/.test(flat)) {
+                return { rows: [...queue.keys()].map((storage_path) => ({ storage_path })), rowCount: queue.size };
+            }
+            if (/^DELETE FROM media_object_deletions/.test(flat)) {
+                for (const path of params[0] as string[]) queue.delete(path);
+                return { rows: [], rowCount: (params[0] as string[]).length };
+            }
+            if (/^UPDATE media_object_deletions SET attempts = attempts \+ 1/.test(flat)) {
+                for (const path of params[0] as string[]) queue.set(path, (queue.get(path) ?? 0) + 1);
+                return { rows: [], rowCount: (params[0] as string[]).length };
+            }
+            throw new Error(`no result arranged for SQL: ${flat}`);
+        };
+        previousFetch = setStorageFetch(async (input, init) => {
+            assert.equal(init?.method, 'DELETE');
+            assert.equal(new URL(input).pathname, `/storage/v1/object/${MEDIA_BUCKET}`);
+            removedFromBucket.push(JSON.parse(String(init?.body)).prefixes);
+            return supabase();
+        });
+    });
+
+    afterEach(() => {
+        (pool as unknown as { query: unknown }).query = originalQuery;
+        setStorageFetch(previousFetch);
+        for (const [name, value] of [
+            ['MEDIA_RETENTION_DAYS', saved.media], ['RAW_PAYLOAD_RETENTION_DAYS', saved.raw], ['TOKEN_ENCRYPTION_KEY', saved.enc],
+        ] as const) {
+            if (value === undefined) delete process.env[name];
+            else process.env[name] = value;
+        }
+    });
+
+    it('removes the pruned row\'s object from the bucket in the same run', async () => {
+        const result = await runRetentionSweep();
+
+        assert.equal(result.mediaDeleted, 2);
+        assert.deepEqual(removedFromBucket, [[STORED_PATH]], 'only the Storage row has an object to remove');
+        assert.equal(result.mediaObjectsRemoved, 1);
+        assert.equal(queue.size, 0);
+    });
+
+    it('keeps the object queued, and retries it next run, when Supabase is down', async () => {
+        supabase = () => new Response(JSON.stringify({ message: 'upstream unavailable' }), { status: 503 });
+
+        const first = await runRetentionSweep();
+        assert.equal(first.mediaObjectsRemoved, 0);
+        assert.equal(queue.get(STORED_PATH), 1, 'still queued, one attempt counted');
+
+        supabase = () => new Response(JSON.stringify([{ name: STORED_PATH }]), { status: 200 });
+        const second = await runRetentionSweep();
+        assert.equal(second.mediaObjectsRemoved, 1);
+        assert.equal(queue.size, 0);
     });
 });

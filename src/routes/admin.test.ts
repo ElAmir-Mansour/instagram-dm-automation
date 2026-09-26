@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Request, Response } from 'express';
 import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
+import { setStorageFetch } from '../services/supabaseStorage.js';
 import adminRouter from './admin.js';
 
 interface Reply {
@@ -90,6 +91,9 @@ const ROUTES: Array<[string, string, Record<string, unknown>?]> = [
     ['GET', '/gemini-key'],
     ['PUT', '/gemini-key'],
     ['DELETE', '/gemini-key'],
+    ['GET', '/media-storage'],
+    ['PUT', '/media-storage'],
+    ['DELETE', '/media-storage'],
 ];
 
 describe('the platform_admin gate', () => {
@@ -507,5 +511,220 @@ describe('the Gemini key', () => {
         assert.equal(after.body.source, 'database');
         assert.ok(!JSON.stringify(after.body).includes(KEY));
         assert.ok(!JSON.stringify(after.body).includes('environment-one'));
+    });
+});
+
+/**
+ * GET/PUT/DELETE /media-storage — the Supabase project every tenant's uploads go to.
+ *
+ * Reaches SQL, so the pool is an in-memory `app_settings` plus the usage query, and Supabase is
+ * a fake `fetch`. What is pinned is what Settings promises: nothing is saved until Supabase has
+ * accepted the key (and the bucket exists), the key is stored encrypted, the key travels in the
+ * header its format needs, and neither a response nor an audit row ever carries it.
+ */
+describe('media storage config', () => {
+    const PROJECT = 'https://abcd1234.supabase.co';
+    const SECRET = 'sb_secret_pasted-in-settings-0123456789';
+    const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const legacy = (role: string) => `${part({ alg: 'HS256', typ: 'JWT' })}.${part({ role })}.c2ln`;
+
+    let store: Map<string, { value: string; is_secret: boolean }>;
+    let statements: Array<{ sql: string; params: unknown[] }>;
+    let supabase: Array<{ method: string; path: string; headers: Record<string, string>; body: string | null }>;
+    let bucket: 'exists' | 'missing' | 'refused' | 'down';
+    let storedFiles: number;
+    const restore: Array<() => void> = [];
+
+    beforeEach(() => {
+        store = new Map();
+        statements = [];
+        supabase = [];
+        bucket = 'missing';
+        storedFiles = 0;
+
+        const originalQuery = pool.query;
+        const originalEnv = {
+            enc: process.env.TOKEN_ENCRYPTION_KEY, url: process.env.SUPABASE_URL, key: process.env.SUPABASE_SERVICE_ROLE_KEY,
+        };
+        const previousSink = setLogSink(() => {});
+        process.env.TOKEN_ENCRYPTION_KEY = 'ef'.repeat(32);
+        delete process.env.SUPABASE_URL;
+        delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            statements.push({ sql, params });
+            if (/SELECT value, is_secret FROM app_settings/.test(sql)) {
+                const row = store.get(String(params[0]));
+                return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+            }
+            if (/INSERT INTO app_settings/.test(sql)) {
+                store.set(String(params[0]), { value: String(params[1]), is_secret: params[2] === true });
+                return { rows: [], rowCount: 1 };
+            }
+            if (/DELETE FROM app_settings/.test(sql)) {
+                const had = store.delete(String(params[0]));
+                return { rows: [], rowCount: had ? 1 : 0 };
+            }
+            if (/FROM media_uploads/.test(sql) && /storage_files/.test(sql)) {
+                return {
+                    rows: [{ storage_files: String(storedFiles), storage_bytes: String(storedFiles * 1000), database_files: '2', database_bytes: '5000', queued: '0' }],
+                    rowCount: 1,
+                };
+            }
+            if (/INSERT INTO audit_log/.test(sql)) return { rows: [{ id: 'audit-1' }], rowCount: 1 };
+            throw new Error(`no result arranged for SQL: ${sql}`);
+        };
+
+        const previousFetch = setStorageFetch(async (input, init = {}) => {
+            const headers: Record<string, string> = {};
+            new Headers(init.headers as Record<string, string>).forEach((value, name) => { headers[name] = value; });
+            const path = new URL(input).pathname;
+            supabase.push({ method: init.method ?? 'GET', path, headers, body: init.body ? String(init.body) : null });
+            if (bucket === 'down') throw new TypeError('fetch failed');
+            if (bucket === 'refused') return new Response(JSON.stringify({ message: 'Invalid API key' }), { status: 401 });
+            if (init.method === 'POST' && path === '/storage/v1/bucket') {
+                bucket = 'exists';
+                return new Response(JSON.stringify({ name: 'media' }), { status: 200 });
+            }
+            if (path === '/storage/v1/bucket/media') {
+                return bucket === 'exists'
+                    ? new Response(JSON.stringify({ id: 'media', public: true }), { status: 200 })
+                    : new Response(JSON.stringify({ statusCode: '404', error: 'NoSuchBucket', code: 'NoSuchBucket', message: 'Bucket not found' }), { status: 400 });
+            }
+            throw new Error(`no Supabase answer arranged for ${init.method} ${path}`);
+        });
+
+        restore.push(() => {
+            (pool as unknown as { query: unknown }).query = originalQuery;
+            setStorageFetch(previousFetch);
+            setLogSink(previousSink);
+            for (const [name, value] of [
+                ['TOKEN_ENCRYPTION_KEY', originalEnv.enc], ['SUPABASE_URL', originalEnv.url], ['SUPABASE_SERVICE_ROLE_KEY', originalEnv.key],
+            ] as const) {
+                if (value === undefined) delete process.env[name];
+                else process.env[name] = value;
+            }
+        });
+    });
+
+    afterEach(() => { while (restore.length) restore.pop()!(); });
+
+    const auditRows = () => statements.filter((st) => /INSERT INTO audit_log/.test(st.sql));
+
+    it('refuses a bad URL or a plainly wrong key before asking Supabase anything', async () => {
+        for (const body of [
+            { key: SECRET },
+            { url: 'abcd1234.supabase.co', key: SECRET },
+            { url: 'http://abcd1234.supabase.co', key: SECRET },
+            { url: PROJECT, key: 'sb_publishable_0123456789abcdef' },
+            { url: PROJECT, key: legacy('anon') },
+            { url: PROJECT, key: 'not a key' },
+        ]) {
+            const reply = await call('PUT', '/media-storage', { session: ADMIN, body });
+            assert.equal(reply.status, 400, JSON.stringify(body));
+        }
+        assert.deepEqual(supabase, []);
+        assert.equal(store.size, 0);
+    });
+
+    it('asks Supabase first, creates the public bucket, then saves the key encrypted', async () => {
+        const reply = await call('PUT', '/media-storage', { session: ADMIN, body: { url: `${PROJECT}/rest/v1/`, key: ` ${SECRET} ` } });
+
+        assert.equal(reply.status, 200);
+        // Read, create, then the card's own live status read of the bucket it now has.
+        assert.deepEqual(supabase.map((c) => `${c.method} ${c.path}`), [
+            'GET /storage/v1/bucket/media', 'POST /storage/v1/bucket', 'GET /storage/v1/bucket/media',
+        ]);
+        assert.equal(reply.body.connection.bucketExists, true);
+        assert.deepEqual(JSON.parse(supabase[1]!.body!), { id: 'media', name: 'media', public: true });
+        for (const c of supabase) {
+            assert.equal(c.headers.apikey, SECRET);
+            assert.equal(c.headers.authorization, undefined, 'a secret key is never a Bearer token');
+        }
+
+        assert.equal(store.get('storage.supabase_url')!.value, PROJECT, 'saved as the bare origin');
+        const key = store.get('storage.supabase_service_key')!;
+        assert.equal(key.is_secret, true);
+        assert.match(key.value, /^enc:v1:/);
+        assert.ok(!key.value.includes(SECRET));
+
+        assert.ok(!JSON.stringify(reply.body).includes(SECRET), 'the response never carries the key');
+        assert.equal(reply.body.backend, 'supabase');
+        assert.equal(reply.body.key.kind, 'secret');
+
+        const [row] = auditRows();
+        assert.ok(row);
+        assert.equal(row!.params[2], 'settings.media_storage_write');
+        assert.ok(!JSON.stringify(row!.params).includes(SECRET));
+        assert.match(String(row!.params[5]), /"fields":\["url","credential"\]/);
+        assert.match(String(row!.params[5]), /"bucket_created":true/);
+    });
+
+    it('sends the legacy service_role key as a Bearer token too', async () => {
+        bucket = 'exists';
+        const key = legacy('service_role');
+        const reply = await call('PUT', '/media-storage', { session: ADMIN, body: { url: PROJECT, key } });
+
+        assert.equal(reply.status, 200);
+        assert.equal(supabase[0]!.headers.apikey, key);
+        assert.equal(supabase[0]!.headers.authorization, `Bearer ${key}`);
+        assert.equal(reply.body.key.kind, 'legacy_jwt');
+    });
+
+    it('saves nothing when Supabase refuses the key (400) or cannot be reached (502)', async () => {
+        for (const [state, status] of [['refused', 400], ['down', 502]] as const) {
+            bucket = state;
+            const reply = await call('PUT', '/media-storage', { session: ADMIN, body: { url: PROJECT, key: SECRET } });
+            assert.equal(reply.status, status, state);
+        }
+        assert.equal(store.size, 0);
+        assert.deepEqual(auditRows(), []);
+    });
+
+    it('keeps the saved key when the form leaves it blank', async () => {
+        bucket = 'exists';
+        await call('PUT', '/media-storage', { session: ADMIN, body: { url: PROJECT, key: SECRET } });
+        const savedKey = store.get('storage.supabase_service_key')!.value;
+        supabase = [];
+
+        const reply = await call('PUT', '/media-storage', { session: ADMIN, body: { url: 'https://efgh5678.supabase.co' } });
+
+        assert.equal(reply.status, 200);
+        assert.equal(supabase[0]!.headers.apikey, SECRET, 'checked with the saved key');
+        assert.equal(store.get('storage.supabase_service_key')!.value, savedKey, 'and left as it was');
+        assert.equal(store.get('storage.supabase_url')!.value, 'https://efgh5678.supabase.co');
+    });
+
+    it('reports status without the key, and the environment fallback as present only', async () => {
+        process.env.SUPABASE_URL = PROJECT;
+        process.env.SUPABASE_SERVICE_ROLE_KEY = SECRET;
+        bucket = 'exists';
+
+        const reply = await call('GET', '/media-storage', { session: ADMIN });
+
+        assert.equal(reply.status, 200);
+        assert.equal(reply.body.backend, 'supabase');
+        assert.deepEqual(reply.body.env, { url: true, key: true });
+        assert.equal(reply.body.key.source, 'env');
+        assert.equal(reply.body.key.preview, null, 'an env key is never previewed');
+        assert.equal(reply.body.connection.ok, true);
+        assert.ok(!JSON.stringify(reply.body).includes(SECRET));
+    });
+
+    it('will not remove the config while Storage holds files nothing else could read', async () => {
+        bucket = 'exists';
+        await call('PUT', '/media-storage', { session: ADMIN, body: { url: PROJECT, key: SECRET } });
+        storedFiles = 4;
+
+        const refused = await call('DELETE', '/media-storage', { session: ADMIN });
+        assert.equal(refused.status, 409);
+        assert.match(refused.body.error, /4 file\(s\) are in Supabase Storage/);
+        assert.ok(store.has('storage.supabase_service_key'));
+
+        storedFiles = 0;
+        const removed = await call('DELETE', '/media-storage', { session: ADMIN });
+        assert.equal(removed.status, 200);
+        assert.equal(store.size, 0);
+        assert.equal(removed.body.backend, 'postgres');
     });
 });

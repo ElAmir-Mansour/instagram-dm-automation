@@ -50,7 +50,9 @@ import {
 import {
     commitErasure, executeErasure, previewErasure, rollbackErasure,
 } from '../services/erasure.js';
-import { APP_SETTING_KEYS, describeGeminiKey, setSetting } from '../services/appSettings.js';
+import { APP_SETTING_KEYS, describeGeminiKey, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
+import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
+import { storageKeyKind, storageKeyProblem } from '../services/supabaseStorage.js';
 import { checkGeminiKey } from '../services/geminiKey.js';
 import { dmModelsInUse } from '../services/ai.js';
 
@@ -213,6 +215,111 @@ router.delete('/gemini-key', async (req, res) => {
         res.json(await describeGeminiKey());
     } catch (err) {
         failWith(res, err, 'admin.gemini_key_remove_failed', 'Failed to remove the Gemini key.');
+    }
+});
+
+// ─── Media storage ──────────────────────────────────────────────────────────
+
+/**
+ * The Supabase Storage project every tenant's uploads go to (src/services/storage.ts): its URL,
+ * and a secret key (or the legacy service_role key) saved encrypted, with `SUPABASE_URL` /
+ * `SUPABASE_SERVICE_ROLE_KEY` as the fallback. One config for the deployment; each tenant's
+ * files sit in their own folder of the one bucket.
+ *
+ * The status never carries the key. Saving asks Supabase first — reading the bucket and
+ * creating it, public, if it is missing — so a key Supabase refuses is never written.
+ */
+router.get('/media-storage', async (_req, res) => {
+    try {
+        res.json(await describeMediaStorage());
+    } catch (err) {
+        failWith(res, err, 'admin.media_storage_read_failed', 'Failed to read the media storage status.');
+    }
+});
+
+router.put('/media-storage', async (req, res) => {
+    const body = req.body ?? {};
+    const rawUrl = typeof body.url === 'string' ? body.url.trim() : '';
+    const rawKey = typeof body.key === 'string' ? body.key.trim() : '';
+
+    const url = rawUrl ? normaliseOrigin(rawUrl) : null;
+    if (!url) {
+        res.status(400).json({ error: 'The Project URL must be an https:// address, like https://abcd1234.supabase.co' });
+        return;
+    }
+    const keyProblem = rawKey ? storageKeyProblem(rawKey) : null;
+    if (keyProblem) {
+        res.status(400).json({ error: keyProblem });
+        return;
+    }
+
+    try {
+        // A blank key keeps the saved one — the page never has it to send back — and then
+        // the environment's, so the URL can be saved on its own.
+        const key = rawKey
+            || (await getSetting(APP_SETTING_KEYS.mediaStorageKey))
+            || process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
+            || '';
+        if (!key) {
+            res.status(400).json({ error: 'Paste the secret key as well: nothing is saved or set in the environment yet.' });
+            return;
+        }
+
+        const check = await checkMediaStorage({ url, key }, { create: true });
+        if (!check.ok) {
+            log('warn', 'admin.media_storage_refused', { http_status: check.status, reason: check.error });
+            res.status(check.status).json({ error: check.error });
+            return;
+        }
+
+        const updatedBy = req.session?.userId ?? null;
+        await setSetting(APP_SETTING_KEYS.mediaStorageUrl, url, updatedBy);
+        if (rawKey) await setSetting(APP_SETTING_KEYS.mediaStorageKey, rawKey, updatedBy);
+        // The fact, never the value, named so the redaction pattern leaves it readable.
+        await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, {
+            change: 'saved',
+            fields: rawKey ? ['url', 'credential'] : ['url'],
+            credential_kind: storageKeyKind(key),
+            bucket_created: check.created,
+        });
+        res.json(await describeMediaStorage());
+    } catch (err) {
+        failWith(res, err, 'admin.media_storage_save_failed', 'Failed to save the media storage settings.');
+    }
+});
+
+/**
+ * Forget the saved config, so the environment's (or Postgres) takes over. Refused while files
+ * are in Storage and nothing else could read them: they would stop being served — including to
+ * Meta and TikTok, mid-publish.
+ */
+router.delete('/media-storage', async (req, res) => {
+    try {
+        const [usage, savedUrl, savedKey] = await Promise.all([
+            getMediaUsage(),
+            getSetting(APP_SETTING_KEYS.mediaStorageUrl),
+            getSetting(APP_SETTING_KEYS.mediaStorageKey),
+        ]);
+        const envUrl = process.env.SUPABASE_URL?.trim();
+        const envReadsThem = Boolean(envUrl && normaliseOrigin(envUrl) && process.env.SUPABASE_SERVICE_ROLE_KEY?.trim());
+        if (usage.storage.files > 0 && !envReadsThem) {
+            res.status(409).json({
+                error: `${usage.storage.files} file(s) are in Supabase Storage. Without this config they cannot be served, so it stays. Replace it with another key instead.`,
+            });
+            return;
+        }
+        if (!savedUrl && !savedKey) {
+            res.status(404).json({ error: 'Nothing is saved here to remove.' });
+            return;
+        }
+
+        const updatedBy = req.session?.userId ?? null;
+        await setSetting(APP_SETTING_KEYS.mediaStorageUrl, null, updatedBy);
+        await setSetting(APP_SETTING_KEYS.mediaStorageKey, null, updatedBy);
+        await audit(req, AUDIT_ACTIONS.settingsMediaStorageWrite, 'app', null, { change: 'removed' });
+        res.json(await describeMediaStorage());
+    } catch (err) {
+        failWith(res, err, 'admin.media_storage_remove_failed', 'Failed to remove the media storage settings.');
     }
 });
 

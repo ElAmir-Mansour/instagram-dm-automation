@@ -30,6 +30,7 @@ beforeEach(() => {
     previous = setMediaStore({
         async put() { throw new Error('not in these tests'); },
         async get() { throw new Error('bytes must never be read to validate a post'); },
+        async open() { throw new Error('bytes must never be read to validate a post'); },
         async mimeTypes(ids) {
             lookups.push([...ids]);
             return new Map(ids.filter((id) => STORED[id]).map((id) => [id, STORED[id]!]));

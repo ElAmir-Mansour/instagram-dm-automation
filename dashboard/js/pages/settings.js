@@ -1,5 +1,6 @@
 /**
- * Settings — access token, webhook verify token, TikTok, account info, appearance.
+ * Settings — access token, webhook verify token, TikTok, media storage,
+ * account info, appearance.
  *
  * Every credential shown here is a Latin string sitting inside Arabic prose,
  * which is exactly where bidi goes wrong: an unisolated token preview drags
@@ -72,12 +73,17 @@ const SettingsPage = {
         let tiktokError = null;
         let tiktokApp = null;
         let tiktokAppError = null;
-        const [tt, ttApp] = await Promise.allSettled([
+        // Media storage too — platform admins only, and isolated like the rest.
+        let media = null;
+        let mediaError = null;
+        const [tt, ttApp, ms] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
+            App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
         ]);
         if (tt.status === 'fulfilled') tiktok = tt.value; else tiktokError = tt.reason;
         if (ttApp.status === 'fulfilled') tiktokApp = ttApp.value; else tiktokAppError = ttApp.reason;
+        if (ms.status === 'fulfilled') media = ms.value; else mediaError = ms.reason;
 
         if (!live()) return;
         gate.done();
@@ -236,6 +242,8 @@ const SettingsPage = {
             </section>
 
             ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
+
+            ${App.isAdmin() ? this.mediaStorageSection(media, mediaError) : ''}
 
             <section class="section">
                 <h2 class="section-title">${t('settings.accountInfo')}</h2>
@@ -561,6 +569,154 @@ const SettingsPage = {
     },
 
     /**
+     * Where uploads are kept: one Supabase project for the whole deployment,
+     * so platform admins only. The pill is Supabase's live answer, not the
+     * saved config — a key that stopped working shows as not connected.
+     */
+    mediaStorageSection(ms, error) {
+        let body = '';
+        if (error) {
+            body = html`
+                <div class="inline-error" role="alert">
+                    <i data-lucide="alert-circle" aria-hidden="true"></i>
+                    <div><strong dir="auto">${t('settings.media.loadFailed', { message: error.message })}</strong></div>
+                </div>
+                ${UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render',
+                })}
+            `;
+        } else if (ms) {
+            body = html`${this.mediaStorageStatus(ms)}${this.mediaStorageForm(ms)}`;
+        }
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.media.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.media.intro')}</p>
+                    ${body}
+                </div>
+            </section>
+        `;
+    },
+
+    mediaStorageStatus(ms) {
+        const c = ms.connection;
+        const connected = !!(c && c.ok);
+        const pill = ms.backend !== 'supabase'
+            ? { cls: 'health-stale', icon: 'database', text: t('settings.media.statusPostgres') }
+            : connected
+                ? { cls: 'health-fresh', icon: 'check-circle', text: t('settings.media.statusConnected') }
+                : { cls: 'health-stale', icon: 'alert-triangle', text: t('settings.media.statusFailed') };
+        const u = ms.usage;
+        return html`
+            <div class="token-status">
+                <span class="health-pill ${html.raw(pill.cls)}">
+                    <i data-lucide="${pill.icon}" aria-hidden="true"></i>
+                    ${pill.text}
+                </span>
+                ${ms.url && ms.url.value ? html`<span class="text-meta">${UI.ltr(ms.url.value)}</span>` : ''}
+            </div>
+            ${c && !c.ok ? html`<p class="form-hint text-warning mbe-3" dir="auto">${c.error}</p>` : ''}
+            <dl class="ops-facts mbe-4">
+                ${Admin.field(t('settings.media.bucket'), connected && !c.bucketExists
+                    ? t('settings.media.bucketMissing')
+                    : UI.ltr(ms.bucket))}
+                ${u ? html`
+                    ${Admin.field(t('settings.media.used', { total: Admin.bytes(u.tierBytes) }), UI.ltr(Admin.bytes(u.storage.bytes)))}
+                    ${Admin.field(t('settings.media.files'), UI.num(u.storage.files))}
+                    ${u.database.files > 0 ? Admin.field(t('settings.media.inDatabase'), UI.ltr(Admin.bytes(u.database.bytes))) : ''}
+                    ${u.queuedDeletions > 0 ? Admin.field(t('settings.media.queued'), UI.num(u.queuedDeletions)) : ''}
+                ` : ''}
+            </dl>
+            ${u && u.database.files > 0 ? html`<p class="form-hint mbe-4">${t('settings.media.inDatabaseHint')}</p>` : ''}
+            ${ms.usageError ? html`<p class="form-hint text-warning mbe-4" dir="auto">${t('settings.media.usageFailed', { message: ms.usageError })}</p>` : ''}
+        `;
+    },
+
+    mediaStorageForm(ms) {
+        const key = ms.key || {};
+        const keyNote = key.source === 'database' && key.preview
+            ? t('settings.media.keySaved', { preview: key.preview })
+            : (key.source === 'env' ? t('settings.media.keyFromEnv') : '');
+        const savedUrl = ms.url && ms.url.source === 'database' ? ms.url.value : '';
+        const envUrl = ms.url && ms.url.source === 'env' ? ms.url.value : '';
+        return html`
+            <form id="media-storage-form" data-submit="settings:saveMediaStorage">
+                <div class="form-group">
+                    <label class="form-label" for="media-storage-url">${t('settings.media.url')}</label>
+                    <input class="field field-mono" id="media-storage-url" name="url" type="url" dir="ltr"
+                           autocomplete="off" spellcheck="false" autocapitalize="off" required
+                           placeholder="${envUrl || 'https://abcd1234.supabase.co'}"
+                           value="${savedUrl || ''}">
+                    ${envUrl ? html`<p class="form-hint">${t('settings.media.urlFromEnv')}</p>` : ''}
+                </div>
+                <div class="form-group">
+                    <!-- Never prefilled: the key is never sent back. Blank means
+                         "keep what is saved". -->
+                    <label class="form-label" for="media-storage-key">${t('settings.media.key')}</label>
+                    <input class="field field-mono" id="media-storage-key" name="key" type="password" dir="ltr"
+                           autocomplete="new-password" spellcheck="false" autocapitalize="off"
+                           placeholder="sb_secret_…">
+                    ${keyNote ? html`<p class="form-hint" dir="auto">${keyNote}</p>` : ''}
+                    ${key.kind === 'legacy_jwt' ? html`<p class="form-hint text-warning">${t('settings.media.keyLegacy')}</p>` : ''}
+                    <p class="form-hint">${t('settings.media.help')}</p>
+                </div>
+                <div class="form-actions">
+                    ${UI.button({
+                        variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
+                        label: t('settings.media.save'), id: 'media-storage-submit',
+                    })}
+                    ${savedUrl || key.source === 'database' ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'trash-2',
+                        label: t('settings.media.remove'), action: 'settings:removeMediaStorage', id: 'media-storage-remove',
+                    }) : ''}
+                </div>
+            </form>
+        `;
+    },
+
+    async saveMediaStorage(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const payload = { url: (data.get('url') || '').toString().trim() };
+        // A blank key means "leave it" — it is never sent back to the page.
+        const key = (data.get('key') || '').toString().trim();
+        if (key) payload.key = key;
+
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveMediaStorage(payload);
+            UI.toast(t('settings.media.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            UI.toast(err.message, 'error');
+        }
+    },
+
+    removeMediaStorage(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.media.removeTitle'),
+            body: t('settings.media.removeBody'),
+            hint: t('settings.media.removeHint'),
+            confirmLabel: t('settings.media.remove'),
+            confirmIcon: 'trash-2',
+            onConfirm: () => SettingsPage.removeMediaStorageConfirmed(),
+        });
+    },
+
+    /** A refusal (409: files still in Storage) is shown inside the dialog, which stays open. */
+    async removeMediaStorageConfirmed() {
+        await API.removeMediaStorage();
+        UI.toast(t('settings.media.removed'), 'success');
+        await this.render();
+    },
+
+    /**
      * The session lives in localStorage, so the connect flow cannot be a plain
      * link: this asks the server (authenticated) for TikTok's authorise URL,
      * which also sets the single-use state cookie, and only then navigates.
@@ -743,4 +899,6 @@ UI.registerActions('settings', {
     connectTikTok: (el) => SettingsPage.connectTikTok(el),
     disconnectTikTok: (el) => SettingsPage.disconnectTikTok(el),
     saveTikTokApp: (el, e) => SettingsPage.saveTikTokApp(el, e),
+    saveMediaStorage: (el, e) => SettingsPage.saveMediaStorage(el, e),
+    removeMediaStorage: (el) => SettingsPage.removeMediaStorage(el),
 });
