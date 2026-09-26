@@ -584,3 +584,31 @@ describe('our upload URLs, with and without an extension', () => {
         assert.equal(uploadIdFromUrl('https://cdn.example/photo.jpg'), null);
     });
 });
+
+describe('SupabaseStorageClient.createSignedUploadUrl', () => {
+    const PATH = `${CREATOR}/aaaaaaaa-1111-4111-8111-111111111111.mp4`;
+    const SIGN = `/storage/v1/object/upload/sign/${MEDIA_BUCKET}/${PATH}`;
+
+    it('signs with the key and hands back a keyless PUT, valid 2 hours', async () => {
+        on('POST', SIGN, () => json(200, { url: `/object/upload/sign/${MEDIA_BUCKET}/${PATH}?token=abc.def` }));
+        const client = new SupabaseStorageClient({ url: PROJECT, key: SECRET_KEY });
+        const before = Date.now();
+        const signed = await client.createSignedUploadUrl(PATH, 'video/mp4');
+        assert.equal(signed.url, `${PROJECT}/storage/v1/object/upload/sign/${MEDIA_BUCKET}/${PATH}?token=abc.def`);
+        assert.deepEqual(signed.headers, { 'content-type': 'video/mp4', 'x-upsert': 'false', 'cache-control': 'max-age=31536000' });
+        assert.ok(!('apikey' in signed.headers), 'the worker never holds the key');
+        const expires = Date.parse(signed.expiresAt) - before;
+        assert.ok(expires >= 2 * 60 * 60 * 1000 - 1000 && expires <= 2 * 60 * 60 * 1000 + 1000);
+        assert.equal(calls[0]!.headers.apikey, SECRET_KEY);
+        assert.equal(calls[0]!.body!.toString(), '{}');
+    });
+
+    it('refuses an answer with no token, and surfaces Supabase’s refusal', async () => {
+        on('POST', SIGN, () => json(200, { url: `/object/upload/sign/${MEDIA_BUCKET}/${PATH}` }));
+        const client = new SupabaseStorageClient({ url: PROJECT, key: SECRET_KEY });
+        await assert.rejects(client.createSignedUploadUrl(PATH, 'video/mp4'), (err: unknown) => err instanceof StorageApiError && err.status === 502);
+        routes = [];
+        on('POST', SIGN, () => storageSays('404', 'NoSuchBucket', 'Bucket not found'));
+        await assert.rejects(client.createSignedUploadUrl(PATH, 'video/mp4'), (err: unknown) => err instanceof StorageApiError && err.notFound);
+    });
+});

@@ -9,6 +9,7 @@
  *   POST   /object/{bucket}/{path}               upload the body; x-upsert, content-type, cache-control
  *   GET    /object/authenticated/{bucket}/{path} download with the key
  *   DELETE /object/{bucket}                      { prefixes: [...] }, at most 1000 per request
+ *   POST   /object/upload/sign/{bucket}/{path}   a URL to PUT the bytes to without the key, for 2 h
  *
  * **Keys.** Supabase has two formats and retires the older one by the end of 2026
  * (https://supabase.com/docs/guides/getting-started/api-keys):
@@ -206,6 +207,16 @@ export interface ObjectStream {
     length: number | null;
 }
 
+/** Storage's fixed lifetime for a signed upload URL. */
+export const SIGNED_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000;
+
+/** Where and how to PUT an upload's bytes: `url` carries its own token, so no key is needed. */
+export interface SignedUpload {
+    url: string;
+    headers: Record<string, string>;
+    expiresAt: string;
+}
+
 export class SupabaseStorageClient {
     readonly bucket: string;
     private readonly base: string;
@@ -300,6 +311,40 @@ export class SupabaseStorageClient {
         }, 'upload the file');
         if (!response.ok) throw await errorFrom(response, 'upload the file');
         await response.body?.cancel().catch(() => undefined);
+    }
+
+    /**
+     * A URL the bytes can be PUT to without the key, for a client that must not hold it (the Mac
+     * worker's rendered reels, which are over Vercel's 4.5MB request cap). Storage fixes its expiry
+     * at 2 hours. What storage-js's `createSignedUploadUrl` / `uploadToSignedUrl` do, over REST:
+     *
+     *   POST {base}/object/upload/sign/{bucket}/{path}   with the key → { url: "/object/upload/sign/…?token=…" }
+     *   PUT  {base}{url}                                  the bytes, content-type, x-upsert: false; no key
+     */
+    async createSignedUploadUrl(path: string, contentType: string): Promise<SignedUpload> {
+        const response = await this.send(this.objectUrl('/object/upload/sign', path), {
+            method: 'POST',
+            headers: this.headers({ 'Content-Type': 'application/json' }),
+            body: '{}',
+            signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+        }, 'sign the upload');
+        if (!response.ok) throw await errorFrom(response, 'sign the upload');
+        const body = await response.json().catch(() => null) as { url?: unknown } | null;
+        const relative = typeof body?.url === 'string' ? body.url : '';
+        if (!relative.startsWith('/object/upload/sign/') || !/[?&]token=[^&]+/.test(relative)) {
+            throw new StorageApiError(502, null, 'Supabase Storage signed the upload but sent no URL to put it to.');
+        }
+        return {
+            url: `${this.base}${relative}`,
+            headers: {
+                'content-type': contentType,
+                // A fresh path names one upload; finding something there is a bug, not a replace.
+                'x-upsert': 'false',
+                // Each path is a fresh uuid, so the bytes behind it never change.
+                'cache-control': 'max-age=31536000',
+            },
+            expiresAt: new Date(Date.now() + SIGNED_UPLOAD_TTL_MS).toISOString(),
+        };
     }
 
     /** The whole object, or null when it does not exist. For the few callers that need all of it. */
