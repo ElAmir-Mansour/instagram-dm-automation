@@ -21,7 +21,7 @@ import { matchCampaign } from '../matching.js';
 import { validateMetaOptions } from '../metaOptions.js';
 import { validatePostMedia } from '../postMedia.js';
 import { getConnection } from '../tiktokConnections.js';
-import { validateTikTokOptions } from '../tiktokPublish.js';
+import { validateTikTokOptions, type TikTokMediaKind } from '../tiktokPublish.js';
 import type { Carousel } from './carouselTypes.js';
 import { type Exec, isPlainObject, StudioError, unique, withTransaction } from './common.js';
 import { presentDraft, type Draft } from './drafts.js';
@@ -33,20 +33,23 @@ export const BATCH_STAGGER_MS = 40_000;
 export const TIKTOK_INTENTS: readonly DraftTikTokIntent[] = ['none', 'queue', 'scheduled'];
 
 /**
- * The options every Studio TikTok carousel carries: direct, public once audited and private
- * until then, the carousel's own title, music, comments on, organic brand content. Consent is
- * the operator's click on schedule or batch. Run through `validateTikTokOptions`, so the same
- * rules as the composer's hold here.
+ * The options every Studio TikTok post carries: direct, public once audited and private until
+ * then, comments on, organic brand content. A carousel adds its own title and music; a video (the
+ * Monteur's reels) has neither, and gets no duet, stitch or AI label. Consent is the operator's
+ * click on schedule, batch or approve. Run through `validateTikTokOptions`, so the same rules as
+ * the composer's hold here.
  */
-export function studioTikTokOptions(carousel: Carousel, audited: boolean): TikTokPostOptions {
+export function studioTikTokOptions(
+    carousel: Pick<Carousel, 'captions'> | null, audited: boolean, media: TikTokMediaKind = 'photo'
+): TikTokPostOptions {
     const checked = validateTikTokOptions({
         consent: true,
         privacy_level: audited ? 'PUBLIC_TO_EVERYONE' : 'SELF_ONLY',
-        title: carousel.captions?.tiktokTitle,
+        title: carousel?.captions?.tiktokTitle,
         auto_add_music: true,
         allow_comment: true,
         brand_organic: true,
-    }, { audited, media: 'photo' });
+    }, { audited, media });
     if (!checked.ok) throw new StudioError(400, checked.error);
     return checked.options;
 }
@@ -55,7 +58,7 @@ export function studioTikTokOptions(carousel: Carousel, audited: boolean): TikTo
  * Said at the click, not at publish time in a card nobody is looking at: TikTok must be
  * connected, and able to Direct Post (the scope, and the operator's switch).
  */
-async function assertDirectPostReady(creatorId: string, flags: TikTokPostingFlags): Promise<void> {
+export async function assertDirectPostReady(creatorId: string, flags: TikTokPostingFlags): Promise<void> {
     const connection = await getConnection(creatorId);
     if (!connection || connection.status !== 'active') {
         throw new StudioError(409, 'TikTok is not connected. Connect it in Settings first.');

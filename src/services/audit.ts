@@ -121,6 +121,8 @@ export const AUDIT_ACTIONS = {
     studioSchedule: 'studio.schedule',
     /** The queued TikTok carousels went out as a batch of rows due now. */
     studioTikTokBatch: 'studio.tiktok_batch',
+    /** A Monteur reel became scheduled posts (and possibly a campaign). */
+    monteurApprove: 'monteur.approve',
     /** Growth keywords, hashtag sets, competitors or audience changed (GROWTH.md). */
     growthSettingsWrite: 'growth.settings_write',
 } as const;

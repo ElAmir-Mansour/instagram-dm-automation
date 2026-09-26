@@ -1,16 +1,18 @@
 /**
- * Carousel Studio routes, under `/api/studio` (STUDIO.md §4, §5, §10).
+ * Carousel Studio routes, under `/api/studio` (STUDIO.md §4, §5, §10), and the Monteur's
+ * (MONTEUR.md §4, §5).
  *
  * Two routers, because the worker is not a dashboard user and carries no session:
  *
  *   studioWorkerRouter — mounted ABOVE `requireAuth` in api.ts, like `tiktokPublicRouter`.
  *     Authenticated only by the worker's bearer token, which resolves its tenant; every call
  *     acts as that tenant and nothing else.
- *     POST /worker/claim               { name } → 200 { job } | 204
+ *     POST /worker/claim               { name } → 200 { job } | 204; queues the Monteur's daily scan first
  *     POST /worker/jobs/:id/progress   { progress } → 204 (the heartbeat)
  *     POST /worker/jobs/:id/complete   { result } → 204, and the job's side effects
  *     POST /worker/jobs/:id/fail       { error } → 204
  *     POST /worker/upload              { filename, mime_type, base64_data } → { id, url }
+ *     POST /worker/uploads/sign        { filename, mime_type, size_bytes } → { id, url, upload }
  *
  *   studioRouter — mounted BELOW `resolveTenant`, so every route acts as the session's tenant,
  *     and every route needs the operator role. Minting and revoking a worker needs the owner:
@@ -23,6 +25,11 @@ import { getPublicBaseUrl, getTikTokPostingFlags } from '../services/appSettings
 import { isMissingSchema } from '../services/health.js';
 import { getMediaStore } from '../services/storage.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
+import { refreshLessons } from '../services/monteur/analyst.js';
+import { approveClip, patchClip, rejectClip } from '../services/monteur/clips.js';
+import { enqueueDueMonteurScan, requestFolderPick, runMonteurNow } from '../services/monteur/daily.js';
+import { signWorkerUpload } from '../services/monteur/uploads.js';
+import { getMonteurView, presentLessons, retrySource } from '../services/monteur/view.js';
 import { clipText, requireId, STUDIO_MIGRATION_HINT, StudioError } from '../services/studio/common.js';
 import {
     createDraft, deleteDraft, getDraft, listDrafts, patchDraft, planDrafts, renderDraft, rewriteDraftSlide,
@@ -130,8 +137,15 @@ export const studioWorkerRouter = Router();
 studioWorkerRouter.use('/worker', requireWorker);
 
 studioWorkerRouter.post('/worker/claim', handle('studio.claim_failed', 'Failed to claim a job.', async (_req, res) => {
+    const creatorId = workerTenant(res);
+    // The Monteur's daily run (MONTEUR.md §7) needs no cron: a worker that polls is a worker that
+    // can scan. Queued before the claim, so this very claim can hand it out. It must never stop the
+    // worker claiming anything else, so its failure is logged, not answered.
+    await enqueueDueMonteurScan(creatorId).catch((err: unknown) => {
+        log('error', 'monteur.daily_run_failed', { creator_id: creatorId, ...describeError(err) });
+    });
     // The body's `name` is not stored: the worker's name is the label the operator gave it.
-    const job = await claimJob(workerTenant(res));
+    const job = await claimJob(creatorId);
     if (!job) {
         res.status(204).end();
         return;
@@ -182,6 +196,11 @@ studioWorkerRouter.post('/worker/upload', handle('studio.upload_failed', 'Failed
         data,
     });
     res.status(201).json({ id, url: store.publicUrl(id, base) });
+}));
+
+// A rendered reel: tens of MB, straight to Supabase Storage through a signed URL (MONTEUR.md §4).
+studioWorkerRouter.post('/worker/uploads/sign', handle('monteur.sign_failed', 'Failed to sign the upload.', async (req, res) => {
+    res.status(201).json(await signWorkerUpload(workerTenant(res), req.body, () => getPublicBaseUrl(requestOrigin(req))));
 }));
 
 // ─── Operator ───────────────────────────────────────────────────────────────────────────
@@ -335,4 +354,52 @@ studioRouter.get('/slots', handle('studio.slots_failed', 'Failed to find free sl
 
 studioRouter.post('/plan', handle('studio.plan_failed', 'Failed to plan the posts.', async (req, res) => {
     res.json({ proposals: await planDrafts(getTenantId(req), req.body) });
+}));
+
+// ── The Monteur (MONTEUR.md §5) ──
+// Its settings are the `monteur` section of GET/PUT /settings; there is no route of their own.
+
+studioRouter.get('/monteur', handle('monteur.view_failed', 'Failed to read the Monteur.', async (req, res) => {
+    res.json(await getMonteurView(getTenantId(req)));
+}));
+
+studioRouter.post('/monteur/run', handle('monteur.run_failed', 'Failed to queue the scan.', async (req, res) => {
+    res.json({ job: await runMonteurNow(getTenantId(req)) });
+}));
+
+studioRouter.post('/monteur/pick-folder', handle('monteur.pick_folder_failed', 'Failed to ask for the folder.', async (req, res) => {
+    res.json({ job: await requestFolderPick(getTenantId(req)) });
+}));
+
+studioRouter.post('/monteur/sources/:id/retry', handle('monteur.retry_failed', 'Failed to retry the video.', async (req, res) => {
+    res.json(await retrySource(getTenantId(req), requireId(req.params.id, 'source')));
+}));
+
+studioRouter.patch('/monteur/clips/:id', handle('monteur.clip_patch_failed', 'Failed to save the reel.', async (req, res) => {
+    res.json(await patchClip(getTenantId(req), requireId(req.params.id, 'clip'), req.body));
+}));
+
+studioRouter.post('/monteur/clips/:id/approve', handle('monteur.approve_failed', 'Failed to schedule the reel.', async (req, res) => {
+    const creatorId = getTenantId(req);
+    const outcome = await approveClip(creatorId, requireId(req.params.id, 'clip'), req.body);
+    await writeAudit(await actorFromSession(req.session), {
+        action: AUDIT_ACTIONS.monteurApprove,
+        targetType: 'clip_draft',
+        targetId: outcome.clip.id,
+        detail: {
+            scheduled_time: outcome.scheduled_time,
+            post_ids: outcome.rows.map((row) => row.id),
+            campaign_id: outcome.campaign?.id ?? null,
+            campaign_created: outcome.campaign?.created ?? false,
+        },
+    });
+    res.json({ clip: outcome.clip, scheduled_time: outcome.scheduled_time });
+}));
+
+studioRouter.post('/monteur/clips/:id/reject', handle('monteur.reject_failed', 'Failed to reject the reel.', async (req, res) => {
+    res.json(await rejectClip(getTenantId(req), requireId(req.params.id, 'clip')));
+}));
+
+studioRouter.post('/monteur/lessons/refresh', handle('monteur.lessons_failed', 'Failed to run the Analyst.', async (req, res) => {
+    res.json(presentLessons(await refreshLessons(getTenantId(req))));
 }));

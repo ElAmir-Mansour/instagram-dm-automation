@@ -12,7 +12,8 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import express from 'express';
 import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
-import { setMediaStore, type MediaStore } from '../services/storage.js';
+import { setMediaStore, SupabaseStorageMediaStore, type MediaStore } from '../services/storage.js';
+import { setStorageFetch } from '../services/supabaseStorage.js';
 import { setGeneration } from '../services/studio/drafts.js';
 import { hashWorkerToken, mintWorkerToken } from '../services/studio/worker.js';
 import { MAX_STUDIO_UPLOAD_BYTES, sniffImageType, studioRouter, studioWorkerRouter } from './studio.js';
@@ -369,5 +370,107 @@ describe('operator routes', () => {
             tiktok: { audited: false, queued: 0 },
         });
         for (const s of statements.filter((s) => /creator_id = \$1/.test(s.sql))) assert.equal(s.params[0], TENANT_A);
+    });
+});
+
+// ─── The Monteur's worker routes (MONTEUR.md §4, §7) ────────────────────────────────────
+
+describe('POST /worker/uploads/sign', () => {
+    const PROJECT = 'https://abcd1234.supabase.co';
+    const SECRET = 'sb_secret_0123456789abcdefghijKLMNOP';
+    let signCalls: { method: string; url: string; headers: Record<string, string>; body: string }[] = [];
+    let previousFetch: ReturnType<typeof setStorageFetch> = null;
+
+    const supabase = () => {
+        signCalls = [];
+        previousFetch = setStorageFetch(async (input, init = {}) => {
+            const headers: Record<string, string> = {};
+            new Headers(init.headers).forEach((v, k) => { headers[k] = v; });
+            signCalls.push({ method: String(init.method), url: input, headers, body: String(init.body) });
+            const path = new URL(input).pathname.replace('/storage/v1', '');
+            return new Response(JSON.stringify({ url: `${path}?token=signed-token-123` }), { status: 200, headers: { 'content-type': 'application/json' } });
+        });
+        setMediaStore(new SupabaseStorageMediaStore({ url: PROJECT, key: SECRET, source: { url: 'database', key: 'database' } }));
+    };
+    afterEach(() => setStorageFetch(previousFetch));
+
+    const sign = (body: unknown) => worker('/worker/uploads/sign', TOKEN_A, body);
+    const reel = { filename: 'reel.mp4', mime_type: 'video/mp4', size_bytes: 58 * 1024 * 1024 };
+
+    it('409s when media is not in Supabase Storage: there is nothing to sign against', async () => {
+        const r = await sign(reel);
+        assert.equal(r.status, 409);
+        assert.match(r.body.error, /Supabase Storage/);
+        assert.ok(!statements.some((s) => /INSERT INTO media_uploads/.test(s.sql)));
+    });
+
+    it('400s any type but MP4 and JPEG, and anything over 100MB, before asking Supabase', async () => {
+        supabase();
+        for (const body of [
+            { ...reel, mime_type: 'video/quicktime' },
+            { ...reel, mime_type: 'image/png' },
+            { ...reel, size_bytes: 100 * 1024 * 1024 + 1 },
+            { ...reel, size_bytes: 0 },
+            { ...reel, size_bytes: '5000' },
+        ]) {
+            const r = await sign(body);
+            assert.equal(r.status, 400, JSON.stringify(body));
+        }
+        assert.equal(signCalls.length, 0);
+        assert.ok(!statements.some((s) => /INSERT INTO media_uploads/.test(s.sql)));
+    });
+
+    it('signs the path, writes the metadata-only row, and answers with our own URL and the PUT to make', async () => {
+        supabase();
+        const r = await sign(reel);
+        assert.equal(r.status, 201);
+        const { id, url, upload } = r.body;
+        assert.match(id, /^[0-9a-f-]{36}$/);
+        assert.equal(url, `${BASE}/api/uploads/${id}`, 'the URL Meta fetches is ours, never the bucket’s');
+        assert.deepEqual(upload, {
+            method: 'PUT',
+            url: `${PROJECT}/storage/v1/object/upload/sign/media/${TENANT_A}/${id}.mp4?token=signed-token-123`,
+            headers: { 'content-type': 'video/mp4', 'x-upsert': 'false', 'cache-control': 'max-age=31536000' },
+        });
+        assert.equal(signCalls.length, 1);
+        assert.equal(signCalls[0]!.method, 'POST');
+        assert.equal(signCalls[0]!.url, `${PROJECT}/storage/v1/object/upload/sign/media/${TENANT_A}/${id}.mp4`);
+        assert.equal(signCalls[0]!.headers.apikey, SECRET);
+        assert.equal(signCalls[0]!.body, '{}');
+
+        const [row] = statements.filter((s) => /^INSERT INTO media_uploads/.test(s.sql));
+        assert.match(row!.sql, /VALUES \(\$1, \$2, \$3, \$4, NULL, \$5, \$6\)/, 'no bytes in Postgres');
+        assert.deepEqual(row!.params, [id, TENANT_A, 'reel.mp4', 'video/mp4', `${TENANT_A}/${id}.mp4`, reel.size_bytes]);
+    });
+
+    it('needs the worker token like every worker route', async () => {
+        assert.equal((await worker('/worker/uploads/sign', null, reel)).status, 401);
+    });
+});
+
+describe('POST /worker/claim — the Monteur’s daily run', () => {
+    it('queues the day’s scan before claiming, so the same claim can hand it out', async () => {
+        settingsRow = { schedule: { timezone: 'UTC', slots: ['12:00'] }, monteur: { enabled: true, folder: '/Volumes/Clips', run_at: '00:00' } };
+        routes.unshift(
+            [/^SELECT id FROM studio_jobs WHERE creator_id = \$1 AND kind = 'monteur_scan'/, () => ({ rows: [] })],
+            [/^INSERT INTO studio_jobs/, (p) => {
+                jobs.push({ id: JOB_A, creator_id: p[0], kind: p[1], status: 'pending', payload: JSON.parse(p[2]), attempts: 0 });
+                return { rows: [{ id: JOB_A, kind: p[1], status: 'pending', payload: JSON.parse(p[2]) }] };
+            }],
+        );
+        const r = await worker('/worker/claim', TOKEN_A);
+        assert.equal(r.status, 200);
+        assert.equal(r.body.job.kind, 'monteur_scan');
+        assert.equal(r.body.job.payload.folder, '/Volumes/Clips');
+    });
+
+    it('still claims when the daily run breaks — before migration v24, say', async () => {
+        routes.unshift([/FROM studio_settings/, () => {
+            throw Object.assign(new Error('column "monteur" does not exist'), { code: '42703' });
+        }]);
+        jobs = [job(JOB_A, TENANT_A)];
+        const r = await worker('/worker/claim', TOKEN_A);
+        assert.equal(r.status, 200);
+        assert.equal(r.body.job.id, JOB_A);
     });
 });
