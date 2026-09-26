@@ -249,6 +249,33 @@ describe('publishFacebookPost', () => {
         assert.deepEqual(calls[0]!.body, { file_url: 'https://cdn/v.mp4', description: 'وصف' });
     });
 
+    it('never repeats a video post that timed out: Facebook may already have posted it', async () => {
+        // The incident, 2026-09-26: a 10 MB reel outlasted the 10 s timeout, the retry went
+        // through as well, and the Page got the same reel twice, two seconds apart.
+        onPost = async () => { throw Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' }); };
+        await assert.rejects(() => publishFacebookPost('page-1', 'video', 'وصف', 'https://cdn/v.mp4', TOKEN));
+        assert.equal(calls.length, 1, 'one attempt, no retry');
+        assert.equal(calls[0]!.config.timeout, 60_000, 'a video gets a minute, not the shared 10 s');
+    });
+
+    it('never repeats a post Meta answered with a 5xx', async () => {
+        onPost = async () => { throw Object.assign(new Error('bad gateway'), { response: { status: 502, data: {} } }); };
+        await assert.rejects(() => publishFacebookPost('page-1', 'image', 'وصف', 'https://cdn/p.jpg', TOKEN));
+        assert.equal(calls.length, 1);
+    });
+
+    it('still retries a post Meta refused with a rate limit, since nothing was created', async () => {
+        let n = 0;
+        onPost = async () => {
+            n++;
+            if (n === 1) throw Object.assign(new Error('rate'), { response: { status: 400, data: { error: { code: 4, message: 'Application request limit reached' } } } });
+            return { data: { id: 'fb-9' } };
+        };
+        const res = await publishFacebookPost('page-1', 'video', 'وصف', 'https://cdn/v.mp4', TOKEN);
+        assert.equal(res.id, 'fb-9');
+        assert.equal(calls.length, 2);
+    });
+
     it('publishes an image through /photos with url + caption', async () => {
         onPost = ok({ id: 'fb-3' });
 

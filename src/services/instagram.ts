@@ -82,6 +82,10 @@ export class MetaApiError extends Error {
     }
 }
 
+/** How long Facebook may take to fetch a video (or a photo) and answer, before the call gives up. */
+export const FB_VIDEO_TIMEOUT_MS = 60_000;
+export const FB_PHOTO_TIMEOUT_MS = 30_000;
+
 /** `[Private Reply Failed: ... (Code: 190)]` — the shape the dashboard has always shown. */
 export function metaFailure(prefix: string, error: any): MetaApiError {
     const metaError = error?.response?.data?.error;
@@ -394,11 +398,16 @@ export async function publishFacebookPost(
     }
 
     try {
+        // Facebook fetches the file itself before it answers, and a 10 MB reel took longer
+        // than the shared 10 s timeout: the retry that followed posted the reel twice. So a
+        // video gets a minute, and no call that creates a post is retried when it may have
+        // gone through (see RetryOptions.creates).
         const response = await withRetry(
             () => metaHttp.post(url, payload, {
-                headers: { Authorization: `Bearer ${accessToken}` }
+                headers: { Authorization: `Bearer ${accessToken}` },
+                ...(url.endsWith('/videos') ? { timeout: FB_VIDEO_TIMEOUT_MS } : url.endsWith('/photos') ? { timeout: FB_PHOTO_TIMEOUT_MS } : {}),
             }),
-            { label: `publishFacebookPost[${type}]` }
+            { label: `publishFacebookPost[${type}]`, creates: true }
         );
         return response.data; // returns { id: "post_id" }
     } catch (error: any) {
@@ -439,7 +448,8 @@ export async function publishFacebookCarousel(
 
         const response = await withRetry(
             () => metaHttp.post(`${GRAPH_BASE}/${pageId}/feed`, { message: caption, attached_media: attached }, { headers }),
-            { label: 'publishFacebookCarousel[feed]' }
+            // The one call here that makes a public post: never repeated when it may have landed.
+            { label: 'publishFacebookCarousel[feed]', creates: true }
         );
         return response.data; // returns { id: "post_id" }
     } catch (error: any) {
