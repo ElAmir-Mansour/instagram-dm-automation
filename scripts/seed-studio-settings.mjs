@@ -95,6 +95,19 @@ export const STUDIO_SETTINGS = {
     schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'] },
     library: { root: '/Users/elamir/Desktop/AI Course' },
     examples: null,
+    // MONTEUR.md §1. Off until the folder is chosen from the dashboard; the daily run at 07:00 and
+    // the posting slot at 19:00 are Riyadh times, the slot the views analysis found best.
+    monteur: {
+        enabled: false,
+        folder: null,
+        run_at: '07:00',
+        videos_per_run: 1,
+        reels_per_video: 1,
+        platforms: ['instagram', 'facebook', 'tiktok'],
+        post_at: ['19:00'],
+        min_seconds: 20,
+        max_seconds: 45,
+    },
 };
 
 async function main() {
@@ -137,17 +150,18 @@ async function main() {
         }
         const s = STUDIO_SETTINGS;
         await pool.query(
-            `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, updated_at)
-             VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, NOW())
+            `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, updated_at)
+             VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, NOW())
              ON CONFLICT (creator_id) DO UPDATE
                 SET brand = EXCLUDED.brand, voice = EXCLUDED.voice, product = EXCLUDED.product,
                     cta = EXCLUDED.cta, schedule = EXCLUDED.schedule, library = EXCLUDED.library,
-                    examples = EXCLUDED.examples, updated_at = NOW()`,
+                    examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, updated_at = NOW()`,
             [
                 creatorId,
                 JSON.stringify(s.brand), JSON.stringify(s.voice), JSON.stringify(s.product),
                 JSON.stringify(s.cta), JSON.stringify(s.schedule), JSON.stringify(s.library),
                 s.examples === null ? null : JSON.stringify(s.examples),
+                JSON.stringify(s.monteur),
             ]
         );
         console.log(`Seeded Studio settings for ${creator.rows[0].name ?? creatorId}.`);

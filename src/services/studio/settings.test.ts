@@ -210,3 +210,82 @@ describe('getStudioSettings / updateStudioSettings', () => {
         assert.equal(writes().length, 0);
     });
 });
+
+describe('the monteur section (MONTEUR.md §1)', () => {
+    it('defaults to off, no folder, one reel a day from one video, on all three platforms', () => {
+        assert.deepEqual(defaultStudioSettings().monteur, {
+            enabled: false, folder: null, run_at: '07:00', videos_per_run: 1, reels_per_video: 1,
+            platforms: ['instagram', 'facebook', 'tiktok'], post_at: ['19:00'], min_seconds: 20, max_seconds: 45,
+        });
+    });
+
+    const cases: [string, Record<string, unknown>, RegExp][] = [
+        ['a relative folder', { folder: 'Movies/Monteur' }, /monteur\.folder must be a full folder path/],
+        ['an empty folder (null clears it)', { folder: '' }, /monteur\.folder is required/],
+        ['a folder over 1024 characters', { folder: `/${'a'.repeat(1024)}` }, /monteur\.folder is 1025 characters/],
+        ['a run time that is not HH:MM', { run_at: '7am' }, /monteur\.run_at/],
+        ['no videos per run', { videos_per_run: 0 }, /monteur\.videos_per_run must be a whole number from 1 to 10/],
+        ['eleven videos per run', { videos_per_run: 11 }, /monteur\.videos_per_run/],
+        ['half a video per run', { videos_per_run: 1.5 }, /monteur\.videos_per_run/],
+        ['six reels per video', { reels_per_video: 6 }, /monteur\.reels_per_video must be a whole number from 1 to 5/],
+        ['no platforms', { platforms: [] }, /monteur\.platforms needs at least one platform/],
+        ['a platform it cannot post to', { platforms: ['youtube'] }, /monteur\.platforms\[0\] must be one of instagram, facebook, tiktok/],
+        ['a platform twice', { platforms: ['instagram', 'instagram'] }, /lists a platform twice/],
+        ['no posting slot', { post_at: [] }, /monteur\.post_at needs at least one time/],
+        ['five posting slots', { post_at: ['08:00', '10:00', '12:00', '14:00', '16:00'] }, /monteur\.post_at holds at most 4/],
+        ['a posting slot that is not HH:MM', { post_at: ['7pm'] }, /monteur\.post_at\[0\] must be a time/],
+        ['a slot twice', { post_at: ['19:00', '19:00'] }, /monteur\.post_at lists a time twice/],
+        ['a minimum under 10 s', { min_seconds: 5 }, /monteur\.min_seconds must be a number from 10 to 60/],
+        ['a maximum over 90 s', { max_seconds: 120 }, /monteur\.max_seconds must be a number from 15 to 90/],
+        ['a maximum not above the minimum', { min_seconds: 30, max_seconds: 30 }, /max_seconds must be more than monteur\.min_seconds/],
+        ['enabled as text', { enabled: 'yes' }, /monteur\.enabled must be true or false/],
+        ['a key that is not a setting', { run_time: '07:00' }, /monteur\.run_time is not a setting/],
+    ];
+    for (const [name, monteur, expected] of cases) {
+        it(`refuses ${name}`, () => {
+            const problems = problemsFor({ monteur });
+            assert.ok(problems.some((p) => expected.test(p)), `expected ${expected} in:\n${problems.join('\n')}`);
+        });
+    }
+
+    it('accepts a folder on any of the worker’s systems, and clearing it again', () => {
+        for (const folder of ['/Users/me/Movies/Monteur', 'C:\\Users\\me\\Videos', 'D:/Videos', '\\\\nas\\videos']) {
+            assert.deepEqual(problemsFor({ monteur: { folder } }), [], folder);
+        }
+        assert.deepEqual(problemsFor({ monteur: { folder: null } }), []);
+    });
+
+    it('accepts a full, valid change, merged into the rest of the section', () => {
+        const problems: string[] = [];
+        const next = mergeSettings(defaultStudioSettings(), {
+            monteur: { enabled: true, folder: '/Volumes/Clips', post_at: ['13:00', '21:00'], reels_per_video: 3, platforms: ['instagram'] },
+        }, problems);
+        assert.deepEqual([...problems, ...settingsProblems(next)], []);
+        assert.equal(next.monteur.run_at, '07:00', 'the sibling field is kept');
+        assert.deepEqual(next.monteur.platforms, ['instagram'], 'a list is replaced whole');
+    });
+
+    it('is read and written with the other sections', async () => {
+        const originalQuery = pool.query;
+        const statements: { sql: string; params: unknown[] }[] = [];
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            statements.push({ sql: sql.replace(/\s+/g, ' '), params });
+            if (/FROM studio_settings/.test(sql)) return { rows: [{ monteur: { enabled: true, folder: '/v' } }], rowCount: 1 };
+            return { rows: [], rowCount: 1 };
+        };
+        try {
+            const read = await getStudioSettings(TENANT);
+            assert.equal(read.monteur.folder, '/v');
+            assert.equal(read.monteur.run_at, '07:00', 'a stored section is merged over the defaults');
+            assert.match(statements[0]!.sql, /SELECT brand, voice, product, cta, schedule, library, examples, monteur FROM studio_settings/);
+
+            await updateStudioSettings(TENANT, { monteur: { run_at: '06:30' } });
+            const write = statements.find((s) => /INSERT INTO studio_settings/.test(s.sql))!;
+            assert.match(write.sql, /examples, monteur, updated_at\) VALUES/);
+            assert.match(write.sql, /monteur = EXCLUDED\.monteur/);
+            assert.deepEqual(JSON.parse(write.params[8] as string), { ...read.monteur, run_at: '06:30' });
+        } finally {
+            (pool as unknown as { query: unknown }).query = originalQuery;
+        }
+    });
+});

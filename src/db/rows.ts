@@ -22,6 +22,9 @@
  * type says which columns the query actually asked for.
  */
 import type { Carousel } from '../services/studio/carouselTypes.js';
+import type { MonteurConfig } from '../services/studio/settingsTypes.js';
+
+export type { MonteurConfig, MonteurPlatform } from '../services/studio/settingsTypes.js';
 
 /** Postgres `TIMESTAMP WITH TIME ZONE` arrives as a Date through `pg`'s default parser. */
 export type Timestamptz = Date;
@@ -477,7 +480,10 @@ export interface CarouselDraftRow {
     updated_at: Timestamptz;
 }
 
-export type StudioJobKind = 'scan_library' | 'index_lesson' | 'render_carousel';
+export type StudioJobKind =
+    | 'scan_library' | 'index_lesson' | 'render_carousel'
+    /** The Monteur (v24, MONTEUR.md §3). */
+    | 'pick_folder' | 'monteur_scan' | 'monteur_transcribe' | 'monteur_render';
 export type StudioJobStatus = 'pending' | 'claimed' | 'done' | 'failed';
 
 export interface ScanLibraryPayload { root: string }
@@ -500,7 +506,9 @@ export interface StudioJobRow {
     id: string;
     creator_id: string;
     kind: StudioJobKind;
-    payload: ScanLibraryPayload | IndexLessonPayload | RenderCarouselPayload;
+    payload:
+        | ScanLibraryPayload | IndexLessonPayload | RenderCarouselPayload
+        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload;
     status: StudioJobStatus;
     progress: string | null;
     claimed_at: Timestamptz | null;
@@ -589,6 +597,8 @@ export interface StudioSettings {
     library: LibraryConfig;
     /** Carousels the tenant approved, as few-shot examples; null = the built-in ones. */
     examples: Carousel[] | null;
+    /** v24. The Monteur's folder, daily run and output (MONTEUR.md §1). */
+    monteur: MonteurConfig;
 }
 
 export interface StudioSettingsRow extends StudioSettings {
@@ -605,6 +615,169 @@ export interface StudioWorkerRow {
     last_seen_at: Timestamptz | null;
     created_at: Timestamptz;
     revoked_at: Timestamptz | null;
+}
+
+// ─── The Monteur (v24, MONTEUR.md) ──────────────────────────────────────────────────────
+//
+// A folder on the creator's machine, the videos found in it, the reels cut from them, and the
+// lessons learnt from past reels. The worker does the file work as Studio jobs; the app picks,
+// writes and schedules.
+
+/** One spoken word: seconds from the start of the source (2 decimals), and its text. */
+export type TranscriptWord = [t0: number, t1: number, text: string];
+
+export type MonteurSourceStatus = 'transcribing' | 'transcribed' | 'picking' | 'rendering' | 'done' | 'no_clips' | 'failed';
+
+/** What a pick cost and saw, kept on the source for the record. */
+export interface SourcePick {
+    model: string | null;
+    tokens_in: number;
+    tokens_out: number;
+    /** How many clips the Monteur proposed, before code dropped any. */
+    considered: number;
+    /** The Marketer's call, when there was one. */
+    copy?: { model: string | null; tokens_in: number; tokens_out: number };
+}
+
+export interface MonteurSourceRow {
+    id: string;
+    creator_id: string;
+    /** The worker's sha1 of the size, the first MiB and the last MiB. UNIQUE per tenant. */
+    content_key: string;
+    /** Absolute, on the worker's machine. */
+    path: string;
+    name: string;
+    /** BIGINT, so pg returns it as a string. */
+    size_bytes: string | null;
+    /** NUMERIC: select it as `duration::float8`. */
+    duration: number | null;
+    status: MonteurSourceStatus;
+    /** The whole transcript. Never selected by a list, never sent to the dashboard. */
+    words: TranscriptWord[] | null;
+    pick: SourcePick | null;
+    /** Pick attempts; the third failure fails the source. */
+    attempts: number;
+    /** The pick sweep's claim. One older than 10 minutes is claimable again. */
+    claimed_at: Timestamptz | null;
+    error: string | null;
+    created_at: Timestamptz;
+    updated_at: Timestamptz;
+}
+
+export type ClipStatus = 'rendering' | 'review' | 'scheduled' | 'rejected' | 'failed';
+
+/** The words that go out with a reel (MONTEUR.md §5 `ClipCopy`). */
+export interface ClipCopy {
+    /** Instagram + Facebook, ready to post: hook line, body, the keyword ask, hashtags. */
+    caption: string;
+    /** Ready to post: hook line, body, the tenant's TikTok line, hashtags. */
+    tiktok_caption: string;
+    /** 3–5, without '#', already inside both captions. */
+    hashtags: string[];
+    /** The comment keyword on the CTA card. */
+    keyword: string;
+    /** Other spellings that trigger the same DM. */
+    variants: string[];
+    /** True = create the keyword campaign on approve (an active one that answers it is reused). */
+    keyword_create: boolean;
+    /** The full DM, from the tenant's template. `{username}` is filled at send time. */
+    dm: string;
+    alt_text: string;
+}
+
+/** The worker's render. `job_id` is the render that made it: only the clip's latest may land. */
+export interface ClipRender {
+    video_url: string;
+    cover_url: string;
+    duration: number;
+    job_id: string;
+    rendered_at: string;
+}
+
+export interface ClipSchedule {
+    scheduled_time: string;
+    meta_row_id: string | null;
+    tiktok_row_id: string | null;
+    campaign_id: string | null;
+}
+
+export interface ClipDraftRow {
+    id: string;
+    creator_id: string;
+    source_id: string;
+    /** 1 = the Monteur's best. */
+    rank: number;
+    status: ClipStatus;
+    /** NUMERIC: select as `start_s::float8`. Seconds into the source. */
+    start_s: number;
+    end_s: number;
+    /** The on-screen hook, at most 60 characters. */
+    title: string;
+    /** The spoken opening line, from the transcript. */
+    hook: string;
+    why: string | null;
+    /** NUMERIC, 0–10. */
+    score: number | null;
+    copy: ClipCopy;
+    render: ClipRender | null;
+    schedule: ClipSchedule | null;
+    error: string | null;
+    created_at: Timestamptz;
+    updated_at: Timestamptz;
+}
+
+export interface StudioLesson { rule: string; evidence: string }
+
+/** What the Analyst's lessons were learnt from. */
+export interface LessonBasis {
+    posts: number;
+    from: string | null;
+    to: string | null;
+    /** `post_insights.id`s. */
+    post_ids: string[];
+}
+
+export interface StudioLessonRow {
+    id: string;
+    creator_id: string;
+    status: 'running' | 'done' | 'failed';
+    lessons: StudioLesson[] | null;
+    summary: string | null;
+    basis: LessonBasis | null;
+    model: string | null;
+    error: string | null;
+    created_at: Timestamptz;
+}
+
+/** `pick_folder`: the worker shows the native folder dialog with this title. */
+export interface PickFolderPayload { prompt: string }
+
+/** `monteur_scan`: list the top level of `folder` for new videos. */
+export interface MonteurScanPayload {
+    folder: string;
+    limit: number;
+    /** Every content key the tenant already has: those files are skipped. */
+    known: string[];
+    extensions: string[];
+    /** A file younger than this may still be copying. */
+    min_age_s: number;
+}
+
+export interface MonteurTranscribePayload { sourceId: string; path: string; language: 'ar' | 'en' }
+
+/** `monteur_render`: one reel. `words` are relative to the clip (0 = `start`). */
+export interface MonteurRenderPayload {
+    clipId: string;
+    sourceId: string;
+    path: string;
+    start: number;
+    end: number;
+    title: string;
+    words: TranscriptWord[];
+    cta: { line1: string; line2: string };
+    brand: { accent: string; font: StudioDisplayFont; direction: 'rtl' | 'ltr' };
+    /** Seconds into the clip. */
+    cover_at: number;
 }
 
 // ─── Growth & SEO hub (v22, GROWTH.md) ──────────────────────────────────────────────────

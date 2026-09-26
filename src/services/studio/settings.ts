@@ -1,23 +1,26 @@
 /**
  * Per-tenant Studio settings (STUDIO.md §10): brand kit, voice, product, CTAs, posting times,
- * library folder and few-shot examples.
+ * library folder, few-shot examples, and the Monteur (MONTEUR.md §1).
  *
  * The Studio is a feature for any tenant, so none of this is in code or prompts. A tenant with
  * no row gets `defaultStudioSettings()`, which is deliberately neutral: English, generic copy,
  * no product. A stored row is merged over those defaults on every read, section by section, so
  * a field added to a section later reads as its default for every tenant with no backfill.
  */
-import { queryCount, queryOne } from '../../db/query.js';
-import type { StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
-import { isPlainObject, problemsError, StudioError } from './common.js';
+import { pool } from '../../config/db.js';
+import type { MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
+import { type Exec, isPlainObject, problemsError, StudioError } from './common.js';
 import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
 
-export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples'] as const;
+export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur'] as const;
 type Section = (typeof STUDIO_SETTINGS_SECTIONS)[number];
 
 export const DISPLAY_FONTS: readonly StudioDisplayFont[] = ['Cairo', 'Tajawal', 'IBM Plex Sans Arabic', 'Inter'];
 /** Placeholders `cta.dmTemplate` may use; anything else is a typo that would reach a customer. */
 export const DM_PLACEHOLDERS = ['username', 'question', 'pitch', 'url', 'bullets'] as const;
+export const MONTEUR_PLATFORMS: readonly MonteurPlatform[] = ['instagram', 'facebook', 'tiktok'];
+/** An absolute folder: `/…` on macOS and Linux, `C:\…` or `\\server\share` on Windows. */
+const ABSOLUTE_FOLDER = /^(\/|[A-Za-z]:[\\/]|\\\\)/;
 
 const MAX_PROBLEMS = 20;
 const HEX_COLOUR = /^#[0-9A-Fa-f]{6}$/;
@@ -111,8 +114,23 @@ export function settingsProblems(s: StudioSettings): string[] {
     const oneOf = (value: unknown, path: string, options: readonly string[]): void => {
         if (!options.includes(value as string)) problems.push(`${path} must be one of ${options.join(', ')}`);
     };
+    const between = (value: unknown, path: string, min: number, max: number, whole: boolean): void => {
+        const ok = typeof value === 'number' && Number.isFinite(value) && (!whole || Number.isInteger(value));
+        if (!ok || (value as number) < min || (value as number) > max) {
+            problems.push(`${path} must be ${whole ? 'a whole number' : 'a number'} from ${min} to ${max}`);
+        }
+    };
+    const times = (value: unknown, path: string, min: number, max: number): void => {
+        list(value, path, max, (v, p) => {
+            if (typeof v !== 'string' || !LOCAL_TIME.test(v)) problems.push(`${p} must be a time like 13:00`);
+        });
+        if (Array.isArray(value)) {
+            if (value.length < min) problems.push(`${path} needs at least ${min === 1 ? 'one time' : `${min} times`}`);
+            if (new Set(value).size !== value.length) problems.push(`${path} lists a time twice`);
+        }
+    };
 
-    const { brand, voice, product, cta, schedule, library, examples } = s;
+    const { brand, voice, product, cta, schedule, library, examples, monteur } = s;
     text(brand?.name, 'brand.name', 80, true);
     text(brand?.signature?.latin, 'brand.signature.latin', 40);
     text(brand?.signature?.local, 'brand.signature.local', 40);
@@ -158,13 +176,7 @@ export function settingsProblems(s: StudioSettings): string[] {
     else for (const [key, value] of Object.entries(cta.slide)) text(value, `cta.slide.${key}`, 60);
 
     if (!isTimeZone(schedule?.timezone)) problems.push('schedule.timezone must be a timezone like Asia/Riyadh or Europe/London');
-    list(schedule?.slots, 'schedule.slots', 8, (v, p) => {
-        if (typeof v !== 'string' || !LOCAL_TIME.test(v)) problems.push(`${p} must be a time like 13:00`);
-    });
-    if (Array.isArray(schedule?.slots)) {
-        if (schedule.slots.length === 0) problems.push('schedule.slots needs at least one time');
-        if (new Set(schedule.slots).size !== schedule.slots.length) problems.push('schedule.slots lists a time twice');
-    }
+    times(schedule?.slots, 'schedule.slots', 1, 8);
 
     if (!isPlainObject(library)) problems.push('library must be an object');
     else if (library.root !== null) {
@@ -184,16 +196,46 @@ export function settingsProblems(s: StudioSettings): string[] {
             problems.push('examples are larger than 100KB: keep the few-shot set to a handful of carousels');
         }
     }
+
+    // The Monteur (MONTEUR.md §1). Its times are in schedule.timezone, checked above.
+    if (!isPlainObject(monteur)) {
+        problems.push('monteur must be an object');
+    } else {
+        if (typeof monteur.enabled !== 'boolean') problems.push('monteur.enabled must be true or false');
+        if (monteur.folder !== null) {
+            text(monteur.folder, 'monteur.folder', 1024, true);
+            if (typeof monteur.folder === 'string' && monteur.folder.trim() && !ABSOLUTE_FOLDER.test(monteur.folder)) {
+                problems.push('monteur.folder must be a full folder path, e.g. /Users/you/Movies/Monteur');
+            }
+        }
+        if (typeof monteur.run_at !== 'string' || !LOCAL_TIME.test(monteur.run_at)) {
+            problems.push('monteur.run_at must be a time like 07:00');
+        }
+        between(monteur.videos_per_run, 'monteur.videos_per_run', 1, 10, true);
+        between(monteur.reels_per_video, 'monteur.reels_per_video', 1, 5, true);
+        list(monteur.platforms, 'monteur.platforms', MONTEUR_PLATFORMS.length, (v, p) => oneOf(v, p, MONTEUR_PLATFORMS));
+        if (Array.isArray(monteur.platforms)) {
+            if (monteur.platforms.length === 0) problems.push('monteur.platforms needs at least one platform');
+            if (new Set(monteur.platforms).size !== monteur.platforms.length) problems.push('monteur.platforms lists a platform twice');
+        }
+        times(monteur.post_at, 'monteur.post_at', 1, 4);
+        between(monteur.min_seconds, 'monteur.min_seconds', 10, 60, false);
+        between(monteur.max_seconds, 'monteur.max_seconds', 15, 90, false);
+        if (typeof monteur.min_seconds === 'number' && typeof monteur.max_seconds === 'number'
+            && monteur.max_seconds <= monteur.min_seconds) {
+            problems.push('monteur.max_seconds must be more than monteur.min_seconds');
+        }
+    }
     return problems;
 }
 
-/** The tenant's settings, over the defaults. */
-export async function getStudioSettings(creatorId: string): Promise<StudioSettings> {
-    const row = await queryOne<Omit<StudioSettingsRow, 'creator_id' | 'updated_at'>>(
-        'SELECT brand, voice, product, cta, schedule, library, examples FROM studio_settings WHERE creator_id = $1',
+/** The tenant's settings, over the defaults. `exec` is a transaction's client, when inside one. */
+export async function getStudioSettings(creatorId: string, exec: Exec = pool): Promise<StudioSettings> {
+    const { rows } = await exec.query<Omit<StudioSettingsRow, 'creator_id' | 'updated_at'>>(
+        'SELECT brand, voice, product, cta, schedule, library, examples, monteur FROM studio_settings WHERE creator_id = $1',
         [creatorId]
     );
-    return row ? overDefaults(row) : defaultStudioSettings();
+    return rows[0] ? overDefaults(rows[0]) : defaultStudioSettings();
 }
 
 /**
@@ -201,30 +243,31 @@ export async function getStudioSettings(creatorId: string): Promise<StudioSettin
  * after the merge, so a change that is fine alone but breaks what it lands on is refused too.
  */
 export async function updateStudioSettings(
-    creatorId: string, patch: unknown
+    creatorId: string, patch: unknown, exec: Exec = pool
 ): Promise<{ settings: StudioSettings; changed: string[] }> {
     if (!isPlainObject(patch) || Object.keys(patch).length === 0) {
         throw new StudioError(400, 'Send the settings to change, e.g. { "schedule": { "timezone": "Asia/Riyadh" } }.');
     }
-    const current = await getStudioSettings(creatorId);
+    const current = await getStudioSettings(creatorId, exec);
     const problems: string[] = [];
     const next = mergeSettings(current, patch, problems);
     problems.push(...settingsProblems(next));
     if (problems.length) throw problemsError(problems.slice(0, MAX_PROBLEMS), 'these settings');
 
-    await queryCount(
-        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, updated_at)
-         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, NOW())
+    await exec.query(
+        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, updated_at)
+         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, NOW())
          ON CONFLICT (creator_id) DO UPDATE
             SET brand = EXCLUDED.brand, voice = EXCLUDED.voice, product = EXCLUDED.product,
                 cta = EXCLUDED.cta, schedule = EXCLUDED.schedule, library = EXCLUDED.library,
-                examples = EXCLUDED.examples, updated_at = NOW()`,
+                examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, updated_at = NOW()`,
         [
             creatorId,
             JSON.stringify(next.brand), JSON.stringify(next.voice), JSON.stringify(next.product),
             JSON.stringify(next.cta), JSON.stringify(next.schedule), JSON.stringify(next.library),
             // SQL NULL, not the JSON value `null`: "no examples" is the absence of a list.
             next.examples === null ? null : JSON.stringify(next.examples),
+            JSON.stringify(next.monteur),
         ]
     );
     return { settings: next, changed: Object.keys(patch) };
