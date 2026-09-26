@@ -41,7 +41,7 @@ export interface InspectedImage {
 export async function inspectImages(urls: readonly string[]): Promise<InspectedImage[]> {
     const ids = urls.map((url) => uploadIdFromUrl(url));
     const ours = [...new Set(ids.filter((id): id is string => id !== null))];
-    const mimes = ours.length > 0 ? await getMediaStore().mimeTypes(ours) : new Map<string, string>();
+    const mimes = ours.length > 0 ? await (await getMediaStore()).mimeTypes(ours) : new Map<string, string>();
     return urls.map((url, i) => {
         const uploadId = ids[i] ?? null;
         return { url, uploadId, mimeType: uploadId ? mimes.get(uploadId) ?? null : null };

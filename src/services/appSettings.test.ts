@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
-import { describeGeminiKey, getGeminiKey } from './appSettings.js';
+import { describeGeminiKey, getGeminiKey, getMediaStorageConfig } from './appSettings.js';
 
 const TEST_ENCRYPTION_KEY = 'cd'.repeat(32);
 const SAVED = 'AIza.fake.saved-on-operations.test';
@@ -95,5 +95,80 @@ describe('describeGeminiKey', () => {
 
         storeHolds(null);
         assert.deepEqual(await describeGeminiKey(), { source: null, preview: null, envFallback: false });
+    });
+});
+
+/**
+ * Where media goes: Settings first, then SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY, each half on
+ * its own. A wrong answer here is silent — uploads just keep landing in the 500MB database — so
+ * each rule is pinned.
+ */
+describe('getMediaStorageConfig', () => {
+    const SAVED_URL = 'https://saved1234.supabase.co';
+    const SAVED_KEY = 'sb_secret_saved-in-settings-0123456789';
+    let savedEnv: { url?: string; key?: string };
+
+    /** app_settings holding exactly these keys. */
+    function settingsHold(rows: Record<string, string>): void {
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            assert.match(sql, /FROM app_settings WHERE key = \$1/);
+            const key = String(params[0]);
+            if (!(key in rows)) return { rows: [], rowCount: 0 };
+            const secret = key === 'storage.supabase_service_key';
+            return { rows: [{ value: secret ? encryptSecret(rows[key]!) : rows[key], is_secret: secret }], rowCount: 1 };
+        };
+    }
+
+    beforeEach(() => {
+        savedEnv = { url: process.env.SUPABASE_URL, key: process.env.SUPABASE_SERVICE_ROLE_KEY };
+        delete process.env.SUPABASE_URL;
+        delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    });
+    afterEach(() => {
+        for (const [name, value] of [['SUPABASE_URL', savedEnv.url], ['SUPABASE_SERVICE_ROLE_KEY', savedEnv.key]] as const) {
+            if (value === undefined) delete process.env[name];
+            else process.env[name] = value;
+        }
+    });
+
+    it('answers with what Settings saved, decrypted, over the environment', async () => {
+        process.env.SUPABASE_URL = 'https://env5678.supabase.co';
+        process.env.SUPABASE_SERVICE_ROLE_KEY = 'sb_secret_from-the-environment-000000';
+        settingsHold({ 'storage.supabase_url': SAVED_URL, 'storage.supabase_service_key': SAVED_KEY });
+
+        assert.deepEqual(await getMediaStorageConfig(), {
+            url: SAVED_URL, key: SAVED_KEY, source: { url: 'database', key: 'database' },
+        });
+    });
+
+    it('falls back to the environment, trimmed and normalised to an origin, while nothing is saved', async () => {
+        process.env.SUPABASE_URL = '  https://env5678.supabase.co/storage/v1/ \n';
+        process.env.SUPABASE_SERVICE_ROLE_KEY = '  sb_secret_from-the-environment-000000 ';
+        settingsHold({});
+
+        assert.deepEqual(await getMediaStorageConfig(), {
+            url: 'https://env5678.supabase.co', key: 'sb_secret_from-the-environment-000000', source: { url: 'env', key: 'env' },
+        });
+    });
+
+    it('takes each half from wherever it is set', async () => {
+        process.env.SUPABASE_SERVICE_ROLE_KEY = 'sb_secret_from-the-environment-000000';
+        settingsHold({ 'storage.supabase_url': SAVED_URL });
+
+        assert.deepEqual(await getMediaStorageConfig(), {
+            url: SAVED_URL, key: 'sb_secret_from-the-environment-000000', source: { url: 'database', key: 'env' },
+        });
+    });
+
+    it('is null with half a config, a blank env var, or a URL that is not https', async () => {
+        settingsHold({ 'storage.supabase_url': SAVED_URL });
+        assert.equal(await getMediaStorageConfig(), null, 'no key anywhere');
+
+        settingsHold({ 'storage.supabase_service_key': SAVED_KEY });
+        process.env.SUPABASE_URL = '   ';
+        assert.equal(await getMediaStorageConfig(), null, 'a blank env var is not a URL');
+
+        process.env.SUPABASE_URL = 'http://env5678.supabase.co';
+        assert.equal(await getMediaStorageConfig(), null, 'plain http is refused');
     });
 });

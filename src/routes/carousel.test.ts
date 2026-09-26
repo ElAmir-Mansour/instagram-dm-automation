@@ -355,9 +355,10 @@ describe('GET /uploads/:id — with a file extension', () => {
         fetched = [];
         previousStore = setMediaStore({
             async put() { throw new Error('not in these tests'); },
-            async get(id) {
+            async get() { throw new Error('the route streams through open(), never get()'); },
+            async open(id) {
                 fetched.push(id);
-                return MIMES[id] ? { id, mimeType: MIMES[id]!, data: Buffer.from('bytes') } : null;
+                return MIMES[id] ? { kind: 'bytes' as const, id, mimeType: MIMES[id]!, data: Buffer.from('bytes') } : null;
             },
             async mimeTypes() { return new Map(); },
             publicUrl(id, origin) { return `${origin}/api/uploads/${id}`; },

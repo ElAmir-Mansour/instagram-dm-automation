@@ -114,6 +114,7 @@ beforeEach(() => {
             return { id: UPLOADED };
         },
         async get() { return null; },
+        async open() { return null; },
         async mimeTypes() { return new Map(); },
         publicUrl: (id, origin) => `${origin}/api/uploads/${id}`,
     });

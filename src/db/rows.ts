@@ -296,9 +296,21 @@ export interface MediaUploadRow {
     creator_id: string | null;
     filename: string;
     mime_type: string;
-    /** BYTEA. See ARCHITECTURE.md — this is the row that should not be in Postgres. */
-    data: Buffer;
+    /** BYTEA. NULL once the bytes are in Supabase Storage (migration v23, src/services/storage.ts). */
+    data: Buffer | null;
+    /** `<creator_id>/<id><ext>` in the Storage bucket `media`, or NULL for a legacy BYTEA row. */
+    storage_path: string | null;
+    /** BIGINT, so pg returns it as a string. */
+    size_bytes: string | null;
     created_at: Timestamptz;
+}
+
+/** An object whose row was deleted, waiting to be removed from Storage (migration v23). */
+export interface MediaObjectDeletionRow {
+    storage_path: string;
+    queued_at: Timestamptz;
+    attempts: number;
+    last_error: string | null;
 }
 
 // ─── identity ───────────────────────────────────────────────────────────────────────────

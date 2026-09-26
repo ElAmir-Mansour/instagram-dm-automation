@@ -174,7 +174,7 @@ studioWorkerRouter.post('/worker/upload', handle('studio.upload_failed', 'Failed
     if (!base) throw new StudioError(500, 'No public address for this app: set it in Settings → TikTok app.');
 
     // Through the store, like POST /api/upload, and as the worker's tenant.
-    const store = getMediaStore();
+    const store = await getMediaStore();
     const { id } = await store.put({
         creatorId: workerTenant(res),
         filename: clipText(filename, 200) ?? 'studio-upload',

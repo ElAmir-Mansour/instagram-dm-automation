@@ -29,6 +29,7 @@
 import { queryCount } from '../db/query.js';
 import { getJobQueue } from '../jobs/queue.js';
 import { log } from '../utils/log.js';
+import { removeQueuedMediaObjects } from './storage.js';
 
 /** Floor on the configurable window. Below this, debugging a live webhook issue is hopeless. */
 export const MIN_RETENTION_DAYS = 7;
@@ -171,10 +172,10 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
  * are already PUBLISHED. Meta fetches the URL once, at publish time, and hosts its own copy
  * afterwards — so three quarters of that storage is a copy nobody reads, on a 500MB tier.
  *
- * ARCHITECTURE.md §7 Stage 3 proposes moving media to object storage. For a single-operator
- * deployment that is the wrong shape of fix: it adds an integration and a migration to solve
- * a problem better solved by deleting what is already dead. Reclaim rather than relocate.
- * The `MediaStore` seam stays, so Stage 3 remains available if the volume ever justifies it.
+ * Migration v23 moved new uploads to Supabase Storage, which relocates the bytes but does not
+ * stop them accumulating, so this still matters. Deleting a row whose bytes are in Storage
+ * queues its object (the v23 trigger), and `runRetentionSweep` removes queued objects after its
+ * passes — so the row and the object both go, and a failed Storage call is retried next run.
  *
  * ── What it will NOT delete, and why each matters ──
  *
@@ -282,6 +283,8 @@ export interface RetentionSweepResult {
     rawPayloadsCleared: number;
     jobsDeleted: number;
     mediaDeleted: number;
+    /** Objects removed from Supabase Storage because their rows were deleted, by this sweep or any other. */
+    mediaObjectsRemoved: number;
     passes: number;
     /** True when a pass came back full, so there is more behind it than this run cleared. */
     moreRemaining: boolean;
@@ -292,6 +295,7 @@ export interface RetentionSweepDeps {
     pruneRaw: typeof pruneRawPayloads;
     pruneJobs: typeof pruneCompletedJobs;
     pruneMedia: typeof pruneOrphanedMedia;
+    removeObjects: typeof removeQueuedMediaObjects;
 }
 
 /**
@@ -309,12 +313,23 @@ export async function runRetentionSweep(
         pruneRaw: pruneRawPayloads,
         pruneJobs: pruneCompletedJobs,
         pruneMedia: pruneOrphanedMedia,
+        removeObjects: removeQueuedMediaObjects,
     }
 ): Promise<RetentionSweepResult> {
     const result: RetentionSweepResult = {
-        rawPayloadsCleared: 0, jobsDeleted: 0, mediaDeleted: 0, passes: 0, moreRemaining: false,
+        rawPayloadsCleared: 0, jobsDeleted: 0, mediaDeleted: 0, mediaObjectsRemoved: 0, passes: 0, moreRemaining: false,
     };
 
+    await sweepPasses(deps, result);
+
+    // After the passes, and whatever they found: the queue also holds objects whose rows the
+    // Studio or a tenant deletion removed, and it must drain even with MEDIA_RETENTION_DAYS unset.
+    const objects = await deps.removeObjects();
+    result.mediaObjectsRemoved = objects.removed;
+    return result;
+}
+
+async function sweepPasses(deps: RetentionSweepDeps, result: RetentionSweepResult): Promise<void> {
     for (let pass = 0; pass < MAX_SWEEP_PASSES; pass++) {
         result.passes = pass + 1;
 
@@ -331,7 +346,7 @@ export async function runRetentionSweep(
 
         // Nothing moved: every sweep is caught up, or switched off and finding nothing.
         // Either way another identical pass would do nothing.
-        if (!rawFull && !jobsFull && !mediaFull) return result;
+        if (!rawFull && !jobsFull && !mediaFull) return;
 
         if (pass === MAX_SWEEP_PASSES - 1) {
             result.moreRemaining = true;
@@ -343,6 +358,4 @@ export async function runRetentionSweep(
             });
         }
     }
-
-    return result;
 }
