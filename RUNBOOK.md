@@ -1087,6 +1087,42 @@ vercel env pull .env.local --environment=production
 
 ---
 
+## Publishing and DM safety
+
+Three behaviours that look like failures but aren't, and one that used to be a failure:
+
+- **Instagram still processing.** A reel whose container isn't FINISHED within the 25 s poll
+  budget is held, not failed: `PENDING`, `error_log` says so, `external_publish_id =
+  'IGC:<container>'`, and Facebook stays recorded in `published_post_id`. The next sweep publishes
+  the same container. After 15 sweeps it fails as before. Nothing to do unless it fails.
+- **Facebook "didn't answer".** A post that times out or gets a 5xx is not re-sent, because it may
+  be live. If a post FAILED with a timeout, **check the Page before retrying**.
+- **DM refused.** When Meta won't deliver a DM (code 100: the commenter can't receive messages
+  from Pages; code 10903: they blocked Pages), the interaction is FAILED with "Replied publicly with
+  the link instead", and a public reply went out: the campaign's link on Facebook, "link in bio" on
+  Instagram.
+- **Trial reel refused.** The post FAILS and says it was not published; turn Trial Reel off to post
+  it normally.
+
+## Media storage
+
+Uploads live in the public Supabase Storage bucket `media` (`<creator_id>/<id><ext>`);
+`media_uploads` keeps the metadata (`storage_path`, `size_bytes`). URLs stay
+`/api/uploads/<id>` on our domain, and the route streams the object.
+
+- **Setup:** Settings → Media storage (platform admin). The Project URL is
+  `https://<project-ref>.supabase.co` (the ref is in the dashboard's address bar, or under
+  **Connect**). The key is a secret key (`sb_secret_…`, Project Settings → API Keys), sent only in
+  the `apikey` header; a legacy service_role JWT also works. "Save and connect" creates the bucket.
+- **Backfill** legacy BYTEA rows: `node --env-file=.env scripts/migrate-media-to-storage.mjs`
+  (dry run), then `--apply`. Resumable, verified by sha256. Then `VACUUM FULL media_uploads` to
+  return the space (done 2026-09-26: 894 files, 283 MB → 16 MB).
+- **Rotating the key:** create a new secret key in Supabase, paste it in the card, then revoke the
+  old one.
+- **An upload 404s:** check the row's `storage_path`, then that the object exists in the bucket.
+  Deleted rows queue their object in `media_object_deletions`; the daily sweep removes it and
+  records `last_error` on failure.
+
 ## Carousel Studio
 
 The Studio's own guide is [`docs/STUDIO_GUIDE.md`](docs/STUDIO_GUIDE.md): what each part does,
