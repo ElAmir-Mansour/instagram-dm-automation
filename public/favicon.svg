@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="AutoReply Pro">
+  <!-- The dashboard's login mark: Lucide's `zap` on the accent (#0071e3, DESIGN.md §3).
+       Same 24-unit polygon as the icon, scaled 1.9× and centred in a 64px rounded square.
+       SVG only — there is no rasteriser in this repo, so no PNG apple-touch-icon. -->
+  <rect width="64" height="64" rx="14" fill="#0071e3"/>
+  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" transform="translate(9.2 9.2) scale(1.9)" fill="#ffffff" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>

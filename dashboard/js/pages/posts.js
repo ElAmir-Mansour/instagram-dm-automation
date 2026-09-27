@@ -262,7 +262,7 @@ const PostsPage = {
         return html`
             <button type="button" id="posts-tab-${tab}"
                     aria-pressed="${active ? 'true' : 'false'}"
-                    class="btn btn-sm ${active ? html.raw('btn-primary') : html.raw('btn-ghost')}"
+                    class="btn btn-sm btn-ghost"
                     data-action="posts:switchTab" data-tab="${tab}">
                 <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
             </button>
@@ -606,7 +606,7 @@ const PostsPage = {
                     </div>
                     <span class="status-pill ${html.raw(statusClass)}">
                         ${isPublishing || isProcessing
-                            ? html`<span class="dot-blink" aria-hidden="true"></span> ${isProcessing ? t('state.processing') : t('posts.statusPublishing')}`
+                            ? html`<span class="dot-blink" aria-hidden="true"></span> ${isProcessing ? (isPhoto ? t('state.processingPhoto') : t('state.processing')) : t('posts.statusPublishing')}`
                             : UI.statusLabel(post.status)}
                     </span>
                 </div>
@@ -914,12 +914,11 @@ const PostsPage = {
             ${offerAlso ? html`
                 <div class="form-group switch-row hidden" id="tiktok-also-group">
                     <label class="switch" for="post-also-tiktok">
-                        <span class="sr-only">${t('posts.tiktok.also')}</span>
                         <input type="checkbox" name="also_tiktok" id="post-also-tiktok"
                                data-change="posts:handleTypeChange" ${ready ? '' : html.raw('disabled')}>
                         <span class="switch-track"></span>
                     </label>
-                    <span class="switch-label">${t('posts.tiktok.also')}</span>
+                    <label class="switch-label" for="post-also-tiktok">${t('posts.tiktok.also')}</label>
                 </div>
             ` : ''}
             ${direct ? html`
@@ -1367,7 +1366,6 @@ const PostsPage = {
         return html`
             <div class="switch-row tiktok-switch ${s.disabled ? html.raw('is-disabled') : ''}">
                 <label class="switch" for="${id}">
-                    <span class="sr-only">${label}</span>
                     <input type="checkbox" id="${id}" data-change="posts:tiktokChange"
                            ${s.checked ? html.raw('checked') : ''}
                            ${s.disabled ? html.raw('disabled') : ''}
@@ -1375,7 +1373,7 @@ const PostsPage = {
                     <span class="switch-track"></span>
                 </label>
                 <span class="switch-text">
-                    <span class="switch-label">${label}</span>
+                    <label class="switch-label" for="${id}">${label}</label>
                     ${note ? html`<span class="form-hint" id="${noteId}">${note}</span>` : ''}
                 </span>
             </div>
@@ -2522,7 +2520,7 @@ const PostsPage = {
                         <span class="field-count" id="post-collab-count">${t('posts.reach.collabCount', { n: UI.formatNumber(saved.collaborators.length) })}</span>
                     </div>
                     <input class="field" id="post-collaborators" name="collaborators" dir="ltr" autocomplete="off" spellcheck="false"
-                           value="${collab}" placeholder="@partner, @friend" data-input="posts:collabInput" data-guard-dirty
+                           value="${collab}" placeholder="${t('posts.reach.collabPlaceholder')}" data-input="posts:collabInput" data-guard-dirty
                            aria-describedby="post-collab-hint post-collab-problem">
                     <p class="form-hint" id="post-collab-hint">${t('posts.reach.collabHint')}</p>
                     <p class="form-hint text-warning hidden" id="post-collab-problem" role="status"></p>
@@ -2532,13 +2530,12 @@ const PostsPage = {
                 <div class="form-group hidden" id="reach-trial-group">
                     <div class="switch-row">
                         <label class="switch" for="post-trial-reel">
-                            <span class="sr-only">${t('posts.reach.trial')}</span>
                             <input type="checkbox" id="post-trial-reel" name="trial_reel" data-change="posts:trialToggle" data-guard-dirty
                                    aria-describedby="post-trial-hint" ${trial ? html.raw('checked') : ''}>
                             <span class="switch-track"></span>
                         </label>
                         <span class="switch-text">
-                            <span class="switch-label">${t('posts.reach.trial')}</span>
+                            <label class="switch-label" for="post-trial-reel">${t('posts.reach.trial')}</label>
                             <span class="form-hint" id="post-trial-hint">${t('posts.reach.trialHint')}</span>
                         </span>
                     </div>
@@ -2744,12 +2741,17 @@ const PostsPage = {
      * 00:00 UTC run while they nudge the minutes — which is the point: seeing
      * it NOT move is what teaches that the minute is not what counts.
      */
-    scheduleFields(value) {
+    /**
+     * `min` is set by the CREATE modal only: a new post cannot be scheduled in
+     * the past, but the edit form must still open an overdue row without the
+     * browser refusing the unchanged time.
+     */
+    scheduleFields(value, min) {
         return html`
             <div class="form-group" id="schedule-time-group">
                 <label class="form-label" for="post-scheduled-time">${t('posts.schedule.label')}</label>
                 <input type="datetime-local" class="field" id="post-scheduled-time" name="scheduled_time"
-                       value="${value}" data-input="posts:refreshScheduleNote" required>
+                       value="${value}" ${min ? html`min="${min}"` : ''} data-input="posts:refreshScheduleNote" required>
                 <div class="schedule-truth">
                     <i data-lucide="info" aria-hidden="true"></i>
                     <div>
@@ -2975,14 +2977,19 @@ const PostsPage = {
                 </div>
                 ${this.tiktokTitleField()}
                 ${this.mediaFields(null)}
-                ${this.scheduleFields(defaultTime)}
+                ${this.scheduleFields(defaultTime, UI.toLocalInputValue(new Date()))}
                 <div class="form-group switch-row">
                     <label class="switch" for="post-publish-now">
-                        <span class="sr-only">${t('posts.publishNowToggle')}</span>
                         <input type="checkbox" name="publish_now" id="post-publish-now" data-change="posts:toggleScheduleTime">
                         <span class="switch-track"></span>
                     </label>
-                    <span class="switch-label">${t('posts.publishNowToggle')}</span>
+                    <span class="switch-text">
+                        <label class="switch-label" for="post-publish-now">${t('posts.publishNowToggle')}</label>
+                        <!-- The consequence, shown the moment the switch is on: the composer has no
+                             confirm dialog (Admin.confirm would replace this modal), so the switch
+                             itself has to say what the submit button is about to do. -->
+                        <span class="form-hint text-warning hidden" id="post-publish-now-hint" role="status">${t('posts.publishNowLive')}</span>
+                    </span>
                 </div>
                 ${this.tiktokConsentHost()}
                 <div class="modal-actions">
@@ -3177,6 +3184,8 @@ const PostsPage = {
         timeGroup.classList.toggle('hidden', publishNow);
         timeInput.required = !publishNow;
         timeInput.disabled = publishNow;
+        const liveHint = document.getElementById('post-publish-now-hint');
+        if (liveHint) liveHint.classList.toggle('hidden', !publishNow);
         submitBtn.innerHTML = esc(publishNow
             ? html`<i data-lucide="send" aria-hidden="true"></i> ${t('posts.publishNow')}`
             : html`<i data-lucide="plus" aria-hidden="true"></i> ${t('posts.scheduleBtn')}`);
@@ -3291,7 +3300,7 @@ const PostsPage = {
         };
 
         if (!payload.scheduled_time) {
-            this.showFormError(t('posts.schedule.unreadable'), 'post-scheduled-time');
+            this.showFormError(t('posts.schedule.unreadable'), 'post-scheduled-time', '');
             return;
         }
 
@@ -3350,7 +3359,9 @@ const PostsPage = {
         } catch (err) {
             const failure = this.publishFailure(null, err);
             if (publishNow) this.publishError = { message: failure };
-            this.showFormError(failure);
+            // A failed *schedule* created nothing, so the "still queued as failed"
+            // hint is only true on the publish-now path.
+            this.showFormError(failure, null, publishNow ? undefined : t('posts.saveFailedHint'));
             restore();
             if (publishNow) await this.render();
         }
@@ -3363,7 +3374,7 @@ const PostsPage = {
         const scheduledTime = UI.fromLocalInputValue(data.get('scheduled_time'));
 
         if (!scheduledTime) {
-            this.showFormError(t('posts.schedule.unreadable'), 'post-scheduled-time');
+            this.showFormError(t('posts.schedule.unreadable'), 'post-scheduled-time', '');
             return;
         }
 
@@ -3386,7 +3397,7 @@ const PostsPage = {
             UI.closeModal();
         } catch (err) {
             restore();
-            this.showFormError(err.message);
+            this.showFormError(err.message, null, t('posts.saveFailedHint'));
         }
     },
 
@@ -3399,10 +3410,11 @@ const PostsPage = {
     publishNow(id) {
         Admin.confirm({
             title: t('posts.publishNow'),
-            body: t('posts.publishNowToggle'),
-            hint: t('posts.deleteHint'),
+            body: t('posts.publishNowConfirm'),
+            hint: t('posts.publishNowConfirmHint'),
             confirmLabel: t('posts.publishNow'),
             confirmIcon: 'send',
+            tone: 'primary',
             onConfirm: () => PostsPage.publishNowConfirmed(id),
         });
     },
@@ -3466,10 +3478,14 @@ const PostsPage = {
      * `Admin.confirm` is loaded eagerly for this reason.
      */
     deletePost(id) {
+        // A published row is a log entry: removing it does nothing to the live
+        // post, and "cannot be undone" would read as though it did.
+        const post = this.posts.find((p) => p.id === id);
+        const isLog = !!post && post.status === 'PUBLISHED';
         Admin.confirm({
-            title: t('posts.deleteTitle'),
-            body: t('posts.deleteConfirm'),
-            hint: t('posts.deleteHint'),
+            title: isLog ? t('posts.deleteLogTitle') : t('posts.deleteTitle'),
+            body: isLog ? t('posts.deleteLogConfirm') : t('posts.deleteConfirm'),
+            hint: isLog ? t('posts.deleteLogHint') : t('posts.deleteHint'),
             confirmLabel: t('common.delete'),
             onConfirm: () => PostsPage.deletePostConfirmed(id),
         });

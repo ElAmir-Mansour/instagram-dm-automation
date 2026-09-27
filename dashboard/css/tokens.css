@@ -163,6 +163,10 @@
     --text-default: #d1d1d6;
     --text-muted: #aeaeb2;
     --text-on-accent: #ffffff;
+    /* The native <select> chevron, as a data URI because a <select> cannot host a
+       pseudo-element. The stroke is a theme value: one fixed grey measured under
+       3:1 on the light sunken well. */
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
     /* ─── Accent ──────────────────────────────────────────────────────────────
        `--accent` is the FILL (buttons, active states, focus rings) and
@@ -245,6 +249,7 @@
         --text-muted: #636366;
         --text-muted-large: #86868b;
         --text-on-accent: #ffffff;
+        --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
         --accent: #0071e3;
         --accent-hover: #0077ed;
@@ -268,6 +273,11 @@
         --info: #5e5ce6;
         --info-soft: rgba(94, 92, 230, 0.1);
         --info-text: #4c4acc;
+
+        /* Platform labels: the dark values are pastels that measured ~2:1 as text on
+           the -soft tint over the light card, so light gets its own deeper pair. */
+        --brand-instagram-text: #b5185c;
+        --brand-facebook-text: #0a58ca;
 
         --gradient-brand: linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc);
         --gradient-brand-soft: linear-gradient(180deg, rgba(0, 113, 227, 0.09), rgba(0, 100, 204, 0.03));
@@ -317,6 +327,7 @@
     --text-muted: #636366;
     --text-muted-large: #86868b;
     --text-on-accent: #ffffff;
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
     --accent: #0071e3;
     --accent-hover: #0077ed;
@@ -340,6 +351,11 @@
     --info: #5e5ce6;
     --info-soft: rgba(94, 92, 230, 0.1);
     --info-text: #4c4acc;
+
+    /* Platform labels: the dark values are pastels that measured ~2:1 as text on
+       the -soft tint over the light card, so light gets its own deeper pair. */
+    --brand-instagram-text: #b5185c;
+    --brand-facebook-text: #0a58ca;
 
     --gradient-brand: linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc);
     --gradient-brand-soft: linear-gradient(180deg, rgba(0, 113, 227, 0.09), rgba(0, 100, 204, 0.03));

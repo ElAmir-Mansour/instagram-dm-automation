@@ -105,6 +105,11 @@ const AnalyticsPage = {
         const campaignStats = campaignRes.status === 'fulfilled' ? campaignRes.value : null;
         const campaignError = campaignRes.status === 'rejected' ? campaignRes.reason : null;
 
+        // Today = today's row of the gap-filled daily series, not the rolling
+        // 24-hour `todayActivity` that also counted failures.
+        const todayRow = daily.length ? (daily[daily.length - 1] || {}) : null;
+        const todaySent = todayRow ? (Number(todayRow.sent) || 0) : (stats.todayActivity || 0);
+        const todayFailed = todayRow ? (Number(todayRow.failed) || 0) : null;
         const total = stats.totalInteractions || 0;
         const igCount = stats.instagramCount || 0;
         const fbCount = stats.facebookCount || 0;
@@ -139,7 +144,8 @@ const AnalyticsPage = {
                         <span class="stat-label">${t('analytics.today')}</span>
                         <span class="stat-icon"><i data-lucide="calendar" aria-hidden="true"></i></span>
                     </div>
-                    <p class="stat-value">${UI.formatNumber(stats.todayActivity)}</p>
+                    <p class="stat-value">${UI.formatNumber(todaySent)}</p>
+                    ${todayFailed !== null ? html`<p class="stat-sub">${t('analytics.todaySub', { failed: UI.formatNumber(todayFailed) })}</p>` : ''}
                 </div>
             </div>
 

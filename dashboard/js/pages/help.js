@@ -31,7 +31,6 @@ const HelpPage = {
     /** The search box's text. Cleared when the page is left. */
     query: '',
     /** slug → 'yes' | 'no', for this visit only: the line is presentational. */
-    feedback: Object.create(null),
     _contentPromise: null,
     _index: null,
     _indexLang: '',
@@ -587,7 +586,6 @@ const HelpPage = {
                 ` : ''}
                 ${sections.map((s) => this.sectionMarkup(article, s))}
                 ${this.relatedMarkup(article)}
-                ${this.feedbackMarkup(article)}
                 ${this.nextMarkup(article)}
             </article>
         `;
@@ -667,33 +665,6 @@ const HelpPage = {
                 </ul>
             </nav>
         `;
-    },
-
-    /** Presentational only: it changes what this screen says, and nothing else. */
-    feedbackMarkup(article) {
-        const value = this.feedback[article.slug] || '';
-        const button = (v, icon, label) => html`
-            <button type="button" class="btn btn-secondary btn-sm" data-action="help:feedback" data-value="${v}"
-                    data-slug="${article.slug}" aria-pressed="${value === v ? 'true' : 'false'}">
-                <i data-lucide="${icon}" aria-hidden="true"></i> ${label}
-            </button>
-        `;
-        return html`
-            <div class="help-feedback" role="group" aria-labelledby="help-feedback-q">
-                <p class="help-feedback-q" id="help-feedback-q">${t('help.feedback.question')}</p>
-                <div class="row row--wrap gap-2">
-                    ${button('yes', 'thumbs-up', t('help.feedback.yes'))}
-                    ${button('no', 'thumbs-down', t('help.feedback.no'))}
-                </div>
-                <p class="help-feedback-thanks" id="help-feedback-thanks" role="status">${this.feedbackThanks(value)}</p>
-            </div>
-        `;
-    },
-
-    feedbackThanks(value) {
-        if (value === 'yes') return t('help.feedback.thanksYes');
-        if (value === 'no') return t('help.feedback.thanksNo');
-        return '';
     },
 
     nextMarkup(article) {
@@ -784,25 +755,9 @@ const HelpPage = {
         this.paintList();
     },
 
-    /** Say thank you, mark the choice, and nothing more: there is no backend for this. */
-    setFeedback(el) {
-        const slug = el && el.dataset ? el.dataset.slug : '';
-        const value = el && el.dataset ? el.dataset.value : '';
-        if (!this.article(slug) || (value !== 'yes' && value !== 'no')) return;
-        this.feedback[slug] = value;
-        const group = el.closest ? el.closest('.help-feedback') : null;
-        if (group) {
-            group.querySelectorAll('[data-action="help:feedback"]').forEach((b) => {
-                b.setAttribute('aria-pressed', b.dataset.value === value ? 'true' : 'false');
-            });
-        }
-        const thanks = document.getElementById('help-feedback-thanks');
-        if (thanks) thanks.textContent = this.feedbackThanks(value);
-    },
 };
 
 UI.registerActions('help', {
     search(el) { HelpPage.onSearch(el); },
     clearSearch() { HelpPage.clearSearch(); },
-    feedback(el) { HelpPage.setFeedback(el); },
 });

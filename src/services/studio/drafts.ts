@@ -434,7 +434,7 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
     return {
         recentTopics: unique(topics),
         recentAccents: unique(accents.map((a) => a.accent).filter((a): a is string => Boolean(a))),
-        activeKeywords: unique(campaigns.flatMap((c) => (c.trigger_keyword ?? '').split(','))
+        activeKeywords: unique(campaigns.flatMap((c) => (c.trigger_keyword ?? '').split(/[,،]/))
             .map((k) => k.trim()).filter(Boolean)),
         palette: [...studio.brand.palette],
         settings: studio,
@@ -456,7 +456,7 @@ export async function preferPrimaryKeyword<T extends { carousel: Carousel; campa
         'SELECT trigger_keyword FROM campaigns WHERE creator_id = $1 AND is_active = TRUE ORDER BY created_at', [creatorId]
     );
     for (const c of campaigns) {
-        const words = (c.trigger_keyword ?? '').split(',').map((w) => w.trim()).filter(Boolean);
+        const words = (c.trigger_keyword ?? '').split(/[,،]/).map((w) => w.trim()).filter(Boolean);
         if (!words.some((w) => normalizeArabic(w.toLowerCase()) === picked)) continue;
         const primary = words[0]!;
         if (primary === generated.carousel.keyword) return generated;

@@ -70,8 +70,12 @@ const API = {
         }
 
         if (res.status === 401) {
+            const hadSession = !!this.token;
             this.clearToken();
-            if (typeof App !== 'undefined') App.showLogin();
+            // A 401 with a token is an expired session and the login screen says
+            // so; a 401 without one is the login attempt itself, which the form
+            // reports on its own.
+            if (typeof App !== 'undefined') App.showLogin(hadSession ? t('http.sessionExpired') : '');
             const err = new Error(t('http.sessionExpired'));
             err.status = 401;
             throw err;

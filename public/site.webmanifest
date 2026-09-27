@@ -1,0 +1,13 @@
+{
+  "name": "أوتوريبلاي برو",
+  "short_name": "AutoReply",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#161617",
+  "theme_color": "#0071e3",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

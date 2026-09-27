@@ -205,7 +205,7 @@ This document describes intent. Four CI checks enforce the parts that can be:
 | `check:i18n` | an English string with no Arabic translation, rendering English inside an RTL page |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
 
-`check:contrast` measures **144 pairs** across both themes. The tightest is **4.67:1**. That
+`check:contrast` measures **152 pairs** across both themes (the platform badge text on its own tint was added on 2026-09-27, after it was found failing in light mode). The tightest is **4.67:1**. That
 number is low on purpose: glass surfaces shift the ground under text, so the margin is thin
 and this is checked rather than asserted.
 
