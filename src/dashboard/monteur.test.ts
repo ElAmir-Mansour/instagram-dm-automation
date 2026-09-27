@@ -647,12 +647,12 @@ describe('Monteur — settings', () => {
         const page = await renderPage(s);
         assert.equal(s.Page.setup, true);
         assert.equal(count(page, '<li class="setup-step'), 3);
-        assert.ok(page.includes(s.t('monteur.setup.folder')) && page.includes(s.t('monteur.setup.times')) && page.includes(s.t('monteur.setup.numbers')));
+        assert.ok(page.includes(s.t('monteur.setup.source')) && page.includes(s.t('monteur.setup.times')) && page.includes(s.t('monteur.setup.numbers')));
         assert.ok(page.indexOf('id="mt-settings"') < page.indexOf('id="mt-queue"'), 'the setup comes before the (empty) queue');
         assert.ok(tagOf(page, 'mt-queue').includes('hidden'), 'nothing to review under a first run');
         assert.ok(tagOf(page, 'mt-enabled').includes('checked'), 'the setup is there to start the daily run');
         assert.ok(page.includes(s.t('monteur.setup.save')));
-        for (const id of ['mt-folder', 'mt-pick-folder', 'mt-run_at', 'mt-videos_per_run', 'mt-reels_per_video', 'mt-post_at-0', 'mt-min_seconds', 'mt-max_seconds', 'mt-platform-instagram', 'mt-platform-facebook', 'mt-platform-tiktok']) {
+        for (const id of ['mt-source-folder', 'mt-source-course', 'mt-mode-review', 'mt-mode-auto', 'mt-folder', 'mt-pick-folder', 'mt-run_at', 'mt-videos_per_run', 'mt-reels_per_video', 'mt-post_at-0', 'mt-min_seconds', 'mt-max_seconds', 'mt-platform-instagram', 'mt-platform-facebook', 'mt-platform-tiktok']) {
             assert.ok(tagOf(page, id), id);
         }
         s.Page.destroy();
@@ -697,7 +697,7 @@ describe('Monteur — settings', () => {
         const put = s.calls.find((c) => c.method === 'saveStudioSettings')!;
         assert.deepEqual(JSON.parse(JSON.stringify(put.args[0])), {
             monteur: {
-                enabled: true, folder: '/Users/elamir/Videos/Reels', run_at: '06:30', videos_per_run: 3, reels_per_video: 2,
+                enabled: true, source: 'folder', mode: 'review', folder: '/Users/elamir/Videos/Reels', run_at: '06:30', videos_per_run: 3, reels_per_video: 2,
                 platforms: ['instagram', 'tiktok'], post_at: ['20:00', '21:00'], min_seconds: 20, max_seconds: 45,
             },
         });
@@ -1029,16 +1029,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.doesNotMatch(studioTabs, /href="#\/monteur"\s+aria-current/);
     });
 
-    it('ships at cache version 8.1: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 11.4: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '11.3');
+        assert.equal(version, '11.4');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['11.3']);
+        assert.deepEqual([...new Set(refs)], ['11.4']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.3'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.4'], page);
         }
     });
 });
@@ -1393,6 +1393,145 @@ describe('Monteur — Approve’s answers (backend round 2)', () => {
         await renderPage(s);
         s.Page.clipField(fakeEl('mt-clip-c1-keyword', { dataset: { clip: 'c1', field: 'keyword' }, value: 'كورسات' }));
         assert.deepEqual(JSON.parse(JSON.stringify(s.Page.clipPatch(s.Page.clipById('c1'), s.Page.edits.c1))), { copy: { keyword: 'كورسات' } });
+        s.Page.destroy();
+    });
+});
+
+// ─── Round 4: where the videos come from, and what happens to a ready reel ─────────────────
+describe('Monteur — source and mode (MONTEUR.md §1)', () => {
+    const radio = (key: string, value: string): FakeEl => fakeEl(`mt-${key}-${value}`, { dataset: { key }, value, checked: true });
+
+    it('the settings card asks both, as radio groups, with the saved choice checked', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ settings: settings({ source: 'course', mode: 'auto' }) }));
+        await renderPage(s);
+        const form = String(s.Page.formMarkup());
+        for (const [key, value] of [['source', 'folder'], ['source', 'course'], ['mode', 'review'], ['mode', 'auto']]) {
+            const tag = tagOf(form, `mt-${key}-${value}`);
+            assert.ok(tag.includes('type="radio"') && tag.includes(`name="mt-${key}"`) && tag.includes('data-change="monteur:setting"'), `${key}=${value}`);
+            assert.equal(tag.includes('checked'), value === 'course' || value === 'auto', `${key}=${value} checked`);
+        }
+        for (const key of ['monteur.settings.source', 'monteur.settings.sourceFolder', 'monteur.settings.sourceCourse',
+            'monteur.settings.mode', 'monteur.settings.modeReview', 'monteur.settings.modeAuto']) {
+            assert.ok(form.includes(escaped(s.t(key))), key);
+        }
+        assert.ok(form.indexOf('id="mt-source"') < form.indexOf('id="mt-folder-group"'), 'the source comes before the folder');
+        assert.ok(tagOf(form, 'mt-folder-group').includes('hidden'), 'no folder is asked for with the course library');
+        s.Page.destroy();
+    });
+
+    it('reads a section with neither as the folder, reviewed', () => {
+        const s = loadMonteur('en');
+        const c = s.Page.normalizeConfig({ enabled: true, folder: '/v' });
+        assert.deepEqual([c.source, c.mode], ['folder', 'review']);
+        const odd = s.Page.normalizeConfig({ source: 'drive', mode: 'yolo' });
+        assert.deepEqual([odd.source, odd.mode], ['folder', 'review']);
+    });
+
+    it('course and auto are saved as such, with the daily run on and no folder at all', async () => {
+        const s = loadMonteur('en');
+        stub(s, firstRunView());
+        await renderPage(s);
+        s.host('mt-settings-savebar');
+        const group = s.host('mt-folder-group');
+        s.Page.setting(radio('source', 'course'));
+        assert.ok(group.classes.has('hidden'), 'the folder field goes');
+        s.Page.setting(radio('mode', 'auto'));
+        assert.deepEqual([...s.Page.stepStates()], [true, true, true], 'step 1 is done without a folder');
+        s.api.saveStudioSettings = (body: Json) => Promise.resolve({ settings: { ...studioSettings().settings, monteur: body.monteur } });
+        s.api.getMonteur = () => Promise.resolve(monteurView({ settings: settings({ source: 'course', mode: 'auto', folder: null }) }));
+        await s.Page.saveSettings(fakeEl('mt-settings-form'), { preventDefault() {} });
+        await settle();
+        const put = s.calls.find((c) => c.method === 'saveStudioSettings');
+        assert.ok(put, 'saved, not refused for want of a folder');
+        const sent = JSON.parse(JSON.stringify(put!.args[0])).monteur;
+        assert.deepEqual([sent.enabled, sent.source, sent.mode, sent.folder], [true, 'course', 'auto', null]);
+        s.Page.setting(radio('source', 'folder'));
+        assert.ok(!group.classes.has('hidden'), 'back to a folder, the field is back');
+        s.Page.destroy();
+    });
+
+    it('still needs a folder to run daily from one', async () => {
+        const s = loadMonteur('en');
+        stub(s, firstRunView());
+        await renderPage(s);
+        s.host('mt-settings');
+        s.Page.setting(radio('mode', 'auto'));
+        await s.Page.saveSettings(fakeEl('mt-settings-form'), { preventDefault() {} });
+        assert.equal(countCalls(s, 'saveStudioSettings'), 0);
+        assert.deepEqual([...s.Page.fieldProblems.keys()], ['folder']);
+        s.Page.destroy();
+    });
+
+    it('ignores a value that is neither choice', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.Page.setting(radio('source', 'dropbox'));
+        s.Page.setting(radio('mode', 'sometimes'));
+        assert.deepEqual([s.Page.work.source, s.Page.work.mode], ['folder', 'review']);
+        s.Page.destroy();
+    });
+
+    it('course mode: the strip shows the next run, Run now needs no folder, and its 409 is "no lesson left"', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ settings: settings({ source: 'course', folder: null }) }));
+        const page = await renderPage(s);
+        assert.ok(!page.includes(s.t('monteur.run.noFolder')));
+        assert.ok(page.includes(escaped(s.t('monteur.run.next', { when: s.Page.zoneLabel(RIYADH_NEXT_RUN) }))));
+        assert.ok(!/\sdisabled\b/.test(tagOf(page, 'mt-run-now')), 'Run now works without a folder');
+        assert.ok(!page.includes('monteur-folder-line'), 'no folder line in the summary');
+        s.api.runMonteur = () => Promise.reject(Object.assign(new Error('Every lesson…'), { status: 409 }));
+        await s.Page.runNow(button('mt-run-now'));
+        assert.ok(s.toasts.some((x) => x.type === 'error' && x.message === s.t('monteur.run.noLessonsToast')));
+        s.Page.destroy();
+    });
+
+    it('the summary says the videos come from the course library and reels are scheduled automatically', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ settings: settings({ source: 'course', mode: 'auto' }) }));
+        const page = await renderPage(s);
+        assert.ok(!page.includes('monteur-folder-line'), 'a folder still saved is not shown as where the videos come from');
+        const summary = String(s.Page.summaryMarkup());
+        assert.ok(summary.includes(s.t('monteur.summary.course')));
+        assert.ok(summary.includes(s.t('monteur.summary.auto')));
+        const plain = loadMonteur('en');
+        stub(plain);
+        await renderPage(plain);
+        const plainSummary = String(plain.Page.summaryMarkup());
+        assert.ok(!plainSummary.includes(plain.t('monteur.summary.course')) && !plainSummary.includes(plain.t('monteur.summary.auto')));
+        s.Page.destroy();
+        plain.Page.destroy();
+    });
+
+    it('an empty queue in course mode says when the next reels come, with no folder', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ settings: settings({ source: 'course', folder: null }), clips: [], sources: [] }));
+        const page = await renderPage(s);
+        assert.ok(page.includes(escaped(s.t('monteur.queue.emptyNext', { when: s.Page.zoneLabel(RIYADH_NEXT_RUN) }))));
+        s.Page.destroy();
+    });
+
+    it('a reel auto mode could not schedule says why on its card', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ clips: [clip({ error: 'TikTok is not connected. <b>Connect it</b>' })] }));
+        const page = await renderPage(s);
+        const line = (page.match(/<p [^>]*id="mt-clip-c1-refused"[^>]*>[\s\S]*?<\/p>/) || [''])[0];
+        assert.ok(line.includes(escaped(s.t('monteur.clip.autoRefused', { error: 'TikTok is not connected. <b>Connect it</b>' }))), line);
+        assert.ok(!page.includes('<b>Connect it</b>'), 'escaped');
+        s.Page.destroy();
+    });
+
+    it('says all of it in Arabic too', async () => {
+        const s = loadMonteur('ar');
+        stub(s, monteurView({ settings: settings({ source: 'course', mode: 'auto' }) }));
+        await renderPage(s);
+        const form = String(s.Page.formMarkup());
+        for (const key of ['monteur.settings.source', 'monteur.settings.sourceCourse', 'monteur.settings.mode', 'monteur.settings.modeAuto']) {
+            const text = s.t(key);
+            assert.match(text, /[\u0600-\u06FF]/, key);
+            assert.ok(form.includes(escaped(text)), key);
+        }
         s.Page.destroy();
     });
 });
