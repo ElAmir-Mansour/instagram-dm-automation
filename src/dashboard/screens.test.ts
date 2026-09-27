@@ -306,7 +306,7 @@ function load(): Loaded {
 
     for (const f of [
         'dashboard/js/components.js',
-        'dashboard/js/i18n.js',
+        'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js',
         'dashboard/js/motion.js',
         'dashboard/js/charts.js',
         'dashboard/js/pages/posts.js',
@@ -2265,7 +2265,7 @@ function loadStudio(hash: Record<string, string> = {}, storage: FakeStorage = fa
     vm.createContext(ctx);
     for (const f of [
         'dashboard/js/components.js',
-        'dashboard/js/i18n.js',
+        'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js',
         'dashboard/js/motion.js',
         'dashboard/js/pages/studio.js',
     ]) {

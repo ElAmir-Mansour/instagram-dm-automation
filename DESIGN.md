@@ -202,7 +202,7 @@ This document describes intent. Five CI checks, plus a few tests that act as gua
 |---|---|
 | `check:contrast` | any text/surface pair below WCAG AA (4.5:1) in either theme, **compositing the full glass stack down to the opaque canvas**; any two semantic colours within 25° of hue; and any platform colour used as a solid fill outside data visualisation |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
-| `check:i18n` | an English string with no Arabic translation, rendering English inside an RTL page; a key whose `{placeholders}` differ between the languages (plural families compared as a family); an Arabic-Indic digit in Arabic copy outside its allow-list |
+| `check:i18n` | (over `i18n.ar.js` / `i18n.en.js`: one dictionary per language since 2026-09-27, and a visit loads only its own) an English string with no Arabic translation, rendering English inside an RTL page; a key whose `{placeholders}` differ between the languages (plural families compared as a family); an Arabic-Indic digit in Arabic copy outside its allow-list |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
 | `check:icon-subset` | `dashboard/js/icons.js` out of date with the icon names the dashboard uses. The dashboard ships only the Lucide 0.577 icons it draws (128, ~9KB gz) instead of the 93KB UMD; a name missing from the subset still renders, by loading the full UMD once from the CDN |
 

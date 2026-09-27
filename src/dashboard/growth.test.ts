@@ -182,7 +182,7 @@ function load(files: string[], page: string, lang: 'ar' | 'en' = 'ar', app: Json
     };
     ctx.globalThis = ctx;
     vm.createContext(ctx);
-    for (const f of ['dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/motion.js', 'dashboard/js/charts.js', ...files]) {
+    for (const f of ['dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js', 'dashboard/js/charts.js', ...files]) {
         vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     }
     const run = <T>(code: string): T => vm.runInContext(code, ctx) as T;
@@ -1443,7 +1443,7 @@ describe('Growth — every string in Arabic and English, and the page wired into
         assert.ok(at('data-page="analytics"') < at('data-page="growth"') && at('data-page="growth"') < at('data-page="activity"'));
         assert.match(index, /var PAGES = \[[^\]]*'growth'/);
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '11.2');
-        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.2']);
+        assert.equal(version, '11.3');
+        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.3']);
     });
 });

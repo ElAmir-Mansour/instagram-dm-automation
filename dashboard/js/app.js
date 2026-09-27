@@ -79,7 +79,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '11.2',
+    ASSET_VERSION: '11.3',
 
     _modules: Object.create(null),
 
@@ -1221,4 +1221,9 @@ UI.registerActions('app', {
 });
 
 // Boot
-document.addEventListener('DOMContentLoaded', () => App.init());
+// The dictionary for the page's language is a separate file (i18n.ar.js / i18n.en.js) that
+// the head script started fetching early; boot waits for it rather than render raw keys.
+// A failure still boots (I18N.ready falls back to English), so the app never hangs here.
+document.addEventListener('DOMContentLoaded', () => {
+    I18N.ready().then(() => App.init(), () => App.init());
+});

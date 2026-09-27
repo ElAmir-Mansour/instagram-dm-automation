@@ -170,7 +170,7 @@ function load(files: string[], page: string, lang: 'ar' | 'en' = 'en', app: Json
     };
     ctx.globalThis = ctx;
     vm.createContext(ctx);
-    for (const f of ['dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/motion.js', ...files]) {
+    for (const f of ['dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js', ...files]) {
         vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     }
     const run = <T>(code: string): T => vm.runInContext(code, ctx) as T;
@@ -1033,12 +1033,12 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '11.2');
+        assert.equal(version, '11.3');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['11.2']);
+        assert.deepEqual([...new Set(refs)], ['11.3']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.2'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.3'], page);
         }
     });
 });

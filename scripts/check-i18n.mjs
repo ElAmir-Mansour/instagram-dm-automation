@@ -44,6 +44,8 @@ import vm from 'node:vm';
 
 const DASHBOARD = 'dashboard';
 const I18N_FILE = 'dashboard/js/i18n.js';
+// The dictionaries, one file per language since 2026-09-27 (a visit loads only its own).
+const DICT_FILES = { ar: 'dashboard/js/i18n.ar.js', en: 'dashboard/js/i18n.en.js' };
 const PLURAL_SUFFIXES = ['zero', 'one', 'two', 'few', 'many', 'other'];
 
 /** Keys whose Arabic value may contain Arabic-Indic digits, each with the reason. */
@@ -72,21 +74,20 @@ function walk(dir) {
 }
 
 // ─── The dictionaries ───────────────────────────────────────────────────────
-const source = readFileSync(I18N_FILE, 'utf8');
-const lines = source.split('\n');
-// Exactly four spaces: `        ar: { label: ... }` at the top is the LANGS config, not a
-// dictionary, and matching it instead is how the first version of this reported 889-vs-0.
-const iAr = lines.findIndex(l => /^ {4}ar: \{/.test(l));
-const iEn = lines.findIndex(l => /^ {4}en: \{/.test(l));
-if (iAr === -1 || iEn === -1) {
-    console.error(`❌ could not locate the ar/en dictionaries in ${I18N_FILE}.`);
-    process.exit(1);
-}
-const dictKeys = (from, to) => new Set(
-    lines.slice(from, to).map(l => (l.match(/^\s+'([a-zA-Z0-9_.]+)':/) || [])[1]).filter(Boolean)
+// Keys read from each dictionary file's lines (a key is `'a.b':` at the start of a line), so
+// a key written twice is seen as written, which evaluating the object would hide.
+const dictKeys = (file) => new Set(
+    readFileSync(file, 'utf8').split('\n')
+        .map(l => (l.match(/^\s+'([a-zA-Z0-9_.]+)':/) || [])[1]).filter(Boolean)
 );
-const AR = dictKeys(iAr, iEn);
-const EN = dictKeys(iEn, lines.length);
+for (const [lang, file] of Object.entries(DICT_FILES)) {
+    if (!/\.(ar|en) = \{/.test(readFileSync(file, 'utf8'))) {
+        console.error(`❌ could not locate the ${lang} dictionary in ${file}.`);
+        process.exit(1);
+    }
+}
+const AR = dictKeys(DICT_FILES.ar);
+const EN = dictKeys(DICT_FILES.en);
 
 // The values, for checks 5 and 6. i18n.js is a plain script whose top level only builds
 // objects (document and localStorage are touched inside functions), so it is evaluated
@@ -94,7 +95,10 @@ const EN = dictKeys(iEn, lines.length);
 const sandbox = {};
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
-const STRINGS = vm.runInContext(`${source}\n;I18N.strings`, sandbox, { filename: I18N_FILE });
+for (const file of [I18N_FILE, DICT_FILES.ar, DICT_FILES.en]) {
+    vm.runInContext(readFileSync(file, 'utf8'), sandbox, { filename: file });
+}
+const STRINGS = vm.runInContext('I18N.strings', sandbox);
 
 // ─── Every key the UI asks for ──────────────────────────────────────────────
 const used = new Map();       // key -> first file that uses it
