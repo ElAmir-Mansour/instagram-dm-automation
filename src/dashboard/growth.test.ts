@@ -9,7 +9,10 @@
  *     exact scopes), nothing synced yet, an account under 100 followers, a viewer, a failed read;
  *   - "not measured" is never drawn as 0, and sorts last in both directions;
  *   - best times land on the tenant's local weekday and hour, including across midnight and the
- *     week's edge, and a half-hour zone maps every hour to exactly one cell;
+ *     week's edge, and a half-hour zone maps every hour to exactly one cell; the grid is four
+ *     parts of the day, each saying how many posts it is of, and nothing is "best" under 10;
+ *   - each region paints the moment its own read lands, fails alone with its own Retry, and a
+ *     late answer for an old range or tenant never paints (G7);
  *   - the coach's actions are ordered by the impact/effort chips they show;
  *   - the keywords and composer payloads are exactly what the API contract names.
  */
@@ -287,6 +290,9 @@ async function renderPage(s: Loaded): Promise<string> {
 
 const count = (text: string, needle: string): number => text.split(needle).length - 1;
 
+/** Markup as the words a reader gets: tags dropped, whitespace folded. */
+const text = (markup: unknown): string => String(markup).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
 /** A string as `esc()` writes it into markup, so copy with "&" or quotes can be looked for. */
 const escaped = (text: string): string => text.replace(/[&<>"'`]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;', '`': '&#96;' }[c] as string));
 
@@ -396,14 +402,16 @@ describe('GrowthPage — every state renders something true', () => {
         s.Page.destroy();
     });
 
-    it('a failed overview is one error panel; the posts beside it still render', async () => {
+    it('a failed overview is its own error panel; the posts and best times beside it still render', async () => {
         const s = loadGrowth('en');
         stubGrowth(s);
         s.api.getGrowthOverview = () => Promise.reject(Object.assign(new Error('Gateway timeout'), { status: 504 }));
         const page = await renderPage(s);
         assert.ok(page.includes('data-error-host'));
-        assert.ok(page.includes('data-error-retry="data"'));
+        assert.equal(count(page, 'data-error-retry="overview"'), 2, 'the summary and by type: the two regions the overview feeds');
+        assert.equal(page.includes('data-error-retry="data"'), false, 'no Retry that re-asks for everything');
         assert.ok(count(page, 'class="log-card growth-post-card"') > 0, 'posts are their own region');
+        assert.ok(page.includes('id="growth-heat"'), 'and best times come from the posts');
     });
 
     it('loading: the skeleton is the page’s shape; a range change keeps the old numbers, dimmed and aria-busy (G6)', async () => {
@@ -606,13 +614,15 @@ describe('GrowthPage — building the best-times heat map', () => {
         assert.equal(noViews.grid[0][21], 3);
     });
 
-    it('renders hours in document order, so Arabic runs from the right, and labels local time', async () => {
+    it('renders the parts of the day in document order, so Arabic runs from the right, and labels local time', async () => {
         const s = loadGrowth('ar');
         stubGrowth(s);
         await s.Page.render();
         const best = String(s.Page.bestTimesMarkup());
-        assert.equal(/<table class="growth-heat"[^>]*dir=/.test(best), false, 'no direction override: RTL comes from the page');
-        assert.ok(best.indexOf('<span class="sr-only">00:00</span>') < best.indexOf('<span class="sr-only">23:00</span>'));
+        assert.equal(/<table class="growth-heat[^"]*"[^>]*dir=/.test(best), false, 'no direction override: RTL comes from the page');
+        const at = ['night', 'morning', 'afternoon', 'evening'].map((k) => best.indexOf(`<span class="growth-part-name">${s.t(`growth.best.part.${k}`)}</span>`));
+        assert.ok(at.every((i, n) => i > 0 && (n === 0 || at[n - 1]! < i)), 'night first, evening last');
+        assert.ok(best.includes('<bdi class="ltr-text" dir="ltr">18–24</bdi>'), 'the hours isolated, or 18–24 reads 24–18 in Arabic');
         assert.ok(best.includes(s.t('growth.best.zone', { zone: s.Page.zoneLabel('Asia/Riyadh') })), 'the tenant’s zone, named');
         assert.ok(best.includes('id="growth-best-basis"'), 'and "based on your posts"');
         assert.equal(s.Page.heatLevel(null, 10), 0);
@@ -629,6 +639,285 @@ describe('GrowthPage — building the best-times heat map', () => {
         assert.equal(tz.own, false);
         s.Page.settings = s.Page.normalizeSettings({ audience: { timezone: 'Asia/Dubai' } });
         assert.deepEqual(plain(s.Page.tenantZone()), { zone: 'Asia/Dubai', own: true });
+    });
+});
+
+describe('GrowthPage — best times in four parts of the day (G9 G10)', () => {
+    /** A post at an hour in Riyadh (UTC+3) on a weekday of the week that starts Sunday 2026-09-20. */
+    const at = (day: number, hour: number, views: number): Json => ({
+        platform: 'instagram', media_type: 'REELS',
+        published_at: new Date(Date.UTC(2026, 8, 20 + day, hour - 3, 10)).toISOString(),
+        metrics: { views },
+    });
+    const six = (): Json[] => [at(2, 19, 300), at(2, 22, 500), at(2, 23, 100), at(0, 1, 50), at(0, 5, 70), at(4, 13, 40)];
+    const ten = (): Json[] => [...six(), at(3, 8, 20), at(3, 9, 30), at(5, 20, 900), at(6, 14, 10)];
+
+    function withPosts(posts: Json[], lang: 'ar' | 'en' = 'en'): Loaded {
+        const s = loadGrowth(lang);
+        s.Page.settings = s.Page.normalizeSettings(fullSettings());
+        s.Page.days = 28;
+        s.Page.posts = posts;
+        s.Page.postsLoaded = true;
+        return s;
+    }
+
+    it('gathers each part of the day, and says how many posts each average is of', () => {
+        const s = loadGrowth('en');
+        const own = s.Page.postsHeatGrid(six(), 'Asia/Riyadh');
+        const cells = plain(s.Page.daypartCells(own.sums, own.counts));
+        assert.equal(cells.length, 7);
+        assert.ok(cells.every((row: Json[]) => row.length === 4), 'night, morning, afternoon, evening');
+        assert.deepEqual(cells[2][3], { avg: 300, n: 3 }, 'Tuesday evening: (300 + 500 + 100) / 3 — every post weighs the same');
+        assert.deepEqual(cells[0][0], { avg: 60, n: 2 }, 'Sunday night is 00:00–06:00');
+        assert.deepEqual(cells[4][2], { avg: 40, n: 1 });
+        assert.equal(cells[1][1], null, 'nothing posted then: null, not 0');
+    });
+
+    it('names no best time under 10 posts, and from 10 names each with the posts behind it', () => {
+        const few = String(withPosts(six()).Page.bestTimesMarkup());
+        const s = withPosts(ten());
+        assert.equal(few.includes('id="growth-best-top"'), false, 'six posts are not a pattern');
+        assert.ok(few.includes(s.t('growth.best.fewPosts', { min: '10', posts: '6 posts' })));
+        const enough = String(s.Page.bestTimesMarkup());
+        assert.equal(enough.includes('id="growth-best-few"'), false);
+        const top = (enough.match(/<p class="growth-best-top" id="growth-best-top">([\s\S]*?)<\/p>/) || [])[1] || '';
+        assert.equal(text(top), `${s.t('growth.best.topLead')} Fri evening · 1 post · Tue evening · 3 posts · Sun night · 2 posts`,
+            'a one-post slot may lead, but it says it is one post');
+    });
+
+    it('is 7 days × 4 parts in a table, with a button for each part that had posts and a dash for the rest', () => {
+        const s = withPosts(ten());
+        const m = String(s.Page.bestTimesMarkup());
+        assert.ok(m.includes('<caption class="sr-only">'), 'the table keeps its caption for a screen reader');
+        assert.equal(count(m, '<th scope="row">'), 7);
+        assert.equal(count(m, '<th scope="col">'), 4);
+        assert.equal(count(m, 'data-action="growth:pickSlot"'), 6, 'Sun night, Tue evening, Wed morning, Thu afternoon, Fri evening, Sat afternoon');
+        assert.equal(count(m, 'class="growth-slot is-empty"'), 22);
+        const label = s.t('growth.best.slotLabel', {
+            slot: 'Tuesday evening', hours: '18:00–24:00', numbers: s.t('growth.best.slotViews', { avg: '300', posts: '3 posts' }),
+        });
+        assert.ok(m.includes(`aria-label="${escaped(label)}"`), 'its name carries the numbers it shows');
+        assert.ok(/id="growth-slot-2-3"[\s\S]*?<span class="growth-slot-avg">300<\/span>\s*<span class="growth-slot-n">3 posts<\/span>/.test(m));
+        assert.equal(/<span class="sr-only">\d{2}:00<\/span>/.test(m), false, 'no 24 hour columns any more');
+    });
+
+    it('a tap or Enter on a cell spells its numbers out under the grid; a second press puts the hint back', () => {
+        const s = withPosts(ten());
+        const region = s.host('growth-best');
+        assert.ok(String(s.Page.bestTimesMarkup()).includes(s.t('growth.best.tapHint')));
+        s.Page.pickSlot({ dataset: { day: '2', part: '3' } });
+        assert.ok(/id="growth-slot-2-3"[^>]*aria-pressed="true"/.test(region.innerHTML));
+        const caption = (region.innerHTML.match(/id="growth-slot-caption">([\s\S]*?)<\/p>/) || [])[1] || '';
+        assert.equal(text(caption), `Tuesday evening 18:00–24:00 · ${s.t('growth.best.slotViews', { avg: '300', posts: '3 posts' })}`);
+        s.Page.pickSlot({ dataset: { day: '2', part: '3' } });
+        assert.ok(region.innerHTML.includes(s.t('growth.best.tapHint')));
+        assert.equal(s.Page.slotPick, null);
+        s.Page.pickSlot({ dataset: { day: '9', part: '1' } });
+        assert.equal(s.Page.slotPick, null, 'a day that does not exist picks nothing');
+    });
+
+    it('when the posts cannot be read, weights the server’s grid back by its counts, from the zone it names', () => {
+        const s = loadGrowth('en');
+        s.Page.settings = s.Page.normalizeSettings(fullSettings());
+        s.Page.postsError = new Error('Posts timed out');
+        const grid = (): number[][] => Array.from({ length: 7 }, () => Array(24).fill(0));
+        const avg = grid();
+        const counts = grid();
+        avg[2]![19] = 100; counts[2]![19] = 1;
+        avg[2]![20] = 400; counts[2]![20] = 3;
+        s.Page.overview = { best_times: avg, best_times_meta: { counts, timezone: 'Asia/Riyadh', metric: 'views' } };
+        const map = s.Page.bestMap();
+        assert.deepEqual(plain(map.cells[2][3]), { avg: 325, n: 4 }, '(100 + 3 × 400) / 4, not (100 + 400) / 2');
+        assert.equal(map.basis, 'server');
+        s.Page.overview = { best_times: avg, best_times_meta: { counts, timezone: 'UTC', metric: 'views' } };
+        assert.deepEqual(plain(s.Page.bestMap().cells[2][3]), { avg: 325, n: 4 }, 'Tuesday 19:00 UTC is 22:00 in Riyadh: still the evening');
+        assert.equal(plain(s.Page.bestMap().cells[2][2]), null);
+        s.Page.overview = { best_times: avg, best_times_meta: { timezone: 'UTC' } };
+        const failed = String(s.Page.bestTimesMarkup());
+        assert.ok(failed.includes('data-error-retry="posts"'), 'no counts to weigh by: the posts failure, with its Retry');
+        assert.equal(failed.includes(s.t('growth.best.empty')), false, 'not "not enough posts": that would be false');
+    });
+});
+
+describe('GrowthPage — each region paints as its own read lands (G7)', () => {
+    /** The four reads, each answered by hand. */
+    function inFlight(s: Loaded) {
+        const r = { status: deferred<Json>(), overview: deferred<Json>(), posts: deferred<Json>(), settings: deferred<Json>() };
+        s.api.getGrowthStatus = () => r.status.promise;
+        s.api.getGrowthOverview = () => r.overview.promise;
+        s.api.getGrowthPosts = () => r.posts.promise;
+        s.api.getGrowthSettings = () => r.settings.promise;
+        s.api.getGrowthCompetitors = () => Promise.resolve([]);
+        return r;
+    }
+    /** The frame's regions, as a real DOM has them once the frame is painted. */
+    const REGIONS = ['growth-toolbar', 'growth-banner', 'growth-do-first', 'growth-summary', 'growth-coach', 'growth-details', 'growth-best', 'growth-types', 'growth-posts'];
+    const frame = (s: Loaded): Record<string, FakeEl> => Object.fromEntries(REGIONS.map((id) => [id, s.host(id)]));
+
+    it('paints the frame at once, then each region as the read it needs lands, in whatever order they land', async () => {
+        const s = loadGrowth('en');
+        const r = inFlight(s);
+        const done = s.Page.render();
+        const shell = s.dom.get('page-container')!.innerHTML;
+        assert.ok(shell.includes('id="growth-tab-performance"') && shell.includes('id="growth-range-28"'), 'the toolbar is real at once');
+        for (const id of ['growth-summary', 'growth-best', 'growth-types', 'growth-posts']) assert.ok(shell.includes(`id="${id}"`), id);
+        assert.ok(shell.includes('class="skel'), 'each region as its skeleton');
+        assert.ok(shell.includes('id="growth-best-title"') && shell.includes('id="growth-posts-title"'), 'the cards keep their headings while they load');
+        assert.equal(shell.includes(s.t('growth.sync.never')), false, 'not "never synced" before the status says so');
+        const h = frame(s);
+
+        r.overview.resolve({ ...fullOverview(), kpis: { ...fullOverview().kpis, saves: null } });
+        await settle();
+        assert.ok(h['growth-summary']!.innerHTML.includes('<p class="stat-value">59,455</p>'), 'the summary, the moment its overview lands');
+        assert.equal(h['growth-summary']!.innerHTML.includes(s.t('growth.kpi.locked')), false, 'why saves is missing is the status’s to say');
+        assert.ok(h['growth-types']!.innerHTML.includes(s.t('growth.types.verdict', { best: 'Reel', worst: 'Carousel', ratio: '3.3' })));
+        assert.equal(h['growth-posts']!.innerHTML, '', 'the posts wait for the posts');
+        assert.equal(h['growth-banner']!.innerHTML, '', 'the banner for the status');
+
+        r.posts.resolve({ posts: fullPosts() });
+        await settle();
+        assert.equal(count(h['growth-posts']!.innerHTML, 'class="log-card growth-post-card"'), 25);
+        assert.equal(h['growth-best']!.innerHTML, '', 'best times wait for the zone the settings name');
+
+        r.status.resolve({ ...fullStatus(), instagram: 'missing_permission', missing: ['instagram_manage_insights'] });
+        await settle();
+        assert.ok(h['growth-banner']!.innerHTML.includes('id="growth-permission-banner"'));
+        assert.match(h['growth-toolbar']!.innerHTML, /id="growth-last-sync" title="/, 'the toolbar, with when it last synced');
+        assert.ok(h['growth-summary']!.innerHTML.includes(s.t('growth.kpi.locked')), 'and the summary is told why saves is missing');
+        assert.ok(h['growth-coach']!.innerHTML.includes(s.t('growth.coach.lockedNote')));
+
+        r.settings.resolve({ settings: fullSettings() });
+        await done;
+        assert.ok(h['growth-best']!.innerHTML.includes('id="growth-heat"'));
+        assert.ok(h['growth-best']!.innerHTML.includes(s.t('growth.best.zone', { zone: s.Page.zoneLabel('Asia/Riyadh') })));
+        assert.equal(s.dom.get('page-container')!.innerHTML, shell, 'the frame itself was never painted again');
+        assert.deepEqual(plain(s.Page.pending), { status: false, overview: false, posts: false, settings: false });
+        s.Page.destroy();
+    });
+
+    it('each region fails alone, with a panel whose Retry asks for its own read', async () => {
+        const s = loadGrowth('en');
+        stubGrowth(s);
+        s.api.getGrowthPosts = () => Promise.reject(Object.assign(new Error('Posts timed out'), { status: 504 }));
+        s.api.getGrowthStatus = () => Promise.reject(new Error('Status is down'));
+        const page = await renderPage(s);
+        assert.equal(count(page, 'data-error-retry="posts"'), 2, 'the posts table, and best times that are built from it');
+        assert.ok(page.includes('data-error-retry="status"'), 'the status, where its banner would be');
+        assert.ok(page.includes(escaped(s.t('growth.status.failed'))));
+        assert.equal(page.includes('data-error-retry="overview"'), false, 'the overview answered');
+        assert.ok(page.includes('<p class="stat-value">59,455</p>'), 'so its numbers are on screen');
+        assert.equal(page.includes(s.t('growth.sync.never')), false, 'an unread status is not "never synced"');
+        assert.equal(page.includes(s.t('growth.best.empty')), false, 'nor are failed posts "not enough posts"');
+    });
+
+    it('Retry re-asks for that read alone, with a skeleton where the error was', async () => {
+        const s = loadGrowth('en');
+        stubGrowth(s);
+        s.api.getGrowthPosts = () => Promise.reject(new Error('Posts timed out'));
+        await s.Page.render();
+        await settle();
+        const h = frame(s);
+        const before = s.calls.length;
+        const again = deferred<Json>();
+        s.api.getGrowthPosts = () => again.promise;
+        const retrying = s.Page.retry(['posts']);
+        assert.ok(h['growth-posts']!.innerHTML.includes('class="skel'), 'the panel gives way to the skeleton');
+        assert.ok(h['growth-best']!.innerHTML.includes('class="skel'));
+        again.resolve({ posts: fullPosts() });
+        await retrying;
+        assert.deepEqual(s.calls.slice(before).map((c) => c.method), ['getGrowthPosts'], 'nothing else is asked twice');
+        assert.equal(count(h['growth-posts']!.innerHTML, 'class="log-card growth-post-card"'), 25);
+        assert.ok(h['growth-best']!.innerHTML.includes('id="growth-heat"'));
+        assert.deepEqual([...s.Page.RETRY_SOURCES], ['status', 'overview', 'posts', 'settings']);
+        s.Page.destroy();
+    });
+
+    it('a late answer for an old range, an old tenant or a page left behind never paints', async () => {
+        const s = loadGrowth('en');
+        const r = inFlight(s);
+        s.Page.render();
+        const h = frame(s);
+        r.status.resolve(fullStatus());
+        r.settings.resolve({ settings: fullSettings() });
+        r.posts.resolve({ posts: fullPosts() });
+        await settle();
+
+        // The range switches while the 28-day overview is still out.
+        const week = deferred<Json>();
+        s.api.getGrowthOverview = () => week.promise;
+        s.Page.setDays({ dataset: { days: '7' } });
+        r.overview.resolve({ ...fullOverview(), kpis: { ...fullOverview().kpis, views: 111111 } });
+        await settle();
+        assert.equal(h['growth-summary']!.innerHTML.includes('111,111'), false, 'the 28-day answer landed after the switch: dropped');
+        assert.equal(s.Page.overview, null);
+        assert.equal(s.Page.pending.overview, true, 'still waiting, for the 7-day one');
+        week.resolve({ ...fullOverview(), kpis: { ...fullOverview().kpis, views: 777 } });
+        await settle();
+        assert.ok(h['growth-summary']!.innerHTML.includes('<p class="stat-value">777</p>'));
+
+        // A tenant switch mid-read retires the old tenant's answer.
+        const other = deferred<Json>();
+        s.api.getGrowthOverview = () => other.promise;
+        s.Page.reloadData();
+        s.Page.resetTenantState();
+        other.resolve({ ...fullOverview(), kpis: { ...fullOverview().kpis, views: 222222 } });
+        await settle();
+        assert.equal(s.Page.overview, null);
+        assert.equal(h['growth-summary']!.innerHTML.includes('222,222'), false);
+
+        // And a page left behind: the answer is not painted into whatever screen is there now.
+        stubGrowth(s);
+        const late = deferred<Json>();
+        s.api.getGrowthOverview = () => late.promise;
+        s.Page.render();
+        s.Page.destroy();
+        const elsewhere = s.dom.get('page-container')!.innerHTML;
+        late.resolve({ ...fullOverview(), kpis: { ...fullOverview().kpis, views: 333333 } });
+        await settle();
+        assert.equal(s.dom.get('page-container')!.innerHTML, elsewhere);
+        assert.equal(h['growth-summary']!.innerHTML.includes('333,333'), false);
+    });
+});
+
+describe('GrowthPage — the posts table and the phone cards (G8)', () => {
+    it('keeps the post column in place while the metrics scroll: sticky at the inline start, on an opaque ground', () => {
+        const s = loadGrowth('en');
+        s.Page.posts = fullPosts();
+        s.Page.postsLoaded = true;
+        s.Page.days = 28;
+        const m = String(s.Page.postsMarkup());
+        assert.ok(m.includes('<th scope="col" class="growth-post-head">'));
+        assert.equal(count(m, '<td class="growth-post-cell">'), 25);
+        const css = readFileSync('dashboard/css/styles.css', 'utf8');
+        const wave = css.slice(css.indexOf('/* ─── wave3: growth ─── */'));
+        assert.ok(wave.length < css.length, 'the wave-3 section exists');
+        const rule = (wave.match(/\.growth-posts-table \.growth-post-cell,\s*\.growth-posts-table \.growth-post-head \{([^}]*)\}/) || [])[1] || '';
+        assert.match(rule, /position: sticky;/);
+        assert.match(rule, /inset-inline-start: 0;/);
+        assert.match(rule, /background: var\(--surface-solid\);/, 'opaque: the numbers must not show through it');
+        assert.match(wave, /tr:hover \.growth-post-cell \{\s*background: linear-gradient\(var\(--surface-glass-hover\), var\(--surface-glass-hover\)\), var\(--surface-solid\);/,
+            'and still opaque under the row’s hover tint');
+        assert.equal(/(^|[\s;{])(left|right)\s*:|(margin|padding|border)-(left|right)/.test(wave), false, 'logical properties only');
+    });
+
+    it('a phone card leads with views, the skip rate, watch time and engagement, and folds the rest into «More»', () => {
+        const s = loadGrowth('en');
+        const labels = (markup: string): string[] => [...markup.matchAll(/<dt>([^<]+)<\/dt>/g)].map((m) => m[1]!);
+        const names = (keys: string[]): string[] => keys.map((k) => escaped(s.t(`growth.metric.${k}`)));
+        const reel = fullPosts()[0];
+        reel.metrics.skip_rate = 74.1;
+        const card = String(s.Page.postCard(reel, 10));
+        const lead = card.slice(card.indexOf('growth-card-key'), card.indexOf('<details'));
+        const more = card.slice(card.indexOf('<details class="growth-card-more">'));
+        assert.deepEqual(labels(lead), names(['views', 'skip_rate', 'avg_watch', 'engagement_rate']));
+        assert.ok(lead.includes('74.1%') && lead.includes('class="growth-er"'), 'the skip rate, and engagement with its bar');
+        assert.deepEqual(labels(more), names(['reach', 'likes', 'comments', 'saved', 'shares']));
+        assert.ok(more.includes(`<summary>${s.t('growth.posts.moreMetrics')}<span class="sr-only">: Reach, Likes, Comments, Saves, and Shares</span></summary>`),
+            '«More», and what it opens, for a screen reader');
+        const carousel = String(s.Page.postCard(fullPosts()[1], 10));
+        assert.deepEqual(labels(carousel.slice(0, carousel.indexOf('<details'))), names(['views', 'engagement_rate']),
+            'a carousel has no watch time or skip rate: no empty rows for them');
+        assert.equal(loadGrowth('ar').t('growth.posts.moreMetrics'), 'المزيد');
     });
 });
 
@@ -1154,7 +1443,7 @@ describe('Growth — every string in Arabic and English, and the page wired into
         assert.ok(at('data-page="analytics"') < at('data-page="growth"') && at('data-page="growth"') < at('data-page="activity"'));
         assert.match(index, /var PAGES = \[[^\]]*'growth'/);
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '11.0');
-        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.0']);
+        assert.equal(version, '11.1');
+        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.1']);
     });
 });
