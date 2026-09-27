@@ -24,7 +24,11 @@ The section is a JSONB column, merged over the defaults and validated whole, lik
 ```ts
 type MonteurConfig = {
   enabled: boolean;          // default false. Off = no daily run (Run now still works)
-  folder: string | null;     // absolute path on the worker's machine, ≤ 1024 chars
+  source: 'folder' | 'course';  // default 'folder'. Where a run takes its videos (§7): new files in `folder`,
+                             // or the course library's next lessons (`course_lessons`), which needs no folder
+  mode: 'review' | 'auto';   // default 'review'. 'auto': the drain approves each rendered reel itself, through
+                             // Approve (§6, "Auto mode"); a refused one stays in review with the reason
+  folder: string | null;     // absolute path on the worker's machine, ≤ 1024 chars; needed only for 'folder'
   run_at: string;            // 'HH:MM' in schedule.timezone, default '07:00'
   videos_per_run: number;    // 1–10, default 1: new videos taken per run, oldest first
   reels_per_video: number;   // 1–5, default 1
@@ -40,6 +44,11 @@ type MonteurConfig = {
 - **Routes:** GET and PUT `/api/studio/settings` carry the section like any other; there is no separate
   settings route.
 - **Transcript language:** `voice.language`.
+- **A section saved before `source` and `mode` existed** reads as `'folder'` and `'review'`: sections are merged
+  over the defaults. A change of `source` (or of `folder`, in folder mode) fails a pending `monteur_scan` of the
+  other kind, so the next run is the new one.
+- **`mode` is independent of `enabled`:** `enabled` is only the daily run. A Monteur switched off but in auto mode
+  still schedules the reels that finish rendering.
 
 ## 2. Migration `src/config/migration_v24_monteur.sql`
 
@@ -95,6 +104,9 @@ studio_lessons (
 )
 ```
 
+**v27** (`migration_v27_monteur_edits.sql`) adds `clip_drafts.edits jsonb NOT NULL DEFAULT '[]'`: the Editor's
+edits (§6.2), written once by the sweep and sent with every render of the clip. Migrate before deploying.
+
 **Media references.** The media in `render` for a clip that is `rendering`, `review` or `scheduled` counts as
 referenced. Both the retention sweep (`src/services/retention.ts`) and `deleteUnreferencedUploads` must treat
 it that way. A rejected or failed clip's media is not referenced.
@@ -111,10 +123,21 @@ Every job uses the existing studio_jobs flow: claim, progress as the heartbeat, 
 - After 5 minutes it gives up and reports `cancelled`.
 - The app saves `monteur.folder` through the settings validation.
 
-**`monteur_scan`** `{ folder, limit, known: string[], extensions: ['.mp4','.mov','.m4v','.mkv','.webm'], min_age_s: 60 }`
+**`monteur_scan`** `{ folder: string | null, files?: string[], limit, known: string[], extensions: ['.mp4','.mov','.m4v','.mkv','.webm'], min_age_s: 60 }`
 → `{ files: [{ path, name, key, size, mtime, duration }], skipped: [{ name, reason }], missing: boolean }`
 
-What the worker does:
+Two kinds, one result shape:
+- **Folder** (`source: 'folder'`): `folder` is set, and there is no `files`.
+- **Course** (`source: 'course'`): `folder` is **null** and `files` lists absolute paths, **in the order to take them**
+  (the lesson order). There are up to `limit + 10` of them: the ten past `limit` stand in for any the worker
+  skips. The worker then:
+  - reads nothing but those paths, one by one in that order, never a folder;
+  - skips one that is missing, younger than `min_age_s`, whose `key` is in `known`, or under 10 s, each with its
+    reason in `skipped`;
+  - reports each file's `path` **exactly as given** in `files` (not resolved or normalised: the app matches on it);
+  - stops after the first `limit` new ones.
+
+What the worker does, for a folder scan:
 - It reads only the top level of `folder`, skipping names that start with `.` or `~`.
 - A file is taken only when it is at least `min_age_s` old, so it isn't still being copied.
 - `key` is the sha1 hex of `"<size>:"`, the first MiB and the last MiB.
@@ -124,6 +147,8 @@ What the worker does:
 - `missing` is true when the folder doesn't exist.
 
 What the app does on apply:
+- For a course scan, keeps only the files whose `path` is one of `files`, in that order, then at most `limit`. Any
+  other file is skipped as "not one of the lessons asked for".
 - Inserts `monteur_sources` with `ON CONFLICT DO NOTHING`.
 - Enqueues one `monteur_transcribe` for each inserted row.
 - Stores `{ added, skipped, missing }` as the job's result.
@@ -140,7 +165,7 @@ What the app does on apply:
 - Stores `words` and `duration`, and sets the status to `transcribed`. The drain sweep (§6) takes it from there.
 
 **`monteur_render`**
-`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction }, cover_at }`
+`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction }, cover_at, edits: ClipEdit[] }`
 → `{ video_url, tiktok_video_url: string | null, cover_url, duration, width: 1080, height: 1920 }`
 
 `cta_tiktok` makes a second MP4 from the same cut, identical except for the CTA text (e.g. «الرابط في البايو»),
@@ -149,6 +174,15 @@ because TikTok can't auto-DM, so its copy must not say "comment X". It's null wh
 
 The payload:
 - `words` are relative to the clip (0 = `start`).
+- `edits` are the Editor's pro edits (§6.2), `t` in seconds relative to the clip, sorted by `t`. Each is
+  `{ t, kind, text?, emoji?, query?, sfx? }`:
+  - `keyword`: `text`, 2–4 words restating the point. `tool`: `text`, a tool's name in Latin script.
+  - `emoji`: `emoji`, one emoji; the worker draws it as a Fluent Emoji picture.
+  - `image`: `query`, 2–4 English words (letters, digits and spaces, ≤ 40 characters) naming one concrete object or
+    scene. The worker takes the picture from a **free photo library** by that query. Never generated.
+  - `punch`: no field; a quick zoom-in.
+  - `sfx`, when present: `whoosh | whip | ding | click | switch`. Absent means no sound.
+  - `[]` renders the reel without edits. Spacing and the per-kind limits are the renderer's (`cleanEdits`).
 - `font` is one of `Cairo | Tajawal | IBM Plex Sans Arabic | Inter`.
 - `cover_at` is in seconds, relative to the clip, default 0.5.
 
@@ -199,7 +233,7 @@ accepts only upload URLs of its own tenant.
 | Method & path | Body | Response |
 |---|---|---|
 | GET `/api/studio/monteur` | | `MonteurView` |
-| POST `/api/studio/monteur/run` | | `{ job }`: enqueues `monteur_scan` now, or returns the open one. **409** with no folder |
+| POST `/api/studio/monteur/run` | | `{ job }`: enqueues `monteur_scan` now, or returns the open one. **409** in folder mode with no folder, or in course mode with no lesson left |
 | POST `/api/studio/monteur/pick-folder` | | `{ job }`: enqueues `pick_folder`, or returns the open one |
 | POST `/api/studio/monteur/sources/:id/retry` | | `SourceView` (below) |
 | PATCH `/api/studio/monteur/clips/:id` | `{ title?, copy?: Partial<ClipCopy> }` | `ClipView` (below) |
@@ -228,11 +262,13 @@ clip goes back to `rendering`). A caption-only change doesn't.
   collide with a live campaign (by match mode) is a 409.
 - Model all of this on `scheduleDraft` in `src/services/studio/schedule.ts`.
 - **409** unless the clip is in `review`.
+- **Auto mode** (§6) calls this same function with no `scheduled_time`, so an automatic reel gets exactly what the
+  button would give it.
 
 ```ts
 type MonteurView = {
   settings: MonteurConfig; timezone: string;
-  next_run: string | null;                       // ISO; null when off or no folder
+  next_run: string | null;                       // ISO; null when off, or in folder mode with no folder
   last_scan: { at: string; added: number; skipped: number; missing: boolean } | null;
   worker: { online: boolean; lastSeen: string | null; name: string | null };
   pending: { scan: boolean; folder_pick: boolean };
@@ -254,8 +290,12 @@ type ClipCopy = {
 };
 type ClipView = {
   id; source_id; source_name; rank; status; start; end; duration; title; hook; why; score;
-  copy: ClipCopy; video_url: string | null; cover_url: string | null;
-  scheduled_time: string | null; error: string | null; created_at;
+  copy: ClipCopy; edits: ClipEdit[];             // the Editor's edits (§6.2); [] for none
+  video_url: string | null; cover_url: string | null;
+  scheduled_time: string | null;
+  error: string | null;                          // failed: the render's error. review: why auto mode's last
+                                                 // approve was refused (cleared by any edit, or by the approve)
+  created_at;
 };
 type LessonsView = {
   lessons: { rule: string; evidence: string }[]; summary: string | null;
@@ -269,6 +309,17 @@ type LessonsView = {
 The sweep is independent of the queue drain: its failure never fails the drain's response. Each call takes at
 most **one** source: one that is `transcribed`, or `picking` with `claimed_at` more than 10 minutes old. It
 claims the source atomically (`FOR UPDATE SKIP LOCKED`). A source that reaches 3 attempts becomes `failed`.
+
+**Auto mode**, first in every sweep (no model call, so it runs even with no time left for a pick):
+- It takes reels in `review` with a render, of active tenants with `mode: 'auto'`: never-refused ones first, then
+  oldest first, **at most 4** a drain call. Each is tried once a call.
+- Each goes through `approveClip` (§5), with no `scheduled_time`: the next free slot, the per-tenant publishing
+  lock, the campaign.
+- A refusal (a 409: no free slot, a keyword that would really collide, TikTok not ready, …) leaves the reel in
+  review with the reason in `clip_drafts.error`. It is logged as `monteur.auto_refused` (warn the first time, info
+  while the reason repeats) and tried again on the next drain. An approval is logged as `monteur.auto_approved`.
+- The drain's `monteur` gains `auto: { approved, refused, error? }`. `error` means the step itself failed; the pick
+  still runs.
 
 ### 1. Monteur (one Gemini call)
 The call goes through `callGemini`, the `STUDIO_MODELS` chain and a `responseSchema`, with one repair round.
@@ -311,14 +362,18 @@ pitch, alt_text }`.
 **Its context:** the voice guide and `avoid` terms, the product name and facts, the latest lessons, and the
 clip's lines.
 
-### 3. Hand-off
-- Insert the `clip_drafts` rows (`rendering`).
+### 3. Editor (one Gemini call for all the clips)
+See §6.2. It never holds a reel back.
+
+### 4. Hand-off
+- Insert the `clip_drafts` rows (`rendering`), each with its `edits`.
 - Enqueue one `monteur_render` each. `cta` is built from the settings:
   - `line1` = the ask with the keyword
   - `line2` = `cta.slide.igSub`
 - Pick the accent with `pickAccent`.
 - The source becomes `rendering`.
-- Log `monteur.pick` and `monteur.copy` with each call's tokens in and out.
+- Log `monteur.pick`, `monteur.copy` and `monteur.edit` with each call's tokens in and out.
+- Each render's payload carries the clip's `edits`.
 
 ## 6.1 Prompt rules from the research review (they override §6 wherever the two differ)
 
@@ -406,14 +461,51 @@ alt_text }`.
 A separate Facebook first line, the Facebook no-keyword test, Trial Reels, speech-rate stats, and deduping the
 Analyst's input by media.
 
+## 6.2 The Editor: `src/services/monteur/editor.ts`
+
+The pro edits on each reel, asked for by the owner: images and edits tied to the topic, with sounds.
+
+**One Gemini call** for all of a video's clips, after the Marketer, for the clips that got copy. `writeEdits` goes
+through `ask()` like the Marketer (`EDITOR_SCHEMA`, `maxOutputTokens` 8192, thinking 1024, a 90 s cap inside the
+sweep's deadline) and is logged as `monteur.edit` with its tokens. The call is recorded on the source's `pick` as
+`edit: { model, tokens_in, tokens_out, error? }`.
+
+**What goes in** (`editorUserPrompt(clipLines(...))`): `C<n>` for each clip in order, then its own lines numbered
+from `L1`, each `[mm:ss.s]` on the clip's clock.
+
+**What comes out:** `{ clips: [{ clip, edits: [{ line, word, kind, text?, emoji?, query?, sfx }] }] }`, 6–10 edits a
+clip in the prompt's words. The prompt's image line: "image: at most 2 per clip, for a real-world thing the speaker
+mentions or compares to. query: 2-4 English words naming one concrete object or scene a free photo library has
+(e.g. world map, recipe book)."
+
+**Code, not the prompt** (`editsByClip`, `placeEdits`):
+- Answers are matched to clips by `C<n>`, never by position.
+- An edit lands on the start of its `word` in its line, else on the line's start, on the clip's clock.
+- Dropped: an unknown kind, a missing line, a keyword or tool without `text`, an emoji without `emoji`, an image
+  without a usable `query`, a third image.
+- `query` keeps Latin letters, digits and single spaces, whole words up to 40 characters.
+- At most 12 edits a clip, sorted by `t`. `sfx: 'none'` is sent as no `sfx`.
+
+**A failed call never holds a reel back:** any failure, of the call or of its answer, stores and renders every clip
+with `edits: []`, and is logged as `monteur.edit_failed`. The attempt does not fail.
+
+**Stored** in `clip_drafts.edits` (v27) and sent in every `monteur_render` of the clip: the first, `POST /rerender`,
+and a PATCH that re-renders. `ClipView.edits` carries them to the page.
+
 ## 7. The daily run
 
 `enqueueDueMonteurScan(creatorId, now)` runs at the top of `POST /worker/claim`. It enqueues
-`monteur_scan { folder, limit: videos_per_run, known: <every content_key of the tenant>, … }` only when all of
-these hold:
-- `enabled` is on and `folder` is set.
+`monteur_scan { folder, limit: videos_per_run, known: <every content_key of the tenant>, … }` (or, in course mode,
+`{ folder: null, files, … }`, below) only when all of these hold:
+- `enabled` is on, and — in folder mode — `folder` is set.
 - The latest `run_at` instant at or before `now` in the timezone (today's, or yesterday's if today's hasn't come
-  yet) has no `monteur_scan` created at or after it.
+  yet) has no `monteur_scan` created at or after it that finished for the source set now: a course scan in course
+  mode, a scan of this folder in folder mode. A failed or cancelled scan does not count.
+
+**Course mode** (`source: 'course'`): the videos are the Studio library's lessons (`course_lessons`) whose
+`video_path` has no `monteur_sources` row for the tenant, in natural `lesson_no` order ("1.2" before "1.10", both
+before "G.1"). `files` is the first `videos_per_run + 10` of them and `limit` is `videos_per_run`, so the run takes
+the next `videos_per_run` new ones. With no lesson left nothing is queued, and Run now answers 409.
 
 This gives three behaviours:
 - A Mac asleep at 07:00 scans the next time it polls.
@@ -480,7 +572,6 @@ What the page has:
 The live launchd worker runs from the main checkout and must not change until the merge.
 
 ## 10. Not in v1
-- Auto mode.
 - A TikTok-only render (TikTok gets the same video; its caption carries «رابطه في البايو»).
 - The cold open and face tracking.
 - YouTube.
