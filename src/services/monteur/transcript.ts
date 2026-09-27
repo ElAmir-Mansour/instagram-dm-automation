@@ -240,6 +240,53 @@ export interface PickedClip {
     text: string;
 }
 
+type SpanFit =
+    | { kind: 'ok'; endLine: number; edges: { startWord: number; endWord: number }; start: number; end: number }
+    | { kind: 'no-cut' }
+    | { kind: 'no-length'; length: number };
+
+/**
+ * The clip from `startLine` whose length fits, keeping the start: the hook is the part the model
+ * is good at, and its arithmetic over timestamps is not. Measured live (2026-09-27): the two best
+ * moments of a 7-minute lesson came back at 69 s and 99 s against a 45 s maximum, and both were
+ * dropped. So a clip that runs long ends at the latest line that fits, and one that runs short
+ * extends to the first line that reaches the minimum. Only when no end line gives a length in
+ * range, or none can be cut cleanly, is it a problem for the repair round.
+ */
+export function fitSpan(
+    lines: readonly TranscriptLine[], words: readonly TranscriptWord[], startLine: number, endLine: number,
+    opts: { minSeconds: number; maxSeconds: number; duration: number | null }
+): SpanFit {
+    const at = (e: number): SpanFit => {
+        const edges = snapEdges(lines, words, startLine, e);
+        if (!edges) return { kind: 'no-cut' };
+        const { start, end } = cutTimes(words, edges.startWord, edges.endWord, opts.duration);
+        return { kind: 'ok', endLine: e, edges, start, end };
+    };
+    const lengthOf = (f: SpanFit): number => (f.kind === 'ok' ? round2(f.end - f.start) : Number.NaN);
+    const asked = at(endLine);
+    if (asked.kind === 'ok') {
+        const length = lengthOf(asked);
+        if (length >= opts.minSeconds && length <= opts.maxSeconds) return asked;
+    }
+    let sawCut = asked.kind === 'ok';
+    const order: number[] = [];
+    // Too long (or no clean cut at the asked end): the latest earlier end line that fits.
+    for (let e = endLine - 1; e >= startLine; e--) order.push(e);
+    // Too short: the first later end line that reaches the minimum.
+    for (let e = endLine + 1; e <= lines.length; e++) order.push(e);
+    for (const e of order) {
+        const f = at(e);
+        if (f.kind !== 'ok') continue;
+        sawCut = true;
+        const length = lengthOf(f);
+        if (length >= opts.minSeconds && length <= opts.maxSeconds) return f;
+        if (e > endLine && length > opts.maxSeconds) break;
+    }
+    if (!sawCut) return { kind: 'no-cut' };
+    return { kind: 'no-length', length: asked.kind === 'ok' ? lengthOf(asked) : Number.NaN };
+}
+
 export interface ClipChoice {
     kept: PickedClip[];
     /** The video's main idea, as the model put it. */
@@ -292,21 +339,21 @@ export function chooseClips(
         // The model's own judgement that it is weak: not a reel, and nothing to repair.
         if (scores.hook <= 1 || scores.alone <= 1 || total < MIN_RANK) return;
 
-        const edges = snapEdges(lines, words, s, e);
-        if (!edges) {
+        const fit = fitSpan(lines, words, s, e, opts);
+        if (fit.kind === 'no-cut') {
             problems.push(`${label}: L${s}–L${e} would cut mid-sentence (no pause or punctuation within ${SNAP_WINDOW_S} s of its edge)`);
             return;
         }
+        if (fit.kind === 'no-length') {
+            const was = Number.isFinite(fit.length) ? ` is ${fit.length.toFixed(1)} s, and` : '';
+            problems.push(`${label}: L${s}–L${e}${was} no end line from L${s} gives ${opts.minSeconds}–${opts.maxSeconds} s`);
+            return;
+        }
+        const { edges, start, end } = fit;
         const text = words.slice(edges.startWord, edges.endWord + 1).map((w) => w[2].trim()).filter(Boolean).join(' ');
         const leaning = leaningOpening(text);
         if (leaning) {
             problems.push(`${label}: L${s} opens on «${leaning}», which needs what was said before it`);
-            return;
-        }
-        const { start, end } = cutTimes(words, edges.startWord, edges.endWord, opts.duration);
-        const length = round2(end - start);
-        if (length < opts.minSeconds || length > opts.maxSeconds) {
-            problems.push(`${label}: L${s}–L${e} is ${length.toFixed(1)} s; a clip must be ${opts.minSeconds}–${opts.maxSeconds} s`);
             return;
         }
         if (existing.some((t) => textOverlap(text, t) >= DEDUPE_OVERLAP)) {
@@ -316,7 +363,7 @@ export function chooseClips(
         const hookEnd = Math.max(edges.startWord, lines[s - 1]!.last);
         const why = typeof c.why === 'string' && oneLine(c.why) ? trimText(oneLine(c.why), MAX_WHY) : null;
         candidates.push({
-            startLine: s, endLine: e, startWord: edges.startWord, endWord: edges.endWord, start, end, title, why, scores, total,
+            startLine: s, endLine: fit.endLine, startWord: edges.startWord, endWord: edges.endWord, start, end, title, why, scores, total,
             hookType: (HOOK_TYPES as readonly unknown[]).includes(c.hook_type) ? (c.hook_type as HookType) : null,
             hook: trimText(words.slice(edges.startWord, hookEnd + 1).map((w) => w[2].trim()).filter(Boolean).join(' '), MAX_HOOK),
             text,

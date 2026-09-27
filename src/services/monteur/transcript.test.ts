@@ -152,11 +152,24 @@ describe('chooseClips', () => {
         assert.deepEqual(choice.problems, []);
     });
 
-    it('drops a clip outside [min, max] seconds, and says so for the repair', () => {
-        const choice = chooseClips({ clips: [clip(1, 2), clip(1, 12), clip(5, 9)] }, lines, w, opts);
-        assert.deepEqual(choice.kept.map((c) => c.startLine), [5]);
-        assert.equal(choice.considered, 3);
-        assert.ok(choice.problems.some((p) => /clip 1: L1–L2 is 9\.8 s; a clip must be 20–45 s/.test(p)), choice.problems.join('\n'));
+    it('fits a long or short clip by moving its end line, and keeps its start (measured live: 69 s and 99 s picks)', () => {
+        // L1–L12 runs 59.8 s: the latest end that fits 45 s is L9 (0.85 … 44.8 s).
+        const long = chooseClips({ clips: [clip(1, 12)] }, lines, w, opts);
+        assert.deepEqual(long.kept.map((c) => [c.startLine, c.endLine, c.start, c.end]), [[1, 9, 0, 44.8]]);
+        assert.deepEqual(long.problems, []);
+        // L5–L6 runs 9.9 s; L5–L8 is 19.95 s, just short, so the first end that reaches 20 s is L9.
+        const short = chooseClips({ clips: [clip(5, 6)] }, lines, w, opts);
+        assert.deepEqual(short.kept.map((c) => [c.startLine, c.endLine]), [[5, 9]]);
+        const length = short.kept[0]!.end - short.kept[0]!.start;
+        assert.ok(length >= 20 && length <= 45, String(length));
+    });
+
+    it('drops a clip no end line can fit, and says so for the repair', () => {
+        // From L18 only 3 lines are left: under 15 s at most, below the 20 s minimum.
+        const choice = chooseClips({ clips: [clip(18, 19), clip(3, 7)] }, lines, w, opts);
+        assert.deepEqual(choice.kept.map((c) => c.startLine), [3]);
+        assert.equal(choice.considered, 2);
+        assert.ok(choice.problems.some((p) => /clip 1: L18–L19 is 9\.9 s, and no end line from L18 gives 20–45 s/.test(p)), choice.problems.join('\n'));
     });
 
     it('refuses line numbers that do not exist or run backwards', () => {
