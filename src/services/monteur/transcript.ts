@@ -134,6 +134,8 @@ export function textOverlap(a: string, b: string): number {
 const LEANING_OPENINGS: readonly string[][] = [
     ['وبعدين'], ['فبعدين'], ['يعني'], ['بس'], ['عشان', 'كذا'], ['زي', 'ما', 'قلت'],
     ['ف', 'لما'], ['ف', 'اذا'], ['ف', 'هذا'], ['فلما'], ['فاذا'], ['فهذا'],
+    // Narrating the screen, not saying anything: the first live reel opened on «هني جينا محادثة جديدة».
+    ['هني', 'جينا'], ['هنا', 'جينا'], ['خلينا', 'نروح'], ['خلينا', 'نفتح'], ['زي', 'ما', 'انتو', 'شايفين'], ['كما', 'نرى'], ['كما', 'ترى'],
 ].map((seq) => seq.map((w) => normalizeArabic(w)));
 
 /** The opening this clip leans on, or null when it can start cold. */

@@ -70,6 +70,7 @@ export function pickSystemPrompt(settings: StudioSettings): string {
 topic: first, the video's main idea in one line.
 Score each clip 0-3:
 - hook: 3 = its first sentence states the result, number, mistake or contrast; 2 = its first line has it after a lead-in; 1 = it comes in line 2; 0 = later or never.
+An opening that only narrates the screen (هنا جينا، خلينا نفتح، كما نرى) is hook 0: start where the speaker says the point.
 - alone: its start needs nothing said before it (no greeting, no intro, no «زي ما قلت / وبعدين / فـ») and its end leaves nothing hanging.
 - payoff: it holds the answer or demonstration that proves the claim. Start on the claim; end_line is where the payoff is complete.
 - send: worth sending to a colleague: a tool, a prompt, a step, a number or a surprise. Motivation alone is 0.
