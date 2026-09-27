@@ -172,6 +172,8 @@ const MIN_REPAIR_MS = 40_000;
 /** A retry of a failed first call needs time for a full answer. */
 const MIN_RETRY_MS = 50_000;
 const MIN_CALL_MS = 8_000;
+/** A model in the fallback chain is not tried with less than this left before the call's deadline. */
+const MIN_MODEL_MS = 5_000;
 const MAX_OUTPUT_TOKENS = 24_576;
 /** 2.5 Pro can't switch thinking off (minimum 128); these keep it inside the budget. */
 const THINKING = { draft: 2048, repair: 1024, rewrite: 1024, plan: 2048 } as const;
@@ -203,7 +205,19 @@ export type ModelRequest = {
     temperature: number;
     thinkingBudget: number;
     timeoutMs: number;
+    /** Caps the answer, thinking included. Default `MAX_OUTPUT_TOKENS`, sized for a whole carousel. */
+    maxOutputTokens?: number;
+    /** Told what the call cost, once it answered: the model that did, and its tokens. */
+    onUsage?: (usage: ModelUsage) => void;
+    /**
+     * An instant (ms) the whole call — every model the chain falls back to — must finish by.
+     * `timeoutMs` applies to each model; without this, four models could take four timeouts.
+     */
+    deadline?: number;
 };
+
+/** What one answered call cost. `tokensOut` is the answer; `thinking` is counted apart. */
+export type ModelUsage = { model: string; tokensIn: number; tokensOut: number; thinking: number };
 
 /** Resolves to the JSON the model returned, parsed. Throws with `retryable` on transient failures. */
 export type CallModel = (req: ModelRequest) => Promise<unknown>;
@@ -258,7 +272,7 @@ export async function callGemini(req: ModelRequest): Promise<unknown> {
             responseMimeType: 'application/json',
             responseSchema: withoutArrayBounds(req.schema),
             temperature: req.temperature,
-            maxOutputTokens: MAX_OUTPUT_TOKENS,
+            maxOutputTokens: req.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
             thinkingConfig: { thinkingBudget: req.thinkingBudget },
         },
     };
@@ -267,9 +281,13 @@ export async function callGemini(req: ModelRequest): Promise<unknown> {
     let model = STUDIO_MODELS[0]!;
     for (const [i, candidate] of STUDIO_MODELS.entries()) {
         model = candidate;
+        const left = req.deadline === undefined ? req.timeoutMs : req.deadline - Date.now();
+        if (left < MIN_MODEL_MS) {
+            throw new ModelError(`Out of time before trying ${candidate}${i ? ' (the models before it failed)' : ''}.`, false);
+        }
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`;
         try {
-            const res = await axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout: req.timeoutMs });
+            const res = await axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout: Math.min(req.timeoutMs, left) });
             data = res.data;
             break;
         } catch (err: any) {
@@ -294,12 +312,22 @@ export async function callGemini(req: ModelRequest): Promise<unknown> {
 
     const usage = data?.usageMetadata;
     if (usage) {
+        // No "token" in a key: the logger redacts any key containing it, so `prompt_tokens: 7000`
+        // used to log as "[redacted]" and the counts this line exists for never reached a log.
         log('info', 'studio.ai_usage', {
-            purpose: req.purpose, model, prompt_tokens: usage.promptTokenCount,
-            output_tokens: usage.candidatesTokenCount, thinking_tokens: usage.thoughtsTokenCount ?? 0,
-            cached_tokens: usage.cachedContentTokenCount ?? 0,
+            purpose: req.purpose, model,
+            usage: {
+                prompt: usage.promptTokenCount, output: usage.candidatesTokenCount,
+                thinking: usage.thoughtsTokenCount ?? 0, cached: usage.cachedContentTokenCount ?? 0,
+            },
         });
     }
+    req.onUsage?.({
+        model,
+        tokensIn: Number(usage?.promptTokenCount) || 0,
+        tokensOut: Number(usage?.candidatesTokenCount) || 0,
+        thinking: Number(usage?.thoughtsTokenCount) || 0,
+    });
 
     const candidate = data?.candidates?.[0];
     const parts = candidate?.content?.parts;
@@ -332,6 +360,11 @@ export function setModelCaller(next: CallModel): CallModel {
     const previous = modelCaller;
     modelCaller = next;
     return previous;
+}
+
+/** The model call as it is now: Gemini, or whatever `setModelCaller` put in its place. */
+export function callModel(req: ModelRequest): Promise<unknown> {
+    return modelCaller(req);
 }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -631,7 +664,7 @@ export function chooseKeyword(candidates: readonly unknown[], active: readonly s
 }
 
 /** Spellings that should also fire the new campaign: one word, not redundant, not colliding. */
-function cleanVariants(raw: unknown, keyword: string, active: readonly string[]): string[] {
+export function cleanVariants(raw: unknown, keyword: string, active: readonly string[]): string[] {
     const kn = normalizeArabic(keyword);
     const list = activeKeywordList(active);
     const seen = new Set([kn]);

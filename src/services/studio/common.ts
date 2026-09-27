@@ -85,7 +85,10 @@ export function unique<T>(values: readonly T[]): T[] {
     return [...new Set(values)];
 }
 
-/** Said when a Studio table is missing, instead of an opaque 500. */
+/**
+ * Said when a Studio table or column is missing, instead of an opaque 500. v24 (the Monteur) adds
+ * a settings column every Studio route reads, so either migration can be the one missing.
+ */
 export const STUDIO_MIGRATION_HINT =
-    'The database is missing migration v21 (src/config/migration_v21_studio.sql). '
-    + 'Apply it with `npm run migrate`, then reload.';
+    'The database is missing migration v21 or v24 (src/config/migration_v21_studio.sql, migration_v24_monteur.sql). '
+    + 'Apply them with `npm run migrate`, then reload.';

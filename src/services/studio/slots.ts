@@ -6,8 +6,9 @@
  * they are converted per day rather than once: a timezone with daylight saving moves its UTC
  * offset twice a year, and a slot computed from a fixed offset would drift by an hour.
  */
-import { queryRows } from '../../db/query.js';
+import { pool } from '../../config/db.js';
 import type { ScheduleConfig } from '../../db/rows.js';
+import type { Exec } from './common.js';
 
 /**
  * A PENDING Meta post within this much of a slot holds it. Exact equality would call 13:00
@@ -81,19 +82,32 @@ export function parseSlotCount(raw: unknown): number {
     return Math.min(n, MAX_SLOT_COUNT);
 }
 
+/** The platforms whose PENDING rows hold a slot, by default: the Meta ones. */
+export const META_SLOT_HOLDERS: readonly string[] = ['instagram', 'facebook', 'both'];
+
+export interface SlotOptions {
+    /**
+     * `both` is Instagram + Facebook. By default a TikTok row holds no slot: in the Studio it is the
+     * sibling of a Meta post that already holds it. A caller whose posts go to TikTok alone (a
+     * TikTok-only Monteur) passes `['tiktok']`, or every one of its posts gets the same slot.
+     */
+    holders?: readonly string[];
+    /** A transaction's client, when the caller holds a lock the choice must be made under. */
+    exec?: Exec;
+}
+
 export async function nextFreeSlots(
-    creatorId: string, schedule: ScheduleConfig, count: number, now: number = Date.now()
+    creatorId: string, schedule: ScheduleConfig, count: number, now: number = Date.now(), opts: SlotOptions = {}
 ): Promise<string[]> {
     const until = now + (HORIZON_DAYS + 1) * DAY_MS;
-    // `both` is Instagram + Facebook. A TikTok row holds no Meta slot: in the Studio it is the
-    // sibling of a Meta post that already holds it.
-    const rows = await queryRows<{ scheduled_time: Date }>(
+    const exec = opts.exec ?? pool;
+    const { rows } = await exec.query<{ scheduled_time: Date }>(
         `SELECT scheduled_time FROM scheduled_posts
           WHERE creator_id = $1
             AND status = 'PENDING'
-            AND platform IN ('instagram', 'facebook', 'both')
+            AND platform = ANY($4::text[])
             AND scheduled_time > $2 AND scheduled_time < $3`,
-        [creatorId, new Date(now - SLOT_HOLD_WINDOW_MS), new Date(until)]
+        [creatorId, new Date(now - SLOT_HOLD_WINDOW_MS), new Date(until), [...(opts.holders ?? META_SLOT_HOLDERS)]]
     );
     const taken = rows.map((r) => new Date(r.scheduled_time).getTime());
     return freeSlots(candidateSlots(schedule, now, HORIZON_DAYS), taken, count);

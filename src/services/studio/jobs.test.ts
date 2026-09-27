@@ -88,8 +88,8 @@ describe('claim — the SQL', () => {
     it('takes a pending job, or a claimed one gone quiet for 15 minutes with claims left, oldest first', () => {
         const sql = CLAIM_SQL.replace(/\s+/g, ' ');
         assert.match(sql, /status = 'pending' OR \(status = 'claimed' AND COALESCE\(heartbeat_at, claimed_at, created_at\) < NOW\(\) - make_interval\(mins => \$2\) AND attempts < \$3\)/);
-        assert.match(sql, /ORDER BY CASE kind WHEN 'render_carousel' THEN 0 WHEN 'scan_library' THEN 1 ELSE 2 END, created_at, id/,
-            'renders first: someone is waiting at the editor, while indexing is an hour-long backlog');
+        assert.match(sql, /ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_render' THEN 2 WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END, created_at, id/,
+            'the folder dialog first (someone is at the Mac), renders next (someone is at the editor), the long transcribe and index backlog last');
         assert.match(sql, /attempts = j\.attempts \+ 1/);
         assert.match(sql, /heartbeat_at = NOW\(\)/);
     });
@@ -100,7 +100,7 @@ describe('claimJob', () => {
         routes.push([/^WITH picked AS/, () => ({ rows: [{ id: JOB, kind: 'scan_library', payload: { root: '/r' }, attempts: 1 }] })]);
         assert.deepEqual(await claimJob(TENANT), { id: JOB, kind: 'scan_library', payload: { root: '/r' } });
         const [claim] = ran(/^WITH picked AS/);
-        assert.deepEqual(claim!.params, [TENANT, STALE_CLAIM_MINUTES, MAX_ATTEMPTS]);
+        assert.deepEqual(claim!.params, [TENANT, STALE_CLAIM_MINUTES, MAX_ATTEMPTS, null], 'no kinds: any job');
         assert.equal(STALE_CLAIM_MINUTES, 15);
         assert.equal(MAX_ATTEMPTS, 3);
     });

@@ -6,7 +6,7 @@
  * tenant, so his values reach the writer only through his `studio_settings` row.
  * `ENGLISH_SETTINGS` is a neutral English tenant built on the defaults.
  */
-import { DEFAULT_PALETTE, defaultStudioSettings, type StudioSettings } from './settingsTypes.js';
+import { DEFAULT_PALETTE, defaultMonteurConfig, defaultStudioSettings, type StudioSettings } from './settingsTypes.js';
 
 /** STUDIO.md §8, verbatim, with its two topical lines as the contract writes them. */
 export const SECTION_8_DM = `هلا {username} 👋
@@ -81,6 +81,7 @@ export const ELAMIR_SETTINGS: StudioSettings = {
     schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'] },
     library: { root: '/Users/elamir/Desktop/AI Course' },
     examples: null,
+    monteur: { ...defaultMonteurConfig(), post_at: ['19:00'] },
 };
 
 /** A neutral English tenant: the defaults plus a product. */
