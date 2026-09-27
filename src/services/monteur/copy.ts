@@ -40,6 +40,29 @@ const ALT_TEXT_MAX = 300;
 const VOICE_GUIDE_MAX = 2000;
 /** §6.1: tags that ask for reach rather than name the topic. Compared without the #, case-folded. */
 export const HASHTAG_BLOCKLIST: readonly string[] = ['اكسبلور', 'explore', 'fyp', 'foryou'];
+/**
+ * Tags too broad to name a clip's topic. The first live reel (2026-09-27) got exactly these four
+ * (#تقنية #تطوير #برمجة #تعلم) for a clip about Gemini's custom instructions: they are dropped
+ * whenever the clip has enough real topic tags, and the tools named in its title are added.
+ */
+export const GENERIC_HASHTAGS: readonly string[] = ['تقنية', 'تكنولوجيا', 'تطوير', 'برمجة', 'تعلم', 'تعليم', 'tech', 'technology', 'learning', 'education'];
+const MIN_TOPIC_TAGS = 2;
+/** A tool or product named in Latin script, e.g. Gemini, ChatGPT, n8n: a tag people search. */
+const LATIN_TERM = /\b[A-Za-z][A-Za-z0-9.+-]{2,24}\b/g;
+/** Words that are Latin but name no topic. */
+const LATIN_STOP = new Set(['the', 'and', 'for', 'with', 'you', 'your', 'how', 'why', 'what', 'from', 'this', 'that', 'agent', 'agents', 'prompt', 'prompts']);
+
+/** The tools named in `text` (the clip's title and first line), as tags, first mention first. */
+export function termTags(text: string): string[] {
+    const out: string[] = [];
+    for (const m of text.matchAll(LATIN_TERM)) {
+        const term = m[0].replace(/[.+-]+$/, '');
+        // A tool's name has a capital or a digit (Gemini, ChatGPT, n8n); plain English words don't.
+        if (term.length < 3 || LATIN_STOP.has(term.toLowerCase()) || !/[A-Z0-9]/.test(term)) continue;
+        if (!out.some((t) => t.toLowerCase() === term.toLowerCase())) out.push(term);
+    }
+    return out;
+}
 
 /** Question-style asks for when the model's own can't be used, per language. `{keyword}` is filled. */
 export const ASK_POOL: Record<'ar' | 'en', readonly string[]> = {
@@ -123,8 +146,8 @@ For each clip:
 - ask_line: a question, then «{keyword}», written so it fits any of the candidates. Not one of the recent asks listed.
 - keyword_candidates: 3 single ${lang.name} words of 4 or more letters, best first, tied to what the DM sends, like ${lang.keywordExamples}.
 - variants: 0-3 other spellings of the first candidate, one word each.
-- hashtags: 3-5 topic tags without #${ar ? ', mostly Arabic' : ''}. Never #اكسبلور #explore #fyp #foryou.
-- tiktok_body: one descriptive sentence with the topic words, and no ask.
+- hashtags: 3-5 tags without # naming this clip's topic: the tool it shows (Gemini, ChatGPT) and the subject${ar ? ' (الذكاء_الاصطناعي), mostly Arabic' : ''}. Never generic tags (${ar ? '#تقنية #تعلم #برمجة' : '#tech #learning'}) nor #اكسبلور #explore #fyp #foryou.
+- tiktok_body: one descriptive sentence with the topic words. No ask and no link: the link line is added for you.
 - question: one line that opens the DM, about the clip's topic. pitch: one sentence tying the topic to the product.
 - alt_text: ${ar ? 'neutral MSA, ' : ''}at most 2 sentences: ${ar ? '«متحدث يشرح …»' : '"A speaker explains …"'} plus what the clip says. No hashtags, no ask.
 Invent nothing: only the numbers, tools and results the clip says, and the product facts.
@@ -173,7 +196,9 @@ export function copyUserPrompt(args: {
  * 3–5 hashtags without '#': one token each, none on the blocklist, de-duplicated regardless of
  * case. An Arabic tenant gets at least one Arabic tag, from its own sets when the model gave none.
  */
-export function cleanHashtags(raw: unknown, settings?: StudioSettings, fallback: readonly string[] = []): string[] {
+export function cleanHashtags(
+    raw: unknown, settings?: StudioSettings, fallback: readonly string[] = [], topics: readonly string[] = [],
+): string[] {
     const seen = new Set<string>();
     const out: string[] = [];
     const add = (tag: string, front = false): void => {
@@ -185,11 +210,29 @@ export function cleanHashtags(raw: unknown, settings?: StudioSettings, fallback:
         else out.push(t);
     };
     for (const tag of strings(raw)) add(tag);
+    const generic = new Set(GENERIC_HASHTAGS.map((g) => normalizeArabic(g).toLowerCase()));
+    const isGeneric = (t: string) => generic.has(normalizeArabic(t).toLowerCase());
+    for (const term of topics) add(term, true);
+    if (out.filter((t) => !isGeneric(t)).length >= MIN_TOPIC_TAGS) {
+        for (let i = out.length - 1; i >= 0; i--) if (isGeneric(out[i]!)) out.splice(i, 1);
+    }
     if (settings?.voice?.language === 'ar' && !out.some(isArabic)) {
         const arabic = strings(fallback).find(isArabic);
         if (arabic) add(arabic, true);
     }
     return out.slice(0, MAX_HASHTAGS);
+}
+
+/**
+ * The TikTok body without its own "link in bio": the tenant's TikTok line adds that, and the first
+ * live reel said it twice («…، ورابطه في البايو.» and then «رابطه في البايو 🔗»).
+ */
+export function withoutBioLink(text: string): string {
+    return text
+        .replace(/[،,]?\s*و?(?:ال)?رابط(?:ه|ها)?\s+(?:في|ف|ب)\s*(?:ال)?بايو/g, '')
+        .replace(/[,;]?\s*(?:and\s+)?(?:the\s+)?link(?:'s| is)?\s+in\s+(?:my\s+|the\s+)?bio/gi, '')
+        .replace(/\s+([.!؟?])/g, '$1')
+        .trim();
 }
 
 /** The ask as a template: its «keyword» (in any quote, or bare {keyword}) as «{keyword}». */
@@ -273,12 +316,12 @@ export function toClipCopy(
     };
     const keepLines = (text: string): string => text.split('\n').filter(notAnAsk).join('\n');
 
-    const hashtags = cleanHashtags(r.hashtags, settings, ctx.seo?.hashtags ?? []);
+    const hashtags = cleanHashtags(r.hashtags, settings, ctx.seo?.hashtags ?? [], termTags(`${clip.title} ${line(r.first_line)}`));
     const tagLine = hashtags.map((t) => `#${t}`).join(' ');
     const first = keepLines(trimText(digits(line(r.first_line)), MAX_FIRST_LINE)) || clip.title;
     const caption = joinParas([first, keepLines(digits(block(r.body))), ask, tagLine]);
     const tiktok = normalizeTiktokCaption(
-        joinParas([first, keepLines(digits(block(r.tiktok_body))), tagLine]), [...candidates, keyword], settings,
+        joinParas([first, withoutBioLink(keepLines(digits(block(r.tiktok_body)))), tagLine]), [...candidates, keyword], settings,
     );
     const dm = buildDm(settings.cta?.dmTemplate ?? '', {
         question: digits(line(r.question)) || lang.fallbackQuestion,
