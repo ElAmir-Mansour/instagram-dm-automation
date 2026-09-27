@@ -1499,6 +1499,7 @@ const MonteurPage = {
                 <p class="monteur-source-name" dir="auto"${source.path ? html` title="${source.path}"` : ''}>${name}</p>
                 ${meta.length ? html`<p class="text-meta">${meta.map((part, i) => html`${i ? ' · ' : ''}${part}`)}</p>` : ''}
                 ${source.status === 'no_clips' ? html`<p class="form-hint">${t('monteur.source.noClipsNote')}</p>` : ''}
+                ${source.status === 'no_clips' && source.error ? html`<p class="text-meta" dir="auto">${source.error}</p>` : ''}
                 ${source.status === 'failed' && source.error ? html`<p class="post-card-error" dir="auto">${source.error}</p>` : ''}
             </div>
             ${this.statusPill('source', source.status)}

@@ -642,6 +642,8 @@ export interface SourcePick {
      * without sending the whole transcript to the pick again. Cleared by a manual retry.
      */
     saved?: { topic: string | null; clips: unknown[] };
+    /** Why the proposed clips were not kept, when none was (the source is `no_clips`). */
+    problems?: string[];
 }
 
 export interface MonteurSourceRow {

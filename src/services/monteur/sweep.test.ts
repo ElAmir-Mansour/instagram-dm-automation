@@ -218,6 +218,18 @@ describe('sweepMonteur — a pick', () => {
         assert.equal(result.pick?.outcome, 'no_clips');
         assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick']);
         assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+        // The operator is told why, not left with an empty "no clips".
+        const [update] = db.ran(/^UPDATE monteur_sources SET status = 'no_clips'/);
+        assert.match(String(update!.params[3]), /rated all 1 moment\(s\) it proposed below the bar/);
+    });
+
+    it('records why proposed clips were dropped when none is kept', async () => {
+        existingTexts = ['جملة3. جملة4. جملة5. جملة6. جملة7.'];
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'no_clips');
+        const [update] = db.ran(/^UPDATE monteur_sources SET status = 'no_clips'/);
+        assert.match(String(update!.params[3]), /repeats a reel already made/);
+        assert.match(JSON.parse(String(update!.params[1])).problems[0], /repeats a reel already made/);
     });
 
     it('spends no call on a transcript with no words, or one shorter than the shortest clip', async () => {
@@ -234,13 +246,13 @@ describe('sweepMonteur — a pick', () => {
             calls.push(req);
             if (req.purpose.startsWith('monteur.pick')) {
                 n += 1;
-                return n === 1 ? { ...PICK, clips: [{ ...PICK.clips[0], end_line: 3 }] } : PICK;
+                return n === 1 ? { ...PICK, clips: [{ ...PICK.clips[0], start_line: 90, end_line: 95 }] } : PICK;
             }
             return COPY;
         });
         const result = await sweepMonteur(later());
         assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.pick-repair', 'monteur.copy']);
-        assert.match(calls[1]!.turns.at(-1)!.text, /clip 1: L3–L3 is 5\.0 s; a clip must be 20–45 s/);
+        assert.match(calls[1]!.turns.at(-1)!.text, /clip 1: L90–L95 is not a range of lines/);
         assert.equal(result.pick?.outcome, 'rendering');
     });
 

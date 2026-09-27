@@ -114,6 +114,8 @@ export interface PickOutcome {
     kept: PickedClip[];
     topic: string | null;
     considered: number;
+    /** Why proposed clips were not kept, as the repair round was told (empty when none were proposed or all were weak). */
+    problems: string[];
     lines: TranscriptLine[];
     cost: CallCost;
 }
@@ -132,7 +134,7 @@ export async function pickClips(
     const cost = emptyCost();
     const lines = groupLines(source.words);
     const m = settings.monteur;
-    if (!lines.length || spokenSpan(lines) < m.min_seconds) return { kept: [], topic: null, considered: 0, lines, cost };
+    if (!lines.length || spokenSpan(lines) < m.min_seconds) return { kept: [], topic: null, considered: 0, problems: [], lines, cost };
 
     const opts = {
         minSeconds: m.min_seconds, maxSeconds: m.max_seconds, keep: m.reels_per_video, duration: source.duration,
@@ -159,5 +161,5 @@ export async function pickClips(
             log('warn', 'monteur.pick_repair_failed', { message: err instanceof Error ? err.message : String(err) });
         }
     }
-    return { kept: choice.kept, topic: choice.topic, considered: choice.considered, lines, cost };
+    return { kept: choice.kept, topic: choice.topic, considered: choice.considered, problems: choice.problems, lines, cost };
 }

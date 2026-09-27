@@ -238,7 +238,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         // A copy that failed last time is retried on the clips already chosen: the transcript is
         // most of the tokens, and it is not sent twice.
         const saved = source.pick?.saved;
-        let picked: Pick<PickOutcome, 'kept' | 'topic' | 'considered' | 'lines'>;
+        let picked: Pick<PickOutcome, 'kept' | 'topic' | 'considered' | 'lines'> & { problems?: string[] };
         let record: SourcePick;
         if (saved && Array.isArray(saved.clips) && saved.clips.length) {
             picked = { kept: saved.clips as PickedClip[], topic: saved.topic, considered: source.pick!.considered, lines: groupLines(words) };
@@ -268,11 +268,18 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         }
 
         if (!picked.kept.length) {
+            // Say why, so the operator isn't left guessing: the repair round's own words, or that
+            // the model rated every moment below the bar. Kept on `pick` for the record too.
+            const problems = (picked.problems ?? []).slice(0, 8);
+            if (problems.length) record.problems = problems;
+            const why = problems.length
+                ? problems.slice(0, 2).join(' · ')
+                : picked.considered ? `The model rated all ${picked.considered} moment(s) it proposed below the bar (hook or standalone ≤ 1, or rank under 9).` : null;
             const { rows } = await pool.query<{ id: string }>(
-                `UPDATE monteur_sources SET status = 'no_clips', pick = $2::jsonb, error = NULL, claimed_at = NULL, updated_at = NOW()
+                `UPDATE monteur_sources SET status = 'no_clips', pick = $2::jsonb, error = $4, claimed_at = NULL, updated_at = NOW()
                   WHERE id = $1 AND status = 'picking' AND attempts = $3
               RETURNING id`,
-                [source.id, JSON.stringify(record), source.attempts]
+                [source.id, JSON.stringify(record), source.attempts, why]
             );
             return { source_id: source.id, outcome: rows[0] ? 'no_clips' : 'lost', clips: 0 };
         }
