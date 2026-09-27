@@ -297,7 +297,8 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         // then. A rejected or failed reel's files are free to go (MONTEUR.md §2).
         const clause = await keepClause();
         assert.match(clause, /NOT EXISTS \( SELECT 1 FROM clip_drafts c WHERE c\.status IN \('rendering', 'review', 'scheduled'\)/);
-        assert.match(clause, /COALESCE\(c\.render->>'video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'cover_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+        assert.match(clause, /COALESCE\(c\.render->>'video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'tiktok_video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'cover_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/,
+            'the TikTok cut too');
         const clips = clause.slice(clause.indexOf('FROM clip_drafts'));
         assert.doesNotMatch(clips, /'rejected'|'failed'/, 'a rejected or failed reel keeps nothing');
     });

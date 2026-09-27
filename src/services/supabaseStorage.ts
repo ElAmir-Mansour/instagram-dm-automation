@@ -347,6 +347,27 @@ export class SupabaseStorageClient {
         };
     }
 
+    /**
+     * What is actually stored at `path` — its length and type — without fetching it, or null when
+     * there is nothing there. A signed upload carries no size or type limit of its own, so this is
+     * how an upload is checked against what was declared when it was signed.
+     */
+    async headObject(path: string): Promise<{ size: number | null; contentType: string | null } | null> {
+        const response = await this.send(this.objectUrl('/object/authenticated', path), {
+            method: 'HEAD',
+            headers: this.headers({ 'Accept-Encoding': 'identity' }),
+            signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+        }, 'check the file');
+        if (response.status === 404 || response.status === 400) return null;
+        if (!response.ok) throw await errorFrom(response, 'check the file');
+        const size = Number(response.headers.get('content-length'));
+        const type = response.headers.get('content-type');
+        return {
+            size: response.headers.has('content-length') && Number.isSafeInteger(size) && size >= 0 ? size : null,
+            contentType: type ? type.split(';')[0]!.trim().toLowerCase() : null,
+        };
+    }
+
     /** The whole object, or null when it does not exist. For the few callers that need all of it. */
     async download(path: string): Promise<Buffer | null> {
         const response = await this.send(this.objectUrl('/object/authenticated', path), {

@@ -612,3 +612,21 @@ describe('SupabaseStorageClient.createSignedUploadUrl', () => {
         await assert.rejects(client.createSignedUploadUrl(PATH, 'video/mp4'), (err: unknown) => err instanceof StorageApiError && err.notFound);
     });
 });
+
+describe('SupabaseStorageClient.headObject', () => {
+    const PATH = `${CREATOR}/bbbbbbbb-1111-4111-8111-111111111111.mp4`;
+
+    it('reports what is stored — length and type — with the key, fetching nothing', async () => {
+        on('HEAD', AUTHED(PATH), () => new Response(null, { status: 200, headers: { 'content-length': '6123456', 'content-type': 'video/mp4; charset=binary' } }));
+        const client = new SupabaseStorageClient({ url: PROJECT, key: SECRET_KEY });
+        assert.deepEqual(await client.headObject(PATH), { size: 6123456, contentType: 'video/mp4' });
+        assert.equal(calls[0]!.method, 'HEAD');
+        assert.equal(calls[0]!.headers.apikey, SECRET_KEY);
+    });
+
+    it('is null when nothing was uploaded there', async () => {
+        on('HEAD', AUTHED(PATH), () => new Response(null, { status: 400 }));
+        const client = new SupabaseStorageClient({ url: PROJECT, key: SECRET_KEY });
+        assert.equal(await client.headObject(PATH), null);
+    });
+});

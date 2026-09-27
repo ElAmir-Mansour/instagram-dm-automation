@@ -204,7 +204,7 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
  *   - `lesson_moments.thumb_url` — the thumbnails the shot picker shows. A re-index replaces
  *     the moments, so the old thumbnails fall out of this clause and are collected.
  *
- * The Monteur's (v24): `clip_drafts.render` — the video and cover of every reel that is
+ * The Monteur's (v24): `clip_drafts.render` — both videos and the cover of every reel that is
  * rendering (a re-render keeps the last one until the new one lands), in review (waiting for
  * the operator's Approve) or scheduled (its post fetches them). A rejected or failed reel's files
  * are not kept (MONTEUR.md §2).
@@ -270,7 +270,8 @@ export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
                            SELECT 1
                              FROM clip_drafts c
                             WHERE c.status IN ('rendering', 'review', 'scheduled')
-                              AND (COALESCE(c.render->>'video_url', '') || ' ' || COALESCE(c.render->>'cover_url', ''))
+                              AND (COALESCE(c.render->>'video_url', '') || ' ' || COALESCE(c.render->>'tiktok_video_url', '')
+                                   || ' ' || COALESCE(c.render->>'cover_url', ''))
                                   LIKE '%' || m.id::text || '%'
                        )
                      LIMIT $2

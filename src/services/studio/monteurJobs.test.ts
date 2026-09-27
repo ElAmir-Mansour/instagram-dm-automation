@@ -7,8 +7,12 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import { setLogSink } from '../../utils/log.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
+import { setMediaStore, SupabaseStorageMediaStore } from '../storage.js';
+import { setStorageFetch } from '../supabaseStorage.js';
 import { StudioError } from './common.js';
-import { completeJob, deleteUnreferencedUploads, failJob } from './jobs.js';
+import {
+    claimJob, completeJob, deleteUnreferencedUploads, failJob, PICK_FOLDER_EXPIRED_ERROR, PICK_FOLDER_TTL_MINUTES,
+} from './jobs.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
@@ -18,6 +22,8 @@ const SOURCE = '66666666-6666-4666-8666-666666666666';
 const CLIP = '77777777-7777-4777-8777-777777777777';
 const VIDEO = 'a1111111-1111-4111-8111-111111111111';
 const COVER = 'b1111111-1111-4111-8111-111111111111';
+const TT_VIDEO = 'e1111111-1111-4111-8111-111111111111';
+const BASE = 'https://msg-response-auto.vercel.app';
 const OLD_VIDEO = 'c1111111-1111-4111-8111-111111111111';
 const OLD_COVER = 'd1111111-1111-4111-8111-111111111111';
 const up = (id: string) => `https://msg-response-auto.vercel.app/api/uploads/${id}`;
@@ -183,20 +189,23 @@ describe('completeJob — monteur_transcribe', () => {
 describe('completeJob — monteur_render', () => {
     let clipStatus = 'rendering';
     let latest = JOB;
-    let media: Record<string, string> = {};
-    const result = { video_url: up(VIDEO), cover_url: up(COVER), duration: 31.257, width: 1080, height: 1920 };
+    let media: Record<string, { mime: string; path?: string }> = {};
+    const result = { video_url: up(VIDEO), tiktok_video_url: up(TT_VIDEO), cover_url: up(COVER), duration: 31.257, width: 1080, height: 1920 };
 
     beforeEach(() => {
         clipStatus = 'rendering';
         latest = JOB;
-        media = { [VIDEO]: 'video/mp4', [COVER]: 'image/jpeg' };
+        media = { [VIDEO]: { mime: 'video/mp4' }, [TT_VIDEO]: { mime: 'video/mp4' }, [COVER]: { mime: 'image/jpeg' } };
         lockReturns({ id: JOB, kind: 'monteur_render', status: 'claimed', payload: { clipId: CLIP, sourceId: SOURCE } });
         db.routes.push(
-            [/^SELECT id, mime_type FROM media_uploads/, (p) => ({
-                rows: p[1] === TENANT ? (p[0] as string[]).filter((id) => media[id]).map((id) => ({ id, mime_type: media[id] })) : [],
+            [/FROM app_settings WHERE key = \$1/, (p) => ({ rows: p[0] === 'app.public_base_url' ? [{ value: BASE, is_secret: false }] : [] })],
+            [/^SELECT id, mime_type, storage_path FROM media_uploads/, (p) => ({
+                rows: p[1] === TENANT
+                    ? (p[0] as string[]).filter((id) => media[id]).map((id) => ({ id, mime_type: media[id]!.mime, storage_path: media[id]!.path ?? null }))
+                    : [],
             })],
             [/^SELECT id, source_id, status, render FROM clip_drafts/, () => ({
-                rows: [{ id: CLIP, source_id: SOURCE, status: clipStatus, render: { video_url: up(OLD_VIDEO), cover_url: up(OLD_COVER), duration: 30, job_id: 'old', rendered_at: 'x' } }],
+                rows: [{ id: CLIP, source_id: SOURCE, status: clipStatus, render: { video_url: up(OLD_VIDEO), tiktok_video_url: null, cover_url: up(OLD_COVER), duration: 30, job_id: 'old', rendered_at: 'x' } }],
             })],
             [/kind = 'monteur_render' AND payload->>'clipId' = \$2 ORDER BY created_at DESC, id DESC/, () => ({ rows: [{ id: latest }] })],
             [/^DELETE FROM media_uploads/, (p) => ({ rows: [], rowCount: p[1].length })],
@@ -209,11 +218,13 @@ describe('completeJob — monteur_render', () => {
         assert.match(land!.sql, /status = 'review', error = NULL/);
         const render = JSON.parse(land!.params[1]);
         assert.deepEqual({ ...render, rendered_at: 'x' }, {
-            video_url: up(VIDEO), cover_url: up(COVER), duration: 31.26, job_id: JOB, rendered_at: 'x',
+            video_url: `${BASE}/api/uploads/${VIDEO}`, tiktok_video_url: `${BASE}/api/uploads/${TT_VIDEO}`,
+            cover_url: `${BASE}/api/uploads/${COVER}`, duration: 31.26, job_id: JOB, rendered_at: 'x',
         });
         const [del] = db.ran(/^DELETE FROM media_uploads/);
         assert.deepEqual(del!.params, [TENANT, [OLD_VIDEO, OLD_COVER]]);
-        const [done] = db.ran(/^UPDATE monteur_sources s SET status = 'done'/);
+        const [lock, done] = [db.ran(/^SELECT id FROM monteur_sources WHERE id = \$1 AND creator_id = \$2 FOR UPDATE/)[0], db.ran(/^UPDATE monteur_sources s SET status = 'done'/)[0]];
+        assert.ok(lock, 'the source is locked before the check, so two last renders cannot both miss');
         assert.deepEqual(done!.params, [SOURCE, TENANT]);
         assert.match(done!.sql, /s\.status = 'rendering' AND NOT EXISTS \(SELECT 1 FROM clip_drafts c WHERE c\.source_id = s\.id AND c\.status = 'rendering'\)/);
         // The landing comes before the delete: until then the clip still names the old files.
@@ -221,11 +232,28 @@ describe('completeJob — monteur_render', () => {
         assert.ok(order.findIndex((s) => /^UPDATE clip_drafts SET render/.test(s)) < order.findIndex((s) => /^DELETE FROM media_uploads/.test(s)));
     });
 
+    it('stores this app’s own URLs, never the worker’s strings', async () => {
+        await completeJob(TENANT, JOB, {
+            ...result,
+            video_url: `https://evil.example/api/uploads/${VIDEO}`,
+            cover_url: `https://evil.example/x?u=/api/uploads/${COVER}.jpg`,
+        });
+        const render = JSON.parse(db.ran(/^UPDATE clip_drafts SET render/)[0]!.params[1]);
+        assert.equal(render.video_url, `${BASE}/api/uploads/${VIDEO}`);
+        assert.equal(render.cover_url, `${BASE}/api/uploads/${COVER}`);
+        assert.ok(!JSON.stringify(render).includes('evil.example'));
+    });
+
+    it('takes a render with no TikTok cut, when TikTok is off', async () => {
+        await completeJob(TENANT, JOB, { ...result, tiktok_video_url: null });
+        assert.equal(JSON.parse(db.ran(/^UPDATE clip_drafts SET render/)[0]!.params[1]).tiktok_video_url, null);
+    });
+
     it('drops a render an edit superseded, and deletes its files', async () => {
         latest = NEWER_JOB;
         assert.equal(await completeJob(TENANT, JOB, result), 'dropped');
         assert.equal(db.ran(/^UPDATE clip_drafts/).length, 0);
-        assert.deepEqual(db.ran(/^DELETE FROM media_uploads/)[0]!.params, [TENANT, [VIDEO, COVER]]);
+        assert.deepEqual(db.ran(/^DELETE FROM media_uploads/)[0]!.params, [TENANT, [VIDEO, TT_VIDEO, COVER]]);
         assert.equal(storedResult().dropped, 'superseded');
     });
 
@@ -236,14 +264,68 @@ describe('completeJob — monteur_render', () => {
     });
 
     it('accepts only this tenant’s uploads, of the right kinds', async () => {
-        media = { [VIDEO]: 'video/mp4' };
+        media = { [VIDEO]: { mime: 'video/mp4' }, [TT_VIDEO]: { mime: 'video/mp4' } };
         await assert.rejects(completeJob(TENANT, JOB, result), (err: unknown) =>
             err instanceof StudioError && err.status === 400 && (err.problems ?? []).some((p) => p.includes(`upload ${COVER} does not exist`)));
-        media = { [VIDEO]: 'image/jpeg', [COVER]: 'image/jpeg' };
+        media = { [VIDEO]: { mime: 'image/jpeg' }, [TT_VIDEO]: { mime: 'video/mp4' }, [COVER]: { mime: 'image/jpeg' } };
         await assert.rejects(completeJob(TENANT, JOB, result), (err: unknown) =>
             err instanceof StudioError && (err.problems ?? []).some((p) => /video_url: .* is image\/jpeg, not video\/mp4/.test(p)));
         await assert.rejects(completeJob(TENANT, JOB, { ...result, cover_url: 'https://elsewhere.example/c.jpg' }), isStudioError(400));
         assert.equal(db.ran(/^UPDATE clip_drafts|^DELETE/).length, 0);
+    });
+
+    describe('a file in Supabase Storage', () => {
+        let heads: Record<string, { status: number; length?: number; type?: string }> = {};
+        let previousStore: ReturnType<typeof setMediaStore> = null;
+        let previousFetch: ReturnType<typeof setStorageFetch> = null;
+
+        beforeEach(() => {
+            media = {
+                [VIDEO]: { mime: 'video/mp4', path: `${TENANT}/${VIDEO}.mp4` },
+                [TT_VIDEO]: { mime: 'video/mp4', path: `${TENANT}/${TT_VIDEO}.mp4` },
+                [COVER]: { mime: 'image/jpeg', path: `${TENANT}/${COVER}.jpg` },
+            };
+            heads = {
+                [VIDEO]: { status: 200, length: 58 * 1024 * 1024, type: 'video/mp4' },
+                [TT_VIDEO]: { status: 200, length: 58 * 1024 * 1024, type: 'video/mp4' },
+                [COVER]: { status: 200, length: 90_000, type: 'image/jpeg' },
+            };
+            previousStore = setMediaStore(new SupabaseStorageMediaStore({ url: 'https://abcd1234.supabase.co', key: 'sb_secret_0123456789abcdefghijKLMNOP', source: { url: 'database', key: 'database' } }));
+            previousFetch = setStorageFetch(async (input, init = {}) => {
+                assert.equal(init.method, 'HEAD');
+                const id = Object.keys(heads).find((k) => input.includes(k))!;
+                const h = heads[id]!;
+                const headers: Record<string, string> = {};
+                if (h.length !== undefined) headers['content-length'] = String(h.length);
+                if (h.type) headers['content-type'] = h.type;
+                return new Response(null, { status: h.status, headers });
+            });
+        });
+        afterEach(() => {
+            setMediaStore(previousStore);
+            setStorageFetch(previousFetch);
+        });
+
+        it('checks each object is there, at most 100MB and of the declared type', async () => {
+            assert.equal(await completeJob(TENANT, JOB, result), 'applied');
+        });
+
+        it('refuses a file that was signed but never uploaded', async () => {
+            heads[TT_VIDEO] = { status: 404 };
+            await assert.rejects(completeJob(TENANT, JOB, result), (err: unknown) =>
+                err instanceof StudioError && (err.problems ?? []).some((p) => /tiktok_video_url: .* never arrived/.test(p)));
+        });
+
+        it('refuses one over 100MB, or stored as another type than it was signed for', async () => {
+            heads[VIDEO] = { status: 200, length: 100 * 1024 * 1024 + 1, type: 'video/mp4' };
+            await assert.rejects(completeJob(TENANT, JOB, result), (err: unknown) =>
+                err instanceof StudioError && (err.problems ?? []).some((p) => /video_url: .* is over 100MB/.test(p)));
+            heads[VIDEO] = { status: 200, length: 1000, type: 'video/mp4' };
+            heads[COVER] = { status: 200, length: 1000, type: 'image/png' };
+            await assert.rejects(completeJob(TENANT, JOB, result), (err: unknown) =>
+                err instanceof StudioError && (err.problems ?? []).some((p) => /cover_url: .* stored as image\/png, not image\/jpeg/.test(p)));
+            assert.equal(db.ran(/^UPDATE clip_drafts/).length, 0);
+        });
     });
 });
 
@@ -300,6 +382,69 @@ describe('deleteUnreferencedUploads — a live reel’s files are in use', () =>
         await deleteUnreferencedUploads(pool, TENANT, [up(VIDEO)]);
         const [del] = db.ran(/^DELETE FROM media_uploads/);
         assert.match(del!.sql, /NOT EXISTS \( SELECT 1 FROM scheduled_posts s/);
-        assert.match(del!.sql, /AND NOT EXISTS \( SELECT 1 FROM clip_drafts c WHERE c\.status IN \('rendering', 'review', 'scheduled'\) AND \(COALESCE\(c\.render->>'video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'cover_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+        assert.match(del!.sql, /AND NOT EXISTS \( SELECT 1 FROM clip_drafts c WHERE c\.status IN \('rendering', 'review', 'scheduled'\) AND \(COALESCE\(c\.render->>'video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'tiktok_video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'cover_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+});
+
+describe('the claim — a fast lane, and folder dialogs nobody waits for', () => {
+    it('narrows the claim to the kinds asked for, and to none of them when not asked', async () => {
+        await claimJob(TENANT, ['pick_folder']);
+        const [claim] = db.ran(/^WITH picked AS/);
+        assert.match(claim!.sql, /AND \(\$4::text\[\] IS NULL OR kind = ANY\(\$4::text\[\]\)\)/);
+        assert.deepEqual(claim!.params[3], ['pick_folder']);
+    });
+
+    it('fails a folder dialog still queued after 10 minutes instead of handing it out', async () => {
+        await claimJob(TENANT);
+        const [expire] = db.ran(/kind = 'pick_folder' AND status = 'pending'/);
+        assert.match(expire!.sql, /^UPDATE studio_jobs SET status = 'failed'/);
+        assert.match(expire!.sql, /created_at < NOW\(\) - make_interval\(mins => \$2\)/);
+        assert.deepEqual(expire!.params, [TENANT, PICK_FOLDER_TTL_MINUTES, PICK_FOLDER_EXPIRED_ERROR]);
+        assert.equal(PICK_FOLDER_TTL_MINUTES, 10);
+        const order = db.statements.map((s) => s.sql);
+        assert.ok(order.findIndex((s) => /kind = 'pick_folder' AND status = 'pending'/.test(s)) < order.findIndex((s) => /^WITH picked AS/.test(s)));
+    });
+});
+
+describe('completeJob — a folder pick leaves an audit entry', () => {
+    it('records the settings write as PUT /settings would, by the worker', async () => {
+        lockReturns({ id: JOB, kind: 'pick_folder', status: 'claimed', payload: { prompt: 'Choose' } });
+        db.routes.push([/FROM studio_settings/, () => ({ rows: [] })], [/^INSERT INTO audit_log/, () => ({ rows: [{ id: 'audit-1' }] })]);
+        await completeJob(TENANT, JOB, { folder: '/Volumes/Clips' });
+        const [audit] = db.ran(/^INSERT INTO audit_log/);
+        assert.equal(audit!.params[1], 'studio-worker');
+        assert.equal(audit!.params[2], 'studio.settings_write');
+        assert.deepEqual(JSON.parse(audit!.params[5]), { sections: ['monteur'], via: 'pick_folder', job_id: JOB });
+        // In the job's transaction, after the settings write.
+        const order = db.statements.map((s) => s.sql);
+        assert.ok(order.findIndex((s) => /^INSERT INTO studio_settings/.test(s)) < order.findIndex((s) => /^INSERT INTO audit_log/.test(s)));
+    });
+
+    it('fails a pending scan for the old folder when the folder changes', async () => {
+        lockReturns({ id: JOB, kind: 'pick_folder', status: 'claimed', payload: { prompt: 'Choose' } });
+        db.routes.push([/FROM studio_settings/, () => ({ rows: [{ monteur: { folder: '/Old' } }] })]);
+        await completeJob(TENANT, JOB, { folder: '/Volumes/New' });
+        const [cancel] = db.ran(/kind = 'monteur_scan' AND status = 'pending'/);
+        assert.match(cancel!.sql, /payload->>'folder' IS DISTINCT FROM \$3/);
+        assert.deepEqual([cancel!.params[0], cancel!.params[2]], [TENANT, '/Volumes/New']);
+    });
+
+    it('leaves scans alone when the folder is unchanged', async () => {
+        lockReturns({ id: JOB, kind: 'pick_folder', status: 'claimed', payload: { prompt: 'Choose' } });
+        db.routes.push([/FROM studio_settings/, () => ({ rows: [{ monteur: { folder: '/Same' } }] })]);
+        await completeJob(TENANT, JOB, { folder: '/Same' });
+        assert.equal(db.ran(/kind = 'monteur_scan' AND status = 'pending'/).length, 0);
+    });
+});
+
+describe('failJob — a render failure locks its clip before deciding', () => {
+    it('reads the latest render only once the clip is locked', async () => {
+        lockReturns({ id: JOB, kind: 'monteur_render', status: 'claimed', payload: { clipId: CLIP } });
+        db.routes.push([/payload->>'clipId' = \$2 ORDER BY created_at DESC, id DESC/, () => ({ rows: [{ id: JOB }] })]);
+        await failJob(TENANT, JOB, 'x');
+        const order = db.statements.map((s) => s.sql);
+        const lock = order.findIndex((s) => /^SELECT id FROM clip_drafts WHERE id = \$1 AND creator_id = \$2 FOR UPDATE/.test(s));
+        const latest = order.findIndex((s) => /payload->>'clipId' = \$2 ORDER BY created_at DESC, id DESC/.test(s));
+        assert.ok(lock >= 0 && lock < latest);
     });
 });

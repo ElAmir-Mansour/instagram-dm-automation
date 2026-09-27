@@ -18,13 +18,20 @@ const RECENT_ACCENTS = 3;
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /**
- * The CTA card: line 1 is the slide's ask with the keyword quoted (a card, so the short ask,
- * never the caption's long one), line 2 the slide's "and I'll DM you the link".
+ * The CTA overlay (MONTEUR.md §3): line 1 is the slide's short ask with «keyword» — never the
+ * caption's long one — and line 2 the slide's "and I'll DM you the link".
  */
 export function ctaLines(settings: StudioSettings, keyword: string): { line1: string; line2: string } {
-    const quoted = settings.voice?.language === 'ar' ? `«${keyword}»` : `"${keyword}"`;
     const ask = settings.cta?.slide?.igAsk?.trim() ?? '';
-    return { line1: ask ? `${ask} ${quoted}` : quoted, line2: settings.cta?.slide?.igSub?.trim() ?? '' };
+    return { line1: ask ? `${ask} «${keyword}»` : `«${keyword}»`, line2: settings.cta?.slide?.igSub?.trim() ?? '' };
+}
+
+/**
+ * TikTok's CTA for its own cut: TikTok can't auto-DM, so its video must not say "comment X". The
+ * slide's pill ("link in bio") and its sub-line.
+ */
+export function tiktokCtaLines(settings: StudioSettings): { line1: string; line2: string } {
+    return { line1: settings.cta?.slide?.ttPill?.trim() ?? '', line2: settings.cta?.slide?.ttSub?.trim() ?? '' };
 }
 
 /**
@@ -59,6 +66,8 @@ export function buildRenderPayload(input: {
         title: input.title,
         words: clipWords(input.source.words ?? [], input.start, input.end),
         cta: ctaLines(settings, input.keyword),
+        // Only when TikTok is on: a second render nobody would post is minutes of the Mac's time.
+        cta_tiktok: settings.monteur.platforms.includes('tiktok') ? tiktokCtaLines(settings) : null,
         brand: { accent: input.accent, font: settings.brand.fonts.display, direction: settings.brand.direction },
         cover_at: COVER_AT_S,
     };

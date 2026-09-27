@@ -20,10 +20,12 @@ import type {
     MonteurScanPayload, MonteurSourceRow, RenderCarouselPayload, StudioJobKind, StudioJobRow,
 } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
+import { getPublicBaseUrl } from '../appSettings.js';
+import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
 import {
     MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parsePickFolderResult, parseTranscribeResult,
 } from '../monteur/results.js';
-import { uploadIdFromUrl } from '../storage.js';
+import { getMediaStore, SupabaseStorageMediaStore, uploadIdFromUrl } from '../storage.js';
 import {
     type Exec, clipText, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN,
     withTransaction,
@@ -45,6 +47,19 @@ export const EXHAUSTED_ERROR =
     `The worker stopped reporting on this job ${MAX_ATTEMPTS} times. It may be crashing on it: check ~/Library/Logs/aicourse-studio-worker.log on the Mac.`;
 const SUPERSEDED_ERROR = 'Superseded by a newer render of the same draft.';
 const SUPERSEDED_CLIP_ERROR = 'Superseded by a newer render of the same clip.';
+/**
+ * A folder dialog is for someone looking at the Mac right now. One still queued after this long
+ * would pop up when nobody is there, and whatever it chose would overwrite the folder.
+ */
+export const PICK_FOLDER_TTL_MINUTES = 10;
+export const PICK_FOLDER_EXPIRED_ERROR =
+    `Nobody was waiting for the folder dialog any more: it was not picked up within ${PICK_FOLDER_TTL_MINUTES} minutes. Press Choose folder again.`;
+/** What the sign route allows, and so what a render's files may be (MONTEUR.md §4). */
+export const MAX_RENDER_FILE_BYTES = 100 * 1024 * 1024;
+/** Every job kind, for a claim that asks for some of them only. */
+export const STUDIO_JOB_KINDS: readonly StudioJobKind[] = [
+    'scan_library', 'index_lesson', 'render_carousel', 'pick_folder', 'monteur_scan', 'monteur_transcribe', 'monteur_render',
+];
 
 export type StudioJobView = Pick<
     StudioJobRow,
@@ -180,10 +195,13 @@ export async function latestClipRenderJobId(exec: Exec, creatorId: string, clipI
 
 /**
  * A source whose clips have all left `rendering` (landed, failed or rejected) is `done`. Run after
- * every change that can be the last one, in the same statement as the check, so two renders
- * finishing at once cannot both see the other still rendering.
+ * every change that can be the last one. The source row is locked first: two renders finishing at
+ * once would otherwise each see the other's clip still rendering (neither has committed) and
+ * leave the source rendering forever. Behind the lock, the second one's check runs after the
+ * first commits, and sees it.
  */
 export async function markSourceDoneIfRendered(exec: Exec, creatorId: string, sourceId: string): Promise<void> {
+    await exec.query('SELECT id FROM monteur_sources WHERE id = $1 AND creator_id = $2 FOR UPDATE', [sourceId, creatorId]);
     await exec.query(
         `UPDATE monteur_sources s SET status = 'done', updated_at = NOW()
           WHERE s.id = $1 AND s.creator_id = $2 AND s.status = 'rendering'
@@ -212,6 +230,7 @@ export const CLAIM_SQL = `
         SELECT id
           FROM studio_jobs
          WHERE creator_id = $1
+           AND ($4::text[] IS NULL OR kind = ANY($4::text[]))
            AND (status = 'pending'
                 OR (status = 'claimed'
                     AND COALESCE(heartbeat_at, claimed_at, created_at) < NOW() - make_interval(mins => $2)
@@ -233,12 +252,16 @@ export const CLAIM_SQL = `
      WHERE j.id = picked.id
  RETURNING j.id, j.kind, j.payload, j.attempts`;
 
+/**
+ * `kinds` narrows the claim: a worker busy rendering can poll a fast lane for `pick_folder` alone,
+ * so the folder dialog does not wait behind a ten-minute render.
+ */
 export async function claimJob(
-    creatorId: string
+    creatorId: string, kinds: readonly StudioJobKind[] | null = null
 ): Promise<{ id: string; kind: StudioJobKind; payload: StudioJobRow['payload'] } | null> {
     await failExhaustedClaims(creatorId);
     const row = await queryOne<Pick<StudioJobRow, 'id' | 'kind' | 'payload' | 'attempts'>>(
-        CLAIM_SQL, [creatorId, STALE_CLAIM_MINUTES, MAX_ATTEMPTS]
+        CLAIM_SQL, [creatorId, STALE_CLAIM_MINUTES, MAX_ATTEMPTS, kinds && kinds.length ? [...kinds] : null]
     );
     if (!row) return null;
     log('info', 'studio.job_claimed', { job_id: row.id, kind: row.kind, attempt: row.attempts });
@@ -265,6 +288,14 @@ export async function failExhaustedClaims(creatorId: string): Promise<number> {
             log('warn', 'studio.job_exhausted', { job_id: job.id, kind: job.kind });
             await applyFailure(client, job, EXHAUSTED_ERROR);
         }
+        // Folder dialogs nobody is waiting for any more are failed, never handed out.
+        const { rowCount } = await client.query(
+            `UPDATE studio_jobs SET status = 'failed', error = $3, updated_at = NOW()
+              WHERE creator_id = $1 AND kind = 'pick_folder' AND status = 'pending'
+                AND created_at < NOW() - make_interval(mins => $2)`,
+            [creatorId, PICK_FOLDER_TTL_MINUTES, PICK_FOLDER_EXPIRED_ERROR]
+        );
+        if (rowCount) log('info', 'monteur.folder_pick_expired', { jobs: rowCount });
         return rows.length;
     });
 }
@@ -640,7 +671,8 @@ export async function deleteUnreferencedUploads(
             AND NOT EXISTS (
                 SELECT 1 FROM clip_drafts c
                  WHERE c.status IN ('rendering', 'review', 'scheduled')
-                   AND (COALESCE(c.render->>'video_url', '') || ' ' || COALESCE(c.render->>'cover_url', ''))
+                   AND (COALESCE(c.render->>'video_url', '') || ' ' || COALESCE(c.render->>'tiktok_video_url', '')
+                        || ' ' || COALESCE(c.render->>'cover_url', ''))
                        LIKE '%' || m.id::text || '%'
             )`,
         [creatorId, ids]
@@ -705,6 +737,11 @@ async function applyPickFolder(exec: Exec, job: LockedJob, result: unknown): Pro
     if ('cancelled' in picked) return { cancelled: true };
     // A folder the rules refuse (not absolute, too long) is a 400 here, like any bad result.
     const { settings } = await updateStudioSettings(job.creator_id, { monteur: { folder: picked.folder } }, exec);
+    // The same record PUT /settings leaves for the same change; the actor is the tenant's worker.
+    await writeAudit({ userId: null, email: 'studio-worker' }, {
+        action: AUDIT_ACTIONS.studioSettingsWrite, targetType: 'creator', targetId: job.creator_id,
+        detail: { sections: ['monteur'], via: 'pick_folder', job_id: job.id },
+    }, exec);
     log('info', 'monteur.folder_picked', { job_id: job.id });
     return { folder: settings.monteur.folder };
 }
@@ -778,21 +815,45 @@ async function applyTranscribe(
 // ── monteur_render ──
 
 /**
- * Both files must be this tenant's uploads, and of the right kind: an MP4 to post, a JPEG cover
- * (Instagram takes nothing else). A render pointing anywhere else would publish it.
+ * Every file must be this tenant's upload, of the right kind — an MP4 to post, a JPEG cover
+ * (Instagram takes nothing else) — and, for one in Supabase Storage, actually there as declared:
+ * a signed upload URL carries no size or type limit of its own, so the object itself is asked.
  */
-async function assertOwnMedia(exec: Exec, creatorId: string, wanted: readonly [id: string, mime: string, label: string][]): Promise<void> {
+async function checkRenderFiles(exec: Exec, creatorId: string, wanted: readonly [id: string, mime: string, label: string][]): Promise<void> {
     const ids = unique(wanted.map(([id]) => id));
-    const { rows } = await exec.query<{ id: string; mime_type: string }>(
-        'SELECT id, mime_type FROM media_uploads WHERE id = ANY($1::uuid[]) AND creator_id = $2', [ids, creatorId]
+    const { rows } = await exec.query<{ id: string; mime_type: string; storage_path: string | null }>(
+        'SELECT id, mime_type, storage_path FROM media_uploads WHERE id = ANY($1::uuid[]) AND creator_id = $2', [ids, creatorId]
     );
-    const mimeOf = new Map(rows.map((r) => [String(r.id).toLowerCase(), r.mime_type]));
+    const byId = new Map(rows.map((r) => [String(r.id).toLowerCase(), r]));
     const problems = wanted.flatMap(([id, mime, label]) => {
-        const actual = mimeOf.get(id);
-        if (!actual) return [`${label}: upload ${id} does not exist`];
-        return actual === mime ? [] : [`${label}: upload ${id} is ${actual}, not ${mime}`];
+        const row = byId.get(id);
+        if (!row) return [`${label}: upload ${id} does not exist`];
+        return row.mime_type === mime ? [] : [`${label}: upload ${id} is ${row.mime_type}, not ${mime}`];
     });
     if (problems.length) throw problemsError(problems, 'the render result');
+
+    const inStorage = rows.filter((r) => r.storage_path);
+    if (!inStorage.length) return;
+    const store = await getMediaStore();
+    if (!(store instanceof SupabaseStorageMediaStore)) {
+        throw new StudioError(409, 'The render is in Supabase Storage, and media storage is not configured to check it.');
+    }
+    for (const [id, mime, label] of wanted) {
+        const row = byId.get(id)!;
+        if (!row.storage_path) continue;
+        const object = await store.client.headObject(row.storage_path);
+        if (!object) problems.push(`${label}: upload ${id} was signed but its file never arrived`);
+        else if (object.size !== null && object.size > MAX_RENDER_FILE_BYTES) problems.push(`${label}: upload ${id} is over 100MB`);
+        else if (object.contentType && object.contentType !== mime) problems.push(`${label}: upload ${id} was stored as ${object.contentType}, not ${mime}`);
+    }
+    if (problems.length) throw problemsError(problems, 'the render result');
+}
+
+/** This app's own URL for an upload, on its public address: never a string a worker sent. */
+async function ownUploadUrl(id: string): Promise<string> {
+    const base = await getPublicBaseUrl(null);
+    if (!base) throw new StudioError(500, 'No public address for this app: set it in Settings → TikTok app.');
+    return (await getMediaStore()).publicUrl(id, base);
 }
 
 /**
@@ -806,10 +867,17 @@ async function applyMonteurRender(
     exec: Exec, job: LockedJob, result: unknown
 ): Promise<{ outcome: CompleteOutcome; stored: unknown }> {
     const render = parseMonteurRenderResult(result);
-    await assertOwnMedia(exec, job.creator_id, [
+    await checkRenderFiles(exec, job.creator_id, [
         [render.videoId, 'video/mp4', 'video_url'], [render.coverId, 'image/jpeg', 'cover_url'],
+        ...(render.tiktokVideoId ? [[render.tiktokVideoId, 'video/mp4', 'tiktok_video_url'] as [string, string, string]] : []),
     ]);
-    const stored = { video_url: render.video_url, cover_url: render.cover_url, duration: render.duration };
+    const stored = {
+        video_url: await ownUploadUrl(render.videoId),
+        tiktok_video_url: render.tiktokVideoId ? await ownUploadUrl(render.tiktokVideoId) : null,
+        cover_url: await ownUploadUrl(render.coverId),
+        duration: render.duration,
+    };
+    const files = [stored.video_url, stored.tiktok_video_url, stored.cover_url];
 
     const clipId = payloadId(job, 'clipId');
     const { rows } = clipId
@@ -823,7 +891,7 @@ async function applyMonteurRender(
 
     const reason = !clip ? 'clip_missing' : clip.status !== 'rendering' ? `clip_${clip.status}` : latest !== job.id ? 'superseded' : null;
     if (reason) {
-        const deleted = await deleteUnreferencedUploads(exec, job.creator_id, [render.video_url, render.cover_url]);
+        const deleted = await deleteUnreferencedUploads(exec, job.creator_id, files);
         log('info', 'monteur.render_dropped', { job_id: job.id, clip_id: clipId, reason, uploads_deleted: deleted });
         return { outcome: 'dropped', stored: { ...stored, dropped: reason } };
     }
@@ -835,7 +903,8 @@ async function applyMonteurRender(
     );
     const previous = clip!.render;
     if (previous) {
-        await deleteUnreferencedUploads(exec, job.creator_id, [previous.video_url, previous.cover_url], new Set([render.videoId, render.coverId]));
+        const keep = new Set([render.videoId, render.coverId, ...(render.tiktokVideoId ? [render.tiktokVideoId] : [])]);
+        await deleteUnreferencedUploads(exec, job.creator_id, [previous.video_url, previous.tiktok_video_url, previous.cover_url], keep);
     }
     await markSourceDoneIfRendered(exec, job.creator_id, clip!.source_id);
     return { outcome: 'applied', stored };
@@ -893,7 +962,11 @@ async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<
         );
     } else if (job.kind === 'monteur_render') {
         const clipId = payloadId(job, 'clipId');
-        if (!clipId || (await latestClipRenderJobId(exec, job.creator_id, clipId)) !== job.id) return;
+        if (!clipId) return;
+        // The clip first, so a PATCH queueing a newer render at this moment is either seen here
+        // (and the clip left alone) or waits until this failure is recorded.
+        await exec.query('SELECT id FROM clip_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [clipId, job.creator_id]);
+        if ((await latestClipRenderJobId(exec, job.creator_id, clipId)) !== job.id) return;
         const { rows } = await exec.query<Pick<ClipDraftRow, 'source_id'>>(
             `UPDATE clip_drafts SET status = 'failed', error = $3, updated_at = NOW()
               WHERE id = $1 AND creator_id = $2 AND status = 'rendering'

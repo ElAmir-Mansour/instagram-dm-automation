@@ -100,7 +100,7 @@ describe('claimJob', () => {
         routes.push([/^WITH picked AS/, () => ({ rows: [{ id: JOB, kind: 'scan_library', payload: { root: '/r' }, attempts: 1 }] })]);
         assert.deepEqual(await claimJob(TENANT), { id: JOB, kind: 'scan_library', payload: { root: '/r' } });
         const [claim] = ran(/^WITH picked AS/);
-        assert.deepEqual(claim!.params, [TENANT, STALE_CLAIM_MINUTES, MAX_ATTEMPTS]);
+        assert.deepEqual(claim!.params, [TENANT, STALE_CLAIM_MINUTES, MAX_ATTEMPTS, null], 'no kinds: any job');
         assert.equal(STALE_CLAIM_MINUTES, 15);
         assert.equal(MAX_ATTEMPTS, 3);
     });

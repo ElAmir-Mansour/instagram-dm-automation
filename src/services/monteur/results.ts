@@ -158,32 +158,35 @@ export function parseTranscribeResult(result: unknown): { duration: number | nul
 // ─── monteur_render ─────────────────────────────────────────────────────────────────────
 
 export interface ParsedRender {
-    video_url: string;
-    cover_url: string;
-    duration: number;
     videoId: string;
+    /** The TikTok cut (its own CTA), when the worker made one. */
+    tiktokVideoId: string | null;
     coverId: string;
+    duration: number;
 }
 
-/** Two of this app's upload URLs and a duration. Whose uploads they are is checked on apply. */
+/**
+ * The upload ids behind the render's URLs, and its duration. Only the ids are kept: the URLs that
+ * are stored and published are rebuilt from them on this app's public address, so a worker cannot
+ * point a post at another host by naming one of our ids in its path. Whose uploads they are, and
+ * what they hold, is checked on apply.
+ */
 export function parseMonteurRenderResult(result: unknown): ParsedRender {
-    if (!isPlainObject(result)) throw new StudioError(400, 'A render result is { video_url, cover_url, duration, width, height }.');
+    if (!isPlainObject(result)) {
+        throw new StudioError(400, 'A render result is { video_url, tiktok_video_url, cover_url, duration, width, height }.');
+    }
     const problems: string[] = [];
-    const url = (key: 'video_url' | 'cover_url'): { url: string; id: string } | null => {
+    const id = (key: 'video_url' | 'tiktok_video_url' | 'cover_url', optional = false): string | null => {
         const value = result[key];
-        const id = typeof value === 'string' && /^https?:\/\//i.test(value) ? uploadIdFromUrl(value) : null;
-        if (!id) {
-            problems.push(`${key} is not one of this app's upload URLs`);
-            return null;
-        }
-        return { url: value as string, id };
+        if (optional && (value === undefined || value === null)) return null;
+        const found = typeof value === 'string' && /^https?:\/\//i.test(value) ? uploadIdFromUrl(value) : null;
+        if (!found) problems.push(`${key} is not one of this app's upload URLs`);
+        return found;
     };
-    const video = url('video_url');
-    const cover = url('cover_url');
+    const videoId = id('video_url');
+    const tiktokVideoId = id('tiktok_video_url', true);
+    const coverId = id('cover_url');
     if (!(isFiniteNumber(result.duration) && result.duration > 0)) problems.push('duration must be the video\'s length in seconds');
     if (problems.length) throw problemsError(problems, 'the render result');
-    return {
-        video_url: video!.url, cover_url: cover!.url, duration: round2(result.duration as number),
-        videoId: video!.id, coverId: cover!.id,
-    };
+    return { videoId: videoId!, tiktokVideoId, coverId: coverId!, duration: round2(result.duration as number) };
 }
