@@ -16,13 +16,25 @@ export interface DmErrorClassification {
 }
 
 /**
+ * Meta allows one private reply per comment, and says so when it has been used — Facebook with
+ * code 10900, Instagram with code -1 and only this message. Usually the creator messaged the
+ * person by hand from the Instagram app first. Retrying can never succeed, and a public
+ * "we couldn't message you" would be wrong: a DM exists.
+ */
+function isAlreadyRepliedError(err: any): boolean {
+    if (metaErrorCode(err) === 10900) return true;
+    const text = `${err?.response?.data?.error?.message ?? ''} ${err?.message ?? ''}`;
+    return /already has a reply/i.test(text);
+}
+
+/**
  * After a DM that can never be delivered, reply to the comment publicly instead, so the person
  * who asked still gets the link. Not when the token is dead (the reply would fail too) or when
- * Meta says the comment already had its private reply (10900): then a DM exists.
+ * the comment already had its private reply: then a DM exists.
  */
 export function shouldPostDmFallback(err: any): boolean {
     if (isTokenDeathError(err)) return false;
-    return metaErrorCode(err) !== 10900;
+    return !isAlreadyRepliedError(err);
 }
 
 /**
@@ -57,6 +69,17 @@ export function classifyDmError(err: any): DmErrorClassification {
         return {
             status: 'USER_BLOCKED_DMS',
             error: 'User privacy settings block DMs from Pages (Code 10903).',
+            permanent: true,
+        };
+    }
+
+    // Checked before code 100 and before the generic path: Instagram reports it as code -1,
+    // which would otherwise read as transient and retry twice before giving up — and the
+    // final attempt used to post the public fallback. On 2026-09-27 it did.
+    if (isAlreadyRepliedError(err)) {
+        return {
+            status: 'FAILED',
+            error: `This comment already had its private reply (Meta allows one per comment, usually sent by hand from the app), so no DM was sent. (${message})`,
             permanent: true,
         };
     }
