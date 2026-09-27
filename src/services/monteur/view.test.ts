@@ -79,6 +79,22 @@ describe('getMonteurView', () => {
         assert.equal((await getMonteurView(TENANT, NOW)).tiktok_privacy, null);
     });
 
+    it('has a next run in course mode with no folder, and none in folder mode without one', async () => {
+        monteur = { ...monteur, source: 'course', folder: null };
+        assert.equal((await getMonteurView(TENANT, NOW)).next_run, '2026-09-28T04:00:00.000Z', '07:00 Riyadh tomorrow');
+        monteur = { ...monteur, source: 'folder', folder: null };
+        assert.equal((await getMonteurView(TENANT, NOW)).next_run, null);
+    });
+
+    it('lists each clip’s edits (MONTEUR.md §6.2), and [] for a clip that has none', async () => {
+        const edits = [{ t: 4.2, kind: 'tool', text: 'NotebookLM', sfx: 'whoosh' }, { t: 9, kind: 'punch' }];
+        clips = [clipRow({ edits }), clipRow({ id: 'c2', edits: null })];
+        const view = await getMonteurView(TENANT, NOW);
+        assert.match(db.ran(/FROM clip_drafts c JOIN monteur_sources s/)[0]!.sql, /\bc\.edits\b/);
+        assert.deepEqual(view.clips[0]!.edits, edits);
+        assert.deepEqual(view.clips[1]!.edits, []);
+    });
+
     it('reports a scheduled reel’s privacy as it went out', async () => {
         appSettings['tiktok.audited'] = 'true';
         clips = [clipRow({ status: 'scheduled', schedule: { scheduled_time: 'x', tiktok_privacy: 'SELF_ONLY' } })];

@@ -77,9 +77,19 @@ export type MonteurPlatform = 'instagram' | 'facebook' | 'tiktok';
  * The Monteur (MONTEUR.md §1): the folder it watches, when it runs, how much it cuts and where
  * the reels go. Times are wall-clock times in `schedule.timezone`, the tenant's one timezone.
  */
+export type MonteurSource = 'folder' | 'course';
+export type MonteurMode = 'review' | 'auto';
+
 export type MonteurConfig = {
     /** Off = no daily run. Run now still works. */
     enabled: boolean;
+    /**
+     * Where a run takes its videos: new files in `folder`, or the course library's next lessons
+     * (`course_lessons`, in lesson order) that have no source yet. `folder` is needed only for 'folder'.
+     */
+    source: MonteurSource;
+    /** 'review': a rendered reel waits for Approve. 'auto': the drain approves it, as Approve would. */
+    mode: MonteurMode;
     /** Absolute, on the worker's machine; `null` = not chosen yet. */
     folder: string | null;
     /** 'HH:MM': the daily scan. */
@@ -110,10 +120,12 @@ export type StudioSettings = {
     monteur: MonteurConfig;
 };
 
-/** The Monteur's defaults: off, no folder, one reel a day from one video. */
+/** The Monteur's defaults: off, no folder, one reel a day from one video, each reviewed. */
 export function defaultMonteurConfig(): MonteurConfig {
     return {
         enabled: false,
+        source: 'folder',
+        mode: 'review',
         folder: null,
         run_at: '07:00',
         videos_per_run: 1,

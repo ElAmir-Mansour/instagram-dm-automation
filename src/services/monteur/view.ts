@@ -4,7 +4,7 @@
  */
 import { pool } from '../../config/db.js';
 import type {
-    ClipCopy, ClipDraftRow, ClipScores, HookType, MonteurConfig, MonteurSourceRow, StudioLessonRow, TikTokPrivacyLevel,
+    ClipCopy, ClipDraftRow, ClipEdit, ClipScores, HookType, MonteurConfig, MonteurSourceRow, StudioLessonRow, TikTokPrivacyLevel,
 } from '../../db/rows.js';
 import { getTikTokPostingFlags } from '../appSettings.js';
 import { toIso } from '../health.js';
@@ -50,6 +50,8 @@ export interface ClipView {
     why: string | null;
     score: number | null;
     copy: ClipCopy;
+    /** The Editor's pro edits on the reel (MONTEUR.md §6.2), `t` on the clip's clock; `[]` for none. */
+    edits: ClipEdit[];
     video_url: string | null;
     /** TikTok's own cut ("link in bio"), or null when there is none. */
     tiktok_video_url: string | null;
@@ -64,6 +66,7 @@ export interface ClipView {
     topic: string | null;
     hook_type: HookType | null;
     scores: ClipScores | null;
+    /** A failed clip's render error, or — on a clip in review — why the last automatic approve was refused. */
     error: string | null;
     created_at: string | null;
 }
@@ -83,7 +86,7 @@ export interface LessonsView {
 export interface MonteurView {
     settings: MonteurConfig;
     timezone: string;
-    /** ISO; null when the Monteur is off or has no folder. */
+    /** ISO; null when the Monteur is off, or takes videos from a folder and has none. */
     next_run: string | null;
     /** The latest scan to finish; `error` is a failed one's message (a folder outside the allowed roots, say). */
     last_scan: { at: string; added: number; skipped: number; missing: boolean; error: string | null } | null;
@@ -105,10 +108,10 @@ export const SOURCE_VIEW_COLUMNS = `s.id, s.name, s.path, s.duration::float8 AS 
 
 export const CLIP_VIEW_COLUMNS = `c.id, c.source_id, s.name AS source_name, c.rank, c.status,
     c.start_s::float8 AS start_s, c.end_s::float8 AS end_s, c.title, c.hook, c.why, c.score::float8 AS score,
-    c.topic, c.hook_type, c.scores, c.copy, c.render, c.schedule, c.error, c.created_at`;
+    c.topic, c.hook_type, c.scores, c.copy, c.edits, c.render, c.schedule, c.error, c.created_at`;
 
 type SourceViewRow = Pick<MonteurSourceRow, 'id' | 'name' | 'path' | 'duration' | 'status' | 'error' | 'created_at' | 'updated_at'> & { clips: number };
-type ClipViewRow = Pick<ClipDraftRow, 'id' | 'source_id' | 'rank' | 'status' | 'start_s' | 'end_s' | 'title' | 'hook' | 'why' | 'score' | 'topic' | 'hook_type' | 'scores' | 'copy' | 'render' | 'schedule' | 'error' | 'created_at'> & { source_name: string };
+type ClipViewRow = Pick<ClipDraftRow, 'id' | 'source_id' | 'rank' | 'status' | 'start_s' | 'end_s' | 'title' | 'hook' | 'why' | 'score' | 'topic' | 'hook_type' | 'scores' | 'copy' | 'edits' | 'render' | 'schedule' | 'error' | 'created_at'> & { source_name: string };
 
 const num = (v: unknown): number | null => (v === null || v === undefined || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 const round2 = (n: number): number => Math.round(n * 100) / 100;
@@ -128,6 +131,7 @@ export function presentClip(row: ClipViewRow, privacy: TikTokPrivacyLevel | null
         id: row.id, source_id: row.source_id, source_name: row.source_name, rank: row.rank, status: row.status,
         start, end, duration: num(row.render?.duration) ?? round2(end - start),
         title: row.title, hook: row.hook, why: row.why, score: num(row.score), copy: row.copy,
+        edits: Array.isArray(row.edits) ? row.edits : [],
         video_url: row.render?.video_url ?? null, tiktok_video_url: row.render?.tiktok_video_url ?? null,
         cover_url: row.render?.cover_url ?? null,
         scheduled_time: row.schedule?.scheduled_time ?? null,
@@ -276,7 +280,8 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
     return {
         settings: m,
         timezone,
-        next_run: m.enabled && m.folder ? new Date(nextRunAt(now, m.run_at, timezone)).toISOString() : null,
+        // A course run needs no folder: its videos are the library's lessons.
+        next_run: m.enabled && (m.source === 'course' || m.folder) ? new Date(nextRunAt(now, m.run_at, timezone)).toISOString() : null,
         last_scan: scan
             ? {
                 at: toIso(scan.updated_at)!,

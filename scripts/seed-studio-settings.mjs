@@ -99,6 +99,8 @@ export const STUDIO_SETTINGS = {
     // the posting slot at 19:00 are Riyadh times, the slot the views analysis found best.
     monteur: {
         enabled: false,
+        source: 'folder',
+        mode: 'review',
         folder: null,
         run_at: '07:00',
         videos_per_run: 1,

@@ -21,8 +21,11 @@
  * database. Selecting a subset of columns is expressed at the call site with `Pick<>`, so the
  * type says which columns the query actually asked for.
  */
+import type { ClipEdit } from '../services/monteur/editor.js';
 import type { Carousel } from '../services/studio/carouselTypes.js';
 import type { MonteurConfig } from '../services/studio/settingsTypes.js';
+
+export type { ClipEdit } from '../services/monteur/editor.js';
 
 export type { MonteurConfig, MonteurPlatform } from '../services/studio/settingsTypes.js';
 
@@ -654,6 +657,8 @@ export interface SourcePick {
     considered: number;
     /** The Marketer's call, when there was one. */
     copy?: { model: string | null; tokens_in: number; tokens_out: number };
+    /** The Editor's call (MONTEUR.md §6.2), when there was one; `error` when it failed and the reels went without edits. */
+    edit?: { model: string | null; tokens_in: number; tokens_out: number; error?: string };
     /**
      * The clips the Monteur chose, saved before the Marketer's call: a failed copy is retried
      * without sending the whole transcript to the pick again. Cleared by a manual retry.
@@ -761,8 +766,17 @@ export interface ClipDraftRow {
     /** The clip's own words, for the 90-day dedupe. */
     text: string | null;
     copy: ClipCopy;
+    /**
+     * v27. The Editor's pro edits (MONTEUR.md §6.2), `t` on the clip's clock; `[]` for none — a
+     * failed Editor call, or a clip cut before v27. Sent with every render of the clip.
+     */
+    edits: ClipEdit[];
     render: ClipRender | null;
     schedule: ClipSchedule | null;
+    /**
+     * Why the render failed (a `failed` clip), or — on a clip in `review` — why the last automatic
+     * approve (`monteur.mode = 'auto'`) was refused.
+     */
     error: string | null;
     created_at: Timestamptz;
     updated_at: Timestamptz;
@@ -794,9 +808,15 @@ export interface StudioLessonRow {
 /** `pick_folder`: the worker shows the native folder dialog with this title. */
 export interface PickFolderPayload { prompt: string }
 
-/** `monteur_scan`: list the top level of `folder` for new videos. */
+/**
+ * `monteur_scan`: the new videos among the top level of `folder` (`monteur.source = 'folder'`), or
+ * among `files` (`'course'`: the course library's next lessons, in lesson order, with `folder`
+ * null). Either way at most `limit` are taken.
+ */
 export interface MonteurScanPayload {
-    folder: string;
+    folder: string | null;
+    /** Course mode only: absolute paths, in the order to take them. The first `limit` new ones are taken. */
+    files?: string[];
     limit: number;
     /** Every content key the tenant already has: those files are skipped. */
     known: string[];
@@ -823,6 +843,8 @@ export interface MonteurRenderPayload {
     brand: { accent: string; font: StudioDisplayFont; direction: 'rtl' | 'ltr' };
     /** Seconds into the clip. */
     cover_at: number;
+    /** The Editor's pro edits, `t` in seconds on the clip's clock; `[]` renders the reel without any. */
+    edits: ClipEdit[];
 }
 
 // ─── Growth & SEO hub (v22, GROWTH.md) ──────────────────────────────────────────────────

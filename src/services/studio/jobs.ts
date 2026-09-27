@@ -760,7 +760,9 @@ async function applyPickFolder(exec: Exec, job: LockedJob, result: unknown): Pro
 async function applyMonteurScan(exec: Exec, job: LockedJob, result: unknown): Promise<unknown> {
     const payload = isPlainObject(job.payload) ? (job.payload as Partial<MonteurScanPayload>) : {};
     const limit = Number.isInteger(payload.limit) && (payload.limit as number) > 0 ? (payload.limit as number) : 10;
-    const { files, skipped, missing } = parseMonteurScanResult(result, limit);
+    // A course scan (MONTEUR.md §7) takes only its own lessons, in lesson order.
+    const asked = Array.isArray(payload.files) ? payload.files.filter((f): f is string => typeof f === 'string') : undefined;
+    const { files, skipped, missing } = parseMonteurScanResult(result, limit, asked);
 
     let added: Pick<MonteurSourceRow, 'id' | 'path'>[] = [];
     if (files.length) {

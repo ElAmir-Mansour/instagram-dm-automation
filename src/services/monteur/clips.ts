@@ -63,7 +63,7 @@ function isOneWord(value: string): boolean {
 async function lockClip(exec: Exec, creatorId: string, clipId: string): Promise<ClipDraftRow> {
     const { rows } = await exec.query<ClipDraftRow>(
         `SELECT id, creator_id, source_id, rank, status, start_s::float8 AS start_s, end_s::float8 AS end_s, title, hook, why,
-                score::float8 AS score, topic, hook_type, scores, text, copy, render, schedule, error, created_at, updated_at
+                score::float8 AS score, topic, hook_type, scores, text, copy, edits, render, schedule, error, created_at, updated_at
            FROM clip_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE`,
         [clipId, creatorId]
     );
@@ -198,6 +198,8 @@ async function queueRender(exec: Exec, creatorId: string, clip: ClipDraftRow, ti
     const accent = await clipAccent(exec, creatorId, clip.id) ?? (await accentsFor(exec, creatorId, settings, 1))[0]!;
     await enqueueMonteurRender(exec, creatorId, buildRenderPayload({
         clipId: clip.id, source: rows[0], start: clip.start_s, end: clip.end_s, title, keyword, accent, settings,
+        // The Editor's edits are the clip's, written once at the pick: every render carries them.
+        edits: Array.isArray(clip.edits) ? clip.edits : [],
     }));
 }
 
@@ -248,7 +250,10 @@ export async function patchClip(creatorId: string, clipId: string, body: unknown
         const title = patch.title ?? clip.title;
         const rerender = title !== clip.title || keywordChanged;
         await client.query(
-            `UPDATE clip_drafts SET title = $3, copy = $4::jsonb, updated_at = NOW() WHERE id = $1 AND creator_id = $2`,
+            // An edit answers an auto-approve refusal (a clip in review's `error`); a failed clip's
+            // error is its render's, and stays until it renders.
+            `UPDATE clip_drafts SET title = $3, copy = $4::jsonb, error = CASE WHEN status = 'review' THEN NULL ELSE error END, updated_at = NOW()
+              WHERE id = $1 AND creator_id = $2`,
             [clip.id, creatorId, title, JSON.stringify(copy)]
         );
         if (rerender) await queueRender(client, creatorId, clip, title, copy.keyword);
