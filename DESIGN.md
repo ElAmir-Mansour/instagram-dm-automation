@@ -105,7 +105,12 @@ implying "an endorsement or partnership of any kind".
 
 - **Radii** `6 / 8 / 12 / 16 / 20`, pill for chips. Buttons and inputs at 8, inner panels at
   12, outer windows and modals at 16–20. Larger than the previous 3/6/9/13/18, because the
-  radius is part of what makes a window read as a window.
+  radius is part of what makes a window read as a window. **Applied consistently since the
+  2026-09-27 design pass:** every well, tint panel and list row (`.log-card`, `.bulk-row`,
+  `.hazard-item`, `.member-item`, `.thread-item`) is 12; every media frame — thumbnails and
+  previews, the `Pattern: media frame` list plus `.rail-tab` and `.monteur-media` — is 8; and
+  `.badge` is a pill like `.chip`, `.status-pill` and `.role-chip`. The phone mock's screen
+  keeps the device's own radius: it is a device, not a frame.
 - **Depth is diffuse, never harsh.** `--elev-2` is
   `0 4px 24px -1px rgba(0,0,0,0.06), 0 2px 6px -1px rgba(0,0,0,0.04)`; modals carry
   `0 16px 48px rgba(0,0,0,0.14)`. Dark mode leans on a hairline border instead, because shadow
@@ -117,6 +122,30 @@ implying "an endorsement or partnership of any kind".
 - **Focus** is a soft glowing ring (`box-shadow: 0 0 0 4px var(--accent-ring)`) with the solid
   outline kept underneath, because `box-shadow` is dropped entirely in forced-colors mode and
   the affordance has to survive that.
+- **Selected is not focus.** A chosen tile, swatch or slide tab (`.moment-pick.is-current`,
+  `.swatch-btn[aria-pressed='true']`, `.rail-tab.is-selected`) carries a 2px ring INSIDE its
+  box, `inset 0 0 0 2px var(--accent)`; focus keeps the global ring outside it, and a focused
+  selected control shows both. They used to share the outer 2px ring, so a keyboard user could
+  not tell "here" from "chosen". The rail tab draws its ring on a `::after` overlay, because its
+  thumbnail covers the padding box an inset shadow is painted in.
+- **Callouts** have one recipe, in `Pattern: callout`: padding 12/16, gap 12, radius 12, text at
+  `--fs-200`, and the tone's one border. A variant (`.is-warning`, `--tip`, `--warn`) changes the
+  tone, never the shape. The border is `--border-info` / `-warning` / `-danger` / `-success`
+  (`tokens.css`, the tone at 30%), and every resting border tinted with a status colour uses it —
+  error strips, alarm cards, toasts, the danger button — in place of the 28/30/35/40/45% mixes it
+  replaced. The accent's own 30% mixes (chips, the active thread) are not a status tone. Left on
+  their own mix on purpose: the danger buttons' interaction steps (`.btn-danger:hover` 45%;
+  `.icon-btn-danger` 24% at rest, 40% on hover) and the problem markers that must read over an
+  image or a field (`.shot-field.is-invalid` 55%, `.rail-tab.has-problems` 60%).
+- **Step marks** are one size: 24px, the label at `--fs-100` semibold — the stepper, the setup
+  checklist, the writing stages, a slide's number and the coach's numbered actions. Circles are
+  24×24; a slide number is a 24px-tall pill, so "10" still fits.
+- **Meters**: a progress meter is 6px tall (`.dm-meter-track`, `.studio-meter`, `.growth-bar`);
+  the indeterminate sweep is 4px, and the labelled data bar (`.platform-bar`) is 10px because it
+  is data visualisation, not progress.
+- **Empty states** share one padding, `--space-6 --space-4`, and the block form a 12px gap, in
+  `Pattern: empty state` — the empty page, the empty inbox, the table's empty row (its `<td>`
+  included, which `.data-table td` used to outrank) and a chart with nothing to draw.
 
 ---
 

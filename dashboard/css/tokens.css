@@ -234,6 +234,13 @@
     --info-soft: rgba(94, 92, 230, 0.18);
     --info-text: #a3a1ff;
 
+    /* One tinted border per tone, for every callout, error strip and alarm edge. The
+       tone at 30%: the 28/30/35/40/45% mixes it replaces were one intent written five ways. */
+    --border-info: color-mix(in srgb, var(--info) 30%, transparent);
+    --border-warning: color-mix(in srgb, var(--warning) 30%, transparent);
+    --border-danger: color-mix(in srgb, var(--danger) 30%, transparent);
+    --border-success: color-mix(in srgb, var(--success) 30%, transparent);
+
     /* Barely a gradient: a single hue lit from the top edge, which is what a
        macOS control does. Anything more is a different operating system. */
     --gradient-brand: linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc);
@@ -309,6 +316,13 @@
         --info: #5e5ce6;
         --info-soft: rgba(94, 92, 230, 0.1);
         --info-text: #4c4acc;
+
+        /* One tinted border per tone, for every callout, error strip and alarm edge. The
+           tone at 30%: the 28/30/35/40/45% mixes it replaces were one intent written five ways. */
+        --border-info: color-mix(in srgb, var(--info) 30%, transparent);
+        --border-warning: color-mix(in srgb, var(--warning) 30%, transparent);
+        --border-danger: color-mix(in srgb, var(--danger) 30%, transparent);
+        --border-success: color-mix(in srgb, var(--success) 30%, transparent);
 
         /* Platform labels: the dark values are pastels that measured ~2:1 as text on
            the -soft tint over the light card, so light gets its own deeper pair. */
@@ -387,6 +401,13 @@
     --info: #5e5ce6;
     --info-soft: rgba(94, 92, 230, 0.1);
     --info-text: #4c4acc;
+
+    /* One tinted border per tone, for every callout, error strip and alarm edge. The
+       tone at 30%: the 28/30/35/40/45% mixes it replaces were one intent written five ways. */
+    --border-info: color-mix(in srgb, var(--info) 30%, transparent);
+    --border-warning: color-mix(in srgb, var(--warning) 30%, transparent);
+    --border-danger: color-mix(in srgb, var(--danger) 30%, transparent);
+    --border-success: color-mix(in srgb, var(--success) 30%, transparent);
 
     /* Platform labels: the dark values are pastels that measured ~2:1 as text on
        the -soft tint over the light card, so light gets its own deeper pair. */
