@@ -30,7 +30,7 @@ import {
 } from '../services/studio/drafts.js';
 import { claimJob, completeJob, failJob, jobCounts, reportProgress } from '../services/studio/jobs.js';
 import { enqueueIndex, enqueueScan, getLesson, indexMissing, lessonCounts, listLessons } from '../services/studio/lessons.js';
-import { queuedTikTokCount, runTikTokBatch, scheduleDraft } from '../services/studio/schedule.js';
+import { queuedTikTokCount, runTikTokBatch, scheduleDraft, unscheduleDraft } from '../services/studio/schedule.js';
 import { getStudioSettings, updateStudioSettings } from '../services/studio/settings.js';
 import { nextFreeSlots, parseSlotCount } from '../services/studio/slots.js';
 import {
@@ -304,6 +304,11 @@ studioRouter.post('/drafts/:id/schedule', handle('studio.draft_schedule_failed',
         },
     });
     res.json(outcome);
+}));
+
+// The way back from `scheduled`: the queued posts go, the draft reopens. 409 once any went out.
+studioRouter.post('/drafts/:id/unschedule', handle('studio.draft_unschedule_failed', 'Failed to unschedule the draft.', async (req, res) => {
+    res.json(await unscheduleDraft(getTenantId(req), requireId(req.params.id, 'draft')));
 }));
 
 studioRouter.delete('/drafts/:id', handle('studio.draft_delete_failed', 'Failed to delete the draft.', async (req, res) => {

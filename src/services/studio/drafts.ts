@@ -4,6 +4,8 @@
  *   generating ─(Gemini, in the request)→ rendering ─(worker)→ ready ─schedule→ scheduled
  *        └──────────────→ failed ←───────────────┘   └─edit→ rendering
  *
+ * and `scheduled ─unschedule→ ready` (schedule.ts) while none of its posts has gone out.
+ *
  * Generation runs inside the POST, synchronously, because it is one Gemini call with repair
  * rounds and the operator is waiting on the screen for it. If the invocation is cut off the row
  * stays `generating` forever; one older than ten minutes is therefore presented as failed.
@@ -85,10 +87,10 @@ async function loadDraft(exec: Exec, creatorId: string, draftId: string, lock = 
     return rows[0];
 }
 
-/** Refused once scheduled (STUDIO.md §4), and while the draft is still being written. */
+/** Refused once scheduled (STUDIO.md §4) — `/unschedule` reopens it — and while the draft is still being written. */
 function assertEditable(row: CarouselDraftRow, now: number = Date.now()): void {
     if (row.status === 'scheduled') {
-        throw new StudioError(409, 'This draft is scheduled, so it can no longer be changed. Its posts are in Posts.');
+        throw new StudioError(409, 'This draft is scheduled, so it can no longer be changed. Unschedule it first to edit it.');
     }
     if (row.status === 'generating' && !isStaleGeneration(row, now)) {
         throw new StudioError(409, 'This draft is still being written. Wait for it to finish.');

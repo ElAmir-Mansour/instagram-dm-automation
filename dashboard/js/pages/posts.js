@@ -86,8 +86,35 @@ const PostsPage = {
      */
     _seq: 0,
 
+    /**
+     * The queue's own refresh. A PUBLISHING / PROCESSING / IN_INBOX row, or a
+     * PENDING one whose publish window has closed, is a row the server is about
+     * to change under the operator; while one exists the queue is re-read every
+     * 15s (never on a hidden tab), and only the queue grid is repainted, with
+     * focus kept by key — the same `_seq`-guarded interval Studio's status bar uses.
+     */
+    _pollTimer: null,
+    _refreshing: false,
+    QUEUE_POLL_MS: 15000,
+    /** Whether the "Done" group is unfolded; kept across repaints, closed to begin with. */
+    _doneOpen: false,
+    /** The composer's own leave-page guard, bound while it is open and dirty. */
+    _onComposerUnload: null,
+    _composerWatch: null,
+    /** Per-browser memory: the last platform and type a post was created with. Colons: not an i18n key. */
+    PREFS_KEY: 'posts:prefs',
+    /** Instagram's caption limit, counted in UTF-16 units as Studio's counters count. */
+    IG_CAPTION_MAX: 2200,
+
     destroy() {
         this._seq++;
+        this.stopQueuePoll();
+        this.unbindComposerUnload();
+    },
+
+    /** Is this `render()` still the one on screen? */
+    isLive(seq) {
+        return seq === this._seq && !!document.getElementById('page-container');
     },
 
     /** Tenant switch: queue, live grid and error panels are all tenant-scoped. */
@@ -152,7 +179,9 @@ const PostsPage = {
         if (!container) return;
 
         const seq = ++this._seq;
-        const alive = () => seq === this._seq && !!document.getElementById('page-container');
+        const alive = () => this.isLive(seq);
+        // A full render owns the queue from here; the poll restarts below if it is still needed.
+        this.stopQueuePoll();
 
         // Already up on a navigation; scheduled behind a 150ms gate on an
         // in-place refresh, so a fast response never flashes a skeleton.
@@ -190,15 +219,122 @@ const PostsPage = {
         this.tiktok = tiktok.status === 'fulfilled' ? tiktok.value : null;
 
         this.renderLayout();
+        this.syncQueuePoll(seq);
         Motion.announce(this.activeTab === 'scheduled'
             ? `${t('posts.tabQueue')} — ${UI.formatNumber(this.posts.length)}`
             : `${t('posts.tabLive')} — ${UI.formatNumber(this.livePosts.length)}`);
+    },
+
+    // ─── The queue's own refresh ─────────────────────────────────────────────
+    /** Is any row about to change under the operator? Pure: `now` is injectable for the test. */
+    queueNeedsPoll(posts, now) {
+        const at = typeof now === 'number' ? now : Date.now();
+        return (Array.isArray(posts) ? posts : []).some((post) => {
+            const status = post && post.status;
+            if (status === 'PUBLISHING' || status === 'PROCESSING' || status === 'IN_INBOX') return true;
+            if (status !== 'PENDING') return false;
+            // The window promised for the requested time, measured FROM that time:
+            // asked as of now, an overdue row always gets a fresh window that has
+            // not closed yet, so it would never count as late.
+            const requested = new Date(post.scheduled_time).getTime();
+            if (Number.isNaN(requested)) return false;
+            const win = this.publishWindow(post.scheduled_time, requested);
+            return !!(win && win.until.getTime() <= at);
+        });
+    },
+
+    syncQueuePoll(seq) {
+        if (!this.isLive(seq) || this.scheduledError || !this.queueNeedsPoll(this.posts)) {
+            this.stopQueuePoll();
+            return;
+        }
+        if (this._pollTimer) return;
+        this._pollTimer = setInterval(() => {
+            if (!this.isLive(seq)) { this.stopQueuePoll(); return; }
+            // A hidden tab asks nothing; the next visible tick catches up.
+            if (document.visibilityState === 'hidden' || document.hidden === true) return;
+            this.refreshQueue(seq);
+        }, this.QUEUE_POLL_MS);
+    },
+
+    stopQueuePoll() {
+        if (this._pollTimer) clearInterval(this._pollTimer);
+        this._pollTimer = null;
+    },
+
+    /**
+     * Re-read the queue and repaint only its grid. One request at a time: a slow
+     * answer must not stack behind the next tick. The poll says so only when a
+     * row's status actually moved, so it never chatters at a screen reader.
+     *
+     * A failed re-read leaves the queue on screen as it was — it says nothing new
+     * about the rows, and one dropped request must not swap the whole queue for an
+     * error panel. The poll simply tries again; the Refresh button says why.
+     */
+    async refreshQueue(seq, opts) {
+        if (this._refreshing) return false;
+        this._refreshing = true;
+        const manual = !!(opts && opts.manual);
+        const before = new Map(this.posts.map((p) => [String(p.id), String(p.status)]));
+        try {
+            const [scheduled] = await Promise.allSettled([API.getScheduledPosts()]);
+            if (!this.isLive(seq)) return false;
+            if (scheduled.status !== 'fulfilled') {
+                const reason = scheduled.reason;
+                if (manual) UI.toast(t('posts.refreshFailed', { message: (reason && reason.message) || t('error.unexpected') }), 'error');
+                return false;
+            }
+            this.posts = Array.isArray(scheduled.value) ? scheduled.value : [];
+            this.scheduledError = null;
+            if (this.activeTab === 'scheduled') this.repaintQueue();
+            const moved = this.posts.some((p) => before.has(String(p.id)) && before.get(String(p.id)) !== String(p.status));
+            if (moved || manual) Motion.announce(`${t('posts.queueUpdated')} ${t('posts.tabQueue')} — ${UI.formatNumber(this.posts.length)}`);
+            return true;
+        } finally {
+            this._refreshing = false;
+            this.syncQueuePoll(seq);
+        }
+    },
+
+    /** The queue grid alone, in place, with focus put back on the control it was on. */
+    repaintQueue() {
+        const host = document.getElementById('posts-queue');
+        if (!host) return;
+        const done = document.getElementById('posts-done');
+        if (done) this._doneOpen = !!done.open;
+        const focus = UI.captureFocus(host);
+        host.innerHTML = esc(this.renderScheduledQueue());
+        UI.icons(host);
+        UI.revealClipped(host);
+        UI.restoreFocus(focus);
+        this.wireErrorHost(host);
+    },
+
+    /** The toolbar's Refresh: busy while the queue is re-read, whichever tab is showing. */
+    async refresh(el) {
+        const restore = UI.actionBusy(el);
+        if (!restore) return;
+        try {
+            await this.refreshQueue(this._seq, { manual: true });
+        } finally {
+            restore();
+        }
+    },
+
+    /** Error panels own their Retry wiring (no inline handlers). */
+    wireErrorHost(root) {
+        const errorHost = root && typeof root.querySelector === 'function' ? root.querySelector('[data-error-host]') : null;
+        if (errorHost) {
+            UI.renderError(errorHost, JSON.parse(errorHost.dataset.errorOptions), () => this.render());
+        }
     },
 
     renderLayout() {
         const container = document.getElementById('page-container');
         if (!container) return;
         const focus = UI.captureFocus(container);
+        const done = document.getElementById('posts-done');
+        if (done) this._doneOpen = !!done.open;
 
         container.innerHTML = esc(html`
             ${this.publishError ? this.renderPublishErrorPanel() : ''}
@@ -214,6 +350,11 @@ const PostsPage = {
                     ${this.tabButton('live', 'instagram', t('posts.tabLive'))}
                 </div>
                 <div class="toolbar-actions">
+                    <!-- Re-reads the queue, so it is offered only where the queue is shown. -->
+                    ${this.activeTab === 'scheduled' ? UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('posts.refresh'),
+                        action: 'posts:refresh', id: 'posts-refresh',
+                    }) : ''}
                     ${UI.button({
                         variant: 'primary', size: 'sm', icon: 'plus', label: t('posts.new'),
                         action: 'posts:showCreateModal', id: 'posts-new',
@@ -224,7 +365,9 @@ const PostsPage = {
             <div id="posts-content-container">
                 <!-- The only structure below the page <h1> on this screen. -->
                 <h2 class="sr-only">${this.activeTab === 'scheduled' ? t('posts.tabQueue') : t('posts.tabLive')}</h2>
-                ${this.activeTab === 'scheduled' ? this.renderScheduledQueue() : this.renderLiveFeed()}
+                ${this.activeTab === 'scheduled'
+                    ? html`<div id="posts-queue">${this.renderScheduledQueue()}</div>`
+                    : this.renderLiveFeed()}
             </div>
         `);
 
@@ -233,12 +376,7 @@ const PostsPage = {
         // Switching tabs used to throw the operator out of the control they
         // were using, because the whole toolbar is rebuilt with the content.
         UI.restoreFocus(focus);
-
-        // Error panels own their Retry wiring (no inline handlers).
-        const errorHost = container.querySelector('[data-error-host]');
-        if (errorHost) {
-            UI.renderError(errorHost, JSON.parse(errorHost.dataset.errorOptions), () => this.render());
-        }
+        this.wireErrorHost(container);
     },
 
     /**
@@ -321,7 +459,76 @@ const PostsPage = {
             `;
         }
 
-        return html`<div class="card-grid">${this.posts.map((post) => this.renderScheduledCard(post))}</div>`;
+        const groups = this.groupQueue(this.posts);
+        return html`
+            <div class="queue-groups">
+                ${this.QUEUE_GROUPS.map((key) => this.renderQueueGroup(key, groups[key]))}
+            </div>
+        `;
+    },
+
+    // ─── The queue in groups ─────────────────────────────────────────────────
+    /**
+     * Upcoming, Needs attention, Done — in that order, because that is the order
+     * the operator reads them in. A group with nothing in it is not drawn.
+     */
+    QUEUE_GROUPS: Object.freeze(['upcoming', 'attention', 'done']),
+
+    /** Which group a row belongs in. Pure, so the rule is pinned by the test. */
+    queueGroupOf(post) {
+        const status = post && post.status;
+        if (status === 'PUBLISHED') return 'done';
+        // A PENDING row with a note is one being held (TikTok's five-a-day limit,
+        // an Instagram container still processing): the operator should look at it.
+        if (status === 'FAILED' || (status === 'PENDING' && post.error_log)) return 'attention';
+        return 'upcoming';
+    },
+
+    /** Upcoming and held rows soonest first; done rows most recent first. */
+    groupQueue(posts) {
+        const groups = { upcoming: [], attention: [], done: [] };
+        for (const post of Array.isArray(posts) ? posts : []) groups[this.queueGroupOf(post)].push(post);
+        const time = (p) => { const n = new Date(p && p.scheduled_time).getTime(); return Number.isNaN(n) ? 0 : n; };
+        groups.upcoming.sort((a, b) => time(a) - time(b));
+        groups.attention.sort((a, b) => time(a) - time(b));
+        groups.done.sort((a, b) => time(b) - time(a));
+        return groups;
+    },
+
+    queueGroupMeta(key) {
+        if (key === 'attention') return { icon: 'alert-triangle', label: t('posts.group.attention') };
+        if (key === 'done') return { icon: 'check-circle', label: t('posts.group.done') };
+        return { icon: 'calendar-clock', label: t('posts.group.upcoming') };
+    },
+
+    renderQueueGroup(key, list) {
+        if (!list || !list.length) return '';
+        const meta = this.queueGroupMeta(key);
+        const titleId = `posts-group-${key}-title`;
+        const cards = html`<div class="card-grid">${list.map((post) => this.renderScheduledCard(post))}</div>`;
+        const title = html`
+            <i data-lucide="${meta.icon}" aria-hidden="true"></i>
+            <span>${meta.label}</span>
+            <span class="chip">${UI.formatNumber(list.length)}</span>
+        `;
+        if (key === 'done') {
+            // Folded by default: what already went out is the record, not the work.
+            return html`
+                <details class="queue-group queue-group--done" id="posts-done" ${this._doneOpen ? html.raw('open') : ''}>
+                    <summary class="queue-group-title" id="${titleId}">
+                        ${title}
+                        <span class="composer-chevron" aria-hidden="true"><i data-lucide="chevron-down"></i></span>
+                    </summary>
+                    ${cards}
+                </details>
+            `;
+        }
+        return html`
+            <section class="queue-group queue-group--${html.raw(key)}" aria-labelledby="${titleId}">
+                <h3 class="queue-group-title" id="${titleId}">${title}</h3>
+                ${cards}
+            </section>
+        `;
     },
 
     platformBadge(platform) {
@@ -888,12 +1095,172 @@ const PostsPage = {
     },
 
     // ─── Modal ───────────────────────────────────────────────────────────────
+    /**
+     * Only the types this platform takes. A `hidden` <option> is not hidden on
+     * an iPhone — iOS draws it greyed in the picker — so the list is rebuilt per
+     * platform instead (`applyPlatformMatrix`), keeping the chosen type when it
+     * is still allowed.
+     */
     typeOptions(platform, selected) {
-        return this.POST_TYPES.map((type) => html`
-            <option value="${type.value}"
-                    ${selected === type.value ? html.raw('selected') : ''}
-                    ${type.platforms.includes(platform) ? '' : html.raw('hidden disabled')}>${t(type.labelKey)}</option>
+        return this.POST_TYPES.filter((type) => type.platforms.includes(platform)).map((type) => html`
+            <option value="${type.value}" ${selected === type.value ? html.raw('selected') : ''}>${t(type.labelKey)}</option>
         `);
+    },
+
+    PLATFORMS: Object.freeze(['instagram', 'facebook', 'both', 'tiktok']),
+
+    platformLabel(platform) {
+        if (platform === 'facebook') return t('common.facebook');
+        if (platform === 'both') return t('common.both');
+        if (platform === 'tiktok') return t('common.tiktokOnly');
+        return t('common.instagram');
+    },
+
+    /** The four platform options, one selected. Written once for both modals. */
+    platformOptions(selected) {
+        return this.PLATFORMS.map((p) => html`
+            <option value="${p}" ${p === selected ? html.raw('selected') : ''}>${this.platformLabel(p)}</option>
+        `);
+    },
+
+    // ─── Browser memory ──────────────────────────────────────────────────────
+    /**
+     * The last platform and type a post was created with, each re-checked
+     * against the matrix so a stale or hand-edited entry cannot open the
+     * composer on a pair it does not offer. localStorage can be missing, full
+     * or refused (private mode): every use is guarded, and optional.
+     */
+    prefs() {
+        let stored = null;
+        try {
+            const raw = localStorage.getItem(this.PREFS_KEY);
+            stored = raw ? JSON.parse(raw) : null;
+        } catch {
+            stored = null;
+        }
+        const p = stored && typeof stored === 'object' ? stored : {};
+        const platform = this.PLATFORMS.includes(p.platform) ? p.platform : 'instagram';
+        const type = this.typeAllowedOn(p.type, platform) ? p.type : 'image';
+        return { platform, type };
+    },
+
+    savePrefs(patch) {
+        try {
+            localStorage.setItem(this.PREFS_KEY, JSON.stringify({ ...this.prefs(), ...(patch || {}) }));
+        } catch { /* private mode: not remembered, and nothing depends on it */ }
+    },
+
+    // ─── The caption against Instagram's limit ───────────────────────────────
+    /** "1,240/2,200", isolated so it reads left to right inside Arabic, with a spoken form. */
+    captionCountMarkup(value) {
+        const n = String(value || '').length;
+        const max = this.IG_CAPTION_MAX;
+        return html`<span aria-hidden="true">${UI.ltr(`${UI.formatNumber(n)}/${UI.formatNumber(max)}`)}</span><span class="sr-only">${t('posts.captionCountSr', { n: UI.formatNumber(n), max: UI.formatNumber(max) })}</span>`;
+    },
+
+    /** Shown while Instagram is a target; red past the limit. */
+    refreshCaptionCount() {
+        const count = document.getElementById('post-caption-count');
+        const caption = document.getElementById('post-caption');
+        if (!count || !caption) return;
+        const platformSelect = document.getElementById('post-platform-select');
+        const ig = this.isInstagramTarget(platformSelect ? platformSelect.value : '');
+        const value = String(caption.value || '');
+        count.innerHTML = esc(this.captionCountMarkup(value));
+        count.classList.toggle('hidden', !ig);
+        count.classList.toggle('is-warning', ig && value.length > this.IG_CAPTION_MAX);
+        // A hidden element named by aria-describedby is still read out, so the
+        // caption points at the counter only while Instagram is a target. Any
+        // other description (the error strip's) is kept.
+        if (typeof caption.getAttribute === 'function' && typeof caption.setAttribute === 'function') {
+            const ids = String(caption.getAttribute('aria-describedby') || '').split(/\s+/)
+                .filter((id) => id && id !== 'post-caption-count');
+            if (ig) ids.push('post-caption-count');
+            if (ids.length) caption.setAttribute('aria-describedby', ids.join(' '));
+            else caption.removeAttribute('aria-describedby');
+        }
+    },
+
+    /** '' when the caption can go to this platform, else why. Pure. */
+    captionProblem(caption, platform) {
+        if (!this.isInstagramTarget(platform)) return '';
+        const n = String(caption || '').length;
+        if (n <= this.IG_CAPTION_MAX) return '';
+        return t('posts.captionTooLong', { max: UI.formatNumber(this.IG_CAPTION_MAX), n: UI.formatNumber(n) });
+    },
+
+    /** The caption check in the submit chain's shape. @returns {{ message: string, field: string }|null} */
+    checkCaption(payload) {
+        const message = this.captionProblem(payload.caption, payload.platform);
+        return message ? { message, field: 'post-caption' } : null;
+    },
+
+    // ─── The file the type takes ─────────────────────────────────────────────
+    MEDIA_ACCEPT: Object.freeze({
+        image: 'image/*', carousel: 'image/*', video: 'video/*', story: 'image/*,video/*', feed: 'image/*,video/*',
+    }),
+
+    /** The picker's `accept` for this post type. */
+    mediaAccept(type) {
+        return this.MEDIA_ACCEPT[type] || 'image/*,video/*';
+    },
+
+    /**
+     * '' when a file of this MIME type fits the post, else one line saying why —
+     * checked before the file is read, so a video picked for an image post is
+     * refused here and not by Meta at publish time.
+     */
+    mediaTypeProblem(fileType, postType, target) {
+        const mime = String(fileType || '');
+        const image = mime.startsWith('image/');
+        const video = mime.startsWith('video/');
+        if (target === 'cover') return image ? '' : t('posts.fileNotImage');
+        if (postType === 'video') return video ? '' : t('posts.fileNotVideo');
+        if (postType === 'image' || postType === 'carousel') return image ? '' : t('posts.fileNotImage');
+        return image || video ? '' : t('posts.fileNotMedia');
+    },
+
+    // ─── Leaving the page with the composer open ─────────────────────────────
+    /** Is the composer on screen right now? */
+    composerOpen() {
+        const form = document.getElementById('post-schedule-form');
+        const overlay = document.getElementById('modal-overlay');
+        return !!(form && form.isConnected !== false && overlay && !overlay.classList.contains('hidden'));
+    },
+
+    /**
+     * The browser's own "leave this page?" while the composer holds unsaved work
+     * — an upload took time and a closed tab would lose it. Bound when the modal
+     * opens; unbound when it closes (watched on the overlay, since navigation
+     * closes it without asking), on a successful submit, and on `destroy()`.
+     * Same guard Studio's editor carries.
+     */
+    bindComposerUnload() {
+        this.unbindComposerUnload();
+        if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+        this._onComposerUnload = (event) => {
+            if (!PostsPage.composerOpen()) return;
+            if (!UI.isModalDirty() && !(PostsPage._uploadsInFlight > 0)) return;
+            event.preventDefault();
+            event.returnValue = '';
+        };
+        window.addEventListener('beforeunload', this._onComposerUnload);
+        const overlay = document.getElementById('modal-overlay');
+        if (overlay && typeof MutationObserver === 'function') {
+            this._composerWatch = new MutationObserver(() => {
+                if (overlay.classList.contains('hidden')) PostsPage.unbindComposerUnload();
+            });
+            this._composerWatch.observe(overlay, { attributes: true, attributeFilter: ['class'] });
+        }
+    },
+
+    unbindComposerUnload() {
+        if (this._onComposerUnload && typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+            window.removeEventListener('beforeunload', this._onComposerUnload);
+        }
+        if (this._composerWatch && typeof this._composerWatch.disconnect === 'function') this._composerWatch.disconnect();
+        this._onComposerUnload = null;
+        this._composerWatch = null;
     },
 
     /**
@@ -1297,8 +1664,9 @@ const PostsPage = {
         this.refreshTitleCount();
     },
 
-    /** Caption keystroke: an untouched title keeps pace with the caption's first line. */
+    /** Caption keystroke: the Instagram counter, then an untouched title keeps pace with the first line. */
     onCaptionInput(el) {
+        this.refreshCaptionCount();
         if (this._ttTitleTouched) return;
         const next = this.tiktokTitleFromCaption(el ? el.value : '');
         this._ttTitle = next;
@@ -2370,15 +2738,16 @@ const PostsPage = {
     mediaFields(post) {
         const mediaUrl = safeUrl(post && post.media_url);
         const isVideo = post && (post.post_type === 'video' || post.post_type === 'reel');
+        const accept = this.mediaAccept(post && post.post_type === 'reel' ? 'video' : (post && post.post_type) || 'image');
 
         return html`
             <div class="form-group" id="media-url-group">
                 <label class="form-label" for="post-media-file">${t('posts.media')}</label>
                 <input type="file" id="post-media-file" class="field"
-                       accept="image/*,video/*" data-change="posts:handleFileUpload" data-target="media">
+                       accept="${accept}" data-change="posts:handleFileUpload" data-target="media">
                 <label class="sr-only" for="post-media-url">${t('posts.mediaUrl')}</label>
                 <input class="field mbs-4" id="post-media-url" name="media_url" value="${mediaUrl}" dir="ltr"
-                       placeholder="${t('posts.mediaUrlPlaceholder')}" data-input="posts:handleUrlInput">
+                       placeholder="${t('posts.mediaUrlPlaceholder')}" data-input="posts:handleUrlInput" data-guard-dirty>
                 <div id="media-upload-progress" class="upload-progress" role="status" aria-live="polite">
                     <span class="spinner spinner-sm"></span>
                     <span>${t('posts.uploading')}</span>
@@ -2491,9 +2860,17 @@ const PostsPage = {
         const collab = saved.collaborators.map((u) => `@${u}`).join(', ');
         const trial = saved.trial_reel;
         const auto = trial && trial.graduation === 'SS_PERFORMANCE';
+        // Folded unless the row already carries a value: these are levers, not steps.
+        const hasValues = !!(alt || saved.alt_texts.some(Boolean) || saved.collaborators.length || trial);
         return html`
-            <div class="reach-fields hidden" id="reach-fields">
-                <p class="reach-title"><i data-lucide="trending-up" aria-hidden="true"></i> ${t('posts.reach.title')}</p>
+            <details class="reach-fields hidden" id="reach-fields" ${hasValues ? html.raw('open') : ''}>
+                <summary class="reach-title">
+                    <i data-lucide="trending-up" aria-hidden="true"></i>
+                    <span>${t('posts.reach.title')} <span class="label-optional">${t('common.optional')}</span></span>
+                    <span class="composer-chevron" aria-hidden="true"><i data-lucide="chevron-down"></i></span>
+                </summary>
+                <!-- A wrapper, because a <details> does not lay its own children out as a grid everywhere. -->
+                <div class="reach-body">
 
                 <div class="form-group hidden" id="reach-alt-group">
                     <div class="field-head">
@@ -2546,7 +2923,8 @@ const PostsPage = {
                     </fieldset>
                     <p class="reach-learn">${UI.helpLink('seo#trial-reels', t('help.link.trialReels'), { newTab: true })}</p>
                 </div>
-            </div>
+                </div>
+            </details>
         `;
     },
 
@@ -2673,12 +3051,16 @@ const PostsPage = {
         const mediaUrl = safeUrl(post && post.media_url);
         const isVideo = post && (post.post_type === 'video' || post.post_type === 'reel');
 
+        // Folded unless a cover is already chosen — but the state stays on the
+        // summary line, so "no cover" is never hidden behind the fold.
         return html`
-            <div class="cover-step ${isVideo ? '' : html.raw('hidden')}" id="cover-url-group">
-                <div class="cover-step-head">
+            <details class="cover-step ${isVideo ? '' : html.raw('hidden')}" id="cover-url-group" ${coverUrl ? html.raw('open') : ''}>
+                <summary class="cover-step-head">
                     <i data-lucide="image-plus" aria-hidden="true"></i>
                     <h4>${t('posts.cover.step')}</h4>
-                </div>
+                    <span class="cover-step-state" id="cover-step-state">${this.coverStateMarkup(coverUrl)}</span>
+                    <span class="composer-chevron" aria-hidden="true"><i data-lucide="chevron-down"></i></span>
+                </summary>
                 <p class="cover-step-why">${t('posts.cover.why')}</p>
 
                 <label class="form-label" for="post-cover-file">
@@ -2688,7 +3070,7 @@ const PostsPage = {
                        accept="image/*" data-change="posts:handleFileUpload" data-target="cover">
                 <label class="sr-only" for="post-cover-url">${t('posts.cover.url')}</label>
                 <input class="field mbs-4" id="post-cover-url" name="cover_url" value="${coverUrl}" dir="ltr"
-                       placeholder="${t('posts.cover.urlPlaceholder')}" data-input="posts:refreshCoverPreview">
+                       placeholder="${t('posts.cover.urlPlaceholder')}" data-input="posts:refreshCoverPreview" data-guard-dirty>
                 <div id="cover-upload-progress" class="upload-progress" role="status" aria-live="polite">
                     <span class="spinner spinner-sm"></span>
                     <span>${t('posts.cover.uploading')}</span>
@@ -2697,8 +3079,15 @@ const PostsPage = {
                 <div class="cover-compare" id="cover-compare">
                     ${this.coverTiles(mediaUrl, coverUrl)}
                 </div>
-            </div>
+            </details>
         `;
+    },
+
+    /** The one word on the folded step: chosen, or not. */
+    coverStateMarkup(coverUrl) {
+        return coverUrl
+            ? html`<span class="text-success">${t('posts.cover.set')}</span>`
+            : html`<span class="text-warning">${t('posts.cover.missing')}</span>`;
     },
 
     coverTiles(mediaUrl, coverUrl) {
@@ -2728,11 +3117,11 @@ const PostsPage = {
         if (!host) return;
         const media = document.getElementById('post-media-url');
         const cover = document.getElementById('post-cover-url');
-        host.innerHTML = esc(this.coverTiles(
-            safeUrl(media && media.value),
-            safeUrl(cover && cover.value)
-        ));
+        const coverUrl = safeUrl(cover && cover.value);
+        host.innerHTML = esc(this.coverTiles(safeUrl(media && media.value), coverUrl));
         UI.icons(host);
+        const state = document.getElementById('cover-step-state');
+        if (state) state.innerHTML = esc(this.coverStateMarkup(coverUrl));
     },
 
     /**
@@ -2751,7 +3140,7 @@ const PostsPage = {
             <div class="form-group" id="schedule-time-group">
                 <label class="form-label" for="post-scheduled-time">${t('posts.schedule.label')}</label>
                 <input type="datetime-local" class="field" id="post-scheduled-time" name="scheduled_time"
-                       value="${value}" ${min ? html`min="${min}"` : ''} data-input="posts:refreshScheduleNote" required>
+                       value="${value}" ${min ? html`min="${min}"` : ''} data-input="posts:refreshScheduleNote" data-guard-dirty required>
                 <div class="schedule-truth">
                     <i data-lucide="info" aria-hidden="true"></i>
                     <div>
@@ -2949,34 +3338,29 @@ const PostsPage = {
         const defaultTime = UI.toLocalInputValue(new Date(Date.now() + 60 * 60 * 1000));
         this.resetTikTokComposer(null);
         this.resetSlides(null);
+        // The pair the last post was created with, so a daily routine starts where it left off.
+        const prefs = this.prefs();
 
         UI.showModal(html`
             ${this.modalHeader(t('posts.createTitle'))}
             <div id="post-form-error"></div>
-            <form id="post-schedule-form" data-submit="posts:handleCreate">
+            <form id="post-schedule-form" class="post-composer" data-submit="posts:handleCreate">
                 <div class="form-group">
                     <label class="form-label" for="post-platform-select">${t('posts.platform')}</label>
-                    <select class="select" id="post-platform-select" name="platform" data-change="posts:handlePlatformChange" required>
-                        <option value="instagram">${t('common.instagram')}</option>
-                        <option value="facebook">${t('common.facebook')}</option>
-                        <option value="both">${t('common.both')}</option>
-                        <option value="tiktok">${t('common.tiktokOnly')}</option>
+                    <select class="select" id="post-platform-select" name="platform" data-change="posts:handlePlatformChange" data-guard-dirty required>
+                        ${this.platformOptions(prefs.platform)}
                     </select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="post-type-select">${t('posts.type')}</label>
-                    <select class="select" name="post_type" id="post-type-select" data-change="posts:handleTypeChange" required>
-                        ${this.typeOptions('instagram', 'image')}
+                    <select class="select" name="post_type" id="post-type-select" data-change="posts:handleTypeChange" data-guard-dirty required>
+                        ${this.typeOptions(prefs.platform, prefs.type)}
                     </select>
                 </div>
                 ${this.tiktokFields(true)}
-                <div class="form-group">
-                    <label class="form-label" for="post-caption">${t('posts.caption')}</label>
-                    <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
-                              placeholder="${t('posts.captionPlaceholder')}" data-input="posts:captionInput" data-guard-dirty required></textarea>
-                </div>
+                ${this.captionField('')}
                 ${this.tiktokTitleField()}
-                ${this.mediaFields(null)}
+                ${this.mediaFields({ post_type: prefs.type })}
                 ${this.scheduleFields(defaultTime, UI.toLocalInputValue(new Date()))}
                 <div class="form-group switch-row">
                     <label class="switch" for="post-publish-now">
@@ -2993,6 +3377,7 @@ const PostsPage = {
                 </div>
                 ${this.tiktokConsentHost()}
                 <div class="modal-actions">
+                    ${this.uploadWaitNote()}
                     ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
                     ${UI.button({
                         variant: 'primary', type: 'submit', icon: 'plus',
@@ -3007,6 +3392,36 @@ const PostsPage = {
         this._uploadsInFlight = 0;
         this.watchPreviewDuration();
         this.applyPlatformMatrix();
+        this.bindComposerUnload();
+    },
+
+    /** The caption with its Instagram counter beside the label (shown while Instagram is a target). */
+    captionField(caption) {
+        const value = String(caption || '');
+        return html`
+            <div class="form-group">
+                <div class="field-head">
+                    <label class="form-label" for="post-caption">${t('posts.caption')}</label>
+                    <span class="field-count hidden" id="post-caption-count">${this.captionCountMarkup(value)}</span>
+                </div>
+                <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
+                          placeholder="${t('posts.captionPlaceholder')}" data-input="posts:captionInput" data-guard-dirty
+                          required>${value}</textarea>
+            </div>
+        `;
+    },
+
+    /**
+     * Why the submit button is held, said next to it rather than in a `title`
+     * nobody can reach on a phone. Hidden until an upload is in flight.
+     */
+    uploadWaitNote() {
+        return html`
+            <span class="modal-actions-note hidden" id="post-upload-wait" role="status" aria-live="polite">
+                <span class="spinner spinner-sm" aria-hidden="true"></span>
+                <span>${t('posts.uploadWaitHint')}</span>
+            </span>
+        `;
     },
 
     /**
@@ -3035,33 +3450,27 @@ const PostsPage = {
         UI.showModal(html`
             ${this.modalHeader(t('posts.editTitle'))}
             <div id="post-form-error"></div>
-            <form id="post-schedule-form" data-submit="posts:handleEdit" data-id="${post.id}">
+            <form id="post-schedule-form" class="post-composer" data-submit="posts:handleEdit" data-id="${post.id}">
                 <div class="form-group">
                     <label class="form-label" for="post-platform-select">${t('posts.platform')}</label>
-                    <select class="select" id="post-platform-select" name="platform" data-change="posts:handlePlatformChange" required>
-                        <option value="instagram" ${platform === 'instagram' ? html.raw('selected') : ''}>${t('common.instagram')}</option>
-                        <option value="facebook" ${platform === 'facebook' ? html.raw('selected') : ''}>${t('common.facebook')}</option>
-                        <option value="both" ${platform === 'both' ? html.raw('selected') : ''}>${t('common.both')}</option>
-                        <option value="tiktok" ${platform === 'tiktok' ? html.raw('selected') : ''}>${t('common.tiktokOnly')}</option>
+                    <select class="select" id="post-platform-select" name="platform" data-change="posts:handlePlatformChange" data-guard-dirty required>
+                        ${this.platformOptions(platform)}
                     </select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="post-type-select">${t('posts.type')}</label>
-                    <select class="select" name="post_type" id="post-type-select" data-change="posts:handleTypeChange" required>
+                    <select class="select" name="post_type" id="post-type-select" data-change="posts:handleTypeChange" data-guard-dirty required>
                         ${this.typeOptions(platform, postType)}
                     </select>
                 </div>
                 ${this.tiktokFields(false)}
-                <div class="form-group">
-                    <label class="form-label" for="post-caption">${t('posts.caption')}</label>
-                    <textarea class="field-textarea user-content" id="post-caption" name="caption" dir="auto" lang="ar"
-                              data-input="posts:captionInput" data-guard-dirty required>${post.caption || ''}</textarea>
-                </div>
+                ${this.captionField(post.caption || '')}
                 ${this.tiktokTitleField()}
                 ${this.mediaFields({ ...post, post_type: postType })}
                 ${this.scheduleFields(defaultTime)}
                 ${this.tiktokConsentHost()}
                 <div class="modal-actions">
+                    ${this.uploadWaitNote()}
                     ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
                     ${UI.button({
                         variant: 'primary', type: 'submit', icon: 'check', label: t('common.saveChanges'),
@@ -3075,13 +3484,14 @@ const PostsPage = {
         this._uploadsInFlight = 0;
         this.watchPreviewDuration();
         this.applyPlatformMatrix();
+        this.bindComposerUnload();
     },
 
     /**
-     * Show/hide post types for the selected platform WITHOUT rebuilding the
-     * select. Rebuilding innerHTML reset the chosen type to "Single Image" on
-     * every platform change — including in the Edit modal, where it silently
-     * discarded the saved value.
+     * Rebuild the type list for the selected platform, keeping the chosen type
+     * whenever the platform still takes it — the Edit modal must not lose the
+     * saved value on a platform change. Rebuilt rather than hidden, because iOS
+     * shows a `hidden` <option> greyed in its picker.
      */
     applyPlatformMatrix() {
         const platformSelect = document.getElementById('post-platform-select');
@@ -3089,22 +3499,18 @@ const PostsPage = {
         if (!platformSelect || !typeSelect) return;
 
         const platform = platformSelect.value;
-        const allowed = new Set(
-            this.POST_TYPES.filter((x) => x.platforms.includes(platform)).map((x) => x.value)
-        );
-
-        Array.from(typeSelect.options).forEach((option) => {
-            const ok = allowed.has(option.value);
-            option.hidden = !ok;
-            option.disabled = !ok;
-        });
-
-        // Only fall back when the current selection is genuinely unavailable.
-        if (!allowed.has(typeSelect.value)) {
-            typeSelect.value = allowed.has('image') ? 'image' : Array.from(allowed)[0];
-        }
+        const next = this.typeFor(platform, typeSelect.value);
+        typeSelect.innerHTML = esc(this.typeOptions(platform, next));
+        typeSelect.value = next;
 
         this.applyTypeMatrix();
+    },
+
+    /** `wanted` when the platform takes it, else Single image, else the platform's first type. Pure. */
+    typeFor(platform, wanted) {
+        const allowed = this.POST_TYPES.filter((x) => x.platforms.includes(platform)).map((x) => x.value);
+        if (allowed.includes(wanted)) return wanted;
+        return allowed.includes('image') ? 'image' : (allowed[0] || 'image');
     },
 
     /**
@@ -3132,6 +3538,10 @@ const PostsPage = {
         if (carouselGroup) carouselGroup.classList.toggle('hidden', !isCarousel);
         const mediaInput = document.getElementById('post-media-url');
         if (mediaInput) mediaInput.required = !isCarousel && !(platform === 'facebook' && type === 'feed');
+        // The picker offers what the type takes; `handleFileUpload` refuses the rest by MIME type.
+        const mediaFile = document.getElementById('post-media-file');
+        if (mediaFile && typeof mediaFile.setAttribute === 'function') mediaFile.setAttribute('accept', this.mediaAccept(type));
+        this.refreshCaptionCount();
 
         const alsoGroup = document.getElementById('tiktok-also-group');
         const also = document.getElementById('post-also-tiktok');
@@ -3304,9 +3714,11 @@ const PostsPage = {
             return;
         }
 
-        // A carousel: the right number of slides, every one of them uploaded.
-        // Then Direct Post: nothing leaves until TikTok's rules are met.
-        const blocked = this.attachSlides(payload) || this.attachTikTokOptions(payload) || this.attachReach(payload, form);
+        // The caption against Instagram's limit; then a carousel: the right number of
+        // slides, every one of them uploaded; then Direct Post: nothing leaves until
+        // TikTok's rules are met.
+        const blocked = this.checkCaption(payload) || this.attachSlides(payload)
+            || this.attachTikTokOptions(payload) || this.attachReach(payload, form);
         if (blocked) {
             this.showFormError(blocked.message, blocked.field, '');
             return;
@@ -3351,10 +3763,13 @@ const PostsPage = {
             } else {
                 UI.toast(publishNow ? t('posts.publishedOk') : t('posts.scheduledOk'));
             }
+            // What went out is what the next composer opens on.
+            this.savePrefs({ platform: payload.platform, type: payload.post_type });
             // render() first, close after: closing first restored focus to the
             // "New post" button and the re-render then destroyed it, leaving
             // focus on a control inside the hidden overlay.
             await this.render();
+            this.unbindComposerUnload();
             UI.closeModal();
         } catch (err) {
             const failure = this.publishFailure(null, err);
@@ -3379,7 +3794,8 @@ const PostsPage = {
         }
 
         const payload = { ...this.formPayload(form), scheduled_time: scheduledTime };
-        const blocked = this.attachSlides(payload) || this.attachTikTokOptions(payload) || this.attachReach(payload, form);
+        const blocked = this.checkCaption(payload) || this.attachSlides(payload)
+            || this.attachTikTokOptions(payload) || this.attachReach(payload, form);
         if (blocked) {
             this.showFormError(blocked.message, blocked.field, '');
             return;
@@ -3394,6 +3810,7 @@ const PostsPage = {
             await API.updateScheduledPost(id, payload);
             UI.toast(t('posts.updatedOk'));
             await this.render();
+            this.unbindComposerUnload();
             UI.closeModal();
         } catch (err) {
             restore();
@@ -3555,8 +3972,9 @@ const PostsPage = {
         if (!btn) return;
         const busy = this._uploadsInFlight > 0;
         btn.disabled = busy;
-        if (busy) btn.setAttribute('title', t('posts.uploadWaitHint'));
-        else btn.removeAttribute('title');
+        // Said beside the button, in the bar, where a phone can read it.
+        const note = document.getElementById('post-upload-wait');
+        if (note) note.classList.toggle('hidden', !busy);
     },
 
     async handleFileUpload(input) {
@@ -3567,6 +3985,16 @@ const PostsPage = {
         const progress = document.getElementById(target === 'cover' ? 'cover-upload-progress' : 'media-upload-progress');
         const preview = document.getElementById('media-preview-container');
         const urlInput = document.getElementById(target === 'cover' ? 'post-cover-url' : 'post-media-url');
+
+        // The wrong kind of file for this post is refused before it is read: a
+        // video on an image post used to surface hours later, at publish time.
+        const typeSelect = document.getElementById('post-type-select');
+        const mismatch = this.mediaTypeProblem(file.type, typeSelect ? typeSelect.value : '', target);
+        if (mismatch) {
+            this.showFormError(mismatch, input.id, '');
+            input.value = '';
+            return;
+        }
 
         // Vercel caps the request body at 4.5MB and /api/upload takes base64 JSON,
         // so the real ceiling is ~3.2MB of file — not the 10MB this used to claim.
@@ -3683,6 +4111,7 @@ const debouncedCoverPreview = Motion.debounce(() => PostsPage.refreshCoverPrevie
 
 UI.registerActions('posts', {
     switchTab: (el) => PostsPage.switchTab(el.dataset.tab),
+    refresh: (el) => PostsPage.refresh(el),
     showCreateModal: () => PostsPage.showCreateModal(),
     showEditModal: (el) => PostsPage.showEditModal(el.dataset.id),
     publishNow: (el) => PostsPage.publishNow(el.dataset.id),

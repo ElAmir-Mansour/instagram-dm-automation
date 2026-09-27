@@ -178,6 +178,15 @@ const StudioPage = {
     _renderTimer: null,
     _onKeydown: null,
     _onBeforeUnload: null,
+    /** The drafts grid's filter: 'all' | 'review' | 'scheduled' | 'failed'. Page state, not remembered. */
+    draftFilter: 'all',
+    DRAFT_FILTERS: Object.freeze(['all', 'review', 'scheduled', 'failed']),
+    /**
+     * "Write it again" from inside the editor: `{ state: 'running' | 'done' | 'failed',
+     * draftId, draft?, message? }`, painted above the editor head so the operator
+     * keeps their place. `draftId` is the draft it was started from.
+     */
+    regen: null,
 
     destroy() {
         this._seq++;
@@ -189,6 +198,8 @@ const StudioPage = {
         this.clearUndo();
         // A worker token is shown once. Leaving the page is the end of "once".
         this.newWorker = null;
+        // A finished "write it again" belongs to the editor it was shown in; a running one is kept.
+        if (this.regen && this.regen.state !== 'running') this.regen = null;
     },
 
     // ─── Browser memory ──────────────────────────────────────────────────────
@@ -1485,18 +1496,23 @@ const StudioPage = {
         const id = String(lesson.id);
         const picked = this.selected.includes(id);
         const pickable = this.isPickable(lesson);
-        const blocked = !picked && (!pickable || full);
+        // Not indexed: nothing to write from, so the chip is off. At the limit the
+        // chip stays live with `aria-disabled`, and the click says why (a `title`
+        // on a disabled button reaches neither a finger nor a screen reader).
+        const blocked = !picked && !pickable;
+        const atLimit = !picked && pickable && full;
         const state = this.lessonState(lesson.status);
         const name = this.lessonName(lesson);
         let why = '';
         if (!pickable) why = state.label;
-        else if (blocked) why = t('studio.lessons.full', { max: this.MAX_LESSONS });
+        else if (atLimit) why = t('studio.lessons.full', { max: this.MAX_LESSONS });
         const about = t('studio.lessons.about', { name });
         return html`
             <li class="lesson-chip-item">
                 <button type="button" class="lesson-chip${picked ? html.raw(' is-picked') : ''}${pickable ? '' : html.raw(' is-unindexed')}"
                         aria-pressed="${picked ? 'true' : 'false'}" data-action="studio:toggleLesson" data-id="${id}"
-                        data-focus-key="lesson-${id}" title="${why}" ${blocked ? html.raw('disabled') : ''}>
+                        data-focus-key="lesson-${id}" title="${why}" ${blocked ? html.raw('disabled') : ''}
+                        ${atLimit ? html.raw('aria-disabled="true"') : ''}>
                     <i data-lucide="${picked ? 'check' : state.icon}" aria-hidden="true"></i>
                     <bdi class="lesson-chip-no" dir="ltr">${lesson.lesson_no || ''}</bdi>
                     <span class="lesson-chip-title" dir="auto">${lesson.title || ''}</span>
@@ -1962,9 +1978,12 @@ const StudioPage = {
      * editor only if the operator is still on the Studio's home; anywhere else a
      * toast says it is ready, and the draft is in the grid.
      */
-    async runGeneration(input) {
+    async runGeneration(input, opts) {
         const seq = this._seq;
         const tenant = this._tenantEpoch;
+        // `inline`: started from an editor, which keeps the operator and shows the
+        // progress above its head; the home card is not on screen to paint.
+        const inline = !!(opts && opts.inline && this.draft && document.getElementById('studio-regen-host'));
         this.generating = true;
         this.newError = null;
         this.gen = {
@@ -1973,7 +1992,12 @@ const StudioPage = {
             summary: this.genSummary(input),
             stage: 0,
         };
-        this.paintNewCard();
+        if (inline) {
+            this.regen = { state: 'running', draftId: this.draft.id };
+            this.paintRegen();
+        } else {
+            this.paintNewCard();
+        }
         this.startGenTicker();
         Motion.announce(t('studio.gen.started'));
         // The server saved a `generating` row before it started writing: show it.
@@ -1994,7 +2018,12 @@ const StudioPage = {
             }
             this.selected = [];
             this.newText = { idea: '', keyword: '' };
-            if ((seq === this._seq || this.onStudioHome()) && typeof App !== 'undefined' && typeof App.goWithQuery === 'function') {
+            if (inline && seq === this._seq) {
+                // Still in the editor it was started from: offer the new draft there.
+                this.regen = { state: 'done', draftId: this.regen.draftId, draft };
+                opened = true;
+                UI.toast(t('studio.regen.ready', { title: this.draftTitle(draft) }));
+            } else if ((seq === this._seq || this.onStudioHome()) && typeof App !== 'undefined' && typeof App.goWithQuery === 'function') {
                 UI.toast(t('studio.new.done'));
                 opened = true;
                 App.goWithQuery('studio', { draft: draft.id });
@@ -2011,6 +2040,19 @@ const StudioPage = {
                 this.generating = false;
                 this.gen = null;
                 this.stopGenTicker();
+            }
+            if (inline && !stale) {
+                // The editor's card: done (above), failed, or gone because the operator left —
+                // in which case the reason stays in `newError`, for the home card to show.
+                if (this.regen && this.regen.state === 'running') {
+                    this.regen = this.newError && seq === this._seq
+                        ? { state: 'failed', draftId: this.regen.draftId, message: this.newError.message }
+                        : null;
+                }
+                if (this.regen && seq !== this._seq) this.regen = null;
+                // Said once, by the strip's own role="alert", in the editor it was asked from.
+                if (this.regen && this.regen.state === 'failed') this.newError = null;
+                this.paintRegen();
             }
             if (!opened && !stale) {
                 // Back to step 1, with the reason (if any) where it was asked for.
@@ -2328,7 +2370,76 @@ const StudioPage = {
                 </div>
             `;
         }
-        return html`<ul class="card-grid studio-draft-grid">${this.drafts.map((d) => this.draftCard(d))}</ul>`;
+        const shown = this.filterDrafts(this.drafts, this.draftFilter);
+        return html`
+            ${this.draftFilterMarkup()}
+            ${shown.length
+                ? html`<ul class="card-grid studio-draft-grid">${shown.map((d) => this.draftCard(d))}</ul>`
+                : html`
+                    <div class="studio-no-match" id="studio-drafts-nomatch">
+                        <p class="studio-empty-note">${t('studio.drafts.noneInFilter')}</p>
+                        ${UI.button({ variant: 'ghost', size: 'sm', icon: 'x', label: t('studio.drafts.showAll'), action: 'studio:setDraftFilter', data: { filter: 'all' } })}
+                    </div>
+                `}
+        `;
+    },
+
+    // ─── Drafts grid: the filter ─────────────────────────────────────────────
+    /** Which filter a draft answers to. Pure. A draft being written or drawn still needs the review. */
+    draftFilterOf(draft) {
+        const status = draft && draft.status;
+        if (status === 'scheduled') return 'scheduled';
+        if (status === 'failed') return 'failed';
+        return 'review';
+    },
+
+    draftCounts(drafts) {
+        const counts = { all: 0, review: 0, scheduled: 0, failed: 0 };
+        for (const d of Array.isArray(drafts) ? drafts : []) {
+            counts.all++;
+            counts[this.draftFilterOf(d)]++;
+        }
+        return counts;
+    },
+
+    /** The drafts this filter shows, newest first. Pure. */
+    filterDrafts(drafts, filter) {
+        const key = this.DRAFT_FILTERS.includes(filter) ? filter : 'all';
+        const time = (d) => { const n = new Date(d && d.created_at).getTime(); return Number.isNaN(n) ? 0 : n; };
+        return (Array.isArray(drafts) ? drafts : [])
+            .filter((d) => key === 'all' || this.draftFilterOf(d) === key)
+            .slice()
+            .sort((a, b) => time(b) - time(a));
+    },
+
+    draftFilterLabel(key) {
+        if (key === 'review') return t('studio.drafts.filterReview');
+        if (key === 'scheduled') return t('studio.drafts.filterScheduled');
+        if (key === 'failed') return t('studio.drafts.filterFailed');
+        return t('studio.drafts.filterAll');
+    },
+
+    /** Four segments with their counts; the pressed one is the filter in force. */
+    draftFilterMarkup() {
+        const counts = this.draftCounts(this.drafts);
+        const icons = { all: 'layers', review: 'pencil', scheduled: 'calendar-check', failed: 'alert-triangle' };
+        return html`
+            <div class="segmented studio-seg studio-draft-filter" role="group" aria-label="${t('studio.drafts.filterLabel')}">
+                ${this.DRAFT_FILTERS.map((key) => this.segButton({
+                    id: `studio-drafts-filter-${key}`, action: 'studio:setDraftFilter', data: `data-filter="${key}"`,
+                    icon: icons[key], label: `${this.draftFilterLabel(key)} (${UI.formatNumber(counts[key])})`,
+                    pressed: this.draftFilter === key,
+                }))}
+            </div>
+        `;
+    },
+
+    setDraftFilter(el) {
+        const key = el && el.dataset ? String(el.dataset.filter || '') : '';
+        this.draftFilter = this.DRAFT_FILTERS.includes(key) ? key : 'all';
+        this.paintDrafts();
+        const n = this.filterDrafts(this.drafts, this.draftFilter).length;
+        Motion.announce(`${this.draftFilterLabel(this.draftFilter)} — ${t('studio.drafts.count', { count: n })}`);
     },
 
     /** What a busy draft is waiting on, in words: writing, drawing, or the Mac. */
@@ -2377,9 +2488,38 @@ const StudioPage = {
                     ` : ''}
                     ${busy ? html`<p class="draft-card-stage"><span class="spinner spinner-sm" aria-hidden="true"></span> ${this.draftStageText(draft)}</p>` : ''}
                     ${draft.status === 'failed' && draft.error ? html`<p class="post-card-error" dir="auto">${draft.error}</p>` : ''}
+                    ${draft.status === 'scheduled' || draft.status === 'generating' ? '' : html`
+                        <!-- A scheduled draft is the record of what was posted: the server refuses to delete it.
+                             One still being written has nothing to delete yet; its card says so. -->
+                        <div class="draft-card-actions">
+                            ${UI.button({
+                                variant: 'ghost', size: 'sm', icon: 'trash-2', label: t('common.delete'),
+                                action: 'studio:deleteDraftCard', data: { id }, focusKey: `draft-delete-${id}`,
+                                ariaLabel: t('studio.drafts.deleteAria', { title: this.draftTitle(draft) }),
+                            })}
+                        </div>
+                    `}
                 </div>
             </li>
         `;
+    },
+
+    /** Delete from the grid, behind the same confirm the editor uses. */
+    deleteDraftCard(el) {
+        const id = el && el.dataset ? String(el.dataset.id || '') : '';
+        const draft = this.drafts.find((d) => String(d.id) === id);
+        if (!draft || draft.status === 'scheduled' || draft.status === 'generating') return;
+        this.confirmDeleteDraft(draft, () => StudioPage.deleteCardConfirmed(id));
+    },
+
+    /** Returns the promise: a refusal stays in the dialog, next to the button that caused it. */
+    async deleteCardConfirmed(id) {
+        await API.deleteStudioDraft(id);
+        this.storeRemove(`${this.EDITS_PREFIX}${id}`);
+        this.drafts = this.drafts.filter((d) => String(d.id) !== String(id));
+        UI.toast(t('studio.editor.deleted'));
+        this.paintDrafts();
+        Motion.announce(t('studio.editor.deleted'));
     },
 
     paintDrafts() {
@@ -2639,6 +2779,7 @@ const StudioPage = {
                 ${this.backLink()}
                 <div id="studio-stepper">${this.stepperMarkup(this.editorStep())}</div>
             </div>
+            <div id="studio-regen-host" class="studio-regen-host">${this.regenHostMarkup()}</div>
             <section class="surface pad-5 studio-editor-head" id="studio-editor-head" aria-labelledby="studio-editor-title">
                 ${this.editorHeadMarkup()}
             </section>
@@ -2739,7 +2880,7 @@ const StudioPage = {
                     action: 'studio:renderAgain', id: 'studio-render-again',
                 })}</div>` : ''}
             ` : ''}
-            ${d.status === 'scheduled' ? html`<p class="studio-hint"><i data-lucide="lock" aria-hidden="true"></i><span>${t('studio.editor.readOnly')}</span></p>` : ''}
+            ${d.status === 'scheduled' ? html`<p class="studio-hint"><i data-lucide="lock" aria-hidden="true"></i><span>${t('studio.editor.readOnlyKept')}</span></p>` : ''}
         `;
     },
 
@@ -2851,6 +2992,9 @@ const StudioPage = {
         const stage = url
             ? html`<img src="${url}" alt="${altText || t('studio.preview.slideAlt', { n: i + 1, total: count, kind: this.kindLabel(slide && slide.kind) })}" decoding="async">`
             : this.wireframeMarkup(slide, busy);
+        // A read-only draft's preview is a viewer, not a way into a form: no pointer,
+        // no click action, and a hint that promises only what the arrow keys do.
+        const ro = this.readOnly();
         return html`
             <div class="phone phone--${tab}" id="studio-phone">
                 ${tab === 'ig' ? html`
@@ -2859,14 +3003,14 @@ const StudioPage = {
                         <span class="phone-handle" dir="auto">${brand}</span>
                     </div>
                 ` : ''}
-                <div class="phone-stage${stale ? html.raw(' is-stale') : ''}" tabindex="0" role="group"
+                <div class="phone-stage${stale ? html.raw(' is-stale') : ''}${ro ? html.raw(' is-readonly') : ''}" tabindex="0" role="group"
                      aria-roledescription="${t('studio.preview.carousel')}"
                      aria-label="${t('studio.preview.stageLabel', { platform, n: i + 1, total: count })}"
-                     aria-describedby="studio-stage-hint" data-action="studio:editSlide" data-slide="${i}">
+                     aria-describedby="studio-stage-hint" ${ro ? '' : html.raw('data-action="studio:editSlide"')} data-slide="${i}">
                     ${stage}
                     ${stale ? html`<span class="phone-badge">${busy ? t('studio.preview.drawing') : t('studio.preview.lastRender')}</span>` : ''}
                 </div>
-                <p class="sr-only" id="studio-stage-hint">${t('studio.preview.stageHint')}</p>
+                <p class="sr-only" id="studio-stage-hint">${ro ? t('studio.preview.stageHintReadOnly') : t('studio.preview.stageHint')}</p>
                 <div class="phone-nav">
                     <button type="button" class="icon-btn" id="studio-prev-slide" data-action="studio:prevSlide"
                             aria-label="${t('studio.preview.prev')}" title="${t('studio.preview.prev')}" ${i === 0 ? html.raw('disabled') : ''}>
@@ -3634,7 +3778,7 @@ const StudioPage = {
      * edits; otherwise the way to the schedule, which is the step's last action.
      */
     saveBarMarkup() {
-        if (this.readOnly()) return html`<p class="text-meta">${t('studio.editor.readOnly')}</p>`;
+        if (this.readOnly()) return html`<p class="text-meta">${t('studio.editor.readOnlyKept')}</p>`;
         const dirty = this.isDirty();
         const n = this.problems ? this.problems.all.length : 0;
         const ready = !!(this.draft && this.draft.status === 'ready');
@@ -3861,7 +4005,14 @@ const StudioPage = {
                     <span>${t('studio.schedule.scheduledFor', { when: this.slotLabel(s.scheduled_time) })}</span>
                 </p>
             ` : ''}
-            <p><a class="btn btn-secondary btn-sm" href="#/posts"><i data-lucide="calendar-days" aria-hidden="true"></i> ${t('studio.schedule.openPosts')}</a></p>
+            <div class="row row--wrap gap-2">
+                <a class="btn btn-secondary btn-sm" href="#/posts"><i data-lucide="calendar-days" aria-hidden="true"></i> ${t('studio.schedule.openPosts')}</a>
+                ${UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'calendar-x', label: t('studio.schedule.unschedule'),
+                    action: 'studio:unschedule', id: 'studio-unschedule',
+                })}
+            </div>
+            <p class="form-hint">${t('studio.schedule.unscheduleHint')}</p>
             ${s.tiktok && s.tiktok !== 'none' ? this.tiktokChecklistMarkup(s) : html`<p class="text-meta">${t('studio.schedule.noTikTok')}</p>`}
         `;
     },
@@ -4875,9 +5026,61 @@ const StudioPage = {
         if (!this.draft || this.generating) return undefined;
         const input = this.regenInput(form);
         UI.closeModal();
-        // The progress lives on the home view, where the new draft will open from.
-        if (typeof App !== 'undefined' && typeof App.go === 'function') App.go('studio');
-        return this.runGeneration(input);
+        // The operator stays in this editor: the progress is painted above its head,
+        // and the new draft is offered there when it lands.
+        return this.runGeneration(input, { inline: true });
+    },
+
+    /** Is the inline progress for THIS editor's draft? */
+    regenHere() {
+        return !!(this.regen && this.draft && String(this.regen.draftId) === String(this.draft.id));
+    },
+
+    /** Above the editor head: the progress card, then "Open the new draft", or why it failed. */
+    regenHostMarkup() {
+        if (!this.regenHere()) return '';
+        const r = this.regen;
+        if (r.state === 'running') {
+            if (!this.generating) return '';
+            return html`<section class="surface pad-4 studio-regen" aria-labelledby="studio-new-title">${this.genProgressMarkup()}</section>`;
+        }
+        if (r.state === 'done' && r.draft) {
+            const href = `#/studio?draft=${encodeURIComponent(String(r.draft.id))}`;
+            return html`
+                <div class="studio-callout studio-regen" role="status">
+                    <i data-lucide="check-circle" aria-hidden="true"></i>
+                    <div class="studio-callout-body studio-callout-row">
+                        <p>${t('studio.regen.ready', { title: this.draftTitle(r.draft) })}</p>
+                        <div class="row row--wrap gap-2">
+                            <a class="btn btn-primary btn-sm" id="studio-regen-open" href="${href}">
+                                <i data-lucide="wand-sparkles" aria-hidden="true"></i> ${t('studio.regen.open')}
+                            </a>
+                            ${UI.button({ variant: 'ghost', size: 'sm', icon: 'x', label: t('common.dismiss'), action: 'studio:dismissRegen', id: 'studio-regen-dismiss' })}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        if (r.state === 'failed') {
+            return html`
+                <div class="studio-regen">
+                    ${UI.errorStrip(r.message || t('error.unexpected'), '', 'studio-regen-error')}
+                    <div class="row row--wrap gap-2 mbs-4">
+                        ${UI.button({ variant: 'ghost', size: 'sm', icon: 'x', label: t('common.dismiss'), action: 'studio:dismissRegen', id: 'studio-regen-dismiss' })}
+                    </div>
+                </div>
+            `;
+        }
+        return '';
+    },
+
+    paintRegen() {
+        this.paintRegion('studio-regen-host', this.regenHostMarkup());
+    },
+
+    dismissRegen() {
+        this.regen = null;
+        this.paintRegen();
     },
 
     async renderAgain(el) {
@@ -5055,13 +5258,57 @@ const StudioPage = {
 
     deleteDraft() {
         if (!this.draft) return;
+        this.confirmDeleteDraft(this.draft, () => StudioPage.deleteConfirmed());
+    },
+
+    /** The one confirm for deleting a draft, from the editor or from its card. */
+    confirmDeleteDraft(draft, onConfirm) {
         Admin.confirm({
             title: t('studio.editor.deleteTitle'),
-            body: t('studio.editor.deleteBody', { title: this.draftTitle(this.draft) }),
+            body: t('studio.editor.deleteBody', { title: this.draftTitle(draft) }),
             hint: t('studio.editor.deleteHint'),
             confirmLabel: t('common.delete'),
-            onConfirm: () => StudioPage.deleteConfirmed(),
+            onConfirm,
         });
+    },
+
+    // ─── Unschedule ──────────────────────────────────────────────────────────
+    /**
+     * The way back from "scheduled": the queued posts this draft created are
+     * removed and the draft opens for edits again, slides and all. Refused by the
+     * server (409) once any of those posts has gone out or is going out.
+     */
+    unschedule() {
+        const d = this.draft;
+        if (!d || d.status !== 'scheduled') return;
+        Admin.confirm({
+            title: t('studio.unschedule.title'),
+            body: t('studio.unschedule.body', { title: this.draftTitle(d) }),
+            hint: t('studio.unschedule.hint'),
+            confirmLabel: t('studio.schedule.unschedule'),
+            confirmIcon: 'calendar-x',
+            // Nothing is lost that scheduling again does not put back: not a red button.
+            tone: 'primary',
+            onConfirm: () => StudioPage.unscheduleConfirmed(),
+        });
+    },
+
+    /** Returns the promise: a 409 stays in the dialog, where the reason can be read. */
+    async unscheduleConfirmed() {
+        const id = this.draft && this.draft.id;
+        if (!id) return;
+        const seq = this._seq;
+        // By path: api.js has no helper for this route yet.
+        const res = await API.request(`/studio/drafts/${encodeURIComponent(id)}/unschedule`, { method: 'POST' });
+        if (seq !== this._seq || !this.draft || String(this.draft.id) !== String(id)) return;
+        const draft = res && res.draft;
+        if (!draft) throw new Error(t('error.unexpected'));
+        this.loadDraft({ draft, lessons: this.draftLessons });
+        this.drafts = this.drafts.map((d) => (String(d.id) === String(id) ? draft : d));
+        this.paintEditor();
+        // The schedule form is back, and it offers the next free slots.
+        this.loadSlots(seq);
+        UI.toast(t('studio.unschedule.done'));
     },
 
     /** Returns the promise: a refusal stays in the dialog, next to the button that caused it. */
@@ -6045,6 +6292,10 @@ UI.registerActions('studio', {
     schedule: (el, e) => studioReport(StudioPage.schedule(el, e)),
     tiktokPublic: (el) => studioReport(StudioPage.tiktokPublic(el)),
     deleteDraft: () => StudioPage.deleteDraft(),
+    deleteDraftCard: (el) => StudioPage.deleteDraftCard(el),
+    setDraftFilter: (el) => StudioPage.setDraftFilter(el),
+    unschedule: () => StudioPage.unschedule(),
+    dismissRegen: () => StudioPage.dismissRegen(),
     // Settings
     setting: (el) => StudioPage.setting(el),
     addListItem: (el) => StudioPage.addListItem(el.dataset.path),
