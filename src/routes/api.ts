@@ -12,7 +12,7 @@ import {
     sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
     API_VERSION, MediaProcessingTimeoutError, resumeInstagramContainer,
 } from '../services/instagram.js';
-import { DEFAULT_MODEL, generateAiResponse, resolveModel } from '../services/ai.js';
+import { DEFAULT_MODEL, generateAiResponse, resolveModel, SUPPORTED_MODELS } from '../services/ai.js';
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
     assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache,
@@ -41,7 +41,12 @@ import { studioRouter, studioWorkerRouter } from './studio.js';
 import {
     publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokInboxOptions, validateTikTokOptions,
 } from '../services/tiktokPublish.js';
-import { getTikTokPostingFlags } from '../services/appSettings.js';
+import {
+    APP_SETTING_KEYS, describeSiteSettings, getPublicBaseUrl, getTikTokPostingFlags, normaliseContactEmail,
+    normaliseIsoDay, normaliseWhatsappNumber, setSetting,
+} from '../services/appSettings.js';
+import { whatsappUrl } from '../services/publicPages.js';
+import { metaHttp } from '../services/http.js';
 import { postModeFor } from './tiktok.js';
 import { getConnection as getTikTokConnection, refreshAllConnections } from '../services/tiktokConnections.js';
 import { formatPublishedIds, publishedPlatforms } from '../services/publishedIds.js';
@@ -3176,11 +3181,34 @@ router.post('/settings/ai', canOperate, async (req, res) => {
 
 router.post('/settings/ai/test', canOperate, async (req, res) => {
     try {
-        const { system_prompt, knowledge_base, user_message } = req.body;
+        const { system_prompt, knowledge_base, user_message, model, temperature } = req.body;
 
         if (!user_message) {
             res.status(400).json({ error: 'user_message is required.' });
             return;
+        }
+
+        // The model and temperature on screen, when the form sends them. Until it did, the
+        // sandbox ran the SAVED pair, so a test after changing the picker tested the wrong
+        // model. Both are optional (an older form omits them) and validated like a save: a
+        // model must be one the server runs, a temperature must be 0–1.
+        const present = (v: unknown) => v !== undefined && v !== null && v !== '';
+        let modelOverride: string | undefined;
+        if (present(model)) {
+            if (typeof model !== 'string' || !SUPPORTED_MODELS.has(model)) {
+                res.status(400).json({ error: 'Unknown model — pick one from the list.' });
+                return;
+            }
+            modelOverride = model;
+        }
+        let temperatureOverride: number | undefined;
+        if (present(temperature)) {
+            const parsed = Number(temperature);
+            if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+                res.status(400).json({ error: 'Temperature must be a number between 0 and 1.' });
+                return;
+            }
+            temperatureOverride = parsed;
         }
 
         const creatorId = getTenantId(req);
@@ -3193,6 +3221,8 @@ router.post('/settings/ai/test', canOperate, async (req, res) => {
         const aiRes = await generateAiResponse(mockConvId, user_message, creatorId, {
             system_prompt: typeof system_prompt === 'string' && system_prompt.trim() ? system_prompt : undefined,
             knowledge_base: typeof knowledge_base === 'string' ? knowledge_base : undefined,
+            model: modelOverride,
+            temperature: temperatureOverride,
         });
 
         // null means the agent is switched off. Say that, rather than rendering an empty reply
@@ -3290,6 +3320,171 @@ router.post('/settings/webhook-token', canAdminister, async (req, res) => {
     } catch (err: any) {
         log('error', 'api.verify_token_save_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save verify token.' });
+    }
+});
+
+// ─── Webhook handshake check ────────────────────────────────────────────────
+// Meta's verification is a plain GET the server can make against itself, so "will Meta accept
+// my subscription change?" no longer has to be answered by trying it in Meta's console and
+// reading an opaque `Callback verification failed: HTTP 403`. The request goes to the app's
+// own PUBLIC base URL (the address Meta would call), not to localhost, so it also proves the
+// deployment that answers that address holds this token. Owner only, like the token itself.
+//
+// A POST, not a GET: it is an action — it sends a request out with the tenant's secret — and
+// every GET below resolveTenant is an ungated read (api.test.ts "gates no read").
+
+/** The origin this request arrived on, for `getPublicBaseUrl`'s last-resort fallback. */
+function publicOriginOf(req: Request): string | null {
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]!.trim();
+    const host = req.get('host');
+    return host ? `${proto}://${host}` : null;
+}
+
+export type WebhookCheckReason = 'ok' | 'no_token' | 'no_base_url' | 'rejected' | 'mismatch' | 'unexpected' | 'unreachable';
+
+router.post('/settings/webhook-token/check', canAdminister, async (req, res) => {
+    const answer = (ok: boolean, reason: WebhookCheckReason, status: number | null, detail: string, url?: string) => {
+        res.json({ ok, reason, status, detail, url: url ?? null });
+    };
+    try {
+        const creator = await getTenant(getTenantId(req), ['webhook_verify_token']);
+        const token: string | null = creator?.webhook_verify_token ?? null;
+        if (!token) {
+            answer(false, 'no_token', null, 'No verify token is saved for this account yet.');
+            return;
+        }
+        const base = await getPublicBaseUrl(publicOriginOf(req));
+        if (!base) {
+            answer(false, 'no_base_url', null, 'The public site address is not set (Settings → TikTok app → site address).');
+            return;
+        }
+        const url = `${base}/webhook`;
+        const challenge = crypto.randomBytes(12).toString('hex');
+        let status: number;
+        let body: string;
+        try {
+            const r = await metaHttp.get(url, {
+                params: { 'hub.mode': 'subscribe', 'hub.verify_token': token, 'hub.challenge': challenge },
+                timeout: 10_000,
+                responseType: 'text',
+                transformResponse: [(d: unknown) => d],
+                validateStatus: () => true,
+                maxRedirects: 0,
+            });
+            status = r.status;
+            body = typeof r.data === 'string' ? r.data : String(r.data ?? '');
+        } catch (err: any) {
+            // An error message may echo the request it failed on, query string and all — the
+            // verify token must never reach the response (or the log) that way.
+            const redact = (text: string) => text.split(token).join('[token]');
+            log('warn', 'api.webhook_check_unreachable', {
+                url, code: err?.code ?? null, message: redact(String(err?.message ?? '')),
+            });
+            const why = redact(String(err?.code || err?.message || 'network error'));
+            answer(false, 'unreachable', null, `Could not reach ${url}: ${why}`, url);
+            return;
+        }
+        if (status === 200 && body === challenge) {
+            answer(true, 'ok', status, 'The deployment answered the challenge with this token.', url);
+        } else if (status === 403) {
+            answer(false, 'rejected', status, 'The deployment refused this token: it holds a different verify token than the one saved here.', url);
+        } else if (status === 200) {
+            answer(false, 'mismatch', status, 'The address answered 200 but not with the challenge — something other than this app is at that URL.', url);
+        } else {
+            answer(false, 'unexpected', status, `The address answered HTTP ${status}.`, url);
+        }
+    } catch (err) {
+        log('error', 'api.webhook_check_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to check the webhook handshake.' });
+    }
+});
+
+// ─── Public site settings ───────────────────────────────────────────────────
+// The values the public pages print: the WhatsApp number, the contact email and the Eid
+// coupon expiry (src/services/publicPages.ts). One set for the whole deployment, so platform
+// admins only — the same 404-for-everyone-else the TikTok app settings use. The write also
+// carries `canAdminister` (a platform admin always acts as owner), because every mutating
+// route below resolveTenant must carry a role guard (api.test.ts); it runs second so anyone
+// who is not a platform admin still gets the 404, never a 403 that confirms the route.
+
+function requirePlatformAdmin(req: Request, res: Response, next: NextFunction): void {
+    if (req.session?.role !== 'platform_admin') {
+        res.status(404).json({ error: 'Not found.' });
+        return;
+    }
+    next();
+}
+
+async function siteSettingsPayload() {
+    const site = await describeSiteSettings();
+    return { ...site, whatsappUrl: whatsappUrl(site.whatsappNumber) };
+}
+
+router.get('/settings/site', requirePlatformAdmin, async (_req, res) => {
+    try {
+        res.json(await siteSettingsPayload());
+    } catch (err) {
+        log('error', 'api.site_settings_read_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to read the public site settings.' });
+    }
+});
+
+router.post('/settings/site', requirePlatformAdmin, canAdminister, async (req, res) => {
+    try {
+        const body = req.body ?? {};
+        const updatedBy = req.session?.userId ?? null;
+        const changed: string[] = [];
+
+        // Each field is optional: absent means "leave it", an empty string means "clear it",
+        // and clearing hands the value back to the environment fallback (or to nothing, which
+        // removes the element from the public pages; the contact email alone falls back to
+        // DEFAULT_CONTACT_EMAIL instead). Every field is validated before any is written, so
+        // a refused value never leaves the other two half-saved; `field` names the input the
+        // dashboard marks.
+        const fields = [
+            {
+                name: 'whatsappNumber', key: APP_SETTING_KEYS.siteWhatsappNumber, log: 'whatsapp_number',
+                normalise: normaliseWhatsappNumber,
+                error: 'The WhatsApp number must be digits in international format without the +, e.g. 9665xxxxxxxx.',
+            },
+            {
+                name: 'contactEmail', key: APP_SETTING_KEYS.siteContactEmail, log: 'contact_email',
+                normalise: normaliseContactEmail,
+                error: 'That does not look like an email address.',
+            },
+            {
+                name: 'eidCouponsExpire', key: APP_SETTING_KEYS.siteEidCouponsExpire, log: 'eid_coupons_expire',
+                normalise: normaliseIsoDay,
+                error: 'The Eid coupon expiry must be a date, YYYY-MM-DD.',
+            },
+        ] as const;
+
+        const writes: Array<{ key: (typeof fields)[number]['key']; value: string | null; log: string }> = [];
+        for (const f of fields) {
+            const input = body[f.name];
+            if (typeof input !== 'string') continue;
+            const raw = input.trim();
+            const value = raw ? f.normalise(raw) : null;
+            if (raw && !value) {
+                res.status(400).json({ error: f.error, field: f.name });
+                return;
+            }
+            writes.push({ key: f.key, value, log: f.log });
+        }
+        for (const w of writes) {
+            await setSetting(w.key, w.value, updatedBy);
+            changed.push(w.log);
+        }
+
+        if (changed.length === 0) {
+            res.status(400).json({ error: 'Nothing to save.' });
+            return;
+        }
+        log('info', 'api.site_settings_written', { changed, user_id: updatedBy });
+        res.json(await siteSettingsPayload());
+    } catch (err) {
+        log('error', 'api.site_settings_write_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to save the public site settings.' });
     }
 });
 

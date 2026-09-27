@@ -64,6 +64,22 @@ export const APP_SETTING_KEYS = {
      * `service_role` JWT. `SUPABASE_SERVICE_ROLE_KEY` is the fallback.
      */
     mediaStorageKey: 'storage.supabase_service_key',
+    /**
+     * The three values the public site prints (src/index.ts `renderPublicPage`). Each was a
+     * literal in six HTML files before; now the public pages carry `{{…}}` tokens and read
+     * these on every request. Env fallbacks: SITE_WHATSAPP_NUMBER / SITE_CONTACT_EMAIL /
+     * SITE_EID_COUPONS_EXPIRE.
+     */
+    /** Digits only, E.164 without the `+`: `9665xxxxxxxx`. Builds the wa.me link. */
+    siteWhatsappNumber: 'site.whatsapp_number',
+    /**
+     * The address behind every `mailto:` on the public pages. Never empty: with nothing saved
+     * and no SITE_CONTACT_EMAIL it falls back to DEFAULT_CONTACT_EMAIL, so no page can end up
+     * with zero ways to reach anyone.
+     */
+    siteContactEmail: 'site.contact_email',
+    /** `YYYY-MM-DD` — the last day the Eid page's Udemy coupons work. Empty = no campaign. */
+    siteEidCouponsExpire: 'site.eid_coupons_expire',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -295,4 +311,122 @@ export async function saveVerificationFile(
     await setSetting(APP_SETTING_KEYS.tiktokVerificationHistory, history.length ? JSON.stringify(history) : null, updatedBy);
     await setSetting(APP_SETTING_KEYS.tiktokVerificationFilename, next?.filename ?? null, updatedBy);
     await setSetting(APP_SETTING_KEYS.tiktokVerificationContent, next?.content ?? null, updatedBy);
+}
+
+// ─── The public site ────────────────────────────────────────────────────────────────────
+
+export interface SiteSettings {
+    /** Digits only, E.164 without the `+`, or null when no WhatsApp channel is offered. */
+    whatsappNumber: string | null;
+    contactEmail: string | null;
+    /** `YYYY-MM-DD`, or null when there is no Eid coupon campaign running. */
+    eidCouponsExpire: string | null;
+}
+
+/**
+ * The address the public pages print when neither Settings nor SITE_CONTACT_EMAIL has one —
+ * the founder's inbox, which every page carried as a literal before these were settings. It
+ * lives here, not in the HTML, so the pages hold only `{{CONTACT_EMAIL}}`.
+ */
+export const DEFAULT_CONTACT_EMAIL = 'elamirmansour@outlook.com';
+
+type SiteSource = 'database' | 'env' | 'default' | null;
+
+export interface SiteSettingsStatus extends SiteSettings {
+    /** Where each value comes from, so the Settings card can say "set in the environment". */
+    source: { whatsappNumber: SiteSource; contactEmail: SiteSource; eidCouponsExpire: SiteSource };
+}
+
+/** E.164 is 8–15 digits with no leading zero; the `+` is never stored. */
+const WHATSAPP_NUMBER = /^[1-9][0-9]{7,14}$/;
+const CONTACT_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * What the operator typed, as the digits wa.me wants: `+966 50 123 4567`, `00966501234567`
+ * and `966501234567` all become `966501234567`, and so does the same number typed on an
+ * Arabic keyboard (`٩٦٦٥٠١٢٣٤٥٦٧`, Arabic-Indic or Persian digits). Null when what is left is
+ * not a phone number. The dashboard mirrors this (settings.js `normaliseWhatsapp`).
+ */
+export function normaliseWhatsappNumber(input: string): string | null {
+    let digits = input
+        .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+        .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+        .replace(/[\s\-().]/g, '');
+    if (digits.startsWith('+')) digits = digits.slice(1);
+    else if (digits.startsWith('00')) digits = digits.slice(2);
+    return WHATSAPP_NUMBER.test(digits) ? digits : null;
+}
+
+export function normaliseContactEmail(input: string): string | null {
+    const v = input.trim();
+    return CONTACT_EMAIL.test(v) ? v : null;
+}
+
+/** A real calendar day in `YYYY-MM-DD`, or null. `2026-02-30` is refused. */
+export function normaliseIsoDay(input: string): string | null {
+    const m = ISO_DAY.exec(input.trim());
+    if (!m) return null;
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const date = new Date(Date.UTC(y, mo - 1, d));
+    if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return null;
+    return m[0];
+}
+
+/**
+ * The environment's answer alone — what the public pages fall back to when the database is
+ * down. The contact email alone has a last resort, DEFAULT_CONTACT_EMAIL.
+ */
+export function siteSettingsFromEnv(): SiteSettings {
+    return {
+        whatsappNumber: envWhatsappNumber(),
+        contactEmail: envContactEmail() ?? DEFAULT_CONTACT_EMAIL,
+        eidCouponsExpire: envEidCouponsExpire(),
+    };
+}
+
+function envWhatsappNumber(): string | null {
+    const v = process.env.SITE_WHATSAPP_NUMBER?.trim();
+    return v ? normaliseWhatsappNumber(v) : null;
+}
+
+/** A blank or malformed SITE_CONTACT_EMAIL is not a value: the default answers instead. */
+function envContactEmail(): string | null {
+    const v = process.env.SITE_CONTACT_EMAIL?.trim();
+    return v ? normaliseContactEmail(v) : null;
+}
+
+function envEidCouponsExpire(): string | null {
+    const v = process.env.SITE_EID_COUPONS_EXPIRE?.trim();
+    return v ? normaliseIsoDay(v) : null;
+}
+
+/**
+ * The public site's contact channels and the Eid coupon expiry: what Settings saved, then the
+ * environment, each on its own; null when neither has it — except the contact email, which
+ * then falls back to DEFAULT_CONTACT_EMAIL (source 'default'). Read on every page request, not
+ * cached, for the same reason as the Gemini key — a value saved from the dashboard has to
+ * reach every warm instance (the CDN's `s-maxage` is the only cache).
+ */
+export async function describeSiteSettings(): Promise<SiteSettingsStatus> {
+    const [dbNumber, dbEmail, dbExpire] = await Promise.all([
+        getSetting(APP_SETTING_KEYS.siteWhatsappNumber),
+        getSetting(APP_SETTING_KEYS.siteContactEmail),
+        getSetting(APP_SETTING_KEYS.siteEidCouponsExpire),
+    ]);
+    const pick = (db: string | null, fromEnv: string | null, fallback: string | null = null): [string | null, SiteSource] =>
+        db ? [db, 'database'] : fromEnv ? [fromEnv, 'env'] : fallback ? [fallback, 'default'] : [null, null];
+    const [whatsappNumber, numberSource] = pick(dbNumber, envWhatsappNumber());
+    const [contactEmail, emailSource] = pick(dbEmail, envContactEmail(), DEFAULT_CONTACT_EMAIL);
+    const [eidCouponsExpire, expireSource] = pick(dbExpire, envEidCouponsExpire());
+    return {
+        whatsappNumber, contactEmail, eidCouponsExpire,
+        source: { whatsappNumber: numberSource, contactEmail: emailSource, eidCouponsExpire: expireSource },
+    };
+}
+
+/** `{ whatsappNumber, contactEmail, eidCouponsExpire }` — what the public pages print. */
+export async function getSiteSettings(): Promise<SiteSettings> {
+    const { whatsappNumber, contactEmail, eidCouponsExpire } = await describeSiteSettings();
+    return { whatsappNumber, contactEmail, eidCouponsExpire };
 }

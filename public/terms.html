@@ -61,15 +61,15 @@
           src/services/tiktokPublish.ts:656-660
 
   OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
-    1. Contact email: elamirmansour@outlook.com — section 11, both languages.
+    1. Contact email: the contact email in Settings → Public site — section 12, both languages.
     2. Operator: ElAmir Mansour — named in the opening paragraph and in
-       section 11.
+       section 12.
     3. NOT SUPPLIED: the country whose law governs these terms. No governing
        law, jurisdiction or venue is stated anywhere on this page, because
        none has been supplied and none may be invented; section 9 is written
        "to the extent the law allows" for the same reason. The visible
        "editorial note" boxes were removed (TikTok's reviewers read this
-       page); the reminder is an HTML comment at the end of section 11.
+       page); the reminder is an HTML comment at the end of section 12.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -80,19 +80,26 @@
          carry a full light theme as a peer of dark. -->
     <meta name="color-scheme" content="dark light">
     <title>شروط الخدمة · Terms of Service — AutoReply Pro</title>
-    <meta name="description" content="شروط استخدام «أوتوريبلاي برو» لربط حسابات إنستجرام وفيسبوك وتيك توك — The terms for connecting Instagram, Facebook and TikTok accounts to AutoReply Pro.">
+    <meta name="description" data-lang-only="ar" content="شروط استخدام «أوتوريبلاي برو» لربط حسابات إنستجرام وفيسبوك وتيك توك: ما تأذن به، ومسؤولياتك، والدفع، وفصل الحسابات.">
+    <meta name="description" data-lang-only="en" content="The terms for connecting Instagram, Facebook and TikTok accounts to AutoReply Pro: what you authorise, your responsibilities, payment, and disconnecting.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
-    <link rel="canonical" href="https://msg-response-auto.vercel.app/terms">
+    <link rel="canonical" href="https://msg-response-auto.vercel.app/terms{{LANG_QUERY}}">
+    <link rel="alternate" hreflang="ar" href="https://msg-response-auto.vercel.app/terms">
+    <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/terms?lang=en">
+    <link rel="alternate" hreflang="x-default" href="https://msg-response-auto.vercel.app/terms">
     <meta property="og:title" content="شروط الخدمة · Terms of Service — AutoReply Pro">
-    <meta property="og:description" content="شروط استخدام «أوتوريبلاي برو» لربط حسابات إنستجرام وفيسبوك وتيك توك — The terms for connecting Instagram, Facebook and TikTok accounts to AutoReply Pro.">
+    <meta property="og:description" data-lang-only="ar" content="شروط استخدام «أوتوريبلاي برو» لربط حسابات إنستجرام وفيسبوك وتيك توك: ما تأذن به، ومسؤولياتك، والدفع، وفصل الحسابات.">
+    <meta property="og:description" data-lang-only="en" content="The terms for connecting Instagram, Facebook and TikTok accounts to AutoReply Pro: what you authorise, your responsibilities, payment, and disconnecting.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://msg-response-auto.vercel.app/terms">
+    <meta property="og:url" content="https://msg-response-auto.vercel.app/terms{{LANG_QUERY}}">
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
-    <meta property="og:locale" content="ar_SA">
-    <meta property="og:locale:alternate" content="en_US">
+    <meta property="og:locale" data-lang-only="ar" content="ar_SA">
+    <meta property="og:locale:alternate" data-lang-only="ar" content="en_US">
+    <meta property="og:locale" data-lang-only="en" content="en_US">
+    <meta property="og:locale:alternate" data-lang-only="en" content="ar_SA">
 
 
     <!-- One design system in this repo, not three. This is the same file the
@@ -218,6 +225,35 @@
             background: var(--surface-raised, rgba(0, 0, 0, 0.03));
         }
         .callout > :last-child { margin-bottom: 0; }
+
+        /* PB12: the contents, at the top of each language. Every h2 has an id,
+           so a reviewer can jump to a section and link straight to it. */
+        .toc {
+            margin: 0 0 var(--space-5, 1.5rem);
+            padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
+            border-radius: var(--radius-md, 14px);
+            border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+            background: var(--surface-raised, rgba(0, 0, 0, 0.03));
+        }
+        .toc-h {
+            margin: 0 0 var(--space-2, 0.5rem);
+            font-size: var(--fs-200, 0.875rem);
+            font-weight: var(--fw-semibold, 600);
+            color: var(--text-strong, #14182a);
+        }
+        .toc ol {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            columns: 2 16rem;
+            column-gap: var(--space-5, 1.5rem);
+        }
+        .toc li { margin: 0; break-inside: avoid; }
+        .toc a {
+            display: inline-flex;
+            align-items: center;
+            min-height: var(--tap-target, 44px);
+        }
 
         .divider {
             height: 1px;
@@ -718,27 +754,31 @@
             .headnav a { padding-inline: var(--space-1); }
             .langswitch { gap: 1px; padding: 2px; }
             .langswitch button { min-width: 0; padding-inline: var(--space-2); }
+            /* Contact made the bar three links. The width it needs comes from
+               the bar's own language switch, which keeps only the language
+               you can switch TO: the pressed one names what is already on
+               screen. The footer's switch keeps both. With JavaScript off
+               nothing is pressed, so both still show. */
+            .topbar .langswitch button[aria-pressed='true'] { display: none; }
         }
     </style>
 
     <script>
         /* Resolve the language before first paint so the page never shows the
-           wrong script for a frame. Mirrors dashboard/js/i18n.js: stored choice,
-           then the browser's own languages, then Arabic. */
+           wrong script for a frame. */
         (function () {
+            /* ?lang= first (a shared or hreflang link names its language),
+               then the stored choice, then Arabic. No browser-locale guess on
+               the public pages: it handed an English-locale visitor — and a
+               crawler — English on an Arabic-first site (PB4). The dashboard
+               still guesses; it is a tool, not a front door. */
             var lang = null;
-            try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
+            try { lang = new URLSearchParams(location.search).get('lang'); } catch (e) { /* no URLSearchParams */ }
             if (lang !== 'ar' && lang !== 'en') {
                 lang = null;
-                try {
-                    var prefs = navigator.languages || [navigator.language || ''];
-                    for (var i = 0; i < prefs.length; i++) {
-                        var code = String(prefs[i] || '').toLowerCase().split('-')[0];
-                        if (code === 'ar' || code === 'en') { lang = code; break; }
-                    }
-                } catch (e) { /* no navigator language information */ }
+                try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
             }
-            lang = lang || 'ar';
+            if (lang !== 'ar' && lang !== 'en') lang = 'ar';
             var root = document.documentElement;
             root.setAttribute('data-lang', lang);
             root.lang = lang;
@@ -789,6 +829,7 @@
             <div class="headtools">
                 <nav class="headnav" aria-label="روابط الموقع · Site">
                     <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <a href="/#contact"><bdi class="t-ar" lang="ar">تواصل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></a>
                     <!-- "الدخول" rather than "تسجيل الدخول": the bar has to hold
                          a wordmark, two links and a language switch inside
                          375px, and the footer carries the full "لوحة التحكم"
@@ -807,7 +848,25 @@
             <!-- ══════════════════════════ ARABIC ══════════════════════════ -->
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>شروط الخدمة</h1>
-                <p class="stamp">آخر تحديث: <time datetime="2026-09-25" dir="ltr">2026-09-25</time></p>
+                <p class="stamp">آخر تحديث: <time datetime="2026-09-27" dir="ltr">2026-09-27</time></p>
+
+                <nav class="toc" aria-labelledby="toc-h-ar">
+                    <p class="toc-h" id="toc-h-ar">المحتويات</p>
+                    <ol>
+                        <li><a href="#acceptance-ar">1. قبول هذه الشروط</a></li>
+                        <li><a href="#service-ar">2. ما تقدّمه الخدمة</a></li>
+                        <li><a href="#connecting-ar">3. ربط حساباتك، وما تأذن به</a></li>
+                        <li><a href="#responsibilities-ar">4. مسؤولياتك</a></li>
+                        <li><a href="#acceptable-use-ar">5. الاستخدام المقبول</a></li>
+                        <li><a href="#platforms-ar">6. المنصّات الخارجية: بلا ضمان</a></li>
+                        <li><a href="#disconnecting-ar">7. فصل الحسابات وسحب الإذن</a></li>
+                        <li><a href="#data-ar">8. بياناتك</a></li>
+                        <li><a href="#liability-ar">9. حدود المسؤولية</a></li>
+                        <li><a href="#payment-ar">10. الدفع والإشعار</a></li>
+                        <li><a href="#changes-ar">11. تغييرات هذه الشروط</a></li>
+                        <li><a href="#contact-ar">12. للتواصل</a></li>
+                    </ol>
+                </nav>
 
                 <p>
                     هذه الشروط هي الاتفاق بينك وبين الأمير منصور
@@ -829,14 +888,14 @@
                     </p>
                 </div>
 
-                <h2>1. قبول هذه الشروط</h2>
+                <h2 id="acceptance-ar">1. قبول هذه الشروط</h2>
                 <p>
                     بربط حساب بـ«أوتوريبلاي برو» أو باستخدام لوحة التحكم، فأنت توافق على هذه الشروط.
                     إن لم توافق، فلا تربط أي حساب؛ وإن كنت قد ربطته، فافصله (القسم 7). وإن كنت
                     تستخدم الخدمة نيابةً عن نشاط تجاري، فأنت تؤكّد أنك مخوَّل بقبول هذه الشروط عنه.
                 </p>
 
-                <h2>2. ما تقدّمه الخدمة</h2>
+                <h2 id="service-ar">2. ما تقدّمه الخدمة</h2>
                 <ul>
                     <li>
                         <strong>ربط الحسابات:</strong> إنستجرام وفيسبوك عبر
@@ -869,7 +928,7 @@
                     ميزات الخدمة أو تُضاف أو تُزال مع الوقت.
                 </p>
 
-                <h2>3. ربط حساباتك، وما تأذن به</h2>
+                <h2 id="connecting-ar">3. ربط حساباتك، وما تأذن به</h2>
                 <p>
                     يُربَط إنستجرام وفيسبوك عبر رمز وصول تُصدره ميتا لصفحتك، ويُربَط تيك توك بتسجيل
                     الدخول في صفحة تيك توك نفسها. في الحالتين لا نطلب كلمة مرور حسابك ولا نخزّنها.
@@ -900,7 +959,7 @@
                 </p>
                 <p>وأنت تؤكّد أن الحسابات التي تربطها مملوكة لك، أو أن مالكها خوّلك بربطها.</p>
 
-                <h2>4. مسؤولياتك</h2>
+                <h2 id="responsibilities-ar">4. مسؤولياتك</h2>
                 <p>أنت مسؤول عن:</p>
                 <ul>
                     <li>
@@ -939,7 +998,7 @@
                     </li>
                 </ul>
 
-                <h2>5. الاستخدام المقبول</h2>
+                <h2 id="acceptable-use-ar">5. الاستخدام المقبول</h2>
                 <p>لا تستخدم «أوتوريبلاي برو» من أجل:</p>
                 <ul>
                     <li>
@@ -966,7 +1025,7 @@
                     قواعدها.
                 </p>
 
-                <h2>6. المنصّات الخارجية: بلا ضمان</h2>
+                <h2 id="platforms-ar">6. المنصّات الخارجية: بلا ضمان</h2>
                 <p>
                     تعتمد «أوتوريبلاي برو» كلياً على واجهات ميتا وتيك توك البرمجية، وهي خارج
                     سيطرتنا. قد تتغيّر أو تتباطأ أو تتعطّل أو تشترط مراجعة جديدة أو تسحب الوصول — عن
@@ -983,7 +1042,7 @@
                     رعايته. إنستجرام وفيسبوك وتيك توك علامات تجارية مملوكة لأصحابها.
                 </p>
 
-                <h2>7. فصل الحسابات وسحب الإذن</h2>
+                <h2 id="disconnecting-ar">7. فصل الحسابات وسحب الإذن</h2>
                 <p>يمكنك إيقاف تصرّف الخدمة نيابةً عنك في أي وقت، دون أن تُبدي سبباً.</p>
                 <ul>
                     <li>
@@ -996,7 +1055,7 @@
                         <strong>إنستجرام وفيسبوك:</strong> أزِل التطبيق من «عمليات تكامل الأعمال»
                         (<bdi lang="en" dir="ltr">Business integrations</bdi>) في إعدادات فيسبوك، فيبطل
                         رمز الوصول الذي تحتفظ به الخدمة؛ أو اطلب منّا إزالة الحساب عبر طريق التواصل في
-                        القسم 11.
+                        <a href="#contact-ar">القسم 12</a>.
                     </li>
                 </ul>
                 <p>
@@ -1004,7 +1063,7 @@
                     نُشر من قبل يبقى على المنصّة حتى تحذفه منها بنفسك.
                 </p>
 
-                <h2>8. بياناتك</h2>
+                <h2 id="data-ar">8. بياناتك</h2>
                 <p>
                     ما تخزّنه الخدمة، ولماذا، وإلى متى، في <a href="/privacy">سياسة الخصوصية</a>.
                     وطريقة حذفه — بما في ذلك بيانات تيك توك — في
@@ -1013,7 +1072,7 @@
                 </p>
                 <p>لا نبيع بياناتك، ولا بيانات مَن يراسلونك.</p>
 
-                <h2>9. حدود المسؤولية</h2>
+                <h2 id="liability-ar">9. حدود المسؤولية</h2>
                 <p>
                     تُقدَّم الخدمة «كما هي» و«حسب توفّرها»، دون أي ضمانات، في الحدود التي يسمح بها
                     القانون. لا نضمن أن تعمل دون انقطاع أو أخطاء، ولا أن تبقى متوافقة مع واجهات ميتا أو
@@ -1028,17 +1087,24 @@
                 </p>
                 <p>لا شيء في هذه الشروط يقيّد حقاً لا يجيز القانون تقييده.</p>
 
-                <h2>10. تغييرات هذه الشروط</h2>
+                <h2 id="payment-ar">10. الدفع والإشعار</h2>
+                <p>
+                    الخدمة مُدارة، ولا اشتراك فيها يُدفع من صفحة على الموقع: الفوترة تجري بيننا
+                    مباشرة، وقيمتها وطريقة دفعها ومدة الإشعار قبل إنهائها نتّفق عليها كتابةً قبل أن
+                    تبدأ. وإن اختلف ذلك الاتفاق المكتوب مع هذه الشروط، فالاتفاق المكتوب هو الذي يسري.
+                </p>
+
+                <h2 id="changes-ar">11. تغييرات هذه الشروط</h2>
                 <p>
                     إن تغيّرت هذه الشروط، تُحدَّث هذه الصفحة ويتغيّر معها تاريخ «آخر تحديث» أعلاها.
                     استمرارك في استخدام الخدمة بعد ذلك يعني قبولك النسخة الجديدة؛ وإن لم تقبلها،
                     فافصل حساباتك (القسم 7).
                 </p>
 
-                <h2>11. للتواصل</h2>
+                <h2 id="contact-ar">12. للتواصل</h2>
                 <p>
                     لأي سؤال عن هذه الشروط، راسل الأمير منصور على
-                    <a href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>،
+                    <a href="mailto:{{CONTACT_EMAIL}}"><bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>،
                     أو افتح موضوعاً على
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني للمشروع</a>
                     — وهو علني، فلا تكتب فيه معلومات شخصية أو تفاصيل حسابك.
@@ -1054,7 +1120,25 @@
             <!-- ══════════════════════════ ENGLISH ══════════════════════════ -->
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Terms of Service</h1>
-                <p class="stamp">Last updated: <time datetime="2026-09-25">2026-09-25</time></p>
+                <p class="stamp">Last updated: <time datetime="2026-09-27">2026-09-27</time></p>
+
+                <nav class="toc" aria-labelledby="toc-h-en">
+                    <p class="toc-h" id="toc-h-en">Contents</p>
+                    <ol>
+                        <li><a href="#acceptance-en">1. Accepting these terms</a></li>
+                        <li><a href="#service-en">2. What the service does</a></li>
+                        <li><a href="#connecting-en">3. Connecting your accounts, and what you authorise</a></li>
+                        <li><a href="#responsibilities-en">4. Your responsibilities</a></li>
+                        <li><a href="#acceptable-use-en">5. Acceptable use</a></li>
+                        <li><a href="#platforms-en">6. Third-party platforms: no guarantee</a></li>
+                        <li><a href="#disconnecting-en">7. Disconnecting and revoking access</a></li>
+                        <li><a href="#data-en">8. Your data</a></li>
+                        <li><a href="#liability-en">9. Limitation of liability</a></li>
+                        <li><a href="#payment-en">10. Payment and notice</a></li>
+                        <li><a href="#changes-en">11. Changes to these terms</a></li>
+                        <li><a href="#contact-en">12. Contact</a></li>
+                    </ol>
+                </nav>
 
                 <p>
                     These terms are the agreement between you and ElAmir Mansour, who operates
@@ -1079,7 +1163,7 @@
                     </p>
                 </div>
 
-                <h2>1. Accepting these terms</h2>
+                <h2 id="acceptance-en">1. Accepting these terms</h2>
                 <p>
                     By connecting an account to AutoReply Pro or using its dashboard, you agree to
                     these terms. If you do not agree, do not connect an account; if you already
@@ -1087,7 +1171,7 @@
                     business, you confirm that you are allowed to accept these terms for it.
                 </p>
 
-                <h2>2. What the service does</h2>
+                <h2 id="service-en">2. What the service does</h2>
                 <ul>
                     <li>
                         <strong>Connects your accounts:</strong> Instagram and Facebook through
@@ -1121,7 +1205,7 @@
                     posts it sent. Features may change, be added, or be removed over time.
                 </p>
 
-                <h2>3. Connecting your accounts, and what you authorise</h2>
+                <h2 id="connecting-en">3. Connecting your accounts, and what you authorise</h2>
                 <p>
                     Instagram and Facebook are connected with an access token Meta issues for
                     your Page; TikTok is connected by signing in on TikTok's own page. Either way,
@@ -1152,7 +1236,7 @@
                 </p>
                 <p>You confirm that the accounts you connect are yours, or that their owner has authorised you to connect them.</p>
 
-                <h2>4. Your responsibilities</h2>
+                <h2 id="responsibilities-en">4. Your responsibilities</h2>
                 <p>You are responsible for:</p>
                 <ul>
                     <li>
@@ -1191,7 +1275,7 @@
                     </li>
                 </ul>
 
-                <h2>5. Acceptable use</h2>
+                <h2 id="acceptable-use-en">5. Acceptable use</h2>
                 <p>Do not use AutoReply Pro to:</p>
                 <ul>
                     <li>
@@ -1220,7 +1304,7 @@
                     platform tells us is breaking theirs.
                 </p>
 
-                <h2>6. Third-party platforms: no guarantee</h2>
+                <h2 id="platforms-en">6. Third-party platforms: no guarantee</h2>
                 <p>
                     AutoReply Pro depends entirely on Meta's and TikTok's APIs, which we do not
                     control. They can change, slow down, fail, require a new review, or withdraw
@@ -1240,7 +1324,7 @@
                     owners.
                 </p>
 
-                <h2>7. Disconnecting and revoking access</h2>
+                <h2 id="disconnecting-en">7. Disconnecting and revoking access</h2>
                 <p>You can stop the service acting for you at any time, without giving a reason.</p>
                 <ul>
                     <li>
@@ -1254,7 +1338,7 @@
                         <strong>Instagram and Facebook:</strong> remove the app from Business
                         integrations in your Facebook settings, which invalidates the access token
                         the service holds; or ask us to remove the account, using the contact route
-                        in section 11.
+                        in <a href="#contact-en">section 12</a>.
                     </li>
                 </ul>
                 <p>
@@ -1263,7 +1347,7 @@
                     delete it there.
                 </p>
 
-                <h2>8. Your data</h2>
+                <h2 id="data-en">8. Your data</h2>
                 <p>
                     What the service stores, why, and for how long is in the
                     <a href="/privacy">privacy policy</a>. How to delete it — including your
@@ -1272,7 +1356,7 @@
                 </p>
                 <p>We do not sell your data, or the data of the people who message you.</p>
 
-                <h2>9. Limitation of liability</h2>
+                <h2 id="liability-en">9. Limitation of liability</h2>
                 <p>
                     The service is provided "as is" and "as available", without warranties of any
                     kind, to the extent the law allows. We do not promise that it will run without
@@ -1289,23 +1373,32 @@
                 </p>
                 <p>Nothing in these terms limits a right that the law says cannot be limited.</p>
 
-                <h2>10. Changes to these terms</h2>
+                <h2 id="payment-en">10. Payment and notice</h2>
+                <p>
+                    This is a managed service, with no subscription paid through a page on this
+                    site: billing is arranged directly between us, and the price, how it is paid,
+                    and the notice period for ending it are agreed in writing before the service
+                    starts. Where that written agreement differs from these terms, the written
+                    agreement prevails.
+                </p>
+
+                <h2 id="changes-en">11. Changes to these terms</h2>
                 <p>
                     If these terms change, this page is updated and the "last updated" date at the
                     top changes with it. Continuing to use the service after that means you accept
                     the new version; if you do not, disconnect your accounts (section 7).
                 </p>
 
-                <h2>11. Contact</h2>
+                <h2 id="contact-en">12. Contact</h2>
                 <p>
                     For any question about these terms, email ElAmir Mansour at
-                    <a href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>, or open
+                    <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>, or open
                     an issue on the
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">project's public issue tracker</a>
                     — it is public, so do not put personal information or account details in it.
                 </p>
                 <!-- OWNER, NOT FOR PUBLICATION: see the matching note at the end of the
-                     Arabic section 11. No governing law, jurisdiction or venue is stated,
+                     Arabic section 12. No governing law, jurisdiction or venue is stated,
                      because the country whose law applies has not been supplied. -->
             </article>
 
@@ -1385,7 +1478,8 @@
                 </div>
                 <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
                     <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
-                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a class="foot-wa" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">تواصل عبر واتساب</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Chat on WhatsApp</bdi></a>
+                    <a class="foot-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
                 </div>
             </div>
@@ -1416,7 +1510,9 @@
             var root = document.documentElement;
             var buttons = document.querySelectorAll('[data-set-lang]');
 
-            function apply(lang) {
+            /* `remember` only for a click: arriving on a ?lang=en link is
+               not a choice to make English stick on the next visit. */
+            function apply(lang, remember) {
                 root.setAttribute('data-lang', lang);
                 root.lang = lang;
                 root.dir = lang === 'ar' ? 'rtl' : 'ltr';
@@ -1426,17 +1522,27 @@
                         buttons[i].getAttribute('data-set-lang') === lang ? 'true' : 'false'
                     );
                 }
+                if (!remember) return;
                 try { localStorage.setItem('dashboard_lang', lang); } catch (e) { /* private mode */ }
+                /* A ?lang= in the address outranks the stored choice, so it
+                   follows the click — or a reload would undo it. */
+                try {
+                    var url = new URL(location.href);
+                    if (url.searchParams.has('lang')) {
+                        url.searchParams.set('lang', lang);
+                        history.replaceState(history.state, '', url.toString());
+                    }
+                } catch (e) { /* file:// or no URL API */ }
             }
 
             for (var i = 0; i < buttons.length; i++) {
                 buttons[i].addEventListener('click', function () {
-                    apply(this.getAttribute('data-set-lang'));
+                    apply(this.getAttribute('data-set-lang'), true);
                 });
             }
 
             /* The head script already chose; reflect it on the buttons. */
-            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar', false);
         })();
     </script>
 </body>

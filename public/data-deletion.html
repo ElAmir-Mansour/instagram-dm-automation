@@ -100,7 +100,7 @@
       generate.ts:242-262).
 
   OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
-    · Contact email for deletion requests: elamirmansour@outlook.com —
+    · Contact email for deletion requests: the contact email in Settings → Public site —
       section 2 (the first route) and section 8, both languages.
     · Operator: ElAmir Mansour — section 8.
     · Nothing on this page states a legal basis or a jurisdiction: none has
@@ -115,19 +115,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="color-scheme" content="dark light">
     <title>حذف البيانات · Data Deletion — AutoReply Pro</title>
-    <meta name="description" content="كيف تطلب حذف بياناتك من «أوتوريبلاي برو»، وما يُحذف فعلاً وما لا يُحذف — How to have your data deleted, and the limits of what deletion can reach.">
+    <meta name="description" data-lang-only="ar" content="كيف تطلب حذف بياناتك من «أوتوريبلاي برو»، وما يُحذف فعلاً وما لا يُحذف.">
+    <meta name="description" data-lang-only="en" content="How to have your data deleted from AutoReply Pro, and the limits of what deletion can reach.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
-    <link rel="canonical" href="https://msg-response-auto.vercel.app/data-deletion">
+    <link rel="canonical" href="https://msg-response-auto.vercel.app/data-deletion{{LANG_QUERY}}">
+    <link rel="alternate" hreflang="ar" href="https://msg-response-auto.vercel.app/data-deletion">
+    <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/data-deletion?lang=en">
+    <link rel="alternate" hreflang="x-default" href="https://msg-response-auto.vercel.app/data-deletion">
     <meta property="og:title" content="حذف البيانات · Data Deletion — AutoReply Pro">
-    <meta property="og:description" content="كيف تطلب حذف بياناتك من «أوتوريبلاي برو»، وما يُحذف فعلاً وما لا يُحذف — How to have your data deleted, and the limits of what deletion can reach.">
+    <meta property="og:description" data-lang-only="ar" content="كيف تطلب حذف بياناتك من «أوتوريبلاي برو»، وما يُحذف فعلاً وما لا يُحذف.">
+    <meta property="og:description" data-lang-only="en" content="How to have your data deleted from AutoReply Pro, and the limits of what deletion can reach.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://msg-response-auto.vercel.app/data-deletion">
+    <meta property="og:url" content="https://msg-response-auto.vercel.app/data-deletion{{LANG_QUERY}}">
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
-    <meta property="og:locale" content="ar_SA">
-    <meta property="og:locale:alternate" content="en_US">
+    <meta property="og:locale" data-lang-only="ar" content="ar_SA">
+    <meta property="og:locale:alternate" data-lang-only="ar" content="en_US">
+    <meta property="og:locale" data-lang-only="en" content="en_US">
+    <meta property="og:locale:alternate" data-lang-only="en" content="ar_SA">
 
 
     <!-- The app's own tokens — the same file the dashboard and eid.html load.
@@ -770,24 +777,29 @@
             .headnav a { padding-inline: var(--space-1); }
             .langswitch { gap: 1px; padding: 2px; }
             .langswitch button { min-width: 0; padding-inline: var(--space-2); }
+            /* Contact made the bar three links. The width it needs comes from
+               the bar's own language switch, which keeps only the language
+               you can switch TO: the pressed one names what is already on
+               screen. The footer's switch keeps both. With JavaScript off
+               nothing is pressed, so both still show. */
+            .topbar .langswitch button[aria-pressed='true'] { display: none; }
         }
     </style>
 
     <script>
         (function () {
+            /* ?lang= first (a shared or hreflang link names its language),
+               then the stored choice, then Arabic. No browser-locale guess on
+               the public pages: it handed an English-locale visitor — and a
+               crawler — English on an Arabic-first site (PB4). The dashboard
+               still guesses; it is a tool, not a front door. */
             var lang = null;
-            try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
+            try { lang = new URLSearchParams(location.search).get('lang'); } catch (e) { /* no URLSearchParams */ }
             if (lang !== 'ar' && lang !== 'en') {
                 lang = null;
-                try {
-                    var prefs = navigator.languages || [navigator.language || ''];
-                    for (var i = 0; i < prefs.length; i++) {
-                        var code = String(prefs[i] || '').toLowerCase().split('-')[0];
-                        if (code === 'ar' || code === 'en') { lang = code; break; }
-                    }
-                } catch (e) { /* no navigator language information */ }
+                try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
             }
-            lang = lang || 'ar';
+            if (lang !== 'ar' && lang !== 'en') lang = 'ar';
             var root = document.documentElement;
             root.setAttribute('data-lang', lang);
             root.lang = lang;
@@ -838,6 +850,7 @@
             <div class="headtools">
                 <nav class="headnav" aria-label="روابط الموقع · Site">
                     <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <a href="/#contact"><bdi class="t-ar" lang="ar">تواصل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></a>
                     <!-- "الدخول" rather than "تسجيل الدخول": the bar has to hold
                          a wordmark, two links and a language switch inside
                          375px, and the footer carries the full "لوحة التحكم"
@@ -901,7 +914,7 @@
                 <ol class="steps">
                     <li>
                         اختر أي طريق من الثلاثة: <strong>راسلنا</strong> على
-                        <a href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>؛
+                        <a href="mailto:{{CONTACT_EMAIL}}"><bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>؛
                         أو <strong>ردّ على الحساب نفسه</strong> الذي راسلك على إنستجرام أو فيسبوك
                         واطلب حذف بياناتك؛ أو افتح موضوعاً على
                         <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني للمشروع</a>.
@@ -1067,7 +1080,7 @@
                     يُشغّل «أوتوريبلاي برو» الأمير منصور (<bdi lang="en" dir="ltr">ElAmir Mansour</bdi>)،
                     وهو مَن يتلقّى طلبات الحذف وينفّذها. للسؤال عن طلب حذف قائم، أو عن أي شيء في هذه
                     الصفحة، راسله على
-                    <a href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>،
+                    <a href="mailto:{{CONTACT_EMAIL}}"><bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>،
                     أو استخدم أحد الطريقين الآخرين في القسم 2.
                 </p>
             </article>
@@ -1127,7 +1140,7 @@
                 <ol class="steps">
                     <li>
                         Pick any of three routes: <strong>email</strong>
-                        <a href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>;
+                        <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>;
                         <strong>reply to the same account</strong> that messaged you on Instagram or
                         Facebook and ask for your data to be deleted; or open an issue on the
                         <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">project's public issue tracker</a>.
@@ -1308,7 +1321,7 @@
                     AutoReply Pro is operated by ElAmir Mansour, who receives and carries out
                     deletion requests. To ask about a deletion request already made, or about
                     anything on this page, email
-                    <a href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>, or use
+                    <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>, or use
                     either of the other routes in section 2.
                 </p>
             </article>
@@ -1389,7 +1402,8 @@
                 </div>
                 <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
                     <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
-                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a class="foot-wa" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">تواصل عبر واتساب</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Chat on WhatsApp</bdi></a>
+                    <a class="foot-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
                 </div>
             </div>
@@ -1417,7 +1431,9 @@
             var root = document.documentElement;
             var buttons = document.querySelectorAll('[data-set-lang]');
 
-            function apply(lang) {
+            /* `remember` only for a click: arriving on a ?lang=en link is
+               not a choice to make English stick on the next visit. */
+            function apply(lang, remember) {
                 root.setAttribute('data-lang', lang);
                 root.lang = lang;
                 root.dir = lang === 'ar' ? 'rtl' : 'ltr';
@@ -1427,16 +1443,26 @@
                         buttons[i].getAttribute('data-set-lang') === lang ? 'true' : 'false'
                     );
                 }
+                if (!remember) return;
                 try { localStorage.setItem('dashboard_lang', lang); } catch (e) { /* private mode */ }
+                /* A ?lang= in the address outranks the stored choice, so it
+                   follows the click — or a reload would undo it. */
+                try {
+                    var url = new URL(location.href);
+                    if (url.searchParams.has('lang')) {
+                        url.searchParams.set('lang', lang);
+                        history.replaceState(history.state, '', url.toString());
+                    }
+                } catch (e) { /* file:// or no URL API */ }
             }
 
             for (var i = 0; i < buttons.length; i++) {
                 buttons[i].addEventListener('click', function () {
-                    apply(this.getAttribute('data-set-lang'));
+                    apply(this.getAttribute('data-set-lang'), true);
                 });
             }
 
-            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar', false);
         })();
     </script>
 </body>

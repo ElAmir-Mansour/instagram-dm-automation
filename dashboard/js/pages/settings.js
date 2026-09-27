@@ -1,6 +1,6 @@
 /**
- * Settings — access token, webhook verify token, TikTok, media storage,
- * account info, appearance.
+ * Settings — access token, webhook verify token, account info, TikTok, media
+ * storage, public site, appearance.
  *
  * Every credential shown here is a Latin string sitting inside Arabic prose,
  * which is exactly where bidi goes wrong: an unisolated token preview drags
@@ -13,7 +13,27 @@ const SettingsPage = {
         'instagram_manage_comments',
         'instagram_manage_messages',
         'instagram_content_publish',
+        // Growth reads insights with these two (src/services/growth/common.ts);
+        // without them the Growth screen reports numbers as missing.
+        'instagram_manage_insights',
+        'read_insights',
     ],
+
+    /** The scopes above that only the Growth screen needs, tagged «للنمو». */
+    GROWTH_SCOPES: ['instagram_manage_insights', 'read_insights'],
+
+    /**
+     * `t(key, params)` with ONE value isolated as Latin text, and the rest of
+     * the sentence left to flow in the page's direction. `UI.ltr()` around the
+     * whole translated sentence isolated the Arabic words too, so the sentence's
+     * own punctuation landed at the wrong end.
+     */
+    ltrIn(key, params, name) {
+        const MARK = '\u0000';
+        const parts = t(key, Object.assign({}, params, { [name]: MARK })).split(MARK);
+        if (parts.length !== 2) return t(key, params);
+        return html`${parts[0]}${UI.ltr(params[name])}${parts[1]}`;
+    },
 
     /**
      * Guards the write against landing after the operator has navigated away.
@@ -76,14 +96,20 @@ const SettingsPage = {
         // Media storage too — platform admins only, and isolated like the rest.
         let media = null;
         let mediaError = null;
-        const [tt, ttApp, ms] = await Promise.allSettled([
+        // The public site's contact channels: one set for the deployment, so
+        // platform admins only, and isolated for the same reason.
+        let site = null;
+        let siteError = null;
+        const [tt, ttApp, ms, st] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
+            App.isAdmin() ? API.getSiteSettings() : Promise.resolve(null),
         ]);
         if (tt.status === 'fulfilled') tiktok = tt.value; else tiktokError = tt.reason;
         if (ttApp.status === 'fulfilled') tiktokApp = ttApp.value; else tiktokAppError = ttApp.reason;
         if (ms.status === 'fulfilled') media = ms.value; else mediaError = ms.reason;
+        if (st.status === 'fulfilled') site = st.value; else siteError = st.reason;
 
         if (!live()) return;
         gate.done();
@@ -105,6 +131,7 @@ const SettingsPage = {
         const missingScopes = isValid && Array.isArray(tokenStatus.scopes)
             ? this.REQUIRED_SCOPES.filter((scope) => !tokenStatus.scopes.includes(scope))
             : [];
+        const webhookUrl = (webhookToken && webhookToken.webhookUrl) || `${location.origin}/webhook`;
 
         // When the fetch failed we do not know whether the token is set in the
         // environment, and the sentence that says so was being rendered with a
@@ -120,9 +147,9 @@ const SettingsPage = {
                             <h3 class="warning-card-title">${t('settings.missingScopesTitle')}</h3>
                             <p class="mbe-3">${t('settings.missingScopesBody')}</p>
                             <ul class="warning-card-list">
-                                ${missingScopes.map((s) => html`<li>${t('settings.scopeRequired', {
+                                ${missingScopes.map((s) => html`<li>${this.ltrIn('settings.scopeRequired', {
                                     name: s, desc: t(`settings.scope.${s}`),
-                                })}</li>`)}
+                                }, 'name')}${this.GROWTH_SCOPES.includes(s) ? html` <span class="badge badge-info">${t('settings.scopeForGrowth')}</span>` : ''}</li>`)}
                             </ul>
                         </div>
                     </div>
@@ -233,12 +260,37 @@ const SettingsPage = {
                                 ${webhookToken.configuredInDatabase ? t('settings.webhookConfigured') : t('settings.webhookNotSet')}
                             </span>
                             ${webhookToken.configuredInDatabase ? html`
-                                <span class="text-meta">${UI.ltr(t('settings.webhookPreview', {
+                                <span class="text-meta">${this.ltrIn('settings.webhookPreview', {
                                     preview: webhookToken.preview, count: Number(webhookToken.length) || 0,
-                                }))}</span>
+                                }, 'preview')}</span>
                             ` : ''}
                         </div>
                     `}
+
+                    <!-- The address Meta calls, beside the token Meta checks it
+                         with: the two values pasted into the same Meta form. It
+                         used to sit three sections down, under TikTok. -->
+                    <div class="settings-copy-row mbe-4">
+                        <span class="form-label">${t('settings.webhookUrl')}</span>
+                        <code dir="ltr">${UI.ltr(webhookUrl)}</code>
+                        ${UI.button({
+                            variant: 'ghost', size: 'sm', icon: 'copy',
+                            ariaLabel: t('setup.copyUrl'), title: t('setup.copyUrl'),
+                            action: 'app:copyValue', data: { copy: webhookUrl },
+                        })}
+                    </div>
+
+                    ${canAdmin && webhookToken && webhookToken.configuredInDatabase ? html`
+                        <div class="row row--wrap gap-3 mbe-2">
+                            ${UI.button({
+                                variant: 'secondary', size: 'sm', icon: 'plug-zap',
+                                label: t('settings.webhookTest'),
+                                action: 'settings:testWebhook', id: 'settings-webhook-test',
+                            })}
+                            <span class="form-hint">${t('settings.webhookTestHint')}</span>
+                        </div>
+                        <div id="settings-webhook-test-result" class="mbe-4" aria-live="polite"></div>
+                    ` : ''}
 
                     <p class="form-hint">${t('settings.webhookBody')} ${UI.helpLink('connect-meta#where', t('help.link.connectMetaWhere'), { newTab: true })}</p>
                     <p class="form-hint mbe-4">${t('settings.webhookBody2')}</p>
@@ -263,10 +315,9 @@ const SettingsPage = {
                 </div>
             </section>
 
-            ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
-
-            ${App.isAdmin() ? this.mediaStorageSection(media, mediaError) : ''}
-
+            <!-- Right after the webhook: the page ids are what Meta's
+                 subscription screens ask about next. The webhook URL moved up
+                 into the webhook section, beside its copy button. -->
             <section class="section">
                 <h2 class="section-title">${t('settings.accountInfo')}</h2>
                 <div class="settings-card surface stack gap-2">
@@ -277,9 +328,15 @@ const SettingsPage = {
                             ${tokenStatus.isActive ? t('settings.statusActive') : t('settings.statusInactive')}
                         </strong>
                     </p>
-                    <p class="token-info">${t('settings.webhookUrl')}: <strong>${UI.ltr((webhookToken && webhookToken.webhookUrl) || `${location.origin}/webhook`)}</strong></p>
                 </div>
             </section>
+
+            ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
+
+            ${App.isAdmin() ? this.mediaStorageSection(media, mediaError) : ''}
+
+            ${App.isAdmin() ? this.siteSection(site, siteError) : ''}
+
 
             <section class="section">
                 <h2 class="section-title">${t('settings.appearance')}</h2>
@@ -447,7 +504,7 @@ const SettingsPage = {
                 <div class="settings-card surface">
                     <p class="form-hint mbe-4">${this.tiktokIntro(c)} ${UI.helpLink('tiktok', t('help.link.tiktok'), { className: 'settings-tiktok-help' })}</p>
                     ${body}
-                    ${isAdmin ? this.tiktokAppBlock(tiktokApp, tiktokAppError, !!(tiktok && tiktok.appConfigured)) : ''}
+                    ${isAdmin ? this.tiktokAppBlock(tiktokApp, tiktokAppError, !!(tiktok && tiktok.appConfigured), connected || needsReconnect) : ''}
                 </div>
             </section>
         `;
@@ -479,7 +536,7 @@ const SettingsPage = {
      * platform admins only. Open by default until the app is configured, since
      * until then it is the only thing in the section that does anything.
      */
-    tiktokAppBlock(app, error, configured) {
+    tiktokAppBlock(app, error, configured, accountConnected) {
         if (error) {
             return html`<p class="form-hint text-warning" dir="auto">${t('settings.tiktok.app.loadFailed', { message: error.message })}</p>`;
         }
@@ -564,6 +621,10 @@ const SettingsPage = {
                         <div class="stack gap-3">
                             <div class="check-row">
                                 <input type="checkbox" id="tiktok-direct-enabled" name="directPostEnabled"
+                                       data-change="settings:previewDirectPost"
+                                       data-saved="${app.directPostEnabled === true ? 'on' : 'off'}"
+                                       data-connected="${accountConnected ? 'yes' : 'no'}"
+                                       aria-describedby="tiktok-direct-consequence"
                                        ${app.directPostEnabled === true ? html.raw('checked') : ''}>
                                 <span class="check-text">
                                     <label class="check-label" for="tiktok-direct-enabled">${t('settings.tiktok.app.directPostEnabled')}</label>
@@ -577,6 +638,9 @@ const SettingsPage = {
                                 </span>
                             </div>
                         </div>
+                        <!-- What saving THIS change will do, before it is saved.
+                             Empty until the switch moves away from what is saved. -->
+                        <p class="form-hint text-warning" id="tiktok-direct-consequence" aria-live="polite"></p>
                         <p class="form-hint">${t('settings.tiktok.app.directPostHint')}</p>
                     </fieldset>
                     <div class="form-actions">
@@ -695,6 +759,226 @@ const SettingsPage = {
                 </div>
             </form>
         `;
+    },
+
+    /**
+     * SE9: the Direct Post switch's consequence, live. Switching it on while an
+     * account is connected means that account must reconnect to grant
+     * `video.publish`; switching it off sends posts back to drafts at once.
+     */
+    previewDirectPost(box) {
+        const out = document.getElementById('tiktok-direct-consequence');
+        if (!out || !box) return;
+        const wasOn = box.dataset.saved === 'on';
+        const connected = box.dataset.connected === 'yes';
+        let text = '';
+        if (box.checked && !wasOn && connected) text = t('settings.tiktok.app.reconnectAfterSave');
+        else if (!box.checked && wasOn) text = t('settings.tiktok.app.draftsAfterSave');
+        out.textContent = text;
+    },
+
+    // ─── Webhook handshake ──────────────────────────────────────────────────
+    /** Every reason the check route can answer with; anything else reads as unexpected. */
+    HANDSHAKE_REASONS: ['ok', 'no_token', 'no_base_url', 'rejected', 'mismatch', 'unexpected', 'unreachable'],
+
+    handshakeResult(r) {
+        const result = r || {};
+        const reason = this.HANDSHAKE_REASONS.includes(result.reason) ? result.reason : 'unexpected';
+        const where = result.url ? this.ltrIn('settings.webhookTest.checked', { url: result.url }, 'url') : '';
+        if (result.ok) {
+            return html`
+                <span class="health-pill health-fresh">
+                    <i data-lucide="check-circle" aria-hidden="true"></i>
+                    ${t('settings.webhookTest.ok')}
+                </span>
+                ${where ? html`<p class="form-hint">${where}</p>` : ''}
+            `;
+        }
+        const status = Number.isFinite(Number(result.status)) && result.status !== null ? Number(result.status) : '';
+        return UI.errorStrip(t(`settings.webhookTest.${reason}`, { status }), where, 'settings-webhook-test-strip');
+    },
+
+    /** «اختبر التحقق»: the server performs Meta's GET against the public webhook URL. */
+    async testWebhook(btn) {
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        const host = document.getElementById('settings-webhook-test-result');
+        if (host) host.innerHTML = '';
+        try {
+            const result = await API.checkWebhookHandshake();
+            if (host) { host.innerHTML = esc(this.handshakeResult(result)); UI.icons(host); }
+        } catch (err) {
+            if (host) {
+                host.innerHTML = esc(UI.errorStrip(t('settings.webhookTest.requestFailed'), (err && err.message) || '', 'settings-webhook-test-strip'));
+                UI.icons(host);
+            }
+        } finally {
+            restore();
+        }
+    },
+
+    // ─── Public site ────────────────────────────────────────────────────────
+    /**
+     * The digits wa.me wants, exactly as the server normalises them
+     * (src/services/appSettings.ts normaliseWhatsappNumber): Arabic-Indic
+     * digits become Latin, spaces/dashes/brackets/dots go, a leading `+` or
+     * `00` goes. '' when nothing is left; null when what is left is not a phone
+     * number.
+     */
+    normaliseWhatsapp(value) {
+        let digits = String(value || '')
+            .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+            .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+            .replace(/[\s\-().]/g, '');
+        if (!digits) return '';
+        if (digits.startsWith('+')) digits = digits.slice(1);
+        else if (digits.startsWith('00')) digits = digits.slice(2);
+        return /^[1-9][0-9]{7,14}$/.test(digits) ? digits : null;
+    },
+
+    /** The line under the number field: the link the site will print, or why there is none. */
+    whatsappPreview(value, fallback) {
+        const typed = this.normaliseWhatsapp(value);
+        if (typed === null) return html`<span class="text-warning">${t('settings.site.whatsappInvalid')}</span>`;
+        const digits = typed || this.normaliseWhatsapp(fallback) || '';
+        if (!digits) return t('settings.site.whatsappNone');
+        const url = `https://wa.me/${digits}`;
+        return html`${t('settings.site.whatsappPreview')} <a href="${url}" target="_blank" rel="noopener noreferrer">${UI.ltr(`wa.me/${digits}`)}</a>`;
+    },
+
+    previewWhatsapp(input) {
+        const out = document.getElementById('site-whatsapp-preview');
+        if (!out || !input) return;
+        out.innerHTML = esc(this.whatsappPreview(input.value, input.dataset.fallback || ''));
+    },
+
+    /** Where a value comes from, when it is not saved here: the note under its field. */
+    siteSourceNote(kind, value, source) {
+        if (!value || source === 'database') return '';
+        const key = source === 'default' ? `settings.site.${kind}FromDefault` : `settings.site.${kind}FromFallback`;
+        return html`<p class="form-hint">${this.ltrIn(key, { value }, 'value')}</p>`;
+    },
+
+    siteSection(site, error) {
+        if (error) {
+            return html`
+                <section class="section">
+                    <h2 class="section-title">${t('settings.site.title')}</h2>
+                    <div class="settings-card surface">
+                        <div class="inline-error" role="alert">
+                            <i data-lucide="alert-circle" aria-hidden="true"></i>
+                            <div><strong dir="auto">${t('settings.site.loadFailed', { message: error.message })}</strong></div>
+                        </div>
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render',
+                        })}
+                    </div>
+                </section>
+            `;
+        }
+        if (!site) return '';
+        const src = site.source || {};
+        const saved = (field) => (src[field] === 'database' && site[field]) || '';
+        const fallbackNumber = src.whatsappNumber && src.whatsappNumber !== 'database' ? (site.whatsappNumber || '') : '';
+        const fallbackEmail = src.contactEmail && src.contactEmail !== 'database' ? (site.contactEmail || '') : '';
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.site.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.site.intro')}</p>
+                    <div id="site-settings-error"></div>
+                    <form id="site-settings-form" data-submit="settings:saveSiteSettings" novalidate>
+                        <div class="form-group">
+                            <label class="form-label" for="site-whatsapp">${t('settings.site.whatsapp')}</label>
+                            <input class="field field-mono" id="site-whatsapp" name="whatsappNumber" type="tel" dir="ltr"
+                                   inputmode="tel" autocomplete="off" spellcheck="false"
+                                   placeholder="${fallbackNumber || '9665XXXXXXXX'}"
+                                   value="${saved('whatsappNumber')}" data-fallback="${fallbackNumber}"
+                                   data-input="settings:previewWhatsapp"
+                                   aria-describedby="site-whatsapp-hint site-whatsapp-preview">
+                            <p class="form-hint" id="site-whatsapp-hint">${t('settings.site.whatsappHint')}</p>
+                            <p class="form-hint" id="site-whatsapp-preview" aria-live="polite">${this.whatsappPreview(saved('whatsappNumber'), fallbackNumber)}</p>
+                            ${this.siteSourceNote('whatsapp', fallbackNumber, src.whatsappNumber)}
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="site-email">${t('settings.site.email')}</label>
+                            <input class="field field-mono" id="site-email" name="contactEmail" type="email" dir="ltr"
+                                   autocomplete="off" spellcheck="false" autocapitalize="off"
+                                   placeholder="${fallbackEmail || 'name@example.com'}"
+                                   value="${saved('contactEmail')}">
+                            ${this.siteSourceNote('email', fallbackEmail, src.contactEmail)}
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="site-eid">
+                                ${t('settings.site.eidExpire')} <span class="label-optional">${t('common.optional')}</span>
+                            </label>
+                            <input class="field" id="site-eid" name="eidCouponsExpire" type="date" dir="ltr"
+                                   value="${saved('eidCouponsExpire')}" aria-describedby="site-eid-hint">
+                            <p class="form-hint" id="site-eid-hint">${t('settings.site.eidHint')}</p>
+                            ${this.siteSourceNote('eid', src.eidCouponsExpire !== 'database' ? site.eidCouponsExpire : '', src.eidCouponsExpire)}
+                        </div>
+                        <p class="form-hint">${t('settings.site.delayHint')}</p>
+                        <div class="form-actions">
+                            ${UI.button({
+                                variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
+                                label: t('settings.site.save'), id: 'site-settings-submit',
+                            })}
+                        </div>
+                    </form>
+                </div>
+            </section>
+        `;
+    },
+
+    /** The field each input maps to, for marking the one a refusal names. */
+    SITE_FIELDS: { whatsappNumber: 'site-whatsapp', contactEmail: 'site-email', eidCouponsExpire: 'site-eid' },
+
+    showSiteError(field, message) {
+        const host = document.getElementById('site-settings-error');
+        const form = document.getElementById('site-settings-form');
+        if (form) UI.clearInvalid(form);
+        if (!host) { UI.toast(message, 'error'); return; }
+        const stripId = 'site-settings-error-strip';
+        host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+        UI.icons(host);
+        const input = field && this.SITE_FIELDS[field] ? document.getElementById(this.SITE_FIELDS[field]) : null;
+        if (input) UI.markInvalid(input, stripId);
+        else if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
+    },
+
+    async saveSiteSettings(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const read = (name) => (data.get(name) || '').toString().trim();
+        const whatsapp = this.normaliseWhatsapp(read('whatsappNumber'));
+        const email = read('contactEmail');
+        const host = document.getElementById('site-settings-error');
+        if (host) host.innerHTML = '';
+        UI.clearInvalid(form);
+
+        // Checked here first so the answer is in Arabic and on the field; the
+        // server checks again and has the last word.
+        if (whatsapp === null) { this.showSiteError('whatsappNumber', t('settings.site.invalid.whatsappNumber')); return; }
+        if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) { this.showSiteError('contactEmail', t('settings.site.invalid.contactEmail')); return; }
+
+        // All three are always sent: an emptied field is a real "clear it",
+        // which hands the value back to its fallback.
+        const payload = { whatsappNumber: whatsapp, contactEmail: email, eidCouponsExpire: read('eidCouponsExpire') };
+
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveSiteSettings(payload);
+            UI.toast(t('settings.site.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            const field = err && err.body && err.body.field;
+            const known = field && this.SITE_FIELDS[field];
+            this.showSiteError(field, known ? t(`settings.site.invalid.${field}`) : ((err && err.message) || t('error.unexpected')));
+        }
     },
 
     async saveMediaStorage(form, event) {
@@ -923,4 +1207,8 @@ UI.registerActions('settings', {
     saveTikTokApp: (el, e) => SettingsPage.saveTikTokApp(el, e),
     saveMediaStorage: (el, e) => SettingsPage.saveMediaStorage(el, e),
     removeMediaStorage: (el) => SettingsPage.removeMediaStorage(el),
+    testWebhook: (el) => SettingsPage.testWebhook(el),
+    previewDirectPost: (el) => SettingsPage.previewDirectPost(el),
+    previewWhatsapp: (el) => SettingsPage.previewWhatsapp(el),
+    saveSiteSettings: (el, e) => SettingsPage.saveSiteSettings(el, e),
 });
