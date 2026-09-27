@@ -160,7 +160,7 @@ const TenantsPage = {
                     ${isActive || !scheduled ? '' : html`
                         <p class="tenant-held-note">
                             <i data-lucide="pause" aria-hidden="true"></i>
-                            ${t('tenants.heldPosts', { count: UI.formatNumber(scheduled) })}
+                            ${t('tenants.heldPosts', { count: Number(scheduled) || 0 })}
                         </p>
                     `}
                     <div class="tenant-page-ids">

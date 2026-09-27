@@ -1284,7 +1284,7 @@ const StudioPage = {
             <div class="studio-setup" id="studio-setup">
                 <p class="studio-setup-title">${t('studio.setup.title')}</p>
                 <p class="form-hint">${t('studio.setup.intro')}</p>
-                <ol class="setup-steps">${folder}${workerStep}${libraryStep}</ol>
+                <ol class="studio-setup-steps">${folder}${workerStep}${libraryStep}</ol>
                 <p class="studio-setup-alt">
                     <span>${t('studio.setup.orIdea')}</span>
                     ${UI.button({ variant: 'ghost', size: 'sm', icon: 'lightbulb', label: t('studio.new.fromIdea'), action: 'studio:setMode', data: { mode: 'idea' }, id: 'studio-setup-idea' })}
@@ -3610,13 +3610,12 @@ const StudioPage = {
             </div>
             <div class="form-group switch-row">
                 <label class="switch" for="st-create">
-                    <span class="sr-only">${t('studio.campaign.create')}</span>
                     <input type="checkbox" id="st-create" data-change="studio:campaignToggle"
                            ${campaign.create ? html.raw('checked') : ''} ${ro ? html.raw('disabled') : ''} aria-describedby="st-create-hint">
                     <span class="switch-track"></span>
                 </label>
                 <span class="switch-text">
-                    <span class="switch-label">${t('studio.campaign.create')}</span>
+                    <label class="switch-label" for="st-create">${t('studio.campaign.create')}</label>
                     <span class="form-hint" id="st-create-hint">${t('studio.campaign.createHint')}</span>
                 </span>
             </div>
@@ -4718,6 +4717,20 @@ const StudioPage = {
 
     discard() {
         if (!this.draft) return;
+        // Deleting ONE slide had a 12s Undo; throwing away every unsaved edit had
+        // nothing. The editor is a page, not a modal, so Admin.confirm can sit on top.
+        Admin.confirm({
+            title: t('studio.editor.discardConfirmTitle'),
+            body: t('studio.editor.discardConfirmBody'),
+            hint: t('studio.editor.discardConfirmHint'),
+            confirmLabel: t('studio.editor.discard'),
+            confirmIcon: 'rotate-ccw',
+            onConfirm: () => StudioPage.discardConfirmed(),
+        });
+    },
+
+    discardConfirmed() {
+        if (!this.draft) return;
         this.forgetEdits();
         this.clearUndo();
         this.loadDraft({ draft: this.draft, lessons: this.draftLessons });
@@ -5762,6 +5775,17 @@ const StudioPage = {
     },
 
     discardSettings() {
+        Admin.confirm({
+            title: t('studio.editor.discardConfirmTitle'),
+            body: t('studio.settings.discardConfirmBody'),
+            hint: t('studio.editor.discardConfirmHint'),
+            confirmLabel: t('studio.editor.discard'),
+            confirmIcon: 'rotate-ccw',
+            onConfirm: () => StudioPage.discardSettingsConfirmed(),
+        });
+    },
+
+    discardSettingsConfirmed() {
         this.loadSettingsWork();
         this.paintSettingsPage();
         Motion.announce(t('studio.editor.discarded'));

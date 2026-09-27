@@ -64,7 +64,8 @@ const ratio = (a, b) => { const x = L(a), y = L(b); return (Math.max(x, y) + 0.0
 // white-on-accent-button, never on a content surface. `surface-scrim` is excluded as a text
 // surface: it is the modal backdrop (styles.css:910), nothing reads on top of it.
 const TEXT = ['text-strong', 'text-default', 'text-muted',
-              'accent-text', 'success-text', 'danger-text', 'warning-text', 'info-text'];
+              'accent-text', 'success-text', 'danger-text', 'warning-text', 'info-text',
+              'brand-instagram-text', 'brand-facebook-text'];
 /**
  * Surfaces text is painted on, as a COMPOSITE CHAIN down to the opaque canvas.
  *
@@ -89,7 +90,31 @@ const SURFACE_STACKS = [
     // The same tint directly on the canvas, which is where sidebar rows live.
     ['surface-glass', 'surface-page'],
     ['surface-glass-hover', 'surface-page'],
+    // The platform badge: a -soft tint on a card, or directly on the canvas. The label on
+    // it is the matching -text token and nothing else (see coOccurs below).
+    ['brand-instagram-soft', 'surface-raised', 'surface-page'],
+    ['brand-facebook-soft', 'surface-raised', 'surface-page'],
+    ['brand-instagram-soft', 'surface-page'],
+    ['brand-facebook-soft', 'surface-page'],
 ];
+
+/**
+ * Which text/stack pairs actually exist, for the one place the cartesian product lies.
+ *
+ * A platform label is painted only on its own tint (`.badge-instagram`, `.platform-tag.ig`
+ * and the Facebook pair, styles.css:987 and :1042), and nothing else is ever painted on
+ * that tint. So `--brand-instagram-text` is measured on the two Instagram stacks and on
+ * nothing else, and the general text tokens skip the tinted stacks. Left unscoped, the
+ * product reports `--text-muted on --brand-instagram-soft` at ~4.5:1 - a pair that does
+ * not exist, sitting exactly on the floor, which is the kind of failure that gets a guard
+ * switched off.
+ */
+const TINT_LABEL = { 'brand-instagram-soft': 'brand-instagram-text', 'brand-facebook-soft': 'brand-facebook-text' };
+const BRAND_TEXT = new Set(Object.values(TINT_LABEL));
+const coOccurs = (txt, stack) => {
+    const label = TINT_LABEL[stack[0]];
+    return label ? label === txt : !BRAND_TEXT.has(txt);
+};
 
 /** Flatten a stack to one opaque colour by compositing each layer over the one below. */
 function flatten(theme, stack) {
@@ -114,6 +139,7 @@ for (const name of Object.keys(THEMES)) {
         if (!fg4) { failures.push(`--${txt} (${name}) could not be resolved to a colour - the guard cannot measure it.`); continue; }
 
         for (const stack of SURFACE_STACKS) {
+            if (!coOccurs(txt, stack)) continue;
             const bg = flatten(t, stack);
             if (!bg) continue; // a surface this theme does not define
             // Text can itself be translucent; composite it onto the same ground.

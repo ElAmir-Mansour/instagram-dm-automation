@@ -108,6 +108,7 @@ const AiSettingsPage = {
                         <i data-lucide="bot" aria-hidden="true"></i>
                         <h3 aria-level="2">${t('ai.configTitle')}</h3>
                     </div>
+                    <p class="form-hint mbe-3">${UI.helpLink('ai-usage', t('help.link.aiUsage'), { newTab: true })}</p>
                     <div id="ai-settings-error"></div>
                     <form id="ai-settings-form" data-submit="ai:saveSettings">
                         <div class="toggle-block">
@@ -145,7 +146,7 @@ const AiSettingsPage = {
                             <span class="field-desc" id="knowledge-base-desc">${t('ai.knowledgeDesc')}</span>
                             <textarea id="knowledge-base-text" class="field-textarea user-content" dir="auto" lang="ar" rows="10"
                                       aria-describedby="knowledge-base-desc"
-                                      placeholder="${t('ai.knowledgePlaceholder')}" required></textarea>
+                                      placeholder="${t('ai.knowledgePlaceholder')}"></textarea>
                         </div>
 
                         <div class="form-grid">

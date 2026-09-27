@@ -10,8 +10,8 @@ comment, DM, publish, login or job actually takes, in order — see [`FLOWS.md`]
 final table indexes every point where a flow can silently do nothing.
 
 **Ground rule.** Two scripts are safe to run at any time and cannot write:
-`scripts/diagnose.mjs` and `scripts/watch.mjs` both hold a session with
-`default_transaction_read_only = on`, verified on connect, and neither prints a token,
+`scripts/diagnose.mjs` and `scripts/watch.mjs` run every query in its own
+`BEGIN READ ONLY … ROLLBACK`, checked inside the transaction, and neither prints a token,
 password or connection string (`scripts/diagnose.mjs:5-9`, `scripts/watch.mjs:15-18`).
 
 Two things are **never** "just a test", because both act on the live accounts:
@@ -783,7 +783,7 @@ The states a TikTok row moves through, and what moves it:
 | `FAILED` | `error_log` says why | **Publish now**, or edit and save |
 
 Every query in this section is a read-only `SELECT`: paste it into the Supabase SQL editor, or run
-it through the read-only session as in §2.1. Start with the last twenty TikTok rows:
+it through `connectReadOnly()` as in §2.1. Start with the last twenty TikTok rows:
 
 ```sql
 SELECT id, status, post_type, scheduled_time, attempts,

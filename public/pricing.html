@@ -73,9 +73,11 @@
       the in-product rows included on every tier, and differentiates on the
       three things that are real: accounts, people, and the work we do.
 
-  OWNER: THINGS ONLY YOU CAN SUPPLY — marked in the page with
-  [غير مُحدَّد بعد] / [not yet supplied] and listed again at the end of each
-  language section. Do not let them ship unfilled:
+  OWNER: THINGS ONLY YOU CAN SUPPLY. Until they are, every tier reads
+  «السعر بعرض بحسب الحساب — تواصل معنا» / "Priced per account — contact us" and
+  its button asks for a quote. (The amber placeholders and the visible
+  editorial checklist that used to mark them were removed on 2026-09-27; this
+  comment is now the only copy of the list.)
     1. The three prices, the currency, and the billing period.
     2. What a connected account beyond the tier's count costs on Agency.
     3. The response time you are willing to commit to, if any. The support
@@ -104,6 +106,18 @@
     <meta name="color-scheme" content="dark light">
     <title>الأسعار · Pricing — AutoReply Pro</title>
     <meta name="description" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية — AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="manifest" href="/site.webmanifest">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
+    <link rel="canonical" href="https://msg-response-auto.vercel.app/pricing">
+    <meta property="og:title" content="الأسعار · Pricing — AutoReply Pro">
+    <meta property="og:description" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية — AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://msg-response-auto.vercel.app/pricing">
+    <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
+    <meta property="og:locale" content="ar_SA">
+    <meta property="og:locale:alternate" content="en_US">
 
     <!-- One design system in this repo, not three. Same file the dashboard,
          /privacy and dashboard/eid.html load, so the sales page and the
@@ -112,7 +126,7 @@
          No webfont: --font-ui is the -apple-system stack, so nothing is
          downloaded. Keep this ?v= pinned to ASSET_VERSION in
          dashboard/js/app.js — scripts/check-asset-version.mjs enforces it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=8.1">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=9.1">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -321,22 +335,16 @@
             line-height: var(--lh-tight);
             margin: 0;
         }
-        .price .placeholder {
-            display: inline-block;
-            font-family: var(--font-mono);
+        /* No figure is published yet: every tier says it is priced per account
+           and points at the contact section. Plain muted text on purpose — a
+           quiet sentence, not a warning box. When a real price lands, put it in
+           this <p> as the strong figure and demote this line to a footnote. */
+        .price .quote {
+            display: block;
             font-size: var(--fs-300);
             font-weight: var(--fw-regular);
-            color: var(--warning-text);
-            background: var(--warning-soft);
-            border: 1px dashed var(--warning);
-            border-radius: var(--radius-sm);
-            padding: var(--space-1) var(--space-3);
-        }
-        .price .per {
-            display: block;
-            font-size: var(--fs-100);
-            font-weight: var(--fw-regular);
             color: var(--text-muted);
+            line-height: var(--lh-loose);
         }
 
         /* ─── The comparison matrix ────────────────────────────────────────────
@@ -482,21 +490,6 @@
             max-width: var(--measure);
         }
         .contact > :last-child { margin-bottom: 0; }
-
-        /* Placeholders the operator must fill. Marked to be impossible to miss
-           rather than quietly plausible — an invented price would be worse than
-           a visible gap. */
-        .todo {
-            padding: var(--space-4) var(--space-5);
-            margin: var(--space-6) 0 0;
-            border-radius: var(--radius-md);
-            border: 1px dashed var(--warning);
-            background: var(--warning-soft);
-            color: var(--text-default);
-            font-size: var(--fs-200);
-        }
-        .todo strong { color: var(--warning-text); }
-        .todo > :last-child { margin-bottom: 0; }
 
         .divider {
             height: 1px;
@@ -1112,8 +1105,7 @@
                         <h3 id="tier-starter-ar">البداية</h3>
                         <p class="who">لصاحب حساب واحد يبيع من خلاله.</p>
                         <p class="price">
-                            <span class="placeholder">[غير مُحدَّد بعد]</span>
-                            <span class="per">السعر والعملة ومدة الاشتراك يحددها مُشغّل الخدمة</span>
+                            <span class="quote">السعر بعرض بحسب الحساب — تواصل معنا</span>
                         </p>
                         <ul>
                             <li>حساب واحد مربوط (إنستجرام وصفحة فيسبوك المرتبطة به)</li>
@@ -1121,15 +1113,14 @@
                             <li>كل ميزات المنتج، بلا استثناء</li>
                             <li>الإعداد والربط بميتا نقوم به عنك</li>
                         </ul>
-                        <a class="cta" href="#contact-ar">تواصل معنا</a>
+                        <a class="cta" href="#contact-ar">اطلب عرض سعر</a>
                     </section>
 
                     <section class="tier" aria-labelledby="tier-growth-ar">
                         <h3 id="tier-growth-ar">النمو</h3>
                         <p class="who">لمَن يدير أكثر من علامة أو أكثر من فرع.</p>
                         <p class="price">
-                            <span class="placeholder">[غير مُحدَّد بعد]</span>
-                            <span class="per">السعر والعملة ومدة الاشتراك يحددها مُشغّل الخدمة</span>
+                            <span class="quote">السعر بعرض بحسب الحساب — تواصل معنا</span>
                         </p>
                         <ul>
                             <li>حتى ثلاثة حسابات مربوطة</li>
@@ -1137,15 +1128,14 @@
                             <li>كل ميزات المنتج، بلا استثناء</li>
                             <li>مراجعة دورية للحملات ولتوجيه الذكاء الاصطناعي معك</li>
                         </ul>
-                        <a class="cta" href="#contact-ar">تواصل معنا</a>
+                        <a class="cta" href="#contact-ar">اطلب عرض سعر</a>
                     </section>
 
                     <section class="tier" aria-labelledby="tier-agency-ar">
                         <h3 id="tier-agency-ar">الوكالات</h3>
                         <p class="who">لوكالة تدير حسابات عملائها.</p>
                         <p class="price">
-                            <span class="placeholder">[غير مُحدَّد بعد]</span>
-                            <span class="per">السعر الأساسي وسعر كل حساب إضافي يحددهما مُشغّل الخدمة</span>
+                            <span class="quote">السعر بعرض بحسب الحساب — تواصل معنا</span>
                         </p>
                         <ul>
                             <li>أكثر من ثلاثة حسابات، والسعر بحسب العدد</li>
@@ -1153,7 +1143,7 @@
                             <li>كل ميزات المنتج، بلا استثناء</li>
                             <li>تنفيذ طلبات حذف بيانات المتابعين نيابةً عنك</li>
                         </ul>
-                        <a class="cta" href="#contact-ar">تواصل معنا</a>
+                        <a class="cta" href="#contact-ar">اطلب عرض سعر</a>
                     </section>
                 </div>
 
@@ -1461,21 +1451,6 @@
                         </li>
                     </ul>
                 </div>
-
-                <div class="todo">
-                    <p><strong>ملاحظة تحريرية — على مُشغّل الخدمة إكمالها قبل النشر:</strong></p>
-                    <ul>
-                        <li>أسعار الباقات الثلاث، والعملة، ومدة الاشتراك.</li>
-                        <li>سعر الحساب الإضافي في باقة الوكالات.</li>
-                        <li>زمن الاستجابة الذي تقبل الالتزام به، إن أردت أن تَعِد بزمن. (قناة الدعم الآن هي البريد.)</li>
-                        <li>دورية «المراجعة الدورية»، ومدة الإشعار قبل الإلغاء.</li>
-                        <li>هل يُحتسب الإعداد الأولي بأجر منفصل؟ وما المدة المتوقعة للربط اليوم؟</li>
-                    </ul>
-                    <p>
-                        لم يُذكر في هذه الصفحة أي ضمان لزمن الاستجابة أو لنسبة التشغيل أو
-                        لتسليم الرسائل، لأن شيئاً من ذلك غير موجود في الكود ولا يصحّ اختراعه.
-                    </p>
-                </div>
             </article>
 
             <hr class="divider">
@@ -1508,8 +1483,7 @@
                         <h3 id="tier-starter-en">Starter</h3>
                         <p class="who">For one account you sell through.</p>
                         <p class="price">
-                            <span class="placeholder">[not yet supplied]</span>
-                            <span class="per">Price, currency and billing period are set by the operator</span>
+                            <span class="quote">Priced per account — contact us</span>
                         </p>
                         <ul>
                             <li>One connected account (Instagram plus its linked Facebook Page)</li>
@@ -1517,15 +1491,14 @@
                             <li>Every feature in the product, without exception</li>
                             <li>Setup and the Meta connection done for you</li>
                         </ul>
-                        <a class="cta" href="#contact-en">Get in touch</a>
+                        <a class="cta" href="#contact-en">Request a quote</a>
                     </section>
 
                     <section class="tier" aria-labelledby="tier-growth-en">
                         <h3 id="tier-growth-en">Growth</h3>
                         <p class="who">For more than one brand or branch.</p>
                         <p class="price">
-                            <span class="placeholder">[not yet supplied]</span>
-                            <span class="per">Price, currency and billing period are set by the operator</span>
+                            <span class="quote">Priced per account — contact us</span>
                         </p>
                         <ul>
                             <li>Up to three connected accounts</li>
@@ -1533,15 +1506,14 @@
                             <li>Every feature in the product, without exception</li>
                             <li>A regular review of your campaigns and AI instructions with you</li>
                         </ul>
-                        <a class="cta" href="#contact-en">Get in touch</a>
+                        <a class="cta" href="#contact-en">Request a quote</a>
                     </section>
 
                     <section class="tier" aria-labelledby="tier-agency-en">
                         <h3 id="tier-agency-en">Agency</h3>
                         <p class="who">For an agency running client accounts.</p>
                         <p class="price">
-                            <span class="placeholder">[not yet supplied]</span>
-                            <span class="per">Base price and per-extra-account price are set by the operator</span>
+                            <span class="quote">Priced per account — contact us</span>
                         </p>
                         <ul>
                             <li>More than three accounts, priced by how many</li>
@@ -1549,7 +1521,7 @@
                             <li>Every feature in the product, without exception</li>
                             <li>Follower data-deletion requests carried out for you</li>
                         </ul>
-                        <a class="cta" href="#contact-en">Get in touch</a>
+                        <a class="cta" href="#contact-en">Request a quote</a>
                     </section>
                 </div>
 
@@ -1868,21 +1840,6 @@
                             — it is public, so do not put personal information in it.
                         </li>
                     </ul>
-                </div>
-
-                <div class="todo">
-                    <p><strong>Editorial note — for the operator to complete before publishing:</strong></p>
-                    <ul>
-                        <li>The three prices, the currency, and the billing period.</li>
-                        <li>The price of an extra account on the Agency plan.</li>
-                        <li>The response time you are willing to commit to, if you want to promise one. (The support channel is now email.)</li>
-                        <li>How often the "regular review" happens, and the notice period for cancelling.</li>
-                        <li>Whether initial setup is charged separately, and the lead time to get connected today.</li>
-                    </ul>
-                    <p>
-                        No response-time, uptime or delivery guarantee is stated anywhere on this
-                        page, because none of them exists in the code and none may be invented.
-                    </p>
                 </div>
             </article>
 

@@ -73,7 +73,10 @@ export function matchCampaign<T extends CampaignMatchFields>(
         if (c.is_active === false) return false;
 
         const triggerKeywordsList = c.trigger_keyword
-            .split(',')
+            // Both commas: an operator on an Arabic keyboard types «،», and the dashboard's
+            // placeholder shows it. Splitting on ASCII only turned «كورس، كوبون» into one
+            // dead phrase keyword that fired on nothing.
+            .split(/[,،]/)
             .map((k: string) => normalizeArabic(k.trim()))
             .filter(Boolean);
 
@@ -123,7 +126,7 @@ export function triggerClashes<T extends CampaignMatchFields>(
     for (const c of campaigns) {
         if (c.post_id || c.is_active === false) continue;
         const liveMode = normalizeMatchMode(c.match_mode);
-        for (const live of c.trigger_keyword.split(',').map((k) => k.trim()).filter(Boolean)) {
+        for (const live of c.trigger_keyword.split(/[,،]/).map((k) => k.trim()).filter(Boolean)) {
             const l = normalizeArabic(live);
             for (const trigger of triggers) {
                 const t = normalizeArabic(trigger.trim());

@@ -39,11 +39,17 @@ export class PostgresJobQueue implements JobQueue {
     async enqueue<K extends JobKind>(input: EnqueueInput<K>): Promise<string | null> {
         const row = await queryOne<{ id: string }>(
             // `tenant_key` takes the creator id when no explicit key was given, so the fair
-            // claim can partition on the bare column and use its index. Doing the COALESCE
+            // claim can partition on the bare column and use its index. Doing the default
             // here costs nothing; doing it in the claim's PARTITION BY would cost a sort on
             // every claim.
+            //
+            // The default is applied in JS, not as `COALESCE($8, $3::text)`: reusing $3 there
+            // makes Postgres deduce it as both uuid (creator_id) and text, and it rejects the
+            // statement with 42P08. Every enqueue failed that way from 2026-09-21 to 09-27 —
+            // the webhook fell back to processing after its 200, and Vercel froze some of
+            // those before they finished, so real comments went unanswered.
             `INSERT INTO jobs (kind, payload, creator_id, dedupe_key, run_after, max_attempts, request_id, tenant_key)
-             VALUES ($1, $2::jsonb, $3, $4, COALESCE($5, NOW()), COALESCE($6, 3), $7, COALESCE($8, $3::text))
+             VALUES ($1, $2::jsonb, $3, $4, COALESCE($5, NOW()), COALESCE($6, 3), $7, $8)
              ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
              RETURNING id`,
             [
@@ -54,7 +60,7 @@ export class PostgresJobQueue implements JobQueue {
                 input.runAfter ?? null,
                 input.maxAttempts ?? null,
                 input.requestId ?? null,
-                input.tenantKey ?? null,
+                input.tenantKey ?? input.creatorId ?? null,
             ]
         );
 

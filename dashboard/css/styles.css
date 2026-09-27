@@ -497,7 +497,7 @@ bdi { unicode-bidi: isolate; }
     inset: 0;
     background: linear-gradient(90deg, transparent, var(--surface-glass), transparent);
     transform: translateX(-100%);
-    animation: skelSweep 1.4s var(--ease-standard) infinite;
+    animation: skelSweep 1.4s linear infinite; /* linear: an infinite sweep hitches at every loop boundary on an easing curve */
 }
 @keyframes skelSweep { to { transform: translateX(100%); } }
 /* The sweep is the only thing here that moves. Without it the shapes still
@@ -831,6 +831,17 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
     border: 1px solid var(--border-subtle);
 }
 .segmented .btn { box-shadow: none; border: none; }
+/* The pressed segment is a solid tile lifted off the sunken track, whatever
+   `.btn-*` variant the page happened to emit: (0,3,0) outranks `.btn-primary`
+   and `.btn-ghost`, and sits after their `:hover`/`:active` rules of equal
+   specificity, so a pressed segment does not change on hover. Nav tabs mark
+   the current one with `aria-current` instead of `aria-pressed`. */
+.segmented .btn[aria-pressed='true'],
+.segmented .btn[aria-current='page'] {
+    background: var(--surface-solid); color: var(--text-strong);
+    box-shadow: var(--elev-1);
+}
+.segmented .btn[aria-pressed='false'] { color: var(--text-default); }
 
 /* ─── Forms ──────────────────────────────────────────────────────────────── */
 .form-group { margin-block-end: var(--space-4); }
@@ -861,6 +872,14 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-ring);
 }
+/* Invalid: a red ring in place of the accent one. Same specificity as `:focus` above and
+   written after it, so a focused invalid field stays red instead of turning blue. */
+.field[aria-invalid='true'], .field-textarea[aria-invalid='true'], .select[aria-invalid='true'] {
+    border-color: var(--danger);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 32%, transparent);
+}
+/* Disabled: faded and refusing the cursor, the same treatment `.icon-btn:disabled` gets. */
+.field:disabled, .field-textarea:disabled, .select:disabled { opacity: 0.45; cursor: not-allowed; }
 .field-textarea { min-height: 110px; resize: vertical; line-height: var(--lh-loose); }
 .field-mono { font-family: var(--font-mono); font-size: var(--fs-100); word-break: break-all; }
 .select {
@@ -868,7 +887,7 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
     /* Scoped to .select only: .field/.field-textarea share the base rule above and must not
        show a dropdown chevron. This used to live on the shared rule, where its own
        `background: var(--surface-sunken)` shorthand immediately reset it back to none. */
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-image: var(--select-chevron); /* themed in tokens.css: a fixed grey stroke measured under 3:1 on the light sunken well */
     background-repeat: no-repeat;
     background-position: right var(--space-3) center;
     background-size: 16px 16px;
@@ -1243,7 +1262,10 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
    is trying to type a password. The gradient stays as part of the identity;
    the animation is gone, which also retires its reduced-motion escape hatch. */
 .login-container { position: relative; z-index: 1; width: 100%; max-width: 420px; }
-.login-card { padding: var(--space-6); text-align: center; background: var(--surface-raised); }
+.login-card { padding: var(--space-6); text-align: center; background: var(--surface-raised); position: relative; }
+/* The language toggle on the login card: same control as the header's, pinned to the
+   card's top inline-end corner so the one-field form stays one field. */
+.login-lang { position: absolute; inset-block-start: var(--space-3); inset-inline-end: var(--space-3); }
 .login-logo { margin-block-end: var(--space-6); }
 .login-mark {
     width: 62px; height: 62px;
@@ -1683,7 +1705,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     cursor: pointer; list-style: none;
 }
 .tiktok-app-summary::-webkit-details-marker { display: none; }
-.tiktok-app-summary svg { width: 16px; height: 16px; transition: transform var(--motion-fast); }
+.tiktok-app-summary svg { width: 16px; height: 16px; transition: transform var(--motion-fast) var(--ease-standard); }
 details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 
 /* ─── Carousel slides ────────────────────────────────────────────────────────
@@ -3254,7 +3276,7 @@ html[lang='en'] .page-toolbar-count {
 .studio-indeterminate span {
     position: absolute; inset-block: 0; inset-inline-start: 0; inline-size: 35%;
     border-radius: inherit; background: var(--accent);
-    animation: studio-sweep 1.6s var(--ease-standard) infinite;
+    animation: studio-sweep 1.6s linear infinite; /* linear: an infinite sweep hitches at every loop boundary on an easing curve */
 }
 @keyframes studio-sweep { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
@@ -3264,12 +3286,8 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 .studio-new-head { align-items: flex-start; }
 .studio-new-heading { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
 .studio-lede { margin: 0; }
-.studio-seg .btn[aria-pressed='true'],
-.studio-seg .btn[aria-current='page'] {
-    background: var(--surface-solid); color: var(--text-strong);
-    box-shadow: var(--elev-1);
-}
-.studio-seg .btn[aria-pressed='false'] { color: var(--text-default); }
+/* `.studio-seg` is still emitted by the pages; its pressed look now lives on
+   `.segmented` itself (see the Segmented control section). */
 .studio-source { inline-size: max-content; max-inline-size: 100%; margin-block-end: var(--space-3); }
 .studio-source-body { margin-block-end: var(--space-2); }
 .studio-lesson-search { position: relative; margin-block: var(--space-2); }
@@ -3322,7 +3340,9 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 }
 .studio-setup-title { margin: 0; font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .studio-setup > .form-hint { margin: 0; }
-.setup-steps { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+/* Not `.setup-steps`: that is the first-run screen's numbered list, and this
+   unnumbered one used to clobber it from further down the file. */
+.studio-setup-steps { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
 .setup-step { display: flex; align-items: flex-start; gap: var(--space-3); }
 .setup-step-mark {
     display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
@@ -3861,14 +3881,6 @@ mark.help-hit {
 .help-card-title { font-weight: var(--fw-semibold); }
 .help-card-summary { font-size: var(--fs-100); color: var(--text-muted); line-height: var(--lh-normal); }
 
-.help-feedback {
-    display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3);
-    margin-block-start: var(--space-6);
-    padding-block-start: var(--space-5);
-    border-block-start: 1px solid var(--border-subtle);
-}
-.help-feedback-q { margin: 0; font-weight: var(--fw-medium); color: var(--text-strong); }
-.help-feedback .btn[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
 .help-feedback-thanks { margin: 0; inline-size: 100%; font-size: var(--fs-200); color: var(--text-muted); }
 .help-feedback-thanks:empty { display: none; }
 

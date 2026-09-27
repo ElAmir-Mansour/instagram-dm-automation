@@ -117,7 +117,20 @@ describe('enqueue', () => {
         await withDb([[/INSERT INTO jobs/, { rows: [{ id: 'job-3' }] }]], async (executed) => {
             await queue.enqueue({ kind: 'dm.process', payload: {} as any, creatorId: 'c-9' });
 
-            assert.match(flat(executed[0]!.sql), /COALESCE\(\$8, \$3::text\)/);
+            assert.equal(executed[0]!.params[7], 'c-9');
+        });
+    });
+
+    it('references each parameter once, so Postgres cannot deduce two types for it', async () => {
+        // `COALESCE($8, $3::text)` beside a uuid `creator_id = $3` is 42P08 "inconsistent
+        // types deduced for parameter $3" — on every enqueue, for six days, invisibly: the
+        // webhook fell back to processing after its 200 and some of that work was frozen.
+        // This suite mocks the database, so this shape check is what stands in for Postgres.
+        await withDb([[/INSERT INTO jobs/, { rows: [{ id: 'job-4' }] }]], async (executed) => {
+            await queue.enqueue({ kind: 'dm.process', payload: {} as any, creatorId: 'c-9' });
+
+            const refs = flat(executed[0]!.sql).match(/\$\d+/g) ?? [];
+            assert.deepEqual(refs, [...new Set(refs)]);
         });
     });
 

@@ -3,7 +3,7 @@
  * Live diagnostics: "is this thing working right now?"
  *
  * Reads the deployed app and the production database and reports what is and is not healthy.
- * Everything it does is read-only — the database session is `default_transaction_read_only`
+ * Everything it does is read-only — every query runs in its own `BEGIN READ ONLY … ROLLBACK`
  * (see scripts/lib/live.mjs) and every HTTP call is either a GET or an intentionally
  * unauthorised probe. It never sends a DM, never publishes a post, never writes a row, and
  * never prints a token, password or connection string.
@@ -932,7 +932,7 @@ function render() {
 
     console.log(color.bold('\nAutoReply Pro — live diagnostics'));
     console.log(`${color.dim('checked')} ${new Date().toISOString()}  ${color.dim('target')} ${BASE_URL}`);
-    console.log(`${color.dim('database')} ${describeDbTarget(process.env.DATABASE_URL ?? '')} ${color.dim('(read-only session)')}`);
+    console.log(`${color.dim('database')} ${describeDbTarget(process.env.DATABASE_URL ?? '')} ${color.dim('(read-only transactions)')}`);
     console.log(`${color.dim('verdict')} ${verdict}`);
     console.log('');
 

@@ -46,6 +46,7 @@ const SHARED_ASSET_PAGES = [
     'public/data-deletion.html',
     'public/pricing.html',
     'public/terms.html',
+    'public/404.html',
     'dashboard/eid.html',
 ];
 

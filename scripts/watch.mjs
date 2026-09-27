@@ -12,7 +12,7 @@
  *   node scripts/watch.mjs --interval 1000       poll faster (default 2000ms)
  *   node scripts/watch.mjs --env ../../../.env   explicit .env
  *
- * READ-ONLY. The database session is `default_transaction_read_only`, verified on connect
+ * READ-ONLY. Every query runs in its own verified `BEGIN READ ONLY … ROLLBACK`
  * (scripts/lib/live.mjs), so this cannot write a row, cannot send a DM and cannot publish
  * anything — it only reads what the app wrote. Message text is truncated in the output and
  * no token, secret or connection string is ever printed.

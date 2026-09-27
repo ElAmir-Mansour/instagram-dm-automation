@@ -75,6 +75,9 @@ const CampaignsPage = {
         gate.done();
 
         this.campaigns = campaigns;
+        // POST/PUT/DELETE /campaigns are `canOperate` on the server; a viewer used
+        // to see every button and learn that from an English 403 toast.
+        const canOperate = App.canOperate();
 
         container.innerHTML = esc(html`
             <div class="page-toolbar">
@@ -83,16 +86,18 @@ const CampaignsPage = {
                 <h2 class="page-toolbar-count">${t('campaigns.count', { count: campaigns.length })}</h2>
                 <div class="toolbar-actions">
                     ${UI.helpLink('campaigns#matching', t('help.link.matching'), { className: 'campaigns-help' })}
-                    ${UI.button({
-                        variant: 'secondary', size: 'sm', icon: 'upload', label: t('campaigns.import'),
-                        action: 'campaigns:triggerCSVSelect', id: 'campaigns-import',
-                    })}
-                    <!-- Stable id: the modal trigger has to be findable again
-                         after the re-render that follows a successful create. -->
-                    ${UI.button({
-                        variant: 'primary', size: 'sm', icon: 'plus', label: t('campaigns.new'),
-                        action: 'campaigns:showCreateModal', id: 'campaigns-new',
-                    })}
+                    ${canOperate ? html`
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'upload', label: t('campaigns.import'),
+                            action: 'campaigns:triggerCSVSelect', id: 'campaigns-import',
+                        })}
+                        <!-- Stable id: the modal trigger has to be findable again
+                             after the re-render that follows a successful create. -->
+                        ${UI.button({
+                            variant: 'primary', size: 'sm', icon: 'plus', label: t('campaigns.new'),
+                            action: 'campaigns:showCreateModal', id: 'campaigns-new',
+                        })}
+                    ` : html`<span class="text-meta">${t('campaigns.readOnly')}</span>`}
                 </div>
             </div>
             <label class="sr-only" for="csv-file-input">${t('campaigns.csvLabel')}</label>
@@ -101,15 +106,16 @@ const CampaignsPage = {
             ${campaigns.length === 0 ? html`
                 <div class="surface pad-5">
                     ${Admin.emptyState('megaphone', t('campaigns.emptyTitle'), t('campaigns.emptyBody'))}
+                    <p class="text-center">${UI.helpLink('campaigns#how', t('help.link.campaignsHow'))}</p>
                     <div class="row gap-3 row--center row--wrap mbs-4">
-                        ${UI.button({
+                        ${canOperate ? UI.button({
                             variant: 'secondary', size: 'sm', icon: 'upload', label: t('campaigns.import'),
                             action: 'campaigns:triggerCSVSelect',
-                        })}
-                        ${UI.button({
+                        }) : ''}
+                        ${canOperate ? UI.button({
                             variant: 'primary', size: 'sm', icon: 'plus', label: t('common.create'),
                             action: 'campaigns:showCreateModal', id: 'campaigns-new-empty',
-                        })}
+                        }) : ''}
                     </div>
                 </div>
             ` : html`
@@ -131,6 +137,7 @@ const CampaignsPage = {
      * ');alert(1);// executed.
      */
     renderCard(c) {
+        const canOperate = App.canOperate();
         const isActive = c.is_active !== false;
         const keywords = this.splitKeywords(c.trigger_keyword);
         const risky = keywords.filter((k) => this.keywordRisk(k).risky);
@@ -146,6 +153,7 @@ const CampaignsPage = {
                      data-id="${c.id}" aria-labelledby="campaign-keywords-${c.id}">
                 <div class="campaign-card-head">
                     <div class="keyword-list" id="campaign-keywords-${c.id}">
+                        ${isActive ? '' : html`<span class="chip"><i data-lucide="pause" aria-hidden="true"></i> ${t('campaigns.pausedChip')}</span>`}
                         ${keywords.map((k) => html`
                             <span class="chip ${this.keywordRisk(k).risky ? html.raw('chip-danger') : ''}" dir="auto">
                                 <i data-lucide="${this.keywordRisk(k).risky ? 'alert-triangle' : 'hash'}" aria-hidden="true"></i>
@@ -161,7 +169,7 @@ const CampaignsPage = {
                                  with no way to tell which campaign you were
                                  about to pause. -->
                             <span class="sr-only">${t('campaigns.toggleLabel')}: <span dir="auto">${keywords.join(', ')}</span></span>
-                            <input type="checkbox" ${isActive ? html.raw('checked') : ''}
+                            <input type="checkbox" ${isActive ? html.raw('checked') : ''} ${canOperate ? '' : html.raw('disabled')}
                                    data-change="campaigns:toggleActive" data-id="${c.id}"
                                    data-focus-key="campaign-toggle-${c.id}">
                             <span class="switch-track"></span>
@@ -206,6 +214,7 @@ const CampaignsPage = {
                     <span class="campaign-stat text-muted">${t('campaigns.statTotal', { count: UI.formatNumber(c.total_interactions) })}</span>
                 </div>
 
+                ${canOperate ? html`
                 <div class="card-actions">
                     <!-- data-focus-key, not id: these buttons are destroyed and
                          rebuilt by every render, and the key is what lets
@@ -223,6 +232,7 @@ const CampaignsPage = {
                         focusKey: `campaign-delete-${c.id}`,
                     })}
                 </div>
+                ` : ''}
             </article>
         `;
     },
@@ -230,7 +240,9 @@ const CampaignsPage = {
     // ─── Keyword hazard analysis ─────────────────────────────────────────────
 
     splitKeywords(value) {
-        return String(value || '').split(',').map((k) => k.trim()).filter(Boolean);
+        // Both commas: the placeholder shows «،» and an Arabic keyboard types it.
+        // matching.ts splits the same way, so what the inspector sees is what fires.
+        return String(value || '').split(/[,،]/).map((k) => k.trim()).filter(Boolean);
     },
 
     /**
@@ -370,7 +382,11 @@ const CampaignsPage = {
      * because the container and the static explanation must NOT be rebuilt —
      * see renderMatchInspector() and inspect() below.
      */
-    matchVerdict(value, excludeId) {
+    matchVerdict(value, excludeId, mode) {
+        // Whole-word mode anchors the keyword to token boundaries, so the
+        // "fires inside a longer word" hazard does not apply; duplicates and
+        // cross-campaign collisions still do.
+        const word = mode === 'word';
         const keywords = this.splitKeywords(value);
         const seen = new Set();
         const duplicates = [];
@@ -380,7 +396,7 @@ const CampaignsPage = {
         keywords.forEach((k) => {
             const n = UI.normalizeArabic(k);
             if (seen.has(n)) duplicates.push(k); else seen.add(n);
-            const risk = this.keywordRisk(k);
+            const risk = word ? { risky: false } : this.keywordRisk(k);
             if (risk.risky) risks.push({ keyword: k, ...risk });
             this.campaignCollisions(k, excludeId).forEach((hit) => {
                 collisions.push({ keyword: k, other: hit.keyword });
@@ -408,7 +424,7 @@ const CampaignsPage = {
                         `)}
                         ${duplicates.map((d) => html`<li dir="auto">${t('campaigns.match.duplicate', { keyword: d })}</li>`)}
                     </ul>
-                    <p class="mbs-4">${t('campaigns.match.advice')}</p>
+                    <p class="mbs-4">${risks.length > 0 ? html`${t('campaigns.match.advice')} ${t('campaigns.match.adviceWord')}` : t('campaigns.match.advice')}</p>
                 ` : ''}
             `,
         };
@@ -429,15 +445,19 @@ const CampaignsPage = {
      * announced is the verdict and not the paragraph about how matching works,
      * repeated on every keystroke.
      */
-    renderMatchInspector(value, excludeId) {
-        const { state, hasProblem, verdict } = this.matchVerdict(value, excludeId);
+    matchExplain(mode) {
+        return mode === 'word' ? t('campaigns.match.wordMode') : t('campaigns.match.explain');
+    },
+
+    renderMatchInspector(value, excludeId, mode) {
+        const { state, hasProblem, verdict } = this.matchVerdict(value, excludeId, mode);
         return html`
             <div class="match-inspector ${html.raw(state)}" id="match-inspector">
                 <h4 id="match-inspector-heading">
                     <i data-lucide="${hasProblem ? 'alert-triangle' : 'search-check'}" aria-hidden="true"></i>
                     ${t('campaigns.match.title')}
                 </h4>
-                <p>${t('campaigns.match.explain')} ${UI.helpLink('campaigns#matching', t('help.link.matching'), { newTab: true })}</p>
+                <p><span id="match-inspector-explain">${this.matchExplain(mode)}</span> ${UI.helpLink('campaigns#matching', t('help.link.matching'), { newTab: true })}</p>
                 <div id="match-inspector-verdict" aria-live="polite">${verdict}</div>
             </div>
         `;
@@ -459,12 +479,14 @@ const CampaignsPage = {
      * between two keystrokes. The verdict still appears while the operator is
      * looking at the field, which was the whole point of it.
      */
-    inspect(value, excludeId) {
+    inspect(value, excludeId, mode) {
         const host = document.getElementById('match-inspector');
         const verdictHost = document.getElementById('match-inspector-verdict');
         if (!host || !verdictHost) return;
 
-        const { state, hasProblem, verdict } = this.matchVerdict(value, excludeId);
+        const { state, hasProblem, verdict } = this.matchVerdict(value, excludeId, mode);
+        const explain = document.getElementById('match-inspector-explain');
+        if (explain) explain.textContent = this.matchExplain(mode);
 
         // Only the CONTENTS of the permanent live region are written. The
         // region itself, the heading and the explanation stay put — replacing
@@ -487,14 +509,21 @@ const CampaignsPage = {
 
     inspectKeywords(input) {
         if (!this._inspectDebounced) {
-            this._inspectDebounced = Motion.debounce((value, excludeId) => this.inspect(value, excludeId), 140);
+            this._inspectDebounced = Motion.debounce((value, excludeId, mode) => this.inspect(value, excludeId, mode), 140);
         }
         // `input.form` is the standard DOM link from a field to its owning
         // <form>. The create form carries no data-id (nothing to exclude);
         // the edit form's data-id (set in showEditModal()) is how "the
         // campaign being edited" is told apart from every other campaign.
         const excludeId = input.form ? input.form.dataset.id : undefined;
-        this._inspectDebounced(input.value, excludeId);
+        const modeSelect = input.form ? input.form.querySelector('#campaign-match-mode') : null;
+        this._inspectDebounced(input.value, excludeId, modeSelect ? modeSelect.value : 'substring');
+    },
+
+    /** The mode changed: re-inspect the keywords under the new rule. */
+    matchModeChange(select) {
+        const trigger = select && select.form ? select.form.querySelector('#campaign-trigger') : null;
+        if (trigger) this.inspectKeywords(trigger);
     },
 
     // ─── Modals ──────────────────────────────────────────────────────────────
@@ -509,7 +538,8 @@ const CampaignsPage = {
         `;
     },
 
-    keywordField(value, excludeId) {
+    keywordField(value, excludeId, mode) {
+        const word = mode === 'word';
         return html`
             <div class="form-group">
                 <label class="form-label" for="campaign-trigger">${t('campaigns.keywords')}</label>
@@ -518,7 +548,21 @@ const CampaignsPage = {
                        aria-describedby="campaign-trigger-hint"
                        data-input="campaigns:inspectKeywords" data-guard-dirty required>
                 <p class="form-hint" id="campaign-trigger-hint">${t('campaigns.keywordsHint')}</p>
-                ${this.renderMatchInspector(value || '', excludeId)}
+            </div>
+            <!-- match_mode has existed end to end since migration_v14 (validated and
+                 stored by the API, honoured by matching.ts); this is the first
+                 control that can set it. The header comment above that said the
+                 column did not exist was stale. -->
+            <div class="form-group">
+                <label class="form-label" for="campaign-match-mode">${t('campaigns.matchMode')}</label>
+                <select class="select" id="campaign-match-mode" name="match_mode"
+                        aria-describedby="campaign-match-mode-hint"
+                        data-change="campaigns:matchModeChange" data-guard-dirty>
+                    <option value="substring" ${word ? '' : html.raw('selected')}>${t('campaigns.matchMode.substring')}</option>
+                    <option value="word" ${word ? html.raw('selected') : ''}>${t('campaigns.matchMode.word')}</option>
+                </select>
+                <p class="form-hint" id="campaign-match-mode-hint">${t('campaigns.matchMode.hint')}</p>
+                ${this.renderMatchInspector(value || '', excludeId, mode)}
             </div>
         `;
     },
@@ -556,6 +600,7 @@ const CampaignsPage = {
         UI.showModal(html`
             ${this.modalHeader(t('campaigns.createTitle'))}
             <form id="campaign-form" data-submit="campaigns:handleCreate">
+                <div id="campaign-form-error"></div>
                 ${this.keywordField('')}
                 <div class="form-group">
                     <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
@@ -564,7 +609,8 @@ const CampaignsPage = {
                          half-written template away. lang="ar" because the
                          template is always Arabic. -->
                     <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto" lang="ar"
-                              placeholder="${t('campaigns.dmPlaceholder')}" data-guard-dirty required></textarea>
+                              placeholder="${t('campaigns.dmPlaceholder')}" aria-describedby="campaign-dm-hint" data-guard-dirty required></textarea>
+                    <p class="form-hint" id="campaign-dm-hint">${t('campaigns.dmHint')} ${UI.helpLink('campaigns#dm', t('help.link.campaignDm'), { newTab: true })}</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="campaign-public">
@@ -591,11 +637,13 @@ const CampaignsPage = {
         UI.showModal(html`
             ${this.modalHeader(t('campaigns.editTitle'))}
             <form id="campaign-form" data-submit="campaigns:handleEdit" data-id="${c.id}">
-                ${this.keywordField(c.trigger_keyword, c.id)}
+                <div id="campaign-form-error"></div>
+                ${this.keywordField(c.trigger_keyword, c.id, c.match_mode)}
                 <div class="form-group">
                     <label class="form-label" for="campaign-dm">${t('campaigns.dmTemplate')}</label>
                     <textarea class="field-textarea user-content" id="campaign-dm" name="dm_template" dir="auto" lang="ar"
-                              data-guard-dirty required>${c.dm_template}</textarea>
+                              aria-describedby="campaign-dm-hint" data-guard-dirty required>${c.dm_template}</textarea>
+                    <p class="form-hint" id="campaign-dm-hint">${t('campaigns.dmHint')} ${UI.helpLink('campaigns#dm', t('help.link.campaignDm'), { newTab: true })}</p>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="campaign-public">
@@ -609,11 +657,10 @@ const CampaignsPage = {
                 ${this.postIdField(c.post_id || '')}
                 <div class="form-group switch-row">
                     <label class="switch" for="campaign-active-toggle">
-                        <span class="sr-only">${t('campaigns.toggleLabel')}</span>
                         <input type="checkbox" id="campaign-active-toggle" name="is_active" ${c.is_active !== false ? html.raw('checked') : ''}>
                         <span class="switch-track"></span>
                     </label>
-                    <span class="switch-label">${t('campaigns.toggleLabel')}</span>
+                    <label class="switch-label" for="campaign-active-toggle">${t('campaigns.toggleLabel')}</label>
                 </div>
                 <div class="modal-actions">
                     ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
@@ -642,6 +689,7 @@ const CampaignsPage = {
         try {
             await API.createCampaign({
                 trigger_keyword: data.get('trigger_keyword'),
+                match_mode: data.get('match_mode') === 'word' ? 'word' : 'substring',
                 dm_template: data.get('dm_template'),
                 public_reply_template: data.get('public_reply_template') || null,
                 post_id: data.get('post_id') || null,
@@ -656,8 +704,26 @@ const CampaignsPage = {
             UI.closeModal();
         } catch (err) {
             restore();
-            UI.toast(err.message, 'error');
+            this.showFormError(err);
         }
+    },
+
+    /**
+     * A rejected save used to go to a corner toast while the modal kept focus and
+     * no field was marked. Posts already does this right; same shape here.
+     */
+    showFormError(err) {
+        const message = (err && err.message) || t('error.unexpected');
+        const host = document.getElementById('campaign-form-error');
+        if (!host) { UI.toast(message, 'error'); return; }
+        const form = document.getElementById('campaign-form');
+        UI.clearInvalid(form);
+        const stripId = 'campaign-form-error-strip';
+        host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+        UI.icons(host);
+        const trigger = err && err.status === 400 ? document.getElementById('campaign-trigger') : null;
+        if (trigger) UI.markInvalid(trigger, stripId);
+        if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
     },
 
     async handleEdit(form, event) {
@@ -669,6 +735,7 @@ const CampaignsPage = {
         try {
             await API.updateCampaign(id, {
                 trigger_keyword: data.get('trigger_keyword'),
+                match_mode: data.get('match_mode') === 'word' ? 'word' : 'substring',
                 dm_template: data.get('dm_template'),
                 public_reply_template: data.get('public_reply_template') || null,
                 post_id: data.get('post_id') || null,
@@ -680,7 +747,7 @@ const CampaignsPage = {
             UI.closeModal();
         } catch (err) {
             restore();
-            UI.toast(err.message, 'error');
+            this.showFormError(err);
         }
     },
 
@@ -1021,7 +1088,9 @@ const CampaignsPage = {
                 publicReplies = mapping.publicReplies;
             } else {
                 const cleanName = String(course.name || '').split('[')[0].split('|')[0].split('-')[0].trim();
-                triggerKeywords = `${cleanName.split(' ')[0].toLowerCase()}, كورس, كوبون, رابط`;
+                // Only the course's own words. «كورس، كوبون، رابط» used to be stamped on
+                // every unmapped row, so two imported courses fired on the same comment.
+                triggerKeywords = `${cleanName.split(' ')[0].toLowerCase()}, ${cleanName}`;
                 dmTemplate = `أهلاً بك {username}! 👋\nإليك رابط التسجيل المجاني لكورس "${cleanName}":\n🔗 ${course.url}\n\nسجل الآن قبل نفاد الكوبون! ✨`;
                 publicReplies = 'تم إرسال الرابط والتفاصيل على الخاص يا {username}! 📩 | تفقد الخاص {username} للحصول على كوبون الدورة! 🚀';
             }
@@ -1045,7 +1114,7 @@ const CampaignsPage = {
         UI.showModal(html`
             ${this.modalHeader(t('campaigns.bulk.title', { count: UI.formatNumber(campaignData.length) }))}
             <div class="bulk-scroll" id="bulk-import-container">
-                <p class="bulk-intro">${t('campaigns.bulk.intro', { count: UI.formatNumber(campaignData.length) })}</p>
+                <p class="bulk-intro">${t('campaigns.bulk.intro', { count: campaignData.length })}</p>
                 ${campaignData.map((c) => html`
                     <div class="bulk-row ${c.matched ? html.raw('is-mapped') : ''}">
                         <div class="bulk-row-head">
@@ -1055,7 +1124,7 @@ const CampaignsPage = {
                                 <div>
                                     <label class="bulk-name" for="import-check-${c.index}" dir="auto">${c.name}</label>
                                     <p class="bulk-coupon" dir="auto">${t('campaigns.bulk.coupon', {
-                                        code: c.couponCode, count: UI.formatNumber(c.redemptions),
+                                        code: c.couponCode, count: Number(c.redemptions) || 0,
                                     })}</p>
                                 </div>
                             </div>
@@ -1164,7 +1233,7 @@ const CampaignsPage = {
         this.pendingImport = null;
 
         if (failCount === 0) {
-            UI.toast(t('campaigns.bulk.allOk', { count: UI.formatNumber(successCount) }));
+            UI.toast(t('campaigns.bulk.allOk', { count: successCount }));
         } else {
             UI.toast(t('campaigns.bulk.partial', {
                 ok: UI.formatNumber(successCount), failed: UI.formatNumber(failCount), message: lastError,
@@ -1184,6 +1253,7 @@ UI.registerActions('campaigns', {
     handleCreate: (el, e) => CampaignsPage.handleCreate(el, e),
     handleEdit: (el, e) => CampaignsPage.handleEdit(el, e),
     inspectKeywords: (el) => CampaignsPage.inspectKeywords(el),
+    matchModeChange: (el) => CampaignsPage.matchModeChange(el),
     openPostPicker: (el) => CampaignsPage.openPostPicker(el),
     selectPickedPost: (el) => CampaignsPage.selectPickedPost(el.dataset.id),
     triggerCSVSelect: () => CampaignsPage.triggerCSVSelect(),
