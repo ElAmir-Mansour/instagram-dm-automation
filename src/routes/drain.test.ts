@@ -73,3 +73,27 @@ describe('drain response shaping', () => {
         assert.equal(body['publish'], null);
     });
 });
+
+describe('drain response shaping — the Monteur’s sweep', () => {
+    const MONTEUR = { exhausted: 0, pick: { source_id: 's-1', outcome: 'rendering' as const, clips: 1 }, analyst: null };
+
+    it('reports the sweep beside both halves', () => {
+        const { status, body } = composeDrainResponse(JOBS as never, null, PUBLISH, null, { result: MONTEUR, error: null });
+        assert.equal(status, 200);
+        assert.deepEqual(body['monteur'], MONTEUR);
+        assert.ok(!('monteurError' in body));
+    });
+
+    it('never fails the drain for the sweep’s failure, and names it', () => {
+        const { status, body } = composeDrainResponse(JOBS as never, null, PUBLISH, null, { result: null, error: 'Gemini down' });
+        assert.equal(status, 200, 'the queue and the publishes worked');
+        assert.equal(body['monteurError'], 'Gemini down');
+        assert.equal(body['monteur'], null);
+    });
+
+    it('never rescues a drain whose two halves failed, and still says what it did', () => {
+        const { status, body } = composeDrainResponse(null, 'pool exhausted', null, 'Meta token expired', { result: MONTEUR, error: null });
+        assert.equal(status, 500);
+        assert.deepEqual(body['monteur'], MONTEUR);
+    });
+});

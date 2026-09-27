@@ -54,6 +54,15 @@ export async function withTransaction<T>(fn: (client: Exec) => Promise<T>): Prom
     }
 }
 
+/**
+ * One tenant's campaign-and-post writes, one at a time: the Studio's schedule and the Monteur's
+ * approve both choose a slot or plan a campaign and then insert, so two at once could take the
+ * same slot or create two campaigns on one keyword. Held until the transaction ends.
+ */
+export async function lockTenantPublishing(exec: Exec, creatorId: string): Promise<void> {
+    await exec.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`publishing:${creatorId}`]);
+}
+
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -85,7 +94,10 @@ export function unique<T>(values: readonly T[]): T[] {
     return [...new Set(values)];
 }
 
-/** Said when a Studio table is missing, instead of an opaque 500. */
+/**
+ * Said when a Studio table or column is missing, instead of an opaque 500. v24 (the Monteur) adds
+ * a settings column every Studio route reads, so either migration can be the one missing.
+ */
 export const STUDIO_MIGRATION_HINT =
-    'The database is missing migration v21 (src/config/migration_v21_studio.sql). '
-    + 'Apply it with `npm run migrate`, then reload.';
+    'The database is missing migration v21 or v24 (src/config/migration_v21_studio.sql, migration_v24_monteur.sql). '
+    + 'Apply them with `npm run migrate`, then reload.';

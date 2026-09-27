@@ -176,6 +176,23 @@ describe('buildGenContext', () => {
         assert.match(accents!.sql, /status = 'scheduled'/);
         assert.match(accents!.sql, /LIMIT 2/);
     });
+
+    it('counts the keywords and variants of the Monteur’s reels in flight as taken', async () => {
+        routes.push(
+            [/FROM campaigns WHERE creator_id = \$1 AND is_active/, () => ({ rows: [{ trigger_keyword: 'متجر' }] })],
+            [/^SELECT copy->>'keyword' AS keyword, copy->'variants' AS variants FROM clip_drafts/, () => ({
+                rows: [{ keyword: 'البرومبت', variants: ['برومبتات'] }],
+            })],
+        );
+        const ctx = await buildGenContext(TENANT);
+        assert.deepEqual(ctx.activeKeywords, ['متجر', 'البرومبت', 'برومبتات'], 'so the writer never picks «برومبت» beside them');
+    });
+
+    it('still builds without the Monteur’s table', async () => {
+        routes.push([/FROM clip_drafts/, () => { throw Object.assign(new Error('relation "clip_drafts" does not exist'), { code: '42P01' }); }]);
+        const ctx = await buildGenContext(TENANT);
+        assert.ok(Array.isArray(ctx.activeKeywords));
+    });
 });
 
 // ─── Create ─────────────────────────────────────────────────────────────────────────────

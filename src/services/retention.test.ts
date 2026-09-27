@@ -292,13 +292,24 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         assert.match(clause, /NOT EXISTS \( SELECT 1 FROM lesson_moments lm WHERE lm\.thumb_url LIKE '%' \|\| m\.id::text \|\| '%'/);
     });
 
+    it('keeps a Monteur reel\u2019s video and cover while it is rendering, in review or scheduled', async () => {
+        // A reel in review is waiting for Approve, and no scheduled post names its files until
+        // then. A rejected or failed reel's files are free to go (MONTEUR.md §2).
+        const clause = await keepClause();
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM clip_drafts c WHERE c\.status IN \('rendering', 'review', 'scheduled'\)/);
+        assert.match(clause, /COALESCE\(c\.render->>'video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'tiktok_video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'cover_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/,
+            'the TikTok cut too');
+        const clips = clause.slice(clause.indexOf('FROM clip_drafts'));
+        assert.doesNotMatch(clips, /'rejected'|'failed'/, 'a rejected or failed reel keeps nothing');
+    });
+
     it('requires every guard at once: each NOT EXISTS is ANDed, never ORed', async () => {
         // An OR between them would delete anything any single table does not name — a render
         // slide is named by no scheduled post, so it would go.
         await pruneOrphanedMedia();
         const sql = statements[0]!;
-        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 3);
-        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 3);
+        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 4);
+        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 4);
         assert.doesNotMatch(sql, /OR NOT EXISTS/);
     });
 });

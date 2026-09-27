@@ -384,7 +384,7 @@ const StudioPage = {
         }
     },
 
-    /** Carousels | Settings — navigation between two views, so links with aria-current. */
+    /** Carousels | Monteur | Settings — navigation, so links with aria-current. The Monteur is its own page (#/monteur). */
     tabsMarkup(active) {
         // Quiet segments, not blue buttons: the page's one primary is the step's own.
         const tab = (key, href, icon, label) => html`
@@ -396,6 +396,7 @@ const StudioPage = {
         return html`
             <nav class="segmented studio-seg studio-tabs" aria-label="${t('studio.tabs.label')}">
                 ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
+                ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
                 ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
             </nav>
         `;

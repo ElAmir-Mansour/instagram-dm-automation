@@ -40,6 +40,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v21_studio.sql',
     'migration_v22_growth.sql',
     'migration_v23_media_storage.sql',
+    'migration_v24_monteur.sql',
 ] as const;
 
 export interface SchemaState {

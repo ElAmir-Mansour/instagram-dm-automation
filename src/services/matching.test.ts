@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { matchCampaign, type CampaignMatchFields } from './matching.js';
+import { matchCampaign, triggerClashes, type CampaignMatchFields } from './matching.js';
 
 interface Campaign extends CampaignMatchFields {
     id: string;
@@ -201,5 +201,35 @@ describe('matchCampaign — match_mode', () => {
         };
         assert.equal(matchCampaign('اهتمام واهتمامات', 'p', [multi]), null);
         assert.equal(matchCampaign('ابي خصم', 'p', [multi])?.id, 'multi');
+    });
+});
+
+describe('triggerClashes — real collisions only, by match mode', () => {
+    const live = (trigger_keyword: string, match_mode: string, post_id: string | null = null) =>
+        ({ trigger_keyword, match_mode, post_id, is_active: true });
+
+    it('a new substring trigger inside a live word collides: it fires on that word’s comments', () => {
+        assert.deepEqual(triggerClashes(['برومبت'], 'substring', [live('البرومبت', 'word')]), [{ trigger: 'برومبت', live: 'البرومبت' }]);
+    });
+
+    it('a live substring trigger inside a new word collides: it fires on the new word’s comments', () => {
+        assert.deepEqual(triggerClashes(['السعر'], 'word', [live('سعر', 'substring')]), [{ trigger: 'السعر', live: 'سعر' }]);
+    });
+
+    it('the same word collides, whatever the modes and spelling', () => {
+        assert.equal(triggerClashes(['دفتـر'], 'word', [live('دفتر', 'word')]).length, 1);
+    });
+
+    it('a word-mode trigger beside a longer word does not: neither fires on the other’s comments', () => {
+        assert.deepEqual(triggerClashes(['برومبت'], 'word', [live('البرومبت', 'word'), live('البرومبت', 'substring')]), []);
+    });
+
+    it('checks every trigger against every live trigger', () => {
+        const clashes = triggerClashes(['برومبت', 'السعر', 'نظيف'], 'word', [live('شي, سعر', 'substring'), live('برومبت', 'word')]);
+        assert.deepEqual(clashes.map((c) => c.trigger).sort(), ['السعر', 'برومبت']);
+    });
+
+    it('leaves out a campaign tied to one post, and one switched off', () => {
+        assert.deepEqual(triggerClashes(['سعر'], 'word', [live('سعر', 'word', 'post-1'), { ...live('سعر', 'word'), is_active: false }]), []);
     });
 });
