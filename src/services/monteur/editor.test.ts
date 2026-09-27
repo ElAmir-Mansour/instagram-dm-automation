@@ -72,7 +72,9 @@ describe('the Editor prompt and schema', () => {
         const item = (EDITOR_SCHEMA as unknown as { properties: { clips: { items: { properties: { edits: { items: { properties: Record<string, { description?: string }>; propertyOrdering: string[] } } } } } } })
             .properties.clips.items.properties.edits.items;
         assert.ok('query' in item.properties && !('prompt' in item.properties));
-        assert.deepEqual((item.properties.query as unknown as { enum: string[] }).enum, [...LIBRARY_TOPICS], 'a library topic, from the fixed list');
+        // No enum: 81 values in the schema made Gemini refuse the request (HTTP 400). The prompt lists them.
+        assert.equal((item.properties.query as unknown as { enum?: string[] }).enum, undefined);
+        assert.ok(editorSystemPrompt(ELAMIR_SETTINGS).includes(LIBRARY_TOPICS.join(', ')), 'the topics are in the prompt');
         assert.deepEqual(item.propertyOrdering, ['line', 'word', 'kind', 'text', 'emoji', 'query', 'sfx']);
     });
 });

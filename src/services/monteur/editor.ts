@@ -88,7 +88,9 @@ export const EDITOR_SCHEMA: GeminiSchema = {
                                 kind: { type: 'STRING', enum: [...EDIT_KINDS] },
                                 text: str(`keyword: 2-4 words, at most ${MAX_TEXT} characters; tool: the tool's name in Latin script`),
                                 emoji: str('emoji: one emoji'),
-                                query: { type: 'STRING', enum: [...LIBRARY_TOPICS], description: 'image or broll: the picture library topic' },
+                                // A plain string: an 81-value enum here makes Gemini refuse the whole request (HTTP 400,
+                                // 2026-09-27). The topics are in the prompt, and placeEdits keeps only those.
+                                query: str('image or broll: one topic from the picture library list, exactly as written'),
                                 sfx: { type: 'STRING', enum: [...EDIT_SFX] },
                             },
                             required: ['line', 'word', 'kind', 'sfx'],
@@ -115,6 +117,7 @@ For each clip, mark a moment about every 4-5 seconds (12 for a 60-second clip), 
 - image: a photo card over the video for an idea, an example or a comparison the speaker makes. query: the closest library topic.
 - broll: a full-screen photo cutaway for a bigger idea or a scene change (the voice goes on). query: the closest library topic.
   Use 3-4 pictures per clip in all (image and broll together), each a different topic.
+  Picture library topics (query is exactly one of these): ${LIBRARY_TOPICS.join(', ')}.
 - highlight: a ring on the part of the screen being pointed at or talked about (a button, a result, a field).
 - punch: a quick zoom-in when a result appears on screen or on a strong claim. At most 2 per clip.
 sfx: whoosh for a keyword, tool, image or broll; pop for an emoji; click for a UI action or highlight; ding for a result or ✅; impact for a punch or a strong claim; glitch for a tech moment; error for a mistake or ❌; none when a sound would be too much. Vary them.
