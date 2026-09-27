@@ -196,14 +196,17 @@ pattern that appears twice belongs in `styles.css` with a class, not copied betw
 
 ## 8. The guards
 
-This document describes intent. Four CI checks enforce the parts that can be:
+This document describes intent. Five CI checks, plus a few tests that act as guards, enforce the parts that can be:
 
 | check | stops |
 |---|---|
 | `check:contrast` | any text/surface pair below WCAG AA (4.5:1) in either theme, **compositing the full glass stack down to the opaque canvas**; any two semantic colours within 25° of hue; and any platform colour used as a solid fill outside data visualisation |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
-| `check:i18n` | an English string with no Arabic translation, rendering English inside an RTL page |
+| `check:i18n` | an English string with no Arabic translation, rendering English inside an RTL page; a key whose `{placeholders}` differ between the languages (plural families compared as a family); an Arabic-Indic digit in Arabic copy outside its allow-list |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
+| `check:icon-subset` | `dashboard/js/icons.js` out of date with the icon names the dashboard uses. The dashboard ships only the Lucide 0.577 icons it draws (128, ~9KB gz) instead of the 93KB UMD; a name missing from the subset still renders, by loading the full UMD once from the CDN |
+
+Tests that guard design intent: `stylesheets.test.ts` (every CSS block closes — an unclosed rule once shipped a whole screen unstyled), `help-labels.test.ts` (a `**label**` in a help article matches the UI's current wording), `icons.test.ts` (the subset renders exactly what Lucide renders).
 
 `check:contrast` measures **200 pairs** across both themes (the platform badge text on its own tint was added on 2026-09-27, after it was found failing in light mode; `--surface-chrome` followed). The tightest is **4.67:1**. That
 number is low on purpose: glass surfaces shift the ground under text, so the margin is thin

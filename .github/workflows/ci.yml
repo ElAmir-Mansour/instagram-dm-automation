@@ -50,6 +50,13 @@ jobs:
       - name: Check RTL icon mirroring
         run: npm run check:icons
 
+      # dashboard/js/icons.js is generated: the Lucide icons the dashboard uses, instead of the
+      # 93KB-gzipped UMD from the CDN. An icon added without a rebuild still renders (icons.js
+      # falls back to the full UMD), which is exactly why nothing else would notice the 93KB
+      # coming back. This fails when the file is not what scripts/build-icons.mjs writes.
+      - name: Check icon subset
+        run: npm run check:icon-subset
+
       # Token colours are one hex edit away from failing AA, and nothing else in this repo
       # would notice. The tightest real pair currently sits at ~4.71:1 - almost no headroom.
       - name: Check colour contrast
