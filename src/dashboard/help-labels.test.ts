@@ -28,7 +28,11 @@ type Lang = 'ar' | 'en';
 const ctx: Json = {};
 ctx.globalThis = ctx;
 vm.createContext(ctx);
-const STRINGS = vm.runInContext(`${readFileSync('dashboard/js/i18n.js', 'utf8')}\n;I18N.strings`, ctx, { filename: 'i18n.js' }) as Record<Lang, Record<string, string>>;
+// The runtime and both dictionaries (split on 2026-09-27; each registers itself, so order is free).
+for (const file of ['dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js']) {
+    vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });
+}
+const STRINGS = vm.runInContext('I18N.strings', ctx) as Record<Lang, Record<string, string>>;
 const CONTENT = vm.runInContext(`${readFileSync('dashboard/js/help-content.js', 'utf8')}\n;HelpContent`, ctx, { filename: 'help-content.js' }) as Json;
 
 /** Deliberate non-UI emphasis, per language: the bold text (as `clean` leaves it) → why. */

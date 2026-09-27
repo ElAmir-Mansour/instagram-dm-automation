@@ -105,7 +105,7 @@ function load(lang: 'ar' | 'en' = 'en', opts: { storageThrows?: boolean; stored?
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const f of [
-        'dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/motion.js', 'dashboard/js/charts.js',
+        'dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/motion.js', 'dashboard/js/charts.js',
         'dashboard/js/pages/overview.js', 'dashboard/js/pages/inbox.js', 'dashboard/js/pages/analytics.js',
         'dashboard/js/pages/activity.js', 'dashboard/js/pages/posts.js',
     ]) {

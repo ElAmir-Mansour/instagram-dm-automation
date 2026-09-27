@@ -87,7 +87,7 @@ function load() {
     vm.createContext(ctx);
     for (const f of [
         'dashboard/js/components.js',
-        'dashboard/js/i18n.js',
+        'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js',
         'dashboard/js/motion.js',
         'dashboard/js/pages/admin_common.js',
         'dashboard/js/pages/operations.js',

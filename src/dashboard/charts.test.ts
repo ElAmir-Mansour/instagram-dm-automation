@@ -58,7 +58,7 @@ function load(): Loaded {
     ctx.globalThis = ctx;
     vm.createContext(ctx);
 
-    for (const f of ['dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/charts.js']) {
+    for (const f of ['dashboard/js/components.js', 'dashboard/js/i18n.js', 'dashboard/js/i18n.ar.js', 'dashboard/js/i18n.en.js', 'dashboard/js/charts.js']) {
         vm.runInContext(readFileSync(f, 'utf8'), ctx, { filename: f });
     }
     // I18N.isRtl is what the strip consults; override it rather than mutating language state.
