@@ -4480,6 +4480,7 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .unsaved-note::before {
     content: ''; inline-size: 7px; block-size: 7px; border-radius: 50%;
     background: var(--warning); flex-shrink: 0;
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Monteur (#/monteur). The status strip, the setup steps, the save bar and the
