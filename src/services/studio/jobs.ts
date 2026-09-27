@@ -1,6 +1,6 @@
 /**
- * The Studio queue (STUDIO.md §5): what the Mac worker claims, and what each result does to
- * the lessons and drafts it was for.
+ * The Studio queue (STUDIO.md §5, MONTEUR.md §3): what the Mac worker claims, and what each result
+ * does to the lessons, drafts, Monteur sources and clips it was for.
  *
  *   pending ─claim→ claimed ─complete→ done
  *                      │  └──fail──→ failed (and its lesson or draft goes failed too)
@@ -16,14 +16,21 @@
 import { pool } from '../../config/db.js';
 import { queryCount, queryOne } from '../../db/query.js';
 import type {
-    CarouselDraftRow, DraftRender, LessonNotes, MomentKind, RenderCarouselPayload, StudioJobKind, StudioJobRow,
+    CarouselDraftRow, ClipDraftRow, ClipRender, DraftRender, LessonNotes, MomentKind, MonteurRenderPayload,
+    MonteurScanPayload, MonteurSourceRow, RenderCarouselPayload, StudioJobKind, StudioJobRow,
 } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
-import { uploadIdFromUrl } from '../storage.js';
+import { getPublicBaseUrl } from '../appSettings.js';
+import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
+import {
+    MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parsePickFolderResult, parseTranscribeResult,
+} from '../monteur/results.js';
+import { getMediaStore, SupabaseStorageMediaStore, uploadIdFromUrl } from '../storage.js';
 import {
     type Exec, clipText, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN,
     withTransaction,
 } from './common.js';
+import { getStudioSettings, updateStudioSettings } from './settings.js';
 
 /** A claim whose heartbeat is older than this is presumed dead: the worker crashed or slept. */
 export const STALE_CLAIM_MINUTES = 15;
@@ -39,6 +46,20 @@ const MAX_PROBLEMS = 20;
 export const EXHAUSTED_ERROR =
     `The worker stopped reporting on this job ${MAX_ATTEMPTS} times. It may be crashing on it: check ~/Library/Logs/aicourse-studio-worker.log on the Mac.`;
 const SUPERSEDED_ERROR = 'Superseded by a newer render of the same draft.';
+const SUPERSEDED_CLIP_ERROR = 'Superseded by a newer render of the same clip.';
+/**
+ * A folder dialog is for someone looking at the Mac right now. One still queued after this long
+ * would pop up when nobody is there, and whatever it chose would overwrite the folder.
+ */
+export const PICK_FOLDER_TTL_MINUTES = 10;
+export const PICK_FOLDER_EXPIRED_ERROR =
+    `Nobody was waiting for the folder dialog any more: it was not picked up within ${PICK_FOLDER_TTL_MINUTES} minutes. Press Choose folder again.`;
+/** What the sign route allows, and so what a render's files may be (MONTEUR.md §4). */
+export const MAX_RENDER_FILE_BYTES = 100 * 1024 * 1024;
+/** Every job kind, for a claim that asks for some of them only. */
+export const STUDIO_JOB_KINDS: readonly StudioJobKind[] = [
+    'scan_library', 'index_lesson', 'render_carousel', 'pick_folder', 'monteur_scan', 'monteur_transcribe', 'monteur_render',
+];
 
 export type StudioJobView = Pick<
     StudioJobRow,
@@ -130,13 +151,75 @@ export async function latestRenderJobId(exec: Exec, creatorId: string, draftId: 
     return rows[0]?.id ?? null;
 }
 
+// ── The Monteur's renders (MONTEUR.md §3) ──
+
+/**
+ * Queue a render of a clip and mark it `rendering`. As for a carousel, renders of the same clip
+ * still pending are failed as superseded first, and a claimed one's result is dropped on arrival.
+ */
+export async function enqueueMonteurRender(
+    exec: Exec, creatorId: string, payload: MonteurRenderPayload
+): Promise<{ job: StudioJobView; clip: ClipDraftRow | null }> {
+    await cancelClipRenders(exec, creatorId, payload.clipId, SUPERSEDED_CLIP_ERROR);
+    const job = await enqueueJob(exec, creatorId, 'monteur_render', payload);
+    const { rows } = await exec.query<ClipDraftRow>(
+        `UPDATE clip_drafts SET status = 'rendering', error = NULL, updated_at = NOW()
+          WHERE id = $1 AND creator_id = $2
+      RETURNING *`,
+        [payload.clipId, creatorId]
+    );
+    return { job, clip: rows[0] ?? null };
+}
+
+/** Stop queued renders of a clip. A claimed one's result is dropped when it arrives. */
+export async function cancelClipRenders(exec: Exec, creatorId: string, clipId: string, reason: string): Promise<void> {
+    await exec.query(
+        `UPDATE studio_jobs SET status = 'failed', error = $3, updated_at = NOW()
+          WHERE creator_id = $1 AND kind = 'monteur_render' AND status = 'pending'
+            AND payload->>'clipId' = $2`,
+        [creatorId, clipId, reason]
+    );
+}
+
+/** The newest render job of a clip, whatever its state: the only one whose result may land. */
+export async function latestClipRenderJobId(exec: Exec, creatorId: string, clipId: string): Promise<string | null> {
+    const { rows } = await exec.query<{ id: string }>(
+        `SELECT id FROM studio_jobs
+          WHERE creator_id = $1 AND kind = 'monteur_render' AND payload->>'clipId' = $2
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1`,
+        [creatorId, clipId]
+    );
+    return rows[0]?.id ?? null;
+}
+
+/**
+ * A source whose clips have all left `rendering` (landed, failed or rejected) is `done`. Run after
+ * every change that can be the last one. The source row is locked first: two renders finishing at
+ * once would otherwise each see the other's clip still rendering (neither has committed) and
+ * leave the source rendering forever. Behind the lock, the second one's check runs after the
+ * first commits, and sees it.
+ */
+export async function markSourceDoneIfRendered(exec: Exec, creatorId: string, sourceId: string): Promise<void> {
+    await exec.query('SELECT id FROM monteur_sources WHERE id = $1 AND creator_id = $2 FOR UPDATE', [sourceId, creatorId]);
+    await exec.query(
+        `UPDATE monteur_sources s SET status = 'done', updated_at = NOW()
+          WHERE s.id = $1 AND s.creator_id = $2 AND s.status = 'rendering'
+            AND NOT EXISTS (SELECT 1 FROM clip_drafts c WHERE c.source_id = s.id AND c.status = 'rendering')`,
+        [sourceId, creatorId]
+    );
+}
+
 // ─── Claim ──────────────────────────────────────────────────────────────────────────────
 
 /**
  * The next claimable job: pending, or claimed with a heartbeat older than 15 minutes and
- * fewer than three claims behind it. Renders go first, then scans, then indexing, oldest first
- * within each: a render is someone waiting at the editor, while indexing the whole library is a
- * backlog of an hour or more that would otherwise hold every render behind it.
+ * fewer than three claims behind it. Oldest first within each rank:
+ *   0  pick_folder         someone is looking at the Mac, waiting for the folder dialog
+ *   1  render_carousel     someone is waiting at the editor
+ *   2  monteur_render      a reel for the review queue, often right after an edit
+ *   3  scan_library, monteur_scan   quick folder listings that queue the real work
+ *   4  index_lesson, monteur_transcribe   minutes each: the backlog that must not hold the rest
  *
  * SKIP LOCKED makes two claimers split the work rather than queue behind each other's lock,
  * and the lock itself is what stops them both taking the same row: the UPDATE runs on the row
@@ -147,11 +230,14 @@ export const CLAIM_SQL = `
         SELECT id
           FROM studio_jobs
          WHERE creator_id = $1
+           AND ($4::text[] IS NULL OR kind = ANY($4::text[]))
            AND (status = 'pending'
                 OR (status = 'claimed'
                     AND COALESCE(heartbeat_at, claimed_at, created_at) < NOW() - make_interval(mins => $2)
                     AND attempts < $3))
-         ORDER BY CASE kind WHEN 'render_carousel' THEN 0 WHEN 'scan_library' THEN 1 ELSE 2 END, created_at, id
+         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_render' THEN 2
+                            WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END,
+                  created_at, id
          LIMIT 1
            FOR UPDATE SKIP LOCKED
     )
@@ -166,12 +252,16 @@ export const CLAIM_SQL = `
      WHERE j.id = picked.id
  RETURNING j.id, j.kind, j.payload, j.attempts`;
 
+/**
+ * `kinds` narrows the claim: a worker busy rendering can poll a fast lane for `pick_folder` alone,
+ * so the folder dialog does not wait behind a ten-minute render.
+ */
 export async function claimJob(
-    creatorId: string
+    creatorId: string, kinds: readonly StudioJobKind[] | null = null
 ): Promise<{ id: string; kind: StudioJobKind; payload: StudioJobRow['payload'] } | null> {
     await failExhaustedClaims(creatorId);
     const row = await queryOne<Pick<StudioJobRow, 'id' | 'kind' | 'payload' | 'attempts'>>(
-        CLAIM_SQL, [creatorId, STALE_CLAIM_MINUTES, MAX_ATTEMPTS]
+        CLAIM_SQL, [creatorId, STALE_CLAIM_MINUTES, MAX_ATTEMPTS, kinds && kinds.length ? [...kinds] : null]
     );
     if (!row) return null;
     log('info', 'studio.job_claimed', { job_id: row.id, kind: row.kind, attempt: row.attempts });
@@ -198,6 +288,14 @@ export async function failExhaustedClaims(creatorId: string): Promise<number> {
             log('warn', 'studio.job_exhausted', { job_id: job.id, kind: job.kind });
             await applyFailure(client, job, EXHAUSTED_ERROR);
         }
+        // Folder dialogs nobody is waiting for any more are failed, never handed out.
+        const { rowCount } = await client.query(
+            `UPDATE studio_jobs SET status = 'failed', error = $3, updated_at = NOW()
+              WHERE creator_id = $1 AND kind = 'pick_folder' AND status = 'pending'
+                AND created_at < NOW() - make_interval(mins => $2)`,
+            [creatorId, PICK_FOLDER_TTL_MINUTES, PICK_FOLDER_EXPIRED_ERROR]
+        );
+        if (rowCount) log('info', 'monteur.folder_pick_expired', { jobs: rowCount });
         return rows.length;
     });
 }
@@ -251,6 +349,18 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
             const applied = await applyRender(client, job, result);
             stored = applied.stored;
             outcome = applied.outcome;
+        } else if (job.kind === 'pick_folder') {
+            stored = await applyPickFolder(client, job, result);
+        } else if (job.kind === 'monteur_scan') {
+            stored = await applyMonteurScan(client, job, result);
+        } else if (job.kind === 'monteur_transcribe') {
+            const applied = await applyTranscribe(client, job, result);
+            stored = applied.stored;
+            outcome = applied.outcome;
+        } else if (job.kind === 'monteur_render') {
+            const applied = await applyMonteurRender(client, job, result);
+            stored = applied.stored;
+            outcome = applied.outcome;
         } else {
             throw new StudioError(409, `Unknown job kind "${String(job.kind)}".`);
         }
@@ -277,7 +387,7 @@ async function lockJob(exec: Exec, creatorId: string, jobId: string): Promise<Lo
     return rows[0];
 }
 
-function payloadId(job: LockedJob, key: 'lessonId' | 'draftId'): string | null {
+function payloadId(job: LockedJob, key: 'lessonId' | 'draftId' | 'sourceId' | 'clipId'): string | null {
     const value = isPlainObject(job.payload) ? (job.payload as Record<string, unknown>)[key] : undefined;
     return typeof value === 'string' && UUID_PATTERN.test(value) ? value.toLowerCase() : null;
 }
@@ -536,8 +646,9 @@ async function assertOwnUploads(exec: Exec, creatorId: string, urls: readonly st
 }
 
 /**
- * Delete these uploads, except any in `keep` and any a `scheduled_posts` row still names, in
- * any state — a row that already published may yet be edited and republished.
+ * Delete these uploads, except any in `keep`, any a `scheduled_posts` row still names, in any
+ * state — a row that already published may yet be edited and republished — and any a Monteur clip
+ * that is rendering, in review or scheduled still shows (MONTEUR.md §2).
  */
 export async function deleteUnreferencedUploads(
     exec: Exec, creatorId: string, urls: readonly (string | null | undefined)[], keep: ReadonlySet<string> = new Set()
@@ -556,6 +667,13 @@ export async function deleteUnreferencedUploads(
                  WHERE s.media_url LIKE '%' || m.id::text || '%'
                     OR s.cover_url LIKE '%' || m.id::text || '%'
                     OR array_to_string(s.media_urls, ' ') LIKE '%' || m.id::text || '%'
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM clip_drafts c
+                 WHERE c.status IN ('rendering', 'review', 'scheduled')
+                   AND (COALESCE(c.render->>'video_url', '') || ' ' || COALESCE(c.render->>'tiktok_video_url', '')
+                        || ' ' || COALESCE(c.render->>'cover_url', ''))
+                       LIKE '%' || m.id::text || '%'
             )`,
         [creatorId, ids]
     );
@@ -575,9 +693,14 @@ async function applyRender(
 ): Promise<{ outcome: CompleteOutcome; stored: unknown }> {
     const payload = isPlainObject(job.payload) ? (job.payload as Partial<RenderCarouselPayload>) : {};
     const slides = isPlainObject(payload.carousel) && Array.isArray(payload.carousel.slides) ? payload.carousel.slides.length : null;
-    const render = parseRenderResult(result, slides);
+    const reported = parseRenderResult(result, slides);
+    await assertOwnUploads(exec, job.creator_id, [...reported.ig, ...reported.tt]);
+    // Kept by id, rebuilt on our own address, like a reel's.
+    const render = {
+        ig: await ownUploadUrls(reported.ig.map((url) => uploadIdFromUrl(url)!)),
+        tt: await ownUploadUrls(reported.tt.map((url) => uploadIdFromUrl(url)!)),
+    };
     const urls = [...render.ig, ...render.tt];
-    await assertOwnUploads(exec, job.creator_id, urls);
 
     const draftId = payloadId(job, 'draftId');
     const { rows } = draftId
@@ -611,6 +734,194 @@ async function applyRender(
     return { outcome: 'applied', stored: render };
 }
 
+// ── pick_folder ──
+
+/** The folder the operator chose, saved through the settings rules; a cancelled dialog changes nothing. */
+async function applyPickFolder(exec: Exec, job: LockedJob, result: unknown): Promise<unknown> {
+    const picked = parsePickFolderResult(result);
+    if ('cancelled' in picked) return { cancelled: true };
+    // A folder the rules refuse (not absolute, too long) is a 400 here, like any bad result.
+    const { settings } = await updateStudioSettings(job.creator_id, { monteur: { folder: picked.folder } }, exec);
+    // The same record PUT /settings leaves for the same change; the actor is the tenant's worker.
+    await writeAudit({ userId: null, email: 'studio-worker' }, {
+        action: AUDIT_ACTIONS.studioSettingsWrite, targetType: 'creator', targetId: job.creator_id,
+        detail: { sections: ['monteur'], via: 'pick_folder', job_id: job.id },
+    }, exec);
+    log('info', 'monteur.folder_picked', { job_id: job.id });
+    return { folder: settings.monteur.folder };
+}
+
+// ── monteur_scan ──
+
+/**
+ * New sources, and one transcribe job for each. ON CONFLICT DO NOTHING makes a file already known
+ * (a second scan queued before the first landed, say) a no-op rather than a second transcript.
+ */
+async function applyMonteurScan(exec: Exec, job: LockedJob, result: unknown): Promise<unknown> {
+    const payload = isPlainObject(job.payload) ? (job.payload as Partial<MonteurScanPayload>) : {};
+    const limit = Number.isInteger(payload.limit) && (payload.limit as number) > 0 ? (payload.limit as number) : 10;
+    const { files, skipped, missing } = parseMonteurScanResult(result, limit);
+
+    let added: Pick<MonteurSourceRow, 'id' | 'path'>[] = [];
+    if (files.length) {
+        const { rows } = await exec.query<Pick<MonteurSourceRow, 'id' | 'path'>>(
+            `INSERT INTO monteur_sources (creator_id, content_key, path, name, size_bytes, duration)
+             SELECT $1::uuid, x.key, x.path, x.name, x.size, x.duration
+               FROM jsonb_to_recordset($2::jsonb) AS x(key TEXT, path TEXT, name TEXT, size BIGINT, duration NUMERIC)
+             ON CONFLICT (creator_id, content_key) DO NOTHING
+          RETURNING id, path`,
+            [job.creator_id, JSON.stringify(files)]
+        );
+        added = rows;
+    }
+    if (added.length) {
+        const { voice } = await getStudioSettings(job.creator_id, exec);
+        const language = voice.language === 'ar' ? 'ar' : 'en';
+        for (const source of added) {
+            await enqueueJob(exec, job.creator_id, 'monteur_transcribe', { sourceId: source.id, path: source.path, language });
+        }
+    }
+    log(missing ? 'warn' : 'info', 'monteur.scan_applied', {
+        job_id: job.id, added: added.length, skipped: skipped.length, missing,
+    });
+    return { added: added.length, skipped: skipped.length, missing, skipped_files: skipped.slice(0, MAX_SKIPPED_KEPT) };
+}
+
+// ── monteur_transcribe ──
+
+/** The words, on a source still waiting for them. The pick sweep takes it from `transcribed`. */
+async function applyTranscribe(
+    exec: Exec, job: LockedJob, result: unknown
+): Promise<{ outcome: CompleteOutcome; stored: unknown }> {
+    const { duration, words } = parseTranscribeResult(result);
+    const sourceId = payloadId(job, 'sourceId');
+    const { rows } = sourceId
+        ? await exec.query<Pick<MonteurSourceRow, 'id' | 'status'>>(
+            'SELECT id, status FROM monteur_sources WHERE id = $1 AND creator_id = $2 FOR UPDATE',
+            [sourceId, job.creator_id]
+        )
+        : { rows: [] };
+    const source = rows[0];
+    if (!source || source.status !== 'transcribing') {
+        const reason = !source ? 'source_missing' : `source_${source.status}`;
+        log('info', 'monteur.transcript_dropped', { job_id: job.id, source_id: sourceId, reason });
+        return { outcome: 'dropped', stored: { words: words.length, duration, dropped: reason } };
+    }
+    await exec.query(
+        `UPDATE monteur_sources
+            SET words = $2::jsonb, duration = COALESCE($3::numeric, duration), status = 'transcribed',
+                attempts = 0, claimed_at = NULL, error = NULL, updated_at = NOW()
+          WHERE id = $1`,
+        [source.id, JSON.stringify(words), duration]
+    );
+    return { outcome: 'applied', stored: { words: words.length, duration } };
+}
+
+// ── monteur_render ──
+
+/**
+ * Every file must be this tenant's upload, of the right kind — an MP4 to post, a JPEG cover
+ * (Instagram takes nothing else) — and, for one in Supabase Storage, actually there as declared:
+ * a signed upload URL carries no size or type limit of its own, so the object itself is asked.
+ */
+async function checkRenderFiles(exec: Exec, creatorId: string, wanted: readonly [id: string, mime: string, label: string][]): Promise<void> {
+    const ids = unique(wanted.map(([id]) => id));
+    const { rows } = await exec.query<{ id: string; mime_type: string; storage_path: string | null }>(
+        'SELECT id, mime_type, storage_path FROM media_uploads WHERE id = ANY($1::uuid[]) AND creator_id = $2', [ids, creatorId]
+    );
+    const byId = new Map(rows.map((r) => [String(r.id).toLowerCase(), r]));
+    const problems = wanted.flatMap(([id, mime, label]) => {
+        const row = byId.get(id);
+        if (!row) return [`${label}: upload ${id} does not exist`];
+        return row.mime_type === mime ? [] : [`${label}: upload ${id} is ${row.mime_type}, not ${mime}`];
+    });
+    if (problems.length) throw problemsError(problems, 'the render result');
+
+    const inStorage = rows.filter((r) => r.storage_path);
+    if (!inStorage.length) return;
+    const store = await getMediaStore();
+    if (!(store instanceof SupabaseStorageMediaStore)) {
+        throw new StudioError(409, 'The render is in Supabase Storage, and media storage is not configured to check it.');
+    }
+    for (const [id, mime, label] of wanted) {
+        const row = byId.get(id)!;
+        if (!row.storage_path) continue;
+        const object = await store.client.headObject(row.storage_path);
+        if (!object) problems.push(`${label}: upload ${id} was signed but its file never arrived`);
+        else if (object.size !== null && object.size > MAX_RENDER_FILE_BYTES) problems.push(`${label}: upload ${id} is over 100MB`);
+        else if (object.contentType && object.contentType !== mime) problems.push(`${label}: upload ${id} was stored as ${object.contentType}, not ${mime}`);
+    }
+    if (problems.length) throw problemsError(problems, 'the render result');
+}
+
+/**
+ * This app's own URLs for uploads, on its public address: never the strings a worker sent. A
+ * worker could otherwise name one of our ids inside another host's URL, and every reader of the
+ * stored URL — the dashboard's preview, Meta fetching the post — would go to that host instead.
+ */
+async function ownUploadUrls(ids: readonly string[]): Promise<string[]> {
+    const base = await getPublicBaseUrl(null);
+    if (!base) throw new StudioError(500, 'No public address for this app: set it in Settings → TikTok app.');
+    const store = await getMediaStore();
+    return ids.map((id) => store.publicUrl(id, base));
+}
+
+const ownUploadUrl = async (id: string): Promise<string> => (await ownUploadUrls([id]))[0]!;
+
+/**
+ * Land a reel on its clip, or drop it. Dropped when it is not the clip's latest render job (an
+ * edit arrived meanwhile), or the clip is gone or no longer rendering (rejected); a dropped
+ * render's files are deleted, since nothing will ever name them. A landed one puts the clip in
+ * review, replaces the previous render (whose files go, unless something still names them) and
+ * may finish its source.
+ */
+async function applyMonteurRender(
+    exec: Exec, job: LockedJob, result: unknown
+): Promise<{ outcome: CompleteOutcome; stored: unknown }> {
+    const render = parseMonteurRenderResult(result);
+    await checkRenderFiles(exec, job.creator_id, [
+        [render.videoId, 'video/mp4', 'video_url'], [render.coverId, 'image/jpeg', 'cover_url'],
+        ...(render.tiktokVideoId ? [[render.tiktokVideoId, 'video/mp4', 'tiktok_video_url'] as [string, string, string]] : []),
+    ]);
+    const stored = {
+        video_url: await ownUploadUrl(render.videoId),
+        tiktok_video_url: render.tiktokVideoId ? await ownUploadUrl(render.tiktokVideoId) : null,
+        cover_url: await ownUploadUrl(render.coverId),
+        duration: render.duration,
+    };
+    const files = [stored.video_url, stored.tiktok_video_url, stored.cover_url];
+
+    const clipId = payloadId(job, 'clipId');
+    const { rows } = clipId
+        ? await exec.query<Pick<ClipDraftRow, 'id' | 'source_id' | 'status' | 'render'>>(
+            'SELECT id, source_id, status, render FROM clip_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE',
+            [clipId, job.creator_id]
+        )
+        : { rows: [] };
+    const clip = rows[0];
+    const latest = clipId ? await latestClipRenderJobId(exec, job.creator_id, clipId) : null;
+
+    const reason = !clip ? 'clip_missing' : clip.status !== 'rendering' ? `clip_${clip.status}` : latest !== job.id ? 'superseded' : null;
+    if (reason) {
+        const deleted = await deleteUnreferencedUploads(exec, job.creator_id, files);
+        log('info', 'monteur.render_dropped', { job_id: job.id, clip_id: clipId, reason, uploads_deleted: deleted });
+        return { outcome: 'dropped', stored: { ...stored, dropped: reason } };
+    }
+
+    const next: ClipRender = { ...stored, job_id: job.id, rendered_at: new Date().toISOString() };
+    await exec.query(
+        `UPDATE clip_drafts SET render = $2::jsonb, status = 'review', error = NULL, updated_at = NOW() WHERE id = $1`,
+        [clip!.id, JSON.stringify(next)]
+    );
+    const previous = clip!.render;
+    if (previous) {
+        const keep = new Set([render.videoId, render.coverId, ...(render.tiktokVideoId ? [render.tiktokVideoId] : [])]);
+        await deleteUnreferencedUploads(exec, job.creator_id, [previous.video_url, previous.tiktok_video_url, previous.cover_url], keep);
+    }
+    await markSourceDoneIfRendered(exec, job.creator_id, clip!.source_id);
+    return { outcome: 'applied', stored };
+}
+
 // ─── Fail ───────────────────────────────────────────────────────────────────────────────
 
 /** The worker gave up. Terminal: the operator re-presses the button once the cause is fixed. */
@@ -631,9 +942,10 @@ export async function failJob(creatorId: string, jobId: string, error: string): 
 }
 
 /**
- * The lesson or draft a failed job was for goes `failed` with the error. A render that is no
- * longer the draft's latest leaves the draft alone: the newer one is still on its way, and a
- * scheduled draft is past rendering.
+ * The lesson, draft, source or clip a failed job was for goes `failed` with the error. A render
+ * that is no longer the draft's (or clip's) latest leaves it alone: the newer one is still on its
+ * way, and a scheduled one is past rendering. A failed `pick_folder` or `monteur_scan` is only a
+ * failed job: neither has a row of its own.
  */
 async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<void> {
     if (job.kind === 'index_lesson') {
@@ -652,6 +964,29 @@ async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<
               WHERE id = $1 AND creator_id = $2 AND status <> 'scheduled'`,
             [draftId, job.creator_id, error]
         );
+    } else if (job.kind === 'monteur_transcribe') {
+        const sourceId = payloadId(job, 'sourceId');
+        if (!sourceId) return;
+        await exec.query(
+            `UPDATE monteur_sources SET status = 'failed', error = $3, updated_at = NOW()
+              WHERE id = $1 AND creator_id = $2 AND status = 'transcribing'`,
+            [sourceId, job.creator_id, error]
+        );
+    } else if (job.kind === 'monteur_render') {
+        const clipId = payloadId(job, 'clipId');
+        if (!clipId) return;
+        // The clip first, so a PATCH queueing a newer render at this moment is either seen here
+        // (and the clip left alone) or waits until this failure is recorded.
+        await exec.query('SELECT id FROM clip_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [clipId, job.creator_id]);
+        if ((await latestClipRenderJobId(exec, job.creator_id, clipId)) !== job.id) return;
+        const { rows } = await exec.query<Pick<ClipDraftRow, 'source_id'>>(
+            `UPDATE clip_drafts SET status = 'failed', error = $3, updated_at = NOW()
+              WHERE id = $1 AND creator_id = $2 AND status = 'rendering'
+          RETURNING source_id`,
+            [clipId, job.creator_id, error]
+        );
+        // The last clip to leave rendering finishes its source, whether it landed or not.
+        if (rows[0]) await markSourceDoneIfRendered(exec, job.creator_id, rows[0].source_id);
     }
 }
 

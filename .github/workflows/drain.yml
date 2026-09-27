@@ -45,7 +45,8 @@ concurrency:
 jobs:
   drain:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Above the curl's 300 s, so a slow drain is reported by curl, not killed by the runner.
+    timeout-minutes: 7
     steps:
       - name: Drain the queue
         env:
@@ -59,7 +60,9 @@ jobs:
           fi
 
           # -s quiet, -S still show errors, --max-time so a hung socket cannot hold the runner.
-          body=$(curl -sS --max-time 60 \
+          # 300 s: the drain ends with the Monteur's pick sweep, two Gemini calls for one video,
+          # and runs up to Vercel's 300 s limit. At 60 s every drain that picked went red.
+          body=$(curl -sS --max-time 300 \
             -H "Authorization: Bearer $CRON_SECRET" \
             -w '\n%{http_code}' \
             "$BASE_URL/api/jobs/drain")

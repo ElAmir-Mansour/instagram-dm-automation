@@ -71,6 +71,33 @@ export type ScheduleConfig = { timezone: string; slots: string[] };
 /** The folder the worker scans; `null` = not set. */
 export type LibraryConfig = { root: string | null };
 
+export type MonteurPlatform = 'instagram' | 'facebook' | 'tiktok';
+
+/**
+ * The Monteur (MONTEUR.md §1): the folder it watches, when it runs, how much it cuts and where
+ * the reels go. Times are wall-clock times in `schedule.timezone`, the tenant's one timezone.
+ */
+export type MonteurConfig = {
+    /** Off = no daily run. Run now still works. */
+    enabled: boolean;
+    /** Absolute, on the worker's machine; `null` = not chosen yet. */
+    folder: string | null;
+    /** 'HH:MM': the daily scan. */
+    run_at: string;
+    /** 1–10: new videos taken per run, oldest first. */
+    videos_per_run: number;
+    /** 1–5. */
+    reels_per_video: number;
+    /** At least one. Instagram and Facebook share one post; TikTok is its sibling. */
+    platforms: MonteurPlatform[];
+    /** 1–4 'HH:MM' posting slots. */
+    post_at: string[];
+    /** 10–60. */
+    min_seconds: number;
+    /** 15–90, and more than `min_seconds`. */
+    max_seconds: number;
+};
+
 export type StudioSettings = {
     brand: BrandKit;
     voice: VoiceProfile;
@@ -80,7 +107,23 @@ export type StudioSettings = {
     library: LibraryConfig;
     /** Carousels the tenant approved, used as few-shot examples; `null` = the built-in ones. */
     examples: Carousel[] | null;
+    monteur: MonteurConfig;
 };
+
+/** The Monteur's defaults: off, no folder, one reel a day from one video. */
+export function defaultMonteurConfig(): MonteurConfig {
+    return {
+        enabled: false,
+        folder: null,
+        run_at: '07:00',
+        videos_per_run: 1,
+        reels_per_video: 1,
+        platforms: ['instagram', 'facebook', 'tiktok'],
+        post_at: ['19:00'],
+        min_seconds: 20,
+        max_seconds: 45,
+    };
+}
 
 /** A spread of accents that read on the dark-grid theme. */
 export const DEFAULT_PALETTE: readonly string[] = [
@@ -129,5 +172,6 @@ export function defaultStudioSettings(): StudioSettings {
         schedule: { timezone: 'UTC', slots: ['12:00', '18:00'] },
         library: { root: null },
         examples: null,
+        monteur: defaultMonteurConfig(),
     };
 }

@@ -109,6 +109,30 @@ describe('an undeliverable DM: the public fallback reply', () => {
         assert.equal(shouldPostDmFallback(metaApiError(10900)), false, 'the comment already had its private reply');
     });
 
+    it("treats Instagram's already-replied refusal (code -1) as final, with no public fallback", () => {
+        // The incident, 2026-09-27: Instagram answered a private reply with code -1 and only
+        // this message. Read as transient, it retried twice and the last attempt replied
+        // publicly "we couldn't message you" — to someone who already had a DM.
+        const err = new MetaApiError(
+            'Private Reply Failed [me]: The comment you are trying to reply to, already has a reply. (Code: -1)',
+            { response: { data: { error: { code: -1, message: 'The comment you are trying to reply to, already has a reply.' } } } }
+        );
+        const classified = classifyDmError(err);
+        assert.equal(classified.permanent, true);
+        assert.equal(classified.status, 'FAILED');
+        assert.match(classified.error, /already had its private reply/);
+        assert.equal(shouldPostDmFallback(err), false);
+        assert.equal(shouldPostDmFallback(rewrapped(-1, 'The comment you are trying to reply to, already has a reply.')), false,
+            'a flat error from elsewhere carries only the message');
+    });
+
+    it('keeps an unrelated code -1 retryable', () => {
+        const err = new MetaApiError('DM Send Failed: An unexpected error has occurred. (Code: -1)',
+            { response: { data: { error: { code: -1, message: 'An unexpected error has occurred.' } } } });
+        assert.equal(classifyDmError(err).permanent, false);
+        assert.equal(shouldPostDmFallback(err), true);
+    });
+
     it('on Facebook, carries the first link from the DM, clickable there', () => {
         const text = dmFallbackReply({
             dmText: 'أهلاً! رابط الكورس: https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34. بالتوفيق',

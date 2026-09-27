@@ -1,0 +1,340 @@
+/**
+ * The pick sweep (MONTEUR.md §6, §6.1): the claim and its attempts, the two calls, the saved pick,
+ * and the hand-off. Gemini is stood in for with `setModelCaller`, the pool answers by SQL, and the
+ * log sink is captured so the token lines are checked, not assumed.
+ */
+import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import type { TranscriptWord } from '../../db/rows.js';
+import { setLogSink } from '../../utils/log.js';
+import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
+import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
+import { ASK_POOL } from './copy.js';
+import { PICK_MAX_OUTPUT } from './pick.js';
+import {
+    CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, sweepMonteur,
+} from './sweep.js';
+import { installFakeDb, type FakeDb } from './testDb.js';
+
+const TENANT = '11111111-1111-4111-8111-111111111111';
+const SOURCE = '66666666-6666-4666-8666-666666666666';
+const CLIP = '77777777-7777-4777-8777-777777777777';
+
+/** L1 at 0 s … L20 at 95 s, each line one sentence of 4.5 s. */
+const WORDS: TranscriptWord[] = Array.from({ length: 20 }, (_, i) => [i * 5, i * 5 + 4.5, `جملة${i + 1}.`] as TranscriptWord);
+
+const PICK = {
+    topic: 'NotebookLM يلخص الدروس',
+    clips: [{ start_line: 3, end_line: 7, title: 'عنوان 3 كلمات', hook_type: 'promise', why: 'يبدأ بنتيجة', scores: { hook: 3, alone: 3, payoff: 2, send: 2 } }],
+};
+const COPY_ITEM = {
+    clip: 1, first_line: '🔥 دفترك الذكي', body: '✅ يلخص لك الدرس\n💡 بدقيقة', ask_line: 'تبي تجربها؟ اكتب «{keyword}» 👇',
+    tiktok_body: 'متحدث يشرح كيف يلخص NotebookLM الدرس',
+    hashtags: ['#ai', 'notebook lm', '#اكسبلور', '#ذكاء_اصطناعي'], keyword_candidates: ['دفت', 'دفتر', 'ملاحظة'], variants: ['الدفتر', 'دفاتر'],
+    question: 'تبي تجربه؟', pitch: 'شرحته في الكورس.', alt_text: 'متحدث يشرح NotebookLM',
+};
+const COPY = { clips: [COPY_ITEM] };
+
+let db: FakeDb;
+let source: Record<string, unknown> | null;
+let handOffClaimed: boolean;
+let calls: ModelRequest[];
+let answers: Record<string, unknown | Error>;
+let logs: { event: string; [k: string]: unknown }[];
+let copyCalledAt: number;
+let inFlight: string[];
+let inFlightVariants: string[];
+let saveClaimed: boolean;
+let existingTexts: string[];
+let recentCaptions: { caption: string; keyword: string }[];
+let previousCaller: CallModel;
+let previousSink: ReturnType<typeof setLogSink>;
+
+beforeEach(() => {
+    db = installFakeDb();
+    source = { id: SOURCE, creator_id: TENANT, name: 'lesson.mp4', path: '/v/lesson.mp4', duration: 100, words: WORDS, pick: null, attempts: 1 };
+    handOffClaimed = true;
+    calls = [];
+    answers = { 'monteur.pick': PICK, 'monteur.copy': COPY };
+    logs = [];
+    copyCalledAt = -1;
+    inFlight = [];
+    inFlightVariants = [];
+    saveClaimed = true;
+    existingTexts = [];
+    recentCaptions = [];
+    previousSink = setLogSink((_level, line) => { logs.push(JSON.parse(line)); });
+    previousCaller = setModelCaller(async (req) => {
+        calls.push(req);
+        if (req.purpose === 'monteur.copy') copyCalledAt = db.statements.length;
+        const answer = answers[req.purpose];
+        if (answer instanceof Error) throw answer;
+        req.onUsage?.({ model: 'gemini-test', tokensIn: 1000, tokensOut: 200, thinking: 50 });
+        return answer;
+    });
+    db.routes.push(
+        [/^SELECT c\.id AS creator_id FROM creators c/, () => ({ rows: [] })],
+        [/^UPDATE monteur_sources SET status = 'failed', claimed_at = NULL/, () => ({ rows: [], rowCount: 0 })],
+        [/^WITH picked AS \( SELECT s\.id FROM monteur_sources s/, () => ({ rows: source ? [source] : [] })],
+        [/FROM studio_settings/, () => ({ rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: 1 } }] })],
+        [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [{ lessons: [{ rule: 'ابدأ بالنتيجة', evidence: 'skip 40%' }] }] })],
+        [/^SELECT caption FROM post_insights/, () => ({ rows: [{ caption: 'هذي أسرع طريقة تلخص فيها درس كامل\nbody' }, { caption: 'غلطة يسويها الكل' }] })],
+        [/^SELECT text FROM clip_drafts/, () => ({ rows: existingTexts.map((text) => ({ text })) })],
+        [/^SELECT copy->>'keyword' AS keyword, copy->'variants' AS variants FROM clip_drafts/, () => ({
+            rows: [...inFlight.map((keyword) => ({ keyword, variants: [] })), ...(inFlightVariants.length ? [{ keyword: null, variants: inFlightVariants }] : [])],
+        })],
+        [/^UPDATE monteur_sources SET pick = \$2::jsonb/, () => ({ rows: [], rowCount: saveClaimed ? 1 : 0 })],
+        [/^SELECT copy->>'caption' AS caption, copy->>'keyword' AS keyword FROM clip_drafts/, () => ({ rows: recentCaptions })],
+        [/^UPDATE monteur_sources SET status = 'rendering'/, () => ({ rows: handOffClaimed ? [{ id: SOURCE }] : [] })],
+        [/^UPDATE monteur_sources SET status = 'no_clips'/, () => ({ rows: [{ id: SOURCE }] })],
+        [/^INSERT INTO clip_drafts/, () => ({ rows: [{ id: CLIP }] })],
+        [/^INSERT INTO studio_jobs/, (p) => ({ rows: [{ id: 'job-render', kind: p[1], status: 'pending', payload: JSON.parse(p[2]) }] })],
+    );
+});
+
+afterEach(() => {
+    db.restore();
+    setModelCaller(previousCaller);
+    setLogSink(previousSink);
+});
+
+const later = () => ({ deadline: Date.now() + 250_000 });
+const savedCopy = () => JSON.parse(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[13]);
+
+describe('the claim — the SQL', () => {
+    it('takes one source, transcribed or with a claim 10 minutes stale, atomically, under 3 attempts', () => {
+        const sql = CLAIM_SOURCE_SQL.replace(/\s+/g, ' ');
+        assert.match(sql, /FOR UPDATE OF s SKIP LOCKED/);
+        assert.match(sql, /LIMIT 1/);
+        assert.match(sql, /s\.attempts < \$2/);
+        assert.match(sql, /s\.status = 'transcribed' OR \(s\.status = 'picking' AND s\.claimed_at < NOW\(\) - make_interval\(mins => \$1\)\)/);
+        assert.match(sql, /attempts = s\.attempts \+ 1/);
+        assert.match(sql, /c\.is_active = TRUE/, 'a deactivated tenant’s videos wait');
+        assert.match(sql, /RETURNING .*s\.pick/, 'with any pick saved by an earlier attempt');
+        assert.equal(PICK_STALE_MINUTES, 10);
+        assert.equal(MAX_PICK_ATTEMPTS, 3);
+    });
+
+    it('fails a stale claim that used its third attempt, before claiming', async () => {
+        source = null;
+        await sweepMonteur(later());
+        const [exhaust, claim] = db.statements;
+        assert.equal(exhaust!.sql, EXHAUST_SOURCES_SQL.replace(/\s+/g, ' ').trim());
+        assert.deepEqual(exhaust!.params, [10, 3, EXHAUSTED_PICK_ERROR]);
+        assert.match(exhaust!.sql, /attempts >= \$2/);
+        assert.deepEqual(claim!.params, [10, 3]);
+    });
+});
+
+describe('sweepMonteur — a pick', () => {
+    it('makes one Monteur call and one Marketer call, then hands the clip to the worker', async () => {
+        const result = await sweepMonteur(later());
+        assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 });
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.copy']);
+
+        const [pick, copy] = calls;
+        assert.match(pick!.turns[0]!.text, /^L3 \[00:10\.0\] جملة3\.$/m, 'numbered lines, L<n> [mm:ss.s] text');
+        assert.match(pick!.turns[0]!.text, /^Pick up to 3 clips/m, 'reels_per_video + 2 candidates');
+        assert.match(pick!.turns[0]!.text, /- هذي أسرع طريقة تلخص فيها درس كامل\n- غلطة يسويها الكل/, 'the openings of the two most-viewed posts');
+        assert.match(pick!.turns[0]!.text, /- ابدأ بالنتيجة/, 'the latest lessons go in');
+        assert.match(pick!.turns[0]!.text, /Never pick a moment about: MCP/, 'and the avoid terms');
+        assert.equal(pick!.maxOutputTokens, PICK_MAX_OUTPUT);
+        assert.equal(PICK_MAX_OUTPUT, 8192);
+        assert.equal(copy!.maxOutputTokens, 8192);
+        assert.ok(pick!.deadline && pick!.deadline <= Date.now() + 250_000, 'one deadline for every model the chain tries');
+        assert.ok(pick!.system.length < 2500, 'a short system prompt');
+        assert.match(copy!.turns[0]!.text, /\[1\] «عنوان 3 كلمات»\nL3 \[00:10\.0\]/, 'the clip’s own lines');
+        assert.ok(!copy!.turns[0]!.text.includes('جملة1.'), 'and only those');
+
+        const [clip] = db.ran(/^INSERT INTO clip_drafts/);
+        const [creator, sourceId, rank, start, end, title, hook, why, score, topic, hookType, scores, text] = clip!.params;
+        assert.deepEqual([creator, sourceId, rank, start, end], [TENANT, SOURCE, 1, 9.85, 34.8]);
+        assert.equal(title, 'عنوان ٣ كلمات', 'Arabic-Indic digits in the burned-in title');
+        assert.deepEqual([hook, why, score], ['جملة3.', 'يبدأ بنتيجة', 9]);
+        assert.deepEqual([topic, hookType, JSON.parse(scores)], ['NotebookLM يلخص الدروس', 'promise', { hook: 3, alone: 3, payoff: 2, send: 2 }]);
+        assert.equal(text, 'جملة3. جملة4. جملة5. جملة6. جملة7.');
+
+        const saved = savedCopy();
+        assert.equal(saved.keyword, 'دفتر', 'the 3-letter candidate is passed over');
+        assert.equal(saved.keyword_create, true);
+        assert.deepEqual(saved.variants, ['دفاتر'], 'a variant containing the keyword is redundant under substring matching');
+        assert.deepEqual(saved.hashtags, ['ai', 'notebook_lm', 'ذكاء_اصطناعي'], '#اكسبلور is on the blocklist');
+        assert.equal(saved.caption, '🔥 دفترك الذكي\n\n✅ يلخص لك الدرس\n💡 بدقيقة\n\nتبي تجربها؟ اكتب «دفتر» 👇\n\n#ai #notebook_lm #ذكاء_اصطناعي',
+            'first line, body, the ask as the model wrote it, hashtags: no save line, no second ask');
+        assert.ok(saved.tiktok_caption.includes('رابطه في البايو'));
+        assert.ok(!saved.tiktok_caption.includes('«دفتر»'), 'TikTok can’t auto-reply: no ask');
+        assert.match(saved.dm, /^هلا \{username\} 👋\n\nتبي تجربه؟\n\nشرحته في الكورس\./);
+
+        const [job] = db.ran(/^INSERT INTO studio_jobs/);
+        const payload = JSON.parse(job!.params[2]);
+        assert.deepEqual(payload.cta, { line1: 'اكتب في التعليقات «دفتر»', line2: 'ويوصلك الرابط بالخاص 📩' });
+        assert.deepEqual(payload.cta_tiktok, { line1: 'رابطه في البايو', line2: 'ادخل البروفايل واضغط الرابط 👆' });
+        assert.deepEqual(payload.words[0], [0.15, 4.65, 'جملة3.'], 'relative to the clip');
+    });
+
+    it('saves the pick before the Marketer’s call', async () => {
+        await sweepMonteur(later());
+        const save = db.statements.findIndex((s) => /^UPDATE monteur_sources SET pick = \$2::jsonb/.test(s.sql));
+        assert.ok(save >= 0 && save < copyCalledAt, 'a copy failure then costs no second pick');
+        const record = JSON.parse(db.statements[save]!.params[1]);
+        assert.equal(record.saved.clips.length, 1);
+        assert.equal(record.saved.topic, 'NotebookLM يلخص الدروس');
+        assert.match(db.statements[save]!.sql, /WHERE id = \$1 AND status = 'picking' AND attempts = \$3/);
+    });
+
+    it('spends nothing more when saving the pick finds another attempt holds the claim', async () => {
+        saveClaimed = false;
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'lost');
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick'], 'no copy call');
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+    });
+
+    it('retries a failed copy on the saved pick, without sending the transcript again', async () => {
+        await sweepMonteur(later());
+        const record = JSON.parse(db.ran(/^UPDATE monteur_sources SET pick = \$2::jsonb/)[0]!.params[1]);
+        calls = [];
+        db.statements.length = 0;
+        source = { ...source, pick: record, attempts: 2 };
+        const result = await sweepMonteur(later());
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.copy']);
+        assert.equal(result.pick?.outcome, 'rendering');
+    });
+
+    it('logs each call’s tokens in and out as monteur.pick and monteur.copy — readable, not redacted', async () => {
+        await sweepMonteur(later());
+        for (const event of ['monteur.pick', 'monteur.copy']) {
+            const line = logs.find((l) => l.event === event);
+            assert.ok(line, event);
+            assert.deepEqual(line!.usage, { in: 1000, out: 250, thinking: 50 }, event);
+            assert.equal(line!.model, 'gemini-test');
+            assert.ok(!JSON.stringify(line).includes('[redacted]'), 'the logger redacts any key with "token" in it');
+        }
+    });
+
+    it('marks a video with nothing worth a reel no_clips, after one call', async () => {
+        answers['monteur.pick'] = { topic: 't', clips: [{ ...PICK.clips[0], scores: { hook: 1, alone: 3, payoff: 3, send: 3 } }] };
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'no_clips');
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick']);
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+    });
+
+    it('spends no call on a transcript with no words, or one shorter than the shortest clip', async () => {
+        source = { ...source, words: [] };
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'no_clips');
+        source = { ...source, words: WORDS.slice(0, 3) }; // 14.5 s of speech, min_seconds 20
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'no_clips');
+        assert.equal(calls.length, 0);
+    });
+
+    it('asks once more when the answer can’t be cut, and keeps the better answer', async () => {
+        let n = 0;
+        setModelCaller(async (req) => {
+            calls.push(req);
+            if (req.purpose.startsWith('monteur.pick')) {
+                n += 1;
+                return n === 1 ? { ...PICK, clips: [{ ...PICK.clips[0], end_line: 3 }] } : PICK;
+            }
+            return COPY;
+        });
+        const result = await sweepMonteur(later());
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.pick-repair', 'monteur.copy']);
+        assert.match(calls[1]!.turns.at(-1)!.text, /clip 1: L3–L3 is 5\.0 s; a clip must be 20–45 s/);
+        assert.equal(result.pick?.outcome, 'rendering');
+    });
+
+    it('drops a repeat of a reel already made', async () => {
+        existingTexts = ['جملة3. جملة4. جملة5. جملة6. جملة7.'];
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'no_clips');
+    });
+});
+
+describe('sweepMonteur — keywords and asks', () => {
+    it('shares a keyword a reel in flight already asks for, and still marks it for a campaign', async () => {
+        inFlight = ['دفتر'];
+        await sweepMonteur(later());
+        assert.equal(savedCopy().keyword, 'دفتر');
+        assert.equal(savedCopy().keyword_create, true);
+        assert.match(calls[1]!.turns[0]!.text, /Keywords in use: .*دفتر/);
+    });
+
+    it('never takes a keyword overlapping one in flight', async () => {
+        inFlight = ['دفترها'];
+        await sweepMonteur(later());
+        assert.equal(savedCopy().keyword, 'ملاحظة');
+    });
+
+    it('never takes a keyword equal to, or overlapping, another reel’s variant', async () => {
+        inFlightVariants = ['دفتر'];
+        await sweepMonteur(later());
+        assert.equal(savedCopy().keyword, 'ملاحظة', 'equal to a variant is never shared: two campaigns would answer it');
+        assert.match(calls[1]!.turns[0]!.text, /Keywords in use: .*دفتر/, 'and the Marketer is told');
+    });
+
+    it('falls back to the pool when the model repeats a recent ask — never to cta.instagramAsk', async () => {
+        recentCaptions = [{ caption: 'x\n\nتبي تجربها؟ اكتب «برومبت» 👇\n\n#y', keyword: 'برومبت' }];
+        await sweepMonteur(later());
+        const caption: string = savedCopy().caption;
+        const used = ASK_POOL.ar.find((a) => caption.includes(a.split('{keyword}').join('دفتر')));
+        assert.ok(used, caption);
+        assert.ok(!caption.includes('بالتعليقات ويوصلك رابط الكورس بالخاص'), 'the tenant’s own caption ask is not the fallback');
+        assert.match(calls[1]!.turns[0]!.text, /Recent asks \(don't reuse\):\n- تبي تجربها؟ اكتب «\{keyword\}» 👇/);
+    });
+
+    it('falls back to the pool when the model’s ask has no {keyword}', async () => {
+        answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, ask_line: 'علّق بكلمة دفتر' }] };
+        await sweepMonteur(later());
+        assert.ok(ASK_POOL.ar.some((a) => savedCopy().caption.includes(a.split('{keyword}').join('دفتر'))));
+    });
+
+    it('matches numbered answers by number only, never by position', async () => {
+        answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, clip: 2 }] };
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'retry');
+        assert.match(result.pick?.error ?? '', /wrote nothing for this clip/);
+    });
+});
+
+describe('sweepMonteur — attempts', () => {
+    it('keeps the claim on a failed attempt, so the source waits 10 minutes before the next', async () => {
+        answers['monteur.pick'] = new Error('Gemini request failed [HTTP 503]');
+        const result = await sweepMonteur(later());
+        assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'retry', error: 'Gemini request failed [HTTP 503]' });
+        const [update] = db.ran(/^UPDATE monteur_sources SET error = \$2/);
+        assert.deepEqual(update!.params, [SOURCE, 'Gemini request failed [HTTP 503]', 1]);
+        assert.match(update!.sql, /WHERE id = \$1 AND status = 'picking' AND attempts = \$3/);
+        assert.equal(db.ran(/SET status = 'failed', error = \$2/).length, 0);
+    });
+
+    it('fails the source on the third failed attempt', async () => {
+        source = { ...source, attempts: 3 };
+        answers['monteur.copy'] = new Error('Gemini returned no content');
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'failed');
+        const [failed] = db.ran(/^UPDATE monteur_sources SET status = 'failed', error = \$2/);
+        assert.deepEqual(failed!.params, [SOURCE, 'Gemini returned no content', 3]);
+    });
+
+    it('writes nothing when another attempt took the claim meanwhile', async () => {
+        handOffClaimed = false;
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'lost');
+        assert.equal(db.ran(/^INSERT INTO clip_drafts|^INSERT INTO studio_jobs/).length, 0);
+    });
+
+    it('fails the attempt when no clip got a usable keyword, rather than saving it half-written', async () => {
+        answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, keyword_candidates: ['two words', 'دفت'] }] };
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'retry');
+        assert.match(result.pick?.error ?? '', /No usable comment keyword.*«دفت» is under 4 letters/);
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+    });
+
+    it('starts no pick without time left for two calls', async () => {
+        const result = await sweepMonteur({ deadline: Date.now() + 30_000 });
+        assert.equal(result.skipped, 'no_time_for_pick');
+        assert.equal(db.ran(/^WITH picked AS/).length, 0);
+        assert.equal(calls.length, 0);
+    });
+});

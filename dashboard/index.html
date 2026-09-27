@@ -73,7 +73,7 @@
                The hash is attacker-controllable, so it is matched against the
                known page list rather than interpolated into a path. */
             try {
-                var PAGES = ['overview', 'campaigns', 'posts', 'studio', 'inbox', 'ai_settings',
+                var PAGES = ['overview', 'campaigns', 'posts', 'studio', 'monteur', 'inbox', 'ai_settings',
                              'analytics', 'growth', 'activity', 'settings', 'help', 'operations', 'tenants',
                              'tenant_detail', 'users', 'jobs', 'audit', 'erasure'];
                 /* The page is the first segment: #/help/worker#security is "help". */
@@ -175,6 +175,12 @@
                 <a href="#/studio" class="nav-item" data-page="studio">
                     <i data-lucide="layers" aria-hidden="true"></i>
                     <span data-i18n="nav.studio">الاستوديو</span>
+                </a>
+                <!-- Right under Studio: it is the Studio's second tab, reels cut from the
+                     creator's own videos, waiting here for approval. -->
+                <a href="#/monteur" class="nav-item" data-page="monteur">
+                    <i data-lucide="scissors" aria-hidden="true"></i>
+                    <span data-i18n="nav.monteur">المونتير</span>
                 </a>
                 <a href="#/inbox" class="nav-item" data-page="inbox">
                     <i data-lucide="message-square" aria-hidden="true"></i>

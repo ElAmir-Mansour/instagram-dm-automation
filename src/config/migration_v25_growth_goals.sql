@@ -1,4 +1,4 @@
--- Migration v24: the growth goals are settings, not constants.
+-- Migration v25: the growth goals are settings, not constants.
 --
 -- The operator chases a follower count and a view count (docs/agents/BRIEF.md). Until now those
 -- two numbers lived nowhere the product could read them, so no screen could say "154 of 10,000".

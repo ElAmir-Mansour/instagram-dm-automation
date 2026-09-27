@@ -4480,4 +4480,110 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .unsaved-note::before {
     content: ''; inline-size: 7px; block-size: 7px; border-radius: 50%;
     background: var(--warning); flex-shrink: 0;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Monteur (#/monteur). The status strip, the setup steps, the save bar and the
+   list editor are the Studio's own classes; what is new here is the review card
+   (a 9:16 player beside its copy), the video list and the lessons. Tokens and
+   logical properties only.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.monteur-section { margin-block-end: var(--space-4); }
+.monteur-section > .section-title,
+.monteur-section .studio-section-head .section-title { margin: 0; }
+.monteur-section > .section-title { margin-block-end: var(--space-2); }
+.monteur-queue .studio-section-head { margin-block-end: var(--space-3); }
+.monteur-group { margin-block-start: var(--space-2); }
+.monteur-group .studio-section-head { margin-block-end: var(--space-2); }
+.monteur-empty { padding-block: var(--space-6); }
+
+.monteur-clips { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.monteur-clip {
+    display: grid; grid-template-columns: minmax(160px, 240px) minmax(0, 1fr);
+    gap: var(--space-4); padding: var(--space-4); align-items: start;
+}
+.monteur-clip--compact { grid-template-columns: 72px minmax(0, 1fr); gap: var(--space-3); padding: var(--space-3); }
+.monteur-media {
+    display: flex; align-items: center; justify-content: center;
+    aspect-ratio: 9 / 16; overflow: hidden;
+    border-radius: var(--radius-md);
+    background: var(--surface-solid); border: 1px solid var(--border-subtle);
+    color: var(--text-muted);
+}
+.monteur-media video, .monteur-media img { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.monteur-media svg { width: 24px; height: 24px; }
+.monteur-clip--compact .monteur-media { border-radius: var(--radius-sm); }
+.monteur-clip-body { display: flex; flex-direction: column; gap: var(--space-3); min-inline-size: 0; }
+.monteur-clip-body .form-group { margin-block-end: var(--space-3); }
+.monteur-clip-body .post-card-meta { margin: 0; }
+.monteur-label { margin: 0 0 var(--space-1); font-size: var(--fs-100); font-weight: var(--fw-semibold); color: var(--text-muted); }
+.monteur-hook {
+    margin: 0; padding-inline-start: var(--space-3);
+    border-inline-start: 3px solid var(--accent);
+    font-size: var(--fs-300); color: var(--text-strong); line-height: var(--lh-normal);
+}
+.monteur-why { margin: 0; font-size: var(--fs-200); color: var(--text-default); line-height: var(--lh-normal); overflow-wrap: anywhere; }
+.monteur-score { font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.monteur-scores { margin: 0; font-variant-numeric: tabular-nums; }
+.monteur-topic { margin: 0; overflow-wrap: anywhere; }
+.monteur-label .chip { margin-inline-start: var(--space-1); vertical-align: middle; }
+.monteur-tt-line { margin: 0; }
+.monteur-tt-link {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    min-block-size: var(--tap-target);
+    font-size: var(--fs-100); color: var(--accent-text);
+}
+.monteur-tt-link svg { width: 14px; height: 14px; flex-shrink: 0; }
+.monteur-tt-link:hover span { text-decoration: underline; text-underline-offset: 2px; }
+/* `.text-meta` comes later than `.text-warning`, so a warning in a meta line needs both. */
+.text-meta.text-warning { color: var(--warning-text); }
+.monteur-rerender { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0 0 var(--space-3); }
+.monteur-rerender svg { width: 15px; height: 15px; flex-shrink: 0; margin-block-start: 2px; }
+.monteur-clip-savebar { align-items: center; }
+.monteur-clip-savebar .text-meta { margin: 0; }
+.monteur-extra summary {
+    display: flex; align-items: center; min-block-size: var(--tap-target);
+    cursor: pointer; color: var(--accent-text); font-weight: var(--fw-semibold); font-size: var(--fs-200);
+}
+.monteur-extra summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
+.monteur-extra .monteur-label { margin-block-start: var(--space-2); }
+.monteur-approve {
+    display: flex; flex-direction: column; gap: var(--space-2);
+    padding-block-start: var(--space-3); border-block-start: 1px solid var(--border-subtle);
+}
+.monteur-approve .form-group { margin: 0; }
+.monteur-approve .form-hint { margin: 0; }
+
+.monteur-folder-row { flex-wrap: wrap; }
+.monteur-folder-row .field { min-inline-size: min(100%, 16rem); }
+.monteur-folder-line { margin: var(--space-2) 0 0; }
+.monteur-form .setup-step-body .form-group { margin-block-end: var(--space-2); }
+.monteur-platforms { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); }
+.monteur-platforms .check-row { align-items: center; }
+
+/* A state that is neither good nor bad news: "no strong moment", "rejected". */
+.status-pill.neutral { background: var(--surface-glass-hover); color: var(--text-default); }
+
+.monteur-sources { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.monteur-source {
+    display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+}
+.monteur-source-main { flex: 1 1 14rem; min-inline-size: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.monteur-source-main p { margin: 0; }
+.monteur-source-name { font-weight: var(--fw-semibold); color: var(--text-strong); overflow-wrap: anywhere; }
+
+.monteur-lessons-summary { margin: var(--space-3) 0 0; font-size: var(--fs-200); color: var(--text-default); }
+.monteur-lessons { margin: var(--space-3) 0; padding-inline-start: var(--space-5); display: grid; gap: var(--space-3); }
+.monteur-lessons li p { margin: 0; }
+.monteur-rule { color: var(--text-strong); font-weight: var(--fw-semibold); line-height: var(--lh-normal); overflow-wrap: anywhere; }
+
+/* ─── Phones: the player stacks above its copy, and Approve is full width ─── */
+@media (max-width: 560px) {
+    .monteur-clip { grid-template-columns: minmax(0, 1fr); padding: var(--space-3); }
+    .monteur-clip > .monteur-media { inline-size: min(100%, 260px); justify-self: center; }
+    .monteur-clip--compact { grid-template-columns: 56px minmax(0, 1fr); }
+    .monteur-clip--compact > .monteur-media { inline-size: auto; justify-self: stretch; }
+    .monteur-approve .btn-primary, .monteur-approve .btn-secondary[type='submit'] { inline-size: 100%; }
+    .monteur-source .btn { margin-inline-start: auto; }
 }

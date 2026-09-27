@@ -20,13 +20,13 @@ import type {
 } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
 import { getTikTokPostingFlags, type TikTokPostingFlags } from '../appSettings.js';
-import { matchCampaign } from '../matching.js';
+import { matchCampaign, triggerClashes } from '../matching.js';
 import { validateMetaOptions } from '../metaOptions.js';
 import { validatePostMedia } from '../postMedia.js';
 import { getConnection } from '../tiktokConnections.js';
-import { validateTikTokOptions } from '../tiktokPublish.js';
+import { validateTikTokOptions, type TikTokMediaKind } from '../tiktokPublish.js';
 import type { Carousel } from './carouselTypes.js';
-import { type Exec, isPlainObject, StudioError, unique, UUID_PATTERN, withTransaction } from './common.js';
+import { type Exec, isPlainObject, lockTenantPublishing, problemsError, StudioError, unique, UUID_PATTERN, withTransaction } from './common.js';
 import { presentDraft, type Draft } from './drafts.js';
 import { altTextFor } from './generate.js';
 
@@ -36,20 +36,23 @@ export const BATCH_STAGGER_MS = 40_000;
 export const TIKTOK_INTENTS: readonly DraftTikTokIntent[] = ['none', 'queue', 'scheduled'];
 
 /**
- * The options every Studio TikTok carousel carries: direct, public once audited and private
- * until then, the carousel's own title, music, comments on, organic brand content. Consent is
- * the operator's click on schedule or batch. Run through `validateTikTokOptions`, so the same
- * rules as the composer's hold here.
+ * The options every Studio TikTok post carries: direct, public once audited and private until
+ * then, comments on, organic brand content. A carousel adds its own title and music; a video (the
+ * Monteur's reels) has neither, and gets no duet, stitch or AI label. Consent is the operator's
+ * click on schedule, batch or approve. Run through `validateTikTokOptions`, so the same rules as
+ * the composer's hold here.
  */
-export function studioTikTokOptions(carousel: Carousel, audited: boolean): TikTokPostOptions {
+export function studioTikTokOptions(
+    carousel: Pick<Carousel, 'captions'> | null, audited: boolean, media: TikTokMediaKind = 'photo'
+): TikTokPostOptions {
     const checked = validateTikTokOptions({
         consent: true,
         privacy_level: audited ? 'PUBLIC_TO_EVERYONE' : 'SELF_ONLY',
-        title: carousel.captions?.tiktokTitle,
+        title: carousel?.captions?.tiktokTitle,
         auto_add_music: true,
         allow_comment: true,
         brand_organic: true,
-    }, { audited, media: 'photo' });
+    }, { audited, media });
     if (!checked.ok) throw new StudioError(400, checked.error);
     return checked.options;
 }
@@ -58,7 +61,7 @@ export function studioTikTokOptions(carousel: Carousel, audited: boolean): TikTo
  * Said at the click, not at publish time in a card nobody is looking at: TikTok must be
  * connected, and able to Direct Post (the scope, and the operator's switch).
  */
-async function assertDirectPostReady(creatorId: string, flags: TikTokPostingFlags): Promise<void> {
+export async function assertDirectPostReady(creatorId: string, flags: TikTokPostingFlags): Promise<void> {
     const connection = await getConnection(creatorId);
     if (!connection || connection.status !== 'active') {
         throw new StudioError(409, 'TikTok is not connected. Connect it in Settings first.');
@@ -104,18 +107,28 @@ type CampaignPlan =
  * "Triggers on" is decided by `matchCampaign` itself, with the campaign's own match mode — a
  * substring campaign on a shorter word answers this keyword too, and a second campaign beside
  * it would never be the one that fires.
+ *
+ * A new one is refused when any of its triggers would collide, for real, with a live campaign
+ * (`triggerClashes`, judged by match mode): the Studio creates substring campaigns, so a keyword
+ * inside a live one — a Monteur reel's «البرومبت» — would answer that reel's commenters too.
+ * Run under the tenant's publishing lock, so a reel approved at the same moment is seen.
  */
-async function planCampaign(creatorId: string, draft: CarouselDraftRow): Promise<CampaignPlan> {
+async function planCampaign(exec: Exec, creatorId: string, draft: CarouselDraftRow): Promise<CampaignPlan> {
     const campaign = draft.campaign;
     const keyword = draft.carousel?.keyword?.trim();
     if (!campaign || !keyword) throw new StudioError(400, 'This draft has no campaign to create.');
-    const active = await queryRows<CampaignRow>(
+    const { rows: active } = await exec.query<CampaignRow>(
         'SELECT * FROM campaigns WHERE creator_id = $1 AND is_active = TRUE', [creatorId]
     );
     // '' as the post id: only campaigns for every post can answer a post that is not live yet.
     const existing = matchCampaign(keyword, '', active);
     if (existing) return { create: false, existing };
-    return { create: true, triggers: unique([keyword, ...campaign.variants]).join(', '), dm: campaign.dm };
+    const triggers = unique([keyword, ...campaign.variants]);
+    const clashes = triggerClashes(triggers, 'substring', active);
+    if (clashes.length) {
+        throw problemsError(clashes.map((c) => `campaign.keyword: «${c.trigger}» would fire alongside the live keyword «${c.live}»`), 'this campaign', 409);
+    }
+    return { create: true, triggers: triggers.join(', '), dm: campaign.dm };
 }
 
 export interface ScheduleOutcome {
@@ -174,9 +187,11 @@ export async function scheduleDraft(creatorId: string, draftId: string, body: un
         await assertDirectPostReady(creatorId, flags);
         tiktokOptions = studioTikTokOptions(carousel, flags.audited);
     }
-    const campaignPlan = b.create_campaign === true ? await planCampaign(creatorId, draft) : null;
-
     return withTransaction(async (client) => {
+        // The same lock the Monteur's approve takes: a carousel and a reel scheduled at once must
+        // not both create a campaign on one keyword.
+        await lockTenantPublishing(client, creatorId);
+        const campaignPlan = b.create_campaign === true ? await planCampaign(client, creatorId, draft) : null;
         const { rows: locked } = await client.query<Pick<CarouselDraftRow, 'status' | 'render'>>(
             'SELECT status, render FROM carousel_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [draft.id, creatorId]
         );

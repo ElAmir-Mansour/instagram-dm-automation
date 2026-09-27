@@ -124,7 +124,7 @@ describe('updateGrowthSettings and seoForWriter', () => {
         assert.equal(writes.length, 0);
     });
 
-    it('reads a BIGINT goal back as a number and fills the defaults on a row written before v24', async () => {
+    it('reads a BIGINT goal back as a number and fills the defaults on a row written before v25', async () => {
         (pool as any).query = async () => ({ rows: [{ keywords: [], hashtag_sets: [], competitors: [], audience: {}, goal_followers: 500, goal_views: '2500000' }] });
         const s = await getGrowthSettings(TENANT);
         assert.equal(s.goal_followers, 500);
@@ -133,7 +133,7 @@ describe('updateGrowthSettings and seoForWriter', () => {
         assert.equal((await getGrowthSettings(TENANT)).goal_views, DEFAULT_GOALS.goal_views);
     });
 
-    it('reads a database without the v24 columns: retried without the goals, the defaults, and one warning', async () => {
+    it('reads a database without the v25 columns: retried without the goals, the defaults, and one warning', async () => {
         const lines: { level: string; event: string }[] = [];
         const previous = setLogSink((level, line) => { lines.push({ level, event: JSON.parse(line).event }); });
         resetGoalColumnsWarning();

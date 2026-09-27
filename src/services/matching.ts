@@ -13,7 +13,7 @@
  * query forgot to select the column — because changing it implicitly would silently stop live
  * campaigns from firing.
  */
-import { normalizeArabic, keywordMatches, normalizeMatchMode } from '../utils/arabic.js';
+import { normalizeArabic, keywordMatches, normalizeMatchMode, type KeywordMatchMode } from '../utils/arabic.js';
 
 /** The fields matching actually reads. Rows carry far more; generics preserve the rest. */
 export interface CampaignMatchFields {
@@ -94,4 +94,46 @@ export function matchCampaign<T extends CampaignMatchFields>(
     });
 
     return matched ?? null;
+}
+
+/** One trigger that would fire alongside a live one on a comment meant for one of them. */
+export interface TriggerClash {
+    /** The new trigger, as given. */
+    trigger: string;
+    /** The live trigger it collides with, as the campaign stores it. */
+    live: string;
+}
+
+/**
+ * The real collisions between new triggers — a campaign about to be created with `mode` — and the
+ * live campaigns for every post, judged by each side's own match mode rather than by spelling.
+ *
+ * Two triggers collide when a comment of one would fire the other too: the new trigger fires on
+ * the live one's word (a substring campaign on «برومبت» fires on «البرومبت»), the live one fires on
+ * the new trigger's word (a live substring «سعر» fires on a new variant «السعر»), or they are the
+ * same word. Whichever `bySpecificity` then ranks first answers both audiences, one of them with
+ * the wrong DM. A word-mode trigger inside a longer word is not a collision: neither fires on the
+ * other's comments. A campaign tied to one post is left out, because on that post it outranks
+ * any campaign for every post, and elsewhere it never fires.
+ *
+ * The caller asks `matchCampaign` first whether a live campaign already answers the keyword; one
+ * that does is reused, and nothing new is created to collide.
+ */
+export function triggerClashes<T extends CampaignMatchFields>(
+    triggers: readonly string[], mode: KeywordMatchMode, campaigns: readonly T[]
+): TriggerClash[] {
+    const out: TriggerClash[] = [];
+    for (const c of campaigns) {
+        if (c.post_id || c.is_active === false) continue;
+        const liveMode = normalizeMatchMode(c.match_mode);
+        for (const live of c.trigger_keyword.split(/[,،]/).map((k) => k.trim()).filter(Boolean)) {
+            const l = normalizeArabic(live);
+            for (const trigger of triggers) {
+                const t = normalizeArabic(trigger.trim());
+                if (!t || !l) continue;
+                if (t === l || keywordMatches(l, t, mode) || keywordMatches(t, l, liveMode)) out.push({ trigger, live });
+            }
+        }
+    }
+    return out;
 }

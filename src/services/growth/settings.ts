@@ -1,6 +1,6 @@
 /**
  * Per-tenant SEO settings (GROWTH.md §1, §3): the search keywords the audience types, hashtag
- * sets, competitors for Business Discovery, the audience itself, and — since v24 — the two goals
+ * sets, competitors for Business Discovery, the audience itself, and — since v25 — the two goals
  * the tenant is chasing (followers and views). A tenant with no row gets the defaults; nothing
  * about any one creator is in code. The goals default to the brief's numbers so a fresh tenant
  * still sees a distance to goal, and they are settings precisely so that they are not constants.
@@ -251,7 +251,7 @@ function fromRow(row: Partial<GrowthSettings> | null): GrowthSettings {
     };
 }
 
-/** `pg` returns BIGINT as a string; a row written before v24 has neither column. */
+/** `pg` returns BIGINT as a string; a row written before v25 has neither column. */
 function storedGoal(value: unknown, fallback: number): number {
     const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
     return Number.isInteger(n) && n >= 1 ? n : fallback;
@@ -260,13 +260,13 @@ function storedGoal(value: unknown, fallback: number): number {
 /** Logged once per process: every Growth route reads the settings, so a warning per call would be noise. */
 let goalColumnsWarned = false;
 
-/** Test hook: forget that the missing-v24 warning was logged. */
+/** Test hook: forget that the missing-v25 warning was logged. */
 export function resetGoalColumnsWarning(): void {
     goalColumnsWarned = false;
 }
 
 /**
- * The settings, with the goals. Tolerant of a database that has v22 but not yet v24: production
+ * The settings, with the goals. Tolerant of a database that has v22 but not yet v25: production
  * auto-deploys on merge, and a read that failed there would take down every Growth route (they all
  * read the settings) for the minutes until `npm run migrate` ran. A missing goal column is retried
  * without the goals, which then come back as the defaults — the same answer a tenant with no row
@@ -285,7 +285,7 @@ export async function getGrowthSettings(creatorId: string): Promise<GrowthSettin
         );
         if (!goalColumnsWarned) {
             goalColumnsWarned = true;
-            log('warn', 'growth.goal_columns_missing', { ...describeError(err), fix: 'npm run migrate (migration_v24_growth_goals.sql)' });
+            log('warn', 'growth.goal_columns_missing', { ...describeError(err), fix: 'npm run migrate (migration_v25_growth_goals.sql)' });
         }
         return fromRow(row);
     }

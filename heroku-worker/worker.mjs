@@ -23,7 +23,11 @@
 const BASE_URL = process.env.DRAIN_BASE_URL || 'https://msg-response-auto.vercel.app';
 const CRON_SECRET = process.env.CRON_SECRET;
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS) || 60_000;
-const REQUEST_TIMEOUT_MS = 20_000;
+// Just under Vercel's 300 s function limit. The drain now ends with the Monteur's pick sweep
+// (MONTEUR.md §6), two Gemini calls for one video, so a drain can take minutes: aborting at 20 s
+// logged every such run as a failure while the work finished anyway. The polls stay sequential,
+// so a long drain only delays the next one.
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 290_000;
 
 if (!CRON_SECRET) {
     console.error(JSON.stringify({ level: 'error', event: 'worker.missing_secret', message: 'CRON_SECRET is not set' }));

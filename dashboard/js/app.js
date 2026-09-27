@@ -49,6 +49,9 @@ const App = {
         campaigns: { src: 'campaigns', page: () => CampaignsPage },
         posts: { src: 'posts', page: () => PostsPage },
         studio: { src: 'studio', page: () => StudioPage },
+        // The Studio's second tab (#/monteur): reels cut from the creator's own videos,
+        // reviewed and approved into the scheduler. Its own sidebar entry, under Studio.
+        monteur: { src: 'monteur', page: () => MonteurPage },
         inbox: { src: 'inbox', page: () => InboxPage },
         ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
         analytics: { src: 'analytics', page: () => AnalyticsPage },
