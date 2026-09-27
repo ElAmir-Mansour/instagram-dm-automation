@@ -172,6 +172,16 @@ bdi { unicode-bidi: isolate; }
 /* The opt-out from glass. `--surface-raised` is translucent now, so pointing this at it
    while also disabling the blur would give a see-through panel with nothing behind it —
    the worst of both. `--surface-solid` exists for exactly this. */
+.surface--interactive {
+    transition: transform var(--motion-base) var(--ease-standard),
+                border-color var(--motion-base) var(--ease-standard),
+                box-shadow var(--motion-base) var(--ease-standard);
+}
+.surface--interactive:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-strong);
+    box-shadow: var(--elev-2);
+}
 .surface--solid { background: var(--surface-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
 /* Cards in a grid are content, not chrome: blur is for the surfaces content scrolls BEHIND
    (DESIGN §1) — the sidebar, the top bar, modals, toasts, the sticky save bars. Posts alone
@@ -210,6 +220,7 @@ bdi { unicode-bidi: isolate; }
 .gap-2 { gap: var(--space-2); }
 .gap-3 { gap: var(--space-3); }
 .gap-4 { gap: var(--space-4); }
+.gap-5 { gap: var(--space-5); }
 .grow { flex: 1; min-width: 0; }
 .shrink-0 { flex-shrink: 0; }
 .nowrap { white-space: nowrap; }
@@ -225,6 +236,7 @@ bdi { unicode-bidi: isolate; }
 .mbe-2 { margin-block-end: var(--space-2); }
 .mbe-3 { margin-block-end: var(--space-3); }
 .mbe-4 { margin-block-end: var(--space-4); }
+.mbe-5 { margin-block-end: var(--space-5); }
 .mbs-4 { margin-block-start: var(--space-4); }
 
 .section { margin-block-end: var(--space-6); }
