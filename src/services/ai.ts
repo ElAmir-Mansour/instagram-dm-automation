@@ -355,7 +355,7 @@ export async function generateAiResponse(
     conversationId: string,
     userMessage: string,
     creatorId: string,
-    overrides?: { system_prompt?: string; knowledge_base?: string }
+    overrides?: { system_prompt?: string; knowledge_base?: string; model?: string; temperature?: number }
 ): Promise<AiResponse | null> {
     // 1. Fetch AI Agent Settings
     //    Deliberately unfiltered by is_active: the filter used to be in the WHERE clause, so a
@@ -427,12 +427,16 @@ export async function generateAiResponse(
     const knowledgeBase = overrides?.knowledge_base ?? agent.knowledge_base;
     const systemInstructionText = `${systemPrompt}\n\n=== قاعدة المعرفة المتاحة لديك (Knowledge Base) ===\n${knowledgeBase}\n\n=== تعليمات إضافية مهمة ===\n1. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللغة العربية الفصحى أو بلهجة سهلة ومناسبة.\n2. إذا طلب المستخدم كورسات أو معلومات تواصل، استخدم خيار "quick_reply" أو "carousel" لتقديمها بشكل تفاعلي ومنظم بدلاً من مجرد سرد روابط نصية.\n3. التزم تماماً بحدود الحروف: عناوين الأزرار والـ quick replies لا تتجاوز 20 حرفاً. عناوين الكروت لا تتجاوز 80 حرفاً.`;
 
-    const modelName = resolveModel(agent.model);
+    // The sandbox may name the model and temperature on screen, so the operator tests what
+    // they are about to save rather than what was saved last time.
+    const modelName = resolveModel(overrides?.model ?? agent.model);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
     // `|| 0.7` turned a deliberate temperature of 0 — the setting you pick precisely to stop
     // the agent improvising about prices and course contents — back into 0.7.
-    const temperature = Number.isFinite(agent.temperature) ? agent.temperature : DEFAULT_TEMPERATURE;
+    const temperature = Number.isFinite(overrides?.temperature)
+        ? (overrides!.temperature as number)
+        : Number.isFinite(agent.temperature) ? agent.temperature : DEFAULT_TEMPERATURE;
 
 
     try {

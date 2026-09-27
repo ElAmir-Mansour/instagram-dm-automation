@@ -4238,3 +4238,50 @@ td.heat { padding: 0; }
     .heat { block-size: 14px; border-radius: 2px; }
     .growth-heat thead th, .growth-heat thead td { font-size: 9px; }
 }
+
+/* ─── wave2: settings+site ─── */
+/* Settings → webhook: the URL Meta calls, with its copy button, on the row
+   under the verify-token pill (SE4). Same shape as the TikTok register rows:
+   label on its own line, the long value beside its button. */
+.settings-copy-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center; column-gap: var(--space-2); row-gap: var(--space-1);
+}
+.settings-copy-row .form-label { grid-column: 1 / -1; margin: 0; }
+.settings-copy-row code {
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-xs);
+    background: var(--surface-sunken);
+    overflow-wrap: anywhere;
+    font-size: var(--fs-100);
+}
+
+/* Activity (V1): the search box and its button travel together, so a phone
+   wraps the pair as one row rather than stranding the button. */
+.activity-search { display: flex; align-items: center; gap: var(--space-2); flex-wrap: nowrap; min-inline-size: 0; }
+.activity-search .field[type='search'] { flex: 1 1 auto; }
+@media (max-width: 768px) {
+    .activity-search { inline-size: 100%; }
+}
+
+/* Campaigns (C8): the failed count is a way into the log. It keeps the stat's
+   look, gains the link colour and an underline on hover — never red fill. */
+.campaign-stat-link {
+    border: 0; background: transparent; padding: 0; margin: 0;
+    font: inherit; font-size: var(--fs-100); color: var(--accent-text);
+    cursor: pointer; border-radius: var(--radius-xs);
+    min-block-size: 24px;
+}
+.campaign-stat-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.campaign-stat-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 4px var(--accent-ring); }
+
+/* AI (AI6): «تغييرات غير محفوظة» beside Save, while there are any. */
+.ai-save-row { align-items: center; }
+.unsaved-note {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    font-size: var(--fs-100); color: var(--warning-text);
+}
+.unsaved-note::before {
+    content: ''; inline-size: 7px; block-size: 7px; border-radius: 50%;
+    background: var(--warning); flex-shrink: 0;
+}

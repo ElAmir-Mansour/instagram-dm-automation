@@ -385,4 +385,12 @@ const API = {
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */
     createStudioWorker: (name) => API.request('/studio/workers', { method: 'POST', body: JSON.stringify({ name }) }),
     revokeStudioWorker: (id) => API.request(`/studio/workers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+    // ─── Settings → Public site (platform admin) ────────────────────────────
+    /** `{ whatsappNumber, contactEmail, eidCouponsExpire, whatsappUrl, source: {…} }` */
+    getSiteSettings: () => API.request('/settings/site'),
+    /** Each field optional; '' clears it. A 400 carries `field` on `err.body`. */
+    saveSiteSettings: (data) => API.request('/settings/site', { method: 'POST', body: JSON.stringify(data) }),
+    /** Meta's verify handshake, run by the server against the public webhook URL. `{ ok, reason, status, detail, url }` */
+    checkWebhookHandshake: () => API.request('/settings/webhook-token/check', { method: 'POST' }),
 };

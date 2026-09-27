@@ -88,11 +88,39 @@ const AiSettingsPage = {
         return { system_prompt: prompt.value, knowledge_base: knowledge.value };
     },
 
+    /** The switch, the model and the temperature — the rest of what Save writes. */
+    currentSettings() {
+        const toggle = document.getElementById('ai-active-toggle');
+        const model = document.getElementById('model-selector');
+        const slider = document.getElementById('temp-slider');
+        if (!toggle || !model || !slider) return null;
+        return { is_active: !!toggle.checked, model: model.value, temperature: String(slider.value) };
+    },
+
+    /**
+     * The two texts are what a reload would lose (and what the draft keeps);
+     * the switch, the model and the temperature are unsaved too, and the note
+     * beside Save counts them.
+     */
     isDirty() {
         const now = this.currentValues();
         if (!now || !this._saved) return false;
         return now.system_prompt !== this._saved.system_prompt
             || now.knowledge_base !== this._saved.knowledge_base;
+    },
+
+    hasUnsavedChanges() {
+        if (this.isDirty()) return true;
+        const now = this.currentSettings();
+        const saved = this._saved && this._saved.settings;
+        if (!now || !saved) return false;
+        return now.is_active !== saved.is_active || now.model !== saved.model || now.temperature !== saved.temperature;
+    },
+
+    /** AI6: «تغييرات غير محفوظة» beside Save, while there are any. */
+    refreshDirty() {
+        const note = document.getElementById('ai-unsaved-note');
+        if (note) note.classList.toggle('hidden', !this.hasUnsavedChanges());
     },
 
     shell() {
@@ -110,7 +138,8 @@ const AiSettingsPage = {
                     </div>
                     <p class="form-hint mbe-3">${UI.helpLink('ai-usage', t('help.link.aiUsage'), { newTab: true })}</p>
                     <div id="ai-settings-error"></div>
-                    <form id="ai-settings-form" data-submit="ai:saveSettings">
+                    <form id="ai-settings-form" data-submit="ai:saveSettings"
+                          data-input="ai:refreshDirty" data-change="ai:refreshDirty">
                         <div class="toggle-block">
                             <div>
                                 <h4 aria-level="3">${t('ai.enableTitle')}</h4>
@@ -157,8 +186,8 @@ const AiSettingsPage = {
                                      This still offered Gemini 1.5 Flash after Google
                                      stopped serving it, and choosing it would have
                                      failed every DM. -->
-                                <select class="select" id="model-selector">
-                                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                                <select class="select" id="model-selector" aria-describedby="model-selector-hint">
+                                    <option value="gemini-2.5-flash">Gemini 2.5 Flash ${t('ai.defaultModel')}</option>
                                     <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
                                     <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
                                     <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
@@ -169,6 +198,7 @@ const AiSettingsPage = {
                                     <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
                                     <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
                                 </select>
+                                <span class="field-desc" id="model-selector-hint">${t('ai.modelHint')}</span>
                             </div>
                             <div class="form-group">
                                 <!-- The label used to be rewritten on every
@@ -184,15 +214,19 @@ const AiSettingsPage = {
                                     <output class="text-meta" id="temp-value" for="temp-slider">0.7</output>
                                 </div>
                                 <input type="range" id="temp-slider" min="0" max="1" step="0.1" value="0.7"
-                                       data-input="ai:updateTemperature">
+                                       data-input="ai:updateTemperature" aria-describedby="temp-anchors">
+                                <!-- AI5: what the two ends mean. A bare 0–1 slider said
+                                     nothing about which end stops the agent improvising. -->
+                                <span class="field-desc" id="temp-anchors">${t('ai.temperatureAnchors')}</span>
                             </div>
                         </div>
 
-                        <div class="form-actions">
+                        <div class="form-actions ai-save-row">
                             ${UI.button({
                                 variant: 'primary', type: 'submit', icon: 'check',
                                 label: t('common.saveChanges'), id: 'save-settings-btn',
                             })}
+                            <span class="unsaved-note hidden" id="ai-unsaved-note" role="status">${t('ai.unsaved')}</span>
                         </div>
                     </form>
                 </section>
@@ -271,6 +305,7 @@ const AiSettingsPage = {
             this._saved = {
                 system_prompt: prompt.value,
                 knowledge_base: knowledge.value,
+                settings: this.currentSettings(),
             };
 
             // An unsaved draft from before a navigation outranks the server's
@@ -283,6 +318,7 @@ const AiSettingsPage = {
                 UI.toast(t('ai.draftRestored'), 'success');
             }
 
+            this.refreshDirty();
             Motion.announce(`${t('nav.ai_settings')} — ${t('common.loaded')}`);
         } catch (err) {
             if (seq !== this._seq) return;
@@ -309,6 +345,9 @@ const AiSettingsPage = {
     updateTemperature(value) {
         const out = document.getElementById('temp-value');
         if (out) out.textContent = UI.formatNumber(Number(value));
+        // The slider's own data-input wins the delegated lookup over the form's,
+        // so it reports the change itself.
+        this.refreshDirty();
     },
 
     async saveSettings(form, event) {
@@ -334,8 +373,10 @@ const AiSettingsPage = {
             this._saved = {
                 system_prompt: payload.system_prompt,
                 knowledge_base: payload.knowledge_base,
+                settings: this.currentSettings(),
             };
             this._draft = null;
+            this.refreshDirty();
             UI.toast(t('ai.saved'), 'success');
         } catch (err) {
             console.error('Save Settings Error:', err);
@@ -406,11 +447,9 @@ const AiSettingsPage = {
         UI.icons(container);
         container.scrollTop = container.scrollHeight;
 
-        const payload = {
-            system_prompt: document.getElementById('system-prompt-text').value,
-            knowledge_base: document.getElementById('knowledge-base-text').value,
-            user_message: query,
-        };
+        // AI1: the model and temperature ON SCREEN, so the test runs what the
+        // operator is about to save — it used to run the saved pair.
+        const payload = this.sandboxPayload(query);
 
         try {
             const aiRes = await API.testAiSettings(payload);
@@ -437,7 +476,7 @@ const AiSettingsPage = {
             if (loader) loader.remove();
             container.insertAdjacentHTML('beforeend', esc(html`
                 <div class="sandbox-msg msg-error">
-                    <div class="sandbox-bubble bubble-error" dir="auto">${err.message || t('ai.errorReply')}</div>
+                    <div class="sandbox-bubble bubble-error" dir="auto">${this.sandboxErrorText(err)}</div>
                 </div>
             `));
             container.scrollTop = container.scrollHeight;
@@ -452,6 +491,27 @@ const AiSettingsPage = {
             const lost = !document.activeElement || document.activeElement === document.body;
             if (lost && input && typeof input.focus === 'function') input.focus();
         }
+    },
+
+    /** What the sandbox sends: the draft texts, the message, and the model/temperature on screen. */
+    sandboxPayload(query) {
+        const value = (id) => { const el = document.getElementById(id); return el ? el.value : ''; };
+        const payload = {
+            system_prompt: value('system-prompt-text'),
+            knowledge_base: value('knowledge-base-text'),
+            user_message: query,
+        };
+        const model = value('model-selector');
+        if (model) payload.model = model;
+        const temperature = parseFloat(value('temp-slider'));
+        if (Number.isFinite(temperature)) payload.temperature = temperature;
+        return payload;
+    },
+
+    /** AI3: the 409 "agent is turned off" arrived as raw English. */
+    sandboxErrorText(err) {
+        if (err && err.status === 409) return t('ai.sandboxAgentOff');
+        return (err && err.message) || t('ai.errorReply');
     },
 
     /** Quick replies and carousels come back from Gemini — model output, escaped. */
@@ -497,4 +557,5 @@ UI.registerActions('ai', {
     saveSettings: (el, e) => AiSettingsPage.saveSettings(el, e),
     sendSandboxTest: (el, e) => AiSettingsPage.sendSandboxTest(el, e),
     updateTemperature: (el) => AiSettingsPage.updateTemperature(el.value),
+    refreshDirty: () => AiSettingsPage.refreshDirty(),
 });

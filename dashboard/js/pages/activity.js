@@ -73,6 +73,83 @@ const ActivityPage = {
         this.currentCampaignId = '';
     },
 
+    /** The statuses and platforms a deep link may ask for — anything else is ignored. */
+    LINK_STATUSES: ['SENT', 'FAILED', 'PENDING'],
+    LINK_PLATFORMS: ['instagram', 'facebook'],
+
+    /**
+     * V3: a deep link into the log. Analytics links `#/activity?campaign=<id>`,
+     * a campaign card's failed count links `?campaign=<id>&status=FAILED`. The
+     * link describes a whole view, so the filters it does not name are cleared
+     * rather than inherited from ten minutes ago. The parameters are stripped
+     * once read (the same `history.replaceState` settings.js uses), so a reload
+     * or a later filter change is not overruled by the link again.
+     *
+     * Returns true when the link changed the filters.
+     */
+    seedFromHash() {
+        const campaign = App.hashParam('campaign') || App.hashParam('campaign_id');
+        const status = String(App.hashParam('status') || '').toUpperCase();
+        const platform = String(App.hashParam('platform') || '').toLowerCase();
+        if (!campaign && !status && !platform) return false;
+        this.currentCampaignId = campaign || '';
+        this.currentStatus = this.LINK_STATUSES.includes(status) ? status : '';
+        this.currentPlatform = this.LINK_PLATFORMS.includes(platform) ? platform : '';
+        this.currentSearch = '';
+        this.currentPage = 1;
+        try {
+            history.replaceState(null, '', `${location.pathname}#/activity`);
+        } catch {
+            // Only the strip is lost: a reload re-applies the same link.
+        }
+        return true;
+    },
+
+    /**
+     * V2: a campaign in the filter was named by its FIRST keyword only, so two
+     * campaigns that both start with «كورس» were indistinguishable. The first
+     * two, and «…» when there are more.
+     */
+    campaignOptionLabel(c) {
+        const keywords = String((c && c.trigger_keyword) || '').split(/[,،]/).map((k) => k.trim()).filter(Boolean);
+        if (keywords.length <= 1) return t('activity.campaignOption', { keyword: keywords[0] || '—' });
+        const sep = I18N.lang === 'ar' ? '، ' : ', ';
+        const shown = keywords.slice(0, 2).join(sep) + (keywords.length > 2 ? '…' : '');
+        return t('activity.campaignOptionMany', { keywords: shown });
+    },
+
+    /**
+     * V5: the error column was Meta's raw English, clipped. The common codes
+     * get a one-line explanation in the interface's language; the raw text stays
+     * in the tooltip, where the detail is still one hover away. Codes are read
+     * the way the pipeline writes them: `(Code: 190)` (src/services/instagram.ts)
+     * and `(Code 10903)` (src/webhook/errors.ts).
+     */
+    META_ERROR_KEYS: {
+        100: 'activity.err.noPrivateReply',
+        190: 'activity.err.token',
+        200: 'activity.err.permission',
+        10903: 'activity.err.blocked',
+        4: 'activity.err.rateLimit',
+        17: 'activity.err.rateLimit',
+        32: 'activity.err.rateLimit',
+        613: 'activity.err.rateLimit',
+    },
+
+    /** The friendly one-liner for a raw error, or '' when the code is not a common one. */
+    explainError(raw) {
+        const text = String(raw || '');
+        if (!text) return '';
+        const codes = [...text.matchAll(/\bCode:?\s*(\d+)/gi)].map((m) => Number(m[1]));
+        // The pipeline's own wording for code 100 carries no code of its own.
+        if (/won't accept a private reply/i.test(text)) codes.unshift(100);
+        for (const code of codes) {
+            const key = this.META_ERROR_KEYS[code];
+            if (key) return t(key);
+        }
+        return '';
+    },
+
     /** 15 rows, which is exactly this page's limit, so the table's height is
      *  final before a single row of data has arrived. */
     skeleton() {
@@ -86,6 +163,7 @@ const ActivityPage = {
     },
 
     async render() {
+        this.seedFromHash();
         await this.loadData(document.getElementById('page-container'));
     },
 
@@ -161,9 +239,18 @@ const ActivityPage = {
                 <h2 class="sr-only">${t('nav.activity')}</h2>
                 <div class="table-header">
                     <div class="filter-bar grow">
-                        <label class="sr-only" for="activity-search">${t('activity.searchLabel')}</label>
-                        <input class="field" id="activity-search" type="search"
-                               placeholder="${t('activity.searchPlaceholder')}" value="${this.currentSearch}" dir="auto">
+                        <!-- V1: a real form, so Enter and the button are the same
+                             submit, and the on-screen keyboard shows «بحث». Search
+                             used to be Enter-only, with nothing on screen saying so. -->
+                        <form class="activity-search" role="search" data-submit="activity:submitSearch">
+                            <label class="sr-only" for="activity-search">${t('activity.searchLabel')}</label>
+                            <input class="field" id="activity-search" name="search" type="search" enterkeyhint="search"
+                                   placeholder="${t('activity.searchPlaceholder')}" value="${this.currentSearch}" dir="auto">
+                            ${UI.button({
+                                variant: 'secondary', size: 'sm', type: 'submit', icon: 'search',
+                                label: t('activity.search'), id: 'activity-search-submit',
+                            })}
+                        </form>
 
                         <label class="sr-only" for="activity-platform-filter">${t('activity.platformFilter')}</label>
                         <select class="select" id="activity-platform-filter" data-change="activity:handlePlatformFilter">
@@ -176,8 +263,8 @@ const ActivityPage = {
                         <select class="select" id="activity-campaign-filter" data-change="activity:handleCampaignFilter">
                             <option value="" ${!this.currentCampaignId ? html.raw('selected') : ''}>${t('activity.allCampaigns')}</option>
                             ${(campaigns || []).map((c) => html`
-                                <option value="${c.id}" ${this.currentCampaignId === c.id ? html.raw('selected') : ''}>${
-                                    t('activity.campaignOption', { keyword: String(c.trigger_keyword || '').split(',')[0] })
+                                <option value="${c.id}" dir="auto" ${String(this.currentCampaignId) === String(c.id) ? html.raw('selected') : ''}>${
+                                    this.campaignOptionLabel(c)
                                 }</option>
                             `)}
                         </select>
@@ -213,9 +300,13 @@ const ActivityPage = {
                                 label: t('activity.clearFilters'),
                                 action: 'activity:clearFilters', id: 'activity-clear-filters',
                             }) : ''}
+                            <!-- V6: filtered, the button says how much it exports —
+                                 "Export CSV" on a filtered table read as the whole log. -->
                             ${UI.button({
                                 variant: 'secondary', size: 'sm', icon: 'download',
-                                label: t('activity.export'),
+                                label: filtered
+                                    ? t('activity.exportCount', { count: total, n: UI.formatNumber(total) })
+                                    : t('activity.export'),
                                 action: 'activity:handleExport', id: 'activity-export',
                             })}
                         </span>
@@ -248,7 +339,7 @@ const ActivityPage = {
                                          after paint, so a clean page gains no tab stops.
                                          The tooltip stays for mouse users. -->
                                     <td class="cell-error truncate" title="${i.error_log || ''}"
-                                        dir="auto" data-clip-focus>${i.error_log || '—'}</td>
+                                        dir="auto" data-clip-focus>${this.explainError(i.error_log) || i.error_log || '—'}</td>
                                     <td class="nowrap">${UI.formatDate(i.timestamp)}</td>
                                 </tr>
                             `)}
@@ -272,7 +363,7 @@ const ActivityPage = {
                                 <span class="status-pill ${String(i.status || '').toLowerCase()}">${UI.statusLabel(i.status)}</span>
                             </div>
                             <p class="text-meta" dir="auto">${t('table.keyword')}: ${i.trigger_keyword || '—'}</p>
-                            ${i.error_log ? html`<p class="text-meta text-danger" dir="auto">${i.error_log}</p>` : ''}
+                            ${i.error_log ? html`<p class="text-meta text-danger" dir="auto" title="${i.error_log}">${this.explainError(i.error_log) || i.error_log}</p>` : ''}
                             <p class="text-meta">${UI.formatDate(i.timestamp)}</p>
                         </article>
                     `)}
@@ -305,15 +396,9 @@ const ActivityPage = {
         UI.icons(container);
         UI.revealClipped(container);
 
-        // Enter-to-search (keyup has no delegated hook, so bind it directly)
+        // Enter and the Search button submit the form (activity:submitSearch).
         const search = document.getElementById('activity-search');
         if (search) {
-            search.addEventListener('keyup', (e) => {
-                if (e.key !== 'Enter') return;
-                this.currentSearch = e.target.value;
-                this.currentPage = 1;
-                this.loadData();
-            });
             // `type="search"` draws a native clear (×) in every engine that
             // supports it, and pressing it fires `search`, not Enter — so the
             // control that looks exactly like "cancel this filter" silently
@@ -340,6 +425,15 @@ const ActivityPage = {
 
         // Motion.busy() said "loading"; nothing said the rows had landed.
         Motion.announce(t('activity.results', { count: total, n: UI.formatNumber(total) }));
+    },
+
+    submitSearch(form, event) {
+        if (event) event.preventDefault();
+        const input = form && form.querySelector ? form.querySelector('#activity-search') : null;
+        // The same term again is a refresh, as Enter always was.
+        this.currentSearch = input ? input.value : '';
+        this.currentPage = 1;
+        this.loadData();
     },
 
     handleFilter(value) {
@@ -393,6 +487,7 @@ UI.registerActions('activity', {
     handlePlatformFilter: (el) => ActivityPage.handlePlatformFilter(el.value),
     handleCampaignFilter: (el) => ActivityPage.handleCampaignFilter(el.value),
     clearFilters: () => ActivityPage.clearFilters(),
+    submitSearch: (el, e) => ActivityPage.submitSearch(el, e),
     handleExport: (el) => ActivityPage.handleExport(el),
     goToPage: (el) => ActivityPage.goToPage(parseInt(el.dataset.page, 10)),
 });

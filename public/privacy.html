@@ -16,7 +16,7 @@
   If the pipeline changes, this page is wrong until it is changed too.
 
   OWNER: WHAT HAS BEEN SUPPLIED, AND WHAT HAS NOT (2026-09-25):
-    1. Contact email: elamirmansour@outlook.com — section 9, both languages,
+    1. Contact email: the contact email in Settings → Public site — section 9, both languages,
        as a mailto: link. The same address as the footer's data-contact-email.
     2. Operator and data controller: ElAmir Mansour — named in section 9.
        THE COUNTRY WHOSE LAW APPLIES HAS NOT BEEN SUPPLIED. No governing law,
@@ -105,19 +105,26 @@
          carry a full light theme as a peer of dark. -->
     <meta name="color-scheme" content="dark light">
     <title>سياسة الخصوصية · Privacy Policy — AutoReply Pro</title>
-    <meta name="description" content="كيف يتعامل «أوتوريبلاي برو» مع بيانات مَن يعلّق أو يرسل رسالة خاصة — What AutoReply Pro collects, where it goes, and how to have it deleted.">
+    <meta name="description" data-lang-only="ar" content="كيف يتعامل «أوتوريبلاي برو» مع بيانات مَن يعلّق أو يرسل رسالة خاصة: ما يُجمع، وأين يذهب، وكيف يُحذف.">
+    <meta name="description" data-lang-only="en" content="What AutoReply Pro collects, where it goes, and how to have it deleted.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
-    <link rel="canonical" href="https://msg-response-auto.vercel.app/privacy">
+    <link rel="canonical" href="https://msg-response-auto.vercel.app/privacy{{LANG_QUERY}}">
+    <link rel="alternate" hreflang="ar" href="https://msg-response-auto.vercel.app/privacy">
+    <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/privacy?lang=en">
+    <link rel="alternate" hreflang="x-default" href="https://msg-response-auto.vercel.app/privacy">
     <meta property="og:title" content="سياسة الخصوصية · Privacy Policy — AutoReply Pro">
-    <meta property="og:description" content="كيف يتعامل «أوتوريبلاي برو» مع بيانات مَن يعلّق أو يرسل رسالة خاصة — What AutoReply Pro collects, where it goes, and how to have it deleted.">
+    <meta property="og:description" data-lang-only="ar" content="كيف يتعامل «أوتوريبلاي برو» مع بيانات مَن يعلّق أو يرسل رسالة خاصة: ما يُجمع، وأين يذهب، وكيف يُحذف.">
+    <meta property="og:description" data-lang-only="en" content="What AutoReply Pro collects, where it goes, and how to have it deleted.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://msg-response-auto.vercel.app/privacy">
+    <meta property="og:url" content="https://msg-response-auto.vercel.app/privacy{{LANG_QUERY}}">
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
-    <meta property="og:locale" content="ar_SA">
-    <meta property="og:locale:alternate" content="en_US">
+    <meta property="og:locale" data-lang-only="ar" content="ar_SA">
+    <meta property="og:locale:alternate" data-lang-only="ar" content="en_US">
+    <meta property="og:locale" data-lang-only="en" content="en_US">
+    <meta property="og:locale:alternate" data-lang-only="en" content="ar_SA">
 
 
     <!-- One design system in this repo, not three. This is the same file the
@@ -243,6 +250,35 @@
             background: var(--surface-raised, rgba(0, 0, 0, 0.03));
         }
         .callout > :last-child { margin-bottom: 0; }
+
+        /* PB12: the contents, at the top of each language. Every h2 has an id,
+           so a reviewer can jump to a section and link straight to it. */
+        .toc {
+            margin: 0 0 var(--space-5, 1.5rem);
+            padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
+            border-radius: var(--radius-md, 14px);
+            border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+            background: var(--surface-raised, rgba(0, 0, 0, 0.03));
+        }
+        .toc-h {
+            margin: 0 0 var(--space-2, 0.5rem);
+            font-size: var(--fs-200, 0.875rem);
+            font-weight: var(--fw-semibold, 600);
+            color: var(--text-strong, #14182a);
+        }
+        .toc ol {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            columns: 2 16rem;
+            column-gap: var(--space-5, 1.5rem);
+        }
+        .toc li { margin: 0; break-inside: avoid; }
+        .toc a {
+            display: inline-flex;
+            align-items: center;
+            min-height: var(--tap-target, 44px);
+        }
 
         .divider {
             height: 1px;
@@ -743,27 +779,31 @@
             .headnav a { padding-inline: var(--space-1); }
             .langswitch { gap: 1px; padding: 2px; }
             .langswitch button { min-width: 0; padding-inline: var(--space-2); }
+            /* Contact made the bar three links. The width it needs comes from
+               the bar's own language switch, which keeps only the language
+               you can switch TO: the pressed one names what is already on
+               screen. The footer's switch keeps both. With JavaScript off
+               nothing is pressed, so both still show. */
+            .topbar .langswitch button[aria-pressed='true'] { display: none; }
         }
     </style>
 
     <script>
         /* Resolve the language before first paint so the page never shows the
-           wrong script for a frame. Mirrors dashboard/js/i18n.js: stored choice,
-           then the browser's own languages, then Arabic. */
+           wrong script for a frame. */
         (function () {
+            /* ?lang= first (a shared or hreflang link names its language),
+               then the stored choice, then Arabic. No browser-locale guess on
+               the public pages: it handed an English-locale visitor — and a
+               crawler — English on an Arabic-first site (PB4). The dashboard
+               still guesses; it is a tool, not a front door. */
             var lang = null;
-            try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
+            try { lang = new URLSearchParams(location.search).get('lang'); } catch (e) { /* no URLSearchParams */ }
             if (lang !== 'ar' && lang !== 'en') {
                 lang = null;
-                try {
-                    var prefs = navigator.languages || [navigator.language || ''];
-                    for (var i = 0; i < prefs.length; i++) {
-                        var code = String(prefs[i] || '').toLowerCase().split('-')[0];
-                        if (code === 'ar' || code === 'en') { lang = code; break; }
-                    }
-                } catch (e) { /* no navigator language information */ }
+                try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
             }
-            lang = lang || 'ar';
+            if (lang !== 'ar' && lang !== 'en') lang = 'ar';
             var root = document.documentElement;
             root.setAttribute('data-lang', lang);
             root.lang = lang;
@@ -814,6 +854,7 @@
             <div class="headtools">
                 <nav class="headnav" aria-label="روابط الموقع · Site">
                     <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <a href="/#contact"><bdi class="t-ar" lang="ar">تواصل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></a>
                     <!-- "الدخول" rather than "تسجيل الدخول": the bar has to hold
                          a wordmark, two links and a language switch inside
                          375px, and the footer carries the full "لوحة التحكم"
@@ -834,6 +875,21 @@
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>سياسة الخصوصية</h1>
                 <p class="stamp">آخر تحديث: 25 سبتمبر 2026</p>
+
+                <nav class="toc" aria-labelledby="toc-h-ar">
+                    <p class="toc-h" id="toc-h-ar">المحتويات</p>
+                    <ol>
+                        <li><a href="#collected-ar">1. ما يَصل إلينا، وما يُخزَّن فعلاً</a></li>
+                        <li><a href="#purposes-ar">2. لماذا نستخدم هذه البيانات</a></li>
+                        <li><a href="#gemini-ar">3. الردّ الآلي و«جيميناي» من جوجل</a></li>
+                        <li><a href="#retention-ar">4. مدة الاحتفاظ</a></li>
+                        <li><a href="#processors-ar">5. مَن يعالج البيانات معنا</a></li>
+                        <li><a href="#deletion-ar">6. حذف بياناتك</a></li>
+                        <li><a href="#security-ar">7. كيف تُحفَظ البيانات</a></li>
+                        <li><a href="#changes-ar">8. تغييرات هذه الصفحة</a></li>
+                        <li><a href="#contact-ar">9. للتواصل</a></li>
+                    </ol>
+                </nav>
 
                 <p>
                     «أوتوريبلاي برو» أداة تُشغّلها صاحبة أو صاحب حساب واحد على إنستجرام وفيسبوك،
@@ -869,7 +925,7 @@
                     </p>
                 </div>
 
-                <h2>1. ما يَصل إلينا، وما يُخزَّن فعلاً</h2>
+                <h2 id="collected-ar">1. ما يَصل إلينا، وما يُخزَّن فعلاً</h2>
                 <p>
                     هذان أمران مختلفان، والتمييز بينهما هو أصدق ما يمكن قوله: يَصلنا من ميتا أكثر
                     مما نحتفظ به.
@@ -986,7 +1042,7 @@
                     يحذفها بنفسه، كما هو الحال مع منشورات إنستجرام وفيسبوك.
                 </p>
 
-                <h2>2. لماذا نستخدم هذه البيانات</h2>
+                <h2 id="purposes-ar">2. لماذا نستخدم هذه البيانات</h2>
                 <ul>
                     <li>معرفة ما إذا كان التعليق يُطابِق كلمة مفتاحية لحملة قائمة.</li>
                     <li>إرسال الردّ الآلي إليك، علناً على التعليق أو في رسالة خاصة.</li>
@@ -996,7 +1052,7 @@
                     <li>تشخيص الأعطال: معرفة سبب فشل ردّ لم يصل.</li>
                 </ul>
 
-                <h2>3. الردّ الآلي و«جيميناي» من جوجل</h2>
+                <h2 id="gemini-ar">3. الردّ الآلي و«جيميناي» من جوجل</h2>
                 <p>
                     الردود على الرسائل الخاصة يكتبها نموذج ذكاء اصطناعي، لا إنسان. لتوليد الردّ،
                     يُرسَل <strong>نصّ رسالتك وآخر ثماني رسائل من المحادثة</strong> إلى
@@ -1013,7 +1069,7 @@
                     بأنك تتحدّث إلى خدمة آلية.
                 </p>
 
-                <h2>4. مدة الاحتفاظ</h2>
+                <h2 id="retention-ar">4. مدة الاحتفاظ</h2>
                 <ul>
                     <li>
                         <strong>الحدث الأصلي الوارد من ميتا:</strong> يُمحى بعد أن يتجاوز عمره
@@ -1044,7 +1100,7 @@
                     </li>
                 </ul>
 
-                <h2>5. مَن يعالج البيانات معنا</h2>
+                <h2 id="processors-ar">5. مَن يعالج البيانات معنا</h2>
                 <p>لا نبيع بياناتك، ولا ننقلها إلى أي جهة لأغراض إعلانية أو تسويقية. نستعين بمزوّدي الخدمة التاليين لتشغيل الأداة فقط:</p>
                 <ul>
                     <li>
@@ -1077,13 +1133,13 @@
                     </li>
                 </ul>
 
-                <h2>6. حذف بياناتك</h2>
+                <h2 id="deletion-ar">6. حذف بياناتك</h2>
                 <p>
                     يمكنك طلب حذف بياناتك في أي وقت. الخطوات، وما يُحذف فعلاً وما لا يُحذف،
                     في <a href="/data-deletion">صفحة حذف البيانات</a>.
                 </p>
 
-                <h2>7. كيف تُحفَظ البيانات</h2>
+                <h2 id="security-ar">7. كيف تُحفَظ البيانات</h2>
                 <ul>
                     <li>كل الاتصالات تجري عبر <bdi lang="en" dir="ltr">HTTPS</bdi>.</li>
                     <li>
@@ -1102,14 +1158,14 @@
                     كنصّ صريح داخل قاعدة البيانات ليقرأها صاحب الحساب.
                 </p>
 
-                <h2>8. تغييرات هذه الصفحة</h2>
+                <h2 id="changes-ar">8. تغييرات هذه الصفحة</h2>
                 <p>
                     إن تغيّر ما يجمعه النظام أو مدة احتفاظه به، يُحدَّث هذا النصّ ويُحدَّث معه
                     تاريخ «آخر تحديث» أعلى الصفحة. لا يوجد إشعار مباشر، لأننا لا نحتفظ بأي وسيلة
                     للتواصل معك.
                 </p>
 
-                <h2>9. للتواصل</h2>
+                <h2 id="contact-ar">9. للتواصل</h2>
                 <p>
                     يُشغّل «أوتوريبلاي برو» الأمير منصور (<bdi lang="en" dir="ltr">ElAmir Mansour</bdi>)،
                     وهو المتحكّم في البيانات الموصوفة في هذه الصفحة.
@@ -1118,7 +1174,7 @@
                 <ul>
                     <li>
                         راسله على
-                        <a href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>؛
+                        <a href="mailto:{{CONTACT_EMAIL}}"><bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>؛
                         أو
                     </li>
                     <li>ردّ على الحساب نفسه الذي راسلك على إنستجرام أو فيسبوك؛ أو</li>
@@ -1140,6 +1196,21 @@
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Privacy Policy</h1>
                 <p class="stamp">Last updated: 25 September 2026</p>
+
+                <nav class="toc" aria-labelledby="toc-h-en">
+                    <p class="toc-h" id="toc-h-en">Contents</p>
+                    <ol>
+                        <li><a href="#collected-en">1. What reaches us, and what is actually stored</a></li>
+                        <li><a href="#purposes-en">2. Why we use it</a></li>
+                        <li><a href="#gemini-en">3. Automated replies and Google Gemini</a></li>
+                        <li><a href="#retention-en">4. How long it is kept</a></li>
+                        <li><a href="#processors-en">5. Who else processes it</a></li>
+                        <li><a href="#deletion-en">6. Deleting your data</a></li>
+                        <li><a href="#security-en">7. How the data is protected</a></li>
+                        <li><a href="#changes-en">8. Changes to this page</a></li>
+                        <li><a href="#contact-en">9. Contact</a></li>
+                    </ol>
+                </nav>
 
                 <p>
                     AutoReply Pro is a tool operated by the owner of a single Instagram and
@@ -1177,7 +1248,7 @@
                     </p>
                 </div>
 
-                <h2>1. What reaches us, and what is actually stored</h2>
+                <h2 id="collected-en">1. What reaches us, and what is actually stored</h2>
                 <p>
                     These are two different things, and the distinction is the most honest thing
                     we can tell you: Meta sends us more than we keep.
@@ -1301,7 +1372,7 @@
                     Facebook posts do.
                 </p>
 
-                <h2>2. Why we use it</h2>
+                <h2 id="purposes-en">2. Why we use it</h2>
                 <ul>
                     <li>To decide whether a comment matches a keyword on an active campaign.</li>
                     <li>To send you the automated reply, publicly under the comment or as a direct message.</li>
@@ -1311,7 +1382,7 @@
                     <li>To diagnose faults: to find out why a reply that should have arrived did not.</li>
                 </ul>
 
-                <h2>3. Automated replies and Google Gemini</h2>
+                <h2 id="gemini-en">3. Automated replies and Google Gemini</h2>
                 <p>
                     Replies to direct messages are written by an AI model, not a person. To
                     generate one, <strong>the text of your message and the last eight messages
@@ -1329,7 +1400,7 @@
                     after a long gap — tells you that you are talking to an automated service.
                 </p>
 
-                <h2>4. How long it is kept</h2>
+                <h2 id="retention-en">4. How long it is kept</h2>
                 <ul>
                     <li>
                         <strong>The verbatim event from Meta:</strong> erased once it is more
@@ -1364,7 +1435,7 @@
                     </li>
                 </ul>
 
-                <h2>5. Who else processes it</h2>
+                <h2 id="processors-en">5. Who else processes it</h2>
                 <p>We do not sell your data and we do not transfer it to anyone for advertising or marketing. We rely on these service providers purely to run the tool:</p>
                 <ul>
                     <li>
@@ -1398,14 +1469,14 @@
                     </li>
                 </ul>
 
-                <h2>6. Deleting your data</h2>
+                <h2 id="deletion-en">6. Deleting your data</h2>
                 <p>
                     You can ask for your data to be deleted at any time. The steps, and what is
                     and is not actually erased, are on the
                     <a href="/data-deletion">data deletion page</a>.
                 </p>
 
-                <h2>7. How the data is protected</h2>
+                <h2 id="security-en">7. How the data is protected</h2>
                 <ul>
                     <li>All traffic runs over HTTPS.</li>
                     <li>
@@ -1424,21 +1495,21 @@
                     text sits in the database in plain text so that the account owner can read it.
                 </p>
 
-                <h2>8. Changes to this page</h2>
+                <h2 id="changes-en">8. Changes to this page</h2>
                 <p>
                     If what the system collects or how long it keeps it changes, this text is
                     updated and the "last updated" date at the top changes with it. There is no
                     direct notice, because we hold no way to contact you.
                 </p>
 
-                <h2>9. Contact</h2>
+                <h2 id="contact-en">9. Contact</h2>
                 <p>
                     AutoReply Pro is operated by ElAmir Mansour, who is the data controller for the
                     data described on this page.
                 </p>
                 <p>For any question about this policy or about your data:</p>
                 <ul>
-                    <li>Email <a href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>; or</li>
+                    <li>Email <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>; or</li>
                     <li>Reply to the same Instagram or Facebook account that messaged you; or</li>
                     <li>
                         Open an issue on the
@@ -1527,7 +1598,8 @@
                 </div>
                 <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
                     <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
-                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a class="foot-wa" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">تواصل عبر واتساب</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Chat on WhatsApp</bdi></a>
+                    <a class="foot-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
                 </div>
             </div>
@@ -1558,7 +1630,9 @@
             var root = document.documentElement;
             var buttons = document.querySelectorAll('[data-set-lang]');
 
-            function apply(lang) {
+            /* `remember` only for a click: arriving on a ?lang=en link is
+               not a choice to make English stick on the next visit. */
+            function apply(lang, remember) {
                 root.setAttribute('data-lang', lang);
                 root.lang = lang;
                 root.dir = lang === 'ar' ? 'rtl' : 'ltr';
@@ -1568,17 +1642,27 @@
                         buttons[i].getAttribute('data-set-lang') === lang ? 'true' : 'false'
                     );
                 }
+                if (!remember) return;
                 try { localStorage.setItem('dashboard_lang', lang); } catch (e) { /* private mode */ }
+                /* A ?lang= in the address outranks the stored choice, so it
+                   follows the click — or a reload would undo it. */
+                try {
+                    var url = new URL(location.href);
+                    if (url.searchParams.has('lang')) {
+                        url.searchParams.set('lang', lang);
+                        history.replaceState(history.state, '', url.toString());
+                    }
+                } catch (e) { /* file:// or no URL API */ }
             }
 
             for (var i = 0; i < buttons.length; i++) {
                 buttons[i].addEventListener('click', function () {
-                    apply(this.getAttribute('data-set-lang'));
+                    apply(this.getAttribute('data-set-lang'), true);
                 });
             }
 
             /* The head script already chose; reflect it on the buttons. */
-            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar', false);
         })();
     </script>
 </body>
