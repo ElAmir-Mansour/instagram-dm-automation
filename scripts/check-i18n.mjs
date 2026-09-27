@@ -25,13 +25,33 @@
  * Template calls (`t(`nav.${page}`)`) and variable calls (`t(key)`) cannot be resolved
  * statically. For templates the static prefix is checked instead: at least one key must
  * exist under it, which catches a renamed namespace.
+ *
+ * Two checks read the VALUES, not just the keys (CP13 in the 2026-09-27 UX audit):
+ *
+ *   - Placeholder sets. `t()` substitutes `{name}` and leaves any placeholder it has no value
+ *     for exactly as written, so a translation with `{when}` where the other language has
+ *     `{date}` renders a literal «{when}» on one side only. Every key in both languages must
+ *     use the same SET of placeholders. A plural family (`x_one`, `x_two`, … `x_other`) is
+ *     compared as a family: Arabic legitimately drops `{count}` from «منشور واحد» and
+ *     «منشوران», so it is the union across the family's variants that has to agree.
+ *   - Arabic-Indic digits. The locale pins Latin digits (`nu-latn`, DESIGN.md §5), so a
+ *     «٣» typed into a string reads as a different number system from every formatted number
+ *     next to it. Only a key that names the digit style itself may show one.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import vm from 'node:vm';
 
 const DASHBOARD = 'dashboard';
 const I18N_FILE = 'dashboard/js/i18n.js';
 const PLURAL_SUFFIXES = ['zero', 'one', 'two', 'few', 'many', 'other'];
+
+/** Keys whose Arabic value may contain Arabic-Indic digits, each with the reason. */
+const ARABIC_DIGITS_ALLOWED = new Map([
+    // The Studio setting that CHOOSES the digit style: the option has to show what it picks.
+    ['studio.settings.digitsArabic', 'names the Arabic-Indic digit style itself'],
+]);
+const ARABIC_INDIC_DIGITS = /[\u0660-\u0669\u06F0-\u06F9]/g;
 
 /** Strip // and /* *\/ comments, and HTML comments. */
 function stripComments(src) {
@@ -52,7 +72,8 @@ function walk(dir) {
 }
 
 // ─── The dictionaries ───────────────────────────────────────────────────────
-const lines = readFileSync(I18N_FILE, 'utf8').split('\n');
+const source = readFileSync(I18N_FILE, 'utf8');
+const lines = source.split('\n');
 // Exactly four spaces: `        ar: { label: ... }` at the top is the LANGS config, not a
 // dictionary, and matching it instead is how the first version of this reported 889-vs-0.
 const iAr = lines.findIndex(l => /^ {4}ar: \{/.test(l));
@@ -66,6 +87,14 @@ const dictKeys = (from, to) => new Set(
 );
 const AR = dictKeys(iAr, iEn);
 const EN = dictKeys(iEn, lines.length);
+
+// The values, for checks 5 and 6. i18n.js is a plain script whose top level only builds
+// objects (document and localStorage are touched inside functions), so it is evaluated
+// rather than grepped: a value split over lines or holding an escaped quote reads correctly.
+const sandbox = {};
+sandbox.globalThis = sandbox;
+vm.createContext(sandbox);
+const STRINGS = vm.runInContext(`${source}\n;I18N.strings`, sandbox, { filename: I18N_FILE });
 
 // ─── Every key the UI asks for ──────────────────────────────────────────────
 const used = new Map();       // key -> first file that uses it
@@ -124,6 +153,49 @@ for (const [prefix, file] of prefixes) {
     if (!any) fail.push(`no key starts with '${prefix}' (template call in ${file}) — the namespace was probably renamed.`);
 }
 
+// 5. Every key in both languages uses the same set of {placeholders}; a plural family is
+//    compared as the union across its variants.
+const PLURAL_RE = new RegExp(`^(.*)_(${PLURAL_SUFFIXES.join('|')})$`);
+const placeholders = (value) => new Set([...String(value).matchAll(/\{(\w+)\}/g)].map(m => m[1]));
+const shown = (set) => (set.size ? [...set].sort().map(p => `{${p}}`).join(', ') : 'none');
+const sameSet = (a, b) => a.size === b.size && [...a].every(p => b.has(p));
+const families = new Set(
+    [...Object.keys(STRINGS.ar), ...Object.keys(STRINGS.en)].map(k => (k.match(PLURAL_RE) || [])[1]).filter(Boolean)
+);
+/** What t(base, { count }) can produce in `dict`: the union over the bare key and its variants. */
+const familyPlaceholders = (dict, base) => {
+    const members = [base, ...PLURAL_SUFFIXES.map(s => `${base}_${s}`)].filter(k => Object.hasOwn(dict, k));
+    if (members.length === 0) return null;
+    return new Set(members.flatMap(k => [...placeholders(dict[k])]));
+};
+let placeholderKeys = 0;
+for (const key of Object.keys(STRINGS.en)) {
+    if (!Object.hasOwn(STRINGS.ar, key)) continue;                 // check 2 already reports it
+    if (families.has(key) || PLURAL_RE.test(key)) continue;         // compared as a family below
+    placeholderKeys++;
+    const ar = placeholders(STRINGS.ar[key]);
+    const en = placeholders(STRINGS.en[key]);
+    if (!sameSet(ar, en)) {
+        fail.push(`'${key}' uses ${shown(ar)} in ar but ${shown(en)} in en — the side that names a placeholder the caller does not pass renders it literally.`);
+    }
+}
+for (const base of [...families].sort()) {
+    const ar = familyPlaceholders(STRINGS.ar, base);
+    const en = familyPlaceholders(STRINGS.en, base);
+    if (!ar || !en) continue;                                        // one-sided: checks 2 and 3 cover it
+    if (!sameSet(ar, en)) {
+        fail.push(`plural family '${base}_*' uses ${shown(ar)} in ar but ${shown(en)} in en (union over its variants) — one language renders a placeholder literally.`);
+    }
+}
+
+// 6. No Arabic-Indic digits in Arabic copy: the interface pins Latin digits.
+for (const [key, value] of Object.entries(STRINGS.ar)) {
+    const digits = String(value).match(ARABIC_INDIC_DIGITS);
+    if (digits && !ARABIC_DIGITS_ALLOWED.has(key)) {
+        fail.push(`'${key}' has Arabic-Indic digits (${[...new Set(digits)].join('')}) in ar — the locale pins Latin digits (DESIGN.md §5), so these read as a different number system from every number beside them. Write them as 0-9.`);
+    }
+}
+
 if (fail.length > 0) {
     console.error('\n❌ i18n check failed:\n');
     for (const f of fail.slice(0, 40)) console.error(`   • ${f}`);
@@ -134,5 +206,7 @@ if (fail.length > 0) {
 
 console.log(
     `✓ i18n: ${used.size} key(s) referenced, all resolve; ar ${AR.size} / en ${EN.size}; ` +
-    `${arOnlyPlurals.length} Arabic plural variant(s) English does not need.`
+    `${arOnlyPlurals.length} Arabic plural variant(s) English does not need; ` +
+    `placeholders agree on ${placeholderKeys} key(s) and ${families.size} plural famil${families.size === 1 ? 'y' : 'ies'}; ` +
+    `no Arabic-Indic digits outside ${ARABIC_DIGITS_ALLOWED.size} allowed key(s).`
 );
