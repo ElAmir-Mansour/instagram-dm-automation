@@ -139,6 +139,23 @@ describe('completeJob — monteur_scan', () => {
         await assert.rejects(completeJob(TENANT, JOB, { lessons: [] }), isStudioError(400));
         assert.equal(writes().length, 0);
     });
+
+    it('a course scan takes only the lessons it asked for, in lesson order, then at most `limit`', async () => {
+        db.routes.unshift([/^SELECT id, creator_id, kind, status, payload FROM studio_jobs/, () => ({
+            rows: [{ id: JOB, creator_id: TENANT, kind: 'monteur_scan', status: 'claimed', payload: {
+                folder: null, files: ['/c/1.2.mp4', '/c/1.10.mp4', '/c/10.1.mp4'], limit: 2, known: [],
+            } }],
+        })]);
+        const at = (key: string, path: string) => ({ path, name: path.split('/').pop(), key, size: 1, mtime: 1, duration: 300 });
+        await completeJob(TENANT, JOB, {
+            // The worker's own order, and a file nobody asked for.
+            files: [at(KEY('c'), '/c/10.1.mp4'), at(KEY('f'), '/x/other.mp4'), at(KEY('a'), '/c/1.2.mp4'), at(KEY('b'), '/c/1.10.mp4')],
+            skipped: [], missing: false,
+        });
+        const sent = JSON.parse(db.ran(/^INSERT INTO monteur_sources/)[0]!.params[1]);
+        assert.deepEqual(sent.map((f: any) => f.path), ['/c/1.2.mp4', '/c/1.10.mp4']);
+        assert.deepEqual(storedResult().skipped_files, [{ name: 'other.mp4', reason: 'not one of the lessons asked for' }]);
+    });
 });
 
 // ─── monteur_transcribe ─────────────────────────────────────────────────────────────────

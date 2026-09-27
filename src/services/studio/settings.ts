@@ -9,6 +9,7 @@
  */
 import { pool } from '../../config/db.js';
 import type { MonteurConfig, MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
+import type { MonteurMode, MonteurSource } from './settingsTypes.js';
 import { type Exec, isPlainObject, problemsError, StudioError } from './common.js';
 import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
 
@@ -19,6 +20,8 @@ export const DISPLAY_FONTS: readonly StudioDisplayFont[] = ['Cairo', 'Tajawal', 
 /** Placeholders `cta.dmTemplate` may use; anything else is a typo that would reach a customer. */
 export const DM_PLACEHOLDERS = ['username', 'question', 'pitch', 'url', 'bullets'] as const;
 export const MONTEUR_PLATFORMS: readonly MonteurPlatform[] = ['instagram', 'facebook', 'tiktok'];
+export const MONTEUR_SOURCES: readonly MonteurSource[] = ['folder', 'course'];
+export const MONTEUR_MODES: readonly MonteurMode[] = ['review', 'auto'];
 /** An absolute folder: `/…` on macOS and Linux, `C:\…` or `\\server\share` on Windows. */
 const ABSOLUTE_FOLDER = /^(\/|[A-Za-z]:[\\/]|\\\\)/;
 /** NUL, newlines and the other control characters: never part of a folder the worker can open. */
@@ -204,6 +207,9 @@ export function settingsProblems(s: StudioSettings): string[] {
         problems.push('monteur must be an object');
     } else {
         if (typeof monteur.enabled !== 'boolean') problems.push('monteur.enabled must be true or false');
+        // The folder is needed only to take videos from it; the course library has its own paths.
+        oneOf(monteur.source, 'monteur.source', MONTEUR_SOURCES);
+        oneOf(monteur.mode, 'monteur.mode', MONTEUR_MODES);
         if (monteur.folder !== null) {
             text(monteur.folder, 'monteur.folder', 1024, true);
             if (typeof monteur.folder === 'string' && monteur.folder.trim() && !ABSOLUTE_FOLDER.test(monteur.folder)) {
@@ -288,15 +294,23 @@ export async function updateStudioSettings(
             JSON.stringify(next.monteur),
         ]
     );
-    if (next.monteur.folder !== current.monteur.folder) {
-        // A scan still waiting for the old folder would run instead of one for the new one: the
-        // daily run queues nothing while a scan is open. One already claimed is left to finish.
-        await exec.query(
-            `UPDATE studio_jobs SET status = 'failed', error = $2, updated_at = NOW()
-              WHERE creator_id = $1 AND kind = 'monteur_scan' AND status = 'pending'
-                AND payload->>'folder' IS DISTINCT FROM $3`,
-            [creatorId, 'Superseded: the Monteur\'s folder changed.', next.monteur.folder]
-        );
-    }
+    await supersedeStaleScans(exec, creatorId, current.monteur, next.monteur);
     return { settings: next, changed: Object.keys(patch) };
+}
+
+/**
+ * A scan still waiting for the old source or folder would run instead of one for the new: the
+ * daily run queues nothing while a scan is open. So a pending scan the new settings would not have
+ * queued is failed — in course mode every folder scan (a course scan carries `files`), in folder
+ * mode every course scan and any for another folder. One already claimed is left to finish.
+ */
+async function supersedeStaleScans(exec: Exec, creatorId: string, was: MonteurConfig, now: MonteurConfig): Promise<void> {
+    const sourceChanged = now.source !== was.source;
+    if (!sourceChanged && (now.folder === was.folder || now.source === 'course')) return;
+    const error = sourceChanged ? 'Superseded: the Monteur\'s source changed.' : 'Superseded: the Monteur\'s folder changed.';
+    const stale = `UPDATE studio_jobs SET status = 'failed', error = $2, updated_at = NOW()
+          WHERE creator_id = $1 AND kind = 'monteur_scan' AND status = 'pending'`;
+    await (now.source === 'course'
+        ? exec.query(`${stale} AND payload->'files' IS NULL`, [creatorId, error])
+        : exec.query(`${stale} AND (payload->'files' IS NOT NULL OR payload->>'folder' IS DISTINCT FROM $3)`, [creatorId, error, now.folder]));
 }

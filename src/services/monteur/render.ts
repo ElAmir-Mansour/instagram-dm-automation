@@ -1,12 +1,12 @@
 /**
  * What the worker needs to render one reel (MONTEUR.md §3 `monteur_render`): the cut, its words on
- * the clip's own clock, the hook, the CTA card's two lines, and the brand.
+ * the clip's own clock, the hook, the CTA card's two lines, the brand, and the Editor's edits.
  *
  * The same builder serves the first render and every re-render after an edit, so both cut the
- * words the same way. A clip keeps the accent it was first rendered in; a new clip takes the next
+ * words the same way and carry the same edits (the ones stored on the clip). A clip keeps the accent it was first rendered in; a new clip takes the next
  * palette colour not used by the tenant's latest reels, so neighbouring tiles in the grid differ.
  */
-import type { MonteurRenderPayload, StudioSettings, TranscriptWord } from '../../db/rows.js';
+import type { ClipEdit, MonteurRenderPayload, StudioSettings, TranscriptWord } from '../../db/rows.js';
 import type { Exec } from '../studio/common.js';
 import { pickAccents } from '../studio/generate.js';
 
@@ -55,6 +55,8 @@ export function buildRenderPayload(input: {
     keyword: string;
     accent: string;
     settings: StudioSettings;
+    /** The clip's stored edits (MONTEUR.md §6.2), already on its clock. */
+    edits: readonly ClipEdit[];
 }): MonteurRenderPayload {
     const { settings } = input;
     return {
@@ -70,6 +72,7 @@ export function buildRenderPayload(input: {
         cta_tiktok: settings.monteur.platforms.includes('tiktok') ? tiktokCtaLines(settings) : null,
         brand: { accent: input.accent, font: settings.brand.fonts.display, direction: settings.brand.direction },
         cover_at: COVER_AT_S,
+        edits: [...input.edits],
     };
 }
 

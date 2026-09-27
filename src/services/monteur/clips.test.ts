@@ -10,6 +10,7 @@ import type { ClipCopy } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { StudioError } from '../studio/common.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
+import { AUTO_APPROVE_SQL, autoApproveClips, MAX_AUTO_APPROVALS } from './auto.js';
 import { approveClip, localDay, metaPlatformFor, patchClip, rejectClip, rerenderClip } from './clips.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
 
@@ -418,6 +419,11 @@ describe('patchClip', () => {
         assert.equal(db.ran(/^UPDATE clip_drafts SET title/).length, 1);
     });
 
+    it('clears a reel’s auto-approve refusal on any edit, and never a failed clip’s render error', async () => {
+        await patchClip(TENANT, CLIP, { copy: { dm: 'هلا {username}' } });
+        assert.match(db.ran(/^UPDATE clip_drafts SET title/)[0]!.sql, /error = CASE WHEN status = 'review' THEN NULL ELSE error END/);
+    });
+
     it('does not re-render a failed clip on an unrelated edit: that is /rerender', async () => {
         clip = { ...clip, status: 'failed' };
         await patchClip(TENANT, CLIP, { copy: { dm: 'هلا {username}' } });
@@ -446,12 +452,123 @@ describe('rerenderClip', () => {
         assert.equal(JSON.parse(job!.params[2]).title, 'دفترك الذكي');
     });
 
+    it('re-sends the Editor’s stored edits — on /rerender and on an edit that re-renders', async () => {
+        const edits = [{ t: 3.4, kind: 'keyword', text: 'نقطة مهمة', sfx: 'whoosh' }, { t: 12, kind: 'image', query: 'paper notebook' }];
+        clip = { ...clip, status: 'failed', edits };
+        await rerenderClip(TENANT, CLIP);
+        assert.match(db.ran(/^SELECT id, creator_id, source_id, rank, status, start_s::float8/)[0]!.sql, /\bedits\b/);
+        assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[2]).edits, edits);
+        clip = { ...clip, status: 'review' };
+        db.statements.length = 0;
+        await patchClip(TENANT, CLIP, { title: 'عنوان أقوى' });
+        assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[2]).edits, edits);
+    });
+
+    it('renders a clip cut before v27 with no edits', async () => {
+        clip = { ...clip, status: 'failed', edits: null };
+        await rerenderClip(TENANT, CLIP);
+        assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[2]).edits, []);
+    });
+
     it('409s any clip that has not failed', async () => {
         for (const status of ['review', 'rendering', 'scheduled', 'rejected']) {
             clip = { ...clip, status };
             await assert.rejects(rerenderClip(TENANT, CLIP), isStudioError(409), status);
         }
         assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 0);
+    });
+});
+
+describe('auto mode — the drain approves reels in review (monteur.mode = auto)', () => {
+    let candidates: { id: string; creator_id: string; error: string | null }[];
+    let logs: { level: string; event: string; [k: string]: unknown }[];
+    let restore: (() => void) | undefined;
+    const attempts = () => db.ran(/^SELECT id, status, render FROM clip_drafts/).length;
+
+    beforeEach(() => {
+        candidates = [{ id: CLIP, creator_id: TENANT, error: null }];
+        logs = [];
+        const previous = setLogSink((level, line) => { logs.push({ level, ...JSON.parse(line) }); });
+        restore = () => setLogSink(previous);
+        // The fake returns every candidate, LIMIT or not: the cap must hold in code too.
+        db.routes.unshift([/^SELECT c\.id, c\.creator_id, c\.error FROM clip_drafts c/, () => ({ rows: candidates })]);
+    });
+    afterEach(() => restore?.());
+
+    it('takes reels in review with a render, of active tenants in auto mode — never-refused first, then oldest, at most 4', async () => {
+        await autoApproveClips(NOW);
+        const [select] = db.ran(/^SELECT c\.id, c\.creator_id, c\.error FROM clip_drafts c/);
+        assert.equal(select!.sql, AUTO_APPROVE_SQL.replace(/\s+/g, ' ').trim());
+        assert.match(select!.sql, /JOIN creators cr ON cr\.id = c\.creator_id AND cr\.is_active = TRUE/);
+        assert.match(select!.sql, /JOIN studio_settings ss ON ss\.creator_id = c\.creator_id/);
+        assert.match(select!.sql, /WHERE c\.status = 'review' AND c\.render IS NOT NULL AND ss\.monteur->>'mode' = 'auto'/);
+        assert.match(select!.sql, /ORDER BY \(c\.error IS NOT NULL\), c\.created_at, c\.rank LIMIT \$1$/);
+        assert.deepEqual(select!.params, [4]);
+        assert.equal(MAX_AUTO_APPROVALS, 4);
+    });
+
+    it('approves through Approve itself: the next free slot, under the publishing lock, with its campaign', async () => {
+        directPostReady(false);
+        assert.deepEqual(await autoApproveClips(NOW), { approved: 1, refused: 0 });
+        assert.equal(db.ran(/pg_advisory_xact_lock/)[0]!.params[0], `publishing:${TENANT}`);
+        const [meta, tiktok] = inserts();
+        // 12:00 in Riyadh now: today's 19:00 is the next free slot.
+        assert.equal((meta!.params[4] as Date).toISOString(), '2026-09-27T16:00:00.000Z');
+        assert.equal(tiktok!.params[1], 'tiktok');
+        const [campaign] = db.ran(/^INSERT INTO campaigns/);
+        assert.equal(campaign!.params[1], 'دفتر, دفاتر');
+        assert.equal(campaign!.params[6], 'word');
+        assert.match(db.ran(/^UPDATE clip_drafts SET status = 'scheduled'/)[0]!.sql, /error = NULL/, 'a refusal from an earlier drain is cleared');
+        const approved = logs.find((l) => l.event === 'monteur.auto_approved');
+        assert.deepEqual([approved?.clip_id, approved?.scheduled_time, approved?.campaign_created], [CLIP, '2026-09-27T16:00:00.000Z', true]);
+    });
+
+    it('a refusal leaves the reel in review with the reason, logs it, and is tried again next drain — once a drain', async () => {
+        // TikTok is on and not connected: Approve's own 409.
+        assert.deepEqual(await autoApproveClips(NOW), { approved: 0, refused: 1 });
+        assert.equal(attempts(), 1, 'one attempt, no retry inside the call');
+        assert.equal(inserts().length, 0);
+        const [refusal] = db.ran(/^UPDATE clip_drafts SET error = \$3/);
+        assert.match(refusal!.sql, /WHERE id = \$1 AND creator_id = \$2 AND status = 'review'$/);
+        assert.deepEqual(refusal!.params.slice(0, 2), [CLIP, TENANT]);
+        assert.match(refusal!.params[2], /^TikTok is not connected/);
+        const logged = logs.find((l) => l.event === 'monteur.auto_refused');
+        assert.equal(logged?.level, 'warn');
+        assert.equal(logged?.status, 409);
+        assert.match(String(logged?.error), /TikTok is not connected/);
+
+        // The next drain tries it again; the same reason again is logged quietly.
+        candidates = [{ id: CLIP, creator_id: TENANT, error: refusal!.params[2] }];
+        db.statements.length = 0;
+        logs.length = 0;
+        assert.deepEqual(await autoApproveClips(NOW), { approved: 0, refused: 1 });
+        assert.equal(attempts(), 1);
+        assert.equal(logs.find((l) => l.event === 'monteur.auto_refused')?.level, 'info');
+    });
+
+    it('names every problem of a refusal made of several', async () => {
+        monteur = { platforms: ['instagram', 'facebook'], post_at: ['19:00'] };
+        clip = { ...clip, copy: { ...COPY, variants: ['الدفتر', 'دفاتر'] } };
+        campaigns = [
+            { id: 'a', trigger_keyword: 'الدفتر الذكي', is_active: true, post_id: null, match_mode: 'substring', created_at: new Date() },
+            { id: 'b', trigger_keyword: 'فاتر', is_active: true, post_id: null, match_mode: 'substring', created_at: new Date() },
+        ];
+        assert.deepEqual(await autoApproveClips(NOW), { approved: 0, refused: 1 });
+        const stored: string = db.ran(/^UPDATE clip_drafts SET error = \$3/)[0]!.params[2];
+        assert.match(stored, /«الدفتر» would fire alongside the live keyword «الدفتر الذكي»/);
+        assert.match(stored, /«دفاتر» would fire alongside the live keyword «فاتر»/);
+    });
+
+    it('stops at 4 a drain, and one reel that cannot be scheduled holds back none of the others', async () => {
+        candidates = Array.from({ length: 6 }, (_, i) => ({ id: `c${i}`, creator_id: TENANT, error: null }));
+        assert.deepEqual(await autoApproveClips(NOW), { approved: 0, refused: 4 });
+        assert.equal(attempts(), 4);
+    });
+
+    it('does nothing with nothing to approve', async () => {
+        candidates = [];
+        assert.deepEqual(await autoApproveClips(NOW), { approved: 0, refused: 0 });
+        assert.equal(db.statements.length, 1);
     });
 });
 

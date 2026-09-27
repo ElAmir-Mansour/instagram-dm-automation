@@ -3,7 +3,8 @@
  *
  * One Gemini call for all of a video's clips, after the Marketer. For each clip it reads the
  * clip's own lines and names the moments worth marking: a pop-up keyword restating the point, a
- * chip for a tool the speaker names, an emoji for a concept, or a punch-in on a result. Each edit
+ * chip for a tool the speaker names, an emoji for a concept, a photo of a real-world thing it
+ * mentions (from a free photo library, never generated), or a punch-in on a result. Each edit
  * is anchored on a spoken word, so it lands when the word is said, and carries a sound effect from
  * the worker's own library. Code, not the model, decides the timing: the word's start, spacing,
  * and the limits in MonteurClip (aicourse-captions/src/monteur/layout.ts, cleanEdits).
@@ -16,6 +17,7 @@ import type { StudioSettings } from '../studio/settingsTypes.js';
 import { languageKit } from '../studio/prompts.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import type { TranscriptWord } from '../../db/rows.js';
+import { ask, type CallCost, emptyCost } from './model.js';
 import type { TranscriptLine } from './transcript.js';
 import { formatStamp } from './transcript.js';
 
@@ -30,8 +32,11 @@ export interface ClipEdit {
     kind: EditKind;
     text?: string;
     emoji?: string;
-    /** image: what to picture, in English, for the worker's image model (MONTEUR.md §6.2). */
-    prompt?: string;
+    /**
+     * image: 2–4 English words naming one concrete object or scene — what the worker searches a
+     * free photo library for (MONTEUR.md §6.2). Letters, digits and spaces, at most 40 characters.
+     */
+    query?: string;
     sfx?: Exclude<EditSfx, 'none'>;
 }
 
@@ -39,9 +44,12 @@ export interface ClipEdit {
 export const MAX_EDITS_PER_CLIP = 12;
 export const EDITOR_MAX_OUTPUT = 8192;
 export const EDITOR_THINKING = 1024;
+/** The call's own ceiling; the sweep's deadline may cut it shorter. */
+export const EDITOR_CALL_MS = 90_000;
 const MAX_TEXT = 28;
-const MAX_PROMPT = 220;
-/** Pictures take the worker a model call each: at most this many per clip. */
+/** An image's photo library query: at most this many characters, whole words. */
+export const MAX_QUERY = 40;
+/** Pictures take the worker a library search each, and cover the speaker: at most this many per clip. */
 export const MAX_IMAGES_PER_CLIP = 2;
 
 const str = (description: string): GeminiSchema => ({ type: 'STRING', description });
@@ -65,11 +73,11 @@ export const EDITOR_SCHEMA: GeminiSchema = {
                                 kind: { type: 'STRING', enum: [...EDIT_KINDS] },
                                 text: str(`keyword: 2-4 words, at most ${MAX_TEXT} characters; tool: the tool's name in Latin script`),
                                 emoji: str('emoji: one emoji'),
-                                prompt: str(`image: what to picture, in English, at most ${MAX_PROMPT} characters`),
+                                query: str(`image: 2-4 English words naming one concrete object or scene a free photo library has, at most ${MAX_QUERY} characters`),
                                 sfx: { type: 'STRING', enum: [...EDIT_SFX] },
                             },
                             required: ['line', 'word', 'kind', 'sfx'],
-                            propertyOrdering: ['line', 'word', 'kind', 'text', 'emoji', 'prompt', 'sfx'],
+                            propertyOrdering: ['line', 'word', 'kind', 'text', 'emoji', 'query', 'sfx'],
                         },
                     },
                 },
@@ -89,7 +97,7 @@ For each clip, mark 6-10 moments (about one every 7-9 seconds), none in its firs
 - keyword: 2-4 words in ${lang} that restate the point being made right then, like a subtitle headline. Never the title again, never filler.
 - tool: when the speaker names a tool or product (Gemini, ChatGPT, Claude, n8n, Python…), its name in Latin script.
 - emoji: one emoji for a concept being said (🔒 privacy, ⚡ speed, 🌍 language, 🐍 Python, 🧠 thinking, 📄 document, ✅ it works, ❌ a mistake, 🤯 a surprise, 💡 an idea).
-- image: at most 2 per clip, for an idea that a picture explains better than words (a concept, an analogy, a real-world example the speaker gives). prompt: in English, one concrete scene, flat modern illustration, no text, no logos, no real people.
+- image: at most 2 per clip, for a real-world thing the speaker mentions or compares to. query: 2-4 English words naming one concrete object or scene a free photo library has (e.g. world map, recipe book).
 - punch: a quick zoom-in when a result appears on screen or on a strong claim. At most 2 per clip.
 sfx: whoosh for a keyword, tool or image, switch for an emoji, ding for a result or ✅, click for a UI action or punch, none when a sound would be too much. Vary them.
 Mix the kinds; never two of the same in a row. Invent nothing: only what the clip says.`;
@@ -123,9 +131,26 @@ export function clipLines(
 const norm = (s: string) => normalizeArabic(String(s)).replace(/[^\p{L}\p{N}]/gu, '').toLowerCase();
 
 /**
+ * An image's query as the library gets it: Latin letters, digits and single spaces, whole words up
+ * to 40 characters. Anything else — punctuation, another script — is a word break, so a query
+ * with no English left is empty, and the image is dropped.
+ */
+function cleanQuery(raw: unknown): string {
+    if (typeof raw !== 'string') return '';
+    let query = '';
+    for (const word of raw.replace(/[^A-Za-z0-9 ]+/g, ' ').split(' ').filter(Boolean)) {
+        const next = query ? `${query} ${word}` : word;
+        if (next.length > MAX_QUERY) break;
+        query = next;
+    }
+    return query;
+}
+
+/**
  * The model's edits for one clip, placed on the clip's clock: each lands on the start of its word
- * in its line (the first match, else the line's start). Unknown kinds, missing text or emoji, and
- * lines that don't exist are dropped; spacing and limits are the renderer's (cleanEdits).
+ * in its line (the first match, else the line's start). Unknown kinds, missing text, emoji or
+ * query, a third image, and lines that don't exist are dropped; spacing and the other limits are
+ * the renderer's (cleanEdits).
  */
 export function placeEdits(raw: unknown, lines: readonly { t: number; words: TranscriptWord[] }[]): ClipEdit[] {
     const list = Array.isArray(raw) ? raw : [];
@@ -142,14 +167,14 @@ export function placeEdits(raw: unknown, lines: readonly { t: number; words: Tra
         const t = Math.round((hit ? hit[0] : line.t) * 100) / 100;
         const text = typeof e.text === 'string' ? e.text.trim().slice(0, MAX_TEXT) : '';
         const emoji = typeof e.emoji === 'string' ? [...e.emoji.trim()].slice(0, 2).join('') : '';
-        const prompt = typeof e.prompt === 'string' ? e.prompt.replace(/\s+/g, ' ').trim().slice(0, MAX_PROMPT) : '';
+        const query = cleanQuery(e.query);
         if ((kind === 'keyword' || kind === 'tool') && !text) continue;
         if (kind === 'emoji' && !emoji) continue;
-        if (kind === 'image' && (!prompt || out.filter((o) => o.kind === 'image').length >= MAX_IMAGES_PER_CLIP)) continue;
+        if (kind === 'image' && (!query || out.filter((o) => o.kind === 'image').length >= MAX_IMAGES_PER_CLIP)) continue;
         const sfx = (EDIT_SFX as readonly string[]).includes(e.sfx as string) && e.sfx !== 'none' ? (e.sfx as ClipEdit['sfx']) : undefined;
         out.push({
             t, kind, ...(kind === 'keyword' || kind === 'tool' ? { text } : {}), ...(kind === 'emoji' ? { emoji } : {}),
-            ...(kind === 'image' ? { prompt } : {}), ...(sfx ? { sfx } : {}),
+            ...(kind === 'image' ? { query } : {}), ...(sfx ? { sfx } : {}),
         });
         if (out.length === MAX_EDITS_PER_CLIP) break;
     }
@@ -164,4 +189,37 @@ export function editsByClip(raw: unknown, clipLinesList: readonly { t: number; w
         const mine = items.find((c) => c && typeof c === 'object' && (c as Record<string, unknown>).clip === i + 1) as Record<string, unknown> | undefined;
         return mine ? placeEdits(mine.edits, lines) : [];
     });
+}
+
+export interface EditResult {
+    /** One list per clip, in the clips' order; `[]` for a clip the answer skipped. */
+    edits: ClipEdit[][];
+    cost: CallCost;
+}
+
+/**
+ * The Editor's one call for every clip of a video, C1… in the order given (the clips that got
+ * copy), each read on its own clock. Throws what the call throws: the sweep catches it, since a
+ * failed Editor call must never hold a reel back.
+ */
+export async function writeEdits(
+    clips: readonly { start: number; end: number }[],
+    lines: readonly TranscriptLine[],
+    words: readonly TranscriptWord[],
+    settings: StudioSettings,
+    deadline: number,
+): Promise<EditResult> {
+    const cost = emptyCost();
+    const perClip = clips.map((c) => clipLines(lines, words, c.start, c.end));
+    const raw = await ask({
+        purpose: 'monteur.edit',
+        system: editorSystemPrompt(settings),
+        turns: [{ role: 'user', text: editorUserPrompt(perClip.map((l) => ({ lines: l }))) }],
+        schema: EDITOR_SCHEMA,
+        temperature: 0.6,
+        thinkingBudget: EDITOR_THINKING,
+        maxOutputTokens: EDITOR_MAX_OUTPUT,
+        capMs: EDITOR_CALL_MS,
+    }, deadline, cost);
+    return { edits: editsByClip(raw, perClip), cost };
 }

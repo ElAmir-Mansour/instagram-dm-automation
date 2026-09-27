@@ -212,11 +212,21 @@ describe('getStudioSettings / updateStudioSettings', () => {
 });
 
 describe('the monteur section (MONTEUR.md §1)', () => {
-    it('defaults to off, no folder, one reel a day from one video, on all three platforms', () => {
+    it('defaults to off, no folder, one reel a day from one video, on all three platforms, each reviewed', () => {
         assert.deepEqual(defaultStudioSettings().monteur, {
-            enabled: false, folder: null, run_at: '07:00', videos_per_run: 1, reels_per_video: 1,
+            enabled: false, source: 'folder', mode: 'review', folder: null, run_at: '07:00', videos_per_run: 1, reels_per_video: 1,
             platforms: ['instagram', 'facebook', 'tiktok'], post_at: ['19:00'], min_seconds: 20, max_seconds: 45,
         });
+    });
+
+    it('reads a section saved before source and mode existed as the folder, reviewed', () => {
+        const read = overDefaults({ monteur: { enabled: true, folder: '/v' } });
+        assert.equal(read.monteur.source, 'folder');
+        assert.equal(read.monteur.mode, 'review');
+    });
+
+    it('takes the course library with no folder at all, switched on and scheduling by itself', () => {
+        assert.deepEqual(problemsFor({ monteur: { source: 'course', mode: 'auto', enabled: true, folder: null } }), []);
     });
 
     const cases: [string, Record<string, unknown>, RegExp][] = [
@@ -239,6 +249,9 @@ describe('the monteur section (MONTEUR.md §1)', () => {
         ['a maximum over 90 s', { max_seconds: 120 }, /monteur\.max_seconds must be a number from 15 to 90/],
         ['a maximum not above the minimum', { min_seconds: 30, max_seconds: 30 }, /max_seconds must be more than monteur\.min_seconds/],
         ['enabled as text', { enabled: 'yes' }, /monteur\.enabled must be true or false/],
+        ['a source it cannot read', { source: 'drive' }, /^monteur\.source must be one of folder, course$/],
+        ['no source', { source: null }, /^monteur\.source must be one of folder, course$/],
+        ['a mode that is neither', { mode: 'yolo' }, /^monteur\.mode must be one of review, auto$/],
         ['a key that is not a setting', { run_time: '07:00' }, /monteur\.run_time is not a setting/],
     ];
     for (const [name, monteur, expected] of cases) {
@@ -287,6 +300,44 @@ describe('the monteur section (MONTEUR.md §1)', () => {
         } finally {
             (pool as unknown as { query: unknown }).query = originalQuery;
         }
+    });
+});
+
+describe('the monteur source — a scan still waiting for the old one is superseded', () => {
+    async function change(stored: Record<string, unknown>, patch: Record<string, unknown>): Promise<{ sql: string; params: unknown[] }[]> {
+        const originalQuery = pool.query;
+        const statements: { sql: string; params: unknown[] }[] = [];
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            statements.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
+            if (/FROM studio_settings/.test(sql)) return { rows: [{ monteur: stored }], rowCount: 1 };
+            return { rows: [], rowCount: 1 };
+        };
+        try {
+            await updateStudioSettings(TENANT, { monteur: patch });
+        } finally {
+            (pool as unknown as { query: unknown }).query = originalQuery;
+        }
+        return statements.filter((s) => /^UPDATE studio_jobs SET status = 'failed'/.test(s.sql));
+    }
+
+    it('to the course library: every pending folder scan', async () => {
+        const [superseded, ...more] = await change({ source: 'folder', folder: '/v' }, { source: 'course' });
+        assert.equal(more.length, 0);
+        assert.match(superseded!.sql, /kind = 'monteur_scan' AND status = 'pending' AND payload->'files' IS NULL$/);
+        assert.deepEqual(superseded!.params, [TENANT, 'Superseded: the Monteur\'s source changed.']);
+    });
+
+    it('back to a folder: every pending course scan, and any for another folder', async () => {
+        const [superseded] = await change({ source: 'course', folder: '/v' }, { source: 'folder' });
+        assert.match(superseded!.sql, /status = 'pending' AND \(payload->'files' IS NOT NULL OR payload->>'folder' IS DISTINCT FROM \$3\)$/);
+        assert.deepEqual(superseded!.params, [TENANT, 'Superseded: the Monteur\'s source changed.', '/v']);
+    });
+
+    it('a new folder in folder mode: the old folder’s, as before; nothing for a change that moves neither', async () => {
+        const [superseded] = await change({ source: 'folder', folder: '/v' }, { folder: '/w' });
+        assert.deepEqual(superseded!.params, [TENANT, 'Superseded: the Monteur\'s folder changed.', '/w']);
+        assert.deepEqual(await change({ source: 'course', folder: '/v' }, { folder: '/w' }), [], 'course scans name no folder');
+        assert.deepEqual(await change({ source: 'folder', folder: '/v' }, { mode: 'auto' }), []);
     });
 });
 

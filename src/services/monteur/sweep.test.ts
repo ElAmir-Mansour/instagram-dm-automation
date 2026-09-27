@@ -10,6 +10,7 @@ import { setLogSink } from '../../utils/log.js';
 import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import { ASK_POOL } from './copy.js';
+import { EDITOR_MAX_OUTPUT, EDITOR_SCHEMA, EDITOR_THINKING } from './editor.js';
 import { PICK_MAX_OUTPUT } from './pick.js';
 import {
     CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, sweepMonteur,
@@ -34,6 +35,20 @@ const COPY_ITEM = {
     question: 'تبي تجربه؟', pitch: 'شرحته في الكورس.', alt_text: 'متحدث يشرح NotebookLM',
 };
 const COPY = { clips: [COPY_ITEM] };
+/** Two edits on the clip's own lines: L2 is «جملة4.» (15 s into the source), L3 «جملة5.». */
+const EDIT = {
+    clips: [{
+        clip: 1, edits: [
+            { line: 2, word: 'جملة4', kind: 'keyword', text: 'نقطة مهمة', sfx: 'whoosh' },
+            { line: 3, word: 'جملة5.', kind: 'emoji', emoji: '💡', sfx: 'switch' },
+        ],
+    }],
+};
+/** The clip starts at 9.85 s: 15 − 9.85 and 20 − 9.85. */
+const EDITS = [
+    { t: 5.15, kind: 'keyword', text: 'نقطة مهمة', sfx: 'whoosh' },
+    { t: 10.15, kind: 'emoji', emoji: '💡', sfx: 'switch' },
+];
 
 let db: FakeDb;
 let source: Record<string, unknown> | null;
@@ -48,6 +63,7 @@ let saveClaimed: boolean;
 let existingTexts: string[];
 let recentCaptions: { caption: string; keyword: string }[];
 let previousCaller: CallModel;
+let reelsPerVideo: number;
 let previousSink: ReturnType<typeof setLogSink>;
 
 beforeEach(() => {
@@ -55,7 +71,8 @@ beforeEach(() => {
     source = { id: SOURCE, creator_id: TENANT, name: 'lesson.mp4', path: '/v/lesson.mp4', duration: 100, words: WORDS, pick: null, attempts: 1 };
     handOffClaimed = true;
     calls = [];
-    answers = { 'monteur.pick': PICK, 'monteur.copy': COPY };
+    answers = { 'monteur.pick': PICK, 'monteur.copy': COPY, 'monteur.edit': EDIT };
+    reelsPerVideo = 1;
     logs = [];
     copyCalledAt = -1;
     inFlight = [];
@@ -76,7 +93,7 @@ beforeEach(() => {
         [/^SELECT c\.id AS creator_id FROM creators c/, () => ({ rows: [] })],
         [/^UPDATE monteur_sources SET status = 'failed', claimed_at = NULL/, () => ({ rows: [], rowCount: 0 })],
         [/^WITH picked AS \( SELECT s\.id FROM monteur_sources s/, () => ({ rows: source ? [source] : [] })],
-        [/FROM studio_settings/, () => ({ rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: 1 } }] })],
+        [/FROM studio_settings/, () => ({ rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: reelsPerVideo } }] })],
         [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [{ lessons: [{ rule: 'ابدأ بالنتيجة', evidence: 'skip 40%' }] }] })],
         [/^SELECT caption FROM post_insights/, () => ({ rows: [{ caption: 'هذي أسرع طريقة تلخص فيها درس كامل\nbody' }, { caption: 'غلطة يسويها الكل' }] })],
         [/^SELECT text FROM clip_drafts/, () => ({ rows: existingTexts.map((text) => ({ text })) })],
@@ -118,7 +135,8 @@ describe('the claim — the SQL', () => {
     it('fails a stale claim that used its third attempt, before claiming', async () => {
         source = null;
         await sweepMonteur(later());
-        const [exhaust, claim] = db.statements;
+        const [exhaust] = db.statements;
+        const [claim] = db.ran(/^WITH picked AS/);
         assert.equal(exhaust!.sql, EXHAUST_SOURCES_SQL.replace(/\s+/g, ' ').trim());
         assert.deepEqual(exhaust!.params, [10, 3, EXHAUSTED_PICK_ERROR]);
         assert.match(exhaust!.sql, /attempts >= \$2/);
@@ -127,10 +145,10 @@ describe('the claim — the SQL', () => {
 });
 
 describe('sweepMonteur — a pick', () => {
-    it('makes one Monteur call and one Marketer call, then hands the clip to the worker', async () => {
+    it('makes one Monteur call, one Marketer call and one Editor call, then hands the clip to the worker', async () => {
         const result = await sweepMonteur(later());
         assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 });
-        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.copy']);
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.copy', 'monteur.edit']);
 
         const [pick, copy] = calls;
         assert.match(pick!.turns[0]!.text, /^L3 \[00:10\.0\] جملة3\.$/m, 'numbered lines, L<n> [mm:ss.s] text');
@@ -197,7 +215,7 @@ describe('sweepMonteur — a pick', () => {
         db.statements.length = 0;
         source = { ...source, pick: record, attempts: 2 };
         const result = await sweepMonteur(later());
-        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.copy']);
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.copy', 'monteur.edit']);
         assert.equal(result.pick?.outcome, 'rendering');
     });
 
@@ -251,7 +269,7 @@ describe('sweepMonteur — a pick', () => {
             return COPY;
         });
         const result = await sweepMonteur(later());
-        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.pick-repair', 'monteur.copy']);
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.pick-repair', 'monteur.copy', 'monteur.edit']);
         assert.match(calls[1]!.turns.at(-1)!.text, /clip 1: L90–L95 is not a range of lines/);
         assert.equal(result.pick?.outcome, 'rendering');
     });
@@ -260,6 +278,100 @@ describe('sweepMonteur — a pick', () => {
         existingTexts = ['جملة3. جملة4. جملة5. جملة6. جملة7.'];
         const result = await sweepMonteur(later());
         assert.equal(result.pick?.outcome, 'no_clips');
+    });
+});
+
+const renderPayloads = () => db.ran(/^INSERT INTO studio_jobs/).map((j) => JSON.parse(j.params[2]));
+const handOffRecord = () => JSON.parse(db.ran(/^UPDATE monteur_sources SET status = 'rendering'/)[0]!.params[1]);
+
+describe('sweepMonteur — the Editor (MONTEUR.md §6.2)', () => {
+    it('makes ONE call after the Marketer, on each clip’s own lines and clock', async () => {
+        await sweepMonteur(later());
+        const edit = calls.find((c) => c.purpose === 'monteur.edit');
+        assert.ok(edit, 'an Editor call');
+        assert.equal(calls.filter((c) => c.purpose === 'monteur.edit').length, 1);
+        assert.match(edit!.system, /^You are the editor of short vertical reels/);
+        assert.deepEqual(edit!.schema, EDITOR_SCHEMA);
+        assert.equal(edit!.maxOutputTokens, EDITOR_MAX_OUTPUT);
+        assert.equal(edit!.thinkingBudget, EDITOR_THINKING);
+        assert.ok(edit!.deadline && edit!.deadline <= Date.now() + 250_000, 'inside the sweep’s deadline');
+        const text = edit!.turns[0]!.text;
+        assert.match(text, /^C1\nL1 \[00:00\.\d\] جملة3\.\nL2 \[00:05\.\d\] جملة4\./, 'C<n>, then the clip’s lines from L1, on its clock');
+        assert.ok(!text.includes('جملة2.') && !text.includes('جملة8.'), 'only the clip’s own lines');
+    });
+
+    it('stores each clip’s edits, and sends them in its render with t on the clip’s clock', async () => {
+        await sweepMonteur(later());
+        const [insert] = db.ran(/^INSERT INTO clip_drafts/);
+        assert.match(insert!.sql, /\bedits\b/);
+        assert.deepEqual(JSON.parse(insert!.params[14]), EDITS);
+        assert.deepEqual(renderPayloads()[0]!.edits, EDITS);
+    });
+
+    it('logs monteur.edit with its tokens, and records the call on the source’s pick', async () => {
+        await sweepMonteur(later());
+        const line = logs.find((l) => l.event === 'monteur.edit');
+        assert.ok(line, 'monteur.edit');
+        assert.deepEqual(line!.usage, { in: 1000, out: 250, thinking: 50 });
+        assert.equal(line!.edits, 2);
+        assert.deepEqual(handOffRecord().edit, { model: 'gemini-test', tokens_in: 1000, tokens_out: 250 });
+    });
+
+    it('a failed Editor call never holds a reel back: it renders with no edits, and the failure is logged', async () => {
+        answers['monteur.edit'] = new Error('Gemini request failed [HTTP 503]');
+        const result = await sweepMonteur(later());
+        assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 });
+        assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14]), []);
+        assert.deepEqual(renderPayloads()[0]!.edits, []);
+        const failed = logs.find((l) => l.event === 'monteur.edit_failed');
+        assert.ok(failed, 'the failure is logged');
+        assert.match(String(failed!.error), /HTTP 503/);
+        assert.equal(handOffRecord().edit.error, 'Gemini request failed [HTTP 503]');
+        assert.equal(db.ran(/^UPDATE monteur_sources SET error = \$2/).length, 0, 'the attempt did not fail');
+    });
+
+    it('an answer with nothing usable is a reel without edits, not a failure', async () => {
+        answers['monteur.edit'] = { clips: [{ clip: 1, edits: [{ line: 99, word: 'x', kind: 'keyword', text: 'y', sfx: 'none' }] }, { clip: 7, edits: [] }] };
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'rendering');
+        assert.deepEqual(renderPayloads()[0]!.edits, []);
+    });
+
+    it('gives each clip its own edits, matched by C<n>', async () => {
+        reelsPerVideo = 2;
+        answers['monteur.pick'] = {
+            topic: PICK.topic,
+            clips: [PICK.clips[0], { ...PICK.clips[0], start_line: 11, end_line: 15, title: 'عنوان ثاني', scores: { hook: 3, alone: 3, payoff: 2, send: 1 } }],
+        };
+        answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, clip: 1 }, { ...COPY_ITEM, clip: 2, keyword_candidates: ['ملاحظة'] }] };
+        answers['monteur.edit'] = {
+            clips: [
+                { clip: 2, edits: [{ line: 1, word: 'جملة11', kind: 'tool', text: 'NotebookLM', sfx: 'whoosh' }] },
+                { clip: 1, edits: [{ line: 2, word: 'جملة4', kind: 'punch', sfx: 'click' }] },
+            ],
+        };
+        assert.equal((await sweepMonteur(later())).pick?.clips, 2);
+        const stored = db.ran(/^INSERT INTO clip_drafts/).map((i) => JSON.parse(i.params[14]));
+        assert.deepEqual(stored, [[{ t: 5.15, kind: 'punch', sfx: 'click' }], [{ t: 0.15, kind: 'tool', text: 'NotebookLM', sfx: 'whoosh' }]]);
+        assert.deepEqual(renderPayloads().map((p) => p.edits), stored);
+    });
+
+    it('numbers the clips that got copy: a clip the Marketer dropped is not sent, and edits land on the right clip', async () => {
+        reelsPerVideo = 2;
+        answers['monteur.pick'] = {
+            topic: PICK.topic,
+            clips: [PICK.clips[0], { ...PICK.clips[0], start_line: 11, end_line: 15, title: 'عنوان ثاني', scores: { hook: 3, alone: 3, payoff: 2, send: 1 } }],
+        };
+        // Clip 1's only candidate is unusable, so only clip 2 reaches the Editor, as C1.
+        answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, clip: 1, keyword_candidates: ['دفت'] }, { ...COPY_ITEM, clip: 2 }] };
+        answers['monteur.edit'] = { clips: [{ clip: 1, edits: [{ line: 1, word: 'جملة11', kind: 'tool', text: 'NotebookLM', sfx: 'whoosh' }] }] };
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.clips, 1);
+        const text = calls.find((c) => c.purpose === 'monteur.edit')!.turns[0]!.text;
+        assert.match(text, /^C1\nL1 \[00:00\.\d\] جملة11\./);
+        assert.ok(!text.includes('C2') && !text.includes('جملة3.'), 'the dropped clip is not sent');
+        const [insert] = db.ran(/^INSERT INTO clip_drafts/);
+        assert.equal(insert!.params[5], 'عنوان ثاني');
+        assert.deepEqual(JSON.parse(insert!.params[14]), [{ t: 0.15, kind: 'tool', text: 'NotebookLM', sfx: 'whoosh' }]);
     });
 });
 
@@ -306,6 +418,32 @@ describe('sweepMonteur — keywords and asks', () => {
         const result = await sweepMonteur(later());
         assert.equal(result.pick?.outcome, 'retry');
         assert.match(result.pick?.error ?? '', /wrote nothing for this clip/);
+    });
+});
+
+describe('sweepMonteur — auto mode', () => {
+    const autoSelect = /^SELECT c\.id, c\.creator_id, c\.error FROM clip_drafts c/;
+
+    it('approves auto-mode reels first, and reports it', async () => {
+        const result = await sweepMonteur(later());
+        assert.deepEqual(result.auto, { approved: 0, refused: 0 });
+        const order = db.statements.map((st) => st.sql);
+        const auto = order.findIndex((sql) => autoSelect.test(sql));
+        assert.ok(auto > 0 && auto < order.findIndex((sql) => /^WITH picked AS/.test(sql)), 'after the exhausted claims, before the pick');
+    });
+
+    it('still approves when there is no time left for a pick', async () => {
+        const result = await sweepMonteur({ deadline: Date.now() + 30_000 });
+        assert.equal(result.skipped, 'no_time_for_pick');
+        assert.equal(db.ran(autoSelect).length, 1);
+    });
+
+    it('never lets a failure there stop the pick', async () => {
+        db.routes.unshift([autoSelect, () => { throw new Error('connection reset'); }]);
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'rendering');
+        assert.deepEqual(result.auto, { approved: 0, refused: 0, error: 'connection reset' });
+        assert.ok(logs.some((l) => l.event === 'monteur.auto_failed'));
     });
 });
 
