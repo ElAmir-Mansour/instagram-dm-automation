@@ -628,3 +628,79 @@ describe('Growth — goals, bands, freshness (G1 G2 G4 G5 G12 G14)', () => {
         assert.equal(s.announced.pop(), s.t('growth.posts.sortedAnnounce', { column: s.t('growth.metric.reach'), dir: s.t('growth.posts.desc') }));
     });
 });
+
+describe('Growth — a direction on the KPIs, from the server’s previous window (G3)', () => {
+    function kpis(previous: Json, lang: 'ar' | 'en' = 'en') {
+        const s = load(lang);
+        const G = s.pages.Growth;
+        G.overview = { kpis: { views: 14009, reach: 5200, saves: 40, shares: 12, engagement_rate: 0.05 }, previous, trend: [] };
+        G.status = G.normalizeStatus({ instagram: 'ok', facebook: 'ok', missing: [], lastSync: ago(3600 * 1000) });
+        G.days = 28;
+        return { s, card: (key: string) => String(G.kpiCard({ key, icon: 'eye' })) };
+    }
+
+    it('says "↑ 12% vs the previous 28 days" in the band colour, and a whole sentence to a screen reader', () => {
+        const { s, card } = kpis({ days: 28, views: 12508, reach: 6500, saves: null, shares: 12 });
+        const views = card('views');
+        assert.match(views, /class="stat-sub growth-dir text-success" id="growth-dir-views"/);
+        assert.ok(views.includes('<span aria-hidden="true">↑ 12% vs the previous 28 days</span>'), '14,009 against 12,508; the arrow is not read out');
+        assert.ok(views.includes(`<span class="sr-only">${s.t('growth.kpi.dirUpSr', { pct: '12', days: '28 days' })}</span>`));
+        assert.equal(s.t('growth.kpi.dirUpSr', { pct: '12', days: '28 days' }), 'Up 12 percent compared with the previous 28 days');
+        const reach = card('reach');
+        assert.match(reach, /growth-dir text-danger/);
+        assert.ok(text(reach).includes('↓ 20% vs the previous 28 days'), '5,200 against 6,500');
+        const shares = card('shares');
+        assert.ok(text(shares).includes(s.t('growth.kpi.dirFlat', { days: '28 days' })));
+        assert.equal(/growth-dir text-(success|danger)/.test(shares), false, 'no change, no colour');
+        const ar = kpis({ days: 28, views: 12508 }, 'ar').card('views');
+        assert.ok(text(ar).includes('↑ 12% مقارنةً بـ28 يوماً قبلها'), 'Latin digits, in Arabic');
+    });
+
+    it('draws no arrow it cannot state: no previous, a null or zero baseline, engagement rate', () => {
+        const { card } = kpis({ days: 28, views: 0, reach: null, saves: null, shares: 12, engagement_rate: 0.04 });
+        for (const key of ['views', 'reach', 'saves', 'engagement_rate']) assert.equal(card(key).includes('growth-dir'), false, key);
+        assert.ok(text(card('views')).includes('In the last 28 days'), 'the plain range line instead');
+        assert.equal(kpis(undefined).card('views').includes('growth-dir'), false, 'a server that sends no previous at all');
+    });
+});
+
+describe('Growth — your rate beside the competitors’, measured the same way (G11)', () => {
+    function page() {
+        const s = load();
+        const G = s.pages.Growth;
+        G.overview = { kpis: { followers: 154 }, by_platform: [{ platform: 'instagram', followers: 36 }, { platform: 'facebook', followers: 118 }] };
+        const ig = (daysAgo: number, likes: number | null, comments: number | null) => ({ platform: 'instagram', published_at: ago(daysAgo * DAY), metrics: { likes, comments } });
+        G.posts = [
+            ...Array.from({ length: 12 }, (_, i) => ig(i + 1, 2, 1)),
+            ig(20, 300, 0),
+            { platform: 'facebook', published_at: ago(DAY / 2), metrics: { likes: 900, comments: 0 } },
+        ];
+        G.postsLoaded = true;
+        G.settings = G.normalizeSettings({ competitors: ['ai.arabic'] });
+        return { s, G };
+    }
+
+    it('is likes + comments over your latest 12 Instagram posts, over your Instagram followers', () => {
+        const { s, G } = page();
+        const own = plain(G.ownRate());
+        assert.equal(own.posts, 12, 'as many as a competitor’s card is averaged over; the 13th is older');
+        assert.equal(own.avg, 3, 'and the Facebook post is not an Instagram one');
+        assert.equal(own.followers, 36, 'Instagram followers, not the 154 across both platforms');
+        const head = String(G.competitorsMarkup());
+        assert.ok(text(head).includes(`${s.t('growth.competitors.ownRate')} 8.3%`), '3 / 36');
+        assert.ok(text(head).includes(s.t('growth.competitors.ownRateHow', { posts: '12 posts' })));
+        const card = String(G.competitorCard({ username: 'ai.arabic', followers: 1000, media_count: 5, recent: [{ like_count: 30, comments_count: 10 }] }));
+        assert.ok(text(card).includes(`${s.t('growth.competitors.rate')} 4%`), 'theirs: 40 / 1,000, the same measure');
+        assert.match(s.t('growth.competitors.rate'), /per follower/);
+        assert.match(load('ar').t('growth.competitors.rate'), /لكل متابع/);
+    });
+
+    it('is a dash that says what it waits for, when those numbers are not on the page', () => {
+        const { s, G } = page();
+        G.overview = null;
+        const head = String(G.competitorsMarkup());
+        assert.ok(text(head).includes(`${s.t('growth.competitors.ownRate')} — ${s.t('growth.competitors.ownRateMissing')}`));
+        G.settings = G.normalizeSettings({ competitors: [] });
+        assert.equal(String(G.competitorsMarkup()).includes('growth-own-rate'), false, 'nobody to compare with: no line');
+    });
+});

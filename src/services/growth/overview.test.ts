@@ -7,8 +7,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { PostInsightRow, PostMetrics } from '../../db/rows.js';
 import {
-    bestTimes, buildOverview, engagementRate, interactionsOf, slotOf, sortPosts, toPostInsight, type OverviewInput,
+    bestTimes, buildOverview, engagementRate, interactionsOf, previousAccountTotal, slotOf, sortPosts, toPostInsight, type OverviewInput,
 } from './overview.js';
+import { addDays } from './mapping.js';
 
 let n = 0;
 function post(metrics: PostMetrics, fields: Partial<PostInsightRow> = {}) {
@@ -162,6 +163,63 @@ describe('buildOverview', () => {
         const o = buildOverview(base({ posts: [carousel, reel] }), 'instagram');
         assert.deepEqual(o.top_posts.map((p) => p.media_id), [reel.media_id, carousel.media_id]);
         assert.deepEqual(o.by_type.map((t) => [t.type, t.posts, t.avg_views]), [['CAROUSEL_ALBUM', 1, 14], ['REELS', 1, 150]]);
+    });
+
+    describe('previous: the window before, only where it compares exactly (G3)', () => {
+        /** One row per day per platform, from `from` to `to`, carrying `metrics(day)`. */
+        const rows = (platform: string, from: string, to: string, metrics: (day: string) => Record<string, number>) => {
+            const out: OverviewInput['days'][number][] = [];
+            for (let day = from; day <= to; day = addDays(day, 1)) out.push({ platform, day, metrics: metrics(day) });
+            return out;
+        };
+        // Window 2026-09-19 … 2026-09-25 (today). Insight days end yesterday, so the 25th has none,
+        // and the span it is compared with is the same six days one window (7 days) earlier: the
+        // 12th to the 17th, weekday for weekday.
+        const current = (platform: string, v: number) => rows(platform, '2026-09-19', '2026-09-24', () => ({ views: v, reach: v / 2 }));
+        const before = (platform: string, v: number) => rows(platform, '2026-09-12', '2026-09-17', () => ({ views: v, reach: v / 2 }));
+
+        it('sums the same span one window earlier: 6 measured days against the same 6, a week before', () => {
+            const o = buildOverview(base({ days: [...current('instagram', 20), ...before('instagram', 10)] }), 'instagram');
+            assert.equal(o.kpis.views, 120, 'this window: 6 days × 20');
+            assert.deepEqual(o.previous, { days: 7, reach: 30, views: 60, saves: null, shares: null });
+            assert.deepEqual(o.trend.map((d) => d.day), ['2026-09-19', '2026-09-20', '2026-09-21', '2026-09-22', '2026-09-23', '2026-09-24', '2026-09-25'],
+                'the earlier rows never reach the trend');
+        });
+
+        it('says nothing when the earlier window is not fully synced: a gap, a short history, a missing day', () => {
+            const short = [...current('instagram', 20), ...rows('instagram', '2026-09-15', '2026-09-17', () => ({ views: 10 }))];
+            assert.equal(buildOverview(base({ days: short }), 'instagram').previous.views, null, 'three of six days is not a period');
+            const gap = [...current('instagram', 20), ...before('instagram', 10).filter((d) => d.day !== '2026-09-14')];
+            assert.equal(buildOverview(base({ days: gap }), 'instagram').previous.views, null);
+            const holed = [...current('instagram', 20).filter((d) => d.day !== '2026-09-21'), ...before('instagram', 10)];
+            assert.equal(buildOverview(base({ days: holed }), 'instagram').previous.views, null, 'nor when THIS window has the hole');
+            assert.equal(buildOverview(base({ days: current('instagram', 20) }), 'instagram').previous.views, null, 'no history at all');
+        });
+
+        it('needs the same platforms on both sides: one connected mid-way is not growth', () => {
+            const joined = [...current('instagram', 20), ...current('facebook', 5), ...before('instagram', 10)];
+            assert.equal(buildOverview(base({ days: joined }), 'all').previous.views, null);
+            const both = [...joined, ...before('facebook', 5)];
+            assert.equal(buildOverview(base({ days: both }), 'all').previous.views, 90, '6 × (10 + 5)');
+            const left = [...current('instagram', 20), ...before('instagram', 10), ...before('facebook', 5)];
+            assert.equal(buildOverview(base({ days: left }), 'all').previous.views, null, 'nor one that stopped reporting');
+        });
+
+        it('compares only account-day totals: post sums have no previous', () => {
+            const o = buildOverview(base({ posts: [post({ views: 100, reach: 50, saved: 3, shares: 2 })] }), 'instagram');
+            assert.equal(o.kpi_sources.views, 'posts');
+            assert.deepEqual(o.previous, { days: 7, reach: null, views: null, saves: null, shares: null });
+            assert.equal('engagement_rate' in o.previous, false, 'a lifetime ratio is never compared across windows');
+        });
+
+        it('checks each metric on its own days: saves can compare while shares cannot', () => {
+            const days = [
+                ...rows('instagram', '2026-09-19', '2026-09-24', () => ({ saves: 2, shares: 1 })),
+                ...rows('instagram', '2026-09-12', '2026-09-17', (d): Record<string, number> => (d === '2026-09-14' ? { saves: 1 } : { saves: 1, shares: 1 })),
+            ];
+            assert.equal(previousAccountTotal(days, 'saves', '2026-09-19', '2026-09-25', 7), 6);
+            assert.equal(previousAccountTotal(days, 'shares', '2026-09-19', '2026-09-25', 7), null);
+        });
     });
 
     it('sorts the posts table descending with unknowns last', () => {

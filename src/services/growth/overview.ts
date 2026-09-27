@@ -14,6 +14,9 @@
  *                    tenant's own posts published in that slot (interactions when no post has views).
  *                    Instagram's `online_followers` is empty under 100 followers, so our own posts
  *                    are the source.
+ *   previous         the same account-day totals over the window before this one, for the KPI cards'
+ *                    "↑ 12% vs the previous 28 days" — only where the two compare exactly (see
+ *                    `previousAccountTotal`), else null.
  */
 import type { AccountDayMetrics, AccountInsightsDailyRow, PostInsightRow, PostMetrics } from '../../db/rows.js';
 import { queryRows } from '../../db/query.js';
@@ -155,7 +158,10 @@ function meanOf<T>(rows: readonly T[], pick: (row: T) => unknown, places = 1): n
 export interface OverviewInput {
     /** Posts from the lookback (at least 90 days), newest first. */
     posts: readonly PostInsight[];
-    /** Account days inside the window. */
+    /**
+     * Account days inside the window, and inside the window before it (for `previous`). Rows
+     * outside both are ignored, so passing more is harmless.
+     */
     days: readonly Pick<AccountInsightsDailyRow, 'platform' | 'day' | 'metrics'>[];
     /** The newest follower total per platform, whenever it was recorded. */
     latestFollowers: Readonly<Record<string, number | undefined>>;
@@ -186,6 +192,13 @@ export interface Overview {
         skip_rate: number | null;
     };
     kpi_sources: Record<'reach' | 'views' | 'saves' | 'shares' | 'profile_visits', 'account' | 'posts' | null>;
+    /**
+     * The window before this one, `days` long, for the KPI cards' direction (G3). A total is null
+     * unless it compares exactly — see `previousAccountTotal`. There is deliberately no
+     * engagement rate here: it is computed from post LIFETIME totals read at sync time, so an older
+     * window's posts have simply had longer to collect, and the difference would not be the period's.
+     */
+    previous: { days: number; reach: number | null; views: number | null; saves: number | null; shares: number | null };
     /** Instagram's follower / non-follower split over the window. */
     audience_split: {
         reach: { followers: number | null; non_followers: number | null };
@@ -205,6 +218,47 @@ export interface Overview {
     by_platform: { platform: string; posts: number; followers: number | null; views: number | null; reach: number | null; avg_views: number | null }[];
     /** Why a number is empty, by key, e.g. `follows`: "Instagram shares this once…". */
     notes: Record<string, string>;
+}
+
+type DayRow = Pick<AccountInsightsDailyRow, 'platform' | 'day' | 'metrics'>;
+
+/** Every day from `from` to `to`, inclusive, as YYYY-MM-DD. */
+function daySpan(from: string, to: string): string[] {
+    const out: string[] = [];
+    for (let day = from; day <= to; day = addDays(day, 1)) out.push(day);
+    return out;
+}
+
+/**
+ * The total of one account-day metric over the window before this one — or null, whenever the
+ * two totals would not compare like with like. Exact means all of:
+ *   - this window's total is an account-day sum (a sum of post lifetime totals is not a period's);
+ *   - every platform in it has the metric on every day from the window's first day to its last
+ *     measured one (insight days end yesterday, so "today" is usually not measured yet);
+ *   - the same span exactly `windowDays` earlier has the metric on every one of its days, for the
+ *     same platforms and no others.
+ * So a sync that started ten days ago, a missed day, or a platform connected mid-window gives no
+ * comparison at all rather than an arrow that measures the gap.
+ */
+export function previousAccountTotal(
+    rows: readonly DayRow[], key: keyof AccountDayMetrics, start: string, today: string, windowDays: number,
+): number | null {
+    const measured = (d: DayRow): boolean => has(d.metrics?.[key]);
+    const current = rows.filter((d) => d.day >= start && d.day <= today && measured(d));
+    if (!current.length) return null;
+    const platforms = [...new Set(current.map((d) => d.platform))];
+    const last = current.reduce((m, d) => (d.day > m ? d.day : m), start);
+    const span = daySpan(start, last);
+    const prevStart = addDays(start, -windowDays);
+    const prevEnd = addDays(last, -windowDays);
+    const before = rows.filter((d) => d.day >= prevStart && d.day <= prevEnd && measured(d));
+    const beforePlatforms = new Set(before.map((d) => d.platform));
+    if (beforePlatforms.size !== platforms.length || platforms.some((p) => !beforePlatforms.has(p))) return null;
+    const covers = (list: readonly DayRow[], p: string, n: number): boolean => new Set(list.filter((d) => d.platform === p).map((d) => d.day)).size === n;
+    for (const p of platforms) {
+        if (!covers(current, p, span.length) || !covers(before, p, span.length)) return null;
+    }
+    return sumOf(before, (d) => d.metrics?.[key]);
 }
 
 /** Pure: everything the overview says, from rows. */
@@ -331,6 +385,13 @@ export function buildOverview(input: OverviewInput, platform: OverviewPlatform):
             skip_rate: medianSkip(inWindow),
         },
         kpi_sources: { reach: reach.source, views: views.source, saves: saves.source, shares: shares.source, profile_visits: visits.source },
+        previous: {
+            days: input.windowDays,
+            reach: previousAccountTotal(input.days, 'reach', start, input.today, input.windowDays),
+            views: previousAccountTotal(input.days, 'views', start, input.today, input.windowDays),
+            saves: previousAccountTotal(input.days, 'saves', start, input.today, input.windowDays),
+            shares: previousAccountTotal(input.days, 'shares', start, input.today, input.windowDays),
+        },
         audience_split: splitKnown ? split : null,
         reach_by_surface: Object.keys(surface).length ? surface : null,
         trend,
@@ -386,11 +447,12 @@ export async function getOverview(creatorId: string, query: { days?: unknown; pl
 
     const [posts, days, latest, timezone] = await Promise.all([
         readPosts(creatorId, platforms, Math.max(windowDays, 90)),
+        // Two windows: this one, and the one before it that `previous` compares against.
         queryRows<Pick<AccountInsightsDailyRow, 'platform' | 'day' | 'metrics'>>(
             `SELECT platform, to_char(day, 'YYYY-MM-DD') AS day, metrics FROM account_insights_daily
               WHERE creator_id = $1 AND platform = ANY($2::text[]) AND day >= $3::date
               ORDER BY day`,
-            [creatorId, platforms, addDays(today, -(windowDays - 1))]
+            [creatorId, platforms, addDays(today, -(2 * windowDays - 1))]
         ),
         queryRows<{ platform: string; followers: number | string | null }>(
             `SELECT DISTINCT ON (platform) platform, (metrics->>'followers')::float8 AS followers

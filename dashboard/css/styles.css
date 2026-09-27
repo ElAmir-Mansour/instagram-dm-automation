@@ -4669,3 +4669,70 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 @media (max-width: 560px) {
     .analytics-range { inline-size: 100%; }
 }
+
+/* ─── wave3: growth ─── */
+/* G3: a KPI's direction against the window before. The colour is the band's, the words carry it. */
+.growth-dir { font-variant-numeric: tabular-nums; }
+
+/* G8: the post keeps its place while the metrics scroll past it. Opaque, or the numbers show
+   through it: `--surface-solid` is what the card's glass composites to, and the hover tint is
+   laid over it rather than replacing it. */
+.growth-posts-table .growth-post-cell,
+.growth-posts-table .growth-post-head {
+    position: sticky;
+    inset-inline-start: 0;
+    z-index: 1;
+    background: var(--surface-solid);
+    border-inline-end: 1px solid var(--border-subtle);
+}
+.growth-posts-table .data-table tbody tr:hover .growth-post-cell {
+    background: linear-gradient(var(--surface-glass-hover), var(--surface-glass-hover)), var(--surface-solid);
+}
+
+/* G8: a phone card leads with four numbers; «More» opens the rest. */
+.growth-card-key { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.growth-card-key .growth-er { justify-content: flex-start; inline-size: auto; }
+.growth-card-key .growth-er .growth-bar { inline-size: 40px; }
+.growth-card-key .growth-er-value { text-align: start; min-inline-size: 0; }
+.growth-card-more > summary {
+    display: flex; align-items: center; gap: var(--space-1);
+    min-block-size: 44px; cursor: pointer;
+    font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--accent-text);
+}
+.growth-card-more > summary:hover { text-decoration: underline; }
+.growth-card-more[open] > summary { margin-block-end: var(--space-2); }
+
+/* G9/G10: best times in four parts of the day. The cell is a button; its colour is a bar above
+   the numbers, so the numbers keep the card's own ground and its contrast. */
+.growth-dayparts { min-inline-size: 0; border-spacing: var(--space-1); }
+.growth-dayparts thead th { padding-block-end: var(--space-1); }
+.growth-part-name, .growth-part-hours { display: block; }
+.growth-part-name { color: var(--text-default); font-weight: var(--fw-semibold); }
+.growth-part-hours { font-weight: var(--fw-regular); }
+.growth-slot { padding: 0; text-align: center; vertical-align: middle; }
+.growth-slot.is-empty { color: var(--text-muted); block-size: 44px; font-size: var(--fs-200); }
+.growth-slot-btn {
+    inline-size: 100%; min-block-size: 44px;
+    display: flex; flex-direction: column; align-items: stretch; justify-content: center; gap: 2px;
+    padding: var(--space-1);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+    background: transparent; color: var(--text-strong);
+    font: inherit; font-variant-numeric: tabular-nums; cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard);
+}
+.growth-slot-btn:hover { background: var(--surface-glass-hover); }
+.growth-slot-btn[aria-pressed='true'] { background: var(--accent-soft); border-color: var(--accent); }
+.growth-slot-btn .heat { display: block; inline-size: 100%; block-size: 6px; border-radius: 3px; }
+.growth-slot-avg { font-size: var(--fs-200); font-weight: var(--fw-semibold); line-height: var(--lh-tight); }
+.growth-slot-n { font-size: var(--fs-100); color: var(--text-muted); line-height: var(--lh-tight); }
+.growth-slot-btn[aria-pressed='true'] .growth-slot-n { color: var(--text-default); }
+.growth-slot-caption { margin: var(--space-2) 0 0; min-block-size: 1.5em; }
+.growth-best-few { margin: 0 0 var(--space-3); }
+@media (prefers-reduced-motion: reduce) { .growth-slot-btn { transition: none; } }
+
+/* G11: the operator's own rate, beside the competitors', measured the same way. */
+.growth-own-rate { margin: var(--space-2) 0 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); }
+.growth-own-rate strong { font-size: var(--fs-300); color: var(--text-strong); font-variant-numeric: tabular-nums; }
+
+/* G7: the SEO view's cards, as one region that fills when the settings land. */
+.growth-seo-body { display: flex; flex-direction: column; gap: var(--space-5); min-inline-size: 0; }

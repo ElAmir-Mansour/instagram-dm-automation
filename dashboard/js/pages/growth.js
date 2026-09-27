@@ -29,10 +29,14 @@
  *     (0.042 = 4.2%), always: the server computes interactions / reach. On a tiny reach a ratio can
  *     pass 1 (6 interactions on 5 accounts is 120%), so nothing above 1 is reinterpreted.
  *   - Best times are built HERE from our own posts, in the tenant's time zone
- *     (`postsHeatGrid`): Instagram's online_followers is empty for small accounts, and a grid
- *     whose zone is not in the contract cannot be labelled with local hours honestly. The
- *     server's `best_times` is the fallback when the posts list fails, read as
- *     `[weekday 0 = Sunday][hour]` in UTC unless `best_times_tz` names its zone.
+ *     (`postsHeatGrid`, then `daypartCells`): Instagram's online_followers is empty for small
+ *     accounts, and a grid whose zone is not in the contract cannot be labelled with local hours
+ *     honestly. The server's `best_times` is the fallback when the posts list fails, read as
+ *     `[weekday 0 = Sunday][hour]` averages in `best_times_meta.timezone` (UTC when it names
+ *     none), weighted by `best_times_meta.counts`.
+ *   - A KPI's direction ("↑ 12% vs the previous 28 days") is `overview.previous`, the server's
+ *     total for the window before — only views, reach, saves and shares, and only where the
+ *     server could compare exactly. Nothing here derives one.
  *   - Under 100 followers Instagram withholds the daily follower series and its change. That is
  *     a calm note ("after 100 followers"), never an error or an empty chart.
  *   - Watch time is `metrics.avg_watch_time_ms` (or Meta's `ig_reels_avg_watch_time`), in ms.
@@ -106,8 +110,12 @@ const GrowthPage = {
     posts: [],
     postsLoaded: false,
     postsError: null,
-    /** Overview and posts are being re-read for a new range or after a sync. */
-    dataLoading: false,
+    /**
+     * G7: the reads still out, by source. A region paints the moment the reads it needs have
+     * landed — never waiting for the slowest of the four — and until then shows its skeleton, or
+     * keeps the previous answer on screen, dimmed and aria-busy (G6).
+     */
+    pending: { status: false, overview: false, posts: false, settings: false },
     settings: null,
     settingsError: null,
     /** 'idle' | 'loading' | 'ready' | 'error' | 'missing' (Business Discovery refused). */
@@ -126,6 +134,8 @@ const GrowthPage = {
     trendMetric: 'views',
     sort: { key: 'views', dir: 'desc' },
     filter: { type: 'all', platform: 'all' },
+    /** Best times: the slot `{ day, part }` whose numbers the line under the grid spells out. */
+    slotPick: null,
     postsLimit: 25,
     syncing: false,
     /** `{ kind: 'error'|'cooldown', message }` under the Sync button, or null. */
@@ -145,7 +155,8 @@ const GrowthPage = {
     _focusGoal: null,
 
     _seq: 0,
-    _dataSeq: 0,
+    /** The newest ask per source: an older answer that lands after it is dropped, never painted. */
+    _srcSeq: { status: 0, overview: 0, posts: 0, settings: 0 },
     _competitorsSeq: 0,
     _tenantEpoch: 0,
     _coachTimer: null,
@@ -161,7 +172,7 @@ const GrowthPage = {
     /** Tenant switch: every number, post, keyword and plan here belongs to the old tenant. */
     resetTenantState() {
         this._tenantEpoch++;
-        this._dataSeq++;
+        Object.keys(this._srcSeq).forEach((k) => { this._srcSeq[k]++; });
         this._competitorsSeq++;
         this.destroy();
         this.status = null;
@@ -171,7 +182,7 @@ const GrowthPage = {
         this.posts = [];
         this.postsLoaded = false;
         this.postsError = null;
-        this.dataLoading = false;
+        this.pending = { status: false, overview: false, posts: false, settings: false };
         this.settings = null;
         this.settingsError = null;
         this.competitorsState = 'idle';
@@ -183,6 +194,7 @@ const GrowthPage = {
         this.coachDays = null;
         this.coachError = null;
         this.filter = { type: 'all', platform: 'all' };
+        this.slotPick = null;
         this.postsLimit = this.POSTS_PAGE;
         this.syncing = false;
         this.syncNote = null;
@@ -284,29 +296,17 @@ const GrowthPage = {
             return;
         }
 
-        const gate = Motion.beginLoad(container, () => this.skeleton());
+        // G7: the frame at once — the toolbar, and each region as its skeleton (or, on a return
+        // visit, its last answer, dimmed) — then every region fills as the reads IT needs land.
+        // It used to await all four, so the slowest request held back the three that had answered.
         const tenant = this._tenantEpoch;
-        const dataSeq = ++this._dataSeq;
-        const [status, overview, posts, settings] = await Promise.allSettled([
-            API.getGrowthStatus(),
-            API.getGrowthOverview(this.days),
-            API.getGrowthPosts(this.days, 'views'),
-            API.getGrowthSettings(),
-        ]);
-        if (!this.alive(seq) || tenant !== this._tenantEpoch) return;
-        gate.done();
-        this.applyStatus(status);
-        if (dataSeq === this._dataSeq) {
-            this.dataLoading = false;
-            this.applyOverview(overview);
-            this.applyPosts(posts);
-        }
-        this.applySettings(settings);
         if (!this.coach && this.coachState === 'idle') this.restoreCoach();
-
+        Motion.clearSkeleton(container);
+        const loading = this.loadSources(['status', 'overview', 'posts', 'settings'], seq);
         this.paintPage();
         if (this.coachState === 'loading') this.startCoachTicker();
-        this.maybeLoadCompetitors();
+        await loading;
+        if (!this.alive(seq) || tenant !== this._tenantEpoch) return;
         this.focusPendingGoal();
         Motion.announce(`${t('nav.growth')} — ${t('common.loaded')}`);
     },
@@ -314,7 +314,9 @@ const GrowthPage = {
     /** A tab switch inside the page: repaint from what is loaded, keep focus on the tab. */
     onHashChange() {
         const container = document.getElementById('page-container');
-        const nothingYet = !this.postsLoaded && !this.postsError && !this.settings && !this.settingsError;
+        // Reads still out are not "nothing": the new view's regions fill as they land (G7).
+        const inFlight = Object.values(this.pending).some(Boolean);
+        const nothingYet = !inFlight && !this.postsLoaded && !this.postsError && !this.settings && !this.settingsError;
         if (!container || nothingYet) {
             this.render();
             return;
@@ -402,32 +404,148 @@ const GrowthPage = {
         return s.missing.includes(scope);
     },
 
+    // ─── Loading, region by region (G7) ──────────────────────────────────────
+    /** The four reads the page is made of. Overview and posts follow the range on screen. */
+    request(source) {
+        if (source === 'status') return API.getGrowthStatus();
+        if (source === 'overview') return API.getGrowthOverview(this.days);
+        if (source === 'posts') return API.getGrowthPosts(this.days, 'views');
+        return API.getGrowthSettings();
+    },
+
+    apply(source, result) {
+        if (source === 'status') this.applyStatus(result);
+        else if (source === 'overview') this.applyOverview(result);
+        else if (source === 'posts') this.applyPosts(result);
+        else this.applySettings(result);
+    },
+
+    /**
+     * Ask for `sources` at once and settle each onto the page the moment it lands. An answer is
+     * dropped — never painted — when the page it was asked for is gone (`seq`), the tenant has
+     * changed, or a newer ask for the same source is out: a range switched mid-load, a Retry, a
+     * sync. The promise settles when every answer has.
+     */
+    loadSources(sources, seq) {
+        const tenant = this._tenantEpoch;
+        return Promise.all(sources.map((source) => {
+            const ask = ++this._srcSeq[source];
+            this.pending[source] = true;
+            let call;
+            try { call = Promise.resolve(this.request(source)); } catch (err) { call = Promise.reject(err); }
+            return call.then((value) => ({ status: 'fulfilled', value }), (reason) => ({ status: 'rejected', reason }))
+                .then((result) => {
+                    if (seq !== this._seq || tenant !== this._tenantEpoch || ask !== this._srcSeq[source]) return;
+                    this.pending[source] = false;
+                    this.apply(source, result);
+                    if (this.alive(seq)) this.landed(source);
+                });
+        }));
+    },
+
+    /** What each region needs before it can say anything true. The rest it reads if present. */
+    NEEDS: Object.freeze({
+        summary: Object.freeze(['overview']),
+        types: Object.freeze(['overview']),
+        best: Object.freeze(['posts', 'settings']),
+        posts: Object.freeze(['posts']),
+        seo: Object.freeze(['settings']),
+    }),
+
+    /** Every region that shows something from a source, so its landing repaints exactly those. */
+    READS: Object.freeze({
+        status: Object.freeze(['toolbar', 'banner', 'summary', 'types', 'posts', 'coach']),
+        overview: Object.freeze(['summary', 'types', 'best', 'competitors']),
+        posts: Object.freeze(['summary', 'best', 'posts', 'competitors']),
+        settings: Object.freeze(['summary', 'best', 'seo']),
+    }),
+
+    /** Is a read this region needs still out? */
+    waiting(region) {
+        return (this.NEEDS[region] || []).some((source) => this.pending[source]);
+    },
+
+    /** Is there an earlier answer for this region to keep on screen while it waits (G6)? An error is not one. */
+    keeps(region) {
+        if (region === 'summary' || region === 'types') return !!this.overview;
+        if (region === 'best' || region === 'posts') return this.postsLoaded;
+        if (region === 'seo') return !!this.settings;
+        return false;
+    },
+
+    /** Waiting with nothing to keep: the region's skeleton. */
+    showsSkeleton(region) {
+        return this.waiting(region) && !this.keeps(region);
+    },
+
+    REGION_VIEWS: Object.freeze({ summary: 'performance', types: 'performance', best: 'performance', posts: 'performance', coach: 'performance', seo: 'seo', competitors: 'seo' }),
+
+    paintNamed(region) {
+        const view = this.REGION_VIEWS[region];
+        if (view && view !== this.view()) return;
+        if (region === 'toolbar') this.paintRegion('growth-toolbar', this.toolbarMarkup());
+        else if (region === 'banner') this.paintRegion('growth-banner', this.bannerMarkup());
+        else if (region === 'summary') this.paintRegion('growth-summary', this.summaryMarkup());
+        else if (region === 'types') this.paintRegion('growth-types', this.typesSectionMarkup());
+        else if (region === 'best') this.paintRegion('growth-best', this.bestSectionMarkup());
+        else if (region === 'posts') this.paintRegion('growth-posts', this.postsMarkup());
+        else if (region === 'coach' && this.coachState !== 'loading') this.paintRegion('growth-coach', this.coachMarkup());
+        else if (region === 'seo') this.paintRegion('growth-seo', this.seoMarkup());
+        else if (region === 'competitors') this.paintRegion('growth-competitors', this.competitorsMarkup());
+    },
+
+    /** Is this page's frame on screen? Until it is (another page's skeleton, a bare host), there is no region to fill. */
+    framed() {
+        return !!document.getElementById(this.view() === 'seo' ? 'growth-seo' : 'growth-summary');
+    },
+
+    /**
+     * One read landed: repaint the regions that show it and are no longer waiting on anything
+     * they need. A region still waiting keeps its skeleton or its dimmed previous answer.
+     */
+    landed(source) {
+        if (!this.framed()) {
+            this.paintPage();
+        } else {
+            (this.READS[source] || []).forEach((region) => {
+                if (!this.waiting(region)) this.paintNamed(region);
+            });
+            this.setBusy();
+        }
+        if (source === 'settings') {
+            this.maybeLoadCompetitors();
+            this.focusPendingGoal();
+        }
+    },
+
+    /** At the start of a re-read: a skeleton where there is nothing to keep, a dimmed answer where there is. */
+    paintWaiting() {
+        if (!this.framed()) return;
+        ['summary', 'types', 'best', 'posts', 'seo'].forEach((region) => {
+            if (this.showsSkeleton(region)) this.paintNamed(region);
+        });
+        this.setBusy();
+    },
+
     /** Re-read overview and posts for the current range (and the status, after a sync). */
     async reloadData(opts) {
         const o = opts || {};
-        const dataSeq = ++this._dataSeq;
+        const sources = o.withStatus ? ['overview', 'posts', 'status'] : ['overview', 'posts'];
+        const loading = this.loadSources(sources, this._seq);
+        this.paintRegion('growth-toolbar', this.toolbarMarkup());
+        this.paintWaiting();
         const tenant = this._tenantEpoch;
-        this.dataLoading = true;
-        this.paintData();
-        const calls = [API.getGrowthOverview(this.days), API.getGrowthPosts(this.days, 'views')];
-        if (o.withStatus) calls.push(API.getGrowthStatus());
-        const [overview, posts, status] = await Promise.allSettled(calls);
-        if (dataSeq !== this._dataSeq || tenant !== this._tenantEpoch) return;
-        this.dataLoading = false;
-        this.applyOverview(overview);
-        this.applyPosts(posts);
-        if (status) this.applyStatus(status);
-        this.paintData();
+        const seq = this._seq;
+        await loading;
+        if (seq !== this._seq || tenant !== this._tenantEpoch) return;
         if (typeof Motion !== 'undefined') Motion.announce(t('growth.range.loaded', { days: this.daysText(this.days) }));
     },
 
-    async reloadSettings() {
-        const tenant = this._tenantEpoch;
-        const [settings] = await Promise.allSettled([API.getGrowthSettings()]);
-        if (tenant !== this._tenantEpoch) return;
-        this.applySettings(settings);
-        this.paintSeo();
-        this.maybeLoadCompetitors();
+    /** A region's Retry: that region's own read again, alone — the others are not asked twice. */
+    retry(sources) {
+        const loading = this.loadSources(sources, this._seq);
+        this.paintWaiting();
+        return loading;
     },
 
     // ─── Painting ────────────────────────────────────────────────────────────
@@ -444,6 +562,9 @@ const GrowthPage = {
         return html`<div data-error-host data-error-retry="${retry}" data-error-options="${options}"></div>`;
     },
 
+    /** A region's error panel retries its own read: one of these. */
+    RETRY_SOURCES: Object.freeze(['status', 'overview', 'posts', 'settings']),
+
     wireErrors(root) {
         if (!root || typeof root.querySelectorAll !== 'function') return;
         root.querySelectorAll('[data-error-host]').forEach((host) => {
@@ -451,8 +572,7 @@ const GrowthPage = {
             let options = {};
             try { options = JSON.parse(host.dataset.errorOptions || '{}'); } catch { /* the defaults */ }
             UI.renderError(host, options, () => {
-                if (retry === 'data') GrowthPage.reloadData({ withStatus: true });
-                else if (retry === 'settings') GrowthPage.reloadSettings();
+                if (GrowthPage.RETRY_SOURCES.includes(retry)) GrowthPage.retry([retry]);
                 else if (retry === 'competitors') GrowthPage.loadCompetitors();
                 else GrowthPage.render();
             });
@@ -481,49 +601,26 @@ const GrowthPage = {
         UI.restoreFocus(focus);
     },
 
-    /** Is there a previous answer on screen that a reload can keep while it works? */
-    hasData() {
-        return !!(this.overview || this.overviewError || this.postsLoaded || this.postsError);
-    },
-
     /**
-     * Everything that follows the range: the banner, the numbers, the posts.
-     *
-     * G6: a range switch used to blank all of it to skeletons, so the page jumped twice and the
-     * operator lost the numbers they were comparing against. Now the old numbers stay, dimmed
-     * and marked `aria-busy`, until the new ones replace them. Skeletons only when there is
-     * nothing to keep (the first load).
+     * G6: a range switch used to blank everything to skeletons, so the page jumped twice and the
+     * operator lost the numbers they were comparing against. The old numbers stay, dimmed and
+     * marked `aria-busy`, until the new ones replace them — per region since G7: the summary is
+     * busy while its overview is out, the details while any of their reads are.
      */
-    paintData() {
-        if (this.view() !== 'performance') return;
-        this.paintRegion('growth-toolbar', this.toolbarMarkup());
-        const busy = this.dataLoading && this.hasData();
-        if (busy) {
-            this.setBusy(true);
-            return;
-        }
-        this.paintRegion('growth-banner', this.bannerMarkup());
-        this.paintRegion('growth-summary', this.summaryMarkup());
-        this.paintRegion('growth-details', this.detailsMarkup());
-        this.paintRegion('growth-do-first', this.doFirstMarkup());
-        this.setBusy(false);
+    busyNow(host) {
+        const kept = (region) => this.waiting(region) && this.keeps(region);
+        if (host === 'growth-summary') return kept('summary');
+        if (host === 'growth-details') return kept('best') || kept('types') || kept('posts');
+        return false;
     },
 
-    setBusy(on) {
+    setBusy() {
         ['growth-summary', 'growth-details'].forEach((id) => {
             const host = document.getElementById(id);
             if (!host) return;
-            if (on) host.setAttribute('aria-busy', 'true');
+            if (this.busyNow(id)) host.setAttribute('aria-busy', 'true');
             else host.removeAttribute('aria-busy');
         });
-    },
-
-    paintSeo() {
-        if (this.view() !== 'seo') return;
-        this.paintRegion('growth-goals', this.goalsMarkup());
-        this.paintRegion('growth-keywords', this.keywordsMarkup());
-        this.paintRegion('growth-hashtags', this.hashtagsMarkup());
-        this.paintRegion('growth-competitors', this.competitorsMarkup());
     },
 
     pageMarkup() {
@@ -532,20 +629,20 @@ const GrowthPage = {
             <div class="growth-page" data-view="${seo ? 'seo' : 'performance'}">
                 <div class="growth-toolbar" id="growth-toolbar">${this.toolbarMarkup()}</div>
                 <div id="growth-banner">${this.bannerMarkup()}</div>
-                ${seo ? this.seoMarkup() : this.performanceMarkup()}
+                ${seo ? html`<div class="growth-seo-body" id="growth-seo">${this.seoMarkup()}</div>` : this.performanceMarkup()}
             </div>
         `;
     },
 
     performanceMarkup() {
-        const busy = this.dataLoading && this.hasData() ? html.raw(' aria-busy="true"') : '';
+        const busy = (id) => (this.busyNow(id) ? html.raw(' aria-busy="true"') : '');
         return html`
             <div id="growth-do-first">${this.doFirstMarkup()}</div>
-            <div id="growth-summary"${busy}>${this.summaryMarkup()}</div>
+            <div id="growth-summary"${busy('growth-summary')}>${this.summaryMarkup()}</div>
             <section class="surface pad-5 growth-coach" id="growth-coach" aria-labelledby="growth-coach-title">
                 ${this.coachMarkup()}
             </section>
-            <div id="growth-details"${busy}>${this.detailsMarkup()}</div>
+            <div id="growth-details"${busy('growth-details')}>${this.detailsMarkup()}</div>
         `;
     },
 
@@ -826,6 +923,9 @@ const GrowthPage = {
      * hid a missed day entirely.
      */
     lastSyncMarkup() {
+        // Not "never synced" while the status is still out, or when it could not be read: unknown.
+        if (!this.status && this.pending.status) return html`<span class="text-meta" id="growth-last-sync" aria-hidden="true">${Motion.line('sm')}</span>`;
+        if (!this.status && this.statusError) return '';
         const last = this.status && this.status.lastSync;
         if (!last) return html`<span class="text-meta" id="growth-last-sync">${t('growth.sync.never')}</span>`;
         const age = UI.relativeAge(last, { warnMs: this.SYNC_WARN_MS, staleMs: this.SYNC_STALE_MS });
@@ -875,12 +975,11 @@ const GrowthPage = {
     bannerMarkup() {
         const s = this.status;
         if (!s) {
-            // A failed status read is not a missing permission: say nothing false, offer Retry.
-            return this.statusError ? html`
-                <p class="form-hint text-warning growth-status-failed" role="status">
-                    ${t('growth.status.failed', { message: this.statusError.message || t('error.unexpected') })}
-                </p>
-            ` : '';
+            // A failed status read is not a missing permission: say nothing false, offer Retry —
+            // of the status alone (G7). While it is still out, nothing: no banner is a claim too.
+            return this.statusError && !this.pending.status
+                ? html`<div class="growth-status-failed">${this.errorHost(this.statusError, t('growth.status.failed'), 'status')}</div>`
+                : '';
         }
         const parts = [];
         if (s.instagram === 'not_connected') {
@@ -960,6 +1059,8 @@ const GrowthPage = {
 
     /** Why a number is missing — the permission, no sync yet, or simply not offered. */
     missingReason() {
+        // Which of the three it is comes from the status; until that lands, say none of them.
+        if (!this.status && this.pending.status) return '';
         if (this.locked('instagram')) return t('growth.kpi.locked');
         if (this.status && !this.status.lastSync) return t('growth.kpi.notSynced');
         return t('growth.kpi.notMeasured');
@@ -992,6 +1093,8 @@ const GrowthPage = {
                     </p>`;
         } else if (band) {
             sub = html`<p class="stat-sub">${t(`growth.kpi.skipBand.${band}`)}</p>`;
+        } else if (this.direction(def.key)) {
+            sub = this.directionMarkup(def.key);
         } else {
             sub = html`<p class="stat-sub">${t('growth.kpi.inRange', { days: this.daysText(this.days) })}</p>`;
         }
@@ -1012,6 +1115,45 @@ const GrowthPage = {
                     <p>${t(`growth.kpi.${def.key}.tip`)}</p>
                 </details>
             </div>
+        `;
+    },
+
+    /**
+     * G3: the KPIs whose direction the server can state — account-day totals, compared with the
+     * same span one window earlier (`overview.previous`). Engagement rate is not among them: the
+     * server does not send one, because a rate of lifetime post totals does not compare across
+     * windows, and a change in a rate would be ambiguous besides (points or percent?).
+     */
+    DIRECTION_KEYS: Object.freeze(['reach', 'views', 'saves', 'shares']),
+
+    /** `{ pct, dir: 'up'|'down'|'flat' }` against the previous window, or null when there is no exact one. */
+    direction(key) {
+        if (!this.DIRECTION_KEYS.includes(key)) return null;
+        const prev = this.overview && this.overview.previous;
+        if (!prev || typeof prev !== 'object') return null;
+        const before = this.num(prev[key]);
+        const now = this.num(this.kpis()[key]);
+        // Nothing before is no baseline: "up from 0" has no percentage, and inventing one would be worse.
+        if (before === null || now === null || !(before > 0)) return null;
+        const pct = Math.round(((now - before) / before) * 100);
+        return { pct: Math.abs(pct), dir: pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat' };
+    },
+
+    /** "↑ 12% vs the previous 28 days", in the band colours, with a sentence for a screen reader. */
+    directionMarkup(key) {
+        const d = this.direction(key);
+        if (!d) return '';
+        const days = this.daysText(this.days);
+        if (d.dir === 'flat') {
+            return html`<p class="stat-sub growth-dir" id="growth-dir-${key}">${t('growth.kpi.dirFlat', { days })}</p>`;
+        }
+        const pct = UI.formatNumber(d.pct);
+        const up = d.dir === 'up';
+        return html`
+            <p class="stat-sub growth-dir ${html.raw(up ? 'text-success' : 'text-danger')}" id="growth-dir-${key}">
+                <span aria-hidden="true">${t(up ? 'growth.kpi.dirUp' : 'growth.kpi.dirDown', { pct, days })}</span>
+                <span class="sr-only">${t(up ? 'growth.kpi.dirUpSr' : 'growth.kpi.dirDownSr', { pct, days })}</span>
+            </p>
         `;
     },
 
@@ -1187,27 +1329,42 @@ const GrowthPage = {
         `;
     },
 
-    /** Loading shapes for a region, sized like what replaces them. */
+    /**
+     * Loading shapes for a region, sized like what replaces them. The details' cards keep their
+     * real heading, so the page reads in order and `aria-labelledby` names something from the start.
+     */
     regionSkeleton(kind) {
         if (kind === 'summary') {
             return html`
-                ${Motion.statsGrid(6)}
+                ${Motion.statsGrid(this.KPI_DEFS.length)}
                 <div class="chart-card surface" aria-hidden="true"><div class="chart-skel"><span class="skel skel-block"></span></div></div>
                 ${Motion.busy()}
             `;
         }
+        if (kind === 'posts') {
+            const cols = [t('growth.posts.post'), t('growth.metric.views'), t('growth.metric.reach'), t('growth.metric.engagement_rate')];
+            return html`
+                <div class="table-header"><h2 class="table-title" id="growth-posts-title">${t('growth.posts.title')}</h2></div>
+                <div class="table-wrapper" aria-hidden="true">
+                    <table class="data-table">
+                        <thead><tr>${cols.map((label) => html`<th scope="col">${label}</th>`)}</tr></thead>
+                        ${Motion.tableRows(5, cols.length)}
+                    </table>
+                </div>
+            `;
+        }
+        const title = kind === 'best'
+            ? html`<h2 class="chart-card-title" id="growth-best-title">${t('growth.best.title')}</h2>`
+            : html`<h2 class="chart-card-title" id="growth-types-title">${t('growth.types.title')}</h2>`;
         return html`
-            <div class="chart-grid chart-grid--even" aria-hidden="true">
-                <div class="chart-card surface"><div class="chart-skel"><span class="skel skel-block"></span></div></div>
-                <div class="chart-card surface"><div class="chart-skel"><span class="skel skel-block"></span></div></div>
-            </div>
-            ${Motion.tableCard(5, [t('growth.posts.post'), t('growth.metric.views'), t('growth.metric.reach'), t('growth.metric.engagement_rate')])}
+            <div class="chart-card-header">${title}</div>
+            <div class="chart-skel" aria-hidden="true"><span class="skel skel-block"></span></div>
         `;
     },
 
     summaryMarkup() {
-        if (this.dataLoading && !this.hasData()) return this.regionSkeleton('summary');
-        if (this.overviewError) return this.errorHost(this.overviewError, t('growth.overview.failed'), 'data');
+        if (this.showsSkeleton('summary')) return this.regionSkeleton('summary');
+        if (this.overviewError && !this.pending.overview) return this.errorHost(this.overviewError, t('growth.overview.failed'), 'overview');
         const split = this.followSplit();
         const trend = html`
             <section class="chart-card surface growth-trend" id="growth-trend" aria-labelledby="growth-trend-title">
@@ -1227,21 +1384,41 @@ const GrowthPage = {
         `;
     },
 
+    /**
+     * Best times, by type and the posts: three regions in one frame. Best times and the posts come
+     * from the posts list (and best times from the settings' zone too), by type from the overview,
+     * so each fills — or fails, with its own Retry — on its own.
+     */
     detailsMarkup() {
-        if (this.dataLoading && !this.hasData()) return this.regionSkeleton('details');
         return html`
             <div class="chart-grid chart-grid--even growth-pair">
                 <section class="chart-card surface growth-best" id="growth-best" aria-labelledby="growth-best-title">
-                    ${this.overviewError ? this.errorHost(this.overviewError, t('growth.overview.failed'), 'data') : this.bestTimesMarkup()}
+                    ${this.bestSectionMarkup()}
                 </section>
                 <section class="chart-card surface growth-types" id="growth-types" aria-labelledby="growth-types-title">
-                    ${this.overviewError ? this.errorHost(this.overviewError, t('growth.overview.failed'), 'data') : this.byTypeMarkup()}
+                    ${this.typesSectionMarkup()}
                 </section>
             </div>
             <section class="table-card surface growth-posts" id="growth-posts" aria-labelledby="growth-posts-title">
                 ${this.postsMarkup()}
             </section>
         `;
+    },
+
+    bestSectionMarkup() {
+        if (this.showsSkeleton('best')) return this.regionSkeleton('best');
+        return this.bestTimesMarkup();
+    },
+
+    typesSectionMarkup() {
+        if (this.showsSkeleton('types')) return this.regionSkeleton('types');
+        if (this.overviewError && !this.pending.overview) {
+            return html`
+                <div class="chart-card-header"><h2 class="chart-card-title" id="growth-types-title">${t('growth.types.title')}</h2></div>
+                ${this.errorHost(this.overviewError, t('growth.overview.failed'), 'overview')}
+            `;
+        }
+        return this.byTypeMarkup();
     },
 
     // ─── Posts: filter and sort (pure) ───────────────────────────────────────
@@ -1391,23 +1568,45 @@ const GrowthPage = {
         `;
     },
 
-    CARD_METRICS: Object.freeze(['views', 'reach', 'likes', 'comments', 'saved', 'shares', 'avg_watch', 'skip_rate']),
+    /**
+     * G8: a phone card leads with the four numbers that answer "did the hook work" — views, the
+     * skip rate, the average watch and engagement — and folds the rest into «More». Watch time
+     * and the skip rate exist for reels only: a card for an image carries no empty row for them.
+     */
+    CARD_KEY_METRICS: Object.freeze(['views', 'skip_rate', 'avg_watch', 'engagement_rate']),
+    CARD_MORE_METRICS: Object.freeze(['reach', 'likes', 'comments', 'saved', 'shares']),
+
+    /** "reach, likes, comments, saves and shares": what «More» opens, for a screen reader. */
+    listText(items) {
+        try {
+            return new Intl.ListFormat(I18N.locale(), { style: 'long', type: 'conjunction' }).format(items);
+        } catch {
+            return items.join(', ');
+        }
+    },
 
     postCard(post, maxRate) {
-        // Watch time exists for reels only; a card for an image does not carry an empty row for it.
-        const keys = this.CARD_METRICS.filter((key) => (key !== 'avg_watch' || this.watchMs(post) !== null)
+        const keys = this.CARD_KEY_METRICS.filter((key) => (key !== 'avg_watch' || this.watchMs(post) !== null)
             && (key !== 'skip_rate' || this.metric(post, 'skip_rate') !== null));
+        const more = this.CARD_MORE_METRICS;
         return html`
             <li class="log-card growth-post-card">
                 ${this.postIdentity(post)}
-                <dl class="growth-card-metrics">
+                <dl class="growth-card-metrics growth-card-key">
                     ${keys.map((key) => html`
-                        <div><dt>${t(`growth.metric.${key}`)}</dt><dd>${this.cellValue(post, key)}</dd></div>
+                        <div><dt>${t(`growth.metric.${key}`)}</dt><dd>${key === 'engagement_rate' ? this.erMarkup(post, maxRate) : this.cellValue(post, key)}</dd></div>
                     `)}
                 </dl>
+                <details class="growth-card-more">
+                    <summary>${t('growth.posts.moreMetrics')}<span class="sr-only">: ${this.listText(more.map((key) => t(`growth.metric.${key}`)))}</span></summary>
+                    <dl class="growth-card-metrics">
+                        ${more.map((key) => html`
+                            <div><dt>${t(`growth.metric.${key}`)}</dt><dd>${this.cellValue(post, key)}</dd></div>
+                        `)}
+                    </dl>
+                </details>
                 <div class="growth-card-foot">
                     <span class="text-meta">${this.cellValue(post, 'published_at')}</span>
-                    <span class="growth-card-er"><span class="text-meta">${t('growth.metric.engagement_rate')}</span>${this.erMarkup(post, maxRate)}</span>
                 </div>
             </li>
         `;
@@ -1428,10 +1627,12 @@ const GrowthPage = {
     },
 
     postsMarkup() {
+        if (this.showsSkeleton('posts')) return this.regionSkeleton('posts');
         const head = html`<h2 class="table-title" id="growth-posts-title">${t('growth.posts.title')}</h2>`;
-        if (this.postsError) return html`${head}${this.errorHost(this.postsError, t('growth.posts.failed'), 'data')}`;
+        if (this.postsError && !this.pending.posts) return html`${head}${this.errorHost(this.postsError, t('growth.posts.failed'), 'posts')}`;
         if (!this.posts.length) {
-            const synced = this.status && this.status.lastSync;
+            // "Nothing synced yet" is the status's to say; unknown, the plain "none in this range" is what is true.
+            const synced = this.status ? this.status.lastSync : true;
             return html`
                 <div class="table-header">${head}</div>
                 ${Admin.emptyState('image', synced ? t('growth.posts.emptyTitle') : t('growth.posts.notSyncedTitle'),
@@ -1473,7 +1674,7 @@ const GrowthPage = {
                     <table class="data-table">
                         <caption class="sr-only">${t('growth.posts.caption', { days: this.daysText(this.days) })}</caption>
                         <thead><tr>
-                            <th scope="col">${t('growth.posts.post')}</th>
+                            <th scope="col" class="growth-post-head">${t('growth.posts.post')}</th>
                             ${this.COLUMNS.map((k) => this.sortHeader(k))}
                         </tr></thead>
                         <tbody>${shown.map((p) => this.postRow(p, maxRate))}</tbody>
@@ -1493,7 +1694,19 @@ const GrowthPage = {
         `;
     },
 
-    // ─── Best times (7×24) ───────────────────────────────────────────────────
+    // ─── Best times (7 days × 4 parts of the day) ────────────────────────────
+    /**
+     * G9/G10: the day in four parts, in the tenant's zone — night 00–06, morning 06–12,
+     * afternoon 12–18, evening 18–24. The 7×24 grid this replaced put one post in most of its
+     * cells and then named them "your best hours", in 168 cells too small to read or touch on a
+     * phone. Four parts gather each cell's posts, every cell says how many posts its average is
+     * of, and no time is called "best" before there are enough posts to mean it.
+     */
+    DAYPARTS: Object.freeze(['night', 'morning', 'afternoon', 'evening']),
+    DAYPART_HOURS: 6,
+    /** Under this many posts no time is named "best": a pattern needs more than a handful. */
+    BEST_MIN_POSTS: 10,
+
     /**
      * Move a UTC-indexed grid into `to`, keyed by the middle of each source hour, so a zone
      * half an hour off (Asia/Kolkata) still lands each hour in exactly one local cell.
@@ -1565,7 +1778,7 @@ const GrowthPage = {
      * most posts have them, and interactions (likes + comments + saves + shares) otherwise, so a
      * token without insights still gets a map, from what it can read.
      *
-     * @returns {{ grid: Array<Array<number|null>>, basis: 'views'|'interactions', posts: number }}
+     * @returns {{ grid: Array<Array<number|null>>, sums: number[][], counts: number[][], basis: 'views'|'interactions', posts: number }}
      */
     postsHeatGrid(posts, zone) {
         const list = (Array.isArray(posts) ? posts : []).filter((p) => p && Number.isFinite(Date.parse(p.published_at || '')));
@@ -1584,7 +1797,65 @@ const GrowthPage = {
             counted += 1;
         });
         const grid = sums.map((row, d) => row.map((sum, h) => (counts[d][h] ? sum / counts[d][h] : null)));
-        return { grid, basis, posts: counted };
+        return { grid, sums, counts, basis, posts: counted };
+    },
+
+    /**
+     * Hour sums and post counts, `[weekday][hour]`, into `[weekday][part]` cells: `{ avg, n }` —
+     * the average over every post published in that part of that day, and how many posts that
+     * is — or null where nothing was posted. An average of the hours' averages would weigh one
+     * lonely post like five.
+     */
+    daypartCells(sums, counts) {
+        return Array.from({ length: 7 }, (_, d) => this.DAYPARTS.map((_part, p) => {
+            let sum = 0;
+            let n = 0;
+            for (let h = p * this.DAYPART_HOURS; h < (p + 1) * this.DAYPART_HOURS; h++) {
+                const c = this.num(counts && counts[d] && counts[d][h]);
+                const v = this.num(sums && sums[d] && sums[d][h]);
+                if (c !== null && c > 0 && v !== null) { sum += v; n += c; }
+            }
+            return n ? { avg: sum / n, n } : null;
+        }));
+    },
+
+    /**
+     * The best-times cells on screen: our own posts, in the tenant's zone; the server's grid when
+     * the posts list could not be read — its averages weighted back into sums by its own counts,
+     * and moved from the zone it names (UTC when none) into the tenant's.
+     */
+    bestMap() {
+        const tz = this.tenantZone();
+        const own = this.postsHeatGrid(this.posts, tz.zone);
+        let cells = this.daypartCells(own.sums, own.counts);
+        let basis = own.basis;
+        let metric = own.basis;
+        let posts = own.posts;
+        const o = this.overview;
+        const meta = o && o.best_times_meta && typeof o.best_times_meta === 'object' ? o.best_times_meta : null;
+        if (!posts && this.postsError && o && Array.isArray(o.best_times) && meta && Array.isArray(meta.counts)) {
+            const from = this.validZone(meta.timezone) ? meta.timezone : this.validZone(o.best_times_tz) ? o.best_times_tz : 'UTC';
+            const sums = o.best_times.map((row, d) => (Array.isArray(row) ? row : []).map((v, h) => {
+                const avg = this.num(v);
+                const n = this.num(meta.counts[d] && meta.counts[d][h]);
+                return avg !== null && n ? avg * n : null;
+            }));
+            const moved = this.buildHeatmap(sums, { from, to: tz.zone }).cells;
+            const movedCounts = this.buildHeatmap(meta.counts, { from, to: tz.zone }).cells;
+            cells = this.daypartCells(moved, movedCounts);
+            posts = cells.flat().reduce((sum, c) => sum + (c ? c.n : 0), 0);
+            basis = 'server';
+            metric = meta.metric === 'interactions' ? 'interactions' : 'views';
+        }
+        let max = 0;
+        const ranked = [];
+        cells.forEach((row, day) => row.forEach((c, part) => {
+            if (!c || !(c.avg > 0)) return;
+            ranked.push({ day, part, avg: c.avg, n: c.n });
+            if (c.avg > max) max = c.avg;
+        }));
+        ranked.sort((a, b) => b.avg - a.avg || b.n - a.n || a.day - b.day || a.part - b.part);
+        return { cells, max, top: ranked.slice(0, 3), posts, basis, metric, zone: tz, empty: posts === 0 };
     },
 
     /** 0 = nothing posted then; 1–4 = quartiles of the best hour. */
@@ -1613,8 +1884,77 @@ const GrowthPage = {
         }
     },
 
-    hourLabel(h) {
-        return `${String(h).padStart(2, '0')}:00`;
+    /** "18–24", or "18:00–24:00" in full: a part's hours, in the tenant's zone. */
+    partHours(part, full) {
+        const from = part * this.DAYPART_HOURS;
+        const pad = (h) => (full ? `${String(h).padStart(2, '0')}:00` : String(h).padStart(2, '0'));
+        return `${pad(from)}–${pad(from + this.DAYPART_HOURS)}`;
+    },
+
+    /** "Tue evening" / «مساء الثلاثاء». */
+    slotName(day, part, style) {
+        const key = this.DAYPARTS[part] || this.DAYPARTS[0];
+        return t(`growth.best.slot.${key}`, { day: this.dayName(day, style) });
+    },
+
+    /** "320 views on average, from 3 posts" — the numbers behind one cell. */
+    slotNumbers(cell, metric) {
+        const params = { avg: UI.formatNumber(Math.round(cell.avg)), posts: this.postsText(cell.n) };
+        return t(metric === 'interactions' ? 'growth.best.slotInteractions' : 'growth.best.slotViews', params);
+    },
+
+    /** A cell's name for a screen reader: the day, the part, its hours, and the same numbers it shows. */
+    slotSentence(day, part, cell, metric) {
+        return t('growth.best.slotLabel', {
+            slot: this.slotName(day, part, 'long'), hours: this.partHours(part, true), numbers: this.slotNumbers(cell, metric),
+        });
+    },
+
+    /**
+     * A cell: a button when posts went out then, so a tap or Enter spells its numbers out under
+     * the grid (touch has no hover, and a title tooltip never reached a phone); a dash when not.
+     */
+    slotCell(day, part, cell, map) {
+        if (!cell) {
+            return html`<td class="growth-slot is-empty"><span aria-hidden="true">—</span><span class="sr-only">${t('growth.best.slotNone', { slot: this.slotName(day, part, 'long') })}</span></td>`;
+        }
+        const picked = !!this.slotPick && this.slotPick.day === day && this.slotPick.part === part;
+        return html`
+            <td class="growth-slot">
+                <button type="button" class="growth-slot-btn" id="growth-slot-${day}-${part}"
+                        data-action="growth:pickSlot" data-day="${day}" data-part="${part}"
+                        aria-pressed="${picked ? 'true' : 'false'}" aria-label="${this.slotSentence(day, part, cell, map.metric)}">
+                    <span class="heat heat-${this.heatLevel(cell.avg, map.max)}" aria-hidden="true"></span>
+                    <span class="growth-slot-avg">${UI.formatNumber(Math.round(cell.avg))}</span>
+                    <span class="growth-slot-n">${this.postsText(cell.n)}</span>
+                </button>
+            </td>
+        `;
+    },
+
+    /** The line under the grid: the picked cell's numbers, or how to get them. */
+    slotCaption(map) {
+        const pick = this.slotPick;
+        if (!pick) return t('growth.best.tapHint');
+        const cell = map.cells[pick.day] && map.cells[pick.day][pick.part];
+        const name = html`<strong>${this.slotName(pick.day, pick.part, 'long')}</strong> ${UI.ltr(this.partHours(pick.part, true))}`;
+        if (!cell) return html`${name} · ${t('growth.best.nothingThen')}`;
+        return html`${name} · ${this.slotNumbers(cell, map.metric)}`;
+    },
+
+    /** A tap or Enter on a cell: its numbers under the grid, and said aloud. A second press puts it back. */
+    pickSlot(el) {
+        const day = Number(el && el.dataset ? el.dataset.day : NaN);
+        const part = Number(el && el.dataset ? el.dataset.part : NaN);
+        if (!Number.isInteger(day) || day < 0 || day > 6 || !Number.isInteger(part) || part < 0 || part >= this.DAYPARTS.length) return;
+        const same = !!this.slotPick && this.slotPick.day === day && this.slotPick.part === part;
+        this.slotPick = same ? null : { day, part };
+        this.paintRegion('growth-best', this.bestSectionMarkup());
+        if (this.slotPick) {
+            const map = this.bestMap();
+            const cell = map.cells[day] && map.cells[day][part];
+            if (cell) Motion.announce(this.slotSentence(day, part, cell, map.metric));
+        }
     },
 
     bestTimesMarkup() {
@@ -1624,60 +1964,53 @@ const GrowthPage = {
                 ${UI.helpLink('growth#best-times', t('help.link.bestTimes'), { iconOnly: true })}
             </div>
         `;
-        const tz = this.tenantZone();
-        // Our own posts first, already in the tenant's zone. The server's grid is the fallback
-        // for when the posts list could not be read; its zone is UTC unless it names one.
-        const own = this.postsHeatGrid(this.posts, tz.zone);
-        let map = this.buildHeatmap(own.grid, { from: tz.zone, to: tz.zone });
-        let basis = own.basis;
-        if (map.empty && this.postsError && this.overview && Array.isArray(this.overview.best_times)) {
-            map = this.buildHeatmap(this.overview.best_times, {
-                from: this.validZone(this.overview.best_times_tz) ? this.overview.best_times_tz : 'UTC',
-                to: tz.zone,
-            });
-            basis = 'server';
-        }
+        const map = this.bestMap();
+        const tz = map.zone;
         const zoneNote = html`<p class="text-meta growth-zone">${tz.own
             ? t('growth.best.zone', { zone: this.zoneLabel(tz.zone) })
             : t('growth.best.zoneBrowser', { zone: this.zoneLabel(tz.zone) })}</p>`;
+        if (map.empty && this.postsError && !this.pending.posts) {
+            // Not "not enough posts": the posts could not be read, and the server's grid did not stand in.
+            return html`${head}${this.errorHost(this.postsError, t('growth.posts.failed'), 'posts')}`;
+        }
         if (map.empty) {
             return html`${head}<p class="chart-empty growth-empty-line">${t('growth.best.empty')}</p>${zoneNote}`;
         }
-        const pct = (v) => (v === null || !(map.max > 0) ? 0 : Math.round((v / map.max) * 100));
+        // G9: "your best times" only from BEST_MIN_POSTS posts, and each named with the posts behind it.
+        const enough = map.posts >= this.BEST_MIN_POSTS && map.top.length > 0;
         return html`
             ${head}
-            <p class="text-meta growth-best-basis" id="growth-best-basis">${basis === 'views'
-                ? t('growth.best.basisViews', { posts: this.postsText(own.posts) })
-                : basis === 'interactions'
-                    ? t('growth.best.basisInteractions', { posts: this.postsText(own.posts) })
+            <p class="text-meta growth-best-basis" id="growth-best-basis">${map.basis === 'views'
+                ? t('growth.best.basisViews', { posts: this.postsText(map.posts) })
+                : map.basis === 'interactions'
+                    ? t('growth.best.basisInteractions', { posts: this.postsText(map.posts) })
                     : t('growth.best.basis')}</p>
-            <p class="growth-best-top">
-                <strong>${t('growth.best.topLead')}</strong>
-                ${map.top.map((c, i) => html`${i ? ' · ' : ''}<span class="growth-best-slot">${this.dayName(c.day)} ${UI.ltr(this.hourLabel(c.hour))}</span>`)}
-            </p>
+            ${enough ? html`
+                <p class="growth-best-top" id="growth-best-top">
+                    <strong>${t('growth.best.topLead')}</strong>
+                    ${map.top.map((c, i) => html`${i ? ' · ' : ''}<span class="growth-best-slot">${t('growth.best.topSlot', { slot: this.slotName(c.day, c.part), posts: this.postsText(c.n) })}</span>`)}
+                </p>
+            ` : html`
+                <p class="text-meta growth-best-few" id="growth-best-few">${t('growth.best.fewPosts', { min: UI.formatNumber(this.BEST_MIN_POSTS), posts: this.postsText(map.posts) })}</p>
+            `}
             <div class="growth-heat-wrap">
-                <table class="growth-heat" id="growth-heat">
+                <table class="growth-heat growth-dayparts" id="growth-heat">
                     <caption class="sr-only">${t('growth.best.caption', { zone: this.zoneLabel(tz.zone) })}</caption>
                     <thead><tr>
                         <td></td>
-                        ${Array.from({ length: 24 }, (_, h) => html`<th scope="col"><span aria-hidden="true">${h % 3 === 0 ? String(h).padStart(2, '0') : ''}</span><span class="sr-only">${this.hourLabel(h)}</span></th>`)}
+                        ${this.DAYPARTS.map((key, p) => html`<th scope="col"><span class="growth-part-name">${t(`growth.best.part.${key}`)}</span><span class="growth-part-hours">${UI.ltr(this.partHours(p))}</span></th>`)}
                     </tr></thead>
                     <tbody>
                         ${this.DAY_ORDER.map((d) => html`
                             <tr>
                                 <th scope="row">${this.dayName(d)}</th>
-                                ${map.cells[d].map((v, h) => {
-                                    const level = this.heatLevel(v, map.max);
-                                    const tip = v === null || v <= 0
-                                        ? t('growth.best.cellNone', { day: this.dayName(d, 'long'), hour: this.hourLabel(h) })
-                                        : t('growth.best.cell', { day: this.dayName(d, 'long'), hour: this.hourLabel(h), pct: pct(v) });
-                                    return html`<td class="heat heat-${level}" title="${tip}"><span class="sr-only">${level ? `${pct(v)}%` : '—'}</span></td>`;
-                                })}
+                                ${map.cells[d].map((cell, p) => this.slotCell(d, p, cell, map))}
                             </tr>
                         `)}
                     </tbody>
                 </table>
             </div>
+            <p class="text-meta growth-slot-caption" id="growth-slot-caption">${this.slotCaption(map)}</p>
             <div class="growth-heat-legend" aria-hidden="true">
                 <span>${t('growth.best.less')}</span>
                 ${[1, 2, 3, 4].map((l) => html`<span class="heat heat-${l}"></span>`)}
@@ -2188,6 +2521,7 @@ const GrowthPage = {
     },
 
     seoMarkup() {
+        if (this.showsSkeleton('seo')) return html`${Motion.cardGrid(3, 3)}${Motion.busy()}`;
         if (this.settingsError && !this.settings) {
             return html`<div class="surface pad-5">${this.errorHost(this.settingsError, t('growth.settings.failed'), 'settings')}</div>`;
         }
@@ -2721,6 +3055,44 @@ const GrowthPage = {
         return { avg, rate, followers, posts: this.num(c.media_count) };
     },
 
+    /** As many recent posts as Business Discovery returns for a competitor (`BD_MEDIA_LIMIT`). */
+    OWN_RATE_POSTS: 12,
+
+    /**
+     * G11: the operator's own rate, measured exactly as a competitor's is — likes + comments per
+     * post over the latest Instagram posts, as a share of Instagram followers — so the two sit
+     * side by side as the same number. It is not the engagement-rate KPI (per REACH), which a
+     * competitor's account never shares. Only from what this page has already read; null otherwise.
+     */
+    ownRate() {
+        const recent = (Array.isArray(this.posts) ? this.posts : [])
+            .filter((p) => p && this.platformKey(p.platform) === 'instagram' && Number.isFinite(Date.parse(p.published_at || '')))
+            .sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at))
+            .slice(0, this.OWN_RATE_POSTS);
+        const counted = recent.map((p) => {
+            const likes = this.metric(p, 'likes');
+            const comments = this.metric(p, 'comments');
+            return likes === null && comments === null ? null : (likes || 0) + (comments || 0);
+        }).filter((v) => v !== null);
+        const rows = this.overview && Array.isArray(this.overview.by_platform) ? this.overview.by_platform : [];
+        const ig = rows.find((r) => r && this.platformKey(r.platform) === 'instagram');
+        const followers = ig ? this.num(ig.followers) : null;
+        const avg = counted.length ? counted.reduce((a, b) => a + b, 0) / counted.length : null;
+        const rate = avg !== null && followers ? avg / followers : null;
+        return { rate, avg, followers, posts: counted.length };
+    },
+
+    ownRateMarkup() {
+        const own = this.ownRate();
+        return html`
+            <p class="growth-own-rate" id="growth-own-rate">
+                <span>${t('growth.competitors.ownRate')}</span>
+                <strong>${own.rate === null ? '—' : this.formatRate(own.rate)}</strong>
+                <span class="text-meta">${own.rate === null ? t('growth.competitors.ownRateMissing') : t('growth.competitors.ownRateHow', { posts: this.postsText(own.posts) })}</span>
+            </p>
+        `;
+    },
+
     competitorCard(c) {
         const username = this.normalizeUsername(c.username);
         const stats = this.competitorStats(c);
@@ -2814,6 +3186,7 @@ const GrowthPage = {
                 <div class="growth-section-heading">
                     <h2 class="section-title" id="growth-competitors-title"><i data-lucide="users" aria-hidden="true"></i> ${t('growth.competitors.title')}</h2>
                     <p class="text-meta">${t('growth.competitors.lede')}</p>
+                    ${s.competitors.length ? this.ownRateMarkup() : ''}
                 </div>
                 ${s.competitors.length && this.competitorsState !== 'loading' ? UI.button({
                     variant: 'ghost', size: 'sm', icon: 'refresh-cw', label: t('growth.competitors.refresh'), action: 'growth:loadCompetitors', id: 'growth-competitors-refresh',
@@ -2984,4 +3357,5 @@ UI.registerActions('growth', {
     addCompetitor: (form, event) => GrowthPage.addCompetitor(form, event),
     removeCompetitor: (el) => GrowthPage.removeCompetitor(el),
     loadCompetitors: () => GrowthPage.loadCompetitors(),
+    pickSlot: (el) => GrowthPage.pickSlot(el),
 });
