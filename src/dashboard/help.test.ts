@@ -484,7 +484,9 @@ describe('Help Center — every article in both languages', () => {
                     assert.equal(visible.includes(leftover), false, `${lang}:${a.slug} shows ${leftover}`);
                 }
                 for (const sec of a.sections) assert.ok(markup.includes(`id="help-s-${sec.id}"`), `${lang}:${a.slug}#${sec.id}`);
-                assert.ok(markup.includes('data-action="help:feedback" data-value="yes"'), `${lang}:${a.slug} asks "was this helpful?"`);
+                // The "was this helpful?" control was removed on 2026-09-27: it recorded
+                // nothing and promised improvement (DESIGN.md §6).
+                assert.equal(markup.includes('help:feedback'), false, `${lang}:${a.slug} still asks "was this helpful?"`);
             }
         }
     });
@@ -519,22 +521,13 @@ describe('Help Center — every article in both languages', () => {
         assert.deepEqual(missing, []);
     });
 
-    it('marks the "Was this helpful?" choice on the screen and stores it nowhere', () => {
-        const s = load('en', '#/help/faq');
-        const thanks = s.host('help-feedback-thanks');
-        const pressed: Array<[string, string]> = [];
-        const buttons = ['yes', 'no'].map((v) => ({
-            dataset: { value: v, slug: 'faq' },
-            setAttribute: (n: string, val: string) => { if (n === 'aria-pressed') pressed.push([v, val]); },
-        }));
-        const group = { querySelectorAll: () => buttons };
-        s.UI._actions.help.feedback({ dataset: { value: 'yes', slug: 'faq' }, closest: () => group });
-        assert.equal(thanks.textContent, s.t('help.feedback.thanksYes'));
-        assert.deepEqual(pressed, [['yes', 'true'], ['no', 'false']]);
-        // Presentational only: the page has no way to send or keep the answer.
-        const source = readFileSync('dashboard/js/pages/help.js', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-        for (const reach of ['API.', 'fetch(', 'localStorage', 'sessionStorage', 'XMLHttpRequest', 'sendBeacon']) {
-            assert.equal(source.includes(reach), false, `help.js uses ${reach}`);
+    it('has no "was this helpful?" control: it recorded nothing (removed 2026-09-27)', () => {
+        const source = readFileSync('dashboard/js/pages/help.js', 'utf8');
+        assert.equal(/help:feedback|feedbackMarkup|setFeedback/.test(source), false);
+        const s = load();
+        for (const lang of ['ar', 'en']) {
+            const dict = s.I18N.strings[lang]!;
+            assert.deepEqual(Object.keys(dict).filter((k) => k.startsWith('help.feedback.')), [], `${lang} still carries help.feedback keys`);
         }
     });
 });

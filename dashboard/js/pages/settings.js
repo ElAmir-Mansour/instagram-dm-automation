@@ -91,6 +91,16 @@ const SettingsPage = {
         const isValid = tokenStatus.status === 'valid';
         const expiresAt = tokenStatus.expiresAt ? new Date(tokenStatus.expiresAt) : null;
         const daysLeft = expiresAt ? Math.ceil((expiresAt - Date.now()) / 86400000) : null;
+        // The 90-day data-access window is the date that actually lapses on a
+        // never-expiring page token. It was fetched and never shown.
+        const dataAccessAt = tokenStatus.dataAccessExpiresAt ? new Date(tokenStatus.dataAccessExpiresAt) : null;
+        const dataAccessDays = dataAccessAt && !Number.isNaN(dataAccessAt.getTime())
+            ? Math.ceil((dataAccessAt - Date.now()) / 86400000) : null;
+        // The token, extend and verify-token routes are owner-only on the server
+        // (`canAdminister`); an operator who could see the forms only learned that
+        // from a 403 after pasting a 200-character token.
+        const canAdmin = App.canAdminister();
+        const tokenReason = !isValid ? (tokenStatus.error || tokenStatus.message || '') : '';
 
         const missingScopes = isValid && Array.isArray(tokenStatus.scopes)
             ? this.REQUIRED_SCOPES.filter((scope) => !tokenStatus.scopes.includes(scope))
@@ -100,9 +110,6 @@ const SettingsPage = {
         // environment, and the sentence that says so was being rendered with a
         // bare "." interpolated where the answer should be. There is no copy
         // for "unknown", so the sentence is simply not claimed.
-        const envNote = webhookError
-            ? null
-            : (webhookToken.configuredInEnv ? t('settings.webhookEnvSet') : t('settings.webhookEnvUnset'));
 
         container.innerHTML = esc(html`
             ${missingScopes.length > 0 ? html`
@@ -132,6 +139,8 @@ const SettingsPage = {
                         </span>
                         ${tokenStatus.type ? html`<span class="text-meta">${t('settings.tokenType', { type: tokenStatus.type })}</span>` : ''}
                     </div>
+                    ${tokenReason ? html`<div class="mbe-4">${UI.errorStrip(t('settings.tokenProblem'), tokenReason)}</div>` : ''}
+                    <p class="form-hint mbe-4">${UI.helpLink('connect-meta#token-health', t('help.link.tokenHealth'), { newTab: true })}</p>
 
                     ${expiresAt ? html`
                         <div class="row row--wrap gap-3 mbe-4">
@@ -145,15 +154,24 @@ const SettingsPage = {
                                     </span>
                                 ` : ''}
                             </p>
-                            ${UI.button({
+                            ${canAdmin ? UI.button({
                                 variant: 'secondary', size: 'sm', icon: 'refresh-cw',
                                 label: t('settings.extend'),
                                 action: 'settings:extendToken', id: 'settings-extend',
-                            })}
+                            }) : ''}
                         </div>
                     ` : html`
                         <p class="token-info mbe-4">${t('settings.expiresNever')}</p>
                     `}
+                    ${dataAccessAt && dataAccessDays !== null ? html`
+                        <p class="token-info mbe-4">
+                            ${t('settings.dataAccessExpires', { date: UI.formatDay(dataAccessAt) })}
+                            <span class="${dataAccessDays < 14 ? html.raw('text-warning') : ''}">
+                                ${dataAccessDays > 0 ? t('settings.daysLeft', { count: dataAccessDays }) : t('settings.expired')}
+                            </span>
+                            <span class="form-hint">${t('settings.dataAccessHint')}</span>
+                        </p>
+                    ` : ''}
 
                     ${tokenStatus.scopes ? html`
                         <div class="mbe-4">
@@ -164,6 +182,7 @@ const SettingsPage = {
                         </div>
                     ` : ''}
 
+                    ${canAdmin ? html`
                     <div class="settings-block">
                         <label class="form-label" for="settings-token-input">${t('settings.updateToken')}</label>
                         <p class="form-hint mbe-3">${t('settings.updateTokenHint')}</p>
@@ -189,6 +208,7 @@ const SettingsPage = {
                             </div>
                         </form>
                     </div>
+                    ` : html`<p class="form-hint">${t('settings.ownerOnlyMeta')}</p>`}
                 </div>
             </section>
 
@@ -214,15 +234,16 @@ const SettingsPage = {
                             </span>
                             ${webhookToken.configuredInDatabase ? html`
                                 <span class="text-meta">${UI.ltr(t('settings.webhookPreview', {
-                                    preview: webhookToken.preview, length: webhookToken.length,
+                                    preview: webhookToken.preview, count: Number(webhookToken.length) || 0,
                                 }))}</span>
                             ` : ''}
                         </div>
                     `}
 
-                    <p class="form-hint">${t('settings.webhookBody')}</p>
-                    ${envNote ? html`<p class="form-hint mbe-4">${t('settings.webhookBody2', { env: envNote })}</p>` : ''}
+                    <p class="form-hint">${t('settings.webhookBody')} ${UI.helpLink('connect-meta#where', t('help.link.connectMetaWhere'), { newTab: true })}</p>
+                    <p class="form-hint mbe-4">${t('settings.webhookBody2')}</p>
 
+                    ${canAdmin ? html`
                     <form id="webhook-token-form" data-submit="settings:handleWebhookTokenUpdate">
                         <label class="form-label" for="settings-webhook-input">${t('settings.webhookLabel')}</label>
                         <input class="field field-mono" id="settings-webhook-input" name="token" type="text" dir="ltr"
@@ -238,6 +259,7 @@ const SettingsPage = {
                             })}
                         </div>
                     </form>
+                    ` : html`<p class="form-hint">${t('settings.ownerOnlyMeta')}</p>`}
                 </div>
             </section>
 

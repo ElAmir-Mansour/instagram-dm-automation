@@ -189,6 +189,7 @@ const ActivityPage = {
                             <option value="FAILED" ${this.currentStatus === 'FAILED' ? html.raw('selected') : ''}>${t('common.failed')}</option>
                             <option value="PENDING" ${this.currentStatus === 'PENDING' ? html.raw('selected') : ''}>${t('common.pending')}</option>
                         </select>
+                        ${UI.helpLink('troubleshooting#dms', t('help.link.troubleshootDms'), { newTab: true })}
                     </div>
 
                     <!-- Two children, not three. Below 768px the stylesheet gives
@@ -199,8 +200,8 @@ const ActivityPage = {
                          [count][actions], which wraps as a unit at 375px. -->
                     <div class="row gap-3 row--wrap">
                         <span class="text-meta">${filtered
-                            ? t('activity.resultsFiltered', { count: UI.formatNumber(total) })
-                            : t('activity.results', { count: UI.formatNumber(total) })}</span>
+                            ? t('activity.resultsFiltered', { count: total, n: UI.formatNumber(total) })
+                            : t('activity.results', { count: total, n: UI.formatNumber(total) })}</span>
                         <span class="row gap-2 row--wrap">
                             <!-- Only rendered while something is actually narrowing
                                  the log. A permanently-present "Clear filters" on an
@@ -338,7 +339,7 @@ const ActivityPage = {
         UI.restoreFocus(focus, fallback);
 
         // Motion.busy() said "loading"; nothing said the rows had landed.
-        Motion.announce(t('activity.results', { count: UI.formatNumber(total) }));
+        Motion.announce(t('activity.results', { count: total, n: UI.formatNumber(total) }));
     },
 
     handleFilter(value) {

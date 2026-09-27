@@ -49,6 +49,8 @@ const OverviewPage = {
      */
     SUCCESS_RATE_DANGER_MAX: 70,
     SUCCESS_RATE_WARNING_MAX: 90,
+    OVERDUE_GRACE_MS: 15 * 60 * 1000,
+
     TRAILING_SUCCESS_RATE_ALERT_MIN: 85,
 
     /** text-success / text-warning / text-danger for a 0–100 rate, or '' if unknown. */
@@ -175,6 +177,19 @@ const OverviewPage = {
             const dailyRes = await dailyP;
             if (!live()) return;
             this.renderCharts(stats, dailyRes);
+            // "Today" on the tile used to be `todayActivity`, a rolling 24 hours
+            // of every status, while the alert above counted from local
+            // midnight — two numbers called "today" on one screen. The daily
+            // series is gap-filled by the API (generate_series), so its last
+            // row is today.
+            const sub = document.getElementById('stat-sent-sub');
+            if (sub && dailyRes.status === 'fulfilled' && Array.isArray(dailyRes.value) && dailyRes.value.length) {
+                const today = dailyRes.value[dailyRes.value.length - 1] || {};
+                sub.textContent = t('overview.stat.sentTodaySub', {
+                    sent: UI.formatNumber(Number(today.sent) || 0),
+                    failed: UI.formatNumber(Number(today.failed) || 0),
+                });
+            }
         });
 
         // ── Region 4: the recent-activity table ────────────────────────────
@@ -387,9 +402,15 @@ const OverviewPage = {
         // 4. The publishing queue.
         if (postsRes.status === 'fulfilled' && Array.isArray(postsRes.value)) {
             const posts = postsRes.value;
+            // Overdue by more than the sweep can explain. The Heroku worker polls
+            // every 60s and a video container can take ~75s, so a row two minutes
+            // past its time is on its way, not stuck; fifteen minutes is stuck.
+            // (Mirrors posts.js FREQUENT_SWEEP_LAG_MS ×3; the constant lives in a
+            // lazily loaded module, so it is restated here.)
             const now = Date.now();
             const overdue = posts.filter((p) => (
-                p.status === 'PENDING' && p.scheduled_time && new Date(p.scheduled_time).getTime() < now
+                p.status === 'PENDING' && p.scheduled_time
+                && new Date(p.scheduled_time).getTime() < now - this.OVERDUE_GRACE_MS
             )).length;
             const failed = posts.filter((p) => p.status === 'FAILED').length;
 
@@ -499,7 +520,7 @@ const OverviewPage = {
                         <span class="stat-icon"><i data-lucide="send" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value" id="stat-sent">0</p>
-                    <p class="stat-sub">${t('overview.stat.sentSub', { count: UI.formatNumber(stats.todayActivity) })}</p>
+                    <p class="stat-sub" id="stat-sent-sub">${t('overview.stat.sentSub', { count: UI.formatNumber(stats.todayActivity) })}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
@@ -529,7 +550,7 @@ const OverviewPage = {
                         <span class="stat-icon"><i data-lucide="megaphone" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value" id="stat-campaigns">0</p>
-                    <p class="stat-sub">${t('overview.stat.campaignsSub', { count: UI.formatNumber(stats.totalInteractions) })}</p>
+                    <p class="stat-sub">${t('overview.stat.campaignsSub', { count: Number(stats.totalInteractions) || 0, n: UI.formatNumber(stats.totalInteractions) })}</p>
                 </div>
             </div>
         `;

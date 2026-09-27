@@ -150,6 +150,20 @@ app.get('/pricing', (_req, res) => {
     res.sendFile(path.join(__dirname, '../public/pricing.html'));
 });
 
+// The two root-level files every public page's <head> names. `public/**` has no static
+// handler — vercel.json sends only /dashboard/* and /samples/* to static files and everything
+// else here — so without these two routes /favicon.svg and /site.webmanifest would 404 on
+// every page that links them. A day of caching: both are tiny, and neither carries a ?v=.
+const ROOT_ASSET_MAX_AGE = 24 * 60 * 60 * 1000;
+app.get('/favicon.svg', (_req, res) => {
+    res.type('image/svg+xml');
+    res.sendFile(path.join(__dirname, '../public/favicon.svg'), { maxAge: ROOT_ASSET_MAX_AGE });
+});
+app.get('/site.webmanifest', (_req, res) => {
+    res.type('application/manifest+json');
+    res.sendFile(path.join(__dirname, '../public/site.webmanifest'), { maxAge: ROOT_ASSET_MAX_AGE });
+});
+
 // ─── Health Check ───────────────────────────────────────────────────────────
 
 app.get('/health', async (_req, res) => {
@@ -301,6 +315,24 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         // that is left is to make it visible.
         log('error', 'webhook.pipeline_error', describeError(err));
     }
+});
+
+// ─── Not Found ──────────────────────────────────────────────────────────────
+// A browser navigation to a path nothing above claims gets the bilingual public 404 page,
+// with a real 404 status. Guarded three ways so nothing else changes:
+//   · it is registered LAST, after every route and middleware, so it can only ever see
+//     requests nothing else answered;
+//   · it never touches /api — that router answers its own unknown paths, and an API client
+//     must never be handed HTML;
+//   · it fires only when the client accepts text/html. A webhook probe, a curl with an
+//     explicit Accept, a fetch() asking for JSON — all fall through to Express's own plain
+//     404 exactly as before.
+app.use((req, res, next) => {
+    if (req.path.startsWith('/api') || !req.accepts('html')) {
+        next();
+        return;
+    }
+    res.status(404).sendFile(path.join(__dirname, '../public/404.html'));
 });
 
 // ─── Start Server ───────────────────────────────────────────────────────────

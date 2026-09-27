@@ -76,7 +76,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '8.0',
+    ASSET_VERSION: '9.0',
 
     _modules: Object.create(null),
 
@@ -307,14 +307,18 @@ const App = {
     },
 
     renderLanguageToggle() {
-        const btn = document.getElementById('lang-toggle');
-        if (!btn) return;
+        // Two instances: the header's and the login card's. The login one exists
+        // because first-visit language comes from the browser, and an Arabic
+        // operator on an English-locale device used to log in through an
+        // English form with no way to switch until they were inside.
         const target = this.otherLang();
         const cfg = I18N.LANGS[target];
-        btn.textContent = cfg.label;
-        btn.setAttribute('lang', cfg.htmlLang);
-        btn.setAttribute('dir', cfg.dir);
-        btn.setAttribute('aria-label', t('app.switchTo', { name: t(`lang.name.${target}`) }));
+        document.querySelectorAll('#lang-toggle, [data-lang-toggle]').forEach((btn) => {
+            btn.textContent = cfg.label;
+            btn.setAttribute('lang', cfg.htmlLang);
+            btn.setAttribute('dir', cfg.dir);
+            btn.setAttribute('aria-label', t('app.switchTo', { name: t(`lang.name.${target}`) }));
+        });
     },
 
     /** 'auto' | 'dark' | 'light'. 'auto' removes the attribute and lets
@@ -428,11 +432,21 @@ const App = {
         }
     },
 
-    showLogin() {
+    /**
+     * `reason` is shown in the form's alert slot: a session that expired
+     * mid-task used to bounce here with no explanation, which reads as "my
+     * password stopped working". Logout and first load pass nothing.
+     */
+    showLogin(reason) {
         this.teardownCurrentPage();
         this.currentPage = null;
         document.getElementById('login-screen').classList.remove('hidden');
         document.getElementById('app').classList.add('hidden');
+        const errorEl = document.getElementById('login-error');
+        if (errorEl) {
+            errorEl.textContent = reason ? String(reason) : '';
+            errorEl.classList.toggle('hidden', !reason);
+        }
         const pw = document.getElementById('login-password');
         if (pw) pw.value = '';
         // Back to the one-field form: the email affordance is opt-in every time.
