@@ -87,9 +87,15 @@ const SURFACE_STACKS = [
     // The HIG "secondary fill": a tint on a glass card, which is itself on the canvas.
     ['surface-glass', 'surface-raised', 'surface-page'],
     ['surface-glass-hover', 'surface-raised', 'surface-page'],
-    // The same tint directly on the canvas, which is where sidebar rows live.
+    // The same tint directly on the canvas.
     ['surface-glass', 'surface-page'],
     ['surface-glass-hover', 'surface-page'],
+    // The window chrome (the sidebar and the top bar share one token), and a hover row on
+    // it — which is where the nav items and the page title actually sit. Measured over the
+    // canvas; content scrolling under the top bar shows through 14%, which the blur evens out.
+    ['surface-chrome', 'surface-page'],
+    ['surface-glass', 'surface-chrome', 'surface-page'],
+    ['surface-glass-hover', 'surface-chrome', 'surface-page'],
     // The platform badge: a -soft tint on a card, or directly on the canvas. The label on
     // it is the matching -text token and nothing else (see coOccurs below).
     ['brand-instagram-soft', 'surface-raised', 'surface-page'],

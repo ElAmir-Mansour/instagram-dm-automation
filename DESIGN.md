@@ -26,8 +26,8 @@ Three roles, and getting them mixed up is the main way this design breaks:
 
 | role | token | when |
 |---|---|---|
-| **Glass** | `--surface-raised`, `--surface-overlay` | anything that FLOATS over content: cards, the sidebar, the top bar, modals, toasts |
-| **Solid** | `--surface-solid` | anything that must render predictably: native `<option>` popups, image and media frames |
+| **Glass** | `--surface-raised`, `--surface-overlay`, `--surface-chrome` | anything that FLOATS over content: the sidebar and the top bar (one `--surface-chrome`, so they meet without a seam), modals, toasts |
+| **Solid** | `--surface-solid` | anything that must render predictably: native `<option>` popups, image and media frames, and cards that live in scrolling grids (posts, campaigns, drafts, stat and chart cards). Up to ~36 blurred cards over a fixed background repainted on every scroll frame; blur is for chrome that content scrolls *behind* |
 | **Tint** | `--surface-glass`, `--surface-glass-hover` | small inline fills: pills, chips, switch tracks, hover rows, incoming chat bubbles |
 
 `--surface-raised` and `--surface-overlay` are **translucent**. They have no real colour until
@@ -80,8 +80,8 @@ Two values in the brief were changed, and only these two:
 
 - **`--text-muted` is #6E6E73 / #636366, not #86868B.** The brief's value measures 3.33:1 on
   the canvas and 3.53:1 on glass — below AA for normal text, and it carries form hints, table
-  headers, empty states and every timestamp. #86868B survives as `--text-muted-large`, for
-  large text only.
+  headers, empty states and every timestamp. #86868B was kept as `--text-muted-large` for
+  large text only; nothing ever used it, and it was removed on 2026-09-27.
 - **The hover tint is 0.075 / 0.11**, not a straight doubling of the fill. The brief's fill
   alphas (0.05 light, 0.08 dark) are used exactly as given; the hover step is the one number
   that is mine, and it was chosen so Apple's own published text colours clear AA on it.
@@ -205,7 +205,7 @@ This document describes intent. Four CI checks enforce the parts that can be:
 | `check:i18n` | an English string with no Arabic translation, rendering English inside an RTL page |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
 
-`check:contrast` measures **152 pairs** across both themes (the platform badge text on its own tint was added on 2026-09-27, after it was found failing in light mode). The tightest is **4.67:1**. That
+`check:contrast` measures **200 pairs** across both themes (the platform badge text on its own tint was added on 2026-09-27, after it was found failing in light mode; `--surface-chrome` followed). The tightest is **4.67:1**. That
 number is low on purpose: glass surfaces shift the ground under text, so the margin is thin
 and this is checked rather than asserted.
 
