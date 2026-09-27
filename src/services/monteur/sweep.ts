@@ -32,7 +32,7 @@ import { askOf, writeCopy } from './copy.js';
 import { writeEdits } from './editor.js';
 import { inFlightTriggers } from './keywords.js';
 import { pickClips, type PickOutcome } from './pick.js';
-import { usageFields } from './model.js';
+import { MIN_CALL_MS, usageFields } from './model.js';
 import { accentsFor, buildRenderPayload } from './render.js';
 import { groupLines, type PickedClip } from './transcript.js';
 
@@ -243,19 +243,44 @@ async function editReady(
     source: ClaimedSource, settings: StudioSettings, ready: ReadyClip[], lines: PickOutcome['lines'],
     words: readonly TranscriptWord[], record: SourcePick, deadline: number,
 ): Promise<void> {
-    try {
-        const { edits, cost } = await writeEdits(ready.map((r) => r.clip), lines, words, settings, deadline);
-        ready.forEach((r, i) => { r.edits = edits[i] ?? []; });
-        record.edit = { model: cost.model, tokens_in: cost.tokens_in, tokens_out: cost.tokens_out };
-        log('info', 'monteur.edit', {
-            source_id: source.id, creator_id: source.creator_id, ...usageFields(cost),
-            clips: ready.length, edits: edits.reduce((n, e) => n + e.length, 0),
-        });
-    } catch (err) {
-        for (const r of ready) r.edits = [];
-        record.edit = { model: null, tokens_in: 0, tokens_out: 0, error: errorText(err) };
-        log('warn', 'monteur.edit_failed', { source_id: source.id, creator_id: source.creator_id, error: errorText(err), ...describeError(err) });
+    let lastErr: unknown = null;
+    for (let attempt = 0; ; attempt++) {
+        try {
+            const { edits, cost } = await writeEdits(ready.map((r) => r.clip), lines, words, settings, deadline);
+            ready.forEach((r, i) => { r.edits = edits[i] ?? []; });
+            record.edit = { model: cost.model, tokens_in: cost.tokens_in, tokens_out: cost.tokens_out };
+            log('info', 'monteur.edit', {
+                source_id: source.id, creator_id: source.creator_id, ...usageFields(cost),
+                clips: ready.length, edits: edits.reduce((n, e) => n + e.length, 0), attempt: attempt + 1,
+            });
+            return;
+        } catch (err) {
+            lastErr = err;
+            // A busy model clears in seconds (every model in the chain answered 503 "high demand"
+            // at once on 2026-09-27, and that reel went out without its edits): wait and ask again,
+            // while there is time before the drain's deadline.
+            const wait = editRetryWaitsMs[attempt];
+            if (wait === undefined || !transientModelError(err) || Date.now() + wait + MIN_CALL_MS > deadline) break;
+            log('info', 'monteur.edit_retry', { source_id: source.id, attempt: attempt + 1, wait_ms: wait, error: errorText(err) });
+            await new Promise((r) => setTimeout(r, wait));
+        }
     }
+    for (const r of ready) r.edits = [];
+    record.edit = { model: null, tokens_in: 0, tokens_out: 0, error: errorText(lastErr) };
+    log('warn', 'monteur.edit_failed', { source_id: source.id, creator_id: source.creator_id, error: errorText(lastErr), ...describeError(lastErr) });
+}
+
+/** How long the Editor waits before each retry of a busy model. Tests set it to [0, 0]. */
+let editRetryWaitsMs: readonly number[] = [6_000, 20_000];
+export function setEditRetryWaits(next: readonly number[]): readonly number[] {
+    const prev = editRetryWaitsMs;
+    editRetryWaitsMs = next;
+    return prev;
+}
+
+/** A failure a short wait may cure: the model busy or rate-limited, not a bad request or a bad answer. */
+export function transientModelError(err: unknown): boolean {
+    return /\b(429|500|502|503|504)\b|high demand|overloaded|unavailable|RESOURCE_EXHAUSTED|timed out/i.test(errorText(err));
 }
 
 /** One claimed source through the three calls and the hand-off. Never throws for a model's failure. */
