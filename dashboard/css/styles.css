@@ -4330,3 +4330,107 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 /* Studio — at the three-lesson limit a chip stays reachable (aria-disabled) and says why when pressed. */
 .lesson-chip[aria-disabled='true']:not(.is-picked) { opacity: 0.55; cursor: not-allowed; }
 .lesson-chip[aria-disabled='true']:hover { border-color: var(--border-subtle); background: var(--surface-glass); }
+
+/* ─── wave2: reading screens ─── */
+/* A stat tile's colour is its message (failed today, the skip-rate band). `.stat-value`
+   sets `--text-strong` later in this file than `.text-*` at the top, so at equal
+   specificity the tile always won and the band never showed. Two classes outrank one. */
+.stat-value.text-danger { color: var(--danger-text); }
+.stat-value.text-warning { color: var(--warning-text); }
+.stat-value.text-success { color: var(--success-text); }
+/* Same cascade trap for a muted line whose colour is the message: "last synced 2 days ago"
+   (G5), "synced since this plan was written" (G12), a follower change in a sub-line. */
+.text-meta.text-warning, .stat-sub.text-warning { color: var(--warning-text); }
+.text-meta.text-danger, .stat-sub.text-danger { color: var(--danger-text); }
+.stat-sub.text-success { color: var(--success-text); }
+
+/* SH3: the waiting count on the Inbox nav item. Data, not decoration: hidden at zero. */
+.nav-count {
+    margin-inline-start: auto;
+    min-inline-size: 22px; block-size: 22px; padding-inline: var(--space-2);
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-pill);
+    background: var(--danger-soft); color: var(--danger-text);
+    font-size: var(--fs-100); font-weight: var(--fw-semibold);
+    font-variant-numeric: tabular-nums;
+}
+.nav-count[hidden] { display: none; }
+
+/* O7: "as of 14:05 · refresh" in the briefing head. */
+.briefing-head .briefing-asof { font-size: var(--fs-100); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.briefing-head .btn { margin-inline-start: auto; }
+/* O8: what is broken spans the row; what is merely worth knowing shares one. */
+.briefing-list .alert-danger { grid-column: 1 / -1; }
+
+/* O1 + G1: the content region between the briefing and the tiles. */
+.growth-strip { margin-block-end: var(--space-5); }
+.growth-strip .stats-grid { margin-block-end: var(--space-3); }
+.stat-trend { display: inline-flex; align-items: center; gap: 2px; font-weight: var(--fw-semibold); }
+.stat-trend i[data-lucide] { inline-size: 14px; block-size: 14px; }
+.stat-trend.is-up { color: var(--success-text); }
+.stat-trend.is-down { color: var(--danger-text); }
+.do-first {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    border-inline-start: 3px solid var(--accent);
+    background: var(--surface-raised);
+    font-size: var(--fs-200);
+}
+.do-first > strong { color: var(--text-strong); flex-shrink: 0; }
+.do-first > .do-first-text { color: var(--text-default); min-inline-size: 0; flex: 1 1 24ch; }
+.do-first i[data-lucide] { inline-size: 16px; block-size: 16px; color: var(--accent-text); flex-shrink: 0; }
+.growth-unavailable { font-size: var(--fs-100); color: var(--text-muted); margin: 0; }
+.stat-link { padding: 0; border: 0; background: none; font: inherit; color: var(--accent-text); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.stat-link:hover { color: var(--text-strong); }
+.chart-grid--one { grid-template-columns: 1fr; }
+
+/* O11: a FAILED row's reason, under the pill. */
+.cell-note { display: block; margin-block-start: 2px; font-size: var(--fs-100); color: var(--text-muted); max-inline-size: 36ch; overflow-wrap: anywhere; }
+
+/* I1 + I7: the filter and the count under the search box. */
+.inbox-search .segmented { margin-block-start: var(--space-2); inline-size: 100%; }
+.inbox-search .segmented .btn { flex: 1; }
+.inbox-count { margin: var(--space-2) 0 0; font-size: var(--fs-100); color: var(--text-muted); }
+.inbox-count strong { color: var(--text-strong); }
+/* I9: the empty state, with a next step. */
+.empty-threads p { margin: 0; }
+.empty-threads .empty-hint { margin-block-start: var(--space-2); font-size: var(--fs-100); }
+.empty-threads .help-link { margin-block-start: var(--space-2); }
+/* I10: the stale strip's Retry. */
+#threads-stale { padding: var(--space-2) var(--space-2) 0; }
+#threads-stale .inline-error { margin-block-end: 0; flex-wrap: wrap; }
+#threads-stale .inline-error > .btn { margin-inline-start: auto; }
+/* I4: a day divider in the message log. */
+.chat-day { display: flex; align-items: center; gap: var(--space-3); margin-block: var(--space-2); font-size: var(--fs-100); color: var(--text-muted); }
+.chat-day::before, .chat-day::after { content: ''; flex: 1; border-block-start: 1px solid var(--border-subtle); }
+/* I5: the switch's visible state, and the hint that outlives the placeholder. */
+.ai-state { font-size: var(--fs-100); color: var(--text-muted); white-space: nowrap; }
+.ai-state.is-on { color: var(--success-text); }
+.composer-hint { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: var(--space-2) 0 0; font-size: var(--fs-100); color: var(--text-muted); }
+.composer-hint > span { flex: 1 1 24ch; min-inline-size: 0; }
+
+/* G6: a range switch dims the numbers it is replacing instead of blanking them. */
+/* Only the page's own regions: a busy BUTTON inside them (Sync) says so with its spinner. */
+.growth-page > [aria-busy='true'] { opacity: 0.55; pointer-events: none; transition: opacity var(--motion-fast) var(--ease-standard); }
+@media (prefers-reduced-motion: reduce) { .growth-page > [aria-busy='true'] { transition: none; } }
+/* G1: no plan, no line — and no empty gap in the page's column either. */
+#growth-do-first:empty { display: none; }
+/* G4: the distance to goal under followers and views. */
+.growth-goal { display: grid; gap: var(--space-1); margin-block-start: var(--space-2); }
+.growth-goal .growth-bar { inline-size: 100%; block-size: 6px; display: block; }
+.growth-goal-line { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: baseline; font-size: var(--fs-100); color: var(--text-muted); }
+.growth-goal-line .stat-link { font-size: var(--fs-100); }
+.growth-goals-form { display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); align-items: end; }
+.growth-goals-form .form-group { margin: 0; }
+.growth-goals-form .field { text-align: start; font-variant-numeric: tabular-nums; }
+/* G12: beside Regenerate. */
+.growth-coach-foot .text-meta { margin-inline-end: auto; }
+
+/* A7: the summary above the 30-day strip. */
+.chart-summary { margin: 0 0 var(--space-2); font-size: var(--fs-100); color: var(--text-muted); }
+.chart-summary strong { color: var(--text-strong); }
+/* A4: a keyword chip that opens the activity log — still a chip, now a button. */
+.chip-link { cursor: pointer; font-family: inherit; line-height: inherit; }
+.chip-link:hover { text-decoration: underline; text-underline-offset: 2px; }

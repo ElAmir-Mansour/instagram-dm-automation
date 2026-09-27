@@ -400,6 +400,34 @@ const App = {
         return value === null ? '' : value;
     },
 
+    /** The tab title as `init()` set it, before any "(3) " prefix. */
+    _baseTitle: null,
+
+    /**
+     * How many conversations are waiting for a human, on the Inbox nav item and
+     * in the tab title. Fed by the inbox poll and by the Overview's own
+     * `/conversations` read, so the one thing the operator opens the app for
+     * is visible from every screen and from another tab. Hidden at zero: this
+     * is a count, not a badge — data, not decoration (DESIGN.md §6).
+     */
+    setInboxWaiting(count) {
+        const n = Math.max(0, Math.floor(Number(count) || 0));
+        const item = document.querySelector('.nav-item[data-page="inbox"]');
+        if (item) {
+            let badge = item.querySelector('.nav-count');
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'nav-count';
+                item.appendChild(badge);
+            }
+            badge.hidden = n === 0;
+            badge.innerHTML = esc(html`<span aria-hidden="true">${n > 99 ? '99+' : UI.formatNumber(n)}</span><span class="sr-only">${t('nav.inboxWaiting', { count: n, n: UI.formatNumber(n) })}</span>`);
+        }
+        if (this._baseTitle === null) this._baseTitle = document.title;
+        const title = n > 0 ? `(${n > 99 ? '99+' : n}) ${this._baseTitle}` : this._baseTitle;
+        if (document.title !== title) document.title = title;
+    },
+
     /** Navigate by updating the hash; hashchange does the actual render. */
     go(page) {
         if (!this.pages[page]) return;
@@ -440,6 +468,8 @@ const App = {
     showLogin(reason) {
         this.teardownCurrentPage();
         this.currentPage = null;
+        // A signed-out tab must not keep saying "(3)" in its title.
+        this.setInboxWaiting(0);
         document.getElementById('login-screen').classList.remove('hidden');
         document.getElementById('app').classList.add('hidden');
         const errorEl = document.getElementById('login-error');
@@ -714,6 +744,8 @@ const App = {
      * handled separately by teardownCurrentPage.
      */
     resetTenantState() {
+        // The waiting count is the previous tenant's; the next inbox or Overview read restates it.
+        this.setInboxWaiting(0);
         Object.keys(this.pages).forEach((key) => {
             let instance;
             try {

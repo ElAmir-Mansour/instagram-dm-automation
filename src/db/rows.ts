@@ -721,6 +721,10 @@ export interface GrowthSettings {
     /** Instagram usernames, lower case, without the @. */
     competitors: string[];
     audience: GrowthAudience;
+    /** The follower count the tenant is aiming at (v24). A whole number above zero. */
+    goal_followers: number;
+    /** The view count the tenant is aiming at (v24). A whole number above zero. */
+    goal_views: number;
 }
 
 /** A platform's state, as `/api/growth/status` reports it. */

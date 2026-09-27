@@ -131,7 +131,7 @@ describe('growth routes', () => {
 
     it('GET /settings gives the empty defaults to a tenant with no row', async () => {
         const res = await call(growthRouter, 'get', '/settings');
-        assert.deepEqual(res.body, { settings: { keywords: [], hashtag_sets: [], competitors: [], audience: {} } });
+        assert.deepEqual(res.body, { settings: { keywords: [], hashtag_sets: [], competitors: [], audience: {}, goal_followers: 10000, goal_views: 1000000 } });
     });
 
     it('PUT /settings saves, audits, and refuses with every problem listed', async () => {
@@ -142,9 +142,9 @@ describe('growth routes', () => {
         assert.equal(writes(/INSERT INTO audit_log/).length, 1);
 
         statements = [];
-        const refused = await call(growthRouter, 'put', '/settings', { body: { competitors: ['bad name!'], audience: { timezone: 'Nowhere/Here' } } });
+        const refused = await call(growthRouter, 'put', '/settings', { body: { competitors: ['bad name!'], audience: { timezone: 'Nowhere/Here' }, goal_views: 0 } });
         assert.equal(refused.statusCode, 400);
-        assert.equal(refused.body.problems.length, 2);
+        assert.equal(refused.body.problems.length, 3);
         assert.equal(writes(/^INSERT INTO growth_settings/).length, 0);
     });
 

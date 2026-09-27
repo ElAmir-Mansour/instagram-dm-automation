@@ -22,7 +22,7 @@ import adminRouter from './admin.js';
 import { setLogSink } from '../utils/log.js';
 import { DEFAULT_MODEL } from '../services/ai.js';
 import apiRouter, {
-    exportScopeFor, formatPublishedIds, parseExportDownload, publishDuePosts, publishedPlatforms,
+    conversationSearchPattern, exportScopeFor, formatPublishedIds, parseExportDownload, publishDuePosts, publishedPlatforms,
     splitDueByTenantActivity, unsupportedAfterEdit, unsupportedPlatformCombination,
 } from './api.js';
 
@@ -417,6 +417,66 @@ describe('PUT /posts/scheduled/:id — the edit-time platform guard', () => {
 
         assert.equal(res.statusCode, 404);
         assert.ok(!statements.some((sql) => /UPDATE scheduled_posts/.test(sql)));
+    });
+});
+
+/**
+ * GET /conversations — the inbox list, and the `?search=` the inbox sends once the box is non-empty.
+ *
+ * The search used to run in the browser over the 20 most recent rows, so a customer who wrote
+ * last month was unfindable. The server now searches the tenant's whole table, parameterised,
+ * and the count answers for the same filter.
+ */
+describe('GET /conversations — search', () => {
+    async function list(query: Record<string, string>) {
+        const res = {
+            statusCode: 200,
+            body: null as unknown,
+            status(code: number) { this.statusCode = code; return this; },
+            json(payload: unknown) { this.body = payload; return this; },
+        };
+        const statements: { sql: string; params: unknown[] }[] = [];
+        const original = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[]) => {
+            statements.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
+            if (/COUNT\(\*\)/.test(sql)) return { rows: [{ total: 250 }], rowCount: 1 };
+            return { rows: [{ id: 'c-1', username: 'sara_dev' }], rowCount: 1 };
+        };
+        try {
+            await handlerFor('get', '/conversations')(
+                { params: {}, query, session: { userId: 'u-1', role: 'user', tenantId: TENANT_A } },
+                res,
+                () => {}
+            );
+        } finally {
+            (pool as unknown as { query: unknown }).query = original;
+        }
+        return { res, statements };
+    }
+
+    it('filters the rows AND the count by the sender, parameterised and tenant-scoped', async () => {
+        const { res, statements } = await list({ search: ' sara ', limit: '100' });
+        assert.equal(res.statusCode, 200);
+        const [rows, count] = statements;
+        assert.match(rows!.sql, /c\.creator_id = \$1 AND \(c\.username ILIKE \$2 OR c\.instagram_user_id ILIKE \$2\)/);
+        assert.deepEqual(rows!.params, [TENANT_A, '%sara%', 100, 0]);
+        assert.match(count!.sql, /COUNT\(\*\).*c\.username ILIKE \$2/);
+        assert.deepEqual(count!.params, [TENANT_A, '%sara%'], 'the total is the total of the MATCHES');
+        assert.deepEqual((res.body as { pagination: { total: number; limit: number } }).pagination, { page: 1, limit: 100, total: 250, totalPages: 3 });
+    });
+
+    it('sends no ILIKE at all when the search is empty, and caps the limit at 100', async () => {
+        const { statements } = await list({ search: '   ', limit: '500' });
+        assert.ok(!statements.some((s) => /ILIKE/.test(s.sql)));
+        assert.deepEqual(statements[0]!.params, [TENANT_A, 100, 0]);
+    });
+
+    it('escapes LIKE metacharacters, so a typed underscore is an underscore', () => {
+        assert.equal(conversationSearchPattern('sara_dev'), '%sara\\_dev%');
+        assert.equal(conversationSearchPattern('100%'), '%100\\%%');
+        assert.equal(conversationSearchPattern(''), null);
+        assert.equal(conversationSearchPattern(['x']), null);
+        assert.equal(conversationSearchPattern('a'.repeat(200))!.length, 102, 'clipped to 100 characters');
     });
 });
 
