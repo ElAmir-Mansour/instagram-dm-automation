@@ -11,7 +11,7 @@ import { toIso } from '../health.js';
 import { type Exec, StudioError, withTransaction } from '../studio/common.js';
 import { enqueueJob } from '../studio/jobs.js';
 import { getMonteurSettings, getStudioSettings } from '../studio/settings.js';
-import { META_SLOT_HOLDERS, nextFreeSlots } from '../studio/slots.js';
+import { nextFreeSlots } from '../studio/slots.js';
 import { workerSummary } from '../studio/worker.js';
 import { log } from '../../utils/log.js';
 import { STALE_RUN_MS } from './analyst.js';
@@ -185,18 +185,24 @@ export async function loadClipView(exec: Exec, creatorId: string, clipId: string
 }
 
 /**
- * A scheduled clip whose posts were all deleted, or all failed, is back in review: otherwise it
- * could be neither re-approved nor rejected, and its files would be kept forever. Done lazily,
- * when the page is read or an approve is attempted.
+ * A scheduled clip whose posts were deleted from Posts before they were due is back in review:
+ * otherwise it could be neither re-approved nor rejected, and its files would be kept forever.
+ * Done lazily, when the page is read or an approve is attempted.
+ *
+ * Only when EVERY row it names is gone. A FAILED row still counts as there: a `both` post that
+ * went out on Facebook and not Instagram is stored FAILED with the live Facebook id, and a failed
+ * row can be retried from Posts — releasing its clip would let the reel be approved and posted a
+ * second time. So does a clip whose time has passed, even with its rows gone: it may well have
+ * published before they were deleted.
  */
 export async function releaseOrphanedClips(exec: Exec, creatorId: string, clipId: string | null = null): Promise<number> {
     const { rowCount } = await exec.query(
         `UPDATE clip_drafts c SET status = 'review', schedule = NULL, updated_at = NOW()
           WHERE c.creator_id = $1 AND c.status = 'scheduled' AND ($2::uuid IS NULL OR c.id = $2::uuid)
+            AND (c.schedule->>'scheduled_time')::timestamptz > NOW()
             AND NOT EXISTS (
                 SELECT 1 FROM scheduled_posts p
-                 WHERE p.creator_id = c.creator_id AND p.status <> 'FAILED'
-                   AND p.id::text IN (COALESCE(c.schedule->>'meta_row_id', ''), COALESCE(c.schedule->>'tiktok_row_id', ''))
+                 WHERE p.id::text IN (COALESCE(c.schedule->>'meta_row_id', ''), COALESCE(c.schedule->>'tiktok_row_id', ''))
             )`,
         [creatorId, clipId]
     );
@@ -231,7 +237,6 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
     const timezone = settings.schedule.timezone;
     // A scheduled reel whose posts are gone is back in review before the page is read.
     await releaseOrphanedClips(pool, creatorId);
-    const holders = m.platforms.some((p) => p !== 'tiktok') ? META_SLOT_HOLDERS : ['tiktok'];
     const [lastScan, open, worker, slots, sources, clips, lessons, privacy] = await Promise.all([
         pool.query<{ updated_at: Date; status: string; result: Record<string, unknown> | null; error: string | null }>(
             `SELECT updated_at, status, result, error FROM studio_jobs
@@ -246,7 +251,7 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
             [creatorId]
         ),
         workerSummary(creatorId, now),
-        nextFreeSlots(creatorId, { timezone, slots: m.post_at }, 1, now, { holders }),
+        nextFreeSlots(creatorId, { timezone, slots: m.post_at }, 1, now),
         pool.query<SourceViewRow>(
             `SELECT ${SOURCE_VIEW_COLUMNS} FROM monteur_sources s
               WHERE s.creator_id = $1

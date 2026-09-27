@@ -225,6 +225,8 @@ export type CopyOutcome = { copy: ClipCopy; ask: string } | { error: string };
 export interface CopyContext {
     /** Keywords live campaigns answer. */
     activeKeywords: readonly string[];
+    /** Variants of reels in flight: no keyword may be one of them, nor overlap one. */
+    inFlightVariants?: readonly string[];
     seo?: GenContext['seo'];
     /** The tenant's last asks, as templates, newest first. */
     recentAsks?: readonly string[];
@@ -243,8 +245,11 @@ export function toClipCopy(
     const lang = languageKit(settings);
     const language = settings.voice?.language === 'ar' ? 'ar' : 'en';
 
-    const candidates = strings(r.keyword_candidates).filter((k) => letters(k) >= MIN_KEYWORD_LETTERS);
-    const { choice, rejected } = chooseKeyword(candidates, [...ctx.activeKeywords, ...taken]);
+    // Equal to another reel's variant would make two campaigns answer one word: never shared.
+    const theirVariants = new Set((ctx.inFlightVariants ?? []).map((v) => normalizeArabic(v)));
+    const candidates = strings(r.keyword_candidates)
+        .filter((k) => letters(k) >= MIN_KEYWORD_LETTERS && !theirVariants.has(normalizeArabic(k)));
+    const { choice, rejected } = chooseKeyword(candidates, [...ctx.activeKeywords, ...taken, ...(ctx.inFlightVariants ?? [])]);
     if (!choice) {
         const short = strings(r.keyword_candidates).filter((k) => letters(k) < MIN_KEYWORD_LETTERS);
         const reasons = [...rejected, ...short.map((k) => `«${k}» is under ${MIN_KEYWORD_LETTERS} letters`)];
@@ -253,7 +258,7 @@ export function toClipCopy(
     const keyword = choice.keyword;
     const n = normalizeArabic(keyword);
     const shared = taken.some((t) => normalizeArabic(t) === n);
-    const variants = choice.create ? cleanVariants(r.variants, keyword, [...ctx.activeKeywords, ...taken]) : [];
+    const variants = choice.create ? cleanVariants(r.variants, keyword, [...ctx.activeKeywords, ...taken, ...(ctx.inFlightVariants ?? [])]) : [];
     if (choice.create) taken.push(keyword);
 
     const template = chooseAsk(line(r.ask_line), ctx.recentAsks ?? [], usedAsks, language, turn);
@@ -322,7 +327,8 @@ export async function writeCopy(
         turns: [{
             role: 'user',
             text: copyUserPrompt({
-                clips, lines, settings, lessons, activeKeywords: [...ctx.activeKeywords, ...(ctx.inFlightKeywords ?? [])],
+                clips, lines, settings, lessons,
+                activeKeywords: [...ctx.activeKeywords, ...(ctx.inFlightKeywords ?? []), ...(ctx.inFlightVariants ?? [])],
                 recentAsks: ctx.recentAsks, seo: ctx.seo,
             }),
         }],

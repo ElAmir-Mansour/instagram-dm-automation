@@ -203,7 +203,7 @@ accepts only upload URLs of its own tenant.
 | POST `/api/studio/monteur/pick-folder` | | `{ job }`: enqueues `pick_folder`, or returns the open one |
 | POST `/api/studio/monteur/sources/:id/retry` | | `SourceView` (below) |
 | PATCH `/api/studio/monteur/clips/:id` | `{ title?, copy?: Partial<ClipCopy> }` | `ClipView` (below) |
-| POST `/api/studio/monteur/clips/:id/approve` | `{ scheduled_time?: ISO }` | `{ clip: ClipView, scheduled_time }` (below) |
+| POST `/api/studio/monteur/clips/:id/approve` | `{ scheduled_time?: ISO }` | `{ clip: ClipView, scheduled_time, campaign: { id, keyword, trigger_keyword, created } \| null }` (below) |
 | POST `/api/studio/monteur/clips/:id/reject` | | `ClipView` |
 | POST `/api/studio/monteur/lessons/refresh` | | `LessonsView`: runs the Analyst now |
 
@@ -221,7 +221,11 @@ clip goes back to `rendering`). A caption-only change doesn't.
   'video'`, with `media_url`, `cover_url` and `caption`.
 - When `tiktok` is on, a TikTok sibling shares its `group_id`, uses `tiktok_caption`, and gets the same
   Direct Post options the Studio uses.
-- When `keyword_create` is true, the keyword campaign is created with the keyword, `variants` and `dm`.
+- Whenever there is a Meta row, a campaign for every post must answer the keyword: an active one that
+  already does is reused, otherwise one is created in `word` mode with the keyword, `variants` and `dm`.
+  `keyword_create` is informational (the Marketer's guess that one will be created). `campaign` in the
+  response says which happened; it is null when no Meta platform is on. A trigger that would really
+  collide with a live campaign (by match mode) is a 409.
 - Model all of this on `scheduleDraft` in `src/services/studio/schedule.ts`.
 - **409** unless the clip is in `review`.
 
@@ -244,7 +248,7 @@ type ClipCopy = {
   hashtags: string[];        // 3–5, without '#', already inside both captions
   keyword: string;           // the comment keyword on the CTA card
   variants: string[];        // other spellings that trigger the same DM
-  keyword_create: boolean;   // true = create the campaign on approve
+  keyword_create: boolean;   // informational: true = no active campaign answered the keyword when written
   dm: string;                // the full DM, from the tenant's template (buildDm)
   alt_text: string;
 };

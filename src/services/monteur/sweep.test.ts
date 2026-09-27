@@ -43,6 +43,8 @@ let answers: Record<string, unknown | Error>;
 let logs: { event: string; [k: string]: unknown }[];
 let copyCalledAt: number;
 let inFlight: string[];
+let inFlightVariants: string[];
+let saveClaimed: boolean;
 let existingTexts: string[];
 let recentCaptions: { caption: string; keyword: string }[];
 let previousCaller: CallModel;
@@ -57,6 +59,8 @@ beforeEach(() => {
     logs = [];
     copyCalledAt = -1;
     inFlight = [];
+    inFlightVariants = [];
+    saveClaimed = true;
     existingTexts = [];
     recentCaptions = [];
     previousSink = setLogSink((_level, line) => { logs.push(JSON.parse(line)); });
@@ -76,7 +80,10 @@ beforeEach(() => {
         [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [{ lessons: [{ rule: 'ابدأ بالنتيجة', evidence: 'skip 40%' }] }] })],
         [/^SELECT caption FROM post_insights/, () => ({ rows: [{ caption: 'هذي أسرع طريقة تلخص فيها درس كامل\nbody' }, { caption: 'غلطة يسويها الكل' }] })],
         [/^SELECT text FROM clip_drafts/, () => ({ rows: existingTexts.map((text) => ({ text })) })],
-        [/^SELECT DISTINCT copy->>'keyword' AS keyword FROM clip_drafts/, () => ({ rows: inFlight.map((keyword) => ({ keyword })) })],
+        [/^SELECT copy->>'keyword' AS keyword, copy->'variants' AS variants FROM clip_drafts/, () => ({
+            rows: [...inFlight.map((keyword) => ({ keyword, variants: [] })), ...(inFlightVariants.length ? [{ keyword: null, variants: inFlightVariants }] : [])],
+        })],
+        [/^UPDATE monteur_sources SET pick = \$2::jsonb/, () => ({ rows: [], rowCount: saveClaimed ? 1 : 0 })],
         [/^SELECT copy->>'caption' AS caption, copy->>'keyword' AS keyword FROM clip_drafts/, () => ({ rows: recentCaptions })],
         [/^UPDATE monteur_sources SET status = 'rendering'/, () => ({ rows: handOffClaimed ? [{ id: SOURCE }] : [] })],
         [/^UPDATE monteur_sources SET status = 'no_clips'/, () => ({ rows: [{ id: SOURCE }] })],
@@ -175,6 +182,14 @@ describe('sweepMonteur — a pick', () => {
         assert.match(db.statements[save]!.sql, /WHERE id = \$1 AND status = 'picking' AND attempts = \$3/);
     });
 
+    it('spends nothing more when saving the pick finds another attempt holds the claim', async () => {
+        saveClaimed = false;
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'lost');
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick'], 'no copy call');
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+    });
+
     it('retries a failed copy on the saved pick, without sending the transcript again', async () => {
         await sweepMonteur(later());
         const record = JSON.parse(db.ran(/^UPDATE monteur_sources SET pick = \$2::jsonb/)[0]!.params[1]);
@@ -249,6 +264,13 @@ describe('sweepMonteur — keywords and asks', () => {
         inFlight = ['دفترها'];
         await sweepMonteur(later());
         assert.equal(savedCopy().keyword, 'ملاحظة');
+    });
+
+    it('never takes a keyword equal to, or overlapping, another reel’s variant', async () => {
+        inFlightVariants = ['دفتر'];
+        await sweepMonteur(later());
+        assert.equal(savedCopy().keyword, 'ملاحظة', 'equal to a variant is never shared: two campaigns would answer it');
+        assert.match(calls[1]!.turns[0]!.text, /Keywords in use: .*دفتر/, 'and the Marketer is told');
     });
 
     it('falls back to the pool when the model repeats a recent ask — never to cta.instagramAsk', async () => {

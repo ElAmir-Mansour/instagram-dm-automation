@@ -20,6 +20,7 @@ import type {
 import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
 import { seoForWriter } from '../growth/settings.js';
+import { inFlightTriggers } from '../monteur/keywords.js';
 import type { Carousel, Slide } from './carouselTypes.js';
 import {
     type Exec, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN, withTransaction,
@@ -400,7 +401,7 @@ function firstLine(text: string | null): string | null {
  *   - seo: the Growth settings' search keywords and hashtags (GROWTH.md §4); empty when unset
  */
 export async function buildGenContext(creatorId: string, settings?: StudioSettings): Promise<GenContext> {
-    const [studio, drafts, captions, accents, campaigns, seo] = await Promise.all([
+    const [studio, drafts, captions, accents, campaigns, seo, reels] = await Promise.all([
         settings ?? getStudioSettings(creatorId),
         queryRows<{ title: string | null; idea: string | null }>(
             `SELECT carousel->'slides'->0->>'title' AS title, input->>'idea' AS idea
@@ -426,6 +427,9 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
         ),
         // Fail-soft: without migration v22, or on a read error, the writer just gets no SEO hints.
         seoForWriter(creatorId),
+        // The Monteur's reels in flight have no campaign yet, but their keywords are taken all the
+        // same. Fail-soft: before migration v24 there are none.
+        inFlightTriggers(pool, creatorId).catch(() => ({ keywords: [], variants: [] })),
     ]);
     const topics = [
         ...drafts.map((d) => d.title?.trim() || d.idea?.trim() || null),
@@ -434,7 +438,7 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
     return {
         recentTopics: unique(topics),
         recentAccents: unique(accents.map((a) => a.accent).filter((a): a is string => Boolean(a))),
-        activeKeywords: unique(campaigns.flatMap((c) => (c.trigger_keyword ?? '').split(','))
+        activeKeywords: unique([...campaigns.flatMap((c) => (c.trigger_keyword ?? '').split(',')), ...reels.keywords, ...reels.variants]
             .map((k) => k.trim()).filter(Boolean)),
         palette: [...studio.brand.palette],
         settings: studio,

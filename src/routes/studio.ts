@@ -408,7 +408,8 @@ studioRouter.post('/monteur/clips/:id/approve', handle('monteur.approve_failed',
             campaign_created: outcome.campaign?.created ?? false,
         },
     });
-    res.json({ clip: outcome.clip, scheduled_time: outcome.scheduled_time });
+    // `campaign` says whether the keyword's campaign was created now or an active one reused.
+    res.json({ clip: outcome.clip, scheduled_time: outcome.scheduled_time, campaign: outcome.campaign });
 }));
 
 studioRouter.post('/monteur/clips/:id/reject', handle('monteur.reject_failed', 'Failed to reject the reel.', async (req, res) => {

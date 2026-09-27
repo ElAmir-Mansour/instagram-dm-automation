@@ -10,7 +10,7 @@ import type { ClipCopy } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { StudioError } from '../studio/common.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
-import { approveClip, localDay, metaPlatformFor, patchClip, rejectClip, rerenderClip, slotHolders } from './clips.js';
+import { approveClip, localDay, metaPlatformFor, patchClip, rejectClip, rerenderClip } from './clips.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -44,9 +44,10 @@ let monteur: Record<string, unknown>;
 let appSettings: Record<string, string>;
 let connection: Record<string, unknown> | null;
 let campaigns: Record<string, unknown>[];
-let posts: { platform: string; scheduled_time: Date; status: string }[];
+let posts: { platform: string; scheduled_time: Date; status: string; group_id: string | null }[];
 let siblings: { t: string }[];
 let inFlight: string[];
+let inFlightVariants: string[];
 let restoreSink: (() => void) | undefined;
 
 before(() => {
@@ -72,6 +73,7 @@ beforeEach(() => {
     posts = [];
     siblings = [];
     inFlight = [];
+    inFlightVariants = [];
     db.routes.push(
         [/^UPDATE clip_drafts c SET status = 'review', schedule = NULL/, () => ({ rows: [], rowCount: 0 })],
         [/^SELECT id, status, render FROM clip_drafts/, () => ({ rows: [clip] })],
@@ -84,12 +86,17 @@ beforeEach(() => {
             rows: [{ ...clip, status: lockedStatus ?? clip.status, copy: lockedCopy ?? clip.copy }],
         })],
         [/^SELECT schedule->>'scheduled_time' AS t FROM clip_drafts/, () => ({ rows: siblings })],
-        [/^SELECT DISTINCT copy->>'keyword' AS keyword FROM clip_drafts/, () => ({ rows: inFlight.map((keyword) => ({ keyword })) })],
-        [/^SELECT scheduled_time FROM scheduled_posts/, (p) => ({
-            rows: posts.filter((r) => r.status === 'PENDING' && (p[3] as string[]).includes(r.platform)).map((r) => ({ scheduled_time: r.scheduled_time })),
+        [/^SELECT copy->>'keyword' AS keyword, copy->'variants' AS variants FROM clip_drafts/, () => ({
+            rows: [...inFlight.map((keyword) => ({ keyword, variants: [] })), ...(inFlightVariants.length ? [{ keyword: null, variants: inFlightVariants }] : [])],
+        })],
+        // The slot rule, as the query states it: Meta rows hold a slot, and so does a TikTok row
+        // with no Meta sibling in its group.
+        [/^SELECT p\.scheduled_time FROM scheduled_posts p/, () => ({
+            rows: posts.filter((r) => r.status === 'PENDING' && (r.platform !== 'tiktok'
+                || !posts.some((m) => m.group_id === r.group_id && m.platform !== 'tiktok'))).map((r) => ({ scheduled_time: r.scheduled_time })),
         })],
         [/^INSERT INTO scheduled_posts/, (p) => {
-            posts.push({ platform: p[1], scheduled_time: p[4], status: 'PENDING' });
+            posts.push({ platform: p[1], scheduled_time: p[4], status: 'PENDING', group_id: p[6] });
             return { rows: [{ id: `row-${p[1]}-${posts.length}`, platform: p[1], group_id: p[6] }] };
         }],
         [/^INSERT INTO campaigns/, (p) => ({ rows: [{ id: 'campaign-1', trigger_keyword: p[1] }] })],
@@ -157,7 +164,7 @@ describe('approveClip — the rows', () => {
         const order = db.statements.map((s) => s.sql);
         const lock = order.findIndex((s) => /pg_advisory_xact_lock\(hashtextextended\(\$1, 0\)\)/.test(s));
         assert.ok(lock >= 0 && lock < order.findIndex((s) => /FOR UPDATE/.test(s)), 'the tenant lock comes first');
-        assert.equal(db.ran(/pg_advisory_xact_lock/)[0]!.params[0], `monteur.approve:${TENANT}`);
+        assert.equal(db.ran(/pg_advisory_xact_lock/)[0]!.params[0], `publishing:${TENANT}`, 'the lock the Studio’s schedule takes too');
     });
 
     it('posts to one Meta platform, or none, as the platforms say', async () => {
@@ -186,11 +193,16 @@ describe('approveClip — the rows', () => {
         assert.equal(db.ran(/FROM studio_settings|FOR UPDATE/).length, 0, 'no slot looked for, no transaction opened');
     });
 
-    it('frees a scheduled reel whose posts are gone before deciding', async () => {
+    it('frees a scheduled reel only when every post it names is gone and its time has not come', async () => {
         await approveClip(TENANT, CLIP, { scheduled_time: '2026-10-01T16:00:00Z' }, NOW).catch(() => undefined);
         const [release] = db.ran(/^UPDATE clip_drafts c SET status = 'review', schedule = NULL/);
         assert.deepEqual(release!.params, [TENANT, CLIP]);
-        assert.match(release!.sql, /NOT EXISTS \( SELECT 1 FROM scheduled_posts p WHERE p\.creator_id = c\.creator_id AND p\.status <> 'FAILED'/);
+        // Any named row still there keeps it scheduled, a FAILED one too: a partial `both` publish
+        // is stored FAILED with the live Facebook id, and a failed row can be retried from Posts.
+        assert.match(release!.sql, /NOT EXISTS \( SELECT 1 FROM scheduled_posts p WHERE p\.id::text IN \(COALESCE\(c\.schedule->>'meta_row_id', ''\), COALESCE\(c\.schedule->>'tiktok_row_id', ''\)\) \)/);
+        assert.doesNotMatch(release!.sql, /status <> 'FAILED'|p\.status/);
+        // A reel whose time has passed may have published before its rows were deleted.
+        assert.match(release!.sql, /\(c\.schedule->>'scheduled_time'\)::timestamptz > NOW\(\)/);
         assert.ok(db.statements.findIndex((s) => /SET status = 'review', schedule = NULL/.test(s.sql))
             < db.statements.findIndex((s) => /^SELECT id, status, render FROM clip_drafts/.test(s.sql)));
     });
@@ -221,14 +233,26 @@ describe('approveClip — the slot', () => {
     });
 
     it('gives two TikTok-only approvals two slots: its TikTok rows hold them', async () => {
-        assert.deepEqual(slotHolders(['tiktok']), ['tiktok']);
-        assert.deepEqual(slotHolders(['instagram', 'tiktok']), ['instagram', 'facebook', 'both']);
         monteur = { platforms: ['tiktok'], post_at: ['19:00'] };
         directPostReady(true);
         const first = await approveClip(TENANT, CLIP, {}, NOW);
         const second = await approveClip(TENANT, CLIP, {}, NOW);
         assert.equal(first.scheduled_time, '2026-09-27T16:00:00.000Z');
         assert.equal(second.scheduled_time, '2026-09-28T16:00:00.000Z', 'not the same instant twice');
+    });
+
+    it('keeps a TikTok-only reel’s slot after the platforms change, and shows it to every caller', async () => {
+        monteur = { platforms: ['tiktok'], post_at: ['19:00'] };
+        directPostReady(true);
+        const first = await approveClip(TENANT, CLIP, {}, NOW);
+        monteur = { platforms: ['instagram', 'tiktok'], post_at: ['19:00'] };
+        const second = await approveClip(TENANT, CLIP, {}, NOW);
+        assert.equal(first.scheduled_time, '2026-09-27T16:00:00.000Z');
+        assert.equal(second.scheduled_time, '2026-09-28T16:00:00.000Z', 'the TikTok-only row still holds today');
+        const tiktokTimes = posts.filter((r) => r.platform === 'tiktok').map((r) => new Date(r.scheduled_time).toISOString());
+        assert.equal(new Set(tiktokTimes).size, tiktokTimes.length, 'never two TikTok posts at one instant');
+        const [slotSql] = db.ran(/^SELECT p\.scheduled_time FROM scheduled_posts p/);
+        assert.match(slotSql!.sql, /p\.platform = 'tiktok' AND \(p\.group_id IS NULL OR NOT EXISTS \( SELECT 1 FROM scheduled_posts m WHERE m\.group_id = p\.group_id AND m\.platform <> 'tiktok'\)\)/);
     });
 
     it('never puts two reels of one video on the same day', async () => {
@@ -250,13 +274,13 @@ describe('approveClip — the campaign', () => {
         const outcome = await approveClip(TENANT, CLIP, { scheduled_time: '2026-10-01T16:00:00Z' }, NOW);
         const [insert] = db.ran(/^INSERT INTO campaigns/);
         assert.deepEqual(insert!.params, [TENANT, 'دفتر, دفاتر', 'هلا {username} 👋', null, null, true, 'word']);
-        assert.deepEqual(outcome.campaign, { id: 'campaign-1', trigger_keyword: 'دفتر, دفاتر', created: true });
+        assert.deepEqual(outcome.campaign, { id: 'campaign-1', keyword: 'دفتر', trigger_keyword: 'دفتر, دفاتر', created: true });
     });
 
     it('reuses an active campaign for every post that answers the keyword', async () => {
         campaigns = [{ id: 'old-1', trigger_keyword: 'دفت', is_active: true, post_id: null, match_mode: 'substring', created_at: new Date() }];
         const reused = await approveClip(TENANT, CLIP, { scheduled_time: '2026-10-01T16:00:00Z' }, NOW);
-        assert.deepEqual(reused.campaign, { id: 'old-1', trigger_keyword: 'دفت', created: false });
+        assert.deepEqual(reused.campaign, { id: 'old-1', keyword: 'دفتر', trigger_keyword: 'دفت', created: false }, 'the dashboard can say it was reused');
         assert.equal(db.ran(/^INSERT INTO campaigns/).length, 0);
     });
 
@@ -274,11 +298,23 @@ describe('approveClip — the campaign', () => {
         assert.equal(outcome.campaign?.created, true);
     });
 
-    it('refuses a keyword that sits inside a live keyword, writing nothing', async () => {
-        campaigns = [{ id: 'old-3', trigger_keyword: 'الدفتر', is_active: true, post_id: null, match_mode: 'substring', created_at: new Date() }];
+    it('does not refuse a word-mode keyword inside a longer live word: neither fires on the other', async () => {
+        campaigns = [
+            { id: 'old-3', trigger_keyword: 'الدفتر', is_active: true, post_id: null, match_mode: 'substring', created_at: new Date() },
+            { id: 'old-4', trigger_keyword: 'دفترها', is_active: true, post_id: null, match_mode: 'word', created_at: new Date() },
+        ];
+        const outcome = await approveClip(TENANT, CLIP, { scheduled_time: '2026-10-01T16:00:00Z' }, NOW);
+        assert.equal(outcome.campaign?.created, true);
+    });
+
+    it('checks every trigger, variants too: refuses one a live campaign would also answer, writing nothing', async () => {
+        campaigns = [{ id: 'old-5', trigger_keyword: 'سعر', is_active: true, post_id: null, match_mode: 'substring', created_at: new Date() }];
+        clip = { ...clip, copy: { ...COPY, variants: ['السعر'] } };
         await assert.rejects(approveClip(TENANT, CLIP, { scheduled_time: '2026-10-01T16:00:00Z' }, NOW), (err: unknown) =>
-            err instanceof StudioError && err.status === 409 && /copy\.keyword: «دفتر» sits inside the active keyword «الدفتر»/.test(err.message));
+            err instanceof StudioError && err.status === 409
+            && (err.problems ?? []).some((p) => /^copy\.variants: «السعر» would fire alongside the live keyword «سعر»/.test(p)));
         assert.equal(inserts().length, 0);
+        assert.equal(db.ran(/^INSERT INTO campaigns/).length, 0);
     });
 });
 
@@ -331,14 +367,36 @@ describe('patchClip', () => {
         assert.equal(renders().length, 1);
     });
 
-    it('refuses a keyword under 4 letters, or one overlapping a live or in-flight keyword', async () => {
+    it('refuses a keyword under 4 letters, or one that is another reel’s variant', async () => {
         await assert.rejects(patchClip(TENANT, CLIP, { copy: { keyword: 'دفت' } }), (err: unknown) =>
             err instanceof StudioError && err.status === 400 && /copy\.keyword must have at least 4 letters/.test(err.message));
-        campaigns = [{ trigger_keyword: 'ملاحظات_مهمة, other' }];
-        inFlight = ['برومبتات'];
+        inFlightVariants = ['برومبت'];
         await assert.rejects(patchClip(TENANT, CLIP, { copy: { keyword: 'برومبت' } }), (err: unknown) =>
-            err instanceof StudioError && err.status === 409 && (err.problems ?? []).some((p) => /^copy\.keyword: «برومبت» overlaps the active keyword «برومبتات»/.test(p)));
+            err instanceof StudioError && err.status === 409 && (err.problems ?? []).some((p) => /^copy\.keyword: «برومبت» is another reel's variant/.test(p)));
         assert.equal(db.ran(/^UPDATE/).length, 0);
+    });
+
+    it('accepts a word-mode keyword beside a longer one in flight or live: they never fire on each other', async () => {
+        inFlight = ['برومبتات'];
+        campaigns = [{ id: 'l', trigger_keyword: 'البرومبت', is_active: true, post_id: null, match_mode: 'word', created_at: new Date() }];
+        await patchClip(TENANT, CLIP, { copy: { keyword: 'برومبت' } });
+        assert.equal(db.ran(/^UPDATE clip_drafts SET title/).length, 1);
+    });
+
+    it('holds variants to the keyword’s checks: 3+ letters, and no real collision live or in flight', async () => {
+        await assert.rejects(patchClip(TENANT, CLIP, { copy: { variants: ['تم'] } }), (err: unknown) =>
+            err instanceof StudioError && err.status === 400 && /^copy\.variants must each have at least 3 letters/.test(err.message));
+        campaigns = [{ id: 'old', trigger_keyword: 'سعر', is_active: true, post_id: null, match_mode: 'substring', created_at: new Date() }];
+        await assert.rejects(patchClip(TENANT, CLIP, { copy: { variants: ['السعر'] } }), (err: unknown) =>
+            err instanceof StudioError && err.status === 409 && (err.problems ?? []).some((p) => /^copy\.variants: «السعر» would fire alongside the live keyword «سعر»/.test(p)));
+        campaigns = [];
+        inFlight = ['ملخص'];
+        await assert.rejects(patchClip(TENANT, CLIP, { copy: { variants: ['ملخص'] } }), (err: unknown) =>
+            err instanceof StudioError && err.status === 409 && (err.problems ?? []).some((p) => /^copy\.variants: «ملخص» is another reel's keyword or variant/.test(p)));
+        assert.equal(db.ran(/^UPDATE/).length, 0);
+        inFlight = [];
+        await patchClip(TENANT, CLIP, { copy: { variants: ['دفاتر', 'دفتر'] } });
+        assert.deepEqual(JSON.parse(db.ran(/^UPDATE clip_drafts SET title/)[0]!.params[3]).variants, ['دفاتر'], 'the keyword itself is dropped');
     });
 
     it('accepts a keyword equal to one in flight: the two reels share the campaign', async () => {

@@ -85,14 +85,15 @@ describe('getMonteurView', () => {
         assert.equal((await getMonteurView(TENANT, NOW)).clips[0]!.tiktok_privacy, 'SELF_ONLY');
     });
 
-    it('lets a TikTok-only Monteur’s own rows hold next_slot', async () => {
-        monteur = { ...monteur, platforms: ['tiktok'] };
-        await getMonteurView(TENANT, NOW);
-        assert.deepEqual(db.ran(/^SELECT scheduled_time FROM scheduled_posts/)[0]!.params[3], ['tiktok']);
-        monteur = { ...monteur, platforms: ['facebook', 'tiktok'] };
-        db.statements.length = 0;
-        await getMonteurView(TENANT, NOW);
-        assert.deepEqual(db.ran(/^SELECT scheduled_time FROM scheduled_posts/)[0]!.params[3], ['instagram', 'facebook', 'both']);
+    it('finds next_slot with the one slot rule every caller uses, whatever the platforms', async () => {
+        for (const platforms of [['tiktok'], ['facebook', 'tiktok']]) {
+            monteur = { ...monteur, platforms };
+            db.statements.length = 0;
+            await getMonteurView(TENANT, NOW);
+            const [slots] = db.ran(/^SELECT p\.scheduled_time FROM scheduled_posts p/);
+            assert.match(slots!.sql, /p\.platform = 'tiktok' AND \(p\.group_id IS NULL OR NOT EXISTS/);
+            assert.equal(slots!.params.length, 3, 'no per-caller list of platforms');
+        }
     });
 
     it('shows the lessons in use, and beside them the latest run — a failed refresh included', async () => {

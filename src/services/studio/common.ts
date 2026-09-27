@@ -54,6 +54,15 @@ export async function withTransaction<T>(fn: (client: Exec) => Promise<T>): Prom
     }
 }
 
+/**
+ * One tenant's campaign-and-post writes, one at a time: the Studio's schedule and the Monteur's
+ * approve both choose a slot or plan a campaign and then insert, so two at once could take the
+ * same slot or create two campaigns on one keyword. Held until the transaction ends.
+ */
+export async function lockTenantPublishing(exec: Exec, creatorId: string): Promise<void> {
+    await exec.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`publishing:${creatorId}`]);
+}
+
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
