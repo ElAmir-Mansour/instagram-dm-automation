@@ -82,19 +82,20 @@ export function parseSlotCount(raw: unknown): number {
     return Math.min(n, MAX_SLOT_COUNT);
 }
 
-/** The platforms whose PENDING rows hold a slot, by default: the Meta ones. */
-export const META_SLOT_HOLDERS: readonly string[] = ['instagram', 'facebook', 'both'];
-
 export interface SlotOptions {
-    /**
-     * `both` is Instagram + Facebook. By default a TikTok row holds no slot: in the Studio it is the
-     * sibling of a Meta post that already holds it. A caller whose posts go to TikTok alone (a
-     * TikTok-only Monteur) passes `['tiktok']`, or every one of its posts gets the same slot.
-     */
-    holders?: readonly string[];
     /** A transaction's client, when the caller holds a lock the choice must be made under. */
     exec?: Exec;
 }
+
+/**
+ * Which PENDING rows hold a slot. `both` is Instagram + Facebook. A TikTok row is usually the
+ * sibling of a Meta post that already holds its slot (same `group_id`); one with no Meta sibling —
+ * a TikTok-only reel, whatever the platforms are now — holds its own, or every such post, and
+ * whatever the Studio or the Monteur schedules next, would land on the same instant.
+ */
+export const SLOT_HOLDING_ROWS = `(p.platform IN ('instagram', 'facebook', 'both')
+            OR (p.platform = 'tiktok' AND (p.group_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM scheduled_posts m WHERE m.group_id = p.group_id AND m.platform <> 'tiktok'))))`;
 
 export async function nextFreeSlots(
     creatorId: string, schedule: ScheduleConfig, count: number, now: number = Date.now(), opts: SlotOptions = {}
@@ -102,12 +103,12 @@ export async function nextFreeSlots(
     const until = now + (HORIZON_DAYS + 1) * DAY_MS;
     const exec = opts.exec ?? pool;
     const { rows } = await exec.query<{ scheduled_time: Date }>(
-        `SELECT scheduled_time FROM scheduled_posts
-          WHERE creator_id = $1
-            AND status = 'PENDING'
-            AND platform = ANY($4::text[])
-            AND scheduled_time > $2 AND scheduled_time < $3`,
-        [creatorId, new Date(now - SLOT_HOLD_WINDOW_MS), new Date(until), [...(opts.holders ?? META_SLOT_HOLDERS)]]
+        `SELECT p.scheduled_time FROM scheduled_posts p
+          WHERE p.creator_id = $1
+            AND p.status = 'PENDING'
+            AND ${SLOT_HOLDING_ROWS}
+            AND p.scheduled_time > $2 AND p.scheduled_time < $3`,
+        [creatorId, new Date(now - SLOT_HOLD_WINDOW_MS), new Date(until)]
     );
     const taken = rows.map((r) => new Date(r.scheduled_time).getTime());
     return freeSlots(candidateSlots(schedule, now, HORIZON_DAYS), taken, count);

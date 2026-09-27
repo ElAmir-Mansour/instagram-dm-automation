@@ -258,6 +258,17 @@ describe('completeJob — render_carousel', () => {
         })]);
         routes.push([LATEST, () => ({ rows: [{ id: latest }] })]);
         routes.push([/^DELETE FROM media_uploads/, (params) => ({ rows: [], rowCount: params[1].length })]);
+        routes.push([/FROM app_settings WHERE key = \$1/, (params) => ({
+            rows: params[0] === 'app.public_base_url' ? [{ value: 'https://msg-response-auto.vercel.app', is_secret: false }] : [],
+        })]);
+    });
+
+    it('stores its slides on our own address, never the URLs the worker sent', async () => {
+        const evil = { ig: [`https://evil.example/api/uploads/${IG1}`, `https://evil.example/x/api/uploads/${IG2}.jpg`], tt: result.tt };
+        assert.equal(await completeJob(TENANT, JOB, evil), 'applied');
+        const render = JSON.parse(ran(/^UPDATE carousel_drafts SET render/)[0]!.params[1]);
+        assert.deepEqual(render.ig, [up(IG1), up(IG2)]);
+        assert.ok(!JSON.stringify(render).includes('evil.example'));
     });
 
     it('lands the render on the draft, marks it ready, and deletes the previous render’s uploads', async () => {

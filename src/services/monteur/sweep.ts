@@ -25,6 +25,7 @@ import { enqueueMonteurRender } from '../studio/jobs.js';
 import { getStudioSettings } from '../studio/settings.js';
 import { currentLessons, runDueAnalyst } from './analyst.js';
 import { askOf, writeCopy } from './copy.js';
+import { inFlightTriggers } from './keywords.js';
 import { pickClips, type PickOutcome } from './pick.js';
 import { usageFields } from './model.js';
 import { accentsFor, buildRenderPayload } from './render.js';
@@ -93,8 +94,9 @@ export interface PickContext {
     examples: string[];
     /** The words of every clip in flight or scheduled, and of every clip from the last 90 days. */
     existingTexts: string[];
-    /** Keywords reels in flight ask for: a new one must not overlap them. */
+    /** Keywords and variants reels in flight ask for: a new one must not overlap them. */
     inFlightKeywords: string[];
+    inFlightVariants: string[];
     /** The tenant's last 5 asks, as templates. */
     recentAsks: string[];
 }
@@ -117,11 +119,7 @@ export async function loadPickContext(creatorId: string): Promise<PickContext> {
                 AND (status IN ('rendering', 'review', 'scheduled') OR created_at > NOW() - make_interval(days => 90))`,
             [creatorId]
         ),
-        pool.query<{ keyword: string | null }>(
-            `SELECT DISTINCT copy->>'keyword' AS keyword FROM clip_drafts
-              WHERE creator_id = $1 AND status IN ('rendering', 'review', 'failed')`,
-            [creatorId]
-        ),
+        inFlightTriggers(pool, creatorId),
         pool.query<{ caption: string | null; keyword: string | null }>(
             `SELECT copy->>'caption' AS caption, copy->>'keyword' AS keyword FROM clip_drafts
               WHERE creator_id = $1
@@ -133,7 +131,8 @@ export async function loadPickContext(creatorId: string): Promise<PickContext> {
     return {
         examples: examples.rows.map((r) => firstLine(r.caption).slice(0, 120)).filter(Boolean),
         existingTexts: texts.rows.map((r) => r.text),
-        inFlightKeywords: keywords.rows.map((r) => r.keyword).filter((k): k is string => Boolean(k)),
+        inFlightKeywords: keywords.keywords,
+        inFlightVariants: keywords.variants,
         recentAsks: asks.rows.flatMap((r) => {
             const a = r.caption && r.keyword ? askOf(r.caption, r.keyword) : null;
             return a ? [a] : [];
@@ -257,11 +256,14 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
             });
             if (fresh.kept.length) {
                 record.saved = { topic: fresh.topic, clips: fresh.kept };
-                await pool.query(
+                const { rowCount } = await pool.query(
                     `UPDATE monteur_sources SET pick = $2::jsonb, updated_at = NOW()
                       WHERE id = $1 AND status = 'picking' AND attempts = $3`,
                     [source.id, JSON.stringify(record), source.attempts]
                 );
+                // Another attempt holds the claim now (this one ran past its 10 minutes): its own
+                // copy call will follow, so this one spends nothing more.
+                if (!rowCount) return { source_id: source.id, outcome: 'lost', clips: 0 };
             }
         }
 
@@ -277,7 +279,8 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
 
         const ctx = await buildGenContext(source.creator_id, settings);
         const copy = await writeCopy(picked.kept, picked.lines, settings, {
-            activeKeywords: ctx.activeKeywords, seo: ctx.seo, recentAsks: context.recentAsks, inFlightKeywords: context.inFlightKeywords,
+            activeKeywords: ctx.activeKeywords, seo: ctx.seo, recentAsks: context.recentAsks,
+            inFlightKeywords: context.inFlightKeywords, inFlightVariants: context.inFlightVariants,
         }, lessons, deadline);
         log('info', 'monteur.copy', {
             source_id: source.id, creator_id: source.creator_id, ...usageFields(copy.cost),

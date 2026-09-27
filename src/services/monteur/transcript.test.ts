@@ -242,3 +242,39 @@ describe('what the render gets', () => {
         assert.deepEqual(tiktokCtaLines(ELAMIR_SETTINGS), { line1: 'رابطه في البايو', line2: 'ادخل البروفايل واضغط الرابط 👆' });
     });
 });
+
+describe('snapBoundary — both sides of one forced break cut at the same point', () => {
+    // Continuous speech, 0.4 s a word, the only full stop at the very end: every line break is
+    // the 12 s forced one. Around one break the speaker pauses briefly at two commas:
+    //   «… w58, w59 | w60, w61 …»   (| is where the 12 s limit cut)
+    const r2 = (n: number) => Math.round(n * 100) / 100;
+    const w: TranscriptWord[] = [];
+    for (let i = 0; i < 59; i++) w.push([r2(i * 0.4), r2(i * 0.4 + 0.35), i === 58 ? 'w58,' : `w${i}`]);
+    w.push([23.75, 24.0, 'w59']);
+    w.push([24.05, 24.3, 'w60,']);
+    for (let i = 61; i < 120; i++) { const t0 = r2(24.5 + (i - 61) * 0.4); w.push([t0, r2(t0 + 0.35), i === 119 ? `w${i}.` : `w${i}`]); }
+    const lines = groupLines(w);
+    const at = lines.findIndex((l) => l.last === 59) + 1;
+
+    it('gives the clip ending at the break and the clip starting at it the same cut', () => {
+        assert.ok(at > 0 && lines[at - 1]!.forcedEnd && lines[at]!.forcedStart, 'the fixture has a forced break after w59');
+        const a = snapEdges(lines, w, 1, at)!;
+        const b = snapEdges(lines, w, at + 1, lines.length)!;
+        assert.ok(a && b);
+        assert.equal(a.endWord + 1, b.startWord, 'no word in both, none in neither');
+    });
+
+    it('keeps both back-to-back clips, sharing no word', () => {
+        const scores = { hook: 3, alone: 3, payoff: 3, send: 3 };
+        const { kept } = chooseClips({
+            clips: [
+                { start_line: 1, end_line: at, title: 'A', hook_type: 'promise', why: 'w', scores },
+                { start_line: at + 1, end_line: lines.length, title: 'B', hook_type: 'promise', why: 'w', scores: { ...scores, send: 2 } },
+            ],
+        }, lines, w, { minSeconds: 20, maxSeconds: 45, keep: 2, duration: 60 });
+        assert.equal(kept.length, 2);
+        const [first, second] = [...kept].sort((x, y) => x.startWord - y.startWord);
+        assert.ok(first!.endWord < second!.startWord);
+        assert.ok(first!.end <= second!.start, 'nor a second of audio');
+    });
+});

@@ -24,17 +24,19 @@ import type {
 import { normalizeArabic } from '../../utils/arabic.js';
 import { log } from '../../utils/log.js';
 import { getTikTokPostingFlags } from '../appSettings.js';
-import { matchCampaign } from '../matching.js';
-import { type Exec, isPlainObject, problemsError, StudioError, unique, withTransaction } from '../studio/common.js';
-import { chooseKeyword } from '../studio/generate.js';
+import { matchCampaign, triggerClashes } from '../matching.js';
+import {
+    type Exec, isPlainObject, lockTenantPublishing, problemsError, StudioError, unique, withTransaction,
+} from '../studio/common.js';
 import {
     cancelClipRenders, deleteUnreferencedUploads, enqueueMonteurRender, markSourceDoneIfRendered,
 } from '../studio/jobs.js';
 import { tiktokLine } from '../studio/prompts.js';
 import { assertDirectPostReady, studioTikTokOptions } from '../studio/schedule.js';
 import { getStudioSettings } from '../studio/settings.js';
-import { META_SLOT_HOLDERS, nextFreeSlots } from '../studio/slots.js';
+import { nextFreeSlots } from '../studio/slots.js';
 import { keywordLongEnough, MIN_KEYWORD_LETTERS } from './copy.js';
+import { inFlightTriggers } from './keywords.js';
 import { accentsFor, buildRenderPayload, clipAccent } from './render.js';
 import { MAX_TITLE } from './transcript.js';
 import { type ClipView, loadClipView, releaseOrphanedClips } from './view.js';
@@ -45,6 +47,8 @@ const MAX_DM = 4000;
 const MAX_ALT_TEXT = 1000;
 const MAX_HASHTAGS = 30;
 const MAX_VARIANTS = 10;
+/** A variant shorter than this fires on too much, as a short keyword would (MONTEUR.md §6.1). */
+export const MIN_VARIANT_LETTERS = 3;
 /** How many upcoming free slots Approve looks through for a day this video has no reel on. */
 const SLOT_LOOKAHEAD = 30;
 const COPY_KEYS: readonly (keyof ClipCopy)[] = [
@@ -67,12 +71,48 @@ async function lockClip(exec: Exec, creatorId: string, clipId: string): Promise<
     return rows[0];
 }
 
-/** Every keyword a live campaign answers, one per entry. */
-async function activeKeywordsOf(exec: Exec, creatorId: string): Promise<string[]> {
-    const { rows } = await exec.query<{ trigger_keyword: string | null }>(
-        'SELECT trigger_keyword FROM campaigns WHERE creator_id = $1 AND is_active = TRUE', [creatorId]
-    );
-    return unique(rows.flatMap((r) => (r.trigger_keyword ?? '').split(',')).map((k) => k.trim()).filter(Boolean));
+const letterCount = (s: string): number => (s.match(/\p{L}/gu) ?? []).length;
+const norm = (s: string): string => normalizeArabic(s.trim());
+
+async function liveCampaigns(exec: Exec, creatorId: string): Promise<CampaignRow[]> {
+    const { rows } = await exec.query<CampaignRow>('SELECT * FROM campaigns WHERE creator_id = $1 AND is_active = TRUE', [creatorId]);
+    return rows;
+}
+
+/**
+ * Every real collision the reel's triggers — its keyword and its variants — would have once its
+ * campaign is created, each as a problem starting with its field. Two sources:
+ *
+ *   live campaigns    `triggerClashes`, judged by each side's match mode; skipped when a live
+ *                     campaign already answers the keyword, since Approve then reuses it and
+ *                     creates nothing
+ *   reels in flight   they become word-mode campaigns, which collide only on the same word: a
+ *                     keyword equal to another reel's keyword is shared (one campaign), but any
+ *                     other equality — a variant equal to their keyword or variant, or our keyword
+ *                     equal to their variant — makes two campaigns fire on one word
+ */
+export async function triggerProblems(
+    exec: Exec, creatorId: string, clipId: string | null, copy: Pick<ClipCopy, 'keyword' | 'variants'>
+): Promise<string[]> {
+    const problems: string[] = [];
+    const variants = copy.variants ?? [];
+    const label = (t: string): string => (norm(t) === norm(copy.keyword) ? 'copy.keyword' : 'copy.variants');
+    const live = await liveCampaigns(exec, creatorId);
+    if (!matchCampaign(copy.keyword, '', live)) {
+        for (const c of triggerClashes(unique([copy.keyword, ...variants]), 'word', live)) {
+            problems.push(`${label(c.trigger)}: «${c.trigger}» would fire alongside the live keyword «${c.live}»`);
+        }
+    }
+    const other = await inFlightTriggers(exec, creatorId, clipId);
+    const theirVariants = new Set(other.variants.map(norm));
+    const theirWords = new Set([...other.keywords, ...other.variants].map(norm));
+    if (theirVariants.has(norm(copy.keyword))) {
+        problems.push(`copy.keyword: «${copy.keyword}» is another reel's variant: both campaigns would answer it`);
+    }
+    for (const v of variants) {
+        if (theirWords.has(norm(v))) problems.push(`copy.variants: «${v}» is another reel's keyword or variant: both campaigns would answer it`);
+    }
+    return problems;
 }
 
 // ─── PATCH ──────────────────────────────────────────────────────────────────────────────
@@ -133,7 +173,9 @@ export function parseClipPatch(body: unknown): ClipPatch {
                 const list = unique((v as string[]).map((w) => (strip ? w.trim().replace(/^#+/, '') : w.trim())).filter(Boolean));
                 if (list.some((w) => !isOneWord(w))) problems.push(`copy.${key} must be single words of at most 30 characters`);
                 else if (list.length > max) problems.push(`copy.${key} holds at most ${max}`);
-                else patch.copy[key] = list;
+                else if (key === 'variants' && list.some((w) => letterCount(w) < MIN_VARIANT_LETTERS)) {
+                    problems.push(`copy.variants must each have at least ${MIN_VARIANT_LETTERS} letters: a shorter one fires on too many comments`);
+                } else patch.copy[key] = list;
             };
             words('hashtags', MAX_HASHTAGS, true);
             words('variants', MAX_VARIANTS, false);
@@ -164,11 +206,11 @@ async function queueRender(exec: Exec, creatorId: string, clip: ClipDraftRow, ti
  * again; a caption-only change keeps the video.
  *
  * A new keyword — any change of spelling counts, since the video shows it as typed — must be one
- * word of 4+ letters that neither contains nor sits inside a live campaign's keyword or another
- * reel's in flight (an equal one is shared). It carries the caption's «keyword» with it unless a
- * caption is sent too, drops the old keyword's variants, and is marked for a campaign. A caption
- * or keyword change must leave the caption asking for «keyword», or every comment would arrive
- * and none would be answered.
+ * word of 4+ letters, and new variants words of 3+; together they must not collide, for real,
+ * with a live campaign or another reel in flight (`triggerProblems`). A new keyword carries the
+ * caption's «keyword» with it unless a caption is sent too, drops the old keyword's variants, and
+ * is marked for a campaign. A caption or keyword change must leave the caption asking for
+ * «keyword», or every comment would arrive and none would be answered.
  */
 export async function patchClip(creatorId: string, clipId: string, body: unknown): Promise<ClipView> {
     const patch = parseClipPatch(body);
@@ -182,17 +224,15 @@ export async function patchClip(creatorId: string, clipId: string, body: unknown
         const copy: ClipCopy = { ...before, ...patch.copy };
         const keywordChanged = patch.copy.keyword !== undefined && patch.copy.keyword !== before.keyword;
         if (keywordChanged) {
-            const { rows } = await client.query<{ keyword: string | null }>(
-                `SELECT DISTINCT copy->>'keyword' AS keyword FROM clip_drafts
-                  WHERE creator_id = $1 AND id <> $2 AND status IN ('rendering', 'review', 'failed')`,
-                [creatorId, clip.id]
-            );
-            const inFlight = rows.map((r) => r.keyword).filter((k): k is string => Boolean(k));
-            const { choice, rejected } = chooseKeyword([copy.keyword], [...await activeKeywordsOf(client, creatorId), ...inFlight]);
-            if (!choice) throw problemsError(rejected.map((r) => `copy.keyword: ${r}`), 'this clip', 409);
             if (patch.copy.caption === undefined) copy.caption = copy.caption.split(`«${before.keyword}»`).join(`«${copy.keyword}»`);
             if (patch.copy.variants === undefined) copy.variants = [];
             if (patch.copy.keyword_create === undefined) copy.keyword_create = true;
+        }
+        // A variant spelled like the keyword adds nothing.
+        copy.variants = (copy.variants ?? []).filter((v) => norm(v) !== norm(copy.keyword));
+        if (keywordChanged || patch.copy.variants !== undefined) {
+            const clashes = await triggerProblems(client, creatorId, clip.id, copy);
+            if (clashes.length) throw problemsError(clashes, 'this clip', 409);
         }
 
         const problems: string[] = [];
@@ -246,24 +286,17 @@ type CampaignPlan =
 async function planCampaign(exec: Exec, creatorId: string, copy: ClipCopy): Promise<CampaignPlan> {
     const keyword = copy.keyword?.trim();
     if (!keyword) throw new StudioError(400, 'copy.keyword: this reel has no keyword to answer.');
-    const { rows: active } = await exec.query<CampaignRow>(
-        'SELECT * FROM campaigns WHERE creator_id = $1 AND is_active = TRUE', [creatorId]
-    );
+    const active = await liveCampaigns(exec, creatorId);
     // '' as the post id: only campaigns for every post can answer a post that is not live yet.
     const existing = matchCampaign(keyword, '', active);
     if (existing) return { create: false, existing };
-    const k = normalizeArabic(keyword);
-    for (const c of active) {
-        if (c.post_id) continue;
-        const inside = c.trigger_keyword.split(',').map((t) => t.trim()).find((t) => {
-            const n = normalizeArabic(t);
-            return n !== k && n.includes(k);
-        });
-        if (inside) {
-            throw new StudioError(409, `copy.keyword: «${keyword}» sits inside the active keyword «${inside}». Change the reel's keyword.`);
-        }
+    // Every trigger the new word-mode campaign would carry, not just the keyword.
+    const triggers = unique([keyword, ...(copy.variants ?? [])]);
+    const clashes = triggerClashes(triggers, 'word', active);
+    if (clashes.length) {
+        throw problemsError(clashes.map((c) => `${norm(c.trigger) === norm(keyword) ? 'copy.keyword' : 'copy.variants'}: «${c.trigger}» would fire alongside the live keyword «${c.live}»`), 'this reel\'s keywords', 409);
     }
-    return { create: true, triggers: unique([keyword, ...(copy.variants ?? [])]).join(', '), dm: copy.dm };
+    return { create: true, triggers: triggers.join(', '), dm: copy.dm };
 }
 
 /** Instagram and Facebook go out as one post: `both`, or the one of them that is on. */
@@ -271,11 +304,6 @@ export function metaPlatformFor(platforms: readonly string[]): 'both' | 'instagr
     const ig = platforms.includes('instagram');
     const fb = platforms.includes('facebook');
     return ig && fb ? 'both' : ig ? 'instagram' : fb ? 'facebook' : null;
-}
-
-/** Which platforms' rows hold a slot: the Meta ones, or TikTok's when it is the only platform. */
-export function slotHolders(platforms: readonly string[]): readonly string[] {
-    return metaPlatformFor(platforms) ? META_SLOT_HOLDERS : ['tiktok'];
 }
 
 /** The local calendar day of an instant in `timeZone`, `YYYY-MM-DD`. */
@@ -308,7 +336,8 @@ export interface ApproveOutcome {
     clip: ClipView;
     scheduled_time: string;
     rows: ScheduledPostRow[];
-    campaign: { id: string; trigger_keyword: string; created: boolean } | null;
+    /** The campaign that answers the reel's keyword: created now, or an active one reused. Null without a Meta post. */
+    campaign: { id: string; keyword: string; trigger_keyword: string; created: boolean } | null;
 }
 
 /**
@@ -355,9 +384,10 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
     }
 
     return withTransaction(async (client) => {
-        // One approve at a time per tenant: the slot, the campaign and the rows are chosen and
-        // written under this lock, so a second approve sees the first's rows.
-        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`monteur.approve:${creatorId}`]);
+        // One publishing write at a time per tenant — this approve, another, or the Studio's
+        // schedule: the slot, the campaign and the rows are chosen and written under this lock,
+        // so the next one sees them.
+        await lockTenantPublishing(client, creatorId);
         const locked = await lockClip(client, creatorId, clip.id);
         if (locked.status !== 'review' || locked.render?.job_id !== clip.render!.job_id) {
             throw new StudioError(409, 'The reel changed while it was being approved. Reload it and try again.');
@@ -378,7 +408,7 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
             }
             when = requested;
         } else {
-            const free = await nextFreeSlots(creatorId, { timezone, slots }, SLOT_LOOKAHEAD, now, { holders: slotHolders(platforms), exec: client });
+            const free = await nextFreeSlots(creatorId, { timezone, slots }, SLOT_LOOKAHEAD, now, { exec: client });
             const slot = free.find((s) => !taken.has(localDay(Date.parse(s), timezone)));
             if (!slot) throw new StudioError(409, 'There is no free posting slot on a day this video has no reel: choose a time.');
             when = new Date(slot);
@@ -415,9 +445,9 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
                  VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
                 [creatorId, campaignPlan.triggers, campaignPlan.dm, null, null, true, 'word']
             );
-            campaign = { id: created[0]!.id, trigger_keyword: created[0]!.trigger_keyword, created: true };
+            campaign = { id: created[0]!.id, keyword: copy.keyword, trigger_keyword: created[0]!.trigger_keyword, created: true };
         } else if (campaignPlan) {
-            campaign = { id: campaignPlan.existing.id, trigger_keyword: campaignPlan.existing.trigger_keyword, created: false };
+            campaign = { id: campaignPlan.existing.id, keyword: copy.keyword, trigger_keyword: campaignPlan.existing.trigger_keyword, created: false };
         }
 
         const schedule: ClipSchedule = {

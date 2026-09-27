@@ -340,3 +340,24 @@ describe('scheduleDraft — Instagram reach levers (GROWTH.md §4)', () => {
         assert.equal(inserts().length, 0);
     });
 });
+
+describe('scheduleDraft — beside the Monteur', () => {
+    it('plans the campaign and inserts under the tenant’s publishing lock, the one a reel’s approve takes', async () => {
+        await scheduleDraft(TENANT, DRAFT, { scheduled_time: WHEN, create_campaign: true });
+        const order = statements.map((s) => s.sql);
+        const lock = order.findIndex((s) => /pg_advisory_xact_lock\(hashtextextended\(\$1, 0\)\)/.test(s));
+        const plan = order.findIndex((s) => /^SELECT \* FROM campaigns WHERE creator_id = \$1 AND is_active = TRUE/.test(s));
+        const insert = order.findIndex((s) => /^INSERT INTO campaigns/.test(s));
+        assert.ok(lock >= 0 && lock < plan && plan < insert, 'the plan is made where a reel approved at the same moment is seen');
+        assert.equal(statements[lock]!.params[0], `publishing:${TENANT}`);
+    });
+
+    it('refuses a substring campaign that would also answer a live reel’s longer word', async () => {
+        campaigns = [{ id: 'reel', trigger_keyword: 'الدفتر', is_active: true, post_id: null, match_mode: 'word', created_at: new Date() }];
+        await assert.rejects(scheduleDraft(TENANT, DRAFT, { scheduled_time: WHEN, create_campaign: true }), (err: unknown) =>
+            err instanceof StudioError && err.status === 409
+            && (err.problems ?? []).some((p) => /^campaign\.keyword: «دفتر» would fire alongside the live keyword «الدفتر»/.test(p)));
+        assert.equal(inserts().length, 0);
+        assert.ok(!statements.some((s) => /^INSERT INTO campaigns/.test(s.sql)));
+    });
+});

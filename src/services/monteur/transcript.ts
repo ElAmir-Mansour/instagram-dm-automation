@@ -151,20 +151,35 @@ function cutBefore(words: readonly TranscriptWord[], j: number): boolean {
     return ANY_PUNCTUATION.test(words[j - 1]![2].trim()) || words[j]![0] - words[j - 1]![1] >= SNAP_PAUSE_S - EPSILON;
 }
 
-/** The word nearest `at` (by time) at which `ok` holds, within the snap window, or null. */
-function nearestWord(words: readonly TranscriptWord[], at: number, ok: (j: number) => boolean, time: (j: number) => number): number | null {
+/** The instant a cut before word `k` falls at: the middle of the gap between words k−1 and k. */
+function cutInstant(words: readonly TranscriptWord[], k: number): number {
+    if (k <= 0) return words[0]![0];
+    if (k >= words.length) return words[words.length - 1]![1];
+    return (words[k - 1]![1] + words[k]![0]) / 2;
+}
+
+/**
+ * Where a boundary the 12 s limit made — a cut before word `b` — really cuts: before the word
+ * whose cut is natural (punctuation, or a 0.3 s pause) and nearest the boundary's own instant,
+ * within 2 s; the earlier on a tie. Null when there is none. The clip ending at the boundary and
+ * the clip starting at it both ask with the same `b`, so they cut at the same point and can
+ * never share a word.
+ */
+export function snapBoundary(words: readonly TranscriptWord[], b: number): number | null {
+    const at = cutInstant(words, b);
     let best: number | null = null;
-    for (let j = 0; j < words.length; j++) {
-        const d = Math.abs(time(j) - at);
-        if (d > SNAP_WINDOW_S + EPSILON || !ok(j)) continue;
-        if (best === null || d < Math.abs(time(best) - at)) best = j;
+    for (let k = 1; k < words.length; k++) {
+        if (!cutBefore(words, k)) continue;
+        const d = Math.abs(cutInstant(words, k) - at);
+        if (d > SNAP_WINDOW_S + EPSILON) continue;
+        if (best === null || d < Math.abs(cutInstant(words, best) - at) - EPSILON) best = k;
     }
     return best;
 }
 
 /**
  * The clip's first and last word. An edge the 12 s limit made is moved to the nearest natural
- * one; null when there is none within 2 s.
+ * cut (`snapBoundary`); null when there is none within 2 s.
  */
 export function snapEdges(
     lines: readonly TranscriptLine[], words: readonly TranscriptWord[], startLine: number, endLine: number
@@ -174,14 +189,14 @@ export function snapEdges(
     let startWord = startL.first;
     let endWord = endL.last;
     if (startL.forcedStart) {
-        const j = nearestWord(words, words[startWord]![0], (k) => cutBefore(words, k) && k <= endWord, (k) => words[k]![0]);
-        if (j === null) return null;
-        startWord = j;
+        const b = snapBoundary(words, startL.first);
+        if (b === null) return null;
+        startWord = b;
     }
     if (endL.forcedEnd) {
-        const j = nearestWord(words, words[endWord]![1], (k) => cutBefore(words, k + 1) && k >= startWord, (k) => words[k]![1]);
-        if (j === null) return null;
-        endWord = j;
+        const b = snapBoundary(words, endL.last + 1);
+        if (b === null) return null;
+        endWord = b - 1;
     }
     return startWord <= endWord ? { startWord, endWord } : null;
 }

@@ -47,7 +47,7 @@ describe('latestRunAt / nextRunAt', () => {
 describe('enqueueDueMonteurScan', () => {
     let db: FakeDb;
     let monteur: Record<string, unknown> | null;
-    let scans: { created_at: number; status: string }[];
+    let scans: { created_at: number; status: string; folder?: string }[];
     let restoreSink: (() => void) | undefined;
 
     before(() => {
@@ -62,9 +62,11 @@ describe('enqueueDueMonteurScan', () => {
         scans = [];
         db.routes.push(
             [/FROM studio_settings/, () => ({ rows: [{ schedule: { timezone: 'Asia/Riyadh', slots: ['13:00'] }, monteur }] })],
-            // The due check: a scan created at or after the due instant, or one still open.
+            // The due check: a scan still open, or one that finished since the due instant for
+            // the folder set now.
             [/^SELECT id FROM studio_jobs WHERE creator_id = \$1 AND kind = 'monteur_scan'/, (p) => ({
-                rows: scans.filter((s) => s.created_at >= (p[1] as Date).getTime() || ['pending', 'claimed'].includes(s.status))
+                rows: scans.filter((s) => ['pending', 'claimed'].includes(s.status)
+                    || (s.status === 'done' && s.created_at >= (p[1] as Date).getTime() && (s.folder ?? '/Users/me/Movies/Monteur') === p[2]))
                     .map(() => ({ id: 'scan' })),
             })],
             [/^SELECT content_key FROM monteur_sources/, () => ({ rows: [{ content_key: 'a'.repeat(40) }, { content_key: 'b'.repeat(40) }] })],
@@ -101,7 +103,8 @@ describe('enqueueDueMonteurScan', () => {
         const [check] = db.ran(/kind = 'monteur_scan'/);
         assert.equal(iso((check!.params[1] as Date).getTime()), '2026-09-27T04:00:00.000Z', 'due = today’s 07:00 Riyadh');
         // The fake evaluates the condition in JS, so pin the SQL that Postgres evaluates too.
-        assert.match(check!.sql, /WHERE creator_id = \$1 AND kind = 'monteur_scan' AND \(created_at >= \$2 OR status IN \('pending', 'claimed'\)\) LIMIT 1$/);
+        assert.match(check!.sql, /WHERE creator_id = \$1 AND kind = 'monteur_scan' AND \(status IN \('pending', 'claimed'\) OR \(status = 'done' AND created_at >= \$2 AND payload->>'folder' = \$3\)\) LIMIT 1$/);
+        assert.equal(check!.params[2], '/Users/me/Movies/Monteur');
     });
 
     it('scans a Mac that slept through 07:00 the next time it polls, once', async () => {
@@ -124,6 +127,17 @@ describe('enqueueDueMonteurScan', () => {
         assert.equal(await enqueueDueMonteurScan(TENANT, at('2026-09-27T10:00:00Z')), null);
         scans = [{ created_at: at('2026-09-27T03:30:00Z'), status: 'done' }]; // at 06:30, before 07:00
         assert.ok(await enqueueDueMonteurScan(TENANT, at('2026-09-27T04:10:00Z')));
+    });
+
+    it('does not count a scan that failed or was cancelled today as today’s run', async () => {
+        scans = [{ created_at: at('2026-09-27T04:02:00Z'), status: 'failed' }];
+        assert.ok(await enqueueDueMonteurScan(TENANT, at('2026-09-27T05:00:00Z')));
+    });
+
+    it('scans the new folder the day the folder changed, though the old one was scanned already', async () => {
+        scans = [{ created_at: at('2026-09-27T04:02:00Z'), status: 'done', folder: '/Users/me/Old' }];
+        const job = await enqueueDueMonteurScan(TENANT, at('2026-09-27T05:00:00Z'));
+        assert.equal((job?.payload as { folder: string }).folder, '/Users/me/Movies/Monteur');
     });
 
     it('waits while yesterday’s scan is still open, instead of queueing a second', async () => {
@@ -165,11 +179,22 @@ describe('Run now and Choose folder', () => {
         assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 0);
     });
 
+    it('replaces a folder dialog nobody picked up within 10 minutes, rather than handing it back', async () => {
+        open = { id: 'job-old', kind: 'pick_folder', status: 'pending', payload: {}, created_at: new Date(Date.now() - 11 * 60_000) };
+        const job = await requestFolderPick(TENANT);
+        assert.equal(job.id, 'job-new');
+        const [expire] = db.ran(/^UPDATE studio_jobs SET status = 'failed'/);
+        assert.deepEqual(expire!.params.slice(0, 2), ['job-old', TENANT]);
+        assert.match(expire!.params[2], /Nobody was waiting for the folder dialog/);
+        open = { id: 'job-shown', kind: 'pick_folder', status: 'claimed', payload: {}, created_at: new Date(Date.now() - 11 * 60_000) };
+        assert.equal((await requestFolderPick(TENANT)).id, 'job-shown', 'one on screen now is left alone');
+    });
+
     it('asks the worker for the folder dialog in the tenant’s language, once at a time', async () => {
         const job = await requestFolderPick(TENANT);
         assert.equal(job.kind, 'pick_folder');
         assert.match((job.payload as { prompt: string }).prompt, /المونتير/);
-        open = { id: 'job-open', kind: 'pick_folder', status: 'pending', payload: {} };
+        open = { id: 'job-open', kind: 'pick_folder', status: 'pending', payload: {}, created_at: new Date() };
         assert.equal((await requestFolderPick(TENANT)).id, 'job-open');
     });
 });

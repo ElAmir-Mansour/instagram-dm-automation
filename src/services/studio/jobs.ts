@@ -693,9 +693,14 @@ async function applyRender(
 ): Promise<{ outcome: CompleteOutcome; stored: unknown }> {
     const payload = isPlainObject(job.payload) ? (job.payload as Partial<RenderCarouselPayload>) : {};
     const slides = isPlainObject(payload.carousel) && Array.isArray(payload.carousel.slides) ? payload.carousel.slides.length : null;
-    const render = parseRenderResult(result, slides);
+    const reported = parseRenderResult(result, slides);
+    await assertOwnUploads(exec, job.creator_id, [...reported.ig, ...reported.tt]);
+    // Kept by id, rebuilt on our own address, like a reel's.
+    const render = {
+        ig: await ownUploadUrls(reported.ig.map((url) => uploadIdFromUrl(url)!)),
+        tt: await ownUploadUrls(reported.tt.map((url) => uploadIdFromUrl(url)!)),
+    };
     const urls = [...render.ig, ...render.tt];
-    await assertOwnUploads(exec, job.creator_id, urls);
 
     const draftId = payloadId(job, 'draftId');
     const { rows } = draftId
@@ -849,12 +854,19 @@ async function checkRenderFiles(exec: Exec, creatorId: string, wanted: readonly 
     if (problems.length) throw problemsError(problems, 'the render result');
 }
 
-/** This app's own URL for an upload, on its public address: never a string a worker sent. */
-async function ownUploadUrl(id: string): Promise<string> {
+/**
+ * This app's own URLs for uploads, on its public address: never the strings a worker sent. A
+ * worker could otherwise name one of our ids inside another host's URL, and every reader of the
+ * stored URL — the dashboard's preview, Meta fetching the post — would go to that host instead.
+ */
+async function ownUploadUrls(ids: readonly string[]): Promise<string[]> {
     const base = await getPublicBaseUrl(null);
     if (!base) throw new StudioError(500, 'No public address for this app: set it in Settings → TikTok app.');
-    return (await getMediaStore()).publicUrl(id, base);
+    const store = await getMediaStore();
+    return ids.map((id) => store.publicUrl(id, base));
 }
+
+const ownUploadUrl = async (id: string): Promise<string> => (await ownUploadUrls([id]))[0]!;
 
 /**
  * Land a reel on its clip, or drop it. Dropped when it is not the clip's latest render job (an

@@ -15,7 +15,9 @@ import { pool } from '../../config/db.js';
 import type { MonteurConfig, MonteurScanPayload, PickFolderPayload } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
 import { type Exec, StudioError } from '../studio/common.js';
-import { enqueueJob, findOpenJob, type StudioJobView } from '../studio/jobs.js';
+import {
+    enqueueJob, findOpenJob, PICK_FOLDER_EXPIRED_ERROR, PICK_FOLDER_TTL_MINUTES, type StudioJobView,
+} from '../studio/jobs.js';
 import { getMonteurSettings, getStudioSettings } from '../studio/settings.js';
 import { zonedTimeToUtc, zoneOffsetMs } from '../studio/slots.js';
 
@@ -72,6 +74,9 @@ export function scanPayload(monteur: MonteurConfig, known: string[]): MonteurSca
 /**
  * Queue today's scan if it is due. Returns the job it queued, or null. Also null while a scan is
  * still open, however old: a worker that has not finished yesterday's does not need today's too.
+ *
+ * Only a scan that finished, of the folder set now, counts as today's run: one that failed, was
+ * cancelled, or scanned the folder before a change leaves today still to do.
  */
 export async function enqueueDueMonteurScan(creatorId: string, now: number = Date.now()): Promise<StudioJobView | null> {
     const { monteur: m, timezone } = await getMonteurSettings(creatorId);
@@ -80,9 +85,10 @@ export async function enqueueDueMonteurScan(creatorId: string, now: number = Dat
     const { rows } = await pool.query<{ id: string }>(
         `SELECT id FROM studio_jobs
           WHERE creator_id = $1 AND kind = 'monteur_scan'
-            AND (created_at >= $2 OR status IN ('pending', 'claimed'))
+            AND (status IN ('pending', 'claimed')
+                 OR (status = 'done' AND created_at >= $2 AND payload->>'folder' = $3))
           LIMIT 1`,
-        [creatorId, new Date(due)]
+        [creatorId, new Date(due), m.folder]
     );
     if (rows[0]) return null;
     const job = await enqueueJob(pool, creatorId, 'monteur_scan', scanPayload(m, await knownKeys(pool, creatorId)));
@@ -112,10 +118,22 @@ export async function runMonteurNow(creatorId: string): Promise<StudioJobView> {
     return enqueueJob(pool, creatorId, 'monteur_scan', scanPayload(monteur, await knownKeys(pool, creatorId)));
 }
 
-/** POST /monteur/pick-folder: the worker shows the native folder dialog. One at a time. */
-export async function requestFolderPick(creatorId: string): Promise<StudioJobView> {
+/**
+ * POST /monteur/pick-folder: the worker shows the native folder dialog. One at a time — but one
+ * still waiting past its 10 minutes is expired and replaced: the claim would fail it anyway,
+ * rather than pop a dialog up when nobody is at the Mac.
+ */
+export async function requestFolderPick(creatorId: string, now: number = Date.now()): Promise<StudioJobView> {
     const open = await findOpenJob(pool, creatorId, 'pick_folder');
-    if (open) return open;
+    const stale = open?.status === 'pending' && now - new Date(open.created_at).getTime() > PICK_FOLDER_TTL_MINUTES * 60_000;
+    if (open && !stale) return open;
+    if (open && stale) {
+        await pool.query(
+            `UPDATE studio_jobs SET status = 'failed', error = $3, updated_at = NOW()
+              WHERE id = $1 AND creator_id = $2 AND status = 'pending'`,
+            [open.id, creatorId, PICK_FOLDER_EXPIRED_ERROR]
+        );
+    }
     const { voice } = await getStudioSettings(creatorId);
     const payload: PickFolderPayload = { prompt: FOLDER_PROMPTS[voice.language === 'ar' ? 'ar' : 'en'] };
     return enqueueJob(pool, creatorId, 'pick_folder', payload);
