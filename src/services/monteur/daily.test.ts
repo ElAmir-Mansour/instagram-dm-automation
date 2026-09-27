@@ -96,6 +96,8 @@ describe('enqueueDueMonteurScan', () => {
         });
         assert.deepEqual([...SCAN_EXTENSIONS], ['.mp4', '.mov', '.m4v', '.mkv', '.webm']);
         assert.equal(SCAN_MIN_AGE_S, 60);
+        // Every poll reads this: the monteur section and the timezone, not the whole settings row.
+        assert.match(db.statements[0]!.sql, /^SELECT monteur, schedule FROM studio_settings WHERE creator_id = \$1$/);
         const [check] = db.ran(/kind = 'monteur_scan'/);
         assert.equal(iso((check!.params[1] as Date).getTime()), '2026-09-27T04:00:00.000Z', 'due = today’s 07:00 Riyadh');
         // The fake evaluates the condition in JS, so pin the SQL that Postgres evaluates too.

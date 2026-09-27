@@ -637,6 +637,11 @@ export interface SourcePick {
     considered: number;
     /** The Marketer's call, when there was one. */
     copy?: { model: string | null; tokens_in: number; tokens_out: number };
+    /**
+     * The clips the Monteur chose, saved before the Marketer's call: a failed copy is retried
+     * without sending the whole transcript to the pick again. Cleared by a manual retry.
+     */
+    saved?: { topic: string | null; clips: unknown[] };
 }
 
 export interface MonteurSourceRow {
@@ -685,9 +690,14 @@ export interface ClipCopy {
     alt_text: string;
 }
 
-/** The worker's render. `job_id` is the render that made it: only the clip's latest may land. */
+/**
+ * The worker's render. `job_id` is the render that made it: only the clip's latest may land. The
+ * URLs are rebuilt from their upload ids on `app.public_base_url`, never the worker's strings.
+ */
 export interface ClipRender {
     video_url: string;
+    /** The same cut with TikTok's CTA ("link in bio"); null when TikTok was off. Its sibling falls back to `video_url`. */
+    tiktok_video_url: string | null;
     cover_url: string;
     duration: number;
     job_id: string;
@@ -699,7 +709,14 @@ export interface ClipSchedule {
     meta_row_id: string | null;
     tiktok_row_id: string | null;
     campaign_id: string | null;
+    /** What the TikTok sibling went out as: SELF_ONLY until TikTok audits the app. */
+    tiktok_privacy?: TikTokPrivacyLevel | null;
 }
+
+/** The Monteur's sub-scores, each 0–3 (MONTEUR.md §6.1). `rank = 3·hook + alone + payoff + send`. */
+export interface ClipScores { hook: number; alone: number; payoff: number; send: number }
+
+export type HookType = 'promise' | 'problem' | 'intent' | 'question';
 
 export interface ClipDraftRow {
     id: string;
@@ -716,8 +733,14 @@ export interface ClipDraftRow {
     /** The spoken opening line, from the transcript. */
     hook: string;
     why: string | null;
-    /** NUMERIC, 0–10. */
+    /** NUMERIC, 0–10: round(rank / 1.8). */
     score: number | null;
+    /** The video's main idea, as the Monteur put it. */
+    topic: string | null;
+    hook_type: HookType | null;
+    scores: ClipScores | null;
+    /** The clip's own words, for the 90-day dedupe. */
+    text: string | null;
     copy: ClipCopy;
     render: ClipRender | null;
     schedule: ClipSchedule | null;
@@ -774,7 +797,10 @@ export interface MonteurRenderPayload {
     end: number;
     title: string;
     words: TranscriptWord[];
+    /** Instagram and Facebook: `slide.igAsk` + «keyword», then `slide.igSub`. */
     cta: { line1: string; line2: string };
+    /** A second MP4 with TikTok's CTA (`slide.ttPill`, `slide.ttSub`), or null when TikTok is off. */
+    cta_tiktok: { line1: string; line2: string } | null;
     brand: { accent: string; font: StudioDisplayFont; direction: 'rtl' | 'ltr' };
     /** Seconds into the clip. */
     cover_at: number;

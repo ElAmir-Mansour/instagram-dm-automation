@@ -97,6 +97,13 @@ describe('nextFreeSlots', () => {
         assert.equal(query!.params[0], TENANT);
         assert.match(query!.sql, /status = 'PENDING'/);
         // A TikTok row is the sibling of a Meta post that already holds the slot.
-        assert.match(query!.sql, /platform IN \('instagram', 'facebook', 'both'\)/);
+        assert.match(query!.sql, /platform = ANY\(\$4::text\[\]\)/);
+        assert.deepEqual(query!.params[3], ['instagram', 'facebook', 'both']);
+    });
+
+    it('lets a TikTok-only caller count its TikTok rows as holding slots', async () => {
+        taken = [new Date('2026-10-01T18:00:00Z')];
+        await nextFreeSlots(TENANT, RIYADH, 1, Date.parse('2026-10-01T12:00:00Z'), { holders: ['tiktok'] });
+        assert.deepEqual(statements[0]!.params[3], ['tiktok']);
     });
 });

@@ -16,7 +16,7 @@ import type { MonteurConfig, MonteurScanPayload, PickFolderPayload } from '../..
 import { log } from '../../utils/log.js';
 import { type Exec, StudioError } from '../studio/common.js';
 import { enqueueJob, findOpenJob, type StudioJobView } from '../studio/jobs.js';
-import { getStudioSettings } from '../studio/settings.js';
+import { getMonteurSettings, getStudioSettings } from '../studio/settings.js';
 import { zonedTimeToUtc, zoneOffsetMs } from '../studio/slots.js';
 
 export const SCAN_EXTENSIONS: readonly string[] = ['.mp4', '.mov', '.m4v', '.mkv', '.webm'];
@@ -74,10 +74,9 @@ export function scanPayload(monteur: MonteurConfig, known: string[]): MonteurSca
  * still open, however old: a worker that has not finished yesterday's does not need today's too.
  */
 export async function enqueueDueMonteurScan(creatorId: string, now: number = Date.now()): Promise<StudioJobView | null> {
-    const settings = await getStudioSettings(creatorId);
-    const m = settings.monteur;
+    const { monteur: m, timezone } = await getMonteurSettings(creatorId);
     if (!m.enabled || !m.folder) return null;
-    const due = latestRunAt(now, m.run_at, settings.schedule.timezone);
+    const due = latestRunAt(now, m.run_at, timezone);
     const { rows } = await pool.query<{ id: string }>(
         `SELECT id FROM studio_jobs
           WHERE creator_id = $1 AND kind = 'monteur_scan'
@@ -97,7 +96,7 @@ export async function enqueueDueMonteurScan(creatorId: string, now: number = Dat
  * one is failed for.
  */
 export async function runMonteurNow(creatorId: string): Promise<StudioJobView> {
-    const { monteur } = await getStudioSettings(creatorId);
+    const { monteur } = await getMonteurSettings(creatorId);
     if (!monteur.folder) {
         throw new StudioError(409, 'Choose the Monteur\'s folder first: it is where the worker looks for new videos.');
     }

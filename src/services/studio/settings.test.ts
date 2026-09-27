@@ -9,7 +9,7 @@ import { pool } from '../../config/db.js';
 import type { StudioSettings } from '../../db/rows.js';
 import { StudioError } from './common.js';
 import {
-    defaultStudioSettings, getStudioSettings, mergeSettings, overDefaults, settingsProblems, updateStudioSettings,
+    defaultStudioSettings, getMonteurSettings, getStudioSettings, mergeSettings, overDefaults, settingsProblems, updateStudioSettings,
 } from './settings.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -284,6 +284,35 @@ describe('the monteur section (MONTEUR.md §1)', () => {
             assert.match(write.sql, /examples, monteur, updated_at\) VALUES/);
             assert.match(write.sql, /monteur = EXCLUDED\.monteur/);
             assert.deepEqual(JSON.parse(write.params[8] as string), { ...read.monteur, run_at: '06:30' });
+        } finally {
+            (pool as unknown as { query: unknown }).query = originalQuery;
+        }
+    });
+});
+
+describe('the monteur folder — what the worker is sent back', () => {
+    it('refuses NUL, newlines and other control characters', () => {
+        for (const folder of ['/Users/me/Mov\u0000ies', '/Users/me/Movies\n/etc', '/Users/me/\tTabs', '/Users/me/\u007fDel']) {
+            const problems = problemsFor({ monteur: { folder } });
+            assert.ok(problems.some((p) => /^monteur\.folder must not contain control characters/.test(p)), JSON.stringify(folder));
+        }
+    });
+});
+
+describe('getMonteurSettings — the claim path’s read', () => {
+    it('reads the monteur section and the timezone only, never the 100KB examples', async () => {
+        const originalQuery = pool.query;
+        const statements: string[] = [];
+        (pool as unknown as { query: unknown }).query = async (sql: string) => {
+            statements.push(sql.replace(/\s+/g, ' '));
+            return { rows: [{ monteur: { enabled: true, folder: '/v' }, schedule: { timezone: 'Asia/Riyadh', slots: ['13:00'] } }], rowCount: 1 };
+        };
+        try {
+            const { monteur, timezone } = await getMonteurSettings(TENANT);
+            assert.equal(monteur.folder, '/v');
+            assert.equal(monteur.run_at, '07:00', 'over the defaults');
+            assert.equal(timezone, 'Asia/Riyadh');
+            assert.deepEqual(statements, ['SELECT monteur, schedule FROM studio_settings WHERE creator_id = $1']);
         } finally {
             (pool as unknown as { query: unknown }).query = originalQuery;
         }

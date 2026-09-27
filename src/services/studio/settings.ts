@@ -8,7 +8,7 @@
  * a field added to a section later reads as its default for every tenant with no backfill.
  */
 import { pool } from '../../config/db.js';
-import type { MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
+import type { MonteurConfig, MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
 import { type Exec, isPlainObject, problemsError, StudioError } from './common.js';
 import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
 
@@ -21,6 +21,8 @@ export const DM_PLACEHOLDERS = ['username', 'question', 'pitch', 'url', 'bullets
 export const MONTEUR_PLATFORMS: readonly MonteurPlatform[] = ['instagram', 'facebook', 'tiktok'];
 /** An absolute folder: `/…` on macOS and Linux, `C:\…` or `\\server\share` on Windows. */
 const ABSOLUTE_FOLDER = /^(\/|[A-Za-z]:[\\/]|\\\\)/;
+/** NUL, newlines and the other control characters: never part of a folder the worker can open. */
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
 const MAX_PROBLEMS = 20;
 const HEX_COLOUR = /^#[0-9A-Fa-f]{6}$/;
@@ -207,6 +209,9 @@ export function settingsProblems(s: StudioSettings): string[] {
             if (typeof monteur.folder === 'string' && monteur.folder.trim() && !ABSOLUTE_FOLDER.test(monteur.folder)) {
                 problems.push('monteur.folder must be a full folder path, e.g. /Users/you/Movies/Monteur');
             }
+            if (typeof monteur.folder === 'string' && CONTROL_CHARACTERS.test(monteur.folder)) {
+                problems.push('monteur.folder must not contain control characters or a line break');
+            }
         }
         if (typeof monteur.run_at !== 'string' || !LOCAL_TIME.test(monteur.run_at)) {
             problems.push('monteur.run_at must be a time like 07:00');
@@ -227,6 +232,19 @@ export function settingsProblems(s: StudioSettings): string[] {
         }
     }
     return problems;
+}
+
+/**
+ * Only what the Monteur's daily run needs — its section and the timezone — over the defaults.
+ * Every worker poll reads this, so it does not fetch the rest of the row (the few-shot examples
+ * alone can be 100KB).
+ */
+export async function getMonteurSettings(creatorId: string, exec: Exec = pool): Promise<{ monteur: MonteurConfig; timezone: string }> {
+    const { rows } = await exec.query<Pick<StudioSettingsRow, 'monteur' | 'schedule'>>(
+        'SELECT monteur, schedule FROM studio_settings WHERE creator_id = $1', [creatorId]
+    );
+    const s = overDefaults(rows[0] ?? {});
+    return { monteur: s.monteur, timezone: s.schedule.timezone };
 }
 
 /** The tenant's settings, over the defaults. `exec` is a transaction's client, when inside one. */
@@ -270,5 +288,15 @@ export async function updateStudioSettings(
             JSON.stringify(next.monteur),
         ]
     );
+    if (next.monteur.folder !== current.monteur.folder) {
+        // A scan still waiting for the old folder would run instead of one for the new one: the
+        // daily run queues nothing while a scan is open. One already claimed is left to finish.
+        await exec.query(
+            `UPDATE studio_jobs SET status = 'failed', error = $2, updated_at = NOW()
+              WHERE creator_id = $1 AND kind = 'monteur_scan' AND status = 'pending'
+                AND payload->>'folder' IS DISTINCT FROM $3`,
+            [creatorId, 'Superseded: the Monteur\'s folder changed.', next.monteur.folder]
+        );
+    }
     return { settings: next, changed: Object.keys(patch) };
 }

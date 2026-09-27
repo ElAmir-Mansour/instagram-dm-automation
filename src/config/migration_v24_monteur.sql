@@ -34,6 +34,10 @@ ALTER TABLE studio_jobs ADD CONSTRAINT studio_jobs_kind_check CHECK (kind IN (
     'pick_folder', 'monteur_scan', 'monteur_transcribe', 'monteur_render'
 ));
 
+-- Every worker poll asks "is today's scan queued?" per tenant and kind, and studio_jobs is never
+-- pruned: this keeps that a lookup rather than a scan of the table.
+CREATE INDEX IF NOT EXISTS idx_studio_jobs_creator_kind ON studio_jobs (creator_id, kind, created_at DESC);
+
 -- ── Sources ──────────────────────────────────────────────────────────────────────────────
 -- `content_key` is the worker's sha1 of the size, the first MiB and the last MiB: the same video
 -- renamed or moved is the same source, and a file is never processed twice.
@@ -74,10 +78,12 @@ CREATE INDEX IF NOT EXISTS idx_monteur_sources_pickable
 --   back to rendering.
 -- Every JSONB column is one of MONTEUR.md's shapes:
 --   copy      ClipCopy: both captions, hashtags, keyword, variants, keyword_create, dm, alt_text
---   render    { video_url, cover_url, duration, job_id, rendered_at } — `job_id` made it
---   schedule  { scheduled_time, meta_row_id, tiktok_row_id, campaign_id }
--- The media `render` names is kept by the retention sweep while the clip is rendering, in review
--- or scheduled. A rejected or failed clip's media is not.
+--   render    { video_url, tiktok_video_url, cover_url, duration, job_id, rendered_at } — `job_id` made it
+--   schedule  { scheduled_time, meta_row_id, tiktok_row_id, campaign_id, tiktok_privacy }
+--   scores    { hook, alone, payoff, send }, each 0–3: the Monteur's sub-scores (MONTEUR.md §6.1)
+-- `text` is the clip's own words, for the 90-day dedupe; `topic` is its video's main idea.
+-- The media `render` names (both videos and the cover) is kept by the retention sweep while the clip
+-- is rendering, in review or scheduled. A rejected or failed clip's media is not.
 CREATE TABLE IF NOT EXISTS clip_drafts (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     creator_id  UUID NOT NULL REFERENCES creators(id) ON DELETE CASCADE,
@@ -93,6 +99,11 @@ CREATE TABLE IF NOT EXISTS clip_drafts (
     hook        TEXT NOT NULL,
     why         TEXT,
     score       NUMERIC,
+    topic       TEXT,
+    -- promise, problem, intent or question: how the spoken start line opens.
+    hook_type   TEXT,
+    scores      JSONB,
+    text        TEXT,
     copy        JSONB NOT NULL,
     render      JSONB,
     schedule    JSONB,
