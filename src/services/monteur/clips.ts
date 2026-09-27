@@ -1,37 +1,43 @@
 /**
- * A reel in the review queue (MONTEUR.md §5): edit it, approve it into the scheduler, or reject it.
+ * A reel in the review queue (MONTEUR.md §5, §6.1): edit it, approve it into the scheduler,
+ * render a failed one again, or reject it.
  *
- *   rendering ─(worker)→ review ─approve→ scheduled
+ *   rendering ─(worker)→ review ─approve→ scheduled ─(its posts deleted or failed)→ review
  *        ↑                 │ └─reject→ rejected
- *        └── edit of the title or keyword (burned into the video), or any edit of a failed clip
+ *        ├── an edit of the title or keyword (both are burned into the video)
+ *        └── POST /rerender, for a failed clip
  *
  * Approve is modelled on the Studio's `scheduleDraft` (src/services/studio/schedule.ts): the rows
  * it writes are the rows `POST /api/posts/scheduled` writes, and they publish through the same
  * sweep. One Meta row (`both`, `instagram` or `facebook`, per the tenant's platforms) with the
- * video, its cover and the caption; a TikTok sibling on the same `group_id` with the TikTok
- * caption and the Studio's Direct Post options; and the keyword → DM campaign unless an active
- * one already answers the keyword. Everything is checked before the transaction; inside it the
- * clip is locked and re-checked, so two clicks schedule it once.
+ * video, its cover and the caption; a TikTok sibling on the same `group_id` with its own cut, the
+ * TikTok caption and the Studio's Direct Post options; and — whenever there is a Meta row — a
+ * campaign for every post that answers the keyword, reused or created. The slot, the campaign and
+ * the inserts all happen under one per-tenant lock, so two approvals at once can neither take the
+ * same slot nor create the same campaign twice.
  */
 import crypto from 'crypto';
 import { pool } from '../../config/db.js';
-import { queryRows } from '../../db/query.js';
-import type { CampaignRow, ClipCopy, ClipDraftRow, ClipSchedule, MonteurSourceRow, ScheduledPostRow, TikTokPostOptions } from '../../db/rows.js';
+import type {
+    CampaignRow, ClipCopy, ClipDraftRow, ClipSchedule, MonteurSourceRow, ScheduledPostRow, TikTokPostOptions,
+} from '../../db/rows.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import { log } from '../../utils/log.js';
 import { getTikTokPostingFlags } from '../appSettings.js';
 import { matchCampaign } from '../matching.js';
 import { type Exec, isPlainObject, problemsError, StudioError, unique, withTransaction } from '../studio/common.js';
+import { chooseKeyword } from '../studio/generate.js';
 import {
     cancelClipRenders, deleteUnreferencedUploads, enqueueMonteurRender, markSourceDoneIfRendered,
 } from '../studio/jobs.js';
-import { askLine, tiktokLine } from '../studio/prompts.js';
+import { tiktokLine } from '../studio/prompts.js';
 import { assertDirectPostReady, studioTikTokOptions } from '../studio/schedule.js';
 import { getStudioSettings } from '../studio/settings.js';
-import { nextFreeSlots } from '../studio/slots.js';
+import { META_SLOT_HOLDERS, nextFreeSlots } from '../studio/slots.js';
+import { keywordLongEnough, MIN_KEYWORD_LETTERS } from './copy.js';
 import { accentsFor, buildRenderPayload, clipAccent } from './render.js';
 import { MAX_TITLE } from './transcript.js';
-import { type ClipView, loadClipView } from './view.js';
+import { type ClipView, loadClipView, releaseOrphanedClips } from './view.js';
 
 /** Instagram's caption limit; TikTok's is the same for a video's title. */
 export const MAX_CAPTION = 2200;
@@ -39,6 +45,8 @@ const MAX_DM = 4000;
 const MAX_ALT_TEXT = 1000;
 const MAX_HASHTAGS = 30;
 const MAX_VARIANTS = 10;
+/** How many upcoming free slots Approve looks through for a day this video has no reel on. */
+const SLOT_LOOKAHEAD = 30;
 const COPY_KEYS: readonly (keyof ClipCopy)[] = [
     'caption', 'tiktok_caption', 'hashtags', 'keyword', 'variants', 'keyword_create', 'dm', 'alt_text',
 ];
@@ -51,7 +59,7 @@ function isOneWord(value: string): boolean {
 async function lockClip(exec: Exec, creatorId: string, clipId: string): Promise<ClipDraftRow> {
     const { rows } = await exec.query<ClipDraftRow>(
         `SELECT id, creator_id, source_id, rank, status, start_s::float8 AS start_s, end_s::float8 AS end_s, title, hook, why,
-                score::float8 AS score, copy, render, schedule, error, created_at, updated_at
+                score::float8 AS score, topic, hook_type, scores, text, copy, render, schedule, error, created_at, updated_at
            FROM clip_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE`,
         [clipId, creatorId]
     );
@@ -59,17 +67,28 @@ async function lockClip(exec: Exec, creatorId: string, clipId: string): Promise<
     return rows[0];
 }
 
+/** Every keyword a live campaign answers, one per entry. */
+async function activeKeywordsOf(exec: Exec, creatorId: string): Promise<string[]> {
+    const { rows } = await exec.query<{ trigger_keyword: string | null }>(
+        'SELECT trigger_keyword FROM campaigns WHERE creator_id = $1 AND is_active = TRUE', [creatorId]
+    );
+    return unique(rows.flatMap((r) => (r.trigger_keyword ?? '').split(',')).map((k) => k.trim()).filter(Boolean));
+}
+
 // ─── PATCH ──────────────────────────────────────────────────────────────────────────────
 
 export interface ClipPatch { title?: string; copy: Partial<ClipCopy> }
 
-/** `{ title?, copy?: Partial<ClipCopy> }`, each field checked. A key that is not a field is refused. */
+/**
+ * `{ title?, copy?: Partial<ClipCopy> }`, each field checked. A key that is not a field is
+ * refused. Every problem starts with its field's path.
+ */
 export function parseClipPatch(body: unknown): ClipPatch {
     if (!isPlainObject(body) || !('title' in body || 'copy' in body)) {
         throw new StudioError(400, 'Send the title or the copy to change.');
     }
     const problems: string[] = [];
-    for (const key of Object.keys(body)) if (key !== 'title' && key !== 'copy') problems.push(`"${key}" cannot be changed here`);
+    for (const key of Object.keys(body)) if (key !== 'title' && key !== 'copy') problems.push(`${key} cannot be changed here`);
 
     const patch: ClipPatch = { copy: {} };
     if ('title' in body) {
@@ -101,6 +120,7 @@ export function parseClipPatch(body: unknown): ClipPatch {
             if ('keyword' in raw) {
                 const k = typeof raw.keyword === 'string' ? raw.keyword.trim() : '';
                 if (!isOneWord(k)) problems.push('copy.keyword must be one word');
+                else if (!keywordLongEnough(k)) problems.push(`copy.keyword must have at least ${MIN_KEYWORD_LETTERS} letters: a shorter one fires on too many comments`);
                 else patch.copy.keyword = k;
             }
             const words = (key: 'hashtags' | 'variants', max: number, strip: boolean): void => {
@@ -111,7 +131,7 @@ export function parseClipPatch(body: unknown): ClipPatch {
                     return;
                 }
                 const list = unique((v as string[]).map((w) => (strip ? w.trim().replace(/^#+/, '') : w.trim())).filter(Boolean));
-                if (list.some((w) => !isOneWord(w))) problems.push(`copy.${key} must be single words`);
+                if (list.some((w) => !isOneWord(w))) problems.push(`copy.${key} must be single words of at most 30 characters`);
                 else if (list.length > max) problems.push(`copy.${key} holds at most ${max}`);
                 else patch.copy[key] = list;
             };
@@ -127,15 +147,28 @@ export function parseClipPatch(body: unknown): ClipPatch {
     return patch;
 }
 
+async function queueRender(exec: Exec, creatorId: string, clip: ClipDraftRow, title: string, keyword: string): Promise<void> {
+    const settings = await getStudioSettings(creatorId, exec);
+    const { rows } = await exec.query<Pick<MonteurSourceRow, 'id' | 'path' | 'words'>>(
+        'SELECT id, path, words FROM monteur_sources WHERE id = $1 AND creator_id = $2', [clip.source_id, creatorId]
+    );
+    if (!rows[0]) throw new StudioError(409, 'This reel\'s video is gone, so it cannot be rendered again.');
+    const accent = await clipAccent(exec, creatorId, clip.id) ?? (await accentsFor(exec, creatorId, settings, 1))[0]!;
+    await enqueueMonteurRender(exec, creatorId, buildRenderPayload({
+        clipId: clip.id, source: rows[0], start: clip.start_s, end: clip.end_s, title, keyword, accent, settings,
+    }));
+}
+
 /**
  * PATCH /clips/:id. A new title or keyword changes the burned-in video, so the clip is rendered
- * again; so is a failed clip, whatever the edit, since a new render is the only way forward for
- * it. A caption-only change on a clip in review keeps its video.
+ * again; a caption-only change keeps the video.
  *
- * A new keyword carries the caption's keyword ask with it (unless a caption is sent too), drops
- * the old keyword's variants, and is marked for a campaign. A caption or keyword change must
- * leave the caption asking for the keyword — the same rule a carousel's caption holds — or every
- * comment would arrive and none would be answered.
+ * A new keyword — any change of spelling counts, since the video shows it as typed — must be one
+ * word of 4+ letters that neither contains nor sits inside a live campaign's keyword or another
+ * reel's in flight (an equal one is shared). It carries the caption's «keyword» with it unless a
+ * caption is sent too, drops the old keyword's variants, and is marked for a campaign. A caption
+ * or keyword change must leave the caption asking for «keyword», or every comment would arrive
+ * and none would be answered.
  */
 export async function patchClip(creatorId: string, clipId: string, body: unknown): Promise<ClipView> {
     const patch = parseClipPatch(body);
@@ -147,43 +180,51 @@ export async function patchClip(creatorId: string, clipId: string, body: unknown
 
         const before = clip.copy;
         const copy: ClipCopy = { ...before, ...patch.copy };
-        const keywordChanged = patch.copy.keyword !== undefined
-            && normalizeArabic(patch.copy.keyword) !== normalizeArabic(before.keyword);
+        const keywordChanged = patch.copy.keyword !== undefined && patch.copy.keyword !== before.keyword;
         if (keywordChanged) {
-            const oldAsk = askLine(settings, before.keyword);
-            if (patch.copy.caption === undefined && oldAsk) copy.caption = copy.caption.split(oldAsk).join(askLine(settings, copy.keyword));
+            const { rows } = await client.query<{ keyword: string | null }>(
+                `SELECT DISTINCT copy->>'keyword' AS keyword FROM clip_drafts
+                  WHERE creator_id = $1 AND id <> $2 AND status IN ('rendering', 'review', 'failed')`,
+                [creatorId, clip.id]
+            );
+            const inFlight = rows.map((r) => r.keyword).filter((k): k is string => Boolean(k));
+            const { choice, rejected } = chooseKeyword([copy.keyword], [...await activeKeywordsOf(client, creatorId), ...inFlight]);
+            if (!choice) throw problemsError(rejected.map((r) => `copy.keyword: ${r}`), 'this clip', 409);
+            if (patch.copy.caption === undefined) copy.caption = copy.caption.split(`«${before.keyword}»`).join(`«${copy.keyword}»`);
             if (patch.copy.variants === undefined) copy.variants = [];
             if (patch.copy.keyword_create === undefined) copy.keyword_create = true;
         }
 
         const problems: string[] = [];
-        if (patch.copy.caption !== undefined || keywordChanged) {
-            const ask = askLine(settings, copy.keyword);
-            if (ask && !copy.caption.includes(ask)) problems.push(`The caption must keep the keyword ask: «${ask}»`);
+        if ((patch.copy.caption !== undefined || keywordChanged) && !copy.caption.includes(`«${copy.keyword}»`)) {
+            problems.push(`copy.caption must keep the keyword ask with «${copy.keyword}»`);
         }
         if (patch.copy.tiktok_caption !== undefined) {
             const link = tiktokLine(settings);
-            if (link && !copy.tiktok_caption.includes(link)) problems.push(`The TikTok caption must keep the line «${link}»`);
+            if (link && !copy.tiktok_caption.includes(link)) problems.push(`copy.tiktok_caption must keep the line «${link}»`);
         }
         if (problems.length) throw problemsError(problems, 'this clip');
 
         const title = patch.title ?? clip.title;
-        const rerender = title !== clip.title || keywordChanged || clip.status === 'failed';
+        const rerender = title !== clip.title || keywordChanged;
         await client.query(
             `UPDATE clip_drafts SET title = $3, copy = $4::jsonb, updated_at = NOW() WHERE id = $1 AND creator_id = $2`,
             [clip.id, creatorId, title, JSON.stringify(copy)]
         );
-        if (rerender) {
-            const { rows } = await client.query<Pick<MonteurSourceRow, 'id' | 'path' | 'words'>>(
-                'SELECT id, path, words FROM monteur_sources WHERE id = $1 AND creator_id = $2', [clip.source_id, creatorId]
-            );
-            if (!rows[0]) throw new StudioError(409, 'This reel\'s video is gone, so it cannot be rendered again.');
-            const accent = await clipAccent(client, creatorId, clip.id) ?? (await accentsFor(client, creatorId, settings, 1))[0]!;
-            await enqueueMonteurRender(client, creatorId, buildRenderPayload({
-                clipId: clip.id, source: rows[0], start: clip.start_s, end: clip.end_s, title, keyword: copy.keyword, accent, settings,
-            }));
-        }
+        if (rerender) await queueRender(client, creatorId, clip, title, copy.keyword);
         log('info', 'monteur.clip_edited', { clip_id: clip.id, rerender, fields: [...Object.keys(patch.copy), ...(patch.title ? ['title'] : [])] });
+        return loadClipView(client, creatorId, clip.id);
+    });
+}
+
+/** POST /clips/:id/rerender: a failed clip, rendered again as it is. */
+export async function rerenderClip(creatorId: string, clipId: string): Promise<ClipView> {
+    return withTransaction(async (client) => {
+        const clip = await lockClip(client, creatorId, clipId);
+        if (clip.status !== 'failed') {
+            throw new StudioError(409, `This reel is ${clip.status}; only a failed one is rendered again. Edit its title or keyword to change the video.`);
+        }
+        await queueRender(client, creatorId, clip, clip.title, clip.copy.keyword);
         return loadClipView(client, creatorId, clip.id);
     });
 }
@@ -195,19 +236,33 @@ type CampaignPlan =
     | { create: false; existing: CampaignRow };
 
 /**
- * The campaign to create, unless an active one already triggers on the keyword. "Triggers on" is
- * decided by `matchCampaign` itself, as for the Studio: a substring campaign on a shorter word
- * answers this keyword too, and a second one beside it would never be the one that fires.
+ * The campaign that will answer the reel's keyword. "Answers" is decided by `matchCampaign`
+ * itself, with each campaign's own mode, and only a campaign for every post counts: one tied to
+ * another post (`post_id`) never fires on this reel. When none answers, one is created, whatever
+ * `keyword_create` says: asking for a keyword nothing answers is the silent failure this exists to
+ * prevent. A keyword that sits inside a live keyword is refused: the longer word's comments would
+ * then reach both campaigns.
  */
-async function planCampaign(creatorId: string, copy: ClipCopy): Promise<CampaignPlan> {
+async function planCampaign(exec: Exec, creatorId: string, copy: ClipCopy): Promise<CampaignPlan> {
     const keyword = copy.keyword?.trim();
-    if (!keyword) throw new StudioError(400, 'This reel has no keyword to create a campaign for.');
-    const active = await queryRows<CampaignRow>(
+    if (!keyword) throw new StudioError(400, 'copy.keyword: this reel has no keyword to answer.');
+    const { rows: active } = await exec.query<CampaignRow>(
         'SELECT * FROM campaigns WHERE creator_id = $1 AND is_active = TRUE', [creatorId]
     );
     // '' as the post id: only campaigns for every post can answer a post that is not live yet.
     const existing = matchCampaign(keyword, '', active);
     if (existing) return { create: false, existing };
+    const k = normalizeArabic(keyword);
+    for (const c of active) {
+        if (c.post_id) continue;
+        const inside = c.trigger_keyword.split(',').map((t) => t.trim()).find((t) => {
+            const n = normalizeArabic(t);
+            return n !== k && n.includes(k);
+        });
+        if (inside) {
+            throw new StudioError(409, `copy.keyword: «${keyword}» sits inside the active keyword «${inside}». Change the reel's keyword.`);
+        }
+    }
     return { create: true, triggers: unique([keyword, ...(copy.variants ?? [])]).join(', '), dm: copy.dm };
 }
 
@@ -216,6 +271,16 @@ export function metaPlatformFor(platforms: readonly string[]): 'both' | 'instagr
     const ig = platforms.includes('instagram');
     const fb = platforms.includes('facebook');
     return ig && fb ? 'both' : ig ? 'instagram' : fb ? 'facebook' : null;
+}
+
+/** Which platforms' rows hold a slot: the Meta ones, or TikTok's when it is the only platform. */
+export function slotHolders(platforms: readonly string[]): readonly string[] {
+    return metaPlatformFor(platforms) ? META_SLOT_HOLDERS : ['tiktok'];
+}
+
+/** The local calendar day of an instant in `timeZone`, `YYYY-MM-DD`. */
+export function localDay(instant: number, timeZone: string): string {
+    return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(instant));
 }
 
 async function insertVideoPost(exec: Exec, row: {
@@ -246,19 +311,24 @@ export interface ApproveOutcome {
     campaign: { id: string; trigger_keyword: string; created: boolean } | null;
 }
 
-/** POST /clips/:id/approve `{ scheduled_time? }`: the given time, or the next free posting slot. */
-export async function approveClip(creatorId: string, clipId: string, body: unknown): Promise<ApproveOutcome> {
+/**
+ * POST /clips/:id/approve `{ scheduled_time? }`: the given time, or the next free posting slot
+ * on a day no other reel of the same video is scheduled for (§6.1: never two from one source on
+ * one day).
+ */
+export async function approveClip(creatorId: string, clipId: string, body: unknown, now: number = Date.now()): Promise<ApproveOutcome> {
     const b = isPlainObject(body) ? body : {};
-    let when: Date | null = null;
+    let requested: Date | null = null;
     if (b.scheduled_time !== undefined && b.scheduled_time !== null) {
-        when = typeof b.scheduled_time === 'string' ? new Date(b.scheduled_time) : new Date(NaN);
-        if (Number.isNaN(when.getTime())) {
+        requested = typeof b.scheduled_time === 'string' ? new Date(b.scheduled_time) : new Date(NaN);
+        if (Number.isNaN(requested.getTime())) {
             throw new StudioError(400, 'scheduled_time must be a date and time, e.g. 2026-10-01T16:00:00Z.');
         }
     }
 
-    const { rows: found } = await pool.query<Pick<ClipDraftRow, 'id' | 'status' | 'copy' | 'render'>>(
-        'SELECT id, status, copy, render FROM clip_drafts WHERE id = $1 AND creator_id = $2', [clipId, creatorId]
+    await releaseOrphanedClips(pool, creatorId, clipId);
+    const { rows: found } = await pool.query<Pick<ClipDraftRow, 'id' | 'status' | 'render'>>(
+        'SELECT id, status, render FROM clip_drafts WHERE id = $1 AND creator_id = $2', [clipId, creatorId]
     );
     const clip = found[0];
     if (!clip) throw new StudioError(404, 'No such clip.');
@@ -267,19 +337,15 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
             ? 'This reel is already scheduled.'
             : `This reel is ${clip.status}; only a reel in review can be approved.`);
     }
-    const { render, copy } = clip;
 
     const settings = await getStudioSettings(creatorId);
     const { platforms, post_at: slots } = settings.monteur;
-    if (!when) {
-        const [slot] = await nextFreeSlots(creatorId, { timezone: settings.schedule.timezone, slots }, 1);
-        if (!slot) throw new StudioError(409, 'Every posting slot for the next 90 days is taken: choose a time.');
-        when = new Date(slot);
-    }
+    const timezone = settings.schedule.timezone;
     const meta = metaPlatformFor(platforms);
     let tiktokOptions: TikTokPostOptions | null = null;
     if (platforms.includes('tiktok')) {
-        // Said at the click, as the Studio does, not at publish time in a card nobody reads.
+        // Said at the click, as the Studio does, not at publish time in a card nobody reads. Until
+        // TikTok audits the app the post goes out private ("Only me"), as the owner chose.
         const flags = await getTikTokPostingFlags();
         await assertDirectPostReady(creatorId, flags).catch((err: unknown) => {
             if (err instanceof StudioError) throw new StudioError(err.status, `${err.message} Or take TikTok off the Monteur's platforms.`);
@@ -287,40 +353,67 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
         });
         tiktokOptions = studioTikTokOptions(null, flags.audited, 'video');
     }
-    // A DM campaign answers Instagram and Facebook comments only.
-    const campaignPlan = meta && copy.keyword_create ? await planCampaign(creatorId, copy) : null;
 
     return withTransaction(async (client) => {
+        // One approve at a time per tenant: the slot, the campaign and the rows are chosen and
+        // written under this lock, so a second approve sees the first's rows.
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`monteur.approve:${creatorId}`]);
         const locked = await lockClip(client, creatorId, clip.id);
-        if (locked.status !== 'review' || locked.render?.job_id !== render.job_id) {
+        if (locked.status !== 'review' || locked.render?.job_id !== clip.render!.job_id) {
             throw new StudioError(409, 'The reel changed while it was being approved. Reload it and try again.');
         }
+        const render = locked.render!;
+        const copy = locked.copy;
+
+        const { rows: siblings } = await client.query<{ t: string | null }>(
+            `SELECT schedule->>'scheduled_time' AS t FROM clip_drafts
+              WHERE creator_id = $1 AND source_id = $2 AND status = 'scheduled' AND id <> $3`,
+            [creatorId, locked.source_id, locked.id]
+        );
+        const taken = new Set(siblings.flatMap((r) => (r.t ? [localDay(Date.parse(r.t), timezone)] : [])));
+        let when: Date;
+        if (requested) {
+            if (taken.has(localDay(requested.getTime(), timezone))) {
+                throw new StudioError(409, `scheduled_time: another reel from this video is already on ${localDay(requested.getTime(), timezone)}. Choose another day.`);
+            }
+            when = requested;
+        } else {
+            const free = await nextFreeSlots(creatorId, { timezone, slots }, SLOT_LOOKAHEAD, now, { holders: slotHolders(platforms), exec: client });
+            const slot = free.find((s) => !taken.has(localDay(Date.parse(s), timezone)));
+            if (!slot) throw new StudioError(409, 'There is no free posting slot on a day this video has no reel: choose a time.');
+            when = new Date(slot);
+        }
+        // A DM campaign answers Instagram and Facebook comments only.
+        const campaignPlan = meta ? await planCampaign(client, creatorId, copy) : null;
+
         const groupId = crypto.randomUUID();
         const rows: ScheduledPostRow[] = [];
         let metaRow: ScheduledPostRow | null = null;
         let tiktokRow: ScheduledPostRow | null = null;
         if (meta) {
             metaRow = await insertVideoPost(client, {
-                creatorId, platform: meta, caption: locked.copy.caption, mediaUrl: render.video_url, coverUrl: render.cover_url,
-                when: when!, groupId, options: null,
+                creatorId, platform: meta, caption: copy.caption, mediaUrl: render.video_url, coverUrl: render.cover_url,
+                when, groupId, options: null,
             });
             rows.push(metaRow);
         }
         if (tiktokOptions) {
             tiktokRow = await insertVideoPost(client, {
-                creatorId, platform: 'tiktok', caption: locked.copy.tiktok_caption, mediaUrl: render.video_url, coverUrl: null,
-                when: when!, groupId, options: tiktokOptions,
+                creatorId, platform: 'tiktok', caption: copy.tiktok_caption,
+                // TikTok's own cut, whose CTA says "link in bio" rather than "comment".
+                mediaUrl: render.tiktok_video_url ?? render.video_url, coverUrl: null, when, groupId, options: tiktokOptions,
             });
             rows.push(tiktokRow);
         }
 
         let campaign: ApproveOutcome['campaign'] = null;
         if (campaignPlan?.create) {
-            // The insert POST /campaigns makes, with no public reply, every post, and its default mode.
+            // The insert POST /campaigns makes, with no public reply and every post — in word mode
+            // (§6.1), so the keyword never fires inside a longer word.
             const { rows: created } = await client.query<CampaignRow>(
                 `INSERT INTO campaigns (creator_id, trigger_keyword, dm_template, public_reply_template, post_id, is_active, match_mode)
-                 VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, 'substring')) RETURNING *`,
-                [creatorId, campaignPlan.triggers, campaignPlan.dm, null, null, true, null]
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+                [creatorId, campaignPlan.triggers, campaignPlan.dm, null, null, true, 'word']
             );
             campaign = { id: created[0]!.id, trigger_keyword: created[0]!.trigger_keyword, created: true };
         } else if (campaignPlan) {
@@ -328,25 +421,27 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
         }
 
         const schedule: ClipSchedule = {
-            scheduled_time: when!.toISOString(),
+            scheduled_time: when.toISOString(),
             meta_row_id: metaRow?.id ?? null,
             tiktok_row_id: tiktokRow?.id ?? null,
             campaign_id: campaign?.id ?? null,
+            tiktok_privacy: tiktokOptions?.privacy_level ?? null,
         };
         await client.query(
             `UPDATE clip_drafts SET status = 'scheduled', schedule = $3::jsonb, error = NULL, updated_at = NOW()
               WHERE id = $1 AND creator_id = $2`,
-            [clip.id, creatorId, JSON.stringify(schedule)]
+            [locked.id, creatorId, JSON.stringify(schedule)]
         );
-        return { clip: await loadClipView(client, creatorId, clip.id), scheduled_time: schedule.scheduled_time, rows, campaign };
+        return { clip: await loadClipView(client, creatorId, locked.id), scheduled_time: schedule.scheduled_time, rows, campaign };
     });
 }
 
 // ─── Reject ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * POST /clips/:id/reject: out of the queue, its queued renders stopped and its files deleted —
- * nothing names a rejected clip's media. Rejecting twice is the same as once.
+ * POST /clips/:id/reject: out of the queue — a failed clip too, which is how the page dismisses
+ * one — its queued renders stopped and its files deleted: nothing names a rejected clip's media.
+ * Rejecting twice is the same as once.
  */
 export async function rejectClip(creatorId: string, clipId: string): Promise<ClipView> {
     return withTransaction(async (client) => {
@@ -361,7 +456,7 @@ export async function rejectClip(creatorId: string, clipId: string): Promise<Cli
                 [clip.id, creatorId]
             );
             // After the status change, so the clip no longer counts as naming them.
-            await deleteUnreferencedUploads(client, creatorId, [clip.render?.video_url, clip.render?.cover_url]);
+            await deleteUnreferencedUploads(client, creatorId, [clip.render?.video_url, clip.render?.tiktok_video_url, clip.render?.cover_url]);
             await markSourceDoneIfRendered(client, creatorId, clip.source_id);
         }
         return loadClipView(client, creatorId, clip.id);

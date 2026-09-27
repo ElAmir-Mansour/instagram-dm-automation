@@ -7,7 +7,7 @@
  *   studioWorkerRouter — mounted ABOVE `requireAuth` in api.ts, like `tiktokPublicRouter`.
  *     Authenticated only by the worker's bearer token, which resolves its tenant; every call
  *     acts as that tenant and nothing else.
- *     POST /worker/claim               { name } → 200 { job } | 204; queues the Monteur's daily scan first
+ *     POST /worker/claim               { name, kinds? } → 200 { job } | 204; queues the Monteur's daily scan first
  *     POST /worker/jobs/:id/progress   { progress } → 204 (the heartbeat)
  *     POST /worker/jobs/:id/complete   { result } → 204, and the job's side effects
  *     POST /worker/jobs/:id/fail       { error } → 204
@@ -26,7 +26,7 @@ import { isMissingSchema } from '../services/health.js';
 import { getMediaStore } from '../services/storage.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { refreshLessons } from '../services/monteur/analyst.js';
-import { approveClip, patchClip, rejectClip } from '../services/monteur/clips.js';
+import { approveClip, patchClip, rejectClip, rerenderClip } from '../services/monteur/clips.js';
 import { enqueueDueMonteurScan, requestFolderPick, runMonteurNow } from '../services/monteur/daily.js';
 import { signWorkerUpload } from '../services/monteur/uploads.js';
 import { getMonteurView, presentLessons, retrySource } from '../services/monteur/view.js';
@@ -35,7 +35,7 @@ import {
     createDraft, deleteDraft, getDraft, listDrafts, patchDraft, planDrafts, renderDraft, rewriteDraftSlide,
     setTikTokPublic,
 } from '../services/studio/drafts.js';
-import { claimJob, completeJob, failJob, jobCounts, reportProgress } from '../services/studio/jobs.js';
+import { claimJob, completeJob, failJob, jobCounts, reportProgress, STUDIO_JOB_KINDS } from '../services/studio/jobs.js';
 import { enqueueIndex, enqueueScan, getLesson, indexMissing, lessonCounts, listLessons } from '../services/studio/lessons.js';
 import { queuedTikTokCount, runTikTokBatch, scheduleDraft } from '../services/studio/schedule.js';
 import { getStudioSettings, updateStudioSettings } from '../services/studio/settings.js';
@@ -44,6 +44,7 @@ import {
     authenticateWorker, createWorker, listWorkers, revokeWorker, workerSummary, type AuthenticatedWorker,
 } from '../services/studio/worker.js';
 import { describeError, log } from '../utils/log.js';
+import type { StudioJobKind } from '../db/rows.js';
 
 type Handler = (req: Request, res: Response) => Promise<void>;
 
@@ -136,8 +137,22 @@ export const studioWorkerRouter = Router();
 // `/worker` matches whole segments only, so `/workers` (the operator's list) falls through.
 studioWorkerRouter.use('/worker', requireWorker);
 
-studioWorkerRouter.post('/worker/claim', handle('studio.claim_failed', 'Failed to claim a job.', async (_req, res) => {
+/**
+ * `{ kinds? }` narrows a claim to some job kinds: a worker busy with a long render polls a fast
+ * lane for `pick_folder`, so a person waiting at the folder dialog is not kept waiting.
+ */
+export function parseClaimKinds(body: unknown): StudioJobKind[] | null {
+    const kinds = body && typeof body === 'object' ? (body as { kinds?: unknown }).kinds : undefined;
+    if (kinds === undefined || kinds === null) return null;
+    if (!Array.isArray(kinds) || kinds.length === 0 || kinds.some((k) => !(STUDIO_JOB_KINDS as readonly unknown[]).includes(k))) {
+        throw new StudioError(400, `kinds must be a list of job kinds: ${STUDIO_JOB_KINDS.join(', ')}.`);
+    }
+    return [...new Set(kinds as StudioJobKind[])];
+}
+
+studioWorkerRouter.post('/worker/claim', handle('studio.claim_failed', 'Failed to claim a job.', async (req, res) => {
     const creatorId = workerTenant(res);
+    const kinds = parseClaimKinds(req.body);
     // The Monteur's daily run (MONTEUR.md §7) needs no cron: a worker that polls is a worker that
     // can scan. Queued before the claim, so this very claim can hand it out. It must never stop the
     // worker claiming anything else, so its failure is logged, not answered.
@@ -145,7 +160,7 @@ studioWorkerRouter.post('/worker/claim', handle('studio.claim_failed', 'Failed t
         log('error', 'monteur.daily_run_failed', { creator_id: creatorId, ...describeError(err) });
     });
     // The body's `name` is not stored: the worker's name is the label the operator gave it.
-    const job = await claimJob(creatorId);
+    const job = await claimJob(creatorId, kinds);
     if (!job) {
         res.status(204).end();
         return;
@@ -398,6 +413,10 @@ studioRouter.post('/monteur/clips/:id/approve', handle('monteur.approve_failed',
 
 studioRouter.post('/monteur/clips/:id/reject', handle('monteur.reject_failed', 'Failed to reject the reel.', async (req, res) => {
     res.json(await rejectClip(getTenantId(req), requireId(req.params.id, 'clip')));
+}));
+
+studioRouter.post('/monteur/clips/:id/rerender', handle('monteur.rerender_failed', 'Failed to render the reel again.', async (req, res) => {
+    res.json(await rerenderClip(getTenantId(req), requireId(req.params.id, 'clip')));
 }));
 
 studioRouter.post('/monteur/lessons/refresh', handle('monteur.lessons_failed', 'Failed to run the Analyst.', async (req, res) => {

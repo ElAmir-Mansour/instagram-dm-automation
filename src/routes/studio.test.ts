@@ -474,3 +474,44 @@ describe('POST /worker/claim — the Monteur’s daily run', () => {
         assert.equal(r.body.job.id, JOB_A);
     });
 });
+
+describe('POST /worker/claim — the fast lane', () => {
+    it('claims only the kinds asked for', async () => {
+        jobs = [job(JOB_A, TENANT_A)];
+        routes.unshift([/^WITH picked AS/, (p) => {
+            const found = jobs.find((j) => j.creator_id === p[0] && j.status === 'pending' && (!p[3] || (p[3] as string[]).includes(j.kind)));
+            if (!found) return { rows: [] };
+            found.status = 'claimed';
+            return { rows: [{ id: found.id, kind: found.kind, payload: found.payload, attempts: 1 }] };
+        }]);
+        assert.equal((await worker('/worker/claim', TOKEN_A, { name: 'Mac', kinds: ['pick_folder'] })).status, 204, 'a scan is not a folder pick');
+        const claims = statements.filter((s) => /^WITH picked AS/.test(s.sql));
+        assert.deepEqual(claims.at(-1)!.params[3], ['pick_folder']);
+        assert.equal((await worker('/worker/claim', TOKEN_A, { name: 'Mac' })).status, 200);
+    });
+
+    it('400s a kind it does not know, claiming nothing', async () => {
+        const r = await worker('/worker/claim', TOKEN_A, { kinds: ['render_everything'] });
+        assert.equal(r.status, 400);
+        assert.match(r.body.error, /^kinds must be a list of job kinds/);
+        assert.ok(!statements.some((s) => /^WITH picked AS/.test(s.sql)));
+    });
+});
+
+describe('the Monteur’s operator routes', () => {
+    it('are all mounted', () => {
+        for (const [method, path] of [
+            ['get', '/monteur'], ['post', '/monteur/run'], ['post', '/monteur/pick-folder'], ['post', '/monteur/sources/:id/retry'],
+            ['patch', '/monteur/clips/:id'], ['post', '/monteur/clips/:id/approve'], ['post', '/monteur/clips/:id/reject'],
+            ['post', '/monteur/clips/:id/rerender'], ['post', '/monteur/lessons/refresh'],
+        ] as const) {
+            assert.ok(handlerFor(method, path), `${method} ${path}`);
+        }
+    });
+
+    it('404s a malformed clip id before it reaches Postgres', async () => {
+        const res = await call('post', '/monteur/clips/:id/rerender', { params: { id: 'nope' } });
+        assert.equal(res.statusCode, 404);
+        assert.equal(statements.length, 0);
+    });
+});
