@@ -28,9 +28,12 @@ import { metaHttp } from '../services/http.js';
 import type { Creator } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    dmPromptText, handleMessagingEvent, needsDisclosure, normalizeDm, resolveDmPageId,
+    dmPlatform, dmPromptText, handleMessagingEvent, needsDisclosure, normalizeDm, resolveDmPageId,
     STORY_MENTION_TEXT,
 } from './messaging.js';
+import { handlers } from '../jobs/handlers.js';
+import type { Job } from '../jobs/types.js';
+import type { WebhookHandlerOptions } from './options.js';
 
 let restoreSink: (() => void) | undefined;
 before(() => {
@@ -198,6 +201,39 @@ describe('resolveDmPageId', () => {
     });
 });
 
+/**
+ * v26 `conversations.platform`: which network the thread is on. The body's `object` is the exact
+ * answer; the page-id match is only for jobs queued before the object travelled with them.
+ */
+describe('dmPlatform', () => {
+    const creator = { instagram_page_id: 'ig-1', facebook_page_id: 'fb-9' };
+
+    it('takes the body object as the answer: instagram, or page = Messenger', () => {
+        assert.equal(dmPlatform('instagram', creator, [undefined, undefined]), 'instagram');
+        assert.equal(dmPlatform('page', creator, [undefined, undefined]), 'facebook');
+    });
+
+    it('trusts the object over the ids, which only a job from before v26 has to fall back on', () => {
+        // An Instagram event under a page-level subscription may carry the Page id in entry.id.
+        assert.equal(dmPlatform('instagram', creator, ['ig-1', 'fb-9']), 'instagram');
+        assert.equal(dmPlatform('page', creator, ['ig-1', 'ig-1']), 'facebook');
+    });
+
+    it('falls back to the page id the event was addressed to, recipient first', () => {
+        assert.equal(dmPlatform(undefined, creator, ['ig-1', 'ig-1']), 'instagram');
+        assert.equal(dmPlatform(undefined, creator, ['fb-9', 'fb-9']), 'facebook');
+        assert.equal(dmPlatform(undefined, creator, [undefined, 'fb-9']), 'facebook', 'entry.id when there is no recipient');
+        assert.equal(dmPlatform(undefined, creator, ['ig-1', 'fb-9']), 'instagram', 'recipient.id outranks entry.id');
+    });
+
+    it('answers null rather than guessing', () => {
+        assert.equal(dmPlatform(undefined, creator, ['someone-else', undefined]), null);
+        assert.equal(dmPlatform('whatsapp_business_account', creator, [undefined, undefined]), null);
+        // An unset page id must not match an absent or empty id.
+        assert.equal(dmPlatform(undefined, { instagram_page_id: '', facebook_page_id: null }, ['', undefined]), null);
+    });
+});
+
 // ─── The pipeline ───────────────────────────────────────────────────────────────────────
 
 interface Executed {
@@ -255,8 +291,10 @@ const geminiSaying = (reply: Record<string, unknown>) => async () => ({
 async function runDm(
     event: any,
     scenario: Scenario = {},
-    options?: { lastAttempt: boolean },
-    entryId = 'ig-page-1'
+    options?: WebhookHandlerOptions,
+    entryId = 'ig-page-1',
+    /** What to drive instead of `handleMessagingEvent` — the job handler, for the wiring test. */
+    invoke?: (event: any, entryId: string) => Promise<void>
 ): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; geminiUrls: string[]; geminiKeys: string[]; error: any }> {
     const {
         creator = CREATOR,
@@ -336,7 +374,8 @@ async function runDm(
 
     let error: any = null;
     try {
-        await handleMessagingEvent(event, entryId, options ?? { lastAttempt: false });
+        if (invoke) await invoke(event, entryId);
+        else await handleMessagingEvent(event, entryId, options ?? { lastAttempt: false });
     } catch (err) {
         error = err;
     } finally {
@@ -420,7 +459,8 @@ describe('handleMessagingEvent — claiming the inbound message', () => {
         const { executed } = await runDm(textEvent());
 
         const upsert = executed.find((e) => /INSERT INTO conversations/.test(e.sql))!;
-        assert.deepEqual(upsert.params, ['creator-1', 'user-1']);
+        // The third is the platform (v26): no body object here, so from the recipient id.
+        assert.deepEqual(upsert.params, ['creator-1', 'user-1', 'instagram']);
         assert.match(upsert.sql, /ON CONFLICT \(creator_id, instagram_user_id\)/);
         assert.match(upsert.sql, /DO UPDATE SET last_message_at = NOW\(\)/,
             'one statement, not SELECT-then-INSERT: two DMs a second apart raced on this');
@@ -568,6 +608,60 @@ describe('handleMessagingEvent — which endpoint the reply goes to', () => {
         const { sends } = await runDm(textEvent());
 
         assert.match(sends[0]!.url, /\/me\/messages$/);
+    });
+});
+
+/**
+ * v26: the platform the thread is on, and who wrote each row — the two facts the inbox shows
+ * (I8, I4). Every writer of `conversations` and `messages` in the DM pipeline is covered here;
+ * the operator's manual reply is in src/routes/inboxAnalytics.test.ts.
+ */
+describe('handleMessagingEvent — which network, and who wrote it (v26)', () => {
+    const upsertOf = (executed: Executed[]) => executed.find((e) => /INSERT INTO conversations/.test(e.sql))!;
+
+    it('records the body object as the thread platform: instagram, or page = Messenger', async () => {
+        const ig = await runDm(textEvent(), {}, { lastAttempt: false, object: 'instagram' });
+        assert.equal(upsertOf(ig.executed).params[2], 'instagram');
+
+        const fb = await runDm(
+            textEvent({ recipient: { id: 'fb-page-1' } }), {}, { lastAttempt: false, object: 'page' }, 'fb-page-1'
+        );
+        assert.equal(upsertOf(fb.executed).params[2], 'facebook');
+    });
+
+    it('falls back to the addressed page id for a job queued before v26', async () => {
+        const { executed } = await runDm(
+            textEvent({ recipient: { id: 'fb-page-1' } }), {}, { lastAttempt: false }, 'fb-page-1'
+        );
+        assert.equal(upsertOf(executed).params[2], 'facebook');
+    });
+
+    it('fills a thread written before v26 and never flips one that has a platform', async () => {
+        const { executed } = await runDm(textEvent());
+        const sql = upsertOf(executed).sql.replace(/\s+/g, ' ');
+        assert.match(sql, /INSERT INTO conversations \(creator_id, instagram_user_id, status, platform\)/);
+        assert.match(sql, /platform = COALESCE\(conversations\.platform, EXCLUDED\.platform\)/);
+    });
+
+    it('writes the inbound row as the customer’s and the reply as the AI’s', async () => {
+        const { executed } = await runDm(textEvent());
+
+        const inbound = executed.find((e) => /ON CONFLICT \(meta_message_id\)/.test(e.sql))!;
+        assert.match(inbound.sql.replace(/\s+/g, ' '), /reply_attempts, sender\) VALUES \(.*NOW\(\), 1, 'customer'\)/);
+
+        const outbound = executed.find((e) => /'outbound'/.test(e.sql))!;
+        assert.match(outbound.sql.replace(/\s+/g, ' '), /raw_payload, sender\) VALUES \(\$1, \$2, 'outbound', \$3, \$4, \$5, 'ai'\)/);
+    });
+
+    it('the dm.process job hands the body object through to the pipeline', async () => {
+        // The object lives on the body, not the event, so the job payload is the only way it
+        // reaches the pipeline. A handler that drops it silently falls back to the id match.
+        const job = { attempts: 1, max_attempts: 3 } as unknown as Job<'dm.process'>;
+        const { executed } = await runDm(
+            textEvent({ recipient: { id: 'ig-page-1' } }), {}, undefined, 'ig-page-1',
+            (event, entryId) => handlers['dm.process']({ event, entryId, object: 'page' }, job)
+        );
+        assert.equal(upsertOf(executed).params[2], 'facebook', 'the object wins over the Instagram recipient id');
     });
 });
 

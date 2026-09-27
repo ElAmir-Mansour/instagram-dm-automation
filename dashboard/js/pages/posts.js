@@ -814,7 +814,7 @@ const PostsPage = {
                     <span class="status-pill ${html.raw(statusClass)}">
                         ${isPublishing || isProcessing
                             ? html`<span class="dot-blink" aria-hidden="true"></span> ${isProcessing ? (isPhoto ? t('state.processingPhoto') : t('state.processing')) : t('posts.statusPublishing')}`
-                            : UI.statusLabel(post.status)}
+                            : UI.postStatusLabel(post)}
                     </span>
                 </div>
 
@@ -865,8 +865,10 @@ const PostsPage = {
 
                 ${isPending && post.error_log ? html`
                     <!-- A PENDING row with a note is one being held, not one that
-                         failed — today only TikTok's five-drafts-a-day limit does
-                         this — so it reads as a warning, not an error. -->
+                         failed — TikTok's five-drafts-a-day limit, or a reel
+                         Instagram is still processing (the pill then reads «مؤجَّل
+                         حتى الفحص القادم», UI.heldReason) — so it reads as a
+                         warning, not an error. -->
                     <p class="post-card-meta post-card-meta--note">
                         <i data-lucide="alert-triangle" aria-hidden="true"></i>
                         <span class="text-warning" dir="auto">${post.error_log}</span>

@@ -46,6 +46,21 @@ const OverviewPage = {
     OVERDUE_GRACE_MS: 15 * 60 * 1000,
 
     /**
+     * O9: "DMs failed today" asks for today's failures only (`since` = local
+     * midnight) and as many as the route gives in one page. It used to take
+     * the latest 50 of all time and count today's among them, so a bad day
+     * stopped at 50 and said nothing.
+     */
+    FAILED_TODAY_LIMIT: 100,
+
+    /** Local midnight, the start of the operator's "today". */
+    localMidnight(now) {
+        const at = now instanceof Date ? new Date(now.getTime()) : new Date();
+        at.setHours(0, 0, 0, 0);
+        return at;
+    },
+
+    /**
      * Gates the 7-day-window alert in buildAlerts(). A long history dilutes an
      * all-time rate, which can look calm through a genuinely bad week.
      */
@@ -196,7 +211,9 @@ const OverviewPage = {
         // ~201KB on the critical path of all ten screens.
         const statsP = this._settle(API.getStats());
         const recentP = this._settle(API.getInteractions({ limit: 8 }));
-        const failedP = this._settle(API.getInteractions({ status: 'FAILED', limit: 50 }));
+        const failedP = this._settle(API.getInteractions({
+            status: 'FAILED', limit: this.FAILED_TODAY_LIMIT, since: this.localMidnight().toISOString(),
+        }));
         const tokenP = this._settle(API.getTokenStatus());
         const postsP = this._settle(API.getScheduledPosts());
         // 100, the route's cap: the default of 20 undercounted who is waiting.
@@ -426,8 +443,7 @@ const OverviewPage = {
      */
     buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes) {
         const alerts = [];
-        const startOfToday = new Date();
-        startOfToday.setHours(0, 0, 0, 0);
+        const startOfToday = this.localMidnight();
 
         // 1. Access token — nothing works without it.
         if (tokenRes.status === 'fulfilled' && tokenRes.value) {
@@ -462,17 +478,25 @@ const OverviewPage = {
             });
         }
 
-        // 2. DMs that failed today. /interactions has no date filter, so the
-        //    most recent failures are fetched and counted client-side.
+        // 2. DMs that failed today. Asked for with `since` = local midnight
+        //    (O9), so every row is today's; the client-side date check stays as
+        //    a belt to that brace. One page is at most FAILED_TODAY_LIMIT rows,
+        //    so when the total says there are more, the title says "more than
+        //    100" rather than a number that simply stopped.
         if (failedRes.status === 'fulfilled' && failedRes.value) {
-            const failedToday = ((failedRes.value.data) || []).filter((row) => {
+            const rows = Array.isArray(failedRes.value.data) ? failedRes.value.data : [];
+            const failedToday = rows.filter((row) => {
                 const at = row.timestamp ? new Date(row.timestamp) : null;
                 return at && !Number.isNaN(at.getTime()) && at >= startOfToday;
             }).length;
+            const total = Number(failedRes.value.pagination && failedRes.value.pagination.total);
+            const truncated = failedToday >= this.FAILED_TODAY_LIMIT && Number.isFinite(total) && total > failedToday;
             if (failedToday > 0) {
                 alerts.push({
                     level: 'danger', icon: 'send-horizontal',
-                    title: t('overview.alert.failedToday', { count: failedToday }),
+                    title: truncated
+                        ? t('overview.alert.failedTodayMore', { n: UI.formatNumber(this.FAILED_TODAY_LIMIT) })
+                        : t('overview.alert.failedToday', { count: failedToday }),
                     body: t('overview.alert.failedTodayBody'),
                     action: t('overview.openActivity'), target: 'activity',
                 });

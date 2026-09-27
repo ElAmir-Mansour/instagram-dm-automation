@@ -8,8 +8,14 @@
  * platform split reads from brand tokens rather than `#1877f2` in the markup.
  *
  * Each panel answers for itself: the stats call is fatal (every tile reads
- * it), the 30-day series and the campaign table each have their own error
- * panel whose Retry re-asks for that panel alone.
+ * it), the 30-day series, the campaign table and the failure reasons each have
+ * their own error panel whose Retry re-asks for that panel alone.
+ *
+ * A1: the tiles, the status split, the platform split and the campaign table
+ * answer for one window — 7 / 28 / 90 days or all time — picked in a
+ * segmented control and remembered per browser (`analytics:range`). Each of
+ * them names its window. The 30-day strip, "sent today" and the failure
+ * reasons (A5, always 30 days) are fixed windows and say so in their titles.
  */
 const AnalyticsPage = {
 
@@ -33,6 +39,78 @@ const AnalyticsPage = {
      */
     SUCCESS_RATE_DANGER_MAX: 70,
     SUCCESS_RATE_WARNING_MAX: 90,
+
+    // ─── A1: the window ──────────────────────────────────────────────────────
+    /** The windows on offer, as stored and as sent; 'all' sends no `days`. */
+    RANGES: Object.freeze(['7', '28', '90', 'all']),
+    /** All time: what the routes answered before they took a window. */
+    DEFAULT_RANGE: 'all',
+    RANGE_KEY: 'analytics:range',
+    /** The failure-reasons panel (A5) is always the last 30 days. */
+    FAILURE_DAYS: 30,
+    /** null until the first render reads the remembered one. */
+    range: null,
+
+    /** The remembered window, re-checked so a hand-edited entry cannot send junk. */
+    loadRange() {
+        let stored = null;
+        try { stored = localStorage.getItem(this.RANGE_KEY); } catch { /* private mode */ }
+        return this.RANGES.includes(stored) ? stored : this.DEFAULT_RANGE;
+    },
+
+    saveRange(value) {
+        try { localStorage.setItem(this.RANGE_KEY, value); } catch { /* optional */ }
+    },
+
+    /** The `days` to ask for: a number, or undefined for all time. */
+    rangeDays(range) {
+        return range === 'all' || !this.RANGES.includes(range) ? undefined : Number(range);
+    },
+
+    /** "7 أيام" / "28 يوماً" / "28 days". */
+    daysText(n) {
+        const count = Number(n) || 0;
+        return t('analytics.days', { count, n: UI.formatNumber(count) });
+    },
+
+    /** The window a tile or panel names: "آخر 28 يوماً" / "Last 28 days", or "All time". */
+    windowText(range) {
+        return range === 'all' || !this.RANGES.includes(range)
+            ? t('analytics.window.all')
+            : t('analytics.window.last', { days: this.daysText(range) });
+    },
+
+    /** The segmented control, the same `aria-pressed` pattern as Growth's range. */
+    rangeMarkup() {
+        const current = this.range || this.DEFAULT_RANGE;
+        return html`
+            <div class="segmented studio-seg analytics-range" role="group" aria-label="${t('analytics.range.label')}">
+                ${this.RANGES.map((r) => html`
+                    <button type="button" class="btn btn-sm btn-ghost" id="analytics-range-${r}"
+                            data-action="analytics:setRange" data-range="${r}"
+                            aria-pressed="${r === current ? 'true' : 'false'}">${r === 'all' ? t('analytics.range.all') : this.daysText(r)}</button>
+                `)}
+            </div>
+        `;
+    },
+
+    /** A panel title's second half: which window the numbers under it cover. */
+    windowMeta() {
+        return html`<span class="text-meta analytics-window">${this.windowText(this.range)}</span>`;
+    },
+
+    async setRange(el) {
+        const value = el && el.dataset ? String(el.dataset.range || '') : '';
+        if (!this.RANGES.includes(value) || value === this.range) return;
+        this.range = value;
+        this.saveRange(value);
+        const container = document.getElementById('page-container');
+        // The pressed segment is rebuilt with the page; focus goes back onto it.
+        const focus = container ? UI.captureFocus(container) : null;
+        await this.render();
+        UI.restoreFocus(focus);
+        Motion.announce(t('analytics.range.loaded', { window: this.windowText(this.range) }));
+    },
 
     /** text-success / text-warning / text-danger for a 0–100 rate, or '' if unknown. */
     successRateClass(rate) {
@@ -77,6 +155,8 @@ const AnalyticsPage = {
     async render() {
         const container = document.getElementById('page-container');
         if (!container) return;
+        if (this.range === null) this.range = this.loadRange();
+        const days = this.rangeDays(this.range);
         const gate = Motion.beginLoad(container, () => this.skeleton());
         this.destroy();
         const live = this.liveness();
@@ -91,13 +171,14 @@ const AnalyticsPage = {
          *
          * `allSettled` lets each panel answer for itself. The stats call is
          * still fatal, because every tile and both charts read from it and
-         * there is genuinely no page without it; the other two degrade to their
+         * there is genuinely no page without it; the other three degrade to their
          * own panel and leave the rest of the screen standing.
          */
-        const [statsRes, dailyRes, campaignRes] = await Promise.all([
-            this._settle(API.getStats()),
+        const [statsRes, dailyRes, campaignRes, failuresRes] = await Promise.all([
+            this._settle(API.getStats(days)),
             this._settle(API.getDailyStats(30)),
-            this._settle(API.getCampaignStats()),
+            this._settle(API.getCampaignStats(days)),
+            this._settle(API.getFailureReasons(this.FAILURE_DAYS)),
         ]);
         if (!live()) return;
         gate.done();
@@ -123,7 +204,11 @@ const AnalyticsPage = {
         const total = stats.totalInteractions || 0;
         const split = this.platformSplit(stats.instagramCount, stats.facebookCount);
 
+        const windowLabel = this.windowText(this.range);
+
         container.innerHTML = esc(html`
+            <div class="analytics-toolbar">${this.rangeMarkup()}</div>
+
             <div class="stats-grid">
                 <div class="stat-card surface">
                     <div class="stat-header">
@@ -131,6 +216,7 @@ const AnalyticsPage = {
                         <span class="stat-icon"><i data-lucide="activity" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value">${UI.formatNumber(total)}</p>
+                    <p class="stat-sub" data-window>${windowLabel}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
@@ -138,6 +224,7 @@ const AnalyticsPage = {
                         <span class="stat-icon"><i data-lucide="trending-up" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value ${html.raw(this.successRateClass(stats.successRate))}">${UI.formatPercent(stats.successRate)}</p>
+                    <p class="stat-sub" data-window>${windowLabel}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
@@ -145,6 +232,7 @@ const AnalyticsPage = {
                         <span class="stat-icon"><i data-lucide="users" aria-hidden="true"></i></span>
                     </div>
                     <p class="stat-value">${UI.formatNumber(stats.uniqueUsersReached)}</p>
+                    <p class="stat-sub" data-window>${windowLabel}</p>
                 </div>
                 <div class="stat-card surface">
                     <div class="stat-header">
@@ -170,7 +258,7 @@ const AnalyticsPage = {
                     <div id="analytics-strip"></div>
                 </div>
                 <div class="chart-card surface">
-                    <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chartStatus')}</h2></div>
+                    <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chartStatus')}</h2>${this.windowMeta()}</div>
                     <div id="analytics-split"></div>
                 </div>
             </div>
@@ -179,6 +267,7 @@ const AnalyticsPage = {
                 <div class="chart-card surface">
                     <div class="chart-card-header">
                         <h2 class="chart-card-title">${t('analytics.topCampaigns')}</h2>
+                        ${this.windowMeta()}
                     </div>
                     <div class="table-wrapper" id="analytics-campaigns"></div>
                 </div>
@@ -186,6 +275,7 @@ const AnalyticsPage = {
                 <div class="chart-card surface">
                     <div class="chart-card-header">
                         <h2 class="chart-card-title">${t('analytics.platformSplit')}</h2>
+                        ${this.windowMeta()}
                     </div>
                     <div class="platform-legend">
                         <div class="platform-legend-row">
@@ -223,6 +313,20 @@ const AnalyticsPage = {
                     </div>
                 </div>
             </div>
+
+            <!-- A5: why DMs fail. Always the last 30 days, whatever the range
+                 above, and the title says so. -->
+            <div class="chart-card surface analytics-failures">
+                <div class="chart-card-header">
+                    <h2 class="chart-card-title">${t('analytics.failures.title', { days: this.daysText(this.FAILURE_DAYS) })}</h2>
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', label: t('analytics.failures.open'),
+                        action: 'app:navigate', data: { target: 'activity', query: 'status=FAILED' },
+                        id: 'analytics-failures-open',
+                    })}
+                </div>
+                <div id="analytics-failures"></div>
+            </div>
         `);
 
         UI.icons(container);
@@ -242,6 +346,7 @@ const AnalyticsPage = {
         // blank screen — and its Retry re-asks for that panel only.
         this.fillStrip(dailyRes);
         this.fillCampaigns(campaignRes);
+        this.fillFailures(failuresRes);
 
         const splitHost = document.getElementById('analytics-split');
         if (splitHost) {
@@ -412,16 +517,88 @@ const AnalyticsPage = {
         UI.icons(host);
     },
 
+    // ─── A5: why DMs fail ────────────────────────────────────────────────────
+    /**
+     * One reason as a sentence. A Meta code or one of the pipeline's own
+     * refusals reads in the interface's language (`UI.failureReasonText`, the
+     * same map Activity explains a row with); anything else is Meta's own text,
+     * which is still better than a count with no reason.
+     */
+    failureSentence(reason) {
+        const r = reason || {};
+        const known = UI.failureReasonText(r.reason_code);
+        if (known) return known;
+        if (r.reason_code === 'unknown' || !r.sample) return t('analytics.failures.unknown');
+        return r.sample;
+    },
+
+    failuresMarkup(summary) {
+        const data = summary && typeof summary === 'object' ? summary : {};
+        const reasons = Array.isArray(data.reasons) ? data.reasons : [];
+        const days = this.daysText(Number(data.days) || this.FAILURE_DAYS);
+        const total = Number(data.total) || 0;
+        if (total === 0 || reasons.length === 0) {
+            return html`<p class="text-meta" id="analytics-failures-none">${t('analytics.failures.none', { days })}</p>`;
+        }
+        return html`
+            <p class="chart-summary">${t('analytics.failures.total', { count: total, n: UI.formatNumber(total) })}</p>
+            <ol class="failure-reasons">
+                ${reasons.map((r) => {
+                    const code = String(r.reason_code || '');
+                    const isMetaCode = /^-?\d+$/.test(code);
+                    return html`
+                        <li class="failure-reason">
+                            <div class="failure-reason-main">
+                                <p class="failure-reason-text" dir="auto" title="${r.sample || ''}">${this.failureSentence(r)}</p>
+                                <p class="text-meta">
+                                    ${isMetaCode ? html`<span class="chip failure-reason-code">${t('analytics.failures.code', { code: `\u2066${code}\u2069` })}</span>` : ''}
+                                    ${r.last_at ? html`<span>${t('analytics.failures.latest', { when: UI.formatDateTime(r.last_at) })}</span>` : ''}
+                                </p>
+                            </div>
+                            <strong class="failure-reason-count">${UI.formatNumber(r.count)}</strong>
+                        </li>
+                    `;
+                })}
+            </ol>
+        `;
+    },
+
+    fillFailures(failuresRes) {
+        const host = document.getElementById('analytics-failures');
+        if (!host) return;
+        if (!failuresRes || failuresRes.status === 'rejected') {
+            const err = (failuresRes && failuresRes.reason) || new Error(t('error.unexpected'));
+            UI.renderError(host, {
+                title: t('analytics.failures.errorTitle'),
+                message: err.message || t('error.unexpected'),
+                hint: err.isNetworkError ? t('error.network') : '',
+            }, () => this.retryPanel('failures'));
+            return;
+        }
+        host.innerHTML = esc(this.failuresMarkup(failuresRes.value));
+        UI.icons(host);
+    },
+
+    PANEL_HOSTS: Object.freeze({ strip: 'analytics-strip', campaigns: 'analytics-campaigns', failures: 'analytics-failures' }),
+
     /** A6: one panel's Retry re-asks for that panel alone; the rest of the screen stays. */
     retryPanel(panel) {
         const live = this.liveness();
-        const host = document.getElementById(panel === 'strip' ? 'analytics-strip' : 'analytics-campaigns');
+        const host = document.getElementById(this.PANEL_HOSTS[panel] || this.PANEL_HOSTS.campaigns);
         if (host) host.innerHTML = esc(html`<div class="chart-skel" aria-hidden="true"><span class="skel skel-block"></span></div>${Motion.busy()}`);
-        const request = panel === 'strip' ? API.getDailyStats(30) : API.getCampaignStats();
+        let request;
+        if (panel === 'strip') request = API.getDailyStats(30);
+        else if (panel === 'failures') request = API.getFailureReasons(this.FAILURE_DAYS);
+        else request = API.getCampaignStats(this.rangeDays(this.range));
         return this._settle(request).then((res) => {
             if (!live()) return;
             if (panel === 'strip') this.fillStrip(res);
+            else if (panel === 'failures') this.fillFailures(res);
             else this.fillCampaigns(res);
         });
     },
 };
+
+UI.registerActions('analytics', {
+    setRange: (el) => AnalyticsPage.setRange(el),
+});

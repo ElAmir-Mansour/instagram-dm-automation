@@ -4620,3 +4620,52 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
     .monteur-approve .btn-primary, .monteur-approve .btn-secondary[type='submit'] { inline-size: 100%; }
     .monteur-source .btn { margin-inline-start: auto; }
 }
+
+/* ─── wave3: inbox+analytics data ─── */
+/* I8: the thread's name keeps its ellipsis and the IG / FB tag stays whole beside it. */
+.thread-who { display: inline-flex; align-items: baseline; min-width: 0; }
+.thread-who .platform-tag { flex-shrink: 0; }
+/* In the chat header the tag opens the sub-line, so its gap is on the far side. */
+.chat-sub .platform-tag { margin-inline: 0 var(--space-2); }
+
+/* I4: who wrote an outbound message, above the bubble. The row turns into a column so the
+   bubble keeps its `max-width` against the full row; flex-start / flex-end stay
+   writing-mode aware, so the tag sits at the bubble's own edge in both directions. On the
+   chat canvas, not on the gradient: a tint on the outbound gradient falls below AA. */
+.message-row--tagged { flex-direction: column; gap: var(--space-1); }
+.message-row--tagged.row-outbound { align-items: flex-end; }
+.message-row--tagged.row-inbound { align-items: flex-start; }
+.sender-tag {
+    display: inline-flex; align-items: center;
+    font-size: var(--fs-100);
+    font-weight: var(--fw-semibold);
+    padding: 1px var(--space-2);
+    border-radius: var(--radius-xs);
+    line-height: var(--lh-normal);
+}
+/* Tints with their -text labels (DESIGN §3), the pairs `.chip-accent` and `.chip` use. */
+.sender-tag--ai { background: var(--accent-soft); color: var(--accent-text); }
+.sender-tag--operator { background: var(--surface-glass-hover); color: var(--text-default); }
+
+/* A1: the window control above the tiles, and the window each panel names. */
+.analytics-toolbar { display: flex; justify-content: flex-end; margin-block-end: var(--space-4); }
+.analytics-range { inline-size: max-content; max-inline-size: 100%; }
+.analytics-window { flex-shrink: 0; }
+
+/* A5: why DMs fail, most frequent first. */
+.analytics-failures { margin-block-end: var(--space-5); }
+.failure-reasons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.failure-reason {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+}
+.failure-reason-main { flex: 1; min-inline-size: 0; display: flex; flex-direction: column; gap: var(--space-1); }
+.failure-reason-main p { margin: 0; }
+.failure-reason-main .text-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.failure-reason-text { color: var(--text-strong); overflow-wrap: anywhere; }
+.failure-reason-count { font-size: var(--fs-300); color: var(--text-strong); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+
+@media (max-width: 560px) {
+    .analytics-range { inline-size: 100%; }
+}
