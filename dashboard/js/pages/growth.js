@@ -73,6 +73,19 @@ const GrowthPage = {
      * they are null by design, not an error, and are said to be so calmly.
      */
     SMALL_ACCOUNT_FOLLOWERS: 100,
+    /**
+     * The skip rate's bands (% of views gone in the first 3 s — the hook's own number): above
+     * 70 most viewers are lost before the hook lands, from 50 half of them. Overview restates
+     * them, because this module is lazily loaded.
+     */
+    SKIP_DANGER_ABOVE: 70,
+    SKIP_WARNING_FROM: 50,
+    /** "Last synced" turns amber past one missed daily sync, red past two (GROWTH.md §2). */
+    SYNC_WARN_MS: 26 * 60 * 60 * 1000,
+    SYNC_STALE_MS: 50 * 60 * 60 * 1000,
+    /** A goal is a whole number of followers or views; the server refuses anything above this. */
+    GOAL_MAX: 1000000000,
+    GOAL_KEYS: Object.freeze(['followers', 'views']),
     TYPE_KEYS: Object.freeze(['reel', 'carousel', 'image', 'video', 'other']),
     PLATFORM_KEYS: Object.freeze(['instagram', 'facebook', 'tiktok']),
     /** Sunday first: the Saudi week and the US one agree, and so do both of this page's locales. */
@@ -123,8 +136,13 @@ const GrowthPage = {
     setEditor: null,
     /** Inline messages under the three SEO forms, by form. */
     formErrors: {},
-    /** What is typed in the SEO forms, so a repaint of their region never eats it. */
-    drafts: { keyword: '', topic: '', competitor: '' },
+    /**
+     * What is typed in the SEO forms, so a repaint of their region never eats it. A goal draft
+     * is null until the field is touched, so the field shows the saved goal until then.
+     */
+    drafts: { keyword: '', topic: '', competitor: '', goal_followers: null, goal_views: null },
+    /** A KPI card's "Change goal" names the field to focus once the SEO view is painted. */
+    _focusGoal: null,
 
     _seq: 0,
     _dataSeq: 0,
@@ -171,7 +189,8 @@ const GrowthPage = {
         this.suggest = null;
         this.setEditor = null;
         this.formErrors = {};
-        this.drafts = { keyword: '', topic: '', competitor: '' };
+        this.drafts = { keyword: '', topic: '', competitor: '', goal_followers: null, goal_views: null };
+        this._focusGoal = null;
         this._saveChain = null;
     },
 
@@ -288,6 +307,7 @@ const GrowthPage = {
         this.paintPage();
         if (this.coachState === 'loading') this.startCoachTicker();
         this.maybeLoadCompetitors();
+        this.focusPendingGoal();
         Motion.announce(`${t('nav.growth')} — ${t('common.loaded')}`);
     },
 
@@ -303,6 +323,18 @@ const GrowthPage = {
         // A coach still writing keeps its clock: the card was just rebuilt on this view.
         if (this.coachState === 'loading') this.startCoachTicker();
         this.maybeLoadCompetitors();
+        this.focusPendingGoal();
+    },
+
+    /** After "Change goal" on a KPI card: the field it named, once the SEO view is on screen. */
+    focusPendingGoal() {
+        const key = this._focusGoal;
+        if (!key || this.view() !== 'seo') return;
+        this._focusGoal = null;
+        const input = document.getElementById(`growth-goal-${key}-input`);
+        if (!input) return;
+        if (typeof input.scrollIntoView === 'function') input.scrollIntoView({ block: 'center' });
+        if (typeof input.focus === 'function') input.focus();
     },
 
     // ─── Settling responses onto state ───────────────────────────────────────
@@ -449,17 +481,46 @@ const GrowthPage = {
         UI.restoreFocus(focus);
     },
 
-    /** Everything that follows the range: the banner, the numbers, the posts. */
+    /** Is there a previous answer on screen that a reload can keep while it works? */
+    hasData() {
+        return !!(this.overview || this.overviewError || this.postsLoaded || this.postsError);
+    },
+
+    /**
+     * Everything that follows the range: the banner, the numbers, the posts.
+     *
+     * G6: a range switch used to blank all of it to skeletons, so the page jumped twice and the
+     * operator lost the numbers they were comparing against. Now the old numbers stay, dimmed
+     * and marked `aria-busy`, until the new ones replace them. Skeletons only when there is
+     * nothing to keep (the first load).
+     */
     paintData() {
         if (this.view() !== 'performance') return;
         this.paintRegion('growth-toolbar', this.toolbarMarkup());
+        const busy = this.dataLoading && this.hasData();
+        if (busy) {
+            this.setBusy(true);
+            return;
+        }
         this.paintRegion('growth-banner', this.bannerMarkup());
         this.paintRegion('growth-summary', this.summaryMarkup());
         this.paintRegion('growth-details', this.detailsMarkup());
+        this.paintRegion('growth-do-first', this.doFirstMarkup());
+        this.setBusy(false);
+    },
+
+    setBusy(on) {
+        ['growth-summary', 'growth-details'].forEach((id) => {
+            const host = document.getElementById(id);
+            if (!host) return;
+            if (on) host.setAttribute('aria-busy', 'true');
+            else host.removeAttribute('aria-busy');
+        });
     },
 
     paintSeo() {
         if (this.view() !== 'seo') return;
+        this.paintRegion('growth-goals', this.goalsMarkup());
         this.paintRegion('growth-keywords', this.keywordsMarkup());
         this.paintRegion('growth-hashtags', this.hashtagsMarkup());
         this.paintRegion('growth-competitors', this.competitorsMarkup());
@@ -477,13 +538,47 @@ const GrowthPage = {
     },
 
     performanceMarkup() {
+        const busy = this.dataLoading && this.hasData() ? html.raw(' aria-busy="true"') : '';
         return html`
-            <div id="growth-summary">${this.summaryMarkup()}</div>
+            <div id="growth-do-first">${this.doFirstMarkup()}</div>
+            <div id="growth-summary"${busy}>${this.summaryMarkup()}</div>
             <section class="surface pad-5 growth-coach" id="growth-coach" aria-labelledby="growth-coach-title">
                 ${this.coachMarkup()}
             </section>
-            <div id="growth-details">${this.detailsMarkup()}</div>
+            <div id="growth-details"${busy}>${this.detailsMarkup()}</div>
         `;
+    },
+
+    /**
+     * G1: the coach's first action, under the toolbar. "What should I do" used to be two screens
+     * down and behind a button; the answer is already in this browser once a plan exists.
+     */
+    doFirstMarkup() {
+        if (this.coachState !== 'ready' || !this.coach) return '';
+        const first = this.prioritize(this.coach.actions)[0];
+        if (!first) return '';
+        return html`
+            <div class="do-first" id="growth-do-first-line">
+                <i data-lucide="lightbulb" aria-hidden="true"></i>
+                <strong>${t('growth.doFirst')}</strong>
+                <span class="do-first-text user-content" dir="auto">${first.title}</span>
+                <button type="button" class="alert-link" data-action="growth:showPlan">
+                    ${t('growth.doFirst.open')}
+                    <i data-lucide="arrow-down" aria-hidden="true"></i>
+                </button>
+            </div>
+        `;
+    },
+
+    /** "See the plan": to the coach card, with focus on its heading so a reader lands there too. */
+    showPlan() {
+        const card = document.getElementById('growth-coach');
+        if (card && typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'start' });
+        const title = document.getElementById('growth-coach-title');
+        if (title) {
+            title.setAttribute('tabindex', '-1');
+            if (typeof title.focus === 'function') title.focus();
+        }
     },
 
     // ─── Reading values ──────────────────────────────────────────────────────
@@ -725,11 +820,17 @@ const GrowthPage = {
         `;
     },
 
+    /**
+     * G5: the sync runs daily, so past 26 hours one was missed (amber) and past 50 two were
+     * (red). The age's level used to be computed and thrown away, on 36h/72h thresholds that
+     * hid a missed day entirely.
+     */
     lastSyncMarkup() {
         const last = this.status && this.status.lastSync;
         if (!last) return html`<span class="text-meta" id="growth-last-sync">${t('growth.sync.never')}</span>`;
-        const age = UI.relativeAge(last, { warnMs: 36 * 60 * 60 * 1000, staleMs: 72 * 60 * 60 * 1000 });
-        return html`<span class="text-meta" id="growth-last-sync" title="${age.title}">${t('growth.sync.last', { when: age.text })}</span>`;
+        const age = UI.relativeAge(last, { warnMs: this.SYNC_WARN_MS, staleMs: this.SYNC_STALE_MS });
+        const cls = age.level === 'stale' ? ' text-danger' : age.level === 'warn' ? ' text-warning' : '';
+        return html`<span class="text-meta${html.raw(cls)}" id="growth-last-sync" title="${age.title}">${t('growth.sync.last', { when: age.text })}</span>`;
     },
 
     toolbarMarkup() {
@@ -876,6 +977,7 @@ const GrowthPage = {
         else value = isRate ? this.formatRate(raw) : this.formatCount(raw);
         const missing = this.num(raw) === null;
         const label = t(`growth.kpi.${def.key}`);
+        const band = isSkip && !missing ? this.skipBand(raw) : null;
         let sub;
         if (missing) {
             sub = html`<p class="stat-sub">${(watch || isSkip) && !this.locked('instagram') && this.postsLoaded ? t('growth.kpi.noReels') : this.missingReason()}</p>`;
@@ -888,6 +990,8 @@ const GrowthPage = {
                 : html`<p class="stat-sub growth-delta ${html.raw(d > 0 ? 'text-success' : d < 0 ? 'text-danger' : '')}">
                         ${UI.ltr(this.formatDelta(d))} <span>${t('growth.kpi.deltaIn', { days: this.daysText(this.days) })}</span>
                     </p>`;
+        } else if (band) {
+            sub = html`<p class="stat-sub">${t(`growth.kpi.skipBand.${band}`)}</p>`;
         } else {
             sub = html`<p class="stat-sub">${t('growth.kpi.inRange', { days: this.daysText(this.days) })}</p>`;
         }
@@ -897,8 +1001,9 @@ const GrowthPage = {
                     <span class="stat-label">${label}</span>
                     <span class="stat-icon"><i data-lucide="${def.icon}" aria-hidden="true"></i></span>
                 </div>
-                <p class="stat-value">${value}</p>
+                <p class="stat-value${band ? html.raw(` text-${band}`) : ''}">${value}</p>
                 ${sub}
+                ${this.goalMarkup(def.key, raw)}
                 <details class="growth-tip">
                     <summary title="${t(`growth.kpi.${def.key}.tip`)}">
                         <i data-lucide="circle-help" aria-hidden="true"></i>
@@ -908,6 +1013,52 @@ const GrowthPage = {
                 </details>
             </div>
         `;
+    },
+
+    /** 'danger' | 'warning' | 'success' for a skip rate (0–100), or null when not measured. */
+    skipBand(value) {
+        const n = this.num(value);
+        if (n === null) return null;
+        if (n > this.SKIP_DANGER_ABOVE) return 'danger';
+        if (n >= this.SKIP_WARNING_FROM) return 'warning';
+        return 'success';
+    },
+
+    /** The goal for a KPI, from the settings (never a constant), or null. */
+    goalFor(key) {
+        const s = this.settings;
+        if (!s) return null;
+        const goal = key === 'followers' ? s.goal_followers : key === 'views' ? s.goal_views : null;
+        return this.num(goal) !== null && goal > 0 ? goal : null;
+    },
+
+    /**
+     * G4: the distance to goal under followers and views — "154 of 10,000". Views are over the
+     * range on screen: the account-level series is what the API has, and the label beside it
+     * says which range. An unmeasured count is "—", not 0; no goal (settings unread), no line.
+     */
+    goalMarkup(key, value) {
+        if (!this.GOAL_KEYS.includes(key)) return '';
+        const goal = this.goalFor(key);
+        if (goal === null) return '';
+        const n = this.num(value);
+        return html`
+            <div class="growth-goal" id="growth-goal-${key}">
+                ${n !== null ? this.barSvg(n / goal) : ''}
+                <p class="growth-goal-line">
+                    <span>${t('growth.kpi.goal', { n: n === null ? '—' : UI.formatNumber(n), goal: UI.formatNumber(goal) })}</span>
+                    <button type="button" class="stat-link" data-action="growth:editGoal" data-goal="${key}">${t('growth.kpi.editGoal')}</button>
+                </p>
+            </div>
+        `;
+    },
+
+    /** "Change goal": to the SEO view's goals form, with that field focused. */
+    editGoal(key) {
+        if (!this.GOAL_KEYS.includes(key)) return;
+        this._focusGoal = key;
+        if (this.view() === 'seo') { this.focusPendingGoal(); return; }
+        if (typeof App !== 'undefined' && typeof App.goWithQuery === 'function') App.goWithQuery('growth', { tab: 'seo' });
     },
 
     kpisMarkup() {
@@ -1055,7 +1206,7 @@ const GrowthPage = {
     },
 
     summaryMarkup() {
-        if (this.dataLoading) return this.regionSkeleton('summary');
+        if (this.dataLoading && !this.hasData()) return this.regionSkeleton('summary');
         if (this.overviewError) return this.errorHost(this.overviewError, t('growth.overview.failed'), 'data');
         const split = this.followSplit();
         const trend = html`
@@ -1077,7 +1228,7 @@ const GrowthPage = {
     },
 
     detailsMarkup() {
-        if (this.dataLoading) return this.regionSkeleton('details');
+        if (this.dataLoading && !this.hasData()) return this.regionSkeleton('details');
         return html`
             <div class="chart-grid chart-grid--even growth-pair">
                 <section class="chart-card surface growth-best" id="growth-best" aria-labelledby="growth-best-title">
@@ -1307,7 +1458,7 @@ const GrowthPage = {
                 </div>
             </div>
             <p class="text-meta growth-posts-count" id="growth-posts-count">
-                ${this.postsText(list.length)} · ${t('growth.posts.sortedBy', { column: sortLabel })}
+                ${this.postsText(list.length)} · ${t('growth.posts.sortedBy', { column: sortLabel })} · ${this.sort.dir === 'asc' ? t('growth.posts.asc') : t('growth.posts.desc')}
             </p>
             ${this.platformViewsMarkup(list)}
             ${list.length === 0 ? html`
@@ -1756,9 +1907,17 @@ const GrowthPage = {
             if (tenant === this._tenantEpoch) {
                 this.stopCoachTicker();
                 this.paintRegion('growth-coach', this.coachMarkup());
+                this.paintRegion('growth-do-first', this.doFirstMarkup());
                 if (this.coachState === 'ready') this.paintRegion('growth-posts', this.postsMarkup());
             }
         }
+    },
+
+    /** G12: the numbers moved after this plan was written, so Regenerate would read newer ones. */
+    syncedSincePlan() {
+        const last = Date.parse((this.status && this.status.lastSync) || '');
+        const at = Date.parse(this.coachAt || '');
+        return Number.isFinite(last) && Number.isFinite(at) && last > at;
     },
 
     coachStagesMarkup() {
@@ -1880,6 +2039,7 @@ const GrowthPage = {
                 ` : ''}
                 <div class="growth-coach-foot">
                     <p class="form-hint">${t('growth.coach.disclaimer')}</p>
+                    ${this.syncedSincePlan() ? html`<span class="text-meta text-warning" id="growth-plan-older">${t('growth.sync.sincePlan')}</span>` : ''}
                     ${UI.button({ variant: 'secondary', size: 'sm', icon: 'sparkles', label: t('growth.coach.regenerate'), action: 'growth:generateCoach', id: 'growth-coach-btn' })}
                 </div>
             `;
@@ -1938,10 +2098,31 @@ const GrowthPage = {
                 .map((x) => ({ name: String(x.name || '').trim(), tags: this.normTags(x.tags) })),
             competitors: strings(s.competitors).map((u) => this.normalizeUsername(u)).filter(Boolean),
             audience: s.audience && typeof s.audience === 'object' && !Array.isArray(s.audience) ? { ...s.audience } : {},
+            // The goals (v24). Null when the server did not send one, so nothing invents a target.
+            goal_followers: this.parseGoal(s.goal_followers),
+            goal_views: this.parseGoal(s.goal_views),
         };
     },
 
-    /** The PUT body: the whole settings, so replace and merge semantics both come out right. */
+    /**
+     * A goal as typed or as stored: a whole number from 1 to GOAL_MAX, with thousands
+     * separators and Arabic-Indic digits accepted. Null for anything else.
+     */
+    parseGoal(raw) {
+        if (raw === null || raw === undefined || typeof raw === 'boolean') return null;
+        const text = String(raw).trim()
+            .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+            .replace(/[\s,\u066C\u060C]/g, '');
+        if (!/^\d+$/.test(text)) return null;
+        const n = Number(text);
+        return Number.isSafeInteger(n) && n >= 1 && n <= this.GOAL_MAX ? n : null;
+    },
+
+    /**
+     * The PUT body: the whole settings, so replace and merge semantics both come out right. The
+     * goals are left out on purpose — the route keeps a key it is not sent — so a keyword add
+     * cannot overwrite a goal saved from another tab. They are sent by `saveGoals` alone.
+     */
     settingsPayload(settings) {
         const s = this.normalizeSettings(settings);
         return {
@@ -1961,14 +2142,14 @@ const GrowthPage = {
      * puts back what the server last agreed to, and says so. Serialised so two quick adds
      * cannot race each other's PUT.
      */
-    saveSettings(next, region) {
+    saveSettings(next, region, body) {
         const run = async () => {
             const tenant = this._tenantEpoch;
             const prev = this.settings;
             this.settings = this.normalizeSettings(next);
             this.paintSeoRegion(region);
             try {
-                const res = await API.saveGrowthSettings(this.settingsPayload(this.settings));
+                const res = await API.saveGrowthSettings(body || this.settingsPayload(this.settings));
                 if (tenant !== this._tenantEpoch) return false;
                 if (res && res.settings) this.settings = this.normalizeSettings(res.settings);
                 this.paintSeoRegion(region);
@@ -1990,6 +2171,7 @@ const GrowthPage = {
         if (region === 'keywords') this.paintRegion('growth-keywords', this.keywordsMarkup());
         else if (region === 'hashtags') this.paintRegion('growth-hashtags', this.hashtagsMarkup());
         else if (region === 'competitors') this.paintRegion('growth-competitors', this.competitorsMarkup());
+        else if (region === 'goals') this.paintRegion('growth-goals', this.goalsMarkup());
     },
 
     formError(form) {
@@ -2010,10 +2192,87 @@ const GrowthPage = {
             return html`<div class="surface pad-5">${this.errorHost(this.settingsError, t('growth.settings.failed'), 'settings')}</div>`;
         }
         return html`
+            <section class="surface pad-5 growth-seo-card" id="growth-goals" aria-labelledby="growth-goals-title">${this.goalsMarkup()}</section>
             <section class="surface pad-5 growth-seo-card" id="growth-keywords" aria-labelledby="growth-keywords-title">${this.keywordsMarkup()}</section>
             <section class="surface pad-5 growth-seo-card" id="growth-hashtags" aria-labelledby="growth-hashtags-title">${this.hashtagsMarkup()}</section>
             <section class="surface pad-5 growth-seo-card" id="growth-competitors" aria-labelledby="growth-competitors-title">${this.competitorsMarkup()}</section>
         `;
+    },
+
+    // ─── Goals (v24) ─────────────────────────────────────────────────────────
+    /** A goal field's value: what was typed, else the saved goal, else empty. */
+    goalFieldValue(key) {
+        const draft = this.drafts[`goal_${key}`];
+        if (draft !== null && draft !== undefined) return draft;
+        const saved = this.currentSettings()[`goal_${key}`];
+        return saved === null || saved === undefined ? '' : String(saved);
+    },
+
+    goalsMarkup() {
+        const field = (key) => html`
+            <div class="form-group">
+                <label class="form-label" for="growth-goal-${key}-input">${t(`growth.goals.${key}`)}</label>
+                <input class="field" type="text" inputmode="numeric" autocomplete="off" dir="ltr"
+                       id="growth-goal-${key}-input" name="goal_${key}" maxlength="13"
+                       value="${this.goalFieldValue(key)}" data-input="growth:draftInput" data-draft="goal_${key}">
+                ${this.formError(`goal-${key}`)}
+            </div>
+        `;
+        return html`
+            <div class="growth-section-head">
+                <div class="growth-section-heading">
+                    <h2 class="section-title" id="growth-goals-title"><i data-lucide="flag" aria-hidden="true"></i> ${t('growth.goals.title')}</h2>
+                    <p class="text-meta">${t('growth.goals.lede')}</p>
+                </div>
+            </div>
+            <form class="growth-goals-form" data-submit="growth:saveGoals" novalidate>
+                ${field('followers')}
+                ${field('views')}
+                <div class="form-group">
+                    ${UI.button({ variant: 'secondary', type: 'submit', icon: 'check', label: t('growth.goals.save'), id: 'growth-goals-save' })}
+                </div>
+            </form>
+        `;
+    },
+
+    /**
+     * PUT just the two goals. Each field is checked here first and says what is wrong under
+     * itself; the server checks again (a whole number above zero, at most a billion).
+     */
+    async saveGoals(form, event) {
+        if (event && typeof event.preventDefault === 'function') event.preventDefault();
+        const read = (key) => {
+            const el = document.getElementById(`growth-goal-${key}-input`);
+            if (el) return el.value;
+            return form && form.fields ? form.fields[`goal_${key}`] : this.goalFieldValue(key);
+        };
+        const typed = { followers: String(read('followers') ?? ''), views: String(read('views') ?? '') };
+        const parsed = { followers: this.parseGoal(typed.followers), views: this.parseGoal(typed.views) };
+        const bad = this.GOAL_KEYS.filter((key) => parsed[key] === null);
+        this.GOAL_KEYS.forEach((key) => { delete this.formErrors[`goal-${key}`]; });
+        if (bad.length) {
+            bad.forEach((key) => { this.formErrors[`goal-${key}`] = t('growth.goals.invalid'); });
+            this.drafts.goal_followers = typed.followers;
+            this.drafts.goal_views = typed.views;
+            this.paintSeoRegion('goals');
+            bad.slice().reverse().forEach((key) => {
+                const input = document.getElementById(`growth-goal-${key}-input`);
+                if (input) UI.markInvalid(input, `growth-goal-${key}-error`);
+            });
+            return false;
+        }
+        this.drafts.goal_followers = null;
+        this.drafts.goal_views = null;
+        const s = this.currentSettings();
+        const body = { goal_followers: parsed.followers, goal_views: parsed.views };
+        const ok = await this.saveSettings({ ...s, ...body }, 'goals', body);
+        if (ok) UI.toast(t('growth.goals.saved'));
+        else {
+            this.drafts.goal_followers = typed.followers;
+            this.drafts.goal_views = typed.views;
+            this.paintSeoRegion('goals');
+        }
+        return ok;
     },
 
     // ─── Keywords ────────────────────────────────────────────────────────────
@@ -2611,6 +2870,7 @@ const GrowthPage = {
             this.syncing = false;
             UI.toast(this.syncDoneText(res && res.synced));
             await this.reloadData({ withStatus: true });
+            if (tenant === this._tenantEpoch && this.coachState === 'ready') this.paintRegion('growth-coach', this.coachMarkup());
         } catch (err) {
             if (tenant !== this._tenantEpoch) return;
             this.syncNote = err && err.status === 429
@@ -2654,6 +2914,22 @@ const GrowthPage = {
         }));
     },
 
+    /**
+     * G14: the phone's select. It names a column; choosing one sorts best first, like a new
+     * header click, and a column already sorted keeps the direction its header set — so the
+     * select, the headers' aria-sort and the count line never disagree. It used to repaint
+     * silently; it now says what it did, like the headers do.
+     */
+    sortFromSelect(key) {
+        if (!this.SORT_KEYS.includes(key)) return;
+        this.sort = key === this.sort.key ? { key, dir: this.sort.dir } : { key, dir: 'desc' };
+        this.paintRegion('growth-posts', this.postsMarkup());
+        Motion.announce(t('growth.posts.sortedAnnounce', {
+            column: t(`growth.metric.${key}`),
+            dir: this.sort.dir === 'asc' ? t('growth.posts.asc') : t('growth.posts.desc'),
+        }));
+    },
+
     setFilter(which, value) {
         const keys = which === 'platform' ? this.PLATFORM_KEYS : this.TYPE_KEYS;
         this.filter = { ...this.filter, [which]: value === 'all' || keys.includes(value) ? value : 'all' };
@@ -2681,18 +2957,15 @@ UI.registerActions('growth', {
     setDays: (el) => GrowthPage.setDays(el),
     setMetric: (el) => GrowthPage.setMetric(el),
     sortBy: (el) => GrowthPage.sortBy(el && el.dataset ? el.dataset.key : ''),
-    sortSelect: (el) => {
-        // The phone's select states the column; its direction is always "best first".
-        const key = el ? el.value : '';
-        if (!GrowthPage.SORT_KEYS.includes(key)) return;
-        GrowthPage.sort = { key, dir: 'desc' };
-        GrowthPage.paintRegion('growth-posts', GrowthPage.postsMarkup());
-    },
+    sortSelect: (el) => GrowthPage.sortFromSelect(el ? el.value : ''),
     filterType: (el) => GrowthPage.setFilter('type', el ? el.value : 'all'),
     filterPlatform: (el) => GrowthPage.setFilter('platform', el ? el.value : 'all'),
     clearFilters: () => GrowthPage.clearFilters(),
     morePosts: () => GrowthPage.morePosts(),
     generateCoach: () => GrowthPage.generateCoach(),
+    showPlan: () => GrowthPage.showPlan(),
+    editGoal: (el) => GrowthPage.editGoal(el && el.dataset ? el.dataset.goal : ''),
+    saveGoals: (form, event) => GrowthPage.saveGoals(form, event),
     draftInput: (el) => {
         const key = el && el.dataset ? el.dataset.draft : '';
         if (key && Object.prototype.hasOwnProperty.call(GrowthPage.drafts, key)) GrowthPage.drafts[key] = String(el.value || '');

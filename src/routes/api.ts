@@ -2910,6 +2910,19 @@ router.post('/upload', canOperate, async (req, res) => {
 
 // ─── Direct Message Inbox & Chat ─────────────────────────────────────────────
 
+/**
+ * `?search=` matches the sender — `username` and `instagram_user_id`, the two identity columns the
+ * table has (there is no display name and no platform column yet) — with a parameterised ILIKE.
+ * The dashboard used to search only the 20 rows it had; now the server searches every thread of
+ * the tenant, and the count answers for the same filter so "showing N of M" stays honest.
+ */
+export function conversationSearchPattern(raw: unknown): string | null {
+    const term = typeof raw === 'string' ? raw.trim().slice(0, 100) : '';
+    if (!term) return null;
+    // `%`, `_` and `\` are LIKE metacharacters; escaped so a typed underscore matches an underscore.
+    return `%${term.replace(/[\\%_]/g, '\\$&')}%`;
+}
+
 router.get('/conversations', async (req, res) => {
     try {
         const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
@@ -2917,21 +2930,28 @@ router.get('/conversations', async (req, res) => {
         const offset = (page - 1) * limit;
 
         const tenantId = getTenantId(req);
+        const pattern = conversationSearchPattern(req.query.search);
+        const params: unknown[] = [tenantId];
+        let where = 'c.creator_id = $1';
+        if (pattern) {
+            params.push(pattern);
+            where += ` AND (c.username ILIKE $${params.length} OR c.instagram_user_id ILIKE $${params.length})`;
+        }
 
         const result = await pool.query(
             `SELECT c.*,
                     (SELECT text FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_text,
                     (SELECT direction FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) as last_message_direction
              FROM conversations c
-             WHERE c.creator_id = $1
+             WHERE ${where}
              ORDER BY c.last_message_at DESC
-             LIMIT $2 OFFSET $3`,
-            [tenantId, limit, offset]
+             LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+            [...params, limit, offset]
         );
 
         const countRes = await pool.query(
-            'SELECT COUNT(*)::int as total FROM conversations WHERE creator_id = $1',
-            [tenantId]
+            `SELECT COUNT(*)::int as total FROM conversations c WHERE ${where}`,
+            params
         );
 
         res.json({

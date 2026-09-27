@@ -309,7 +309,17 @@ const API = {
     uploadMedia: (data) => API.request('/upload', { method: 'POST', body: JSON.stringify(data) }),
 
     // Conversations (DM inbox)
-    getConversations: () => API.request('/conversations'),
+    /**
+     * `{ limit, search, page }`. The route defaults to 20 rows, which is why the inbox used to
+     * show only the newest 20 and search only those; the inbox asks for 100 and sends `search`
+     * so the server looks through every thread. `pagination.total` says how many there really are.
+     */
+    getConversations: (params = {}) => {
+        const query = new URLSearchParams(
+            Object.entries(params).filter(([, v]) => v !== '' && v !== null && v !== undefined)
+        ).toString();
+        return API.request(`/conversations${query ? `?${query}` : ''}`);
+    },
     getConversationMessages: (id) => API.request(`/conversations/${encodeURIComponent(id)}/messages`),
     sendConversationMessage: (id, text) => API.request(`/conversations/${encodeURIComponent(id)}/messages`, {
         method: 'POST', body: JSON.stringify({ text }),
@@ -372,7 +382,7 @@ const API = {
     /** Gemini reads the metrics, captions and settings: most of a minute, synchronously. */
     growthCoach: (data) => API.request('/growth/coach', { method: 'POST', body: JSON.stringify(data || {}) }),
     getGrowthSettings: () => API.request('/growth/settings'),
-    /** The whole settings: keywords, hashtag_sets, competitors, audience. */
+    /** The whole settings: keywords, hashtag_sets, competitors, audience, goal_followers, goal_views. */
     saveGrowthSettings: (data) => API.request('/growth/settings', { method: 'PUT', body: JSON.stringify(data) }),
     /** `{ keywords: { term, why }[], hashtags: string[] }` — ideas to verify, not search-volume data. */
     suggestGrowthKeywords: (topic) => API.request('/growth/keywords/suggest', {
