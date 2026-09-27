@@ -1033,12 +1033,12 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '10.1');
+        assert.equal(version, '11.0');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['10.1']);
+        assert.deepEqual([...new Set(refs)], ['11.0']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['10.1'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.0'], page);
         }
     });
 });

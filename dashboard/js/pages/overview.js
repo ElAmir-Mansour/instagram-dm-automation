@@ -545,6 +545,9 @@ const OverviewPage = {
             const now = Date.now();
             const overdue = posts.filter((p) => (
                 p.status === 'PENDING' && p.scheduled_time
+                // A held row (Instagram still processing the reel, TikTok's daily limit) is
+                // late on purpose and says so on its own card; it is not a stuck post.
+                && !UI.heldReason(p)
                 && new Date(p.scheduled_time).getTime() < now - this.OVERDUE_GRACE_MS
             )).length;
             const failed = posts.filter((p) => p.status === 'FAILED').length;

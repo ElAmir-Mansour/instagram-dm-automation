@@ -134,6 +134,38 @@ describe('POST /conversations/:id/messages — the operator’s reply is marked 
     });
 });
 
+describe('POST /conversations/:id/messages — a Facebook thread is answered through its page', () => {
+    const send = async (row: Record<string, unknown>): Promise<string[]> => {
+        const urls: string[] = [];
+        const originalPost = metaHttp.post;
+        (metaHttp as any).post = async (url: string) => { urls.push(url); return { data: { message_id: 'sent-1' } }; };
+        try {
+            const { res } = await call('post', '/conversations/:id/messages', { params: { id: CONV }, body: { text: 'أهلاً' } }, (sql) => (
+                /FROM conversations c/.test(sql)
+                    ? { rows: [{ id: CONV, instagram_user_id: 'user-1', page_access_token: 'EAAGplain', facebook_page_id: 'FBPAGE1', ...row }] }
+                    : { rows: [] }
+            ));
+            assert.equal(res.statusCode, 200);
+        } finally {
+            (metaHttp as any).post = originalPost;
+        }
+        return urls;
+    };
+
+    it('sends to /{page-id}/messages when the thread is a Facebook one', async () => {
+        const urls = await send({ platform: 'facebook' });
+        assert.equal(urls.length, 1);
+        assert.match(urls[0]!, /\/FBPAGE1\/messages$/);
+    });
+
+    it('keeps /me/messages for Instagram and for threads written before v26', async () => {
+        for (const platform of ['instagram', null, undefined]) {
+            const urls = await send({ platform });
+            assert.match(urls[0]!, /\/me\/messages$/, String(platform));
+        }
+    });
+});
+
 // ─── A1: the Analytics window ─────────────────────────────────────────────────────────────
 describe('statsWindowDays', () => {
     it('is all time when absent, "all" or not a positive whole number — the old answer', () => {

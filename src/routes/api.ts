@@ -3164,7 +3164,7 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
         // Fetch conversation and creator credentials. Scoped to the tenant: unscoped, this
         // sent a DM from another tenant's Instagram account, using their access token.
         const convRes = await pool.query(
-            `SELECT c.*, cr.page_access_token
+            `SELECT c.*, cr.page_access_token, cr.facebook_page_id
              FROM conversations c
              JOIN creators cr ON cr.id = c.creator_id
              WHERE c.id = $1 AND c.creator_id = $2`,
@@ -3184,7 +3184,12 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
         log('info', 'inbox.manual_reply', { conversation_id: conv.id, chars: text.length });
         const metaPayload = { text };
         // Selected straight from `creators`, so it has not passed through the tenant service.
-        await sendDirectMessage(conv.instagram_user_id, metaPayload, decryptSecret(conv.page_access_token));
+        // A Facebook thread is answered through `/{page-id}/messages`, exactly as the webhook's
+        // AI reply is (resolveDmPageId). This route never passed the page id, so every manual
+        // reply to a Messenger user went to `/me/messages`, which only resolves for Instagram.
+        // `platform` is v26; a thread written before it (NULL) keeps the old behaviour.
+        const pageId = conv.platform === 'facebook' && conv.facebook_page_id ? String(conv.facebook_page_id) : undefined;
+        await sendDirectMessage(conv.instagram_user_id, metaPayload, decryptSecret(conv.page_access_token), pageId);
 
         // Save message to database & pause the bot to avoid fighting the user.
         // `sender = 'operator'` (v26): the inbox tags this as the operator's reply, not the AI's.

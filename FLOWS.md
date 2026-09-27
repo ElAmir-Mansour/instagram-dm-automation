@@ -534,10 +534,17 @@ reliable); `entry.id` could be the IG id or the FB Page id depending on subscrip
 **`src/webhook/messaging.ts:265-272`** — the conversation, as **one** statement:
 
 ```sql
-INSERT INTO conversations (creator_id, instagram_user_id, status) VALUES ($1, $2, 'active')
-ON CONFLICT (creator_id, instagram_user_id) DO UPDATE SET last_message_at = NOW()
+INSERT INTO conversations (creator_id, instagram_user_id, status, platform) VALUES ($1, $2, 'active', $3)
+ON CONFLICT (creator_id, instagram_user_id)
+DO UPDATE SET last_message_at = NOW(), platform = COALESCE(conversations.platform, EXCLUDED.platform)
 RETURNING id, is_bot_active, ai_disclosed_at
 ```
+
+`platform` (v26) comes from the webhook body's `object` (`instagram` or `page`), carried in the DM
+job; a job queued before v26 falls back to which page id the message was addressed to
+(`dmPlatform`). `COALESCE` keeps a thread's first known platform. Every row in `messages` also
+records its `sender` (`customer`, `ai`, `operator`); the manual reply route sends a Facebook
+thread through `/{page-id}/messages`, as the AI reply does.
 
 Not SELECT-then-INSERT: two DMs a second apart raced on the `unique_creator_user` constraint and
 the loser's duplicate-key error killed the whole batch. The `DO UPDATE` also replaces what used
