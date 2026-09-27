@@ -463,7 +463,8 @@ Analyst's input by media.
 
 ## 6.2 The Editor: `src/services/monteur/editor.ts`
 
-The pro edits on each reel, asked for by the owner: images and edits tied to the topic, with sounds.
+The pro edits on each reel, asked for by the owner: images and edits tied to the topic, with sounds, and (2026-09-27)
+edits that follow instructional-design and e-learning practice.
 
 **One Gemini call** for all of a video's clips, after the Marketer, for the clips that got copy. `writeEdits` goes
 through `ask()` like the Marketer (`EDITOR_SCHEMA`, `maxOutputTokens` 8192, thinking 1024, a 90 s cap inside the
@@ -473,18 +474,65 @@ sweep's deadline) and is logged as `monteur.edit` with its tokens. The call is r
 **What goes in** (`editorUserPrompt(clipLines(...))`): `C<n>` for each clip in order, then its own lines numbered
 from `L1`, each `[mm:ss.s]` on the clip's clock.
 
-**What comes out:** `{ clips: [{ clip, edits: [{ line, word, kind, text?, emoji?, query?, sfx }] }] }`, 6–10 edits a
-clip in the prompt's words. The prompt's image line: "image: at most 2 per clip, for a real-world thing the speaker
-mentions or compares to. query: 2-4 English words naming one concrete object or scene a free photo library has
-(e.g. world map, recipe book)."
+**What comes out:** `{ clips: [{ clip, edits: [{ line, word, kind, text?, meaning?, items?, emoji?, query?, sfx }] }] }`.
+The schema's only enums are `kind` (13 values) and `sfx` (10): a big enum is an HTTP 400 (2026-09-27), so `query`
+is a plain string and the library topics are listed in the prompt. `meaning` is a string, `items` an array of
+strings.
+
+**The teaching kinds** (2026-09-27): Mayer's multimedia principles on a reel. They come first when the clip gives
+a reason; the older kinds fill in.
+
+| kind | fields | when | sound |
+|---|---|---|---|
+| `example` | `query` (library topic), `text` label ≤ 4 words, e.g. «مثال: مطعم» | he refers to something outside the lesson: a real-world thing, an analogy, an example, a workplace situation | whoosh |
+| `callout` | `text`: the name of what he uses, ≤ 3 words, never «هنا» | he clicks or points at a button, menu, field or result | click |
+| `step` | `text` ≤ 4 words; the worker numbers them | a procedure, or a list of things to do, add or set, one step each | pop |
+| `define` | `text` the term ≤ 3 words, `meaning` ≤ 5 plain words | he introduces a term (pre-training) | ding |
+| `compare` | `items`: [wrong or before, right or after], ≤ 4 words each | he contrasts two things | error, then ding as ✓ lands |
+| `recap` | `items`: 2–3 takeaways, ≤ 5 words each | once, on the last line; the worker shows it just before the CTA | whoosh |
+
+**The prompt's rules:** show what he refers to (example); guide the eye while he demonstrates (callout); segment
+a procedure (step), pre-train a term (define), contrast (compare), close with one recap; each edit on the exact
+word it belongs to (temporal contiguity); the captions show every spoken word, so on-screen words condense and
+never copy his (redundancy); every edit needs a reason in the clip (coherence); about one moment every 5
+seconds; at most 4 pictures (example, image and broll together), only of what he says; no broll while he
+demonstrates; invent nothing; never a woman or a girl in any picture, emoji or sticker.
 
 **Code, not the prompt** (`editsByClip`, `placeEdits`):
 - Answers are matched to clips by `C<n>`, never by position.
-- An edit lands on the start of its `word` in its line, else on the line's start, on the clip's clock.
-- Dropped: an unknown kind, a missing line, a keyword or tool without `text`, an emoji without `emoji`, an image
-  without a usable `query`, a third image.
+- An edit lands on the start of its `word` in its line, else on the line's start, on the clip's clock. A recap
+  whose line doesn't exist takes the last line (the worker moves it anyway).
+- Dropped: an unknown kind, a missing line, a keyword or tool without `text`, an emoji without `emoji`, a
+  picture without a usable `query`, a fifth picture, an example without its label, a define without its
+  meaning, a compare without exactly two different sides, a recap with fewer than 2 takeaways (more than 3 are
+  cut to 3).
+- The teaching kinds' words are held to `PHRASE_LIMITS` ([words, characters]): example 4/28, callout 3/24,
+  step 4/28, term 3/24, meaning 5/32, compare side 4/26, takeaway 5/32. Longer is dropped, never cut. A leading
+  or trailing ✗ ✓ or punctuation is stripped: the worker draws its own.
+- `KIND_CAP`: 1 recap, 2 defines, 2 compares, 5 steps a clip. A lone step becomes a keyword: one step is no
+  procedure.
+- **Redundancy:** a keyword that is, word for word, what he says from 1.5 s before to 2.5 s after it is dropped
+  (normalised Arabic, a leading و ف ب ل ك or ال ignored). Tools, steps and terms name what he says on purpose.
+- The teaching kinds' sounds are the table's, whatever the model sent; its `none` still silences one.
 - `query` keeps Latin letters, digits and single spaces, whole words up to 40 characters.
-- At most 12 edits a clip, sorted by `t`. `sfx: 'none'` is sent as no `sfx`.
+- At most 18 edits a clip, sorted by `t`. `sfx: 'none'` is sent as no `sfx`.
+
+**The worker** (aicourse-captions `src/monteur/layout.ts` `cleanEdits`, `src/monteur/Edits.tsx`,
+`scripts/monteur/render.mjs` `prepareEdits`):
+- **One overlay at a time:** an edit starts at least 1.8 s after the one before and only once that one has gone
+  (its hold plus 0.2 s). Where two clash the recap wins, then the teaching kinds, then the rest; among equals
+  the earlier. Holds: example 2.6 s, callout 2, step 2.2, define 3, compare 3.2, recap 3.8.
+- The recap is moved to end as the CTA starts, in a clip of 25 s or more. Steps are numbered 1…N in the order
+  shown, with pips for where the viewer is in the procedure.
+- **Never over what is being demonstrated:** cards sit in the zoom box (between the title and the captions),
+  above or below the focus, whichever has room, and the picture reframes (moves within its edges) so the card
+  gets its full height while the demonstration stays whole on screen. A photo card (example, and an image while
+  he demonstrates) goes beside or above/below the focus, whichever fits the bigger photo, its label with it
+  (spatial contiguity). A callout rings a point of the picture, so it stays on the button as the picture pans,
+  with an arrow from its label; with no focus track (a portrait video) callouts are left out.
+- An example needs a checked library photo; with none it is left out rather than shown as a bare label.
+- **Both ways compatible:** each side drops kinds it doesn't know (`EDIT_KINDS`), and the new fields are
+  optional, so either repo can ship first.
 
 **A failed call never holds a reel back:** any failure, of the call or of its answer, stores and renders every clip
 with `edits: []`, and is logged as `monteur.edit_failed`. The attempt does not fail.
