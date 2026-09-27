@@ -102,9 +102,24 @@ export interface ConversationRow {
     ai_disclosed_at: Timestamptz | null;
     last_message_at: Timestamptz | null;
     created_at: Timestamptz;
+    /**
+     * v26. Which network the thread is on, from the webhook's `object` (or, for a job queued
+     * before v26, the page id the event was addressed to). NULL for a thread no DM has reached
+     * since v26 and the migration could not attribute exactly.
+     */
+    platform: ConversationPlatform | null;
 }
 
+/** v26. `conversations.platform`. */
+export type ConversationPlatform = 'instagram' | 'facebook';
+
 export type MessageDirection = 'inbound' | 'outbound';
+
+/**
+ * v26. `messages.sender`: who wrote the row. `automation` is reserved for campaign DMs and their
+ * public fallbacks, which are not stored in `messages` today. NULL = written before v26.
+ */
+export type MessageSender = 'customer' | 'ai' | 'operator' | 'automation';
 
 export interface MessageRow {
     id: string;
@@ -133,6 +148,8 @@ export interface MessageRow {
     reply_claimed_at: Timestamptz | null;
     /** v14. How many times the pipeline has claimed this inbound message. */
     reply_attempts: number;
+    /** v26. Who wrote it; NULL on rows written before v26 that the migration could not attribute. */
+    sender: MessageSender | null;
     created_at: Timestamptz;
 }
 

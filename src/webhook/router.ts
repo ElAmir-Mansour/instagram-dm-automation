@@ -74,6 +74,9 @@ function isActionableMessagingEvent(event: any): boolean {
 export function planJobs(body: any): EnqueueInput[] {
     const planned: EnqueueInput[] = [];
     const entries: any[] = Array.isArray(body?.entry) ? body.entry : [];
+    // Which network the DMs in this body came from. It is on the body, not the event, so it
+    // travels in the job or the pipeline cannot know it (v26 `conversations.platform`).
+    const object = typeof body?.object === 'string' && body.object ? body.object : undefined;
 
     for (const entry of entries) {
         const entryId = entry?.id;
@@ -88,7 +91,7 @@ export function planJobs(body: any): EnqueueInput[] {
                 if (!isActionableMessagingEvent(event)) continue;
                 planned.push({
                     kind: 'dm.process',
-                    payload: { event, entryId },
+                    payload: object ? { event, entryId, object } : { event, entryId },
                     dedupeKey: dmDedupeKey(event),
                     tenantKey,
                 });
@@ -161,7 +164,7 @@ async function processEntry(entry: any, objectType: string): Promise<void> {
                     // FINAL_ATTEMPT (the default) is correct here and not a shortcut: this is
                     // the fallback path taken when the queue could not be written, so there is
                     // no retry to leave work for. Every outcome has to be recorded now.
-                    await handleMessagingEvent(event, entryId, FINAL_ATTEMPT);
+                    await handleMessagingEvent(event, entryId, { ...FINAL_ATTEMPT, object: objectType });
                 } catch (err: any) {
                     log('error', 'webhook.messaging_failed', {
                         mid: event?.message?.mid ?? null,

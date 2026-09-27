@@ -492,6 +492,101 @@ const UI = {
         return label === key ? String(value || '—') : label;
     },
 
+    // ─── Held posts (CP12) ──────────────────────────────────────────────────
+    /**
+     * Why a PENDING scheduled post is held rather than simply waiting for its
+     * time, or null. Both holds are written by the publisher and released by
+     * the next sweep (CLAUDE.md, "Publishing and DM safety"):
+     *
+     *   'ig_processing' — Instagram was still processing the reel when the
+     *     poll budget ran out; the container is kept as
+     *     `external_publish_id = 'IGC:<id>'` (IG_CONTAINER_PREFIX, src/routes/api.ts).
+     *   'tiktok_limit' — TikTok's five pending inbox shares; the row is back at
+     *     PENDING with TikTokInboxFullError's message, which starts
+     *     "Waiting for TikTok:" (src/services/tiktokPublish.ts).
+     *
+     * A PENDING row with any other note is NOT held: a FAILED row edited back
+     * to PENDING keeps its old error, and goes out at its time like any other.
+     */
+    HELD_IG_PREFIX: 'IGC:',
+    HELD_TIKTOK_PREFIX: 'Waiting for TikTok:',
+
+    heldReason(post) {
+        if (!post || post.status !== 'PENDING') return null;
+        const container = post.external_publish_id;
+        if (typeof container === 'string' && container.startsWith(UI.HELD_IG_PREFIX)) return 'ig_processing';
+        const note = post.error_log;
+        if (post.platform === 'tiktok' && typeof note === 'string' && note.startsWith(UI.HELD_TIKTOK_PREFIX)) return 'tiktok_limit';
+        return null;
+    },
+
+    /** A scheduled post's status: `statusLabel`, except that a held row says it is held. */
+    postStatusLabel(post) {
+        return UI.heldReason(post) ? t('state.held') : UI.statusLabel(post && post.status);
+    },
+
+    // ─── Meta errors in one line (V5, A5) ───────────────────────────────────
+    /**
+     * The common Meta codes, explained in the interface's language. One copy:
+     * Activity explains a row's error with it, Analytics explains the grouped
+     * reasons (A5). Codes as the pipeline writes them: `(Code: 190)`
+     * (src/services/instagram.ts), `(Code 10903)` (src/webhook/errors.ts).
+     * Permanent ones there: 100, 190, 200, 10903; 4/17/32/613 throttle.
+     */
+    META_ERROR_KEYS: Object.freeze({
+        4: 'activity.err.rateLimit',
+        10: 'activity.err.permission',
+        17: 'activity.err.rateLimit',
+        32: 'activity.err.rateLimit',
+        100: 'activity.err.noPrivateReply',
+        190: 'activity.err.token',
+        200: 'activity.err.permission',
+        613: 'activity.err.rateLimit',
+        10900: 'activity.err.alreadyReplied',
+        10903: 'activity.err.blocked',
+    }),
+
+    /** The one-liner for a Meta error code, or '' when it is not a common one. */
+    metaErrorText(code) {
+        const key = UI.META_ERROR_KEYS[Number(code)];
+        return key ? t(key) : '';
+    },
+
+    /** The one-liner for a raw `error_log`, or '' when no common code is in it. */
+    explainMetaError(raw) {
+        const text = String(raw || '');
+        if (!text) return '';
+        const codes = [...text.matchAll(/\bCode:?\s*(\d+)/gi)].map((m) => Number(m[1]));
+        // The pipeline's own wording for these carries no code of its own
+        // (and Instagram reports the second as -1).
+        if (/already had its private reply|already has a reply/i.test(text)) codes.unshift(10900);
+        if (/won't accept a private reply/i.test(text)) codes.unshift(100);
+        for (const code of codes) {
+            const line = UI.metaErrorText(code);
+            if (line) return line;
+        }
+        return '';
+    },
+
+    /**
+     * The reasons GET /api/stats/failures names that are not a Meta code: the
+     * pipeline's own refusals (src/services/failureReasons.ts).
+     */
+    FAILURE_REASON_KEYS: Object.freeze({
+        already_replied: 'activity.err.alreadyReplied',
+        recipient_cap: 'activity.err.recipientCap',
+        quota_hourly: 'activity.err.quotaHourly',
+        quota_app: 'activity.err.quotaApp',
+    }),
+
+    /** A reason code from /stats/failures as a sentence, or '' when there is none to give. */
+    failureReasonText(code) {
+        const value = String(code === null || code === undefined ? '' : code);
+        if (/^-?\d+$/.test(value)) return UI.metaErrorText(value);
+        const key = UI.FAILURE_REASON_KEYS[value];
+        return key ? t(key) : '';
+    },
+
     // ─── Icons ───────────────────────────────────────────────────────────────
     /** lucide is a third-party CDN script: never let it take a page down. */
     icons(node) {
@@ -842,12 +937,21 @@ const UI = {
      * percent-encoded before it goes anywhere near a URL. It is also a Latin
      * handle inside Arabic copy, hence the bdi isolation.
      */
+    /**
+     * The IG / FB tag: a tint with the literal letters (DESIGN §3), so it reads
+     * whatever its hue. '' for anything else — a conversation written before
+     * v26 has no platform, and a guess would be worse than nothing.
+     */
+    platformTag(platform) {
+        if (platform === 'facebook') return html`<span class="platform-tag fb">FB</span>`;
+        if (platform === 'instagram') return html`<span class="platform-tag ig">IG</span>`;
+        return '';
+    },
+
     userCell(interaction) {
         const username = interaction.sender_username || '';
         const isFacebook = interaction.platform === 'facebook';
-        const badge = isFacebook
-            ? html`<span class="platform-tag fb">FB</span>`
-            : html`<span class="platform-tag ig">IG</span>`;
+        const badge = UI.platformTag(isFacebook ? 'facebook' : 'instagram');
         const handle = html`<bdi class="ltr-text" dir="ltr">@${username || '—'}</bdi>`;
         if (isFacebook || !username) {
             return html`<span class="username-link">${handle}</span>${badge}`;

@@ -79,6 +79,17 @@ describe('planJobs', () => {
         assert.equal(planned[0]!.dedupeKey, 'dm:mid-1');
     });
 
+    it('carries the body object with a DM, because that is the only place the platform is said (v26)', () => {
+        // `object` is on the body and not the event; without it in the payload the pipeline
+        // can only guess the conversation's platform from page ids.
+        assert.equal((planJobs(dmDelivery)[0]!.payload as any).object, 'instagram');
+        const messenger = planJobs({ ...dmDelivery, object: 'page' });
+        assert.equal((messenger[0]!.payload as any).object, 'page');
+        // A body with no object plans the same job as before, with no key at all.
+        const bare = planJobs({ entry: dmDelivery.entry });
+        assert.deepEqual(Object.keys(bare[0]!.payload as object).sort(), ['entryId', 'event']);
+    });
+
     it('keys a postback on its own mid', () => {
         const planned = planJobs({
             entry: [{ id: 'p', messaging: [{ postback: { mid: 'mid-pb', payload: 'GO' } }] }],

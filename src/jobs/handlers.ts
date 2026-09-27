@@ -33,6 +33,7 @@ export const handlers: JobHandlerRegistry = {
     'dm.process': async (payload, job) => {
         await handleMessagingEvent(payload.event, payload.entryId, {
             lastAttempt: isLastAttempt(job),
+            object: payload.object,
         });
     },
 };

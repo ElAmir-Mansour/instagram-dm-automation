@@ -43,6 +43,12 @@ export interface JobPayloads {
         /** One element of `entry.messaging`, exactly as Meta sent it. */
         event: unknown;
         entryId: string;
+        /**
+         * The body's `object` (`'instagram'` | `'page'`): the one field that says which network
+         * a DM came from, and it lives on the body, not the event. Absent on jobs queued before
+         * v26.
+         */
+        object?: string;
     };
 }
 

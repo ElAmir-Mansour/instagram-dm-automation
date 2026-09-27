@@ -21,6 +21,13 @@ export interface WebhookHandlerOptions {
      * that quietly relies on a retry that is never coming.
      */
     lastAttempt: boolean;
+    /**
+     * The webhook body's `object` — `'instagram'` or `'page'` — when the caller has it. The DM
+     * pipeline records it as the conversation's platform (v26). Optional because a job queued
+     * before v26 does not carry it; the pipeline then falls back to which page id the event was
+     * addressed to.
+     */
+    object?: string;
 }
 
 export const FINAL_ATTEMPT: WebhookHandlerOptions = { lastAttempt: true };

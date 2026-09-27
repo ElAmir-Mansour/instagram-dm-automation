@@ -236,11 +236,14 @@ const API = {
         return API.request(`/admin/audit${query ? `?${query}` : ''}`);
     },
 
-    // Stats
-    getStats: () => API.request('/stats'),
+    // Stats. `days` windows /stats and /stats/campaigns (A1); left out, both answer
+    // all-time, which is what Overview asks for.
+    getStats: (days) => API.request(days ? `/stats?days=${encodeURIComponent(days)}` : '/stats'),
     getHourlyStats: (days = 7) => API.request(`/stats/hourly?days=${days}`),
     getDailyStats: (days = 30) => API.request(`/stats/daily?days=${days}`),
-    getCampaignStats: () => API.request('/stats/campaigns'),
+    getCampaignStats: (days) => API.request(days ? `/stats/campaigns?days=${encodeURIComponent(days)}` : '/stats/campaigns'),
+    /** A5: the FAILED interactions of the last `days`, grouped by reason (top 6). */
+    getFailureReasons: (days = 30) => API.request(`/stats/failures?days=${encodeURIComponent(days)}`),
 
     // Campaigns
     getCampaigns: () => API.request('/campaigns'),

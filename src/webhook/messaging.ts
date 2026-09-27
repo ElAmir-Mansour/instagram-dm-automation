@@ -5,7 +5,7 @@
  * pipeline — so a duplicate-key error here aborted the comment events queued behind it.
  */
 import { queryCount, queryOne } from '../db/query.js';
-import type { ConversationRow, MessageRow } from '../db/rows.js';
+import type { ConversationPlatform, ConversationRow, MessageRow } from '../db/rows.js';
 import { generateAiResponse } from '../services/ai.js';
 import { sendDirectMessage } from '../services/instagram.js';
 import { isPermanentMetaError } from '../services/http.js';
@@ -143,6 +143,35 @@ export function resolveDmPageId(creator: Creator, addressedTo: (string | undefin
         : undefined;
 }
 
+/**
+ * Which network a DM arrived on, for `conversations.platform` (v26).
+ *
+ * The exact answer is the webhook body's `object`: Meta sends `'instagram'` for Instagram
+ * messaging and `'page'` for Messenger, and it is the only field that says so outright. It lives on
+ * the body rather than the event, so it reaches here through the job payload; a job queued before
+ * v26 has none. For those, the fallback is which of the tenant's page ids the event was addressed
+ * to — `recipient.id` first, which on a message event is the account that received it, then
+ * `entry.id`, which `processDm` notes may be either id depending on the subscription. Not
+ * `resolveDmPageId`: that answers "which endpoint", a different question. No match either way is
+ * `null`, which the dashboard shows as no platform at all rather than a guess.
+ *
+ * Exported for src/webhook/messaging.test.ts.
+ */
+export function dmPlatform(
+    object: unknown,
+    creator: Pick<Creator, 'instagram_page_id' | 'facebook_page_id'>,
+    addressedTo: (string | undefined)[]
+): ConversationPlatform | null {
+    if (object === 'instagram') return 'instagram';
+    if (object === 'page') return 'facebook';
+    for (const id of addressedTo) {
+        if (!id) continue;
+        if (creator.instagram_page_id && id === creator.instagram_page_id) return 'instagram';
+        if (creator.facebook_page_id && id === creator.facebook_page_id) return 'facebook';
+    }
+    return null;
+}
+
 /** Exported for src/webhook/messaging.test.ts. */
 export function needsDisclosure(disclosedAt: string | Date | null | undefined): boolean {
     if (!disclosedAt) return true;
@@ -205,8 +234,8 @@ async function claimInbound(
 ): Promise<InboundClaim | null> {
     const inserted = await queryOne<Pick<MessageRow, 'id'>>(
         `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, payload,
-                               raw_payload, meta_message_id, reply_claimed_at, reply_attempts)
-         VALUES ($1, $2, 'inbound', $3, $4, $5, $6, $7, NOW(), 1)
+                               raw_payload, meta_message_id, reply_claimed_at, reply_attempts, sender)
+         VALUES ($1, $2, 'inbound', $3, $4, $5, $6, $7, NOW(), 1, 'customer')
          ON CONFLICT (meta_message_id) WHERE meta_message_id IS NOT NULL DO NOTHING
          RETURNING id`,
         [
@@ -294,13 +323,16 @@ async function processDm(
     //    One statement, not SELECT-then-INSERT: two DMs a second apart raced on the
     //    unique_creator_user constraint and the loser's duplicate-key error killed the batch.
     //    The DO UPDATE also replaces the separate last_message_at write.
+    //    `platform` (v26) is set once and kept: COALESCE fills a thread written before v26 on
+    //    its next DM, and never flips one that already has an answer.
     const conversation = await queryOne<Pick<ConversationRow, 'id' | 'is_bot_active' | 'ai_disclosed_at'>>(
-        `INSERT INTO conversations (creator_id, instagram_user_id, status)
-         VALUES ($1, $2, 'active')
+        `INSERT INTO conversations (creator_id, instagram_user_id, status, platform)
+         VALUES ($1, $2, 'active', $3)
          ON CONFLICT (creator_id, instagram_user_id)
-         DO UPDATE SET last_message_at = NOW()
+         DO UPDATE SET last_message_at = NOW(),
+                       platform = COALESCE(conversations.platform, EXCLUDED.platform)
          RETURNING id, is_bot_active, ai_disclosed_at`,
-        [creator.id, dm.senderId]
+        [creator.id, dm.senderId, dmPlatform(options.object, creator, [recipientId, entryId])]
     );
 
     if (!conversation) {
@@ -418,9 +450,10 @@ async function processDm(
         }
 
         // Log outbound message
+        // `sender = 'ai'` (v26): the inbox tags Gemini's replies apart from the operator's own.
         await queryCount(
-            `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload)
-             VALUES ($1, $2, 'outbound', $3, $4, $5)`,
+            `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload, sender)
+             VALUES ($1, $2, 'outbound', $3, $4, $5, 'ai')`,
             [
                 conversationId,
                 creator.id,

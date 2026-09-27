@@ -28,8 +28,9 @@ import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/he
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
 import { queryOne } from '../db/query.js';
-import type { UserRow, ScheduledPostRow } from '../db/rows.js';
+import type { ConversationPlatform, MessageSender, UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
+import { FAILURE_TEXT_GROUPS, summariseFailures } from '../services/failureReasons.js';
 import { drainWorker } from '../jobs/drain.js';
 import { describeError, log } from '../utils/log.js';
 import { getMediaStore, MediaStorageUnavailableError, uploadIdFromSegment } from '../services/storage.js';
@@ -1519,10 +1520,27 @@ router.get('/health/tenant', async (req, res) => {
 
 // ─── Dashboard Stats ────────────────────────────────────────────────────────
 
+/**
+ * The window `/stats` and `/stats/campaigns` answer for (A1): a number of days, or null for all
+ * time. Absent, `all`, or anything that is not a positive whole number is all time — the answer
+ * both routes gave before they took a window, so Overview (which sends none) is unchanged. A
+ * number is clamped exactly as the chart routes clamp theirs, then bound as a parameter.
+ */
+export function statsWindowDays(raw: unknown): number | null {
+    const days = clampDays(raw, 0);
+    return days > 0 ? days : null;
+}
+
 router.get('/stats', async (req, res) => {
     try {
         const tenantId = getTenantId(req);
         const owned = interactionsOwnedBy(1);
+        // A1: the interaction counts, the reach and the platform split answer for one window.
+        // The rolling 24h `todayActivity` and the campaign/creator counts are not about a
+        // window, so they keep their own queries and parameters.
+        const days = statsWindowDays(req.query.days);
+        const inWindow = days === null ? '' : ' AND i.timestamp > NOW() - make_interval(days => $2::int)';
+        const windowParams: unknown[] = days === null ? [tenantId] : [tenantId, days];
 
         // `activeCreators` is the one count here that is not about the tenant's own data. For a
         // platform_admin it stays what it always was — how many creators the deployment runs.
@@ -1546,9 +1564,9 @@ router.get('/stats', async (req, res) => {
             );
 
         const [total, sent, failed, campaigns, creators, today, uniqueUsers, instagram, facebook] = await Promise.all([
-            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}`, [tenantId]),
-            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.status = 'SENT'`, [tenantId]),
-            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.status = 'FAILED'`, [tenantId]),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow}`, windowParams),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.status = 'SENT'`, windowParams),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.status = 'FAILED'`, windowParams),
             // `AND is_active` is new and the field has been called `activeCampaigns` all
             // along: it counted every campaign including the paused ones, so the tile said
             // "12 active campaigns" while eleven of them were switched off.
@@ -1558,9 +1576,9 @@ router.get('/stats', async (req, res) => {
             ),
             creatorsQuery,
             pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.timestamp > NOW() - INTERVAL '24 hours'`, [tenantId]),
-            pool.query(`SELECT COUNT(DISTINCT i.sender_username)::int as count FROM interactions i WHERE ${owned}`, [tenantId]),
-            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.platform = 'instagram'`, [tenantId]),
-            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned} AND i.platform = 'facebook'`, [tenantId]),
+            pool.query(`SELECT COUNT(DISTINCT i.sender_username)::int as count FROM interactions i WHERE ${owned}${inWindow}`, windowParams),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.platform = 'instagram'`, windowParams),
+            pool.query(`SELECT COUNT(*)::int as count FROM interactions i WHERE ${owned}${inWindow} AND i.platform = 'facebook'`, windowParams),
         ]);
 
         const totalCount = total.rows[0].count;
@@ -1579,6 +1597,8 @@ router.get('/stats', async (req, res) => {
             uniqueUsersReached: uniqueUsers.rows[0].count,
             instagramCount: instagram.rows[0].count,
             facebookCount: facebook.rows[0].count,
+            /** The window the counts above answer for, in days; null = all time. */
+            days,
         });
     } catch (err) {
         log('error', 'api.stats_failed', describeError(err));
@@ -1830,6 +1850,11 @@ router.delete('/campaigns/:id', canOperate, async (req, res) => {
 
 router.get('/stats/campaigns', async (req, res) => {
     try {
+        // A1: the same window as /stats. It goes in the JOIN's ON clause, not a WHERE: a WHERE
+        // runs after the LEFT JOIN and would drop every campaign with no interaction in the
+        // window, which is exactly the campaign the operator needs to see at zero.
+        const days = statsWindowDays(req.query.days);
+        const inWindow = days === null ? '' : ' AND i.timestamp > NOW() - make_interval(days => $2::int)';
         const result = await pool.query(`
             SELECT
                 c.id,
@@ -1838,16 +1863,48 @@ router.get('/stats/campaigns', async (req, res) => {
                 COUNT(i.id) FILTER (WHERE i.status = 'SENT')::int as sent_count,
                 COUNT(i.id) FILTER (WHERE i.status = 'FAILED')::int as failed_count
             FROM campaigns c
-            LEFT JOIN interactions i ON i.campaign_id = c.id
+            LEFT JOIN interactions i ON i.campaign_id = c.id${inWindow}
             WHERE c.creator_id = $1
             GROUP BY c.id, c.trigger_keyword
             ORDER BY total_triggers DESC
             LIMIT 5
-        `, [getTenantId(req)]);
+        `, days === null ? [getTenantId(req)] : [getTenantId(req), days]);
         res.json(result.rows);
     } catch (err) {
         log('error', 'api.campaign_stats_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch campaign stats.' });
+    }
+});
+
+// ─── Why DMs fail (A5) ──────────────────────────────────────────────────────
+//
+// The FAILED interactions of the window, grouped by the exact `error_log` text in SQL and then
+// folded into reasons by `summariseFailures` (src/services/failureReasons.ts): a Meta code, one
+// of the pipeline's named reasons, or a normalised first line. `total` is every FAILED row in
+// the window — a window SUM, computed before the LIMIT, so it is exact however many distinct
+// texts there are.
+
+router.get('/stats/failures', async (req, res) => {
+    try {
+        const days = clampDays(req.query.days, 30);
+        const result = await pool.query(`
+            SELECT
+                i.error_log,
+                COUNT(*)::int AS count,
+                MAX(i.timestamp) AS last_at,
+                (SUM(COUNT(*)) OVER ())::int AS total
+            FROM interactions i
+            WHERE ${interactionsOwnedBy(1)}
+              AND i.status = 'FAILED'
+              AND i.timestamp > NOW() - make_interval(days => $2::int)
+            GROUP BY i.error_log
+            ORDER BY count DESC, last_at DESC
+            LIMIT ${FAILURE_TEXT_GROUPS}
+        `, [getTenantId(req), days]);
+        res.json({ days, ...summariseFailures(result.rows) });
+    } catch (err) {
+        log('error', 'api.failure_reasons_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to fetch failure reasons.' });
     }
 });
 
@@ -1864,6 +1921,27 @@ router.post('/interactions/export/token', (req, res) => {
 
 // ─── Interactions (Activity Log) ────────────────────────────────────────────
 
+/**
+ * `?since=` on GET /interactions (O9): an ISO 8601 date-time, as `Date.toISOString()` writes it
+ * (a date alone, or an offset instead of `Z`, is accepted too). Returns the instant normalised to
+ * UTC ISO, `null` when the parameter is absent or empty, and `undefined` when it is present but not
+ * a date-time — the route answers that with a 400 rather than quietly returning the whole log,
+ * which for "failed today" would be exactly the wrong count.
+ */
+export function parseSinceParam(raw: unknown): string | null | undefined {
+    if (raw === undefined || raw === null || raw === '') return null;
+    if (typeof raw !== 'string' || raw.length > 40) return undefined;
+    const iso = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+    const parts = iso.exec(raw);
+    if (!parts) return undefined;
+    // `new Date('2026-02-31')` is 3 March, not an error; the calendar date has to exist.
+    const [y, m, d] = [Number(parts[1]), Number(parts[2]), Number(parts[3])];
+    const day = new Date(Date.UTC(y, m - 1, d));
+    if (day.getUTCFullYear() !== y || day.getUTCMonth() !== m - 1 || day.getUTCDate() !== d) return undefined;
+    const at = new Date(raw);
+    return Number.isNaN(at.getTime()) ? undefined : at.toISOString();
+}
+
 router.get('/interactions', async (req, res) => {
     try {
         const page = parseInt(req.query.page as string) || 1;
@@ -1874,8 +1952,21 @@ router.get('/interactions', async (req, res) => {
         const campaign_id = req.query.campaign_id as string;
         const offset = (page - 1) * limit;
 
+        const since = parseSinceParam(req.query.since);
+        if (since === undefined) {
+            res.status(400).json({ error: 'since must be an ISO 8601 date-time, e.g. 2026-09-27T00:00:00.000Z.' });
+            return;
+        }
+
         const params: any[] = [getTenantId(req)];
         const conditions: string[] = [interactionsOwnedBy(1)];
+
+        // Bound, never interpolated: the value is a normalised ISO string by now, but the
+        // parameter is what makes that irrelevant.
+        if (since) {
+            params.push(since);
+            conditions.push(`i.timestamp >= $${params.length}::timestamptz`);
+        }
 
         if (status && ['SENT', 'FAILED', 'PENDING'].includes(status)) {
             params.push(status);
@@ -2940,8 +3031,24 @@ router.post('/upload', canOperate, async (req, res) => {
 // ─── Direct Message Inbox & Chat ─────────────────────────────────────────────
 
 /**
+ * `conversations.platform` (v26) as the inbox reads it: 'instagram', 'facebook' or null.
+ *
+ * The list selects `c.*`, so on a database without v26 the key is simply absent; this answers
+ * null for that, for a thread v26 could not attribute, and for anything that is not one of the
+ * two — the inbox then shows no platform rather than a guess.
+ */
+export function conversationPlatformOf(value: unknown): ConversationPlatform | null {
+    return value === 'instagram' || value === 'facebook' ? value : null;
+}
+
+/** `messages.sender` (v26) the same way: one of the four, or null (absent column, old row). */
+export function messageSenderOf(value: unknown): MessageSender | null {
+    return value === 'customer' || value === 'ai' || value === 'operator' || value === 'automation' ? value : null;
+}
+
+/**
  * `?search=` matches the sender — `username` and `instagram_user_id`, the two identity columns the
- * table has (there is no display name and no platform column yet) — with a parameterised ILIKE.
+ * table has (there is no display name) — with a parameterised ILIKE.
  * The dashboard used to search only the 20 rows it had; now the server searches every thread of
  * the tenant, and the count answers for the same filter so "showing N of M" stays honest.
  */
@@ -2984,7 +3091,9 @@ router.get('/conversations', async (req, res) => {
         );
 
         res.json({
-            data: result.rows,
+            // Always carries `platform`, null included, so the inbox reads one shape before and
+            // after v26 is applied.
+            data: result.rows.map((row) => ({ ...row, platform: conversationPlatformOf(row.platform) })),
             pagination: {
                 page,
                 limit,
@@ -3027,8 +3136,8 @@ router.get('/conversations/:id/messages', async (req, res) => {
             [id]
         );
         // Reversed back to chronological: the query takes the NEWEST 100, the client renders
-        // oldest-first.
-        res.json(messages.rows.reverse());
+        // oldest-first. `sender` (v26) is always present, null before v26 and on old rows.
+        res.json(messages.rows.reverse().map((row) => ({ ...row, sender: messageSenderOf(row.sender) })));
     } catch (err) {
         log('error', 'api.messages_failed', describeError(err));
         res.status(500).json({ error: 'Failed to fetch message history.' });
@@ -3055,7 +3164,7 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
         // Fetch conversation and creator credentials. Scoped to the tenant: unscoped, this
         // sent a DM from another tenant's Instagram account, using their access token.
         const convRes = await pool.query(
-            `SELECT c.*, cr.page_access_token
+            `SELECT c.*, cr.page_access_token, cr.facebook_page_id
              FROM conversations c
              JOIN creators cr ON cr.id = c.creator_id
              WHERE c.id = $1 AND c.creator_id = $2`,
@@ -3075,12 +3184,18 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
         log('info', 'inbox.manual_reply', { conversation_id: conv.id, chars: text.length });
         const metaPayload = { text };
         // Selected straight from `creators`, so it has not passed through the tenant service.
-        await sendDirectMessage(conv.instagram_user_id, metaPayload, decryptSecret(conv.page_access_token));
+        // A Facebook thread is answered through `/{page-id}/messages`, exactly as the webhook's
+        // AI reply is (resolveDmPageId). This route never passed the page id, so every manual
+        // reply to a Messenger user went to `/me/messages`, which only resolves for Instagram.
+        // `platform` is v26; a thread written before it (NULL) keeps the old behaviour.
+        const pageId = conv.platform === 'facebook' && conv.facebook_page_id ? String(conv.facebook_page_id) : undefined;
+        await sendDirectMessage(conv.instagram_user_id, metaPayload, decryptSecret(conv.page_access_token), pageId);
 
-        // Save message to database & pause the bot to avoid fighting the user
+        // Save message to database & pause the bot to avoid fighting the user.
+        // `sender = 'operator'` (v26): the inbox tags this as the operator's reply, not the AI's.
         await pool.query(
-            `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload)
-             VALUES ($1, $2, 'outbound', 'text', $3, $4)`,
+            `INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload, sender)
+             VALUES ($1, $2, 'outbound', 'text', $3, $4, 'operator')`,
             [id, tenantId, text, JSON.stringify(metaPayload)]
         );
 

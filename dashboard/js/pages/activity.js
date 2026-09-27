@@ -121,33 +121,12 @@ const ActivityPage = {
     /**
      * V5: the error column was Meta's raw English, clipped. The common codes
      * get a one-line explanation in the interface's language; the raw text stays
-     * in the tooltip, where the detail is still one hover away. Codes are read
-     * the way the pipeline writes them: `(Code: 190)` (src/services/instagram.ts)
-     * and `(Code 10903)` (src/webhook/errors.ts).
+     * in the tooltip, where the detail is still one hover away. The code map is
+     * `UI.META_ERROR_KEYS` (components.js), shared with Analytics' "Why DMs
+     * fail" panel so the two screens cannot explain one code two ways.
      */
-    META_ERROR_KEYS: {
-        100: 'activity.err.noPrivateReply',
-        190: 'activity.err.token',
-        200: 'activity.err.permission',
-        10903: 'activity.err.blocked',
-        4: 'activity.err.rateLimit',
-        17: 'activity.err.rateLimit',
-        32: 'activity.err.rateLimit',
-        613: 'activity.err.rateLimit',
-    },
-
-    /** The friendly one-liner for a raw error, or '' when the code is not a common one. */
     explainError(raw) {
-        const text = String(raw || '');
-        if (!text) return '';
-        const codes = [...text.matchAll(/\bCode:?\s*(\d+)/gi)].map((m) => Number(m[1]));
-        // The pipeline's own wording for code 100 carries no code of its own.
-        if (/won't accept a private reply/i.test(text)) codes.unshift(100);
-        for (const code of codes) {
-            const key = this.META_ERROR_KEYS[code];
-            if (key) return t(key);
-        }
-        return '';
+        return UI.explainMetaError(raw);
     },
 
     /** 15 rows, which is exactly this page's limit, so the table's height is

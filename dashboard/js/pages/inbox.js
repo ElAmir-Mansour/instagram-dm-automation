@@ -577,9 +577,14 @@ const InboxPage = {
      */
     threadRow(x) {
         const isInbound = x.last_message_direction === 'inbound';
+        // I8: which network the thread is on, as the same IG / FB tag the
+        // activity log uses. A thread from before v26 has no platform and
+        // shows none, rather than a guess.
         return html`
             <span class="thread-top">
-                <span class="thread-name"><bdi dir="auto">@${this.threadName(x)}</bdi></span>
+                <span class="thread-who">
+                    <span class="thread-name"><bdi dir="auto">@${this.threadName(x)}</bdi></span>${UI.platformTag(x.platform)}
+                </span>
                 <span class="thread-time">${this.threadTime(x.last_message_at)}</span>
             </span>
             <span class="thread-preview" dir="auto">${x.last_message_text || t('inbox.noMessages')}</span>
@@ -678,6 +683,7 @@ const InboxPage = {
             // is the TEXT shown, so "14:05" becomes "Yesterday 14:05" at midnight.
             signature: (x) => [
                 this.threadName(x),
+                x.platform || '',
                 this.threadTime(x.last_message_at),
                 x.last_message_text,
                 x.is_bot_active ? '1' : '0',
@@ -874,7 +880,10 @@ const InboxPage = {
                          change the type size. This fixes the outline, not the
                          pixels. -->
                     <h3 aria-level="2" data-chat-username><bdi dir="auto">@${username}</bdi></h3>
-                    <span class="chat-sub">${t('inbox.userId', { id: '' })}${UI.ltr(thread.instagram_user_id)}</span>
+                    <!-- I8: the platform, then the id. «المعرّف» / "ID", not
+                         "User ID": on Facebook it is a Page-scoped id, not an
+                         Instagram user's. -->
+                    <span class="chat-sub"><span data-chat-platform data-platform="${thread.platform || ''}">${UI.platformTag(thread.platform)}</span>${t('inbox.userId', { id: '' })}${UI.ltr(thread.instagram_user_id)}</span>
                 </div>
                 <div class="chat-header-actions">
                     <!-- The switch already announces its state; this is the same
@@ -941,6 +950,14 @@ const InboxPage = {
         if (this.chatShellThreadId !== thread.id) return;
         const nameEl = document.querySelector('[data-chat-username] bdi');
         if (nameEl) nameEl.textContent = `@${this.threadName(thread)}`;
+        // A thread from before v26 gets its platform on its next DM; written
+        // only when it changes, so an idle poll touches nothing.
+        const platformEl = document.querySelector('[data-chat-platform]');
+        const platform = thread.platform || '';
+        if (platformEl && platformEl.dataset && platformEl.dataset.platform !== platform) {
+            platformEl.innerHTML = esc(UI.platformTag(thread.platform));
+            platformEl.dataset.platform = platform;
+        }
         const toggle = document.getElementById('bot-toggle-input');
         if (toggle && document.activeElement !== toggle) toggle.checked = !!thread.is_bot_active;
         this.paintAiState(thread);
@@ -1042,10 +1059,26 @@ const InboxPage = {
         });
     },
 
+    /**
+     * I4: who wrote an outbound message — the AI or the operator — as a small
+     * tint above the bubble (DESIGN §3: a tint with its -text label, never a
+     * solid fill). Outside the bubble on purpose: the outbound bubble is the
+     * brand gradient, and a tint laid on it would fall below AA. A row written
+     * before v26 carries no sender and gets no tag rather than a guess.
+     */
+    senderTag(msg) {
+        if (!msg || msg.direction !== 'outbound') return '';
+        if (msg.sender === 'ai') return html`<span class="sender-tag sender-tag--ai">${t('inbox.senderAi')}</span>`;
+        if (msg.sender === 'operator') return html`<span class="sender-tag sender-tag--operator">${t('inbox.senderOperator')}</span>`;
+        return '';
+    },
+
     messageBubble(msg) {
         const isOut = msg.direction === 'outbound';
+        const tag = this.senderTag(msg);
         return html`
-            <div class="message-row ${isOut ? 'row-outbound' : 'row-inbound'}">
+            <div class="message-row ${isOut ? 'row-outbound' : 'row-inbound'}${tag ? html.raw(' message-row--tagged') : ''}">
+                ${tag}
                 <div class="message-bubble ${isOut ? 'bubble-outbound' : 'bubble-inbound'}">
                     <!-- lang on the OUTBOUND side only. What this account sends
                          is always Arabic — it is the AI's reply or the
@@ -1170,8 +1203,11 @@ const InboxPage = {
 
     /** A bubble for a reply that has left the composer but not yet the server. */
     pendingBubble(key, text) {
+        // The operator's own reply, so it carries «أنت» from the start and the
+        // canonical row (sender = 'operator') lands looking the same.
         return html`
-            <div class="message-row row-outbound" data-pending="${key}">
+            <div class="message-row row-outbound message-row--tagged" data-pending="${key}">
+                ${this.senderTag({ direction: 'outbound', sender: 'operator' })}
                 <div class="message-bubble bubble-outbound is-pending">
                     <p dir="auto" lang="ar">${text}</p>
                     <span class="message-time">${t('inbox.sending')}</span>
