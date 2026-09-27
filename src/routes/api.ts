@@ -397,8 +397,8 @@ router.get('/jobs/drain', async (req, res) => {
     // finished with. Cannot throw, and bounded to a handful of status calls.
     const tiktok = await reconcileTikTokPosts();
 
-    // The Monteur's pick sweep, LAST (MONTEUR.md §6): at most one video's two Gemini calls, and
-    // the Analyst when a tenant's lessons are due, within what is left of this invocation. Its
+    // The Monteur's sweep, LAST (MONTEUR.md §6): auto mode's approvals, at most one video's three
+    // Gemini calls, and the Analyst when a tenant's lessons are due, within what is left of this invocation. Its
     // outcome is its own — composeDrainResponse never lets it move the status.
     let monteur: MonteurSweepResult | null = null;
     let monteurError: string | null = null;

@@ -70,9 +70,12 @@ function baseName(path: string): string {
  * The new files, oldest first as the worker sent them, at most `limit` of them and each content
  * key once; what was skipped, the worker's reasons plus any entry this could not read; and whether
  * the folder was missing.
+ *
+ * A course scan passes the paths it asked for as `asked`: only those are taken, in that order (the
+ * lesson order), whatever order the worker sent them in, and any other file is skipped.
  */
 export function parseMonteurScanResult(
-    result: unknown, limit: number
+    result: unknown, limit: number, asked?: readonly string[]
 ): { files: ScannedFile[]; skipped: SkippedFile[]; missing: boolean } {
     if (!isPlainObject(result) || !Array.isArray(result.files)) {
         throw new StudioError(400, 'A scan result is { files: [...], skipped: [...], missing }.');
@@ -108,8 +111,14 @@ export function parseMonteurScanResult(
             duration: r.duration == null ? null : round2(r.duration as number),
         });
     });
-    const cap = Number.isInteger(limit) && limit > 0 ? limit : files.length;
-    return { files: files.slice(0, cap), skipped, missing: result.missing === true };
+    let taken = files;
+    if (asked) {
+        const order = new Map(asked.map((path, i) => [path, i]));
+        for (const f of files) if (!order.has(f.path)) skipped.push({ name: f.name, reason: 'not one of the lessons asked for' });
+        taken = files.filter((f) => order.has(f.path)).sort((a, b) => order.get(a.path)! - order.get(b.path)!);
+    }
+    const cap = Number.isInteger(limit) && limit > 0 ? limit : taken.length;
+    return { files: taken.slice(0, cap), skipped, missing: result.missing === true };
 }
 
 // ─── monteur_transcribe ─────────────────────────────────────────────────────────────────

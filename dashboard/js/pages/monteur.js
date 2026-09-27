@@ -113,7 +113,10 @@ const MonteurPage = {
     STALE_MS: 30 * 1000,
 
     PLATFORMS: Object.freeze(['instagram', 'facebook', 'tiktok']),
-    FIELDS: Object.freeze(['enabled', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
+    FIELDS: Object.freeze(['enabled', 'source', 'mode', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
+    /** MONTEUR.md §1: where a run takes its videos, and what happens to a reel once it is ready. */
+    SOURCES: Object.freeze(['folder', 'course']),
+    MODES: Object.freeze(['review', 'auto']),
     NUMBER_FIELDS: Object.freeze(['videos_per_run', 'reels_per_video', 'min_seconds', 'max_seconds']),
     /** MONTEUR.md §1: the ranges the server validates. The server stays the authority. */
     LIMITS: Object.freeze({
@@ -151,6 +154,8 @@ const MonteurPage = {
     defaults() {
         return {
             enabled: false,
+            source: 'folder',
+            mode: 'review',
             folder: null,
             run_at: '07:00',
             videos_per_run: 1,
@@ -275,6 +280,8 @@ const MonteurPage = {
         const num = (v, fallback) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
         return {
             enabled: typeof s.enabled === 'boolean' ? s.enabled : d.enabled,
+            source: this.SOURCES.includes(s.source) ? s.source : d.source,
+            mode: this.MODES.includes(s.mode) ? s.mode : d.mode,
             folder: typeof s.folder === 'string' && s.folder.trim() ? s.folder : null,
             run_at: typeof s.run_at === 'string' ? s.run_at : d.run_at,
             videos_per_run: num(s.videos_per_run, d.videos_per_run),
@@ -725,15 +732,17 @@ const MonteurPage = {
         const v = this.view;
         const s = v.settings;
         const name = this.workerName();
+        // The course library needs no folder: its videos are the lessons.
+        const noFolder = s.source === 'folder' && !s.folder;
         let next;
-        if (!s.folder) next = t('monteur.run.noFolder');
+        if (noFolder) next = t('monteur.run.noFolder');
         else if (!s.enabled) next = t('monteur.run.offNote');
         else if (v.next_run) next = t('monteur.run.next', { when: this.zoneLabel(v.next_run) });
         else next = t('monteur.run.nextUnknown');
         const last = v.last_scan ? UI.relativeAge(v.last_scan.at) : null;
         const scanning = v.pending.scan;
         let runTitle = '';
-        if (!s.folder) runTitle = t('monteur.run.nowNoFolder');
+        if (noFolder) runTitle = t('monteur.run.nowNoFolder');
         else if (scanning) runTitle = t('monteur.run.queuedAlready');
         return html`
             <div class="studio-status-item">
@@ -754,7 +763,7 @@ const MonteurPage = {
                 <div class="row row--wrap gap-2">
                     ${UI.button({
                         variant: 'secondary', size: 'sm', icon: 'play', label: t('monteur.run.now'),
-                        action: 'monteur:runNow', id: 'mt-run-now', disabled: !s.folder || scanning, title: runTitle,
+                        action: 'monteur:runNow', id: 'mt-run-now', disabled: noFolder || scanning, title: runTitle,
                     })}
                 </div>
             </div>
@@ -878,7 +887,7 @@ const MonteurPage = {
         const v = this.view;
         let body;
         if (g.working.some((c) => c.status === 'rendering')) body = t('monteur.queue.emptyRendering');
-        else if (v.settings.enabled && v.settings.folder && v.next_run) body = t('monteur.queue.emptyNext', { when: this.zoneLabel(v.next_run) });
+        else if (v.settings.enabled && v.next_run) body = t('monteur.queue.emptyNext', { when: this.zoneLabel(v.next_run) });
         else body = t('monteur.queue.emptyBody');
         return html`
             <div class="empty-state monteur-empty">
@@ -1207,6 +1216,7 @@ const MonteurPage = {
                 </div>
                 ${this.scoresMarkup(clip)}
                 <p class="post-card-meta">${this.clipMetaMarkup(clip)}</p>
+                ${clip.error ? html`<p class="form-hint text-warning" id="mt-clip-${id}-refused" dir="auto">${t('monteur.clip.autoRefused', { error: clip.error })}</p>` : ''}
                 ${clip.topic ? html`<p class="text-meta monteur-topic"><span>${t('monteur.clip.topic')}</span> <span dir="auto">${clip.topic}</span></p>` : ''}
                 ${this.tiktokCut(clip) ? html`
                     <p class="monteur-tt-line">
@@ -1530,7 +1540,7 @@ const MonteurPage = {
                 </button>
             </div>
             <p class="text-meta" id="mt-settings-summary">${this.summaryMarkup()}${dirty && !open ? html` · <span class="text-warning">${t('studio.editor.unsaved')}</span>` : ''}</p>
-            ${this.view.settings.folder ? html`<p class="monteur-folder-line"><code class="studio-path" dir="ltr">${this.view.settings.folder}</code></p>` : ''}
+            ${this.view.settings.source === 'folder' && this.view.settings.folder ? html`<p class="monteur-folder-line"><code class="studio-path" dir="ltr">${this.view.settings.folder}</code></p>` : ''}
             <div id="mt-settings-body"${open ? '' : html.raw(' class="hidden"')}>${open ? this.formMarkup() : ''}</div>
         `;
     },
@@ -1545,11 +1555,13 @@ const MonteurPage = {
         const platforms = this.platformList(s.platforms);
         const parts = [
             s.enabled ? html`${t('monteur.summary.daily')} ${UI.ltr(s.run_at)}` : html`${t('monteur.summary.off')}`,
+            s.source === 'course' ? html`${t('monteur.summary.course')}` : '',
             html`${t('monteur.summary.videos', { count: s.videos_per_run, n: UI.formatNumber(s.videos_per_run) })}`,
             html`${t('monteur.summary.reels', { count: s.reels_per_video, n: UI.formatNumber(s.reels_per_video) })}`,
             html`${UI.ltr(range)} ${t('monteur.summary.seconds')}`,
             html`${t('monteur.summary.posts')} ${UI.ltr(s.post_at.join(', '))}`,
             platforms ? html`${platforms}` : '',
+            s.mode === 'auto' ? html`${t('monteur.summary.auto')}` : '',
         ].filter(Boolean);
         return html`${parts.map((part, i) => html`${i ? ' · ' : ''}${part}`)}`;
     },
@@ -1570,7 +1582,7 @@ const MonteurPage = {
             <p class="form-hint studio-section-lede">${t('monteur.setup.intro')}</p>
             <form id="mt-settings-form" class="monteur-form" data-submit="monteur:saveSettings" novalidate>
                 <ol class="setup-steps">
-                    ${step(1, marks[0], t('monteur.setup.folder'), this.folderFieldMarkup())}
+                    ${step(1, marks[0], t('monteur.setup.source'), html`${this.sourceMarkup()}${this.folderFieldMarkup()}`)}
                     ${step(2, marks[1], t('monteur.setup.times'), html`${this.runAtMarkup()}${this.postAtMarkup()}`)}
                     ${step(3, marks[2], t('monteur.setup.numbers'), html`
                         <div class="studio-settings-grid">
@@ -1579,6 +1591,7 @@ const MonteurPage = {
                         </div>
                         ${this.lengthMarkup()}
                         ${this.platformsMarkup()}
+                        ${this.modeMarkup()}
                     `)}
                 </ol>
                 ${this.enabledMarkup()}
@@ -1591,6 +1604,7 @@ const MonteurPage = {
         return html`
             <form id="mt-settings-form" class="monteur-form" data-submit="monteur:saveSettings" novalidate>
                 ${this.enabledMarkup()}
+                ${this.sourceMarkup()}
                 ${this.folderFieldMarkup()}
                 <div class="studio-settings-grid">
                     ${this.runAtMarkup()}
@@ -1600,19 +1614,20 @@ const MonteurPage = {
                 ${this.postAtMarkup()}
                 ${this.lengthMarkup()}
                 ${this.platformsMarkup()}
+                ${this.modeMarkup()}
                 <div id="mt-settings-savebar">${this.seed('mt-settings-savebar', this.saveBarMarkup())}</div>
             </form>
         `;
     },
 
-    /** [folder chosen, times valid, numbers valid]: the setup's three marks. */
+    /** [where the videos come from, times valid, numbers valid]: the setup's three marks. */
     stepStates() {
         if (!this.work) return [false, false, false];
         const body = this.settingsPayload();
         const problems = this.localProblems(body);
         const has = (keys) => problems.some((p) => keys.includes(p.key.split('.')[0]));
         return [
-            !!body.folder && !has(['folder']),
+            (body.source === 'course' || !!body.folder) && !has(['folder']),
             !has(['run_at', 'post_at']),
             !has(['videos_per_run', 'reels_per_video', 'min_seconds', 'max_seconds', 'platforms']),
         ];
@@ -1669,12 +1684,49 @@ const MonteurPage = {
         `;
     },
 
+    /** One choice as a radio group: `key` names the setting, each option a label and a hint. */
+    choiceMarkup(key, legend, options) {
+        const chosen = this.work[key];
+        return html`
+            <fieldset class="fieldset-plain form-group" id="mt-${key}">
+                <legend class="form-label">${legend}</legend>
+                ${options.map(([value, label, hint]) => html`
+                    <label class="check-row" for="mt-${key}-${value}">
+                        <input type="radio" name="mt-${key}" id="mt-${key}-${value}" value="${value}"
+                               data-change="monteur:setting" data-key="${key}"
+                               aria-describedby="mt-${key}-${value}-hint" ${chosen === value ? html.raw('checked') : ''}>
+                        <span class="check-text">
+                            <span class="check-label">${label}</span>
+                            <span class="form-hint" id="mt-${key}-${value}-hint">${hint}</span>
+                        </span>
+                    </label>
+                `)}
+            </fieldset>
+        `;
+    },
+
+    /** "Take videos from: my folder / the course library". The course library needs no folder. */
+    sourceMarkup() {
+        return this.choiceMarkup('source', t('monteur.settings.source'), [
+            ['folder', t('monteur.settings.sourceFolder'), t('monteur.settings.sourceFolderHint')],
+            ['course', t('monteur.settings.sourceCourse'), t('monteur.settings.sourceCourseHint')],
+        ]);
+    },
+
+    /** "When a reel is ready: I review it / schedule it automatically". */
+    modeMarkup() {
+        return this.choiceMarkup('mode', t('monteur.settings.mode'), [
+            ['review', t('monteur.settings.modeReview'), t('monteur.settings.modeReviewHint')],
+            ['auto', t('monteur.settings.modeAuto'), t('monteur.settings.modeAutoHint')],
+        ]);
+    },
+
     folderFieldMarkup() {
         const w = this.work;
         const pending = !!this.view.pending.folder_pick;
         const problems = this.problemsFor('folder');
         return html`
-            <div class="form-group" id="mt-folder-group">
+            <div class="form-group${w.source === 'course' ? html.raw(' hidden') : ''}" id="mt-folder-group">
                 <label class="form-label" for="mt-folder">${t('monteur.settings.folder')}</label>
                 <div class="field-row monteur-folder-row">
                     <input class="field field-mono" id="mt-folder" type="text" dir="ltr" autocomplete="off" spellcheck="false"
@@ -1865,6 +1917,15 @@ const MonteurPage = {
         let problemKey = key;
         if (key === 'enabled') {
             w.enabled = !!el.checked;
+        } else if (key === 'source' || key === 'mode') {
+            const value = String(el.value || '');
+            if (!(key === 'source' ? this.SOURCES : this.MODES).includes(value)) return;
+            w[key] = value;
+            // The folder is asked for only when the videos come from it.
+            if (key === 'source') {
+                this.toggleHidden('mt-folder-group', value === 'course');
+                problemKey = 'folder';
+            }
         } else if (key === 'folder') {
             const value = String(el.value || '');
             // An emptied folder is "not set", which is what the server stores for it.
@@ -1975,6 +2036,8 @@ const MonteurPage = {
         const num = (v) => (typeof v === 'number' ? v : (String(v).trim() === '' ? NaN : Number(v)));
         return {
             enabled: !!w.enabled,
+            source: this.SOURCES.includes(w.source) ? w.source : 'folder',
+            mode: this.MODES.includes(w.mode) ? w.mode : 'review',
             folder: typeof w.folder === 'string' && w.folder.trim() ? w.folder.trim() : null,
             run_at: String(w.run_at || '').trim(),
             videos_per_run: num(w.videos_per_run),
@@ -1994,8 +2057,8 @@ const MonteurPage = {
     localProblems(body) {
         const out = [];
         const add = (key, message) => out.push({ key, message });
-        // A daily run with no folder can never happen, and would still show as on.
-        if (body.enabled && body.folder === null) add('folder', t('monteur.err.folderRequired'));
+        // A daily run from a folder with no folder can never happen, and would still show as on.
+        if (body.enabled && body.source === 'folder' && body.folder === null) add('folder', t('monteur.err.folderRequired'));
         if (body.folder !== null) {
             if (body.folder.length > this.FOLDER_MAX) add('folder', t('monteur.err.folderLong', { max: this.FOLDER_MAX }));
             else if (!this.ABSOLUTE_PATH.test(body.folder)) add('folder', t('monteur.err.folder'));
@@ -2160,8 +2223,10 @@ const MonteurPage = {
             await API.runMonteur();
             ok = true;
         } catch (err) {
-            // 409 is the contract's "no folder"; say it in the operator's language.
-            UI.toast(err && err.status === 409 ? t('monteur.run.noFolderToast') : ((err && err.message) || t('common.error')), 'error');
+            // 409 is the contract's "no folder", or in course mode "no lesson left"; said in the operator's language.
+            const course = this.view && this.view.settings.source === 'course';
+            const said = course ? t('monteur.run.noLessonsToast') : t('monteur.run.noFolderToast');
+            UI.toast(err && err.status === 409 ? said : ((err && err.message) || t('common.error')), 'error');
         } finally {
             restore();
         }
