@@ -11,7 +11,7 @@ import { setLogSink } from '../../utils/log.js';
 import { setMediaStore, type MediaStore } from '../storage.js';
 import type { Carousel } from './carouselTypes.js';
 import { StudioError } from './common.js';
-import { BATCH_STAGGER_MS, runTikTokBatch, scheduleDraft } from './schedule.js';
+import { BATCH_STAGGER_MS, runTikTokBatch, scheduleDraft, unscheduleDraft, unscheduleRefusal } from './schedule.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const DRAFT = '77777777-7777-4777-8777-777777777777';
@@ -338,6 +338,111 @@ describe('scheduleDraft — Instagram reach levers (GROWTH.md §4)', () => {
             (err: unknown) => err instanceof StudioError && err.status === 400 && /at most 3 collaborators/.test(err.message),
         );
         assert.equal(inserts().length, 0);
+    });
+});
+
+describe('unscheduleDraft — the way back from scheduled', () => {
+    const META_ROW = 'c1c1c1c1-1111-4111-8111-111111111111';
+    const TT_ROW = 'c2c2c2c2-2222-4222-8222-222222222222';
+    type Linked = { id: string; platform: string; status: string; published_post_id: string | null; external_publish_id: string | null };
+    const post = (id: string, fields: Partial<Linked> = {}): Linked => ({
+        id, platform: id === TT_ROW ? 'tiktok' : 'both', status: 'PENDING', published_post_id: null, external_publish_id: null, ...fields,
+    });
+    let linked: Linked[] = [];
+    const scheduledDraft = (tiktokRow: string | null = null) => draftRow({
+        status: 'scheduled',
+        schedule: { scheduled_time: WHEN, meta_row_id: META_ROW, tiktok: tiktokRow ? 'scheduled' : 'none', tiktok_row_id: tiktokRow, tiktok_public_done: false },
+    });
+    const deletes = () => statements.filter((s) => /^DELETE FROM scheduled_posts/.test(s.sql));
+    const reopens = () => statements.filter((s) => /^UPDATE carousel_drafts SET status = 'ready'/.test(s.sql));
+
+    beforeEach(() => {
+        linked = [post(META_ROW)];
+        draft = scheduledDraft();
+        routes.unshift(
+            [/^SELECT \* FROM carousel_drafts WHERE id = \$1 AND creator_id = \$2 FOR UPDATE$/, () => ({ rows: draft ? [draft] : [] })],
+            [/^SELECT id, platform, status, published_post_id, external_publish_id FROM scheduled_posts/, (p) => ({
+                rows: linked.filter((row) => (p[1] as string[]).includes(row.id)),
+            })],
+            [/^DELETE FROM scheduled_posts/, (p) => ({ rows: (p[1] as string[]).map((id) => ({ id })) })],
+            [/^UPDATE carousel_drafts SET status = 'ready'/, () => ({ rows: [draftRow({ status: 'ready', schedule: null })] })],
+        );
+    });
+
+    it('deletes the queued Meta and TikTok rows, then reopens the draft as ready with its slides', async () => {
+        draft = scheduledDraft(TT_ROW);
+        linked = [post(META_ROW), post(TT_ROW)];
+        const outcome = await unscheduleDraft(TENANT, DRAFT);
+
+        assert.deepEqual(outcome.deleted, [META_ROW, TT_ROW]);
+        assert.equal(outcome.draft.status, 'ready');
+        assert.equal(outcome.draft.schedule, null);
+        assert.deepEqual(outcome.draft.render?.ig, [up(IG1), up(IG2)], 'the render is kept, so it can be scheduled again');
+
+        const [lockDraft] = statements.filter((s) => /^SELECT \* FROM carousel_drafts/.test(s.sql));
+        assert.match(lockDraft!.sql, /FOR UPDATE$/);
+        const [lockPosts] = statements.filter((s) => /FROM scheduled_posts/.test(s.sql) && /^SELECT/.test(s.sql));
+        assert.match(lockPosts!.sql, /FOR UPDATE$/, 'locked, so the publish claim cannot slip in between');
+        assert.deepEqual(lockPosts!.params, [TENANT, [META_ROW, TT_ROW]]);
+        const [del] = deletes();
+        assert.match(del!.sql, /WHERE creator_id = \$1 AND id = ANY\(\$2::uuid\[\]\) AND status = 'PENDING'/);
+        assert.equal(del!.params[0], TENANT);
+        const [reopen] = reopens();
+        assert.match(reopen!.sql, /schedule = NULL/);
+        assert.match(reopen!.sql, /AND status = 'scheduled'/);
+        assert.deepEqual(reopen!.params, [DRAFT, TENANT]);
+        assert.ok(!statements.some((s) => /campaigns/.test(s.sql)), 'the keyword campaign is left as it is');
+    });
+
+    it('asks only for the Meta row while the TikTok post is still waiting for the batch', async () => {
+        draft = draftRow({
+            status: 'scheduled',
+            schedule: { scheduled_time: WHEN, meta_row_id: META_ROW, tiktok: 'queue', tiktok_row_id: null, tiktok_public_done: false },
+        });
+        const outcome = await unscheduleDraft(TENANT, DRAFT);
+        assert.deepEqual(outcome.deleted, [META_ROW]);
+    });
+
+    for (const status of ['PUBLISHED', 'PUBLISHING', 'PROCESSING', 'IN_INBOX', 'FAILED']) {
+        it(`refuses with 409 and changes nothing when a linked post is ${status}`, async () => {
+            draft = scheduledDraft(TT_ROW);
+            linked = [post(META_ROW), post(TT_ROW, { status })];
+            await assert.rejects(unscheduleDraft(TENANT, DRAFT), isStudioError(409));
+            assert.equal(deletes().length, 0);
+            assert.equal(reopens().length, 0);
+        });
+    }
+
+    it('refuses a held reel whose Facebook half is already live, though its row still reads PENDING', async () => {
+        linked = [post(META_ROW, { published_post_id: 'fb_123', external_publish_id: 'IGC:456' })];
+        await assert.rejects(unscheduleDraft(TENANT, DRAFT), isStudioError(409));
+        assert.equal(deletes().length, 0);
+        assert.equal(reopens().length, 0);
+    });
+
+    it('still reopens a draft whose post was already deleted in Posts', async () => {
+        linked = [];
+        const outcome = await unscheduleDraft(TENANT, DRAFT);
+        assert.deepEqual(outcome.deleted, []);
+        assert.equal(deletes().length, 0);
+        assert.equal(reopens().length, 1);
+        assert.equal(outcome.draft.status, 'ready');
+    });
+
+    it('409s a draft that is not scheduled, and 404s one that is not there', async () => {
+        draft = draftRow({ status: 'ready' });
+        await assert.rejects(unscheduleDraft(TENANT, DRAFT), isStudioError(409));
+        draft = undefined as unknown as CarouselDraftRow;
+        await assert.rejects(unscheduleDraft(TENANT, DRAFT), isStudioError(404));
+        assert.equal(deletes().length, 0);
+    });
+
+    it('names every refusal in words, and lets only an untouched PENDING row go', () => {
+        assert.equal(unscheduleRefusal(post(META_ROW)), null);
+        for (const status of ['PUBLISHED', 'PUBLISHING', 'PROCESSING', 'IN_INBOX', 'FAILED']) {
+            assert.match(String(unscheduleRefusal(post(META_ROW, { status }))), /\w/);
+        }
+        assert.notEqual(unscheduleRefusal(post(META_ROW, { external_publish_id: 'IGC:1' })), null);
     });
 });
 

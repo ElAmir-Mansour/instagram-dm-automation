@@ -3393,7 +3393,7 @@ describe('StudioPage — editing, preview first', () => {
         assert.ok(String(S.shotHeroMarkup(moments[3])).includes(s.t('studio.moment.notClean')), 'the large view says what is wrong with it');
     });
 
-    it('"Write it again" makes a new draft from the same source, at the chosen angle, and goes to watch it', async () => {
+    it('"Write it again" makes a new draft from the same source, at the chosen angle, and offers it in the editor', async () => {
         const s = loadStudio();
         await openEditor(s);
         const S = s.Studio as Json;
@@ -3401,11 +3401,21 @@ describe('StudioPage — editing, preview first', () => {
             lessonIds: ['l1'], angle: 'steps', slides: 7, keyword: 'برومبت', accent: '#FF6B6B',
         });
         const posted: Json[] = [];
-        s.api.createStudioDraft = (body: Json) => { posted.push(body); return Promise.resolve({ draft: { id: 'v2', status: 'rendering' } }); };
+        let during = '';
+        const regenHost = s.host('studio-regen-host');
+        s.api.createStudioDraft = (body: Json) => {
+            posted.push(body);
+            during = regenHost.innerHTML;
+            return Promise.resolve({ draft: { id: 'v2', status: 'rendering', carousel: { slides: [], captions: {} } } });
+        };
         s.api.getStudioDrafts = () => Promise.resolve({ drafts: [] });
         await S.regenerate(fakeForm({ angle: 'mistakes', slides: '8' }), submitEvent);
+        const after = regenHost.innerHTML;
         s.Studio.destroy();
-        assert.deepEqual(plainJson(s.nav[0]), { page: 'studio' }, 'to the home view, where the progress is');
+        // UX audit ST5: the operator is no longer thrown out to the home view.
+        assert.deepEqual(plainJson(s.nav), [], 'stays in the editor it was started from');
+        assert.ok(during.includes(s.t('studio.gen.title')), 'the progress card sits above the editor head while it writes');
+        assert.ok(after.includes('href="#/studio?draft=v2"') && after.includes(s.t('studio.regen.open')), 'then "Open the new draft"');
         assert.equal(posted.length, 1);
         assert.equal(plainJson(posted[0]).angle, 'mistakes');
         assert.equal(S.draftId === 'v2', false, 'this draft is left as it was');

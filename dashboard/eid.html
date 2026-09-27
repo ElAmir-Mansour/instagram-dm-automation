@@ -9,17 +9,24 @@
          the headline invisible. Every one of those is now a token that has a light
          value, so the pin is gone and the page follows the reader's OS. -->
     <meta name="color-scheme" content="dark light">
+    <!-- This file is served rendered at /eid (src/index.ts), where the coupon
+         expiry below is filled from Settings → Public site. vercel.json hands
+         /dashboard/* straight to the static copy, which the server's 301 never
+         sees — so the old address sends itself on, before anything paints. -->
+    <script>
+        if (/^\/dashboard\//.test(location.pathname)) location.replace('/eid' + location.search + location.hash);
+    </script>
     <title>عيدية المبرمجين — 9 كورسات مجانية بالكامل 🎉</title>
     <meta name="description" content="تسعة كورسات برمجة بالعربية متاحة مجاناً بكوبونات محدودة — اختر كورسك وسجّل فوراً.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
-    <link rel="canonical" href="https://msg-response-auto.vercel.app/dashboard/eid.html">
+    <link rel="canonical" href="https://msg-response-auto.vercel.app/eid">
     <meta property="og:title" content="عيدية المبرمجين — 9 كورسات مجانية بالكامل 🎉">
     <meta property="og:description" content="تسعة كورسات برمجة بالعربية متاحة مجاناً بكوبونات محدودة — اختر كورسك وسجّل فوراً.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://msg-response-auto.vercel.app/dashboard/eid.html">
+    <meta property="og:url" content="https://msg-response-auto.vercel.app/eid">
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
     <meta property="og:locale" content="ar_SA">
     <meta property="og:locale:alternate" content="en_US">
@@ -33,7 +40,7 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=9.1">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=10.0">
     <style>
         :root {
             --bg-primary: var(--surface-page);
@@ -420,10 +427,11 @@
           visitor lands on a paid checkout with no explanation, having been told
           the course was free. Nine of them do it at once.
 
-          `data-coupons-expire` below is the single place a date is written. Fill
-          it with the ISO date the coupons were issued + 5 days, e.g.
-          data-coupons-expire="2026-04-05". The script at the bottom of this file
-          then, from that date onwards:
+          `data-coupons-expire` below is filled when the page is served, from
+          Settings → Public site → «آخر يوم لكوبونات العيد» (site.eid_coupons_expire,
+          env fallback SITE_EID_COUPONS_EXPIRE). Set it to the ISO date the coupons
+          were issued + 5 days, e.g. 2026-04-05. The script at the bottom of this
+          file then, from the day after that date onwards:
               · shows the "offer ended" notice in the header,
               · greys the nine coupon tags,
               · strips `?couponCode=…` from every link so they open the real
@@ -431,8 +439,8 @@
               · and relabels the buttons.
 
           EMPTY = INERT. Nothing changes and the page behaves exactly as it does
-          today. It is left empty deliberately: the issue date is not in this
-          repo and must not be guessed.
+          today. So does the static copy at /dashboard/eid.html, where the value
+          is never filled in: an unparseable date is treated as not configured.
 
           The redemption cap (100) cannot be detected from here at all — only
           Udemy knows the count. If that is the limit that gets hit first, the
@@ -442,7 +450,7 @@
           its per-campaign copy.
         -->
         <h2 class="sr-only" id="courses-heading">الكورسات المتاحة</h2>
-        <main class="courses-grid" aria-labelledby="courses-heading" data-coupons-expire="">
+        <main class="courses-grid" aria-labelledby="courses-heading" data-coupons-expire="{{EID_COUPONS_EXPIRE}}">
             <!-- Card 1 -->
             <div class="course-card">
                 <div class="card-icon" aria-hidden="true">🤖</div>

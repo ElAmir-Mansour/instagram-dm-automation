@@ -9,6 +9,9 @@
  * SELF_ONLY, so the Studio's usual path is to queue each draft's TikTok carousel, send the
  * queue as one batch, and make each post public by hand in the TikTok app — the
  * `tiktok_public_done` tick is the checklist for that last step.
+ *
+ * `/unschedule` is the way back: it deletes the draft's queued posts and reopens the draft,
+ * refused once any of them has gone out.
  */
 import crypto from 'crypto';
 import { queryRows } from '../../db/query.js';
@@ -23,7 +26,7 @@ import { validatePostMedia } from '../postMedia.js';
 import { getConnection } from '../tiktokConnections.js';
 import { validateTikTokOptions, type TikTokMediaKind } from '../tiktokPublish.js';
 import type { Carousel } from './carouselTypes.js';
-import { type Exec, isPlainObject, lockTenantPublishing, problemsError, StudioError, unique, withTransaction } from './common.js';
+import { type Exec, isPlainObject, lockTenantPublishing, problemsError, StudioError, unique, UUID_PATTERN, withTransaction } from './common.js';
 import { presentDraft, type Draft } from './drafts.js';
 import { altTextFor } from './generate.js';
 
@@ -236,6 +239,95 @@ export async function scheduleDraft(creatorId: string, draftId: string, body: un
             [draft.id, creatorId, JSON.stringify(schedule)]
         );
         return { draft: presentDraft(saved[0]!), rows, campaign };
+    });
+}
+
+export interface UnscheduleOutcome {
+    /** Back to `ready`: the same slides and render, with no schedule. */
+    draft: Draft;
+    /** The queued posts that were removed — the Meta row, and the TikTok one when it had been made. */
+    deleted: string[];
+}
+
+type LinkedPost = Pick<ScheduledPostRow, 'id' | 'platform' | 'status' | 'published_post_id' | 'external_publish_id'>;
+
+/**
+ * Why a linked post keeps the draft scheduled, or null when it may be removed. Only a PENDING
+ * row that nothing has published from may go: a held Instagram reel is PENDING while its
+ * Facebook half is already live (`published_post_id`, `IGC:` in `external_publish_id`), and a
+ * FAILED row can carry a partial id too, so neither is treated as "never went out".
+ */
+export function unscheduleRefusal(post: LinkedPost): string | null {
+    if (post.status === 'PENDING' && !post.published_post_id && !post.external_publish_id) return null;
+    if (post.status === 'PUBLISHED') {
+        return 'This draft has already been published, so it stays scheduled: it is the record of what went out.';
+    }
+    if (post.status === 'PUBLISHING' || post.status === 'PROCESSING') {
+        return 'One of this draft’s posts is being published right now. Wait for it to finish.';
+    }
+    if (post.status === 'IN_INBOX') {
+        return 'The TikTok post is already in your TikTok inbox, so the draft stays scheduled.';
+    }
+    if (post.status === 'FAILED') {
+        return 'One of this draft’s posts failed. Retry it or delete it in Posts, then unschedule the draft.';
+    }
+    return 'Part of this post has already gone out, so the draft stays scheduled.';
+}
+
+/**
+ * POST /drafts/:id/unschedule: the way back from `scheduled`. The draft's queued posts are
+ * deleted and the draft is `ready` again, slides and render untouched, so it can be edited and
+ * scheduled anew. The keyword campaign made at scheduling is kept: it is its own row, the
+ * operator may have changed it, and a second scheduling reuses it rather than duplicating it.
+ *
+ * Refused (409) once any linked post has gone out or is going out. The draft and its posts are
+ * locked FOR UPDATE, so the publish sweep's claim (`UPDATE … WHERE status = 'PENDING'`) either
+ * ran first — and this finds PUBLISHING — or waits for this and then finds no row. A post the
+ * operator already deleted in Posts is simply not there, and the draft still reopens.
+ */
+export async function unscheduleDraft(creatorId: string, draftId: string): Promise<UnscheduleOutcome> {
+    return withTransaction(async (client) => {
+        const { rows: found } = await client.query<CarouselDraftRow>(
+            'SELECT * FROM carousel_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE', [draftId, creatorId]
+        );
+        const draft = found[0];
+        if (!draft) throw new StudioError(404, 'No such draft.');
+        if (draft.status !== 'scheduled') throw new StudioError(409, 'This draft is not scheduled.');
+
+        const ids = unique([draft.schedule?.meta_row_id, draft.schedule?.tiktok_row_id]
+            .filter((id): id is string => typeof id === 'string' && UUID_PATTERN.test(id)));
+        const { rows: posts } = ids.length
+            ? await client.query<LinkedPost>(
+                `SELECT id, platform, status, published_post_id, external_publish_id FROM scheduled_posts
+                  WHERE creator_id = $1 AND id = ANY($2::uuid[])
+                    FOR UPDATE`,
+                [creatorId, ids]
+            )
+            : { rows: [] as LinkedPost[] };
+        for (const post of posts) {
+            const refusal = unscheduleRefusal(post);
+            if (refusal) throw new StudioError(409, refusal);
+        }
+
+        let deleted: string[] = [];
+        if (posts.length) {
+            const { rows: gone } = await client.query<{ id: string }>(
+                `DELETE FROM scheduled_posts
+                  WHERE creator_id = $1 AND id = ANY($2::uuid[]) AND status = 'PENDING'
+              RETURNING id`,
+                [creatorId, posts.map((post) => post.id)]
+            );
+            deleted = gone.map((row) => row.id);
+        }
+        const { rows: saved } = await client.query<CarouselDraftRow>(
+            `UPDATE carousel_drafts SET status = 'ready', schedule = NULL, error = NULL, updated_at = NOW()
+              WHERE id = $1 AND creator_id = $2 AND status = 'scheduled'
+          RETURNING *`,
+            [draft.id, creatorId]
+        );
+        if (!saved[0]) throw new StudioError(409, 'The draft changed while it was being unscheduled. Reload it and try again.');
+        log('info', 'studio.unscheduled', { draft_id: draft.id, deleted: deleted.length });
+        return { draft: presentDraft(saved[0]), deleted };
     });
 }
 

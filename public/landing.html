@@ -560,19 +560,26 @@
          carry a full light theme as a peer of dark. -->
     <meta name="color-scheme" content="dark light">
     <title>أوتوريبلاي برو — من تعليق إلى محادثة · AutoReply Pro</title>
-    <meta name="description" content="أوتوريبلاي برو: يردّ تلقائياً على تعليقات إنستجرام وفيسبوك برسالة خاصة، ويجيب عن الرسائل بالذكاء الاصطناعي، وينشر المجدول على إنستجرام وفيسبوك وتيك توك، ويحوّل دروسك المصوّرة إلى كاروسيل — بالعربية أولاً. AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, answers the conversation with AI, and publishes to Instagram, Facebook and TikTok, including carousels its Studio writes from your video lessons.">
+    <meta name="description" data-lang-only="ar" content="أوتوريبلاي برو يحوّل تعليقاً بكلمة مفتاحية على إنستجرام وفيسبوك إلى رسالة خاصة وردّ علني، ويجيب بالذكاء الاصطناعي، وينشر المجدول. بالعربية أولاً.">
+    <meta name="description" data-lang-only="en" content="AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, answers the conversation with AI, and publishes to Instagram, Facebook and TikTok.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
-    <link rel="canonical" href="https://msg-response-auto.vercel.app/">
+    <link rel="canonical" href="https://msg-response-auto.vercel.app/{{LANG_QUERY}}">
+    <link rel="alternate" hreflang="ar" href="https://msg-response-auto.vercel.app/">
+    <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/?lang=en">
+    <link rel="alternate" hreflang="x-default" href="https://msg-response-auto.vercel.app/">
     <meta property="og:title" content="أوتوريبلاي برو — من تعليق إلى محادثة · AutoReply Pro">
-    <meta property="og:description" content="أوتوريبلاي برو: يردّ تلقائياً على تعليقات إنستجرام وفيسبوك برسالة خاصة، ويجيب عن الرسائل بالذكاء الاصطناعي، وينشر المجدول على إنستجرام وفيسبوك وتيك توك، ويحوّل دروسك المصوّرة إلى كاروسيل — بالعربية أولاً. AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, answers the conversation with AI, and publishes to Instagram, Facebook and TikTok, including carousels its Studio writes from your video lessons.">
+    <meta property="og:description" data-lang-only="ar" content="أوتوريبلاي برو يحوّل تعليقاً بكلمة مفتاحية على إنستجرام وفيسبوك إلى رسالة خاصة وردّ علني، ويجيب بالذكاء الاصطناعي، وينشر المجدول. بالعربية أولاً.">
+    <meta property="og:description" data-lang-only="en" content="AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, answers the conversation with AI, and publishes to Instagram, Facebook and TikTok.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://msg-response-auto.vercel.app/">
+    <meta property="og:url" content="https://msg-response-auto.vercel.app/{{LANG_QUERY}}">
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
-    <meta property="og:locale" content="ar_SA">
-    <meta property="og:locale:alternate" content="en_US">
+    <meta property="og:locale" data-lang-only="ar" content="ar_SA">
+    <meta property="og:locale:alternate" data-lang-only="ar" content="en_US">
+    <meta property="og:locale" data-lang-only="en" content="en_US">
+    <meta property="og:locale:alternate" data-lang-only="en" content="ar_SA">
 
     <!-- One design system in this repo, not three. Same file the dashboard,
          /pricing, /privacy and dashboard/eid.html load, so the front door and
@@ -584,7 +591,7 @@
          Keep this ?v= pinned to ASSET_VERSION in dashboard/js/app.js —
          scripts/check-asset-version.mjs enforces it, and public/landing.html
          is in its SHARED_ASSET_PAGES list. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=9.1">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=10.0">
 
     <style>
         /* ═══════════════════════════════════════════════════════════════════
@@ -998,6 +1005,39 @@
             border-radius: var(--radius-lg);
             background: var(--surface-raised);
             box-shadow: var(--lp-elev-card);
+        }
+
+        /* ─── Contact (PB3) ────────────────────────────────────────────────────
+           A quiet card, not a second .cta panel: that one is deliberately the
+           strongest moment after the hero and deliberately the last. Heading
+           and sentence at the reading start, the two channels at the end. */
+        .contact-card {
+            display: grid;
+            gap: var(--space-3);
+            padding: var(--space-5) var(--space-6);
+        }
+        .contact-card h2 {
+            margin: 0;
+            max-width: none;
+            font-size: var(--lp-h3);
+            line-height: var(--lp-lh-head);
+            font-weight: var(--fw-semibold);
+            letter-spacing: 0;
+        }
+        .contact-card p { margin: 0; max-width: 60ch; color: var(--text-default); }
+        .contact-card .cta-row { margin-block-start: var(--space-2); }
+        /* An address is one long unbroken run; on a phone it may wrap. */
+        .contact-mail { overflow-wrap: anywhere; text-align: center; }
+        @media (min-width: 52rem) {
+            .contact-card {
+                grid-template-columns: minmax(0, 1fr) auto;
+                align-items: center;
+                column-gap: var(--space-6);
+            }
+            .contact-card .cta-row { grid-column: 2; grid-row: 1 / span 2; margin-block-start: 0; }
+        }
+        @media (max-width: 40rem) {
+            .contact-card { padding: var(--space-4); }
         }
 
         /* ─── Hero ─────────────────────────────────────────────────────────── */
@@ -2681,27 +2721,31 @@
             .headnav a { padding-inline: var(--space-1); }
             .langswitch { gap: 1px; padding: 2px; }
             .langswitch button { min-width: 0; padding-inline: var(--space-2); }
+            /* Contact made the bar three links. The width it needs comes from
+               the bar's own language switch, which keeps only the language
+               you can switch TO: the pressed one names what is already on
+               screen. The footer's switch keeps both. With JavaScript off
+               nothing is pressed, so both still show. */
+            .topbar .langswitch button[aria-pressed='true'] { display: none; }
         }
     </style>
 
     <script>
         /* Resolve the language before first paint so the page never shows the
-           wrong script for a frame. Mirrors dashboard/js/i18n.js: stored choice,
-           then the browser's own languages, then Arabic. */
+           wrong script for a frame. */
         (function () {
+            /* ?lang= first (a shared or hreflang link names its language),
+               then the stored choice, then Arabic. No browser-locale guess on
+               the public pages: it handed an English-locale visitor — and a
+               crawler — English on an Arabic-first site (PB4). The dashboard
+               still guesses; it is a tool, not a front door. */
             var lang = null;
-            try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
+            try { lang = new URLSearchParams(location.search).get('lang'); } catch (e) { /* no URLSearchParams */ }
             if (lang !== 'ar' && lang !== 'en') {
                 lang = null;
-                try {
-                    var prefs = navigator.languages || [navigator.language || ''];
-                    for (var i = 0; i < prefs.length; i++) {
-                        var code = String(prefs[i] || '').toLowerCase().split('-')[0];
-                        if (code === 'ar' || code === 'en') { lang = code; break; }
-                    }
-                } catch (e) { /* no navigator language information */ }
+                try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
             }
-            lang = lang || 'ar';
+            if (lang !== 'ar' && lang !== 'en') lang = 'ar';
             var root = document.documentElement;
             root.setAttribute('data-lang', lang);
             root.lang = lang;
@@ -2754,6 +2798,7 @@
             <div class="headtools">
                 <nav class="headnav" aria-label="روابط الموقع · Site">
                     <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <a href="/#contact"><bdi class="t-ar" lang="ar">تواصل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></a>
                     <!-- "الدخول" rather than "تسجيل الدخول": the bar has to hold
                          a wordmark, two links and a language switch inside
                          375px, and the footer carries the full "لوحة التحكم"
@@ -2815,6 +2860,25 @@
                                 </li>
                             </ul>
                         </aside>
+                    </div>
+                </section>
+
+                <!-- ─── Contact (PB3) ───────────────────────────────────────
+                     Right under the hero: contact is the only conversion this
+                     site has, and it used to be three hops away. WhatsApp
+                     first, the channel this audience expects; email beside
+                     it. Both are Settings → Public site values filled in when
+                     the page is served, and a channel with no value is
+                     removed rather than shown empty. The header's «تواصل»
+                     lands here (/#contact → #contact-ar). -->
+                <section class="band" id="contact-ar" aria-labelledby="contact-h-ar">
+                    <div class="card contact-card">
+                        <h2 id="contact-h-ar">تواصل معنا</h2>
+                        <p>اكتب لنا بما تريد أتمتته، ونردّ بالسعر والمدة المتوقعة للربط قبل أي التزام.</p>
+                        <div class="cta-row">
+                            <a class="btn btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">تواصل عبر واتساب</a>
+                            <a class="btn btn-secondary contact-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">البريد: <bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>
+                        </div>
                     </div>
                 </section>
 
@@ -3630,7 +3694,7 @@
                             <div class="qa-a"><p>
                                 ليس بعد. ميتا تمنح الأذونات التي يحتاجها البرنامج حساباً حساباً،
                                 فيُربط كل حساب يدوياً ومعك. اكتب لنا على
-                                <a data-contact-email href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a>،
+                                <a data-contact-email href="mailto:{{CONTACT_EMAIL}}"><bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>،
                                 ونخبرك بما يلزم وبالمدة المتوقعة قبل أي التزام.
                             </p></div>
                         </details>
@@ -3726,6 +3790,18 @@
                                 </li>
                             </ul>
                         </aside>
+                    </div>
+                </section>
+
+                <!-- ─── Contact (PB3) — see the Arabic copy above. ────────── -->
+                <section class="band" id="contact-en" aria-labelledby="contact-h-en">
+                    <div class="card contact-card">
+                        <h2 id="contact-h-en">Get in touch</h2>
+                        <p>Tell us what you want automated, and we reply with a price and the expected time to get connected, before you commit to anything.</p>
+                        <div class="cta-row">
+                            <a class="btn btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Chat on WhatsApp</a>
+                            <a class="btn btn-secondary contact-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">Email: {{CONTACT_EMAIL}}</a>
+                        </div>
                     </div>
                 </section>
 
@@ -4590,7 +4666,7 @@
                             <div class="qa-a"><p>
                                 Not yet. Meta grants the permissions this needs account by account,
                                 so every account is connected by hand, with you. Write to
-                                <a data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                                <a data-contact-email href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>
                                 and we tell you what it would take, and how long, before you commit
                                 to anything.
                             </p></div>
@@ -4717,7 +4793,8 @@
                 </div>
                 <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
                     <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
-                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a class="foot-wa" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">تواصل عبر واتساب</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Chat on WhatsApp</bdi></a>
+                    <a class="foot-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
                 </div>
             </div>
@@ -4748,7 +4825,9 @@
             var root = document.documentElement;
             var buttons = document.querySelectorAll('[data-set-lang]');
 
-            function apply(lang) {
+            /* `remember` only for a click: arriving on a ?lang=en link is
+               not a choice to make English stick on the next visit. */
+            function apply(lang, remember) {
                 root.setAttribute('data-lang', lang);
                 root.lang = lang;
                 root.dir = lang === 'ar' ? 'rtl' : 'ltr';
@@ -4758,17 +4837,27 @@
                         buttons[i].getAttribute('data-set-lang') === lang ? 'true' : 'false'
                     );
                 }
+                if (!remember) return;
                 try { localStorage.setItem('dashboard_lang', lang); } catch (e) { /* private mode */ }
+                /* A ?lang= in the address outranks the stored choice, so it
+                   follows the click — or a reload would undo it. */
+                try {
+                    var url = new URL(location.href);
+                    if (url.searchParams.has('lang')) {
+                        url.searchParams.set('lang', lang);
+                        history.replaceState(history.state, '', url.toString());
+                    }
+                } catch (e) { /* file:// or no URL API */ }
             }
 
             for (var i = 0; i < buttons.length; i++) {
                 buttons[i].addEventListener('click', function () {
-                    apply(this.getAttribute('data-set-lang'));
+                    apply(this.getAttribute('data-set-lang'), true);
                 });
             }
 
             /* The head script already chose; reflect it on the buttons. */
-            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar', false);
         })();
 
         /* Language-neutral fragments. The shared footer links to /#faq,

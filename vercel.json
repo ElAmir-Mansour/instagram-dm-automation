@@ -17,6 +17,13 @@
   ],
   "routes": [
     {
+      "src": "/dashboard/eid\\.html",
+      "status": 301,
+      "headers": {
+        "Location": "/eid"
+      }
+    },
+    {
       "src": "/dashboard/(.*)",
       "dest": "dashboard/$1",
       "headers": {

@@ -81,7 +81,7 @@
     1. The three prices, the currency, and the billing period.
     2. What a connected account beyond the tier's count costs on Agency.
     3. The response time you are willing to commit to, if any. The support
-       channel was supplied on 2026-09-25: email, elamirmansour@outlook.com.
+       channel was supplied on 2026-09-25: email, the contact email in Settings → Public site.
     4. The cadence of the campaign review on Growth and Agency (monthly?
        quarterly?), and the notice period for cancelling.
     5. Whether onboarding is charged separately, and the current lead time —
@@ -105,19 +105,26 @@
          carry a full light theme as a peer of dark. -->
     <meta name="color-scheme" content="dark light">
     <title>الأسعار · Pricing — AutoReply Pro</title>
-    <meta name="description" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية — AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
+    <meta name="description" data-lang-only="ar" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية: ما تشمله كل باقة، وما تحدّه ميتا، وكيف نربط حسابك.">
+    <meta name="description" data-lang-only="en" content="AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
-    <link rel="canonical" href="https://msg-response-auto.vercel.app/pricing">
+    <link rel="canonical" href="https://msg-response-auto.vercel.app/pricing{{LANG_QUERY}}">
+    <link rel="alternate" hreflang="ar" href="https://msg-response-auto.vercel.app/pricing">
+    <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/pricing?lang=en">
+    <link rel="alternate" hreflang="x-default" href="https://msg-response-auto.vercel.app/pricing">
     <meta property="og:title" content="الأسعار · Pricing — AutoReply Pro">
-    <meta property="og:description" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية — AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
+    <meta property="og:description" data-lang-only="ar" content="باقات «أوتوريبلاي برو» لأتمتة تعليقات ورسائل إنستجرام وفيسبوك بالعربية: ما تشمله كل باقة، وما تحدّه ميتا، وكيف نربط حسابك.">
+    <meta property="og:description" data-lang-only="en" content="AutoReply Pro plans: what each tier includes, what Meta limits, and how to get an account connected.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://msg-response-auto.vercel.app/pricing">
+    <meta property="og:url" content="https://msg-response-auto.vercel.app/pricing{{LANG_QUERY}}">
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
-    <meta property="og:locale" content="ar_SA">
-    <meta property="og:locale:alternate" content="en_US">
+    <meta property="og:locale" data-lang-only="ar" content="ar_SA">
+    <meta property="og:locale:alternate" data-lang-only="ar" content="en_US">
+    <meta property="og:locale" data-lang-only="en" content="en_US">
+    <meta property="og:locale:alternate" data-lang-only="en" content="ar_SA">
 
     <!-- One design system in this repo, not three. Same file the dashboard,
          /privacy and dashboard/eid.html load, so the sales page and the
@@ -126,7 +133,7 @@
          No webfont: --font-ui is the -apple-system stack, so nothing is
          downloaded. Keep this ?v= pinned to ASSET_VERSION in
          dashboard/js/app.js — scripts/check-asset-version.mjs enforces it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=9.1">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=10.0">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -490,6 +497,39 @@
             max-width: var(--measure);
         }
         .contact > :last-child { margin-bottom: 0; }
+        /* PB3: WhatsApp first — the channel this audience expects — then email.
+           Each is a Settings → Public site value filled in when the page is
+           served; one with no value is removed, never shown empty. The tier
+           CTAs above go straight to WhatsApp when there is a number, and to
+           this block when there is not. */
+        .contact-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--space-3);
+            margin: 0 0 var(--space-4);
+        }
+        .contact-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: var(--tap-target);
+            padding-inline: var(--space-5);
+            border-radius: var(--radius-sm);
+            background: var(--surface-glass);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+            font-size: var(--fs-200);
+            text-decoration: none;
+            overflow-wrap: anywhere;
+            transition: background var(--motion-fast) var(--ease-standard);
+        }
+        .contact-btn:hover { background: var(--surface-glass-hover); color: var(--text-strong); }
+        .contact-btn-primary { background: var(--accent); box-shadow: none; color: var(--text-on-accent); }
+        .contact-btn-primary:hover { background: var(--accent-hover); color: var(--text-on-accent); }
+        @media (max-width: 30rem) {
+            .contact-btn { flex: 1 1 100%; }
+        }
 
         .divider {
             height: 1px;
@@ -992,27 +1032,31 @@
             .headnav a { padding-inline: var(--space-1); }
             .langswitch { gap: 1px; padding: 2px; }
             .langswitch button { min-width: 0; padding-inline: var(--space-2); }
+            /* Contact made the bar three links. The width it needs comes from
+               the bar's own language switch, which keeps only the language
+               you can switch TO: the pressed one names what is already on
+               screen. The footer's switch keeps both. With JavaScript off
+               nothing is pressed, so both still show. */
+            .topbar .langswitch button[aria-pressed='true'] { display: none; }
         }
     </style>
 
     <script>
         /* Resolve the language before first paint so the page never shows the
-           wrong script for a frame. Mirrors dashboard/js/i18n.js: stored choice,
-           then the browser's own languages, then Arabic. */
+           wrong script for a frame. */
         (function () {
+            /* ?lang= first (a shared or hreflang link names its language),
+               then the stored choice, then Arabic. No browser-locale guess on
+               the public pages: it handed an English-locale visitor — and a
+               crawler — English on an Arabic-first site (PB4). The dashboard
+               still guesses; it is a tool, not a front door. */
             var lang = null;
-            try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
+            try { lang = new URLSearchParams(location.search).get('lang'); } catch (e) { /* no URLSearchParams */ }
             if (lang !== 'ar' && lang !== 'en') {
                 lang = null;
-                try {
-                    var prefs = navigator.languages || [navigator.language || ''];
-                    for (var i = 0; i < prefs.length; i++) {
-                        var code = String(prefs[i] || '').toLowerCase().split('-')[0];
-                        if (code === 'ar' || code === 'en') { lang = code; break; }
-                    }
-                } catch (e) { /* no navigator language information */ }
+                try { lang = localStorage.getItem('dashboard_lang'); } catch (e) { /* private mode */ }
             }
-            lang = lang || 'ar';
+            if (lang !== 'ar' && lang !== 'en') lang = 'ar';
             var root = document.documentElement;
             root.setAttribute('data-lang', lang);
             root.lang = lang;
@@ -1063,6 +1107,7 @@
             <div class="headtools">
                 <nav class="headnav" aria-label="روابط الموقع · Site">
                     <a href="/pricing" aria-current="page"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
+                    <a href="/#contact"><bdi class="t-ar" lang="ar">تواصل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></a>
                     <!-- "الدخول" rather than "تسجيل الدخول": the bar has to hold
                          a wordmark, two links and a language switch inside
                          375px, and the footer carries the full "لوحة التحكم"
@@ -1113,7 +1158,8 @@
                             <li>كل ميزات المنتج، بلا استثناء</li>
                             <li>الإعداد والربط بميتا نقوم به عنك</li>
                         </ul>
-                        <a class="cta" href="#contact-ar">اطلب عرض سعر</a>
+                        <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
+                        <a class="cta" data-unless="whatsapp" href="#contact-ar">اطلب عرض سعر</a>
                     </section>
 
                     <section class="tier" aria-labelledby="tier-growth-ar">
@@ -1128,7 +1174,8 @@
                             <li>كل ميزات المنتج، بلا استثناء</li>
                             <li>مراجعة دورية للحملات ولتوجيه الذكاء الاصطناعي معك</li>
                         </ul>
-                        <a class="cta" href="#contact-ar">اطلب عرض سعر</a>
+                        <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
+                        <a class="cta" data-unless="whatsapp" href="#contact-ar">اطلب عرض سعر</a>
                     </section>
 
                     <section class="tier" aria-labelledby="tier-agency-ar">
@@ -1143,7 +1190,8 @@
                             <li>كل ميزات المنتج، بلا استثناء</li>
                             <li>تنفيذ طلبات حذف بيانات المتابعين نيابةً عنك</li>
                         </ul>
-                        <a class="cta" href="#contact-ar">اطلب عرض سعر</a>
+                        <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
+                        <a class="cta" data-unless="whatsapp" href="#contact-ar">اطلب عرض سعر</a>
                     </section>
                 </div>
 
@@ -1298,7 +1346,7 @@
                             </tr>
                             <tr>
                                 <th scope="row">قناة الدعم</th>
-                                <td colspan="3">البريد: <a data-contact-email href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a></td>
+                                <td colspan="3"><span data-when="whatsapp"><a href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">واتساب</a>، أو </span>البريد: <a data-contact-email href="mailto:{{CONTACT_EMAIL}}"><bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a></td>
                             </tr>
                         </tbody>
 
@@ -1442,8 +1490,11 @@
                         اكتب لنا بما تريده: عدد الحسابات، ونوع النشاط، وما تريد أتمتته. نردّ
                         بالسعر والمدة المتوقعة للربط قبل أي التزام.
                     </p>
+                    <div class="contact-actions">
+                        <a class="contact-btn contact-btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">تواصل عبر واتساب</a>
+                        <a class="contact-btn" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">البريد: <bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>
+                    </div>
                     <ul>
-                        <li>البريد: <a data-contact-email href="mailto:elamirmansour@outlook.com"><bdi lang="en" dir="ltr">elamirmansour@outlook.com</bdi></a></li>
                         <li>
                             للأسئلة التقنية:
                             <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">متتبّع المشكلات العلني</a>
@@ -1491,7 +1542,8 @@
                             <li>Every feature in the product, without exception</li>
                             <li>Setup and the Meta connection done for you</li>
                         </ul>
-                        <a class="cta" href="#contact-en">Request a quote</a>
+                        <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
+                        <a class="cta" data-unless="whatsapp" href="#contact-en">Request a quote</a>
                     </section>
 
                     <section class="tier" aria-labelledby="tier-growth-en">
@@ -1506,7 +1558,8 @@
                             <li>Every feature in the product, without exception</li>
                             <li>A regular review of your campaigns and AI instructions with you</li>
                         </ul>
-                        <a class="cta" href="#contact-en">Request a quote</a>
+                        <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
+                        <a class="cta" data-unless="whatsapp" href="#contact-en">Request a quote</a>
                     </section>
 
                     <section class="tier" aria-labelledby="tier-agency-en">
@@ -1521,7 +1574,8 @@
                             <li>Every feature in the product, without exception</li>
                             <li>Follower data-deletion requests carried out for you</li>
                         </ul>
-                        <a class="cta" href="#contact-en">Request a quote</a>
+                        <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
+                        <a class="cta" data-unless="whatsapp" href="#contact-en">Request a quote</a>
                     </section>
                 </div>
 
@@ -1677,7 +1731,7 @@
                             </tr>
                             <tr>
                                 <th scope="row">Support channel</th>
-                                <td colspan="3">Email: <a data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a></td>
+                                <td colspan="3"><span data-when="whatsapp"><a href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">WhatsApp</a>, or </span>email: <a data-contact-email href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a></td>
                             </tr>
                         </tbody>
 
@@ -1832,8 +1886,11 @@
                         what you want automated. We reply with a price and the expected time to
                         get connected, before you commit to anything.
                     </p>
+                    <div class="contact-actions">
+                        <a class="contact-btn contact-btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Chat on WhatsApp</a>
+                        <a class="contact-btn" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">Email: {{CONTACT_EMAIL}}</a>
+                    </div>
                     <ul>
-                        <li>Email: <a data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a></li>
                         <li>
                             For technical questions:
                             <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer">the public issue tracker</a>
@@ -1919,7 +1976,8 @@
                 </div>
                 <div class="foot-contact" role="group" aria-labelledby="foot-h-contact">
                     <p class="foot-h" id="foot-h-contact"><bdi class="t-ar" lang="ar">تواصل معنا</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Contact</bdi></p>
-                    <a class="foot-mail" data-contact-email href="mailto:elamirmansour@outlook.com">elamirmansour@outlook.com</a>
+                    <a class="foot-wa" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">تواصل عبر واتساب</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Chat on WhatsApp</bdi></a>
+                    <a class="foot-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>
                     <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation/issues" target="_blank" rel="noopener noreferrer"><bdi class="t-ar" lang="ar">متتبّع المشكلات العلني</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Public issue tracker</bdi></a>
                 </div>
             </div>
@@ -1950,7 +2008,9 @@
             var root = document.documentElement;
             var buttons = document.querySelectorAll('[data-set-lang]');
 
-            function apply(lang) {
+            /* `remember` only for a click: arriving on a ?lang=en link is
+               not a choice to make English stick on the next visit. */
+            function apply(lang, remember) {
                 root.setAttribute('data-lang', lang);
                 root.lang = lang;
                 root.dir = lang === 'ar' ? 'rtl' : 'ltr';
@@ -1960,17 +2020,27 @@
                         buttons[i].getAttribute('data-set-lang') === lang ? 'true' : 'false'
                     );
                 }
+                if (!remember) return;
                 try { localStorage.setItem('dashboard_lang', lang); } catch (e) { /* private mode */ }
+                /* A ?lang= in the address outranks the stored choice, so it
+                   follows the click — or a reload would undo it. */
+                try {
+                    var url = new URL(location.href);
+                    if (url.searchParams.has('lang')) {
+                        url.searchParams.set('lang', lang);
+                        history.replaceState(history.state, '', url.toString());
+                    }
+                } catch (e) { /* file:// or no URL API */ }
             }
 
             for (var i = 0; i < buttons.length; i++) {
                 buttons[i].addEventListener('click', function () {
-                    apply(this.getAttribute('data-set-lang'));
+                    apply(this.getAttribute('data-set-lang'), true);
                 });
             }
 
             /* The head script already chose; reflect it on the buttons. */
-            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
+            apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'ar', false);
         })();
     </script>
 </body>

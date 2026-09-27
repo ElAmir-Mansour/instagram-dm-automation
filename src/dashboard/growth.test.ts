@@ -406,21 +406,28 @@ describe('GrowthPage — every state renders something true', () => {
         assert.ok(count(page, 'class="log-card growth-post-card"') > 0, 'posts are their own region');
     });
 
-    it('loading: the skeleton is the page’s shape, and a range change re-skeletons only the data', async () => {
+    it('loading: the skeleton is the page’s shape; a range change keeps the old numbers, dimmed and aria-busy (G6)', async () => {
         const s = loadGrowth('en');
         assert.ok(String(s.Page.skeleton()).includes('role="status"'));
         stubGrowth(s);
         await s.Page.render();
-        const summary = s.host('growth-summary');
+        const summary = s.host('growth-summary', { innerHTML: '<div class="stats-grid growth-kpis">old numbers</div>' });
+        const details = s.host('growth-details');
         const later = deferred<Json>();
         s.api.getGrowthOverview = () => later.promise;
         s.Page.setDays({ dataset: { days: '7' } });
-        assert.ok(summary.innerHTML.includes('skel'), 'shapes while the numbers load');
+        assert.equal(summary.innerHTML, '<div class="stats-grid growth-kpis">old numbers</div>', 'the previous range stays on screen');
+        assert.equal(summary.getAttribute('aria-busy'), 'true');
+        assert.equal(details.getAttribute('aria-busy'), 'true');
+        assert.equal(summary.innerHTML.includes('skel'), false, 'no skeleton over numbers that exist');
         assert.equal(s.calls.filter((c) => c.method === 'getGrowthOverview').pop()!.args[0], 7);
         later.resolve(fullOverview());
         await settle();
+        assert.equal(summary.getAttribute('aria-busy'), null);
+        assert.equal(details.getAttribute('aria-busy'), null);
         assert.equal(summary.innerHTML.includes('skel'), false);
         assert.ok(summary.innerHTML.includes('growth-kpis'));
+        assert.ok(!summary.innerHTML.includes('old numbers'), 'replaced by the new range');
         assert.equal(JSON.parse(s.storage.getItem('growth:prefs') || '{}').days, 7, 'the range is remembered in this browser');
         s.Page.destroy();
     });
@@ -1147,7 +1154,7 @@ describe('Growth — every string in Arabic and English, and the page wired into
         assert.ok(at('data-page="analytics"') < at('data-page="growth"') && at('data-page="growth"') < at('data-page="activity"'));
         assert.match(index, /var PAGES = \[[^\]]*'growth'/);
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '9.1');
-        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['9.1']);
+        assert.equal(version, '10.0');
+        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['10.0']);
     });
 });

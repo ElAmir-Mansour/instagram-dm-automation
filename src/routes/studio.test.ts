@@ -312,6 +312,50 @@ describe('operator routes', () => {
         });
     });
 
+    it('unschedules a draft: its queued post goes, and the draft comes back ready', async () => {
+        const META_ROW = 'c1c1c1c1-1111-4111-8111-111111111111';
+        const scheduled = {
+            id: DRAFT, creator_id: TENANT_A, status: 'scheduled', input: { lessonIds: [] }, carousel: null, shots: {}, campaign: null,
+            render: { ig: [], tt: [], rendered_at: 'x', job_id: 'job-1' }, error: null, created_at: new Date(), updated_at: new Date(),
+            schedule: { scheduled_time: '2026-10-01T10:00:00.000Z', meta_row_id: META_ROW, tiktok: 'none', tiktok_row_id: null, tiktok_public_done: false },
+        };
+        routes.unshift(
+            [/^SELECT \* FROM carousel_drafts WHERE id = \$1 AND creator_id = \$2 FOR UPDATE$/, (p) => ({ rows: p[1] === TENANT_A ? [scheduled] : [] })],
+            [/^SELECT id, platform, status, published_post_id, external_publish_id FROM scheduled_posts/, () => ({
+                rows: [{ id: META_ROW, platform: 'both', status: 'PENDING', published_post_id: null, external_publish_id: null }],
+            })],
+            [/^DELETE FROM scheduled_posts/, () => ({ rows: [{ id: META_ROW }] })],
+            [/^UPDATE carousel_drafts SET status = 'ready'/, () => ({ rows: [{ ...scheduled, status: 'ready', schedule: null }] })],
+        );
+        const res = await call('post', '/drafts/:id/unschedule', { params: { id: DRAFT } });
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.draft.status, 'ready');
+        assert.equal(res.body.draft.creator_id, undefined, 'presented, not the raw row');
+        assert.deepEqual(res.body.deleted, [META_ROW]);
+        for (const s of statements.filter((s) => /creator_id = \$[12]/.test(s.sql))) assert.ok(s.params.includes(TENANT_A));
+    });
+
+    it('answers 409 with the reason when the draft has already gone out, and deletes nothing', async () => {
+        routes.unshift(
+            [/^SELECT \* FROM carousel_drafts WHERE id = \$1 AND creator_id = \$2 FOR UPDATE$/, () => ({
+                rows: [{ id: DRAFT, creator_id: TENANT_A, status: 'scheduled', schedule: { meta_row_id: 'c1c1c1c1-1111-4111-8111-111111111111', tiktok_row_id: null } }],
+            })],
+            [/^SELECT id, platform, status, published_post_id, external_publish_id FROM scheduled_posts/, () => ({
+                rows: [{ id: 'c1c1c1c1-1111-4111-8111-111111111111', platform: 'both', status: 'PUBLISHED', published_post_id: 'ig_1', external_publish_id: null }],
+            })],
+        );
+        const res = await call('post', '/drafts/:id/unschedule', { params: { id: DRAFT } });
+        assert.equal(res.statusCode, 409);
+        assert.match(res.body.error, /already been published/);
+        assert.ok(!statements.some((s) => /^DELETE/.test(s.sql) || /^UPDATE carousel_drafts/.test(s.sql)));
+    });
+
+    it('404s unscheduling a malformed id before it reaches Postgres', async () => {
+        const res = await call('post', '/drafts/:id/unschedule', { params: { id: 'not-a-uuid' } });
+        assert.equal(res.statusCode, 404);
+        assert.equal(statements.length, 0);
+    });
+
     it('404s a malformed id before it reaches Postgres', async () => {
         const res = await call('patch', '/drafts/:id', { params: { id: 'not-a-uuid' }, body: { carousel: {} } });
         assert.equal(res.statusCode, 404);

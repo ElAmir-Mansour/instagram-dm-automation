@@ -210,7 +210,18 @@ const CampaignsPage = {
 
                 <div class="campaign-stats">
                     <span class="campaign-stat"><span class="dot ok" aria-hidden="true"></span> ${t('campaigns.statSent', { count: UI.formatNumber(c.sent_count) })}</span>
-                    <span class="campaign-stat"><span class="dot bad" aria-hidden="true"></span> ${t('campaigns.statFailed', { count: UI.formatNumber(c.failed_count) })}</span>
+                    <!-- C8: the failed count opens exactly those failures in the
+                         log (App.goWithQuery via app:navigate). Zero stays text:
+                         a link to an empty list is a control that does nothing. -->
+                    ${Number(c.failed_count) > 0 ? html`
+                        <button type="button" class="campaign-stat campaign-stat-link"
+                                data-action="app:navigate" data-target="activity"
+                                data-query="${new URLSearchParams({ campaign: String(c.id), status: 'FAILED' }).toString()}"
+                                title="${t('campaigns.openFailed')}">
+                            <span class="dot bad" aria-hidden="true"></span> ${t('campaigns.statFailed', { count: UI.formatNumber(c.failed_count) })}
+                            <span class="sr-only">${t('campaigns.openFailed')}</span>
+                        </button>
+                    ` : html`<span class="campaign-stat"><span class="dot bad" aria-hidden="true"></span> ${t('campaigns.statFailed', { count: UI.formatNumber(c.failed_count) })}</span>`}
                     <span class="campaign-stat text-muted">${t('campaigns.statTotal', { count: UI.formatNumber(c.total_interactions) })}</span>
                 </div>
 
