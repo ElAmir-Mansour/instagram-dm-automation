@@ -13,7 +13,8 @@ import { ASK_POOL } from './copy.js';
 import { EDITOR_MAX_OUTPUT, EDITOR_SCHEMA, EDITOR_THINKING } from './editor.js';
 import { PICK_MAX_OUTPUT } from './pick.js';
 import {
-    CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, sweepMonteur,
+    CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, setEditRetryWaits, sweepMonteur,
+    transientModelError,
 } from './sweep.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
 
@@ -65,6 +66,7 @@ let recentCaptions: { caption: string; keyword: string }[];
 let previousCaller: CallModel;
 let reelsPerVideo: number;
 let previousSink: ReturnType<typeof setLogSink>;
+let previousWaits: readonly number[];
 
 beforeEach(() => {
     db = installFakeDb();
@@ -81,10 +83,14 @@ beforeEach(() => {
     existingTexts = [];
     recentCaptions = [];
     previousSink = setLogSink((_level, line) => { logs.push(JSON.parse(line)); });
+    previousWaits = setEditRetryWaits([0, 0]);
     previousCaller = setModelCaller(async (req) => {
         calls.push(req);
         if (req.purpose === 'monteur.copy') copyCalledAt = db.statements.length;
-        const answer = answers[req.purpose];
+        // `{ queue: [...] }` answers one call each, and repeats its last.
+        const entry = answers[req.purpose] as unknown;
+        const queue = entry && typeof entry === 'object' && 'queue' in entry ? (entry as { queue: unknown[] }).queue : null;
+        const answer = queue ? (queue.length > 1 ? queue.shift() : queue[0]) : entry;
         if (answer instanceof Error) throw answer;
         req.onUsage?.({ model: 'gemini-test', tokensIn: 1000, tokensOut: 200, thinking: 50 });
         return answer;
@@ -113,6 +119,7 @@ afterEach(() => {
     db.restore();
     setModelCaller(previousCaller);
     setLogSink(previousSink);
+    setEditRetryWaits(previousWaits);
 });
 
 const later = () => ({ deadline: Date.now() + 250_000 });
@@ -328,6 +335,23 @@ describe('sweepMonteur — the Editor (MONTEUR.md §6.2)', () => {
         assert.match(String(failed!.error), /HTTP 503/);
         assert.equal(handOffRecord().edit.error, 'Gemini request failed [HTTP 503]');
         assert.equal(db.ran(/^UPDATE monteur_sources SET error = \$2/).length, 0, 'the attempt did not fail');
+    });
+
+    it('a busy model is asked again: one 503, then the edits', async () => {
+        answers['monteur.edit'] = { queue: [new Error('Gemini request failed [HTTP 503]: This model is currently experiencing high demand.'), EDIT] };
+        await sweepMonteur(later());
+        assert.equal(calls.filter((c) => c.purpose === 'monteur.edit').length, 2);
+        assert.deepEqual(renderPayloads()[0]!.edits, EDITS);
+        assert.ok(logs.find((l) => l.event === 'monteur.edit_retry'), 'the retry is logged');
+        assert.ok(!logs.find((l) => l.event === 'monteur.edit_failed'));
+    });
+
+    it('a bad request or a bad answer is not retried', async () => {
+        answers['monteur.edit'] = new Error('Gemini answered with text that is not valid JSON');
+        await sweepMonteur(later());
+        assert.equal(calls.filter((c) => c.purpose === 'monteur.edit').length, 1);
+        assert.equal(transientModelError(new Error('HTTP 400 invalid argument')), false);
+        assert.equal(transientModelError(new Error('Gemini request failed [HTTP 429]')), true);
     });
 
     it('an answer with nothing usable is a reel without edits, not a failure', async () => {
