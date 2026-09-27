@@ -1370,9 +1370,7 @@ const MonteurPage = {
             <ul class="studio-summary-list monteur-approve-summary">
                 ${platforms ? html`<li><i data-lucide="share-2" aria-hidden="true"></i><span>${t('monteur.clip.goesTo', { platforms })}</span></li>` : ''}
                 ${keyword && this.hasMeta() ? html`
-                    <li><i data-lucide="message-circle" aria-hidden="true"></i><span dir="auto">${clip.copy.keyword_create
-                        ? t('monteur.clip.campaignToo', { keyword })
-                        : t('monteur.clip.campaignExisting', { keyword })}</span></li>
+                    <li><i data-lucide="message-circle" aria-hidden="true"></i><span dir="auto">${t('monteur.clip.campaignDm', { keyword })}</span></li>
                 ` : ''}
                 ${selfOnly ? html`<li><i data-lucide="lock" aria-hidden="true"></i><span>${t('monteur.clip.tiktokSelfOnly')}</span></li>` : ''}
                 ${slot && slot.clash && !o.open ? html`

@@ -445,7 +445,7 @@ describe('Monteur — the review queue', () => {
         assert.ok(tagOf(page, 'mt-clip-c1-approve-btn').includes('btn-primary'));
         assert.ok(tagOf(page, 'mt-clip-c1-reject').includes('data-action="monteur:reject"'));
         assert.ok(page.includes(s.t('monteur.clip.goesTo', { platforms: 'Instagram, Facebook, and TikTok' })));
-        assert.ok(page.includes(escaped(s.t('monteur.clip.campaignToo', { keyword: 'برومبت' }))));
+        assert.ok(page.includes(escaped(s.t('monteur.clip.campaignDm', { keyword: 'برومبت' }))));
         // §6.1: the caption carries «keyword» in a free-form ask, and that is what is checked.
         assert.ok(page.includes(s.t('studio.captions.has')));
         assert.ok(!page.includes(s.t('studio.captions.missing')), 'no false warning on a §6.1 caption');
@@ -1362,12 +1362,16 @@ describe('Monteur — Approve’s answers (backend round 2)', () => {
         s.Page.destroy();
     });
 
-    it('the campaign line is a fact — new or existing — and the toast says which Approve used', async () => {
+    it('the campaign line names the keyword before Approve, and the toast says whether Approve made or reused a campaign', async () => {
         const s = loadMonteur('en');
         stub(s, monteurView({ clips: [clip(), clip({ id: 'e1', copy: { ...clip().copy, keyword_create: false } })] }));
         const page = await renderPage(s);
-        assert.ok(approveOf(page, 'c1').includes(escaped(s.t('monteur.clip.campaignToo', { keyword: 'برومبت' }))));
-        assert.ok(approveOf(page, 'e1').includes(escaped(s.t('monteur.clip.campaignExisting', { keyword: 'برومبت' }))));
+        // Only the server knows at Approve time whether a campaign still answers the keyword, so
+        // the line before it is the same either way: keyword_create is informational (§5).
+        for (const id of ['c1', 'e1']) {
+            assert.ok(approveOf(page, id).includes(escaped(s.t('monteur.clip.campaignDm', { keyword: 'برومبت' }))), id);
+            assert.ok(!approveOf(page, id).includes(escaped(s.t('monteur.clip.campaignToo', { keyword: 'برومبت' }))), id);
+        }
         s.api.approveMonteurClip = () => Promise.resolve({
             clip: clip({ status: 'scheduled', scheduled_time: RIYADH_NEXT_SLOT }), scheduled_time: RIYADH_NEXT_SLOT,
             campaign: { id: 'k9', trigger_keyword: 'برومبت', created: false },
@@ -1378,7 +1382,7 @@ describe('Monteur — Approve’s answers (backend round 2)', () => {
         const noMeta = loadMonteur('en');
         stub(noMeta, monteurView({ settings: settings({ platforms: ['tiktok'] }) }));
         const noMetaPage = await renderPage(noMeta);
-        assert.ok(!noMetaPage.includes(escaped(noMeta.t('monteur.clip.campaignToo', { keyword: 'برومبت' }))), 'TikTok alone: no DM campaign');
+        assert.ok(!noMetaPage.includes(escaped(noMeta.t('monteur.clip.campaignDm', { keyword: 'برومبت' }))), 'TikTok alone: no DM campaign');
         noMeta.Page.destroy();
         s.Page.destroy();
     });
