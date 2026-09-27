@@ -1,114 +1,827 @@
 {
-    "title": "Design pass 2026-09-27 (feat/design-pass) — every value that changed, by the decision that claims it",
-    "decisions": {
-        "1": "Radii: inner panels, list rows and wells at --radius-md; media frames at --radius-sm; .badge a pill",
-        "2": "One callout recipe; one tinted border per tone (--border-info/-warning/-danger/-success)",
-        "3": "Step marks: 24px, --fs-100 semibold, everywhere",
-        "4": "Meters: progress meters 6px (sweep 4px and .platform-bar 10px unchanged)",
-        "5": "Empty states: one padding (--space-6 --space-4) and gap (--space-3)",
-        "6": "The slide forms: a flex column with a --space-4 gap; the inert declarations gone",
-        "7": "Studio card padding: outer 24, inner and list cards 16, no 12+16 mixes",
-        "8": "Card titles --fs-400 semibold --text-strong; card/section heads end at --space-4",
-        "9": "Selected is an inset ring, not a focus ring",
-        "10": "One narrow breakpoint: the 900px block folded into 860px"
+  "title": "Design pass 2026-09-27 (feat/design-pass) — every value that changed, by the decision that claims it",
+  "decisions": {
+    "1": "Radii: inner panels, list rows and wells at --radius-md; media frames at --radius-sm; .badge a pill",
+    "2": "One callout recipe; one tinted border per tone (--border-info/-warning/-danger/-success)",
+    "3": "Step marks: 24px, --fs-100 semibold, everywhere",
+    "4": "Meters: progress meters 6px (sweep 4px and .platform-bar 10px unchanged)",
+    "5": "Empty states: one padding (--space-6 --space-4) and gap (--space-3)",
+    "6": "The slide forms: a flex column with a --space-4 gap; the inert declarations gone",
+    "7": "Studio card padding: outer 24, inner and list cards 16, no 12+16 mixes",
+    "8": "Card titles --fs-400 semibold --text-strong; card/section heads end at --space-4",
+    "9": "Selected is an inset ring, not a focus ring",
+    "10": "One narrow breakpoint: the 900px block folded into 860px"
+  },
+  "tags": [
+    {
+      "decision": 1,
+      "sel": [
+        ".badge"
+      ],
+      "prop": [
+        "border-radius"
+      ],
+      "to": [
+        "var(--radius-pill)"
+      ]
     },
-    "tags": [
-        { "decision": 1, "sel": [".badge"], "prop": ["border-radius"], "to": ["var(--radius-pill)"] },
-        { "decision": 1, "sel": [".log-card", ".bulk-row", ".hazard-item", ".member-item", ".thread-item",
-                                  ".template-preview", ".post-picker", ".erasure-sample", ".studio-preview-card", ".shot-field", ".help-code pre"],
-          "prop": ["border-radius"], "to": ["var(--radius-md)"] },
-        { "decision": 1, "sel": [".post-picker-thumb", ".post-picker-item img", ".cover-tile-frame", ".post-slide", ".moment-thumb", ".shot-thumb",
-                                  ".slide-alt-thumb", ".rail-tab", ".monteur-media"],
-          "prop": ["border-radius"], "to": ["var(--radius-sm)"] },
-        { "decision": 1, "sel": [".monteur-clip--compact .monteur-media"], "prop": ["border-radius"], "from": ["var(--radius-sm)"], "to": [null],
-          "why": "the compact override said --radius-sm; every .monteur-media is --radius-sm now" },
-
-        { "decision": 2, "sel": [".schedule-truth", ".tiktok-note", ".studio-hint", ".studio-callout", ".help-callout"], "prop": ["border"], "to": ["1px solid var(--border-info)"] },
-        { "decision": 2, "sel": [".schedule-truth", ".tiktok-note", ".studio-hint", ".studio-callout", ".help-callout"], "prop": ["padding"], "to": ["var(--space-3) var(--space-4)"] },
-        { "decision": 2, "sel": [".schedule-truth", ".tiktok-note", ".studio-hint", ".studio-callout", ".help-callout"], "prop": ["gap"], "to": ["var(--space-3)"] },
-        { "decision": 2, "sel": [".schedule-truth", ".tiktok-note", ".studio-hint", ".studio-callout", ".help-callout"], "prop": ["border-radius"], "to": ["var(--radius-md)"] },
-        { "decision": 2, "sel": [".schedule-truth", ".tiktok-note", ".studio-hint", ".studio-callout", ".help-callout"], "prop": ["font-size"], "to": ["var(--fs-200)"] },
-        { "decision": 2, "sel": [".studio-callout.is-warning", ".help-callout--warn", ".match-inspector.is-risky"], "prop": ["border-color"], "to": ["var(--border-warning)"] },
-        { "decision": 2, "sel": [".help-callout--tip", ".toast.success"], "prop": ["border-color"], "to": ["var(--border-success)"] },
-        { "decision": 2, "sel": [".chip-danger", ".toast.error", ".slide-tile.is-failed .slide-thumb", ".health-strip-alarm", ".ops-card-alarm", ".slide-card.has-problems"],
-          "prop": ["border-color"], "to": ["var(--border-danger)"] },
-        { "decision": 2, "sel": [".btn-danger", ".inline-error", ".post-card-error", ".publish-error-panel", ".bubble-error", ".health-diagnosis", ".studio-problems"],
-          "prop": ["border"], "to": ["1px solid var(--border-danger)"] },
-        { "decision": 2, "sel": [".studio-token"], "prop": ["border"], "to": ["1px solid var(--border-warning)"] },
-        { "decision": 2, "selRe": "^:root", "prop": ["--border-info"], "from": [null], "to": ["color-mix(in srgb, var(--info) 30%, transparent)"] },
-        { "decision": 2, "selRe": "^:root", "prop": ["--border-warning"], "from": [null], "to": ["color-mix(in srgb, var(--warning) 30%, transparent)"] },
-        { "decision": 2, "selRe": "^:root", "prop": ["--border-danger"], "from": [null], "to": ["color-mix(in srgb, var(--danger) 30%, transparent)"] },
-        { "decision": 2, "selRe": "^:root", "prop": ["--border-success"], "from": [null], "to": ["color-mix(in srgb, var(--success) 30%, transparent)"] },
-
-        { "decision": 3, "sel": [".slide-card-num", ".setup-step-mark", ".studio-stage-mark", ".growth-action-num"],
-          "prop": ["inline-size", "min-inline-size", "block-size"], "to": ["24px"] },
-        { "decision": 3, "sel": [".studio-step-num", ".studio-stage-mark"], "prop": ["font-size"], "from": [null], "to": ["var(--fs-100)"] },
-        { "decision": 3, "sel": [".studio-stage-mark", ".growth-action-num"], "prop": ["font-weight"], "to": ["var(--fw-semibold)"] },
-
-        { "decision": 4, "sel": [".dm-meter-track"], "prop": ["block-size"], "from": ["5px"], "to": ["6px"] },
-
-        { "decision": 5, "sel": [".empty-state", ".chat-empty", ".sandbox-welcome", ".table-empty-cell", ".data-table .table-empty-cell",
-                                  ".post-picker-note", ".empty-threads", ".chart-empty"],
-          "prop": ["padding"], "to": ["var(--space-6) var(--space-4)"] },
-        { "decision": 5, "sel": [".sandbox-welcome"], "prop": ["gap"], "to": ["var(--space-3)"] },
-        { "decision": 5, "sel": [".table-empty-cell", ".chart-empty"], "prop": ["padding-block"], "from": ["var(--space-6)"], "to": [null],
-          "why": "replaced by the pattern's `padding` shorthand" },
-        { "decision": 5, "sel": [".growth-empty-line"], "prop": ["padding-block"], "from": ["var(--space-5)"], "to": [null],
-          "why": "it only ever sits on a .chart-empty, and overrode the empty-state padding there" },
-
-        { "decision": 6, "sel": [".slide-cards"], "prop": ["display"], "from": ["block"], "to": ["flex"] },
-        { "decision": 6, "sel": [".slide-cards"], "prop": ["gap"], "to": ["var(--space-4)"] },
-        { "decision": 6, "sel": [".slide-cards"], "prop": ["margin-block-start"], "from": ["var(--space-3)"], "to": [null],
-          "why": "inert: `margin: var(--space-3) 0` in the same rule already says it" },
-
-        { "decision": 7, "sel": [".studio-status", ".plan-item", ".draft-card", ".studio-preview-card", ".studio-summary"], "prop": ["padding"], "to": ["var(--space-4)"] },
-        { "decision": 7, "sel": [".slide-card"], "prop": ["padding"], "to": ["var(--space-4) var(--space-4) var(--space-1)"],
-          "why": "16 on every side as rendered: the last field's own 12px margin completes the bottom" },
-        { "decision": 7, "sel": [".studio-editor-head"], "prop": ["padding-block"], "from": ["var(--space-4)"], "to": [null],
-          "why": "the head is an outer panel: its .pad-5 (24) now applies on every side" },
-        { "decision": 7, "ctx": ["@media (max-width: 560px)"], "sel": [".slide-card"], "prop": ["padding-inline"], "from": ["var(--space-3)"], "to": [null],
-          "why": "the phone override made a 16/12 mix" },
-
-        { "decision": 8, "sel": [".chart-card-title", ".studio-panel-title", ".growth-coach-sub", ".growth-action-title"], "prop": ["font-size"], "to": ["var(--fs-400)"] },
-        { "decision": 8, "sel": [".table-title", ".health-strip-title", ".ops-card-title", ".studio-panel-title", ".studio-editor-title", ".growth-coach-sub", ".growth-action-title"],
-          "prop": ["font-weight"], "to": ["var(--fw-semibold)"] },
-        { "decision": 8, "sel": [".studio-section-head", ".growth-section-head"], "prop": ["margin-block-end"], "to": ["var(--space-4)"] },
-        { "decision": 8, "sel": [".help-section-title"], "prop": ["margin"], "to": ["0 0 var(--space-4)"] },
-
-        { "decision": 9, "sel": [".moment-pick.is-current", ".swatch-btn[aria-pressed='true']"], "prop": ["box-shadow"], "to": ["inset 0 0 0 2px var(--accent)"] },
-        { "decision": 9, "sel": [".moment-pick.is-current:focus-visible", ".swatch-btn[aria-pressed='true']:focus-visible"], "prop": ["box-shadow"], "from": [null],
-          "to": ["inset 0 0 0 2px var(--accent), 0 0 0 var(--ring) var(--accent-ring)"] },
-        { "decision": 9, "sel": [".rail-tab.is-selected"], "prop": ["box-shadow"], "from": ["0 0 0 2px var(--accent-ring)"], "to": [null],
-          "why": "the tab's own box-shadow is left to the global focus ring; the inner ring is the ::after below" },
-        { "decision": 9, "sel": [".rail-tab.is-selected::after"], "prop": ["content"], "from": [null], "to": ["''"] },
-        { "decision": 9, "sel": [".rail-tab.is-selected::after"], "prop": ["position"], "from": [null], "to": ["absolute"] },
-        { "decision": 9, "sel": [".rail-tab.is-selected::after"], "prop": ["inset"], "from": [null], "to": ["0"] },
-        { "decision": 9, "sel": [".rail-tab.is-selected::after"], "prop": ["border-radius"], "from": [null], "to": ["inherit"] },
-        { "decision": 9, "sel": [".rail-tab.is-selected::after"], "prop": ["box-shadow"], "from": [null], "to": ["inset 0 0 0 2px var(--accent)"] },
-        { "decision": 9, "sel": [".rail-tab.is-selected::after"], "prop": ["pointer-events"], "from": [null], "to": ["none"] },
-
-        { "decision": 10, "ctx": ["@media (max-width: 900px)"],
-          "sel": [".inbox-layout", ".inbox-layout > .inbox-sidebar", ".inbox-layout > .chat-pane", ".inbox-layout[data-pane='threads'] > .chat-pane",
-                  ".inbox-layout[data-pane='chat'] > .inbox-sidebar", ".chat-back", ".message-bubble", ".form-grid"],
-          "propRe": ".", "to": [null] },
-        { "decision": 10, "ctx": ["@media (max-width: 860px)"],
-          "sel": [".inbox-layout", ".inbox-layout > .inbox-sidebar", ".inbox-layout > .chat-pane", ".inbox-layout[data-pane='threads'] > .chat-pane",
-                  ".inbox-layout[data-pane='chat'] > .inbox-sidebar", ".chat-back", ".message-bubble", ".form-grid"],
-          "propRe": ".", "from": [null],
-          "to": ["1fr", "calc(100dvh - var(--header-height) - var(--space-6))", "1", "0", "none", "inline-flex", "88%"] }
-    ],
-    "outranked": [
-        { "sel": [".badge", ".moment-thumb", ".shot-thumb", ".setup-step-mark", ".studio-stage-mark", ".growth-action-num"], "by": ".studio-indeterminate span",
-          "why": "the indeterminate bar's only child is its own unclassed <span> (studio.js, growth.js)" },
-        { "sel": ".studio-callout", "by": ".studio-callout.is-warning", "prop": "border",
-          "why": "the warning variant: the tone changes, the shape does not" },
-        { "sel": ".studio-section-head", "by": [".monteur-queue .studio-section-head", ".monteur-group .studio-section-head"], "prop": "margin-block-end",
-          "why": "Monteur's own context overrides (the queue 12, its sub-groups 8) — not a Studio section head; left as Monteur wrote them" },
-        { "sel": ".table-empty-cell", "by": ".data-table td", "prop": "padding",
-          "why": "the reason `.data-table .table-empty-cell` (0,2,0) is in the same rule: the bare class serves the <p> form (Activity's cards)" }
-    ],
-    "crossings": [
-        { "a": ".empty-state", "b": ".loader", "prop": "padding",
-          "why": "`loader` counts as 'anywhere' only because it is an icon name in icons.js; the icon's <svg> carries `lucide lucide-loader`, and no element is both .empty-state (UI.emptyState's <div>) and .loader (UI.loader's <div>)" }
-    ]
+    {
+      "decision": 1,
+      "sel": [
+        ".log-card",
+        ".bulk-row",
+        ".hazard-item",
+        ".member-item",
+        ".thread-item",
+        ".template-preview",
+        ".post-picker",
+        ".erasure-sample",
+        ".studio-preview-card",
+        ".shot-field",
+        ".help-code pre"
+      ],
+      "prop": [
+        "border-radius"
+      ],
+      "to": [
+        "var(--radius-md)"
+      ]
+    },
+    {
+      "decision": 1,
+      "sel": [
+        ".post-picker-thumb",
+        ".post-picker-item img",
+        ".cover-tile-frame",
+        ".post-slide",
+        ".moment-thumb",
+        ".shot-thumb",
+        ".slide-alt-thumb",
+        ".rail-tab",
+        ".monteur-media"
+      ],
+      "prop": [
+        "border-radius"
+      ],
+      "to": [
+        "var(--radius-sm)"
+      ]
+    },
+    {
+      "decision": 1,
+      "sel": [
+        ".monteur-clip--compact .monteur-media"
+      ],
+      "prop": [
+        "border-radius"
+      ],
+      "from": [
+        "var(--radius-sm)"
+      ],
+      "to": [
+        null
+      ],
+      "why": "the compact override said --radius-sm; every .monteur-media is --radius-sm now"
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".schedule-truth",
+        ".tiktok-note",
+        ".studio-hint",
+        ".studio-callout",
+        ".help-callout"
+      ],
+      "prop": [
+        "border"
+      ],
+      "to": [
+        "1px solid var(--border-info)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".schedule-truth",
+        ".tiktok-note",
+        ".studio-hint",
+        ".studio-callout",
+        ".help-callout"
+      ],
+      "prop": [
+        "padding"
+      ],
+      "to": [
+        "var(--space-3) var(--space-4)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".schedule-truth",
+        ".tiktok-note",
+        ".studio-hint",
+        ".studio-callout",
+        ".help-callout"
+      ],
+      "prop": [
+        "gap"
+      ],
+      "to": [
+        "var(--space-3)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".schedule-truth",
+        ".tiktok-note",
+        ".studio-hint",
+        ".studio-callout",
+        ".help-callout"
+      ],
+      "prop": [
+        "border-radius"
+      ],
+      "to": [
+        "var(--radius-md)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".schedule-truth",
+        ".tiktok-note",
+        ".studio-hint",
+        ".studio-callout",
+        ".help-callout"
+      ],
+      "prop": [
+        "font-size"
+      ],
+      "to": [
+        "var(--fs-200)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".studio-callout.is-warning",
+        ".help-callout--warn",
+        ".match-inspector.is-risky"
+      ],
+      "prop": [
+        "border-color"
+      ],
+      "to": [
+        "var(--border-warning)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".help-callout--tip",
+        ".toast.success"
+      ],
+      "prop": [
+        "border-color"
+      ],
+      "to": [
+        "var(--border-success)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".chip-danger",
+        ".toast.error",
+        ".slide-tile.is-failed .slide-thumb",
+        ".health-strip-alarm",
+        ".ops-card-alarm",
+        ".slide-card.has-problems"
+      ],
+      "prop": [
+        "border-color"
+      ],
+      "to": [
+        "var(--border-danger)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".btn-danger",
+        ".inline-error",
+        ".post-card-error",
+        ".publish-error-panel",
+        ".bubble-error",
+        ".health-diagnosis",
+        ".studio-problems"
+      ],
+      "prop": [
+        "border"
+      ],
+      "to": [
+        "1px solid var(--border-danger)"
+      ]
+    },
+    {
+      "decision": 2,
+      "sel": [
+        ".studio-token"
+      ],
+      "prop": [
+        "border"
+      ],
+      "to": [
+        "1px solid var(--border-warning)"
+      ]
+    },
+    {
+      "decision": 2,
+      "selRe": "^:root",
+      "prop": [
+        "--border-info"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "color-mix(in srgb, var(--info) 30%, transparent)"
+      ]
+    },
+    {
+      "decision": 2,
+      "selRe": "^:root",
+      "prop": [
+        "--border-warning"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "color-mix(in srgb, var(--warning) 30%, transparent)"
+      ]
+    },
+    {
+      "decision": 2,
+      "selRe": "^:root",
+      "prop": [
+        "--border-danger"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "color-mix(in srgb, var(--danger) 30%, transparent)"
+      ]
+    },
+    {
+      "decision": 2,
+      "selRe": "^:root",
+      "prop": [
+        "--border-success"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "color-mix(in srgb, var(--success) 30%, transparent)"
+      ]
+    },
+    {
+      "decision": 3,
+      "sel": [
+        ".slide-card-num",
+        ".setup-step-mark",
+        ".studio-stage-mark",
+        ".growth-action-num"
+      ],
+      "prop": [
+        "inline-size",
+        "min-inline-size",
+        "block-size"
+      ],
+      "to": [
+        "24px"
+      ]
+    },
+    {
+      "decision": 3,
+      "sel": [
+        ".studio-step-num",
+        ".studio-stage-mark"
+      ],
+      "prop": [
+        "font-size"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "var(--fs-100)"
+      ]
+    },
+    {
+      "decision": 3,
+      "sel": [
+        ".studio-stage-mark",
+        ".growth-action-num"
+      ],
+      "prop": [
+        "font-weight"
+      ],
+      "to": [
+        "var(--fw-semibold)"
+      ]
+    },
+    {
+      "decision": 4,
+      "sel": [
+        ".dm-meter-track"
+      ],
+      "prop": [
+        "block-size"
+      ],
+      "from": [
+        "5px"
+      ],
+      "to": [
+        "6px"
+      ]
+    },
+    {
+      "decision": 5,
+      "sel": [
+        ".empty-state",
+        ".chat-empty",
+        ".sandbox-welcome",
+        ".table-empty-cell",
+        ".data-table .table-empty-cell",
+        ".post-picker-note",
+        ".empty-threads",
+        ".chart-empty"
+      ],
+      "prop": [
+        "padding"
+      ],
+      "to": [
+        "var(--space-6) var(--space-4)"
+      ]
+    },
+    {
+      "decision": 5,
+      "sel": [
+        ".sandbox-welcome"
+      ],
+      "prop": [
+        "gap"
+      ],
+      "to": [
+        "var(--space-3)"
+      ]
+    },
+    {
+      "decision": 5,
+      "sel": [
+        ".table-empty-cell",
+        ".chart-empty"
+      ],
+      "prop": [
+        "padding-block"
+      ],
+      "from": [
+        "var(--space-6)"
+      ],
+      "to": [
+        null
+      ],
+      "why": "replaced by the pattern's `padding` shorthand"
+    },
+    {
+      "decision": 5,
+      "sel": [
+        ".growth-empty-line"
+      ],
+      "prop": [
+        "padding-block"
+      ],
+      "from": [
+        "var(--space-5)"
+      ],
+      "to": [
+        null
+      ],
+      "why": "it only ever sits on a .chart-empty, and overrode the empty-state padding there"
+    },
+    {
+      "decision": 6,
+      "sel": [
+        ".slide-cards"
+      ],
+      "prop": [
+        "display"
+      ],
+      "from": [
+        "block"
+      ],
+      "to": [
+        "flex"
+      ]
+    },
+    {
+      "decision": 6,
+      "sel": [
+        ".slide-cards"
+      ],
+      "prop": [
+        "gap"
+      ],
+      "to": [
+        "var(--space-4)"
+      ]
+    },
+    {
+      "decision": 6,
+      "sel": [
+        ".slide-cards"
+      ],
+      "prop": [
+        "margin-block-start"
+      ],
+      "from": [
+        "var(--space-3)"
+      ],
+      "to": [
+        null
+      ],
+      "why": "inert: `margin: var(--space-3) 0` in the same rule already says it"
+    },
+    {
+      "decision": 7,
+      "sel": [
+        ".studio-status",
+        ".plan-item",
+        ".draft-card",
+        ".studio-preview-card",
+        ".studio-summary"
+      ],
+      "prop": [
+        "padding"
+      ],
+      "to": [
+        "var(--space-4)"
+      ]
+    },
+    {
+      "decision": 7,
+      "sel": [
+        ".slide-card"
+      ],
+      "prop": [
+        "padding"
+      ],
+      "to": [
+        "var(--space-4) var(--space-4) var(--space-1)"
+      ],
+      "why": "16 on every side as rendered: the last field's own 12px margin completes the bottom"
+    },
+    {
+      "decision": 7,
+      "sel": [
+        ".studio-editor-head"
+      ],
+      "prop": [
+        "padding-block"
+      ],
+      "from": [
+        "var(--space-4)"
+      ],
+      "to": [
+        null
+      ],
+      "why": "the head is an outer panel: its .pad-5 (24) now applies on every side"
+    },
+    {
+      "decision": 7,
+      "ctx": [
+        "@media (max-width: 560px)"
+      ],
+      "sel": [
+        ".slide-card"
+      ],
+      "prop": [
+        "padding-inline"
+      ],
+      "from": [
+        "var(--space-3)"
+      ],
+      "to": [
+        null
+      ],
+      "why": "the phone override made a 16/12 mix"
+    },
+    {
+      "decision": 8,
+      "sel": [
+        ".chart-card-title",
+        ".studio-panel-title",
+        ".growth-coach-sub",
+        ".growth-action-title"
+      ],
+      "prop": [
+        "font-size"
+      ],
+      "to": [
+        "var(--fs-400)"
+      ]
+    },
+    {
+      "decision": 8,
+      "sel": [
+        ".table-title",
+        ".health-strip-title",
+        ".ops-card-title",
+        ".studio-panel-title",
+        ".studio-editor-title",
+        ".growth-coach-sub",
+        ".growth-action-title"
+      ],
+      "prop": [
+        "font-weight"
+      ],
+      "to": [
+        "var(--fw-semibold)"
+      ]
+    },
+    {
+      "decision": 8,
+      "sel": [
+        ".studio-section-head",
+        ".growth-section-head"
+      ],
+      "prop": [
+        "margin-block-end"
+      ],
+      "to": [
+        "var(--space-4)"
+      ]
+    },
+    {
+      "decision": 8,
+      "sel": [
+        ".help-section-title"
+      ],
+      "prop": [
+        "margin"
+      ],
+      "to": [
+        "0 0 var(--space-4)"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".moment-pick.is-current",
+        ".swatch-btn[aria-pressed='true']"
+      ],
+      "prop": [
+        "box-shadow"
+      ],
+      "to": [
+        "inset 0 0 0 2px var(--accent-text)"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".moment-pick.is-current:focus-visible",
+        ".swatch-btn[aria-pressed='true']:focus-visible"
+      ],
+      "prop": [
+        "box-shadow"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "inset 0 0 0 2px var(--accent-text), 0 0 0 var(--ring) var(--accent-ring)"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".rail-tab.is-selected"
+      ],
+      "prop": [
+        "box-shadow"
+      ],
+      "from": [
+        "0 0 0 2px var(--accent-ring)"
+      ],
+      "to": [
+        null
+      ],
+      "why": "the tab's own box-shadow is left to the global focus ring; the inner ring is the ::after below"
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".rail-tab.is-selected::after"
+      ],
+      "prop": [
+        "content"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "''"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".rail-tab.is-selected::after"
+      ],
+      "prop": [
+        "position"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "absolute"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".rail-tab.is-selected::after"
+      ],
+      "prop": [
+        "inset"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "0"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".rail-tab.is-selected::after"
+      ],
+      "prop": [
+        "border-radius"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "inherit"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".rail-tab.is-selected::after"
+      ],
+      "prop": [
+        "box-shadow"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "inset 0 0 0 2px var(--accent-text)"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".rail-tab.is-selected::after"
+      ],
+      "prop": [
+        "pointer-events"
+      ],
+      "from": [
+        null
+      ],
+      "to": [
+        "none"
+      ]
+    },
+    {
+      "decision": 10,
+      "ctx": [
+        "@media (max-width: 900px)"
+      ],
+      "sel": [
+        ".inbox-layout",
+        ".inbox-layout > .inbox-sidebar",
+        ".inbox-layout > .chat-pane",
+        ".inbox-layout[data-pane='threads'] > .chat-pane",
+        ".inbox-layout[data-pane='chat'] > .inbox-sidebar",
+        ".chat-back",
+        ".message-bubble",
+        ".form-grid"
+      ],
+      "propRe": ".",
+      "to": [
+        null
+      ]
+    },
+    {
+      "decision": 10,
+      "ctx": [
+        "@media (max-width: 860px)"
+      ],
+      "sel": [
+        ".inbox-layout",
+        ".inbox-layout > .inbox-sidebar",
+        ".inbox-layout > .chat-pane",
+        ".inbox-layout[data-pane='threads'] > .chat-pane",
+        ".inbox-layout[data-pane='chat'] > .inbox-sidebar",
+        ".chat-back",
+        ".message-bubble",
+        ".form-grid"
+      ],
+      "propRe": ".",
+      "from": [
+        null
+      ],
+      "to": [
+        "1fr",
+        "calc(100dvh - var(--header-height) - var(--space-6))",
+        "1",
+        "0",
+        "none",
+        "inline-flex",
+        "88%"
+      ]
+    },
+    {
+      "decision": 9,
+      "sel": [
+        ".moment-pick.is-current",
+        ".swatch-btn[aria-pressed='true']"
+      ],
+      "prop": [
+        "border-color"
+      ],
+      "from": [
+        "var(--accent)"
+      ],
+      "to": [
+        "var(--accent-text)"
+      ],
+      "why": "the ring uses --accent-text (the accent the contrast guard proves at 4.5:1 on these surfaces), so the border under it follows; --accent measured 2.67:1 on the dark tint, below the 3:1 a non-text indicator needs"
+    }
+  ],
+  "outranked": [
+    {
+      "sel": [
+        ".badge",
+        ".moment-thumb",
+        ".shot-thumb",
+        ".setup-step-mark",
+        ".studio-stage-mark",
+        ".growth-action-num"
+      ],
+      "by": ".studio-indeterminate span",
+      "why": "the indeterminate bar's only child is its own unclassed <span> (studio.js, growth.js)"
+    },
+    {
+      "sel": ".studio-callout",
+      "by": ".studio-callout.is-warning",
+      "prop": "border",
+      "why": "the warning variant: the tone changes, the shape does not"
+    },
+    {
+      "sel": ".studio-section-head",
+      "by": [
+        ".monteur-queue .studio-section-head",
+        ".monteur-group .studio-section-head"
+      ],
+      "prop": "margin-block-end",
+      "why": "Monteur's own context overrides (the queue 12, its sub-groups 8) — not a Studio section head; left as Monteur wrote them"
+    },
+    {
+      "sel": ".table-empty-cell",
+      "by": ".data-table td",
+      "prop": "padding",
+      "why": "the reason `.data-table .table-empty-cell` (0,2,0) is in the same rule: the bare class serves the <p> form (Activity's cards)"
+    }
+  ],
+  "crossings": [
+    {
+      "a": ".empty-state",
+      "b": ".loader",
+      "prop": "padding",
+      "why": "`loader` counts as 'anywhere' only because it is an icon name in icons.js; the icon's <svg> carries `lucide lucide-loader`, and no element is both .empty-state (UI.emptyState's <div>) and .loader (UI.loader's <div>)"
+    }
+  ]
 }

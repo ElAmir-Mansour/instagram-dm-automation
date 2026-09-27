@@ -3048,8 +3048,8 @@ html[lang='en'] .page-toolbar-count {
 .moment-pick:hover { border-color: var(--border-strong); background: var(--surface-glass-hover); }
 /* Selected is a ring INSIDE the box; focus keeps the global ring outside it, and a focused
    selected tile shows both. */
-.moment-pick.is-current { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
-.moment-pick.is-current:focus-visible { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 var(--ring) var(--accent-ring); }
+.moment-pick.is-current { border-color: var(--accent-text); box-shadow: inset 0 0 0 2px var(--accent-text); }
+.moment-pick.is-current:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-text), 0 0 0 var(--ring) var(--accent-ring); }
 .moment-thumb {
     aspect-ratio: 16 / 9; overflow: hidden;
 }
@@ -3371,8 +3371,8 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
     background: var(--surface-glass); color: var(--text-default); cursor: pointer; padding: 0;
 }
 .swatch-btn [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); }
-.swatch-btn[aria-pressed='true'] { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
-.swatch-btn[aria-pressed='true']:focus-visible { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 var(--ring) var(--accent-ring); }
+.swatch-btn[aria-pressed='true'] { border-color: var(--accent-text); box-shadow: inset 0 0 0 2px var(--accent-text); }
+.swatch-btn[aria-pressed='true']:focus-visible { box-shadow: inset 0 0 0 2px var(--accent-text), 0 0 0 var(--ring) var(--accent-ring); }
 .swatch-btn:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 .swatch-btn:focus-visible, .picked-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .swatch-dot { inline-size: 26px; block-size: 26px; border-radius: var(--radius-pill); border: 1px solid var(--border-strong); display: inline-block; }
@@ -3496,7 +3496,7 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 .rail-tab.is-selected { border-color: var(--accent); }
 .rail-tab.is-selected::after {
     content: ''; position: absolute; inset: 0;
-    border-radius: inherit; box-shadow: inset 0 0 0 2px var(--accent);
+    border-radius: inherit; box-shadow: inset 0 0 0 2px var(--accent-text);
     pointer-events: none;
 }
 .rail-tab.has-problems:not(.is-selected) { border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
