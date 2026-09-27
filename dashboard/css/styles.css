@@ -4269,6 +4269,19 @@ td.heat { padding: 0; }
 }
 .monteur-why { margin: 0; font-size: var(--fs-200); color: var(--text-default); line-height: var(--lh-normal); overflow-wrap: anywhere; }
 .monteur-score { font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.monteur-scores { margin: 0; font-variant-numeric: tabular-nums; }
+.monteur-topic { margin: 0; overflow-wrap: anywhere; }
+.monteur-label .chip { margin-inline-start: var(--space-1); vertical-align: middle; }
+.monteur-tt-line { margin: 0; }
+.monteur-tt-link {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    min-block-size: var(--tap-target);
+    font-size: var(--fs-100); color: var(--accent-text);
+}
+.monteur-tt-link svg { width: 14px; height: 14px; flex-shrink: 0; }
+.monteur-tt-link:hover span { text-decoration: underline; text-underline-offset: 2px; }
+/* `.text-meta` comes later than `.text-warning`, so a warning in a meta line needs both. */
+.text-meta.text-warning { color: var(--warning-text); }
 .monteur-rerender { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0 0 var(--space-3); }
 .monteur-rerender svg { width: 15px; height: 15px; flex-shrink: 0; margin-block-start: 2px; }
 .monteur-clip-savebar { align-items: center; }

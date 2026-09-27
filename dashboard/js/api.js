@@ -374,6 +374,8 @@ const API = {
         method: 'POST', body: JSON.stringify(data || {}),
     }),
     rejectMonteurClip: (id) => API.request(`/studio/monteur/clips/${encodeURIComponent(id)}/reject`, { method: 'POST' }),
+    /** A failed clip, rendered again: `ClipView`, back in `rendering`. */
+    rerenderMonteurClip: (id) => API.request(`/studio/monteur/clips/${encodeURIComponent(id)}/rerender`, { method: 'POST' }),
     /** Runs the Analyst now: `LessonsView`. */
     refreshMonteurLessons: () => API.request('/studio/monteur/lessons/refresh', { method: 'POST' }),
     // ─── Growth & SEO hub (GROWTH.md §3) ────────────────────────────────────

@@ -25,6 +25,18 @@
  * to it. Typing writes into `edits[clipId]` and the settings' `work`; nothing
  * re-renders on a keystroke, so the caret and an Arabic IME survive.
  *
+ * ─── Nothing lands after leaving ────────────────────────────────────────────
+ * Every await is followed by `alive(seq)` before anything paints or polls, and
+ * `schedulePoll(seq)` refuses a seq that is not the current one. A slow re-read
+ * finishing after the operator moved to Posts must not start a poll there, and a
+ * poll must never write this page over another one.
+ *
+ * ─── The caption check is «keyword» ─────────────────────────────────────────
+ * MONTEUR.md §6.1: the Monteur's ask is a free-form question ending in «keyword»,
+ * never `cta.instagramAsk`. So the Instagram/Facebook check is only that the caption
+ * names the keyword — which is also what catches a caption still asking for the
+ * keyword it had before an edit. TikTok's still carries `cta.tiktokLine`.
+ *
  * ─── Times are the tenant's ─────────────────────────────────────────────────
  * run_at and post_at are wall times in the tenant's zone (`MonteurView.timezone`,
  * which is `schedule.timezone`). So every time on this page is shown in that zone,
@@ -61,7 +73,7 @@ const MonteurPage = {
      * folder landing from Choose folder half way through must not end the setup.
      */
     setup: false,
-    /** clipId → the operator's unsaved values: { title, caption, tiktok_caption, keyword, keyword_create }. */
+    /** clipId → the operator's unsaved values: { title, caption, tiktok_caption, keyword }. */
     edits: {},
     /** clipId → { message, problems }, shown under that card after a refused save or approve. */
     clipErrors: {},
@@ -89,6 +101,10 @@ const MonteurPage = {
     /** The markup last written into each small region, so a poll that changes nothing writes nothing. */
     _painted: {},
     _clipDirty: {},
+    /** clipId → true while its Approve is out: a poll leaves that form alone. */
+    _approving: {},
+    /** Bumped by every read of the view, so an answer can be told apart from one asked before a pick. */
+    _readTicket: 0,
 
     POLL_MS: 5000,
     PICK_POLL_MS: 3000,
@@ -110,10 +126,16 @@ const MonteurPage = {
     FOLDER_MAX: 1024,
     TITLE_MAX: 60,
     IG_CAPTION_MAX: 2200,
-    TIKTOK_CAPTION_MAX: 4000,
+    /** A Monteur post is a video, and a TikTok video's caption goes out as `post_info.title`: 2200 (MAX_TITLE_UTF16). */
+    TIKTOK_CAPTION_MAX: 2200,
+    /** §6.1: a keyword is one word of at least this many letters. */
+    KEYWORD_MIN: 4,
     SCHEDULED_SHOWN: 5,
     LOCAL_TIME: /^([01]\d|2[0-3]):[0-5]\d$/,
-    ABSOLUTE_PATH: /^(\/|[A-Za-z]:[\\/])/,
+    /** The backend's own pattern: POSIX, a Windows drive, or a UNC share (`\\NAS\Videos`). */
+    ABSOLUTE_PATH: /^(\/|[A-Za-z]:[\\/]|\\\\)/,
+    HOOK_TYPES: Object.freeze(['promise', 'problem', 'intent', 'question']),
+    SCORE_KEYS: Object.freeze(['hook', 'alone', 'payoff', 'send']),
     /** A source still on its way to reels — it keeps the page polling. */
     SOURCE_BUSY: Object.freeze(['transcribing', 'transcribed', 'picking', 'rendering']),
     SOURCE_STATES: Object.freeze(['transcribing', 'transcribed', 'picking', 'rendering', 'done', 'no_clips', 'failed']),
@@ -143,8 +165,15 @@ const MonteurPage = {
     // ─── Lifecycle ───────────────────────────────────────────────────────────
     destroy() {
         this._seq++;
+        this._destroyed = true;
         this.stopPoll();
         this.unbindVisibility();
+    },
+    _destroyed: false,
+
+    /** The page is up under its CURRENT visit (not left, whatever visit started the work). */
+    aliveNow() {
+        return !this._destroyed && this.alive(this._seq);
     },
 
     /** Tenant switch: every view, edit and pick here belongs to the previous tenant. */
@@ -172,6 +201,7 @@ const MonteurPage = {
         this._lastRefresh = 0;
         this._painted = {};
         this._clipDirty = {};
+        this._approving = {};
     },
 
     /** Viewers cannot call the operator routes (session + canOperate): say so once. */
@@ -179,8 +209,14 @@ const MonteurPage = {
         return typeof App === 'undefined' || typeof App.canOperate !== 'function' || App.canOperate();
     },
 
+    /**
+     * Still this visit, and still this page. The second half is a backstop: the
+     * router bumps nothing here when it paints another page, but it does set
+     * `App.currentPage`, and a Monteur paint over Posts is the one outcome to rule out.
+     */
     alive(seq) {
-        return seq === this._seq && !!document.getElementById('page-container');
+        if (seq !== this._seq || !document.getElementById('page-container')) return false;
+        return typeof App === 'undefined' || !App.currentPage || App.currentPage === 'monteur';
     },
 
     skeleton() {
@@ -200,6 +236,7 @@ const MonteurPage = {
         this.stopPoll();
         this.unbindVisibility();
         const seq = ++this._seq;
+        this._destroyed = false;
         if (!this.canUse()) {
             container.innerHTML = esc(html`
                 ${this.toolbarMarkup()}
@@ -210,12 +247,13 @@ const MonteurPage = {
         }
         const gate = Motion.beginLoad(container, () => this.skeleton());
         const tenant = this._tenantEpoch;
+        const ticket = ++this._readTicket;
         const [view, studio] = await Promise.allSettled([API.getMonteur(), API.getStudioSettings()]);
         if (!this.alive(seq) || tenant !== this._tenantEpoch) return;
         gate.done();
         if (studio.status === 'fulfilled') this.studio = (studio.value && studio.value.settings) || null;
         if (view.status === 'fulfilled' && view.value && typeof view.value === 'object') {
-            this.acceptView(view.value);
+            this.acceptView(view.value, ticket);
             if (this.firstRun(this.view)) this.setup = true;
             if (this.setup) this.startSetupWork();
         } else {
@@ -225,7 +263,7 @@ const MonteurPage = {
         }
         this.paintPage();
         this.bindVisibility(seq);
-        this.schedulePoll();
+        this.schedulePoll(seq);
         const count = this.view ? this.clipGroups().review.length : 0;
         Motion.announce(`${t('nav.monteur')} — ${t('monteur.queue.count', { count, n: UI.formatNumber(count) })}`);
     },
@@ -268,6 +306,8 @@ const MonteurPage = {
             },
             pending: { scan: pending.scan === true, folder_pick: pending.folder_pick === true },
             next_slot: typeof v.next_slot === 'string' && v.next_slot ? v.next_slot : null,
+            // How a TikTok post would go out now: SELF_ONLY until TikTok audits the app, null with TikTok off.
+            tiktok_privacy: typeof v.tiktok_privacy === 'string' && v.tiktok_privacy ? v.tiktok_privacy : null,
             sources: rows(v.sources),
             clips: rows(v.clips).map((c) => ({ ...c, copy: this.normalizeCopy(c.copy) })),
             lessons: v.lessons && typeof v.lessons === 'object' ? v.lessons : null,
@@ -291,8 +331,12 @@ const MonteurPage = {
         };
     },
 
-    /** Take a GET answer as the new truth, keeping what the operator has not saved. */
-    acceptView(raw) {
+    /**
+     * Take a GET answer as the new truth, keeping what the operator has not saved.
+     * `ticket` says when the read was ASKED: an answer asked before a folder pick
+     * started cannot know about it, so it must not settle it.
+     */
+    acceptView(raw, ticket) {
         const prev = this.view;
         const view = this.normalizeView(raw);
         this.view = view;
@@ -302,7 +346,12 @@ const MonteurPage = {
         if (!this.work || !this.settingsDirty()) this.loadWork();
         else this.followServerFolder(prev, view);
         this.pruneClipState();
-        this.settlePick();
+        if (this.pick && ticket !== undefined && ticket <= this.pick.ticket) {
+            // Asked before the pick: it cannot have seen it. Keep the pick open.
+            this.view.pending.folder_pick = true;
+        } else {
+            this.settlePick();
+        }
         return prev;
     },
 
@@ -402,7 +451,15 @@ const MonteurPage = {
         if (v.pending.scan || v.pending.folder_pick) return true;
         if (v.sources.some((s) => this.SOURCE_BUSY.includes(s.status))) return true;
         if (v.clips.some((c) => c.status === 'rendering')) return true;
-        return !!(v.lessons && v.lessons.status === 'running');
+        return this.lessonsRunning(v.lessons);
+    },
+
+    /** `lessons` is the latest done row; `lessons.last_run` is the latest attempt, which may be running. */
+    lessonsRunning(lessons) {
+        const l = lessons && typeof lessons === 'object' ? lessons : null;
+        if (!l) return false;
+        if (l.last_run && typeof l.last_run === 'object') return l.last_run.status === 'running';
+        return l.status === 'running';
     },
 
     /** 3 s during a folder pick (for its five minutes), 5 s while anything is pending, else never. */
@@ -413,11 +470,15 @@ const MonteurPage = {
         return this.isPending() ? this.POLL_MS : null;
     },
 
-    schedulePoll() {
+    /**
+     * The caller passes the seq it started under. One that is no longer current —
+     * the operator left while its request was out — starts nothing.
+     */
+    schedulePoll(seq) {
+        if (seq !== this._seq) return;
         this.stopPoll();
         const delay = this.pollDelay();
         if (delay === null) return;
-        const seq = this._seq;
         this._timer = setTimeout(() => {
             this._timer = null;
             this.tick(seq);
@@ -438,7 +499,7 @@ const MonteurPage = {
             return;
         }
         await this.refresh(seq);
-        if (this.alive(seq)) this.schedulePoll();
+        if (this.alive(seq)) this.schedulePoll(seq);
     },
 
     bindVisibility(seq) {
@@ -475,14 +536,15 @@ const MonteurPage = {
             return this._refreshing;
         }
         const tenant = this._tenantEpoch;
+        const ticket = ++this._readTicket;
         const run = (async () => {
             try {
                 const res = await API.getMonteur();
-                if (seq !== this._seq || tenant !== this._tenantEpoch) return;
-                const prev = this.acceptView(res);
+                if (!this.alive(seq) || tenant !== this._tenantEpoch) return;
+                const prev = this.acceptView(res, ticket);
                 this.paintUpdates(prev);
             } catch (err) {
-                if (seq !== this._seq || tenant !== this._tenantEpoch) return;
+                if (!this.alive(seq) || tenant !== this._tenantEpoch) return;
                 if (err && err.status === 401) return;
                 this.stale = true;
                 this.paintStatus();
@@ -682,7 +744,7 @@ const MonteurPage = {
                     </span>
                 </p>
                 <p class="text-meta" id="mt-next-run">${next}</p>
-                <p class="text-meta" id="mt-last-run"${last ? html` title="${last.title}"` : ''}>${this.lastRunText(last)}</p>
+                <p class="text-meta${v.last_scan && v.last_scan.error ? html.raw(' text-warning') : ''}" id="mt-last-run" dir="auto"${last ? html` title="${last.title}"` : ''}>${this.lastRunText(last)}</p>
                 ${scanning ? html`
                     <p class="draft-card-stage" id="mt-scan-state">
                         <span class="spinner spinner-sm" aria-hidden="true"></span>
@@ -702,6 +764,8 @@ const MonteurPage = {
     lastRunText(age) {
         const ls = this.view.last_scan;
         if (!ls || !age) return t('monteur.run.never');
+        // A refused scan says why (e.g. a folder outside the worker's allowed roots).
+        if (ls.error) return t('monteur.run.lastFailed', { when: age.text, error: String(ls.error) });
         if (ls.missing) return t('monteur.run.lastMissing', { when: age.text, name: this.workerName() });
         const added = Math.max(0, Number(ls.added) || 0);
         const skipped = Math.max(0, Number(ls.skipped) || 0);
@@ -838,7 +902,16 @@ const MonteurPage = {
         this.paintIfChanged('mt-queue-count', this.queueCountMarkup(g));
         this.paintIfChanged('mt-queue-empty', this.queueEmptyMarkup(g));
         // The next free slot moves with every approval, and is on every Approve button.
-        g.review.forEach((c) => this.paintIfChanged(`mt-clip-${c.id}-approve`, this.approveMarkup(c)));
+        // Not while that Approve is out (a fresh, enabled button would invite a second
+        // one), and not while the operator is inside the form (typing a time).
+        g.review.forEach((c) => {
+            const id = `mt-clip-${c.id}-approve`;
+            if (this._approving[String(c.id)]) return;
+            const host = document.getElementById(id);
+            const active = document.activeElement;
+            if (host && active && typeof host.contains === 'function' && host.contains(active)) return;
+            this.paintIfChanged(id, this.approveMarkup(c));
+        });
     },
 
     /**
@@ -887,7 +960,8 @@ const MonteurPage = {
             return JSON.stringify([item.status, item.name, item.path, item.duration, item.clips, item.error, item.created_at]);
         }
         const sig = [kind, item.status, item.title, item.hook, item.why, item.score, item.start, item.end, item.duration,
-            item.video_url, item.cover_url, item.scheduled_time, item.error, item.source_name, item.copy];
+            item.video_url, item.cover_url, item.scheduled_time, item.error, item.source_name, item.copy,
+            item.topic, item.hook_type, item.scores, this.tiktokCut(item)];
         if (kind === 'working') sig.push(this.view.worker.online, this.view.worker.name);
         if (kind === 'scheduled') sig.push(this.zone());
         if (kind === 'review') sig.push(this.contentLang(), this.studio && this.studio.cta ? this.studio.cta : null);
@@ -932,6 +1006,29 @@ const MonteurPage = {
             <span>${UI.ltr(`${this.clock(clip.start)}–${this.clock(clip.end)}`)}</span>
             ${seconds ? html`<span>${t('monteur.seconds', { n: UI.formatNumber(seconds) })}</span>` : ''}
         `;
+    },
+
+    /** The TikTok cut (§3: the same video with TikTok's CTA), where the render made one. */
+    tiktokCut(clip) {
+        const direct = clip && clip.tiktok_video_url;
+        const inRender = clip && clip.render && typeof clip.render === 'object' ? clip.render.tiktok_video_url : '';
+        return safeUrl(direct || inRender || '');
+    },
+
+    /** "Hook 3 · Alone 3 · Payoff 2 · Send 2": §6.1's parts of the score, when the Monteur sent them. */
+    scoresMarkup(clip) {
+        const s = clip && clip.scores && typeof clip.scores === 'object' ? clip.scores : null;
+        if (!s || !this.SCORE_KEYS.some((k) => Number.isFinite(Number(s[k])))) return '';
+        const part = (k) => (Number.isFinite(Number(s[k])) ? UI.formatNumber(Number(s[k])) : '—');
+        return html`<p class="text-meta monteur-scores" title="${t('monteur.clip.scoresHint')}">${t('monteur.clip.scores', {
+            hook: part('hook'), alone: part('alone'), payoff: part('payoff'), send: part('send'),
+        })}</p>`;
+    },
+
+    hookTypeMarkup(clip) {
+        const type = clip && clip.hook_type;
+        if (!this.HOOK_TYPES.includes(type)) return '';
+        return html`<span class="chip">${t(`monteur.clip.hookType.${type}`)}</span>`;
     },
 
     scoreMarkup(score) {
@@ -980,32 +1077,70 @@ const MonteurPage = {
         const edit = this.edits[String(clip.id)];
         if (edit && edit[field] !== undefined) return edit[field];
         if (field === 'title') return String(clip.title || '');
-        if (field === 'keyword_create') return !!clip.copy.keyword_create;
         return String(clip.copy[field] || '');
     },
 
     /**
-     * The caption lines the tenant's settings require (STUDIO.md §10.3), as the Studio
-     * checks them: the IG caption carries `cta.instagramAsk` with the keyword filled
-     * in, the TikTok caption carries `cta.tiktokLine`. Without the settings, the IG
-     * check falls back to the keyword itself.
+     * What each caption must carry. Instagram/Facebook: the keyword, as §6.1's ask
+     * writes it («keyword») — never `cta.instagramAsk`, which the Monteur does not use.
+     * TikTok: `cta.tiktokLine`, which §6.1 still puts in its caption.
      */
     requiredLines(keyword) {
         const cta = this.studio && this.studio.cta;
         const word = String(keyword || '').trim();
-        let ig = '';
-        if (word) {
-            ig = cta && typeof cta.instagramAsk === 'string' && cta.instagramAsk.includes('{keyword}')
-                ? cta.instagramAsk.split('{keyword}').join(word)
-                : word;
-        }
         const tt = cta && typeof cta.tiktokLine === 'string' ? cta.tiktokLine.trim() : '';
-        return { ig, tt };
+        return { ig: word ? `«${word}»` : '', tt, keyword: word };
     },
 
     lineCheck(caption, line) {
         if (!line) return null;
         return { ok: String(caption || '').includes(line), line };
+    },
+
+    /** The caption must keep «keyword» exactly: the server refuses a save that drops it. */
+    keywordCheck(caption, keyword) {
+        const word = String(keyword || '').trim();
+        if (!word) return null;
+        return { ok: String(caption || '').includes(`«${word}»`), line: `«${word}»` };
+    },
+
+    /**
+     * The caption as a save would store it. A new keyword with the caption left alone
+     * carries «old» → «new» into it on the server (clips.ts patchClip), so that is
+     * what is checked, not the stale text still in the field.
+     */
+    effectiveCaption(clip) {
+        const edit = this.edits[String(clip.id)] || {};
+        const caption = this.clipValue(clip, 'caption');
+        const before = String(clip.copy.keyword || '').trim();
+        const after = String(this.clipValue(clip, 'keyword') || '').trim();
+        const captionEdited = edit.caption !== undefined && edit.caption !== clip.copy.caption;
+        if (captionEdited || !before || !after || before === after) return caption;
+        return caption.split(`«${before}»`).join(`«${after}»`);
+    },
+
+    /** "«old» in the caption becomes «new» when you save": said while that is what will happen. */
+    keywordFollowsMarkup(clip) {
+        const edit = this.edits[String(clip.id)] || {};
+        const before = String(clip.copy.keyword || '').trim();
+        const after = String(this.clipValue(clip, 'keyword') || '').trim();
+        const captionEdited = edit.caption !== undefined && edit.caption !== clip.copy.caption;
+        if (captionEdited || !before || !after || before === after || !clip.copy.caption.includes(`«${before}»`)) return '';
+        return html`<p class="form-hint">${t('monteur.clip.keywordFollows', { from: `«${before}»`, to: `«${after}»` })}</p>`;
+    },
+
+    /** The other spellings; a new keyword clears them (the server drops them unless they are sent). */
+    variantsMarkup(clip) {
+        const before = String(clip.copy.keyword || '').trim();
+        const after = String(this.clipValue(clip, 'keyword') || '').trim();
+        if (before !== after) return clip.copy.variants.length ? html`<p class="form-hint">${t('monteur.clip.variantsCleared')}</p>` : '';
+        if (!clip.copy.variants.length) return '';
+        return html`
+            <p class="draft-card-tags">
+                <span class="text-meta">${t('studio.campaign.variants')}</span>
+                ${clip.copy.variants.map((word) => html`<span class="chip" dir="auto">${word}</span>`)}
+            </p>
+        `;
     },
 
     lineCheckMarkup(check) {
@@ -1022,7 +1157,7 @@ const MonteurPage = {
     checksFor(clip) {
         const lines = this.requiredLines(this.clipValue(clip, 'keyword'));
         return {
-            ig: this.lineCheck(this.clipValue(clip, 'caption'), lines.ig),
+            ig: this.keywordCheck(this.effectiveCaption(clip), lines.keyword),
             tt: this.lineCheck(this.clipValue(clip, 'tiktok_caption'), lines.tt),
         };
     },
@@ -1056,7 +1191,6 @@ const MonteurPage = {
         const video = safeUrl(clip.video_url);
         const cover = safeUrl(clip.cover_url);
         const checks = this.checksFor(clip);
-        const variants = clip.copy.variants;
         let media = html`<i data-lucide="film" aria-hidden="true"></i><span class="sr-only">${t('monteur.clip.noVideo')}</span>`;
         if (video) {
             media = html`<video src="${video}"${cover ? html` poster="${cover}"` : ''} controls playsinline preload="metadata"
@@ -1071,10 +1205,19 @@ const MonteurPage = {
                     <h3 class="draft-title" dir="auto" id="mt-clip-${id}-heading">${clip.title || t('monteur.clip.untitled')}</h3>
                     ${this.scoreMarkup(clip.score)}
                 </div>
+                ${this.scoresMarkup(clip)}
                 <p class="post-card-meta">${this.clipMetaMarkup(clip)}</p>
+                ${clip.topic ? html`<p class="text-meta monteur-topic"><span>${t('monteur.clip.topic')}</span> <span dir="auto">${clip.topic}</span></p>` : ''}
+                ${this.tiktokCut(clip) ? html`
+                    <p class="monteur-tt-line">
+                        <a class="monteur-tt-link" href="${this.tiktokCut(clip)}" target="_blank" rel="noopener">
+                            <i data-lucide="music-2" aria-hidden="true"></i><span>${t('monteur.clip.tiktokVersion')}</span><span class="sr-only"> ${t('help.link.newTab')}</span>
+                        </a>
+                    </p>
+                ` : ''}
                 ${clip.hook ? html`
                     <div>
-                        <p class="monteur-label">${t('monteur.clip.hook')}</p>
+                        <p class="monteur-label">${t('monteur.clip.hook')} ${this.hookTypeMarkup(clip)}</p>
                         <blockquote class="monteur-hook user-content" dir="auto"${this.langAttr()}>${clip.hook}</blockquote>
                     </div>
                 ` : ''}
@@ -1090,21 +1233,11 @@ const MonteurPage = {
                     ${this.clipFieldMarkup(clip, { field: 'tiktok_caption', label: t('monteur.clip.tiktokCaption'), max: this.TIKTOK_CAPTION_MAX, rows: 5, check: checks.tt })}
                     ${this.clipFieldMarkup(clip, {
                         field: 'keyword', label: t('monteur.clip.keyword'), hint: t('monteur.clip.keywordHint'),
-                        after: variants.length ? html`
-                            <p class="draft-card-tags">
-                                <span class="text-meta">${t('studio.campaign.variants')}</span>
-                                ${variants.map((word) => html`<span class="chip" dir="auto">${word}</span>`)}
-                            </p>
-                        ` : '',
+                        after: html`
+                            <div id="mt-clip-${id}-follows" aria-live="polite">${this.seed(`mt-clip-${id}-follows`, this.keywordFollowsMarkup(clip))}</div>
+                            <div id="mt-clip-${id}-variants">${this.seed(`mt-clip-${id}-variants`, this.variantsMarkup(clip))}</div>
+                        `,
                     })}
-                    <div class="form-group check-row">
-                        <input type="checkbox" id="mt-clip-${id}-create" data-change="monteur:clipToggle" data-clip="${id}"
-                               aria-describedby="mt-clip-${id}-create-hint" ${this.clipValue(clip, 'keyword_create') ? html.raw('checked') : ''}>
-                        <span class="check-text">
-                            <label class="check-label" for="mt-clip-${id}-create">${t('monteur.clip.createCampaign')}</label>
-                            <span class="form-hint" id="mt-clip-${id}-create-hint">${t('monteur.clip.createCampaignHint')}</span>
-                        </span>
-                    </div>
                     <div id="mt-clip-${id}-warn" aria-live="polite">${this.seed(`mt-clip-${id}-warn`, this.rerenderMarkup(clip))}</div>
                     <div id="mt-clip-${id}-savebar">${this.clipSaveBarMarkup(clip)}</div>
                 </form>
@@ -1162,6 +1295,12 @@ const MonteurPage = {
         `;
     },
 
+    /** A DM campaign answers Instagram and Facebook comments only (clips.ts). */
+    hasMeta() {
+        const p = this.view ? this.view.settings.platforms : [];
+        return p.includes('instagram') || p.includes('facebook');
+    },
+
     /** "Instagram, Facebook and TikTok", in the interface language. */
     platformList(platforms) {
         const names = this.PLATFORMS.filter((p) => (platforms || []).includes(p)).map((p) => t(`monteur.platform.${p}`));
@@ -1172,6 +1311,27 @@ const MonteurPage = {
             }
         } catch { /* an older engine: commas */ }
         return names.join(', ');
+    },
+
+    /** A day in the tenant's zone, as YYYY-MM-DD, for comparing two instants' days. */
+    zoneDayKey(value) {
+        return this.toZoneInput(value, this.zone()).slice(0, 10);
+    },
+
+    /**
+     * The slot this clip's Approve would take. `next_slot` is tenant-wide, but §6.1
+     * never puts two clips from the same video on the same day: when a sibling is
+     * already scheduled on next_slot's day, the server will use a later day, so the
+     * button must not promise that time (`clash`).
+     */
+    slotFor(clip) {
+        const slot = this.view && this.view.next_slot;
+        if (!slot || !clip) return null;
+        const day = this.zoneDayKey(slot);
+        const clash = this.view.clips.some((c) => String(c.id) !== String(clip.id)
+            && c.source_id !== undefined && String(c.source_id) === String(clip.source_id)
+            && c.status === 'scheduled' && c.scheduled_time && this.zoneDayKey(c.scheduled_time) === day);
+        return { iso: slot, clash };
     },
 
     /**
@@ -1187,10 +1347,17 @@ const MonteurPage = {
         const o = this.overrides[id] || { open: false, value: '' };
         const zone = this.zone();
         const custom = o.open ? this.fromZoneInput(o.value, zone) : null;
-        const when = o.open ? custom : v.next_slot;
-        const label = when ? t('monteur.clip.approveAt', { when: this.zoneTime(when) }) : t('monteur.clip.approve');
+        const slot = this.slotFor(clip);
+        let label;
+        if (o.open) label = custom ? t('monteur.clip.approveAt', { when: this.zoneTime(custom) }) : t('monteur.clip.approve');
+        else if (slot && slot.clash) label = t('monteur.clip.approveNextDay');
+        else label = slot ? t('monteur.clip.approveAt', { when: this.zoneTime(slot.iso) }) : t('monteur.clip.approve');
         const keyword = String(clip.copy.keyword || '').trim();
         const platforms = this.platformList(v.settings.platforms);
+        // The clip's own (a review clip's mirrors the view's; a scheduled one's is how it went out),
+        // else the view's. Both are null with TikTok off.
+        const privacy = clip.tiktok_privacy !== undefined && clip.tiktok_privacy !== null ? clip.tiktok_privacy : v.tiktok_privacy;
+        const selfOnly = privacy === 'SELF_ONLY';
         return html`
             ${o.open ? html`
                 <div class="form-group">
@@ -1202,8 +1369,14 @@ const MonteurPage = {
             ` : ''}
             <ul class="studio-summary-list monteur-approve-summary">
                 ${platforms ? html`<li><i data-lucide="share-2" aria-hidden="true"></i><span>${t('monteur.clip.goesTo', { platforms })}</span></li>` : ''}
-                ${keyword && clip.copy.keyword_create ? html`
-                    <li><i data-lucide="message-circle" aria-hidden="true"></i><span dir="auto">${t('monteur.clip.campaignToo', { keyword })}</span></li>
+                ${keyword && this.hasMeta() ? html`
+                    <li><i data-lucide="message-circle" aria-hidden="true"></i><span dir="auto">${clip.copy.keyword_create
+                        ? t('monteur.clip.campaignToo', { keyword })
+                        : t('monteur.clip.campaignExisting', { keyword })}</span></li>
+                ` : ''}
+                ${selfOnly ? html`<li><i data-lucide="lock" aria-hidden="true"></i><span>${t('monteur.clip.tiktokSelfOnly')}</span></li>` : ''}
+                ${slot && slot.clash && !o.open ? html`
+                    <li><i data-lucide="calendar-clock" aria-hidden="true"></i><span>${t('monteur.clip.siblingDay', { day: this.zoneDay(slot.iso) })}</span></li>
                 ` : ''}
             </ul>
             <div class="row row--wrap gap-2">
@@ -1246,6 +1419,12 @@ const MonteurPage = {
                 ${failed ? html`
                     ${clip.error ? html`<p class="post-card-error" dir="auto">${clip.error}</p>` : ''}
                     <div class="row row--wrap gap-2">
+                        ${UI.button({
+                            variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'),
+                            ariaLabel: t('monteur.clip.retryName', { title: clip.title || t('monteur.clip.untitled') }),
+                            title: t('monteur.clip.retryHint', { name: this.workerName() }),
+                            action: 'monteur:rerender', data: { clip: id }, id: `mt-clip-${id}-rerender`,
+                        })}
                         ${UI.button({
                             variant: 'ghost', size: 'sm', icon: 'x', label: t('monteur.clip.dismiss'),
                             action: 'monteur:reject', data: { clip: id }, id: `mt-clip-${id}-reject`,
@@ -1816,6 +1995,8 @@ const MonteurPage = {
     localProblems(body) {
         const out = [];
         const add = (key, message) => out.push({ key, message });
+        // A daily run with no folder can never happen, and would still show as on.
+        if (body.enabled && body.folder === null) add('folder', t('monteur.err.folderRequired'));
         if (body.folder !== null) {
             if (body.folder.length > this.FOLDER_MAX) add('folder', t('monteur.err.folderLong', { max: this.FOLDER_MAX }));
             else if (!this.ABSOLUTE_PATH.test(body.folder)) add('folder', t('monteur.err.folder'));
@@ -1921,16 +2102,17 @@ const MonteurPage = {
             this.saveError = null;
             this.loadWork();
             UI.toast(t('monteur.settings.saved'));
-            if (seq !== this._seq) return;
+            if (!this.alive(seq)) return;
             // The setup's end moves the card below the queue, so the page is laid out again.
             this.paintPage();
             const toggle = document.getElementById('mt-settings-toggle');
             if (toggle && typeof toggle.focus === 'function') toggle.focus();
             // The next run and the next free slot are the server's to work out.
             await this.refresh(seq);
-            this.schedulePoll();
+            if (!this.alive(seq)) return;
+            this.schedulePoll(seq);
         } catch (err) {
-            if (tenant !== this._tenantEpoch || seq !== this._seq) return;
+            if (tenant !== this._tenantEpoch || !this.alive(seq)) return;
             const problems = this.problemListOf(err);
             this.showSettingsProblems(
                 problems.map((m) => ({ key: this.problemKey(m), message: m })),
@@ -1956,8 +2138,8 @@ const MonteurPage = {
         } finally {
             restore();
         }
-        if (!ok || seq !== this._seq || tenant !== this._tenantEpoch || !this.view) return;
-        this.pick = { startedAt: Date.now(), before: this.view.settings.folder };
+        if (!ok || !this.alive(seq) || tenant !== this._tenantEpoch || !this.view) return;
+        this.pick = { startedAt: Date.now(), before: this.view.settings.folder, ticket: this._readTicket };
         this.pickNote = null;
         this.view.pending.folder_pick = true;
         const btn = document.getElementById('mt-pick-folder');
@@ -1966,7 +2148,7 @@ const MonteurPage = {
         Motion.announce(this.view.worker.online
             ? t('monteur.folder.opened', { name: this.workerName() })
             : t('monteur.folder.openWhenBack', { name: this.workerName() }));
-        this.schedulePoll();
+        this.schedulePoll(seq);
     },
 
     async runNow(el) {
@@ -1984,13 +2166,14 @@ const MonteurPage = {
         } finally {
             restore();
         }
-        if (!ok || seq !== this._seq || tenant !== this._tenantEpoch || !this.view) return;
+        if (!ok || !this.alive(seq) || tenant !== this._tenantEpoch || !this.view) return;
         const name = this.workerName();
         UI.toast(this.view.worker.online ? t('monteur.run.started') : t('monteur.run.startedOffline', { name }));
         this.view.pending.scan = true;
         this.paintStatus();
         await this.refresh(seq);
-        this.schedulePoll();
+        if (!this.alive(seq)) return;
+        this.schedulePoll(seq);
     },
 
     /** Re-read now and say whether the worker is back: the offline notice's way out. */
@@ -2003,8 +2186,8 @@ const MonteurPage = {
         } finally {
             restore();
         }
-        if (seq !== this._seq || !this.view) return;
-        this.schedulePoll();
+        if (!this.alive(seq) || !this.view) return;
+        this.schedulePoll(seq);
         const online = this.view.worker.online;
         const message = online ? t('studio.worker.backOnline') : t('studio.worker.stillOffline');
         Motion.announce(message);
@@ -2025,9 +2208,9 @@ const MonteurPage = {
             const next = res && typeof res === 'object' && res.id !== undefined ? res : { ...source, status: 'transcribing', error: null };
             this.view.sources = this.view.sources.map((s) => (String(s.id) === id ? { ...s, ...next } : s));
             UI.toast(t('monteur.source.retried', { name: source.name || '' }));
-            if (seq !== this._seq) return;
+            if (!this.alive(seq)) return;
             this.refreshSources();
-            this.schedulePoll();
+            this.schedulePoll(seq);
         } catch (err) {
             UI.toast((err && err.message) || t('common.error'), 'error');
         } finally {
@@ -2045,7 +2228,6 @@ const MonteurPage = {
                 caption: clip.copy.caption,
                 tiktok_caption: clip.copy.tiktok_caption,
                 keyword: clip.copy.keyword,
-                keyword_create: !!clip.copy.keyword_create,
             };
         }
         return this.edits[id];
@@ -2064,7 +2246,6 @@ const MonteurPage = {
         if (edit.caption !== undefined && edit.caption !== copy.caption) next.caption = edit.caption;
         if (edit.tiktok_caption !== undefined && edit.tiktok_caption !== copy.tiktok_caption) next.tiktok_caption = edit.tiktok_caption;
         if (edit.keyword !== undefined && String(edit.keyword).trim() !== String(copy.keyword || '').trim()) next.keyword = String(edit.keyword).trim();
-        if (edit.keyword_create !== undefined && !!edit.keyword_create !== !!copy.keyword_create) next.keyword_create = !!edit.keyword_create;
         if (Object.keys(next).length) out.copy = next;
         return out;
     },
@@ -2079,15 +2260,27 @@ const MonteurPage = {
         return !!clip && Object.keys(this.clipPatch(clip, this.edits[String(id)])).length > 0;
     },
 
-    clipProblems(patch) {
+    /** Letters, as the keyword rule counts them: tatweel and diacritics are not letters. */
+    letterCount(word) {
+        return Array.from(UI.normalizeArabic(String(word || '')).replace(/[^\p{L}]/gu, '')).length;
+    },
+
+    clipProblems(patch, clip) {
         const out = [];
         if ('title' in patch) {
             if (!patch.title) out.push({ field: 'title', message: t('monteur.clip.titleRequired') });
             else if (patch.title.length > this.TITLE_MAX) out.push({ field: 'title', message: t('monteur.clip.titleLong', { n: patch.title.length, max: this.TITLE_MAX }) });
         }
+        if (patch.copy && ('caption' in patch.copy || 'keyword' in patch.copy) && clip) {
+            const word = String((patch.copy.keyword !== undefined ? patch.copy.keyword : clip.copy.keyword) || '').trim();
+            if (word && !this.effectiveCaption(clip).includes(`«${word}»`)) {
+                out.push({ field: 'caption', message: t('monteur.clip.captionAsk', { keyword: `«${word}»` }) });
+            }
+        }
         if (patch.copy && 'keyword' in patch.copy) {
             if (!patch.copy.keyword) out.push({ field: 'keyword', message: t('monteur.clip.keywordRequired') });
             else if (/\s/.test(patch.copy.keyword)) out.push({ field: 'keyword', message: t('studio.keywordOneWord') });
+            else if (this.letterCount(patch.copy.keyword) < this.KEYWORD_MIN) out.push({ field: 'keyword', message: t('monteur.clip.keywordShort', { min: this.KEYWORD_MIN }) });
         }
         return out;
     },
@@ -2111,20 +2304,14 @@ const MonteurPage = {
             const checks = this.checksFor(clip);
             this.paintIfChanged(`mt-clip-${id}-caption-check`, this.lineCheckMarkup(checks.ig));
             this.paintIfChanged(`mt-clip-${id}-tiktok_caption-check`, this.lineCheckMarkup(checks.tt));
+            this.paintIfChanged(`mt-clip-${id}-follows`, this.keywordFollowsMarkup(clip));
+            this.paintIfChanged(`mt-clip-${id}-variants`, this.variantsMarkup(clip));
         }
         if (this.clipErrors[id]) {
             delete this.clipErrors[id];
             this.paintRegion(`mt-clip-${id}-error`, '');
             if (typeof el.removeAttribute === 'function') el.removeAttribute('aria-invalid');
         }
-        this.markClipDirty(clip);
-    },
-
-    clipToggle(el) {
-        if (!el || !el.dataset) return;
-        const clip = this.clipById(el.dataset.clip);
-        if (!clip || clip.status !== 'review') return;
-        this.editFor(clip).keyword_create = !!el.checked;
         this.markClipDirty(clip);
     },
 
@@ -2193,7 +2380,7 @@ const MonteurPage = {
         if (!clip || clip.status !== 'review') return;
         const patch = this.clipPatch(clip, this.edits[id]);
         if (!Object.keys(patch).length) return;
-        const local = this.clipProblems(patch);
+        const local = this.clipProblems(patch, clip);
         if (local.length) {
             this.showClipError(id, local[0].message, local.slice(1).map((p) => p.message), `mt-clip-${id}-${local[0].field}`);
             return;
@@ -2214,16 +2401,26 @@ const MonteurPage = {
             delete this.clipErrors[id];
             this._clipDirty[id] = false;
             UI.toast(rerender ? t('monteur.clip.savedRerender', { name: this.workerName() }) : t('monteur.clip.saved'));
-            if (seq !== this._seq) return;
+            if (!this.alive(seq)) return;
             this.refreshQueue();
             this.repaintClip(id);
-            this.schedulePoll();
+            this.schedulePoll(seq);
         } catch (err) {
-            if (tenant !== this._tenantEpoch || seq !== this._seq) return;
-            this.showClipError(id, (err && err.message) || t('error.unexpected'), this.problemListOf(err));
+            // A refused keyword (too short, or another campaign's) comes back as a 400 or 409 with its reason.
+            if (tenant !== this._tenantEpoch || !this.alive(seq)) return;
+            this.showClipError(id, this.plainMessage((err && err.message) || t('error.unexpected')),
+                this.problemListOf(err).map((p) => this.plainMessage(p)));
         } finally {
             restore();
         }
+    },
+
+    /**
+     * The server leads a message with the field it is about (`copy.keyword: «x» sits
+     * inside…`). Beside that very field the path is noise, so it is dropped for display.
+     */
+    plainMessage(message) {
+        return String(message || '').replace(/^[a-z_]+(?:[._][a-z_]+|\[\d+\])+:\s+/i, '');
     },
 
     // ─── A clip: approving and rejecting ─────────────────────────────────────
@@ -2236,8 +2433,11 @@ const MonteurPage = {
             o.open = false;
         } else {
             o.open = true;
-            // Opens on the time Approve would have taken, in the tenant's zone.
-            const start = this.view.next_slot || new Date(Date.now() + 60 * 60 * 1000).toISOString();
+            // Opens on the time Approve would have taken, in the tenant's zone — the next
+            // day at that time when a sibling from the same video already has that day.
+            const slot = this.slotFor(clip);
+            let start = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+            if (slot) start = slot.clash ? new Date(Date.parse(slot.iso) + 24 * 60 * 60 * 1000).toISOString() : slot.iso;
             o.value = o.value || this.toZoneInput(start, this.zone());
         }
         this.overrides[key] = o;
@@ -2256,6 +2456,10 @@ const MonteurPage = {
         const label = document.getElementById(`mt-clip-${key}-approve-label`);
         const iso = this.fromZoneInput(o.value, this.zone());
         if (label) label.textContent = iso ? t('monteur.clip.approveAt', { when: this.zoneTime(iso) }) : t('monteur.clip.approve');
+        // The region now shows what this markup would: recorded, so the next poll
+        // finds nothing to repaint and the field being typed in is left alone.
+        const clip = this.clipById(key);
+        if (clip) this._painted[`mt-clip-${key}-approve`] = esc(this.approveMarkup(clip));
     },
 
     /** `{ ok, body }`: `{}` for the next free slot, or `{ scheduled_time }` read in the tenant's zone. */
@@ -2288,8 +2492,10 @@ const MonteurPage = {
         if (!restore) return;
         const seq = this._seq;
         const tenant = this._tenantEpoch;
+        this._approving[id] = true;
         try {
             const res = await API.approveMonteurClip(id, read.body);
+            delete this._approving[id];
             if (tenant !== this._tenantEpoch) return;
             const when = (res && res.scheduled_time) || (res && res.clip && res.clip.scheduled_time) || read.body.scheduled_time || null;
             if (!this.replaceClip(res && res.clip)) {
@@ -2299,20 +2505,62 @@ const MonteurPage = {
             delete this.overrides[id];
             delete this.clipErrors[id];
             delete this.edits[id];
-            const message = when ? t('monteur.clip.approved', { when: this.zoneTime(when) }) : t('monteur.clip.approvedNoTime');
+            const campaign = res && res.campaign && typeof res.campaign === 'object' ? res.campaign : null;
+            const keyword = String((campaign && campaign.trigger_keyword) || clip.copy.keyword || '');
+            let message = when ? t('monteur.clip.approved', { when: this.zoneTime(when) }) : t('monteur.clip.approvedNoTime');
+            if (campaign) message = `${message} ${campaign.created ? t('monteur.clip.campaignCreated', { keyword }) : t('monteur.clip.campaignReused', { keyword })}`;
             UI.toast(message);
             Motion.announce(message);
-            if (seq !== this._seq) return;
+            if (!this.alive(seq)) return;
             this.refreshQueue();
             // The next free slot has moved, and it is on every other Approve button.
             await this.refresh(seq);
-            this.schedulePoll();
+            if (!this.alive(seq)) return;
+            this.schedulePoll(seq);
         } catch (err) {
+            delete this._approving[id];
             restore();
-            if (tenant !== this._tenantEpoch || seq !== this._seq) return;
-            this.showClipError(id, (err && err.message) || t('error.unexpected'), this.problemListOf(err));
-            // A 409 means the clip moved on (re-rendering, or approved elsewhere): show where it is.
+            if (tenant !== this._tenantEpoch || !this.alive(seq)) return;
+            const raw = String((err && err.message) || '');
+            const message = this.plainMessage(raw || t('error.unexpected'));
+            // §6.1: another reel from this video already has that day, or no day is free:
+            // the reason, and the time picker open on it.
+            if (err && err.status === 409 && /^scheduled_time:|posting slot/i.test(raw)) {
+                const o = this.overrides[id];
+                if (!o || !o.open) this.toggleOverride(id);
+                this.showClipError(id, message, [t('monteur.clip.pickAnotherTime')], `mt-clip-${id}-time`);
+                return;
+            }
+            this.showClipError(id, message, this.problemListOf(err).map((p) => this.plainMessage(p)));
+            // Otherwise a 409 means the clip moved on (re-rendering, approved elsewhere): show where it is.
             if (err && err.status === 409) this.refresh(seq);
+        }
+    },
+
+    /** A failed render, queued again: POST /clips/:id/rerender, and the clip goes back to rendering. */
+    async rerenderClip(el) {
+        const id = String((el && el.dataset && el.dataset.clip) || '');
+        const clip = this.clipById(id);
+        if (!clip || clip.status !== 'failed') return;
+        const restore = UI.actionBusy(el);
+        if (!restore) return;
+        const seq = this._seq;
+        const tenant = this._tenantEpoch;
+        try {
+            const res = await API.rerenderMonteurClip(id);
+            if (tenant !== this._tenantEpoch || !this.view) return;
+            if (!this.replaceClip(res)) {
+                const at = this.view.clips.findIndex((c) => String(c.id) === id);
+                if (at !== -1) this.view.clips[at] = { ...this.view.clips[at], status: 'rendering', error: null };
+            }
+            UI.toast(t('monteur.clip.retried', { title: clip.title || t('monteur.clip.untitled') }));
+            if (!this.alive(seq)) return;
+            this.refreshQueue();
+            this.schedulePoll(seq);
+        } catch (err) {
+            UI.toast((err && err.message) || t('common.error'), 'error');
+        } finally {
+            restore();
         }
     },
 
@@ -2343,9 +2591,28 @@ const MonteurPage = {
     },
 
     // ─── Lessons ─────────────────────────────────────────────────────────────
+    /**
+     * `lessons` is the latest DONE row, so its rules are the ones in use, and they
+     * stay on screen whatever the last attempt did. `lessons.last_run` is that attempt:
+     * running, or failed with a reason the card says out loud.
+     */
+    lessonsFailure(l) {
+        if (!l) return '';
+        const lr = l.last_run && typeof l.last_run === 'object' ? l.last_run : null;
+        if (lr) {
+            if (lr.status !== 'failed') return '';
+            const message = lr.error || t('error.unexpected');
+            return lr.created_at
+                ? t('monteur.lessons.lastFailed', { when: UI.relativeAge(lr.created_at).text, message })
+                : t('monteur.lessons.failed', { message });
+        }
+        return l.status === 'failed' ? t('monteur.lessons.failed', { message: l.error || t('error.unexpected') }) : '';
+    },
+
     lessonsMarkup() {
         const l = this.view.lessons;
-        const running = this.lessonsBusy || !!(l && l.status === 'running');
+        const running = this.lessonsBusy || this.lessonsRunning(l);
+        const failure = this.lessonsFailure(l);
         const rules = l && Array.isArray(l.lessons) ? l.lessons.filter((r) => r && r.rule) : [];
         const basis = l && l.basis && typeof l.basis === 'object' ? l.basis : null;
         const made = l && l.created_at ? UI.relativeAge(l.created_at) : null;
@@ -2365,8 +2632,8 @@ const MonteurPage = {
                     <span class="spinner spinner-sm" aria-hidden="true"></span> ${t('monteur.lessons.running')}
                 </p>
             ` : ''}
-            ${l && l.status === 'failed' ? html`<p class="post-card-error" dir="auto">${t('monteur.lessons.failed', { message: l.error || t('error.unexpected') })}</p>` : ''}
-            ${!l && !running ? html`
+            ${failure && !running ? html`<p class="post-card-error" dir="auto" id="mt-lessons-failed">${failure}</p>` : ''}
+            ${!rules.length && !running ? html`
                 <p class="studio-empty-note">${t('monteur.lessons.empty')}</p>
                 <p class="form-hint">${t('monteur.lessons.emptyBody')}</p>
             ` : ''}
@@ -2412,14 +2679,20 @@ const MonteurPage = {
         }
         if (tenant !== this._tenantEpoch || !this.view) return;
         if (res && typeof res === 'object') this.view.lessons = res;
+        const attempt = res && res.last_run && typeof res.last_run === 'object' ? res.last_run : res;
         if (failure) UI.toast((failure && failure.message) || t('common.error'), 'error');
-        else if (res && res.status === 'failed') UI.toast(t('monteur.lessons.failed', { message: res.error || t('error.unexpected') }), 'error');
+        else if (attempt && attempt.status === 'failed') UI.toast(t('monteur.lessons.failed', { message: attempt.error || t('error.unexpected') }), 'error');
         else UI.toast(t('monteur.lessons.done'));
-        if (seq !== this._seq) return;
+        // The card is painted from `lessonsBusy`, so it is repainted wherever this page
+        // now is — including a re-render that happened while the Analyst was running,
+        // which painted it as "running" — but never over another page.
+        if (!this.aliveNow()) return;
         this.paintRegion('mt-lessons', this.lessonsMarkup());
-        const again = document.getElementById('mt-lessons-refresh');
-        if (again && typeof again.focus === 'function') again.focus();
-        this.schedulePoll();
+        if (seq === this._seq) {
+            const again = document.getElementById('mt-lessons-refresh');
+            if (again && typeof again.focus === 'function') again.focus();
+        }
+        this.schedulePoll(this._seq);
     },
 
     // ─── Time zones ──────────────────────────────────────────────────────────
@@ -2556,13 +2829,13 @@ UI.registerActions('monteur', {
     retrySource: (el) => monteurReport(MonteurPage.retrySource(el)),
     // The review queue
     clipField: (el) => MonteurPage.clipField(el),
-    clipToggle: (el) => MonteurPage.clipToggle(el),
     saveClip: (el, e) => monteurReport(MonteurPage.saveClip(el, e)),
     discardClip: (el) => MonteurPage.discardClip(el.dataset.clip),
     toggleOverride: (el) => MonteurPage.toggleOverride(el.dataset.clip),
     overrideInput: (el) => MonteurPage.overrideInput(el),
     approve: (el, e) => monteurReport(MonteurPage.approve(el, e)),
     reject: (el) => MonteurPage.reject(el.dataset.clip),
+    rerender: (el) => monteurReport(MonteurPage.rerenderClip(el)),
     // Lessons
     refreshLessons: () => monteurReport(MonteurPage.refreshLessons()),
 });

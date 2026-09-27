@@ -207,9 +207,13 @@ function clip(over: Json = {}): Json {
         title: 'الفرق بين رأي وشغل منجز',
         hook: 'أغلب الناس يسألون الذكاء الاصطناعي سؤال، والمحترف يعطيه هدف',
         why: 'Opens on a bold claim, one idea, and the payoff lands at 30 s.',
-        score: 8.5,
+        // §6.1: rank = 3·hook + alone + payoff + send = 16, and the score shown is round(16 / 1.8).
+        score: 9,
+        topic: 'الفرق بين السؤال والهدف', hook_type: 'promise', scores: { hook: 3, alone: 3, payoff: 2, send: 2 },
+        tiktok_privacy: 'SELF_ONLY',
         copy: {
-            caption: 'هدف بدل سؤال\n\nاكتب "برومبت" بالتعليقات ويوصلك الرابط\n#ذكاء_اصطناعي',
+            // §6.1: first line, body, a free-form ask ending in «keyword», hashtags. Never cta.instagramAsk.
+            caption: 'هدف بدل سؤال\n\nوش أول أداة بتجربها؟ «برومبت»\n#ذكاء_اصطناعي',
             tiktok_caption: 'هدف بدل سؤال — رابطه في البايو #ذكاء_اصطناعي',
             hashtags: ['ذكاء_اصطناعي'], keyword: 'برومبت', variants: ['البرومبت'], keyword_create: true,
             dm: 'هلا {username}\nهذا الرابط', alt_text: 'رجل أمام حاسوب',
@@ -426,13 +430,14 @@ describe('Monteur — the review queue', () => {
         assert.ok(page.includes('الفرق بين رأي وشغل منجز'));
         assert.ok(page.includes('أغلب الناس يسألون الذكاء الاصطناعي سؤال'));
         assert.ok(page.includes(escaped('Opens on a bold claim, one idea, and the payoff lands at 30 s.')));
-        assert.ok(page.includes('<bdi class="ltr-text" dir="ltr">8.5/10</bdi>'));
+        assert.ok(page.includes('<bdi class="ltr-text" dir="ltr">9/10</bdi>'));
         assert.ok(page.includes('<bdi class="ltr-text" dir="ltr">1:23–1:58</bdi>'), 'where in the video, isolated');
         for (const field of ['title', 'caption', 'tiktok_caption', 'keyword']) {
             const tag = tagOf(page, `mt-clip-c1-${field}`);
             assert.ok(tag.includes('data-input="monteur:clipField"') && tag.includes(`data-field="${field}"`), field);
         }
-        assert.ok(tagOf(page, 'mt-clip-c1-create').includes('checked'), 'keyword_create comes through');
+        // Approve always makes sure a campaign answers the keyword: shown as a fact, not a choice.
+        assert.equal(tagOf(page, 'mt-clip-c1-create'), '', 'no keyword_create checkbox');
         // Approve names the server's next free slot, in the tenant's zone.
         const label = s.t('monteur.clip.approveAt', { when: s.Page.zoneTime(RIYADH_NEXT_SLOT) });
         assert.match(s.Page.zoneTime(RIYADH_NEXT_SLOT), /19:00/);
@@ -441,8 +446,9 @@ describe('Monteur — the review queue', () => {
         assert.ok(tagOf(page, 'mt-clip-c1-reject').includes('data-action="monteur:reject"'));
         assert.ok(page.includes(s.t('monteur.clip.goesTo', { platforms: 'Instagram, Facebook, and TikTok' })));
         assert.ok(page.includes(escaped(s.t('monteur.clip.campaignToo', { keyword: 'برومبت' }))));
-        // The caption carries the tenant's ask line with this keyword: checked, as the Studio checks it.
+        // §6.1: the caption carries «keyword» in a free-form ask, and that is what is checked.
         assert.ok(page.includes(s.t('studio.captions.has')));
+        assert.ok(!page.includes(s.t('studio.captions.missing')), 'no false warning on a §6.1 caption');
         assert.equal(count(page, 'class="monteur-clip surface"'), 2, 'two to review');
         assert.ok(page.includes(s.t('monteur.queue.count', { count: 2, n: '2' })));
         s.Page.destroy();
@@ -514,14 +520,28 @@ describe('Monteur — the review queue', () => {
         s.Page.destroy();
     });
 
-    it('a keyword edit re-checks the caption against the tenant’s ask line, and refuses two words', async () => {
+    it('a keyword edit re-checks the caption for «keyword» — never the cta.instagramAsk template — and refuses two words', async () => {
         const s = loadMonteur('en');
         stub(s);
         await renderPage(s);
         const check = s.host('mt-clip-c1-caption-check');
+        const follows = s.host('mt-clip-c1-follows');
+        const variants = s.host('mt-clip-c1-variants');
         s.Page.clipField(fakeEl('mt-clip-c1-keyword', { dataset: { clip: 'c1', field: 'keyword' }, value: 'كورس' }));
+        // The caption was left alone, so the save carries «برومبت» → «كورس» into it (clips.ts): that is what is checked.
+        assert.ok(check.innerHTML.includes(s.t('studio.captions.has')) && check.innerHTML.includes('«كورس»'));
+        assert.ok(!check.innerHTML.includes(escaped('اكتب "كورس" بالتعليقات')), 'the Studio template is not the Monteur’s ask');
+        assert.ok(follows.innerHTML.includes(s.t('monteur.clip.keywordFollows', { from: '«برومبت»', to: '«كورس»' })));
+        assert.ok(variants.innerHTML.includes(s.t('monteur.clip.variantsCleared')), 'the old spellings are cleared by the save');
+        // Edit the caption too, dropping the ask: now it IS missing, and the save is refused before the round trip.
+        s.Page.clipField(fakeEl('mt-clip-c1-caption', { dataset: { clip: 'c1', field: 'caption' }, value: 'هدف بدل سؤال' }));
         assert.ok(check.innerHTML.includes(s.t('studio.captions.missing')));
-        assert.ok(check.innerHTML.includes(escaped('اكتب "كورس" بالتعليقات ويوصلك الرابط')));
+        assert.equal(follows.innerHTML, '', 'nothing follows into a caption that was edited');
+        s.host('mt-clip-c1-error');
+        await s.Page.saveClip(fakeEl('mt-clip-c1-form', { dataset: { clip: 'c1' } }), { preventDefault() {} });
+        assert.equal(countCalls(s, 'updateMonteurClip'), 0);
+        assert.ok(s.dom.get('mt-clip-c1-error')!.innerHTML.includes(escaped(s.t('monteur.clip.captionAsk', { keyword: '«كورس»' }))));
+        s.Page.clipField(fakeEl('mt-clip-c1-caption', { dataset: { clip: 'c1', field: 'caption' }, value: clip().copy.caption }));
         s.Page.clipField(fakeEl('mt-clip-c1-keyword', { dataset: { clip: 'c1', field: 'keyword' }, value: 'كورس كامل' }));
         s.host('mt-clip-c1-error');
         await s.Page.saveClip(fakeEl('mt-clip-c1-form', { dataset: { clip: 'c1' } }), { preventDefault() {} });
@@ -957,6 +977,7 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         for (const state of s.Page.SOURCE_STATES) keys.add(`monteur.source.state.${state}`);
         for (const state of s.Page.CLIP_STATES) keys.add(`monteur.clip.state.${state}`);
         for (const p of s.Page.PLATFORMS) keys.add(`monteur.platform.${p}`);
+        for (const type of s.Page.HOOK_TYPES) keys.add(`monteur.clip.hookType.${type}`);
         const missing: string[] = [];
         for (const key of keys) {
             for (const lang of ['ar', 'en']) {
@@ -1019,5 +1040,355 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
             assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['8.1'], page);
         }
+    });
+});
+
+// ─── Round 2: the review's findings (D-numbers) and the API additions ──────────────────────
+function deferred<T>(): { promise: Promise<T>; resolve(v: T): void } {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+}
+
+const approveOf = (page: string, id: string): string =>
+    (page.match(new RegExp(`<form class="monteur-approve" id="mt-clip-${id}-approve"[\\s\\S]*?</form>`)) || [''])[0];
+
+describe('Monteur — review fixes', () => {
+    it('D1/D4: a §6.1 caption passes on «keyword» alone; one without the keyword is flagged', () => {
+        const s = loadMonteur('en');
+        s.Page.studio = studioSettings().settings;
+        s.Page.view = s.Page.normalizeView(monteurView());
+        const ok = s.Page.checksFor(s.Page.clipById('c1'));
+        assert.deepEqual({ ...ok.ig }, { ok: true, line: '«برومبت»' });
+        s.Page.view.clips[0].copy.caption = 'هدف بدل سؤال\n\nوش أول أداة بتجربها؟\n#ذكاء_اصطناعي';
+        assert.equal(s.Page.checksFor(s.Page.clipById('c1')).ig.ok, false);
+        assert.equal(s.Page.checksFor(s.Page.clipById('c1')).tt.line, 'رابطه في البايو', 'TikTok still checks cta.tiktokLine');
+    });
+
+    it('D2: a Windows UNC or drive path is a full path, as the server says; a relative one is not', () => {
+        const s = loadMonteur('en');
+        const folderProblem = (folder: string): boolean => s.Page.localProblems({ ...settings(), folder }).some((p: Json) => p.key === 'folder');
+        assert.equal(folderProblem('\\\\NAS\\Videos\\Monteur'), false);
+        assert.equal(folderProblem('C:\\Users\\me\\Videos'), false);
+        assert.equal(folderProblem('/Users/me/Videos'), false);
+        assert.equal(folderProblem('Videos/Reels'), true);
+    });
+
+    it('D3: leaving during Run now’s re-read starts no poll and paints nothing', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.host('mt-status');
+        s.api.runMonteur = () => Promise.resolve({ job: { id: 'j1' } });
+        const read = deferred<Json>();
+        s.api.getMonteur = () => read.promise;
+        const done = s.Page.runNow(button('mt-run-now'));
+        await settle();
+        s.Page.destroy();
+        s.app.currentPage = 'posts';
+        const container = s.dom.get('page-container')!;
+        container.innerHTML = 'the posts page';
+        read.resolve(monteurView({ pending: { scan: true, folder_pick: false } }));
+        await done;
+        await settle();
+        assert.equal(pollTimer(s), undefined, 'no poll under the new page');
+        assert.equal(container.innerHTML, 'the posts page');
+    });
+
+    it('D3: the same for Approve and for Save, while another clip is still rendering', async () => {
+        for (const which of ['approve', 'save']) {
+            const s = loadMonteur('en');
+            stub(s, monteurView({ clips: [clip(), clip({ id: 'r1', status: 'rendering' })] }));
+            await renderPage(s);
+            s.host('mt-status');
+            s.host('mt-settings');
+            s.host('mt-settings-savebar');
+            s.api.approveMonteurClip = () => Promise.resolve({ clip: clip({ status: 'scheduled', scheduled_time: RIYADH_NEXT_SLOT }), scheduled_time: RIYADH_NEXT_SLOT });
+            s.api.saveStudioSettings = (body: Json) => Promise.resolve({ settings: { ...studioSettings().settings, monteur: body.monteur } });
+            const read = deferred<Json>();
+            s.api.getMonteur = () => read.promise;
+            const done = which === 'approve'
+                ? s.Page.approve(fakeEl('mt-clip-c1-approve', { dataset: { clip: 'c1' } }), { preventDefault() {} })
+                : s.Page.saveSettings(fakeEl('mt-settings-form'), { preventDefault() {} });
+            await settle();
+            s.Page.destroy();
+            s.app.currentPage = 'posts';
+            read.resolve(monteurView({ clips: [clip({ id: 'r1', status: 'rendering' })] }));
+            await done;
+            await settle();
+            assert.equal(pollTimer(s), undefined, which);
+        }
+    });
+
+    it('D5: what is typed in the time override survives the next poll', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ clips: [clip(), clip({ id: 'r1', status: 'rendering' })] }));
+        await renderPage(s);
+        s.host('mt-queue');
+        const region = s.host('mt-clip-c1-approve');
+        s.Page.toggleOverride('c1');
+        s.Page.overrideInput(fakeEl('mt-clip-c1-time', { dataset: { clip: 'c1' }, value: '2030-01-15T20:30' }));
+        region.innerHTML = 'being typed in';
+        s.Page.refreshQueue();
+        assert.equal(region.innerHTML, 'being typed in');
+        s.Page.destroy();
+    });
+
+    it('D5: an Approve in flight is not replaced by a poll, even when the next slot moves', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.host('mt-queue');
+        const region = s.host('mt-clip-c1-approve');
+        const post = deferred<Json>();
+        s.api.approveMonteurClip = () => post.promise;
+        const done = s.Page.approve(fakeEl('mt-clip-c1-approve', { dataset: { clip: 'c1' } }), { preventDefault() {} });
+        region.innerHTML = 'busy Approve';
+        s.Page.view.next_slot = '2030-01-15T18:00:00.000Z';
+        s.Page.refreshQueue();
+        assert.equal(region.innerHTML, 'busy Approve');
+        post.resolve({ clip: clip({ status: 'scheduled', scheduled_time: RIYADH_NEXT_SLOT }), scheduled_time: RIYADH_NEXT_SLOT });
+        await done;
+        s.Page.destroy();
+    });
+
+    it('the TikTok caption counts to 2200: a video caption goes out as post_info.title', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        const page = await renderPage(s);
+        assert.equal(s.Page.TIKTOK_CAPTION_MAX, 2200);
+        assert.ok(tagOf(page, 'mt-clip-c1-tiktok_caption-count').includes('data-max="2200"'));
+        s.Page.destroy();
+    });
+
+    it('a re-render during Refresh now does not leave the lessons card stuck on "running"', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        const card = s.host('mt-lessons');
+        const call = deferred<Json>();
+        s.api.refreshMonteurLessons = () => call.promise;
+        const done = s.Page.refreshLessons();
+        await s.Page.render();
+        await settle();
+        call.resolve({ lessons: [{ rule: 'Post at 19:00.', evidence: 'x' }], summary: null, basis: { posts: 6 }, created_at: new Date().toISOString(), status: 'done', error: null });
+        await done;
+        assert.ok(!card.innerHTML.includes(s.t('monteur.lessons.running')));
+        assert.ok(card.innerHTML.includes('Post at 19:00.'));
+        s.Page.destroy();
+    });
+
+    it('turning the daily run on needs a folder: the setup cannot be saved without one', async () => {
+        const s = loadMonteur('en');
+        stub(s, firstRunView());
+        await renderPage(s);
+        s.host('mt-settings');
+        await s.Page.saveSettings(fakeEl('mt-settings-form'), { preventDefault() {} });
+        assert.equal(countCalls(s, 'saveStudioSettings'), 0);
+        assert.deepEqual([...s.Page.fieldProblems.keys()], ['folder']);
+        assert.ok(s.dom.get('mt-settings')!.innerHTML.includes(escaped(s.t('monteur.err.folderRequired'))));
+        assert.equal(s.Page.setup, true);
+        s.Page.destroy();
+    });
+
+    it('a poll already in flight when Choose folder is pressed cannot end the new pick', async () => {
+        const s = loadMonteur('en');
+        stub(s, firstRunView());
+        await renderPage(s);
+        s.host('mt-status');
+        s.host('mt-pick-status');
+        const old = deferred<Json>();
+        s.api.getMonteur = () => old.promise;
+        const reading = s.Page.refresh(s.Page._seq);
+        s.api.pickMonteurFolder = () => Promise.resolve({ job: { id: 'j2' } });
+        await s.Page.pickFolder(button('mt-pick-folder'));
+        old.resolve(firstRunView());
+        await reading;
+        await settle();
+        assert.ok(s.Page.pick, 'the pick is still open');
+        assert.equal(s.Page.pickNote, null);
+        assert.equal(pollTimer(s)?.ms, 3000);
+        s.Page.destroy();
+    });
+
+    it('§6.1 sibling rule: with a reel from the same video already on that day, Approve promises no time', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({
+            clips: [
+                clip(),
+                clip({ id: 'k1', status: 'scheduled', scheduled_time: '2030-01-15T18:00:00.000Z' }),
+                clip({ id: 'o1', source_id: 's2', title: 'من فيديو آخر' }),
+            ],
+        }));
+        const page = await renderPage(s);
+        assert.ok(approveOf(page, 'c1').includes(s.t('monteur.clip.approveNextDay')));
+        assert.ok(approveOf(page, 'c1').includes(escaped(s.t('monteur.clip.siblingDay', { day: s.Page.zoneDay(RIYADH_NEXT_SLOT) }))));
+        assert.ok(approveOf(page, 'o1').includes(escaped(s.t('monteur.clip.approveAt', { when: s.Page.zoneTime(RIYADH_NEXT_SLOT) }))), 'another video keeps the slot');
+        s.Page.destroy();
+    });
+});
+
+describe('Monteur — API additions', () => {
+    it('a failed clip offers Retry (POST /rerender) beside Dismiss, and is polled once it renders again', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ clips: [clip({ id: 'f1', status: 'failed', error: 'Remotion ran out of memory' })] }));
+        const page = await renderPage(s);
+        assert.ok(tagOf(page, 'mt-clip-f1-rerender').includes('data-action="monteur:rerender"'));
+        assert.ok(tagOf(page, 'mt-clip-f1-reject').includes('data-action="monteur:reject"'), 'Dismiss stays');
+        s.api.rerenderMonteurClip = () => Promise.resolve(clip({ id: 'f1', status: 'rendering', error: null }));
+        await s.Page.rerenderClip(button('mt-clip-f1-rerender', { clip: 'f1' }));
+        assert.equal(countCalls(s, 'rerenderMonteurClip'), 1);
+        assert.equal(s.Page.clipById('f1').status, 'rendering');
+        assert.equal(pollTimer(s)?.ms, 5000);
+        s.Page.destroy();
+    });
+
+    it('lessons.last_run: a failed refresh is said, and the rules in use stay on screen; a running one is polled', async () => {
+        const s = loadMonteur('en');
+        const lessons = { ...monteurView().lessons, last_run: { status: 'failed', error: 'Gemini quota exceeded', created_at: minutesAgo(30) } };
+        stub(s, monteurView({ lessons }));
+        const page = await renderPage(s);
+        assert.ok(page.includes('Open on the result, not the question.'));
+        assert.ok(page.includes(escaped(s.t('monteur.lessons.lastFailed', { when: s.t('common.ago', { value: s.t('common.minutes', { n: '30' }) }), message: 'Gemini quota exceeded' }))));
+        s.Page.destroy();
+        const running = s.Page.normalizeView(monteurView({ clips: [], sources: [], lessons: { ...lessons, last_run: { status: 'running', error: null, created_at: minutesAgo(1) } } }));
+        assert.equal(s.Page.isPending(running), true);
+    });
+
+    it('last_scan.error: a refused folder says why', async () => {
+        const s = loadMonteur('en');
+        const why = 'The folder is outside the allowed roots; pick it with Choose folder.';
+        stub(s, monteurView({ last_scan: { at: minutesAgo(10), added: 0, skipped: 0, missing: false, error: why } }));
+        const page = await renderPage(s);
+        assert.ok(page.includes(escaped(s.t('monteur.run.lastFailed', { when: s.t('common.ago', { value: s.t('common.minutes', { n: '10' }) }), error: why }))));
+        s.Page.destroy();
+    });
+
+    it('TikTok SELF_ONLY is said beside Approve; nothing when the clip posts publicly', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ clips: [clip(), clip({ id: 'p1', tiktok_privacy: 'PUBLIC_TO_EVERYONE' })] }));
+        const page = await renderPage(s);
+        assert.ok(approveOf(page, 'c1').includes(escaped(s.t('monteur.clip.tiktokSelfOnly'))));
+        assert.ok(!approveOf(page, 'p1').includes(escaped(s.t('monteur.clip.tiktokSelfOnly'))));
+        s.Page.destroy();
+        const flagged = loadMonteur('en');
+        stub(flagged, monteurView({ tiktok_privacy: 'SELF_ONLY', clips: [clip({ tiktok_privacy: undefined })] }));
+        const flaggedPage = await renderPage(flagged);
+        assert.ok(flaggedPage.includes(escaped(flagged.t('monteur.clip.tiktokSelfOnly'))), 'MonteurView.tiktok_privacy says so too');
+        flagged.Page.destroy();
+        const off = loadMonteur('en');
+        stub(off, monteurView({ tiktok_privacy: null, clips: [clip({ tiktok_privacy: null })] }));
+        const offPage = await renderPage(off);
+        assert.ok(!offPage.includes(escaped(off.t('monteur.clip.tiktokSelfOnly'))), 'TikTok off: nothing to say');
+        off.Page.destroy();
+    });
+
+    it('a keyword needs 4+ letters before the round trip, and a refused one shows the server’s message', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.host('mt-clip-c1-error');
+        s.Page.clipField(fakeEl('mt-clip-c1-keyword', { dataset: { clip: 'c1', field: 'keyword' }, value: 'كود' }));
+        await s.Page.saveClip(fakeEl('mt-clip-c1-form', { dataset: { clip: 'c1' } }), { preventDefault() {} });
+        assert.equal(countCalls(s, 'updateMonteurClip'), 0);
+        assert.ok(s.dom.get('mt-clip-c1-error')!.innerHTML.includes(escaped(s.t('monteur.clip.keywordShort', { min: 4 }))));
+        assert.equal(s.Page.letterCount('كـــود'), 3, 'tatweel is not a letter');
+        assert.equal(s.Page.letterCount('دورة'), 4);
+        s.Page.clipField(fakeEl('mt-clip-c1-keyword', { dataset: { clip: 'c1', field: 'keyword' }, value: 'دورة' }));
+        const said = '«دورة» is already the keyword of the campaign “Course”.';
+        s.api.updateMonteurClip = () => Promise.reject(Object.assign(new Error(said), { status: 409, body: { error: said } }));
+        await s.Page.saveClip(fakeEl('mt-clip-c1-form', { dataset: { clip: 'c1' } }), { preventDefault() {} });
+        assert.ok(s.dom.get('mt-clip-c1-error')!.innerHTML.includes(escaped(said)));
+        s.Page.destroy();
+    });
+
+    it('shows the scores, the hook type and the topic compactly, and links the TikTok cut when there is one', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ clips: [clip({ tiktok_video_url: '/api/uploads/tt1' }), clip({ id: 'c2', scores: undefined, hook_type: undefined, topic: undefined })] }));
+        const page = await renderPage(s);
+        assert.equal(s.t('monteur.clip.scores', { hook: 3, alone: 3, payoff: 2, send: 2 }), 'Hook 3 · Alone 3 · Payoff 2 · Send 2');
+        assert.ok(page.includes(s.t('monteur.clip.scores', { hook: 3, alone: 3, payoff: 2, send: 2 })));
+        assert.ok(page.includes(s.t('monteur.clip.hookType.promise')));
+        assert.ok(page.includes('الفرق بين السؤال والهدف'));
+        assert.match(page, /<a class="monteur-tt-link" href="\/api\/uploads\/tt1" target="_blank" rel="noopener"/);
+        assert.equal(count(page, 'class="text-meta monteur-scores"'), 1, 'no empty line for a clip without scores');
+        s.Page.destroy();
+    });
+
+    it('the client POSTs /clips/:id/rerender', async () => {
+        const seen: string[] = [];
+        const ctx: Json = {
+            console, t: (key: string) => key,
+            localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+            fetch: (url: string, options: Json = {}) => { seen.push(`${options.method || 'GET'} ${url}`); return Promise.resolve({ status: 200, ok: true, text: () => Promise.resolve('{}') }); },
+        };
+        vm.createContext(ctx);
+        vm.runInContext(`${readFileSync('dashboard/js/api.js', 'utf8')}\nglobalThis.__client = API;`, ctx);
+        await ctx.__client.rerenderMonteurClip('c/1');
+        assert.deepEqual(seen, ['POST /api/studio/monteur/clips/c%2F1/rerender']);
+    });
+});
+
+describe('Monteur — Approve’s answers (backend round 2)', () => {
+    it('a same-day 409 says why, without the field path, and opens the time picker', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.host('mt-clip-c1-error');
+        const approveRegion = s.host('mt-clip-c1-approve');
+        const said = 'scheduled_time: another reel from this video is already on Tue 15 Jan. Choose another day.';
+        s.api.approveMonteurClip = () => Promise.reject(Object.assign(new Error(said), { status: 409, body: { error: said } }));
+        await s.Page.approve(fakeEl('mt-clip-c1-approve', { dataset: { clip: 'c1' } }), { preventDefault() {} });
+        const error = s.dom.get('mt-clip-c1-error')!.innerHTML;
+        assert.ok(error.includes('another reel from this video is already on Tue 15 Jan. Choose another day.'));
+        assert.ok(!error.includes('scheduled_time:'), 'the path is not shown beside its own field');
+        assert.ok(error.includes(s.t('monteur.clip.pickAnotherTime')));
+        assert.equal(s.Page.overrides.c1.open, true);
+        assert.ok(approveRegion.innerHTML.includes('type="datetime-local"'));
+        s.Page.destroy();
+    });
+
+    it('a keyword inside a live campaign’s is shown as the server said it', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.host('mt-clip-c1-error');
+        const said = 'copy.keyword: «برومبت» sits inside the active keyword «البرومبتات». Change the reel\'s keyword.';
+        s.api.approveMonteurClip = () => Promise.reject(Object.assign(new Error(said), { status: 409, body: { error: said } }));
+        await s.Page.approve(fakeEl('mt-clip-c1-approve', { dataset: { clip: 'c1' } }), { preventDefault() {} });
+        assert.ok(s.dom.get('mt-clip-c1-error')!.innerHTML.includes(escaped('«برومبت» sits inside the active keyword «البرومبتات». Change the reel\'s keyword.')));
+        assert.notEqual(s.Page.overrides.c1 && s.Page.overrides.c1.open, true, 'not a time problem');
+        assert.equal(s.Page.plainMessage('Error: something'), 'Error: something', 'only a field path is dropped');
+        s.Page.destroy();
+    });
+
+    it('the campaign line is a fact — new or existing — and the toast says which Approve used', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ clips: [clip(), clip({ id: 'e1', copy: { ...clip().copy, keyword_create: false } })] }));
+        const page = await renderPage(s);
+        assert.ok(approveOf(page, 'c1').includes(escaped(s.t('monteur.clip.campaignToo', { keyword: 'برومبت' }))));
+        assert.ok(approveOf(page, 'e1').includes(escaped(s.t('monteur.clip.campaignExisting', { keyword: 'برومبت' }))));
+        s.api.approveMonteurClip = () => Promise.resolve({
+            clip: clip({ status: 'scheduled', scheduled_time: RIYADH_NEXT_SLOT }), scheduled_time: RIYADH_NEXT_SLOT,
+            campaign: { id: 'k9', trigger_keyword: 'برومبت', created: false },
+        });
+        await s.Page.approve(fakeEl('mt-clip-c1-approve', { dataset: { clip: 'c1' } }), { preventDefault() {} });
+        await settle();
+        assert.ok(s.toasts.some((x) => x.message.includes(s.t('monteur.clip.campaignReused', { keyword: 'برومبت' }))));
+        const noMeta = loadMonteur('en');
+        stub(noMeta, monteurView({ settings: settings({ platforms: ['tiktok'] }) }));
+        const noMetaPage = await renderPage(noMeta);
+        assert.ok(!noMetaPage.includes(escaped(noMeta.t('monteur.clip.campaignToo', { keyword: 'برومبت' }))), 'TikTok alone: no DM campaign');
+        noMeta.Page.destroy();
+        s.Page.destroy();
+    });
+
+    it('the PATCH never sends keyword_create', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.Page.clipField(fakeEl('mt-clip-c1-keyword', { dataset: { clip: 'c1', field: 'keyword' }, value: 'كورسات' }));
+        assert.deepEqual(JSON.parse(JSON.stringify(s.Page.clipPatch(s.Page.clipById('c1'), s.Page.edits.c1))), { copy: { keyword: 'كورسات' } });
+        s.Page.destroy();
     });
 });
