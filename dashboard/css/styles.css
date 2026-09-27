@@ -104,7 +104,6 @@ table { border-collapse: collapse; }
    the isolation; `.ltr-text` pins the direction for a value that is always
    Latin regardless of what the browser guesses. */
 .ltr-text { direction: ltr; unicode-bidi: isolate; text-align: start; }
-.rtl-text { direction: rtl; unicode-bidi: isolate; }
 bdi { unicode-bidi: isolate; }
 
 /* Multi-line user content: per-LINE direction. This is what keeps the
@@ -170,7 +169,9 @@ bdi { unicode-bidi: isolate; }
     border-radius: var(--radius-lg);
     box-shadow: var(--elev-1);
 }
-/* Opt-in. A panel that is not clickable must not behave as if it were. */
+/* The opt-out from glass. `--surface-raised` is translucent now, so pointing this at it
+   while also disabling the blur would give a see-through panel with nothing behind it —
+   the worst of both. `--surface-solid` exists for exactly this. */
 .surface--interactive {
     transition: transform var(--motion-base) var(--ease-standard),
                 border-color var(--motion-base) var(--ease-standard),
@@ -181,9 +182,6 @@ bdi { unicode-bidi: isolate; }
     border-color: var(--border-strong);
     box-shadow: var(--elev-2);
 }
-/* The opt-out from glass. `--surface-raised` is translucent now, so pointing this at it
-   while also disabling the blur would give a see-through panel with nothing behind it —
-   the worst of both. `--surface-solid` exists for exactly this. */
 .surface--solid { background: var(--surface-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
 /* Cards in a grid are content, not chrome: blur is for the surfaces content scrolls BEHIND
    (DESIGN §1) — the sidebar, the top bar, modals, toasts, the sticky save bars. Posts alone
@@ -1095,16 +1093,14 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 }
 .data-table tbody tr:hover td { background: var(--surface-glass-hover); }
 .data-table tbody tr:last-child td { border-block-end: none; }
-.table-empty-cell { text-align: center; padding-block: var(--space-6); color: var(--text-muted); }
+.table-empty-cell { padding-block: var(--space-6); }
 .cell-num { text-align: end; font-variant-numeric: tabular-nums; }
 .cell-id { font-size: var(--fs-100); color: var(--text-muted); max-width: 140px; }
 .cell-error { max-width: 220px; font-size: var(--fs-100); color: var(--danger-text); }
 
 /* ─── Empty / error / loader ─────────────────────────────────────────────── */
 .empty-state {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
     padding: var(--space-7) var(--space-4);
-    text-align: center;
     gap: var(--space-3);
 }
 .empty-state > [data-lucide] { inline-size: 44px; block-size: 44px; }
@@ -1424,9 +1420,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 
 .platform-bar {
     block-size: 10px;
-    border-radius: var(--radius-pill);
-    background: var(--surface-glass-hover);
-    display: flex; overflow: hidden;
+    display: flex;
     margin-block-end: var(--space-5);
 }
 .platform-bar-ig { background: var(--brand-instagram); }
@@ -1452,8 +1446,6 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     font-size: var(--fs-200);
     color: var(--text-default);
     padding: var(--space-3);
-    background: var(--surface-sunken);
-    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     max-height: 7.5em;
     overflow: hidden;
@@ -1498,8 +1490,6 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     margin-block-start: var(--space-2);
     max-height: 240px; overflow-y: auto;
     padding: var(--space-2);
-    background: var(--surface-sunken);
-    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
 }
 .post-picker-item {
@@ -1516,17 +1506,11 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     width: 40px; height: 40px; border-radius: var(--radius-xs);
     object-fit: cover; flex-shrink: 0;
 }
-.post-picker-thumb {
-    /* Sits behind a thumbnail: opaque, or the image reads washed out. */
-    background: var(--surface-solid);
-    display: flex; align-items: center; justify-content: center;
-    color: var(--text-muted);
-}
 .post-picker-thumb [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); }
 .post-picker-body { overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
 .post-picker-id { font-size: var(--fs-100); color: var(--accent-text); font-weight: var(--fw-semibold); }
 .post-picker-caption { font-size: var(--fs-100); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.post-picker-note { font-size: var(--fs-100); text-align: center; padding: var(--space-3); color: var(--text-muted); }
+.post-picker-note { font-size: var(--fs-100); padding: var(--space-3); }
 .post-picker-note.is-error { color: var(--danger-text); }
 
 /* ─── Post cards ─────────────────────────────────────────────────────────── */
@@ -1534,10 +1518,9 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .post-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-2); flex-wrap: wrap; }
 .post-card-badges { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
 .post-media-frame {
-    width: 100%; height: 170px; overflow: hidden;
+    width: 100%; height: 170px;
     border-radius: var(--radius-sm);
     background: var(--surface-sunken);
-    border: 1px solid var(--border-subtle);
     display: flex; align-items: center; justify-content: center;
 }
 .post-media-frame img, .post-media-frame video { width: 100%; height: 100%; object-fit: cover; }
@@ -1575,9 +1558,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 
 /* ─── Cover / thumbnail step ─────────────────────────────────────────────── */
 .cover-step {
-    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    background: var(--surface-sunken);
     padding: var(--space-4);
     margin-block-end: var(--space-4);
 }
@@ -1591,13 +1572,10 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .cover-tile-frame {
     width: 96px; height: 96px;
     border-radius: var(--radius-xs);
-    overflow: hidden;
     background: #000;
-    border: 1px solid var(--border-subtle);
     display: flex; align-items: center; justify-content: center;
     color: var(--text-muted);
 }
-.cover-tile-frame img { width: 100%; height: 100%; object-fit: cover; }
 .cover-tile-frame [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
 .cover-tile-label { font-size: var(--fs-100); color: var(--text-muted); margin-block-start: var(--space-2); text-align: center; }
 .cover-tile.is-chosen .cover-tile-frame { border-color: var(--success); box-shadow: 0 0 0 2px var(--success-soft); }
@@ -1613,9 +1591,8 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .upload-progress.is-active { display: flex; }
 .media-preview {
     margin-block-start: var(--space-3);
-    border-radius: var(--radius-sm); overflow: hidden;
+    border-radius: var(--radius-sm);
     width: 100%; height: 170px;
-    border: 1px solid var(--border-subtle);
     background: var(--surface-sunken);
     align-items: center; justify-content: center;
     display: none;
@@ -1625,12 +1602,10 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 
 /* Schedule honesty block */
 .schedule-truth {
-    display: flex; gap: var(--space-3); align-items: flex-start;
+    gap: var(--space-3);
     padding: var(--space-3);
     margin-block-start: var(--space-2);
     border-radius: var(--radius-sm);
-    background: var(--info-soft);
-    border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
     font-size: var(--fs-100);
     color: var(--text-default);
 }
@@ -1675,11 +1650,9 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 }
 .tiktok-loading { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
 .tiktok-note {
-    display: flex; align-items: flex-start; gap: var(--space-2);
+    gap: var(--space-2);
     margin: 0; padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
-    background: var(--info-soft);
-    border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
     color: var(--text-default);
 }
 .tiktok-note [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; margin-block-start: 2px; }
@@ -1775,27 +1748,13 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
     position: relative;
     aspect-ratio: 1;
     border-radius: var(--radius-sm);
-    overflow: hidden;
-    background: var(--surface-solid);
-    border: 1px solid var(--border-subtle);
-    display: flex; align-items: center; justify-content: center;
-    color: var(--text-muted);
 }
-.slide-thumb img { width: 100%; height: 100%; object-fit: cover; }
 .slide-thumb > [data-lucide] { inline-size: var(--icon-xl); block-size: var(--icon-xl); }
 .slide-num {
     position: absolute;
     inset-block-start: var(--space-1);
     inset-inline-start: var(--space-1);
-    display: inline-flex; align-items: center; justify-content: center;
     min-inline-size: 24px; block-size: 24px;
-    padding-inline: var(--space-2);
-    border-radius: var(--radius-pill);
-    background: var(--surface-solid);
-    color: var(--text-strong);
-    font-size: var(--fs-100);
-    font-weight: var(--fw-semibold);
-    font-variant-numeric: tabular-nums;
     box-shadow: var(--elev-1);
 }
 /* In-flight and failed: a solid chip along the bottom edge, never text laid
@@ -1843,11 +1802,8 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .post-slide {
     aspect-ratio: 1;
     border-radius: var(--radius-xs);
-    overflow: hidden;
     background: var(--surface-solid);
-    border: 1px solid var(--border-subtle);
 }
-.post-slide img { width: 100%; height: 100%; object-fit: cover; }
 .post-slide-more {
     display: flex; align-items: center; justify-content: center;
     background: var(--surface-glass-hover);
@@ -1911,13 +1867,12 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
     unicode-bidi: plaintext;
 }
 .thread-badges { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.empty-threads { padding: var(--space-6) var(--space-4); text-align: center; font-size: var(--fs-200); color: var(--text-muted); }
+.empty-threads { padding: var(--space-6) var(--space-4); font-size: var(--fs-200); }
 
 .chat-pane { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
 .chat-empty {
     flex: 1;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    text-align: center; padding: var(--space-6); gap: var(--space-3);
+    padding: var(--space-6); gap: var(--space-3);
 }
 .chat-empty [data-lucide] { inline-size: 46px; block-size: 46px; }
 .chat-empty svg { color: var(--text-muted); }
@@ -2058,15 +2013,13 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 
 .sandbox-shell {
     flex: 1;
-    background: var(--surface-sunken);
-    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     display: flex; flex-direction: column;
     overflow: hidden;
     min-height: 320px;
 }
 .sandbox-messages { flex: 1; overflow-y: auto; padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
-.sandbox-welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; margin-block-start: var(--space-5); gap: var(--space-2); }
+.sandbox-welcome { margin-block-start: var(--space-5); gap: var(--space-2); }
 .bot-avatar {
     width: 44px; height: 44px;
     background: var(--accent-soft);
@@ -2185,7 +2138,7 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .count-bad.count-zero { color: var(--text-muted); font-weight: var(--fw-regular); }
 .dm-meter { display: flex; flex-direction: column; gap: var(--space-1); min-width: 100px; }
 .dm-meter-text { font-size: var(--fs-100); color: var(--text-default); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.dm-meter-track { display: block; block-size: 5px; border-radius: var(--radius-pill); background: var(--surface-glass-hover); overflow: hidden; }
+.dm-meter-track { display: block; block-size: 5px; }
 .dm-meter-fill { display: block; block-size: 100%; border-radius: var(--radius-pill); }
 .dm-meter-fresh { background: var(--success); }
 .dm-meter-warn { background: var(--warning); }
@@ -2272,9 +2225,6 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .setup-stage {
     margin-block: var(--space-5);
     padding: var(--space-4);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-glass);
     text-align: start;
 }
 .setup-stage-title {
@@ -2513,9 +2463,7 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
     display: flex; flex-direction: column; gap: var(--space-2);
     max-height: 220px; overflow-y: auto;
     padding: var(--space-3);
-    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
-    background: var(--surface-sunken);
     font-size: var(--fs-100);
     color: var(--text-default);
 }
@@ -2871,9 +2819,7 @@ html[lang='en'] .page-toolbar-count {
 .chart-empty {
     margin: 0;
     padding-block: var(--space-6);
-    text-align: center;
     font-size: var(--fs-200);
-    color: var(--text-muted);
 }
 
 /* The daily line (Charts.lineChart). A grid: the y labels in the first column — the
@@ -2915,6 +2861,77 @@ html[lang='en'] .page-toolbar-count {
     .chart-line-x > span.is-minor { visibility: hidden; }
 }
 
+/* ─── Shared patterns (UX audit VS15) ───────────────────────────────────────
+   Declarations several components repeated byte for byte, now stated once.
+   CSS-only: each component keeps its class and its own rule for everything
+   that differs (size, spacing, radius). A near-miss (22px vs 24px, --radius-sm
+   vs --radius-md) is a design decision and was left where it was. The next
+   step is a class in the markup (`.callout`, `.well`…), not more selectors here.
+   Why here and not with the primitives at the top: moving a declaration past
+   an earlier rule of the same specificity that sets the same property can flip
+   which one wins. Every declaration below can reach this stretch of the file
+   without crossing one; `node scripts/css-declmap.mjs` checks that. */
+
+/* ─── Pattern: callout — shared by .schedule-truth, .tiktok-note, .studio-hint, .studio-callout, .help-callout ─── */
+.schedule-truth, .tiktok-note, .studio-hint, .studio-callout, .help-callout {
+    display: flex; align-items: flex-start;
+    background: var(--info-soft);
+    border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
+}
+
+/* ─── Pattern: step mark — shared by .slide-num, .slide-card-num, .studio-step-num, .setup-step-mark, .studio-stage-mark ─── */
+.slide-num, .slide-card-num, .studio-step-num, .setup-step-mark, .studio-stage-mark {
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: var(--radius-pill);
+}
+/* Outlined: the stepper, the setup checklist, the writing stages. */
+.studio-step-num, .setup-step-mark, .studio-stage-mark { flex-shrink: 0; border: 1px solid var(--border-strong); }
+/* Filled: a slide's number, on its tile and on its form. */
+.slide-num, .slide-card-num {
+    padding-inline: var(--space-2);
+    background: var(--surface-solid); color: var(--text-strong);
+    font-size: var(--fs-100); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums;
+}
+
+/* ─── Pattern: media frame — shared by .post-picker-thumb, .cover-tile-frame, .slide-thumb, .post-slide, .moment-thumb, .draft-cover, .shot-thumb, .shot-hero-frame, .slide-alt-thumb, .post-media-frame, .media-preview, and the images in .phone-stage and .rail-tab ─── */
+/* Centres its placeholder icon on the opaque ground: opaque, or an image on it reads washed out. */
+.post-picker-thumb, .slide-thumb, .moment-thumb, .draft-cover, .shot-thumb, .shot-hero-frame, .slide-alt-thumb {
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface-solid); color: var(--text-muted);
+}
+/* Clips to its hairline. */
+.cover-tile-frame, .slide-thumb, .post-slide, .draft-cover, .slide-alt-thumb, .post-media-frame, .media-preview {
+    overflow: hidden; border: 1px solid var(--border-subtle);
+}
+/* The image fills it. */
+.moment-thumb img, .draft-cover img, .shot-thumb img, .phone-stage img, .rail-tab img { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.cover-tile-frame img, .slide-thumb img, .post-slide img { width: 100%; height: 100%; object-fit: cover; }
+
+/* ─── Pattern: well — shared by .template-preview, .post-picker, .cover-step, .sandbox-shell, .erasure-sample, .studio-lessons, .studio-summary, .studio-preview-card, .shot-field, .help-code pre ─── */
+.template-preview, .post-picker, .cover-step, .sandbox-shell, .erasure-sample,
+.studio-lessons, .studio-summary, .studio-preview-card, .shot-field, .help-code pre {
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
+}
+
+/* ─── Pattern: tint panel — shared by .setup-stage, .plan-item, .slide-card, .studio-more, .help-empty, .help-toc, .help-qa-item ─── */
+.setup-stage, .plan-item, .slide-card, .studio-more, .help-empty, .help-toc, .help-qa-item {
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-glass);
+}
+
+/* ─── Pattern: meter — shared by .platform-bar, .dm-meter-track, .studio-meter, .studio-indeterminate ─── */
+.platform-bar, .dm-meter-track, .studio-meter, .studio-indeterminate {
+    border-radius: var(--radius-pill); background: var(--surface-glass-hover); overflow: hidden;
+}
+
+/* ─── Pattern: empty state — shared by .empty-state, .chat-empty, .sandbox-welcome, .table-empty-cell, .post-picker-note, .empty-threads, .chart-empty ─── */
+.empty-state, .chat-empty, .sandbox-welcome {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center;
+}
+/* The one-line form. */
+.table-empty-cell, .post-picker-note, .empty-threads, .chart-empty { text-align: center; color: var(--text-muted); }
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Carousel Studio (#/studio).  Home: status, a new carousel, the plan, the
    drafts. Editor: previews, one form per slide, captions, campaign, schedule.
@@ -2927,28 +2944,27 @@ html[lang='en'] .page-toolbar-count {
 .health-off { background: var(--surface-glass-hover); color: var(--text-default); }
 .status-pill.scheduled { background: var(--info-soft); color: var(--info-text); }
 
-.studio-status { padding: var(--space-4); margin-block-end: var(--space-4); }
+/* The status is a strip, not a dashboard: it gets loud only when something needs doing. */
+.studio-status { padding: var(--space-3) var(--space-4); margin-block-end: var(--space-4); }
 .studio-status-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-    gap: var(--space-4);
+    gap: var(--space-3) var(--space-5);
 }
-.studio-status-item { display: flex; flex-direction: column; gap: var(--space-2); min-inline-size: 0; }
+.studio-status-item { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
 .studio-status-item .text-meta { margin: 0; }
 .studio-status-head {
     display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
     margin: 0; font-size: var(--fs-200); color: var(--text-strong);
 }
 .studio-status-head [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; }
-.studio-status-count { font-size: var(--fs-400); font-variant-numeric: tabular-nums; }
+.studio-status-count { font-size: var(--fs-300); font-variant-numeric: tabular-nums; }
 .studio-status-failed { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); font-size: var(--fs-200); color: var(--danger-text); }
 .studio-status-failed [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; }
 .studio-hint {
-    display: flex; align-items: flex-start; gap: var(--space-2);
+    gap: var(--space-2);
     margin: 0; padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-sm);
-    background: var(--info-soft);
-    border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
     font-size: var(--fs-100); color: var(--text-default);
 }
 .studio-hint [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; margin-block-start: 2px; }
@@ -2970,9 +2986,8 @@ html[lang='en'] .page-toolbar-count {
 /* ─── New carousel ──────────────────────────────────────────────────────── */
 .studio-new { margin-block-end: var(--space-4); }
 .studio-new-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); column-gap: var(--space-4); }
-.studio-new-actions { align-items: center; justify-content: space-between; }
 .studio-plan-launch { display: flex; align-items: stretch; flex-wrap: wrap; gap: var(--space-2); }
-.studio-plan-count { inline-size: auto; min-inline-size: 150px; }
+.studio-plan-count { inline-size: auto; min-inline-size: 0; }
 .studio-color {
     inline-size: var(--tap-target); block-size: var(--tap-target); flex-shrink: 0;
     padding: var(--space-1);
@@ -2981,14 +2996,19 @@ html[lang='en'] .page-toolbar-count {
 }
 .studio-color:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
 
-.studio-lessons { display: flex; flex-direction: column; gap: var(--space-3); }
+/* The picker scrolls inside itself: 34 lessons must not push Generate off the page. */
+.studio-lessons {
+    display: flex; flex-direction: column; gap: var(--space-3);
+    max-block-size: 14rem; overflow-y: auto; overscroll-behavior: contain;
+    padding: var(--space-3); border-radius: var(--radius-md);
+}
 .lesson-group { display: flex; flex-direction: column; gap: var(--space-2); }
 .lesson-group-title { margin: 0; font-size: var(--fs-100); font-weight: var(--fw-semibold); color: var(--text-muted); }
 .lesson-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .lesson-chip-item { display: inline-flex; align-items: stretch; gap: var(--space-1); max-inline-size: 100%; }
 .lesson-chip {
     display: inline-flex; align-items: center; gap: var(--space-2);
-    min-block-size: var(--tap-target); max-inline-size: 100%;
+    min-block-size: var(--tap-target); min-inline-size: 0; max-inline-size: 100%;
     padding-inline: var(--space-3);
     border-radius: var(--radius-pill);
     border: 1px solid var(--border-subtle);
@@ -3006,7 +3026,8 @@ html[lang='en'] .page-toolbar-count {
 .lesson-chip.is-unindexed { border-style: dashed; }
 .lesson-chip-no { font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 .lesson-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-inline-size: 0; }
-.lesson-chip-info { border-radius: var(--radius-pill); }
+/* One info button per lesson, but quiet: the lesson is the thing, not its button. */
+.lesson-chip-info { border-radius: var(--radius-pill); border-color: transparent; background: transparent; flex-shrink: 0; }
 
 .studio-points { margin: 0; padding-inline-start: var(--space-5); display: grid; gap: var(--space-2); font-size: var(--fs-200); }
 .moment-grid {
@@ -3024,11 +3045,9 @@ html[lang='en'] .page-toolbar-count {
 .moment-pick:hover { border-color: var(--border-strong); background: var(--surface-glass-hover); }
 .moment-pick.is-current { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 .moment-thumb {
-    display: flex; align-items: center; justify-content: center;
     aspect-ratio: 16 / 9; overflow: hidden;
-    border-radius: var(--radius-xs); background: var(--surface-solid); color: var(--text-muted);
+    border-radius: var(--radius-xs);
 }
-.moment-thumb img { inline-size: 100%; block-size: 100%; object-fit: cover; }
 .moment-thumb [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
 .moment-meta { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .moment-desc { color: var(--text-default); line-height: var(--lh-normal); }
@@ -3040,8 +3059,6 @@ html[lang='en'] .page-toolbar-count {
 .plan-item {
     display: flex; flex-direction: column; gap: var(--space-2);
     padding: var(--space-3) var(--space-4);
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-    background: var(--surface-glass);
 }
 .plan-item.is-dropped { opacity: var(--opacity-off); border-style: dashed; }
 .plan-item-head { display: flex; align-items: baseline; gap: var(--space-2); }
@@ -3062,13 +3079,9 @@ html[lang='en'] .page-toolbar-count {
     padding: var(--space-3); align-items: start;
 }
 .draft-cover {
-    display: flex; align-items: center; justify-content: center;
-    aspect-ratio: 4 / 5; overflow: hidden;
+    aspect-ratio: 4 / 5;
     border-radius: var(--radius-sm);
-    background: var(--surface-solid); border: 1px solid var(--border-subtle);
-    color: var(--text-muted);
 }
-.draft-cover img { inline-size: 100%; block-size: 100%; object-fit: cover; }
 .draft-cover [data-lucide] { inline-size: var(--icon-xl); block-size: var(--icon-xl); }
 .draft-card-body { display: flex; flex-direction: column; gap: var(--space-2); min-inline-size: 0; }
 .draft-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-2); }
@@ -3078,11 +3091,9 @@ html[lang='en'] .page-toolbar-count {
 .draft-card-tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
 
 /* ─── Editor ────────────────────────────────────────────────────────────── */
-.studio-editor-head { margin-block-end: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.studio-editor-head { margin-block-end: var(--space-4); padding-block: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
 .studio-editor-titlebar { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3); }
 .studio-editor-title { margin: 0; font-size: var(--fs-400); color: var(--text-strong); overflow-wrap: anywhere; }
-.studio-editor { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
-.studio-area-main { display: flex; flex-direction: column; gap: var(--space-4); min-inline-size: 0; }
 .studio-danger { display: flex; justify-content: flex-end; margin-block-start: var(--space-5); }
 
 /* Previews: a strip that scrolls sideways and snaps per slide — a swipe on a
@@ -3108,22 +3119,19 @@ html[lang='en'] .page-toolbar-count {
 .preview-slide img { inline-size: 100%; block-size: 100%; object-fit: cover; display: block; }
 .preview-slide .skel-block { border-radius: 0; }
 
-.slide-cards { list-style: none; margin: var(--space-3) 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+/* A block, not a flex column (`display: block` won when two copies of this rule were merged):
+   `flex-direction` and `gap` are inert here, kept only so that merge changed no computed value.
+   Whether the slide forms should have a gap between them is a design decision. */
+.slide-cards { list-style: none; margin: var(--space-3) 0; margin-block-start: var(--space-3); padding: 0; display: block; flex-direction: column; gap: var(--space-3); }
 .slide-card {
     padding: var(--space-3) var(--space-4) var(--space-1);
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-    background: var(--surface-glass);
     scroll-margin-block: calc(var(--header-height) + var(--space-4));
 }
 .slide-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .slide-card.has-problems { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 .slide-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-block-end: var(--space-3); }
 .slide-card-num {
-    display: inline-flex; align-items: center; justify-content: center;
-    min-inline-size: 28px; block-size: 28px; padding-inline: var(--space-2);
-    border-radius: var(--radius-pill);
-    background: var(--surface-solid); color: var(--text-strong);
-    font-size: var(--fs-100); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums;
+    min-inline-size: 28px; block-size: 28px;
 }
 .slide-card-name { margin: 0; font-size: var(--fs-200); color: var(--text-strong); flex: 1 1 auto; min-inline-size: 0; }
 .slide-card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); }
@@ -3151,16 +3159,14 @@ html[lang='en'] .page-toolbar-count {
 .shot-field {
     display: flex; align-items: flex-start; gap: var(--space-3);
     padding: var(--space-2);
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
-    background: var(--surface-sunken);
+    border-radius: var(--radius-sm);
 }
 .shot-field.is-invalid { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
 .shot-thumb {
     flex: 0 0 auto; inline-size: 96px; aspect-ratio: 16 / 9;
-    display: flex; align-items: center; justify-content: center; overflow: hidden;
-    border-radius: var(--radius-xs); background: var(--surface-solid); color: var(--text-muted);
+    overflow: hidden;
+    border-radius: var(--radius-xs);
 }
-.shot-thumb img { inline-size: 100%; block-size: 100%; object-fit: cover; }
 .shot-thumb [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
 .shot-info { display: flex; flex-direction: column; gap: var(--space-2); min-inline-size: 0; font-size: var(--fs-200); }
 
@@ -3190,7 +3196,7 @@ html[lang='en'] .page-toolbar-count {
    `.studio-savebar` itself is defined once, under "Editor: the action bar". */
 .studio-savebar-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-3); }
 .studio-savebar-row .text-meta { margin: 0; }
-.studio-add-slide { display: flex; align-items: stretch; flex-wrap: wrap; gap: var(--space-2); }
+.studio-add-slide { display: flex; align-items: stretch; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-3); }
 .studio-add-slide .select { inline-size: auto; min-inline-size: 180px; }
 .studio-custom-time { margin-block-start: var(--space-2); }
 
@@ -3205,7 +3211,6 @@ html[lang='en'] .page-toolbar-count {
     display: flex; flex-direction: column;
     padding: var(--space-3) var(--space-4); margin-block-end: var(--space-4);
     border-radius: var(--radius-sm);
-    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
 }
 .studio-preview-card .studio-subhead:first-child { margin-block-start: 0; }
 .studio-preview-line { margin: 0; font-size: var(--fs-200); color: var(--text-strong); }
@@ -3253,10 +3258,7 @@ html[lang='en'] .page-toolbar-count {
     margin-inline-end: var(--space-1);
 }
 .studio-step-num {
-    display: inline-flex; align-items: center; justify-content: center;
-    inline-size: 24px; block-size: 24px; flex-shrink: 0;
-    border-radius: var(--radius-pill);
-    border: 1px solid var(--border-strong);
+    inline-size: 24px; block-size: 24px;
     font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums;
 }
 .studio-step-num [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); }
@@ -3265,11 +3267,9 @@ html[lang='en'] .page-toolbar-count {
 .studio-step.is-done .studio-step-num { background: var(--success-soft); border-color: transparent; color: var(--success-text); }
 
 .studio-callout {
-    display: flex; align-items: flex-start; gap: var(--space-3);
+    gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-md);
-    background: var(--info-soft);
-    border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
     font-size: var(--fs-200); color: var(--text-default);
 }
 .studio-callout > [data-lucide] { inline-size: 18px; block-size: 18px; flex-shrink: 0; margin-block-start: 2px; }
@@ -3285,19 +3285,19 @@ html[lang='en'] .page-toolbar-count {
 .studio-notices { display: flex; flex-direction: column; gap: var(--space-3); }
 .studio-notices:not(:empty) { margin-block-end: var(--space-4); }
 .studio-status-item.is-wide { grid-column: 1 / -1; }
+.studio-status-item .row { margin-block-start: var(--space-1); }
 
 .studio-meter {
     appearance: none; -webkit-appearance: none;
     inline-size: 100%; block-size: 6px;
-    border: 0; border-radius: var(--radius-pill);
-    background: var(--surface-glass-hover); overflow: hidden;
+    border: 0;
 }
 .studio-meter::-webkit-progress-bar { background: var(--surface-glass-hover); border-radius: var(--radius-pill); }
 .studio-meter::-webkit-progress-value { background: var(--accent); border-radius: var(--radius-pill); transition: inline-size var(--motion-base) var(--ease-standard); }
 .studio-meter::-moz-progress-bar { background: var(--accent); border-radius: var(--radius-pill); }
 
 /* Indeterminate: the request is one call, so this says "working", never "63%". */
-.studio-indeterminate { position: relative; block-size: 4px; border-radius: var(--radius-pill); background: var(--surface-glass-hover); overflow: hidden; }
+.studio-indeterminate { position: relative; block-size: 4px; }
 .studio-indeterminate span {
     position: absolute; inset-block: 0; inset-inline-start: 0; inline-size: 35%;
     border-radius: inherit; background: var(--accent);
@@ -3319,23 +3319,7 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 .studio-lesson-search { margin-block: var(--space-2); }
 .studio-lesson-search > [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); }
 .studio-lesson-search .field { padding-inline-start: calc(var(--space-3) + 24px); }
-/* The status is a strip, not a dashboard: it gets loud only when something needs doing. */
-.studio-status { padding: var(--space-3) var(--space-4); }
-.studio-status-grid { gap: var(--space-3) var(--space-5); }
-.studio-status-count { font-size: var(--fs-300); }
-.studio-status-item { gap: var(--space-1); }
-.studio-status-item .row { margin-block-start: var(--space-1); }
-/* One info button per lesson, but quiet: the lesson is the thing, not its button. */
-.lesson-chip-info { border-color: transparent; background: transparent; flex-shrink: 0; }
-.lesson-chip { min-inline-size: 0; }
-.studio-plan-count { min-inline-size: 0; inline-size: auto; }
-/* The picker scrolls inside itself: 34 lessons must not push Generate off the page. */
-.studio-lessons {
-    max-block-size: 14rem; overflow-y: auto; overscroll-behavior: contain;
-    padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-    background: var(--surface-sunken);
-}
-.studio-no-match { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.studio-no-match { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-2); }
 .studio-picked-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .picked-chip {
     display: inline-flex; align-items: center; gap: var(--space-2);
@@ -3368,9 +3352,8 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 .studio-setup-steps { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
 .setup-step { display: flex; align-items: flex-start; gap: var(--space-3); }
 .setup-step-mark {
-    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
-    inline-size: 28px; block-size: 28px; border-radius: var(--radius-pill);
-    border: 1px solid var(--border-strong); font-size: var(--fs-100); font-weight: var(--fw-semibold);
+    inline-size: 28px; block-size: 28px;
+    font-size: var(--fs-100); font-weight: var(--fw-semibold);
 }
 .setup-step-mark [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); }
 .setup-step.is-done .setup-step-mark { background: var(--success-soft); color: var(--success-text); border-color: transparent; }
@@ -3384,8 +3367,6 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 
 .studio-more {
     margin-block: var(--space-3);
-    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
-    background: var(--surface-glass);
 }
 .studio-more-toggle {
     display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-3);
@@ -3412,7 +3393,7 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 .swatch-dot { inline-size: 26px; block-size: 26px; border-radius: var(--radius-pill); border: 1px solid var(--border-strong); display: inline-block; }
 .studio-accent-custom { max-inline-size: 260px; }
 .studio-accent-choice { margin-block-end: var(--space-2); }
-.studio-new-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin-block-start: var(--space-3); }
+.studio-new-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin-block-start: var(--space-3); }
 .studio-new-actions .form-hint { margin: 0; }
 .studio-generate { min-inline-size: 220px; min-block-size: 48px; font-size: var(--fs-300); }
 
@@ -3423,8 +3404,7 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 .studio-stages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .studio-stage { display: flex; align-items: center; gap: var(--space-3); font-size: var(--fs-200); color: var(--text-muted); min-block-size: 28px; }
 .studio-stage-mark {
-    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
-    inline-size: 22px; block-size: 22px; border-radius: var(--radius-pill); border: 1px solid var(--border-strong);
+    inline-size: 22px; block-size: 22px;
 }
 .studio-stage-mark [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); }
 .studio-stage.is-done { color: var(--text-default); }
@@ -3451,7 +3431,7 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 
 /* ─── Editor: layout ────────────────────────────────────────────────────── */
 .studio-editor { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; }
-.studio-area-previews { display: flex; flex-direction: column; gap: var(--space-4); min-inline-size: 0; }
+.studio-area-previews,
 .studio-area-main { display: flex; flex-direction: column; gap: var(--space-4); min-inline-size: 0; }
 .studio-editor-titlebar .row { align-items: center; }
 
@@ -3481,7 +3461,7 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 }
 .phone--tt .phone-stage { aspect-ratio: 9 / 16; border-radius: 22px; }
 .phone--ig .phone-stage { border-radius: var(--radius-sm); }
-.phone-stage img { display: block; inline-size: 100%; block-size: 100%; object-fit: cover; -webkit-user-drag: none; }
+.phone-stage img { display: block; -webkit-user-drag: none; }
 .phone-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .phone-stage.is-stale img { opacity: 0.7; filter: saturate(0.85); }
 .phone-badge {
@@ -3523,17 +3503,16 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
     border-radius: var(--radius-xs);
     border: 2px solid transparent;
     background: var(--surface-solid); cursor: pointer;
+    /* Brought into view clear of the sticky action bar, not under it. */
+    scroll-margin-block: var(--space-3) 112px; scroll-margin-inline: var(--space-3);
 }
 .slide-rail--tt .rail-tab { inline-size: 46px; aspect-ratio: 9 / 16; }
-.rail-tab img { display: block; inline-size: 100%; block-size: 100%; object-fit: cover; }
+.rail-tab img { display: block; }
 .rail-tab .skel-block { border-radius: 0; }
 .rail-tab.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 .rail-tab.has-problems:not(.is-selected) { border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
 .rail-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-/* Brought into view clear of the sticky action bar, not under it. */
-.rail-tab { scroll-margin-block: var(--space-3) 112px; scroll-margin-inline: var(--space-3); }
 .studio-head-meta { flex-wrap: wrap; row-gap: var(--space-2); }
-.studio-editor-head { padding-block: var(--space-4); gap: var(--space-2); }
 .rail-tab .slide-num { inset-block-end: 3px; inset-inline-start: 3px; }
 .rail-wire { display: flex; align-items: center; justify-content: center; block-size: 100%; padding: 2px; font-size: var(--fs-100); line-height: 1.2; color: var(--text-muted); text-align: center; overflow-wrap: anywhere; }
 .rail-flag {
@@ -3541,11 +3520,8 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
     inline-size: 10px; block-size: 10px; border-radius: var(--radius-pill);
     background: var(--danger); box-shadow: 0 0 0 2px var(--surface-solid);
 }
-.studio-add-slide { margin-block-start: var(--space-3); }
 
 /* ─── Editor: the slide form ────────────────────────────────────────────── */
-.slide-cards { display: block; margin-block-start: var(--space-3); }
-.slide-card { padding: var(--space-3) var(--space-4) var(--space-1); }
 .slide-kind-row { display: grid; grid-template-columns: minmax(0, 240px); gap: var(--space-1); }
 .slide-kind-row .form-label { margin: 0; }
 .slide-kind-row .form-hint { margin: 0; }
@@ -3578,7 +3554,6 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
     margin-block: var(--space-2) var(--space-4);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-md);
-    background: var(--surface-sunken); border: 1px solid var(--border-subtle);
 }
 .studio-summary-title { margin: 0 0 var(--space-2); font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
 .studio-summary-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
@@ -3593,8 +3568,8 @@ html[dir='rtl'] .studio-indeterminate span { animation-name: studio-sweep-rtl; }
 .shot-picker { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
 .shot-hero { display: flex; flex-direction: column; gap: var(--space-1); }
 .shot-hero-frame {
-    display: flex; align-items: center; justify-content: center; overflow: hidden;
-    aspect-ratio: 16 / 9; border-radius: var(--radius-sm); background: var(--surface-solid); color: var(--text-muted);
+    overflow: hidden;
+    aspect-ratio: 16 / 9; border-radius: var(--radius-sm);
 }
 .shot-hero-frame img { inline-size: 100%; block-size: 100%; object-fit: contain; }
 .shot-hero-meta { font-size: var(--fs-100); color: var(--text-muted); font-variant-numeric: tabular-nums; }
@@ -3732,9 +3707,6 @@ mark.help-hit {
 .help-empty {
     display: flex; flex-direction: column; gap: var(--space-2);
     padding: var(--space-4);
-    border-radius: var(--radius-md);
-    background: var(--surface-glass);
-    border: 1px solid var(--border-subtle);
 }
 .help-empty-title { margin: 0; font-weight: var(--fw-semibold); color: var(--text-strong); }
 .help-notice {
@@ -3774,9 +3746,6 @@ mark.help-hit {
 .help-toc {
     margin-block: var(--space-5) 0;
     padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-md);
-    background: var(--surface-glass);
-    border: 1px solid var(--border-subtle);
 }
 .help-toc-title { font-size: var(--fs-100); font-weight: var(--fw-semibold); color: var(--text-muted); margin: 0 0 var(--space-2); }
 .help-toc-list { margin: 0; padding-inline-start: var(--space-5); display: grid; gap: var(--space-1); font-size: var(--fs-200); }
@@ -3831,8 +3800,6 @@ mark.help-hit {
     max-inline-size: 100%;
     overflow-x: auto;
     border-radius: var(--radius-sm);
-    background: var(--surface-sunken);
-    border: 1px solid var(--border-subtle);
     font-size: var(--fs-100);
     line-height: var(--lh-normal);
     color: var(--text-strong);
@@ -3840,12 +3807,10 @@ mark.help-hit {
 .help-code pre code { padding: 0; border: 0; background: none; overflow-wrap: normal; }
 
 .help-callout {
-    display: flex; align-items: flex-start; gap: var(--space-3);
+    gap: var(--space-3);
     margin: var(--space-3) 0 var(--space-4);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-md);
-    background: var(--info-soft);
-    border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
 }
 .help-callout [data-lucide] { inline-size: 18px; block-size: 18px; margin-block-start: 3px; color: var(--info-text); }
 .help-callout p { margin: 0; font-size: var(--fs-200); line-height: var(--lh-normal); }
@@ -3865,11 +3830,6 @@ mark.help-hit {
 .help-dl dd { margin: 0; font-size: var(--fs-200); line-height: var(--lh-normal); color: var(--text-default); }
 
 .help-qa { display: grid; gap: var(--space-2); margin: 0 0 var(--space-4); }
-.help-qa-item {
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-glass);
-}
 .help-qa-item > summary {
     cursor: pointer;
     padding: var(--space-3) var(--space-4);
@@ -4240,9 +4200,8 @@ td.heat { padding: 0; }
 .slide-alts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
 .slide-alt-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: var(--space-2) var(--space-3); align-items: start; }
 .slide-alt-thumb {
-    inline-size: 44px; block-size: 44px; border-radius: var(--radius-xs); overflow: hidden;
-    background: var(--surface-solid); border: 1px solid var(--border-subtle);
-    display: flex; align-items: center; justify-content: center; color: var(--text-muted); font-size: var(--fs-100); font-weight: var(--fw-semibold);
+    inline-size: 44px; block-size: 44px; border-radius: var(--radius-xs);
+    font-size: var(--fs-100); font-weight: var(--fw-semibold);
 }
 .slide-alt-thumb img { inline-size: 100%; block-size: 100%; object-fit: cover; display: block; }
 .slide-alt-body { display: grid; gap: var(--space-1); min-inline-size: 0; }
@@ -4344,7 +4303,6 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 
 /* Studio — the drafts filter, and Delete on a card. */
 .studio-draft-filter { inline-size: max-content; max-inline-size: 100%; flex-wrap: wrap; margin-block-end: var(--space-3); }
-.studio-no-match { margin-block-start: var(--space-2); }
 .draft-card-actions { display: flex; justify-content: flex-end; margin-block-start: var(--space-1); }
 @media (max-width: 768px) {
     .studio-draft-filter { inline-size: 100%; }
