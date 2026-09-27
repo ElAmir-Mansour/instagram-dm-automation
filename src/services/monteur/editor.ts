@@ -21,9 +21,24 @@ import { ask, type CallCost, emptyCost } from './model.js';
 import type { TranscriptLine } from './transcript.js';
 import { formatStamp } from './transcript.js';
 
-export const EDIT_KINDS = ['keyword', 'tool', 'emoji', 'image', 'punch'] as const;
+export const EDIT_KINDS = ['keyword', 'tool', 'emoji', 'image', 'broll', 'highlight', 'punch'] as const;
 export type EditKind = (typeof EDIT_KINDS)[number];
-export const EDIT_SFX = ['whoosh', 'whip', 'ding', 'click', 'switch', 'none'] as const;
+/** Sound families the worker has (its own files plus Kenney's CC0 packs); 'whip' and 'switch' are the older names. */
+export const EDIT_SFX = ['whoosh', 'pop', 'click', 'ding', 'impact', 'glitch', 'error', 'whip', 'switch', 'none'] as const;
+/**
+ * The picture library's topics (aicourse-captions/scripts/monteur/library.mjs, LIBRARY_TOPICS): the
+ * worker keeps free public-domain photos of each, so an image or broll edit names one of these.
+ */
+export const LIBRARY_TOPICS = [
+    'artificial intelligence', 'robot', 'brain', 'computer', 'laptop', 'keyboard', 'code', 'programmer', 'server',
+    'data center', 'cloud', 'network', 'database', 'chart', 'analytics', 'office', 'meeting', 'team', 'student',
+    'classroom', 'books', 'library', 'notebook', 'writing', 'document', 'email', 'smartphone', 'chat', 'lock',
+    'security', 'key', 'world map', 'globe', 'city', 'rocket', 'lightbulb', 'puzzle', 'gears', 'factory', 'automation',
+    'calendar', 'clock', 'money', 'store', 'shopping cart', 'kitchen', 'recipe', 'camera', 'video', 'microphone',
+    'podcast', 'headphones', 'design', 'sketch', 'paint', 'website', 'search', 'question', 'checklist', 'target',
+    'trophy', 'mountain', 'road', 'maze', 'compass', 'sunrise', 'desert', 'coffee', 'desk', 'teacher', 'speech',
+    'translation', 'arabic', 'magic', 'speed', 'time', 'idea', 'photo', 'map', 'science', 'medicine',
+] as const;
 export type EditSfx = (typeof EDIT_SFX)[number];
 
 /** What the render gets: `t` in seconds on the clip's clock. */
@@ -41,7 +56,7 @@ export interface ClipEdit {
 }
 
 /** About one edit every 7 s, never more than this per clip. */
-export const MAX_EDITS_PER_CLIP = 12;
+export const MAX_EDITS_PER_CLIP = 18;
 export const EDITOR_MAX_OUTPUT = 8192;
 export const EDITOR_THINKING = 1024;
 /** The call's own ceiling; the sweep's deadline may cut it shorter. */
@@ -50,7 +65,7 @@ const MAX_TEXT = 28;
 /** An image's photo library query: at most this many characters, whole words. */
 export const MAX_QUERY = 40;
 /** Pictures take the worker a library search each, and cover the speaker: at most this many per clip. */
-export const MAX_IMAGES_PER_CLIP = 2;
+export const MAX_IMAGES_PER_CLIP = 4;
 
 const str = (description: string): GeminiSchema => ({ type: 'STRING', description });
 
@@ -73,7 +88,7 @@ export const EDITOR_SCHEMA: GeminiSchema = {
                                 kind: { type: 'STRING', enum: [...EDIT_KINDS] },
                                 text: str(`keyword: 2-4 words, at most ${MAX_TEXT} characters; tool: the tool's name in Latin script`),
                                 emoji: str('emoji: one emoji'),
-                                query: str(`image: 2-4 English words naming one concrete object or scene a free photo library has, at most ${MAX_QUERY} characters`),
+                                query: { type: 'STRING', enum: [...LIBRARY_TOPICS], description: 'image or broll: the picture library topic' },
                                 sfx: { type: 'STRING', enum: [...EDIT_SFX] },
                             },
                             required: ['line', 'word', 'kind', 'sfx'],
@@ -93,13 +108,16 @@ export const EDITOR_SCHEMA: GeminiSchema = {
 export function editorSystemPrompt(settings: StudioSettings): string {
     const lang = languageKit(settings).name;
     return `You are the editor of short vertical reels cut from a creator's screen recordings. You add pro edits that make each reel easier to follow and more fun to watch. Answer with JSON only.
-For each clip, mark 6-10 moments (about one every 7-9 seconds), none in its first second or last 3 seconds, each on a word from its lines:
+For each clip, mark a moment about every 4-5 seconds (12 for a 60-second clip), none in its first second or last 3 seconds, each on a word from its lines:
 - keyword: 2-4 words in ${lang} that restate the point being made right then, like a subtitle headline. Never the title again, never filler.
 - tool: when the speaker names a tool or product (Gemini, ChatGPT, Claude, n8n, Python…), its name in Latin script.
 - emoji: one emoji for a concept being said (🔒 privacy, ⚡ speed, 🌍 language, 🐍 Python, 🧠 thinking, 📄 document, ✅ it works, ❌ a mistake, 🤯 a surprise, 💡 an idea).
-- image: at most 2 per clip, for a real-world thing the speaker mentions or compares to. query: 2-4 English words naming one concrete object or scene a free photo library has (e.g. world map, recipe book).
+- image: a photo card over the video for an idea, an example or a comparison the speaker makes. query: the closest library topic.
+- broll: a full-screen photo cutaway for a bigger idea or a scene change (the voice goes on). query: the closest library topic.
+  Use 3-4 pictures per clip in all (image and broll together), each a different topic.
+- highlight: a ring on the part of the screen being pointed at or talked about (a button, a result, a field).
 - punch: a quick zoom-in when a result appears on screen or on a strong claim. At most 2 per clip.
-sfx: whoosh for a keyword, tool or image, switch for an emoji, ding for a result or ✅, click for a UI action or punch, none when a sound would be too much. Vary them.
+sfx: whoosh for a keyword, tool, image or broll; pop for an emoji; click for a UI action or highlight; ding for a result or ✅; impact for a punch or a strong claim; glitch for a tech moment; error for a mistake or ❌; none when a sound would be too much. Vary them.
 Mix the kinds; never two of the same in a row. Invent nothing: only what the clip says.`;
 }
 
@@ -137,6 +155,8 @@ const norm = (s: string) => normalizeArabic(String(s)).replace(/[^\p{L}\p{N}]/gu
  */
 function cleanQuery(raw: unknown): string {
     if (typeof raw !== 'string') return '';
+    const topic = raw.trim().toLowerCase();
+    if ((LIBRARY_TOPICS as readonly string[]).includes(topic)) return topic;
     let query = '';
     for (const word of raw.replace(/[^A-Za-z0-9 ]+/g, ' ').split(' ').filter(Boolean)) {
         const next = query ? `${query} ${word}` : word;
@@ -170,11 +190,12 @@ export function placeEdits(raw: unknown, lines: readonly { t: number; words: Tra
         const query = cleanQuery(e.query);
         if ((kind === 'keyword' || kind === 'tool') && !text) continue;
         if (kind === 'emoji' && !emoji) continue;
-        if (kind === 'image' && (!query || out.filter((o) => o.kind === 'image').length >= MAX_IMAGES_PER_CLIP)) continue;
+        const pictures = out.filter((o) => o.kind === 'image' || o.kind === 'broll').length;
+        if ((kind === 'image' || kind === 'broll') && (!query || pictures >= MAX_IMAGES_PER_CLIP)) continue;
         const sfx = (EDIT_SFX as readonly string[]).includes(e.sfx as string) && e.sfx !== 'none' ? (e.sfx as ClipEdit['sfx']) : undefined;
         out.push({
             t, kind, ...(kind === 'keyword' || kind === 'tool' ? { text } : {}), ...(kind === 'emoji' ? { emoji } : {}),
-            ...(kind === 'image' ? { query } : {}), ...(sfx ? { sfx } : {}),
+            ...(kind === 'image' || kind === 'broll' ? { query } : {}), ...(sfx ? { sfx } : {}),
         });
         if (out.length === MAX_EDITS_PER_CLIP) break;
     }

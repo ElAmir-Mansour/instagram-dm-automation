@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { TranscriptWord } from '../../db/rows.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
-import { EDITOR_SCHEMA, editorSystemPrompt, MAX_IMAGES_PER_CLIP, MAX_QUERY, placeEdits } from './editor.js';
+import { EDITOR_SCHEMA, editorSystemPrompt, LIBRARY_TOPICS, MAX_IMAGES_PER_CLIP, MAX_QUERY, placeEdits } from './editor.js';
 
 /** One clip's lines on its clock: L1 «خريطة العالم» at 1 s, L2 «كتاب وصفات» at 6 s. */
 const LINES: { t: number; words: TranscriptWord[] }[] = [
@@ -41,10 +41,15 @@ describe('placeEdits — an image is a photo library query, never a generation p
         }
     });
 
-    it('takes at most 2 images a clip', () => {
-        const edits = placeEdits([image('world map'), image('recipe book', 2), image('office laptop', 2)], LINES);
-        assert.deepEqual(edits.map((e) => e.query), ['world map', 'recipe book']);
-        assert.equal(MAX_IMAGES_PER_CLIP, 2);
+    it('takes at most 4 pictures a clip, images and brolls together, by library topic', () => {
+        const edits = placeEdits([image('world map'), image('recipe', 2), image('laptop', 2), { ...image('robot', 2), kind: 'broll' }, image('clock', 2)], LINES);
+        assert.deepEqual(edits.map((e) => [e.kind, e.query]), [['image', 'world map'], ['image', 'recipe'], ['image', 'laptop'], ['broll', 'robot']]);
+        assert.equal(MAX_IMAGES_PER_CLIP, 4);
+    });
+
+    it('takes a highlight with no text, and the newer sound families', () => {
+        assert.deepEqual(placeEdits([{ line: 2, word: 'كتاب', kind: 'highlight', sfx: 'click' }, { line: 1, word: 'x', kind: 'emoji', emoji: '💡', sfx: 'pop' }], LINES).map((e) => [e.kind, e.sfx]),
+            [['emoji', 'pop'], ['highlight', 'click']]);
     });
 
     it('leaves an emoji as it was: one emoji, drawn by the worker', () => {
@@ -57,15 +62,17 @@ describe('placeEdits — an image is a photo library query, never a generation p
 describe('the Editor prompt and schema', () => {
     it('asks for a free photo library query for an image, and says nothing of generating one', () => {
         const system = editorSystemPrompt(ELAMIR_SETTINGS);
-        assert.ok(system.includes('- image: at most 2 per clip, for a real-world thing the speaker mentions or compares to. query: 2-4 English words naming one concrete object or scene a free photo library has (e.g. world map, recipe book).'));
-        assert.doesNotMatch(system, /illustration|prompt:/);
+        assert.ok(system.includes('- image: a photo card over the video'));
+        assert.ok(system.includes('- broll: a full-screen photo cutaway'));
+        assert.ok(system.includes('Use 3-4 pictures per clip'));
+        assert.doesNotMatch(system, /illustration|prompt:|generat/);
     });
 
     it('names `query`, not `prompt`, in the schema', () => {
         const item = (EDITOR_SCHEMA as unknown as { properties: { clips: { items: { properties: { edits: { items: { properties: Record<string, { description?: string }>; propertyOrdering: string[] } } } } } } })
             .properties.clips.items.properties.edits.items;
         assert.ok('query' in item.properties && !('prompt' in item.properties));
-        assert.match(item.properties.query!.description ?? '', /2-4 English words .* at most 40 characters/);
+        assert.deepEqual((item.properties.query as unknown as { enum: string[] }).enum, [...LIBRARY_TOPICS], 'a library topic, from the fixed list');
         assert.deepEqual(item.propertyOrdering, ['line', 'word', 'kind', 'text', 'emoji', 'query', 'sfx']);
     });
 });
