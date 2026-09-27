@@ -30,14 +30,12 @@ export const EDIT_SFX = ['whoosh', 'pop', 'click', 'ding', 'impact', 'glitch', '
  * worker keeps free public-domain photos of each, so an image or broll edit names one of these.
  */
 export const LIBRARY_TOPICS = [
-    'artificial intelligence', 'robot', 'brain', 'computer', 'laptop', 'keyboard', 'code', 'programmer', 'server',
-    'data center', 'cloud', 'network', 'database', 'chart', 'analytics', 'office', 'meeting', 'team', 'student',
-    'classroom', 'books', 'library', 'notebook', 'writing', 'document', 'email', 'smartphone', 'chat', 'lock',
+    'artificial intelligence', 'robot', 'brain', 'computer', 'laptop', 'keyboard', 'code', 'server',
+    'data center', 'cloud', 'network', 'database', 'chart', 'analytics', 'office', 'books', 'library', 'notebook', 'writing', 'document', 'email', 'smartphone', 'chat', 'lock',
     'security', 'key', 'world map', 'globe', 'city', 'rocket', 'lightbulb', 'puzzle', 'gears', 'factory', 'automation',
     'calendar', 'clock', 'money', 'store', 'shopping cart', 'kitchen', 'recipe', 'camera', 'video', 'microphone',
-    'podcast', 'headphones', 'design', 'sketch', 'paint', 'website', 'search', 'question', 'checklist', 'target',
-    'trophy', 'mountain', 'road', 'maze', 'compass', 'sunrise', 'desert', 'coffee', 'desk', 'teacher', 'speech',
-    'translation', 'arabic', 'magic', 'speed', 'time', 'idea', 'photo', 'map', 'science', 'medicine',
+    'headphones', 'design', 'sketch', 'paint', 'website', 'search', 'question', 'checklist', 'target',
+    'trophy', 'mountain', 'road', 'maze', 'compass', 'sunrise', 'desert', 'coffee', 'desk', 'translation', 'arabic', 'magic', 'speed', 'time', 'idea', 'photo', 'map', 'science', 'medicine',
 ] as const;
 export type EditSfx = (typeof EDIT_SFX)[number];
 
@@ -121,7 +119,7 @@ For each clip, mark a moment about every 4-5 seconds (12 for a 60-second clip), 
 - highlight: a ring on the part of the screen being pointed at or talked about (a button, a result, a field).
 - punch: a quick zoom-in when a result appears on screen or on a strong claim. At most 2 per clip.
 sfx: whoosh for a keyword, tool, image or broll; pop for an emoji; click for a UI action or highlight; ding for a result or ✅; impact for a punch or a strong claim; glitch for a tech moment; error for a mistake or ❌; none when a sound would be too much. Vary them.
-Mix the kinds; never two of the same in a row. Invent nothing: only what the clip says.`;
+Mix the kinds; never two of the same in a row. Invent nothing: only what the clip says.\nNever a woman or a girl in any picture, emoji or sticker (the creator's rule); prefer objects and scenes to people.`;
 }
 
 /** The clips as the Editor reads them: C<n>, then its lines numbered from 1 with their clip-relative time. */
