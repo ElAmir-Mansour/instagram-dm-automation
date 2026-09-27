@@ -4,6 +4,11 @@
  *
  *   node scripts/css-declmap.mjs <old.css> <new.css> [--verbose] [--no-markup]
  *   node scripts/css-declmap.mjs --self-test [file.css]
+ *   node scripts/css-declmap.mjs --changes --tags <tags.json> <old.css> <new.css> [<old2> <new2> …]
+ *
+ * The third form is for a pass that MEANS to change what renders: it lists every value that
+ * changed, grouped by the decision that claims it, and fails on any nobody claimed. See
+ * "Changes" below.
  *
  * Run from the repository root (the markup it reads is found relative to it).
  *
@@ -1185,7 +1190,7 @@ function movedKeys(oldMap, newMap) {
  * of that run keep their order by construction), so only pairs that involve a `moved` winner
  * need looking at. That is what keeps this linear-ish instead of quadratic over ~6,000 winners.
  */
-function crossings(oldMap, newMap, moved, markup = null, disjoint = []) {
+function crossings(oldMap, newMap, moved, markup = null, disjoint = [], { bothValues = false } = {}) {
     const buckets = new Map();
     const entries = new Map();
     for (const o of oldMap.values()) {
@@ -1217,7 +1222,8 @@ function crossings(oldMap, newMap, moved, markup = null, disjoint = []) {
                 if (!contextsMayMeet(x.o.ctx, y.o.ctx)) continue;
                 if (!subjectsMayMeet(x.o.subject, y.o.subject)) continue;
                 // The map check proves the values are unchanged, so conflict is judged on the old ones.
-                if (!propsConflict(x.o, y.o)) continue;
+                // A deliberate change (--changes) may have changed one of them: judge both sides.
+                if (!propsConflict(x.o, y.o) && !(bothValues && propsConflict(x.n, y.n))) continue;
                 const pair = x.o.order < y.o.order ? { a: x, b: y } : { a: y, b: x };
                 if (markup) {
                     const need = new Set([...subjectClasses(x.o.sel), ...subjectClasses(y.o.sel)]);
@@ -1254,22 +1260,258 @@ export function styledSources(root = '.') {
     return files.map((f) => [f, readFileSync(f, 'utf8')]);
 }
 
-export function compare(oldSrc, newSrc, { markup = null, presence = null } = {}) {
+export function compare(oldSrc, newSrc, { markup = null, presence = null, bothValues = false } = {}) {
     const oldCheck = selfCheck(oldSrc);
     const newCheck = selfCheck(newSrc);
     const oldMap = declMap(oldCheck.parsed);
     const newMap = declMap(newCheck.parsed);
     const moved = movedKeys(oldMap, newMap);
     const disjoint = [];
-    const found = crossings(oldMap, newMap, moved, markup, disjoint);
+    const found = crossings(oldMap, newMap, moved, markup, disjoint, { bothValues });
     const dead = [];
     const diffs = diffMaps(oldMap, newMap, presence, dead);
     return { oldCheck, newCheck, oldMap, newMap, diffs, dead, moved, crossings: found, disjoint };
 }
 
+// ─── Changes: the report for a DELIBERATE visual pass ──────────────────────
+//
+//   node scripts/css-declmap.mjs --changes --tags <tags.json> <old.css> <new.css> [<old2> <new2> …]
+//
+// The same map, read the other way round: instead of proving nothing changed, it lists every
+// (context, selector, property) whose final value did, and requires each one to be claimed by
+// a tag — a decision of the pass, stated as the selectors, properties and values it may touch:
+//
+//   { "decisions": { "1": "Inner panels at --radius-md …", … },
+//     "tags": [ { "decision": 1, "sel": [".badge"], "prop": ["border-radius"],
+//                 "to": ["var(--radius-pill)"] }, … ],
+//     "crossings": [ { "a": ".empty-state", "b": ".loader", "prop": "padding", "why": "…" } ],
+//     "outranked": [ { "sel": ".studio-section-head", "by": ".monteur-queue .studio-section-head", "why": "…" } ] }
+//
+// A tag matches a change when its `sel` lists the selector (or its `selRe` matches it), its
+// `prop` lists the property (or `propRe` matches it), its `ctx` — if given — lists the media
+// context ('' is top level), and its `to` / `from` — if given — list the new / old value, with
+// null for "absent" (removed / added). So a tag names what a decision may produce, and a value
+// nobody decided on stays UNTAGGED. Untagged changes and unexplained crossings fail the run.
+//
+// The order check runs too, judging a flipped pair on its old AND new values. And one more
+// report, informational: a changed or added winner that another rule outranks (higher
+// specificity, !important, or equal specificity and later), outside :hover/:active/:focus…/
+// :disabled/:checked states — a context override of the same component, or a type-only rule
+// (`.data-table td`) over a class the markup writes on that element. That is where a change
+// can be ineffective, or only partly effective; see certainlyOverrides().
+
+const STATE_PSEUDO = /:(hover|active|focus|focus-visible|focus-within|disabled|checked|enabled|visited|target|placeholder-shown)\b/;
+
+/** The changed entries: { kind, key, ctx, sel, prop, old, new, line }. */
+export function changedEntries(r) {
+    const out = [];
+    for (const d of r.diffs) {
+        const w = d.new || d.old;
+        out.push({
+            kind: d.kind, key: d.key, ctx: w.ctx, sel: w.sel, prop: w.prop,
+            old: d.old ? d.old.value + (d.old.important ? ' !important' : '') : null,
+            new: d.new ? d.new.value + (d.new.important ? ' !important' : '') : null,
+            line: d.new ? d.new.line : d.old.line,
+            oldLine: d.old ? d.old.line : null,
+        });
+    }
+    return out;
+}
+
+function listed(list, v) { return Array.isArray(list) ? list.includes(v) : list === v; }
+
+/** The tags claiming a change (usually one). */
+export function tagsFor(change, tags) {
+    return tags.filter((t) => {
+        if (t.ctx !== undefined && !listed(t.ctx, change.ctx)) return false;
+        const selOk = (t.sel && listed(t.sel, change.sel)) || (t.selRe && new RegExp(t.selRe).test(change.sel));
+        if (!selOk) return false;
+        const propOk = (t.prop && listed(t.prop, change.prop)) || (t.propRe && new RegExp(t.propRe).test(change.prop));
+        if (!propOk) return false;
+        if (t.to !== undefined && !listed(t.to, change.new)) return false;
+        if (t.from !== undefined && !listed(t.from, change.old)) return false;
+        return true;
+    });
+}
+
+/**
+ * The element type a class origin is written on (`<td class="…">` → 'td'), or null when the
+ * markup does not say (a className assignment, a `<${tag}` template).
+ */
+function originTag(o, texts) {
+    const text = texts.get(o.file);
+    if (!text) return null;
+    const lt = text.lastIndexOf('<', o.at);
+    if (lt < 0) return null;
+    const head = text.slice(lt, o.at);
+    if (head.replace(/\$\{[^}]*\}/g, '').includes('>')) return null;
+    const m = head.match(/^<([a-zA-Z][\w-]*)\b/);
+    return m ? m[1].toLowerCase() : null;
+}
+
+/** Every class a selector requires OUTSIDE its subject compound: its ancestors' and siblings'. */
+function contextClasses(sel) {
+    const own = new Set(subjectClasses(sel));
+    return requiredClasses(sel).filter((c) => !own.has(c));
+}
+
+/**
+ * Could `v` really override `w`? Two shapes are worth a line, and both are read LITERALLY
+ * (a class attribute that spells the classes out, no slot needed) — an open `${…}` slot can
+ * carry any free word, which is the right assumption for proving nothing moved and the wrong
+ * one for finding a change that is really overridden: that report is all noise.
+ *
+ *   1. a refinement: v's subject requires every class w's does, plus context (`.monteur-queue
+ *      .studio-section-head` over `.studio-section-head`, a media query's copy of a rule);
+ *   2. a type-only subject (`.data-table td`) over a class written on that element type, whose
+ *      context classes are written in the same file as that class attribute.
+ * Ids are matched against the tag's literal id="…".
+ */
+function certainlyOverrides(w, v, markup, texts) {
+    const wc = subjectClasses(w.sel), vc = subjectClasses(v.sel);
+    if (wc.length && vc.length) return wc.every((c) => vc.includes(c));
+    if (!wc.length || vc.length) return false;
+    const type = v.subject.type;
+    if (!type && !v.subject.ids.length) return false;
+    const ctx = contextClasses(v.sel);
+    for (const o of markup.origins) {
+        if (type && originTag(o, texts) !== type) continue;
+        const text = texts.get(o.file) || '';
+        if (v.subject.ids.length) {
+            const end = text.indexOf('>', o.at);
+            const tag = text.slice(text.lastIndexOf('<', o.at), end < 0 ? undefined : end);
+            if (!v.subject.ids.every((id) => tag.includes(`id="${id}"`))) continue;
+        }
+        if (!ctx.every((c) => new RegExp(`(^|[^\\w-])${c.replace(/[-]/g, '\\-')}($|[^\\w-])`).test(text))) continue;
+        for (const alt of o.alts) if (wc.every((t) => alt.tokens.has(t))) return true;
+    }
+    return false;
+}
+
+/** Changed or added winners that another winner outranks on an element the markup certainly builds. */
+export function outranked(r, markup, sources = null) {
+    const texts = new Map(sources || []);
+    const byAtom = new Map();
+    const entries = [];
+    for (const w of r.newMap.values()) {
+        if (w.ctx.startsWith('@keyframes')) continue;
+        const e = { w, atoms: atomsOf(w.prop, w.value) };
+        entries.push(e);
+        for (const atom of e.atoms.keys()) {
+            if (!byAtom.has(atom)) byAtom.set(atom, []);
+            byAtom.get(atom).push(e);
+        }
+    }
+    const beats = (v, w) => (v.important !== w.important ? v.important
+        : cmpSpec(v.spec, w.spec) > 0 || (cmpSpec(v.spec, w.spec) === 0 && v.order > w.order));
+    const out = [];
+    for (const d of r.diffs) {
+        if (!d.new || d.new.ctx.startsWith('@keyframes')) continue;
+        const w = d.new;
+        const seen = new Set();
+        for (const atom of atomsOf(w.prop, w.value).keys()) {
+            for (const { w: v } of byAtom.get(atom) || []) {
+                if (v === w || seen.has(v.key) || STATE_PSEUDO.test(v.sel)) continue;
+                seen.add(v.key);
+                if (!beats(v, w)) continue;
+                if (!contextsMayMeet(w.ctx, v.ctx) || !subjectsMayMeet(w.subject, v.subject)) continue;
+                if (!propsConflict(w, v)) continue;
+                if (markup && !certainlyOverrides(w, v, markup, texts)) continue;
+                out.push({ w, v });
+            }
+        }
+    }
+    return out;
+}
+
+function changesMain(argv) {
+    const ti = argv.indexOf('--tags');
+    if (ti < 0 || !argv[ti + 1]) {
+        console.error('usage: node scripts/css-declmap.mjs --changes --tags <tags.json> <old.css> <new.css> [<old2> <new2> …] [--no-markup] [--verbose]');
+        return 2;
+    }
+    const spec = JSON.parse(readFileSync(argv[ti + 1], 'utf8'));
+    const files = argv.filter((a, i) => !a.startsWith('--') && i !== ti + 1);
+    if (!files.length || files.length % 2) {
+        console.error('--changes takes pairs of files: <old.css> <new.css> …');
+        return 2;
+    }
+    const verbose = argv.includes('--verbose');
+    const sources = argv.includes('--no-markup') ? null : styledSources();
+    const markup = sources ? scanMarkup(sources) : null;
+    const presence = tokenPresence(presenceSources());
+    const decisions = spec.decisions || {};
+    const groups = new Map(Object.keys(decisions).map((k) => [k, []]));
+    const untagged = [];
+    const unexplained = [];
+    const explained = [];
+    const notes = [];
+    let total = 0;
+    for (let f = 0; f < files.length; f += 2) {
+        const [oldFile, newFile] = [files[f], files[f + 1]];
+        const r = compare(readFileSync(oldFile, 'utf8'), readFileSync(newFile, 'utf8'), { markup, presence, bothValues: true });
+        const label = newFile;
+        if (r.dead.length) for (const d of r.dead) untagged.push({ file: label, kind: 'removed', ctx: d.old.ctx, sel: d.old.sel, prop: d.old.prop, old: d.old.value, new: null, line: d.old.line, why: `dead: ${d.why}` });
+        for (const c of changedEntries(r)) {
+            total++;
+            c.file = label;
+            const hit = tagsFor(c, spec.tags || []);
+            const ds = [...new Set(hit.map((t) => String(t.decision)))];
+            if (ds.length === 1) {
+                if (!groups.has(ds[0])) groups.set(ds[0], []);
+                groups.get(ds[0]).push(c);
+            } else if (ds.length > 1) {
+                c.why = `claimed by decisions ${ds.join(', ')}: a change must implement exactly one`;
+                untagged.push(c);
+            } else untagged.push(c);
+        }
+        for (const { a, b } of r.crossings) {
+            const why = (spec.crossings || []).find((x) => {
+                const pair = [x.a, x.b];
+                return pair.includes(a.o.sel) && pair.includes(b.o.sel) && (!x.prop || x.prop === a.o.prop || x.prop === b.o.prop);
+            });
+            (why ? explained : unexplained).push({ file: label, a, b, why: why && why.why });
+        }
+        for (const n of outranked(r, markup, sources)) {
+            const why = (spec.outranked || []).find((x) => listed(x.sel, n.w.sel) && listed(x.by, n.v.sel) && (!x.prop || listed(x.prop, n.w.prop)));
+            notes.push({ file: label, ...n, why: why && why.why });
+        }
+    }
+    const fmt = (c) => {
+        const ctx = c.ctx ? `${c.ctx} ` : '';
+        const sign = c.kind === 'added' ? '+' : c.kind === 'removed' ? '-' : '~';
+        const val = c.kind === 'added' ? c.new : c.kind === 'removed' ? `${c.old}  (removed)` : `${c.old}  →  ${c.new}`;
+        return `   ${sign} ${ctx}${c.sel} { ${c.prop}: ${val} }  ${c.file.replace(/^.*\//, '')}:${c.line}`;
+    };
+    console.log(`${spec.title || 'changes'}: ${total} (context, selector, property) entr${total === 1 ? 'y' : 'ies'} changed value, across ${files.length / 2} file pair(s)\n`);
+    for (const [k, list] of [...groups].sort((x, y) => Number(x[0]) - Number(y[0]))) {
+        console.log(`Decision ${k} — ${decisions[k] || '(no title)'}: ${list.length}`);
+        for (const c of list) console.log(fmt(c));
+        console.log('');
+    }
+    const counts = [...groups].sort((x, y) => Number(x[0]) - Number(y[0])).map(([k, l]) => `${k}: ${l.length}`).join(' · ');
+    console.log(`per decision: ${counts} · untagged: ${untagged.length}`);
+    if (untagged.length) {
+        console.log(`\n✗ ${untagged.length} UNTAGGED change(s) — each is a regression until a decision claims it:`);
+        for (const c of untagged) console.log(`${fmt(c)}${c.why ? `  [${c.why}]` : ''}`);
+    }
+    console.log(`\norder: ${unexplained.length + explained.length} crossing(s), ${explained.length} explained`);
+    for (const x of explained) console.log(`   explained  ${describe(x.a.o)}  ×  ${describe(x.b.o)}\n              ${x.why}`);
+    for (const x of unexplained) console.log(`   ✗ ${describe(x.a.o)} → new line ${x.a.n.line}\n     vs ${describe(x.b.o)} → new line ${x.b.n.line}`);
+    const open = notes.filter((n) => !n.why);
+    console.log(`\noutranked: ${notes.length} changed winner(s) a context override or a type-only rule beats where both match (${notes.length - open.length} explained)`);
+    for (const n of notes) {
+        if (n.why && !verbose) continue;
+        console.log(`   ${describe(n.w)}\n     by ${describe(n.v)}${n.why ? `\n     ${n.why}` : ''}`);
+    }
+    if (!verbose && notes.length - open.length) console.log(`   (${notes.length - open.length} explained in the tags file; --verbose lists them)`);
+    return untagged.length || unexplained.length ? 1 : 0;
+}
+
 // ─── CLI ────────────────────────────────────────────────────────────────────
 
 function main(argv) {
+    if (argv.includes('--changes')) return changesMain(argv);
     const verbose = argv.includes('--verbose');
     const useMarkup = !argv.includes('--no-markup');
     const args = argv.filter((a) => !a.startsWith('--'));
@@ -1280,7 +1522,7 @@ function main(argv) {
         return 0;
     }
     if (args.length !== 2) {
-        console.error('usage: node scripts/css-declmap.mjs <old.css> <new.css> [--verbose] [--no-markup]\n       node scripts/css-declmap.mjs --self-test [file.css]');
+        console.error('usage: node scripts/css-declmap.mjs <old.css> <new.css> [--verbose] [--no-markup]\n       node scripts/css-declmap.mjs --self-test [file.css]\n       node scripts/css-declmap.mjs --changes --tags <tags.json> <old.css> <new.css> [<old2> <new2> …]');
         return 2;
     }
     const [oldFile, newFile] = args;
