@@ -24,11 +24,11 @@ import { toArabicDigits } from '../studio/generate.js';
 import { enqueueMonteurRender } from '../studio/jobs.js';
 import { getStudioSettings } from '../studio/settings.js';
 import { currentLessons, runDueAnalyst } from './analyst.js';
-import { writeCopy } from './copy.js';
-import { pickClips } from './pick.js';
+import { askOf, writeCopy } from './copy.js';
+import { pickClips, type PickOutcome } from './pick.js';
 import { usageFields } from './model.js';
 import { accentsFor, buildRenderPayload } from './render.js';
-import type { PickedClip } from './transcript.js';
+import { groupLines, type PickedClip } from './transcript.js';
 
 /** A pick claim older than this belongs to an invocation that was cut off (or failed): retry it. */
 export const PICK_STALE_MINUTES = 10;
@@ -73,7 +73,7 @@ export const CLAIM_SOURCE_SQL = `
        SET status = 'picking', claimed_at = NOW(), attempts = s.attempts + 1, updated_at = NOW()
       FROM picked
      WHERE s.id = picked.id
- RETURNING s.id, s.creator_id, s.name, s.path, s.duration::float8 AS duration, s.words, s.attempts`;
+ RETURNING s.id, s.creator_id, s.name, s.path, s.duration::float8 AS duration, s.words, s.pick, s.attempts`;
 
 /** A stale claim that has used its attempts: failed, keeping the last attempt's reason. */
 export const EXHAUST_SOURCES_SQL = `
@@ -85,7 +85,61 @@ export const EXHAUST_SOURCES_SQL = `
        AND attempts >= $2
  RETURNING id`;
 
-type ClaimedSource = Pick<MonteurSourceRow, 'id' | 'creator_id' | 'name' | 'path' | 'duration' | 'words' | 'attempts'>;
+type ClaimedSource = Pick<MonteurSourceRow, 'id' | 'creator_id' | 'name' | 'path' | 'duration' | 'words' | 'pick' | 'attempts'>;
+
+/** What both prompts and the cut read besides the transcript (MONTEUR.md §6.1). */
+export interface PickContext {
+    /** The first lines of the tenant's 2 most-viewed posts of the last 90 days. */
+    examples: string[];
+    /** The words of every clip in flight or scheduled, and of every clip from the last 90 days. */
+    existingTexts: string[];
+    /** Keywords reels in flight ask for: a new one must not overlap them. */
+    inFlightKeywords: string[];
+    /** The tenant's last 5 asks, as templates. */
+    recentAsks: string[];
+}
+
+export async function loadPickContext(creatorId: string): Promise<PickContext> {
+    const firstLine = (text: string | null) => (text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+    const [examples, texts, keywords, asks] = await Promise.all([
+        // Fail-soft: without the Growth hub's table the prompt just has no examples.
+        pool.query<{ caption: string | null }>(
+            `SELECT caption FROM post_insights
+              WHERE creator_id = $1 AND caption IS NOT NULL AND metrics ? 'views'
+                AND published_at > NOW() - make_interval(days => 90)
+              ORDER BY (metrics->>'views')::numeric DESC
+              LIMIT 2`,
+            [creatorId]
+        ).catch(() => ({ rows: [] as { caption: string | null }[] })),
+        pool.query<{ text: string }>(
+            `SELECT text FROM clip_drafts
+              WHERE creator_id = $1 AND text IS NOT NULL
+                AND (status IN ('rendering', 'review', 'scheduled') OR created_at > NOW() - make_interval(days => 90))`,
+            [creatorId]
+        ),
+        pool.query<{ keyword: string | null }>(
+            `SELECT DISTINCT copy->>'keyword' AS keyword FROM clip_drafts
+              WHERE creator_id = $1 AND status IN ('rendering', 'review', 'failed')`,
+            [creatorId]
+        ),
+        pool.query<{ caption: string | null; keyword: string | null }>(
+            `SELECT copy->>'caption' AS caption, copy->>'keyword' AS keyword FROM clip_drafts
+              WHERE creator_id = $1
+              ORDER BY created_at DESC
+              LIMIT 5`,
+            [creatorId]
+        ),
+    ]);
+    return {
+        examples: examples.rows.map((r) => firstLine(r.caption).slice(0, 120)).filter(Boolean),
+        existingTexts: texts.rows.map((r) => r.text),
+        inFlightKeywords: keywords.rows.map((r) => r.keyword).filter((k): k is string => Boolean(k)),
+        recentAsks: asks.rows.flatMap((r) => {
+            const a = r.caption && r.keyword ? askOf(r.caption, r.keyword) : null;
+            return a ? [a] : [];
+        }),
+    };
+}
 
 /**
  * `rendering`: clips queued. `no_clips`: nothing worth a reel. `retry`: the attempt failed and
@@ -139,7 +193,7 @@ type ReadyClip = { clip: PickedClip; copy: ClipCopy };
  * claim's 10 minutes finds another attempt has it, and writes nothing.
  */
 async function handOff(
-    source: ClaimedSource, settings: StudioSettings, ready: readonly ReadyClip[], record: SourcePick
+    source: ClaimedSource, settings: StudioSettings, ready: readonly ReadyClip[], record: SourcePick, topic: string | null
 ): Promise<{ outcome: PickOutcomeKind; clips: number }> {
     return withTransaction(async (client) => {
         const { rows } = await client.query<{ id: string }>(
@@ -155,10 +209,14 @@ async function handOff(
         for (const [i, { clip, copy }] of ready.entries()) {
             const title = digits(clip.title);
             const { rows: inserted } = await client.query<{ id: string }>(
-                `INSERT INTO clip_drafts (creator_id, source_id, rank, status, start_s, end_s, title, hook, why, score, copy)
-                 VALUES ($1, $2, $3, 'rendering', $4, $5, $6, $7, $8, $9, $10::jsonb)
+                `INSERT INTO clip_drafts
+                     (creator_id, source_id, rank, status, start_s, end_s, title, hook, why, score, topic, hook_type, scores, text, copy)
+                 VALUES ($1, $2, $3, 'rendering', $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb)
                  RETURNING id`,
-                [source.creator_id, source.id, i + 1, clip.start, clip.end, title, clip.hook, clip.why, clip.score, JSON.stringify(copy)]
+                [
+                    source.creator_id, source.id, i + 1, clip.start, clip.end, title, clip.hook, clip.why, clip.score,
+                    topic, clip.hookType, JSON.stringify(clip.scores), clip.text, JSON.stringify(copy),
+                ]
             );
             await enqueueMonteurRender(client, source.creator_id, buildRenderPayload({
                 clipId: inserted[0]!.id,
@@ -175,16 +233,37 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
     const began = Date.now();
     try {
         const settings = await getStudioSettings(source.creator_id);
-        const lessons = await currentLessons(pool, source.creator_id);
+        const [lessons, context] = await Promise.all([currentLessons(pool, source.creator_id), loadPickContext(source.creator_id)]);
         const words = Array.isArray(source.words) ? source.words : [];
-        const picked = await pickClips({ words, duration: source.duration }, settings, lessons, deadline);
-        const record: SourcePick = {
-            model: picked.cost.model, tokens_in: picked.cost.tokens_in, tokens_out: picked.cost.tokens_out, considered: picked.considered,
-        };
-        log('info', 'monteur.pick', {
-            source_id: source.id, creator_id: source.creator_id, ...usageFields(picked.cost),
-            lines: picked.lines.length, considered: picked.considered, kept: picked.kept.length, ms: Date.now() - began,
-        });
+
+        // A copy that failed last time is retried on the clips already chosen: the transcript is
+        // most of the tokens, and it is not sent twice.
+        const saved = source.pick?.saved;
+        let picked: Pick<PickOutcome, 'kept' | 'topic' | 'considered' | 'lines'>;
+        let record: SourcePick;
+        if (saved && Array.isArray(saved.clips) && saved.clips.length) {
+            picked = { kept: saved.clips as PickedClip[], topic: saved.topic, considered: source.pick!.considered, lines: groupLines(words) };
+            record = { ...source.pick! };
+            log('info', 'monteur.pick_reused', { source_id: source.id, clips: saved.clips.length });
+        } else {
+            const fresh = await pickClips({ words, duration: source.duration }, settings, { ...context, lessons }, deadline);
+            picked = fresh;
+            record = {
+                model: fresh.cost.model, tokens_in: fresh.cost.tokens_in, tokens_out: fresh.cost.tokens_out, considered: fresh.considered,
+            };
+            log('info', 'monteur.pick', {
+                source_id: source.id, creator_id: source.creator_id, ...usageFields(fresh.cost),
+                lines: fresh.lines.length, considered: fresh.considered, kept: fresh.kept.length, ms: Date.now() - began,
+            });
+            if (fresh.kept.length) {
+                record.saved = { topic: fresh.topic, clips: fresh.kept };
+                await pool.query(
+                    `UPDATE monteur_sources SET pick = $2::jsonb, updated_at = NOW()
+                      WHERE id = $1 AND status = 'picking' AND attempts = $3`,
+                    [source.id, JSON.stringify(record), source.attempts]
+                );
+            }
+        }
 
         if (!picked.kept.length) {
             const { rows } = await pool.query<{ id: string }>(
@@ -197,7 +276,9 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         }
 
         const ctx = await buildGenContext(source.creator_id, settings);
-        const copy = await writeCopy(picked.kept, picked.lines, settings, ctx, lessons, deadline);
+        const copy = await writeCopy(picked.kept, picked.lines, settings, {
+            activeKeywords: ctx.activeKeywords, seo: ctx.seo, recentAsks: context.recentAsks, inFlightKeywords: context.inFlightKeywords,
+        }, lessons, deadline);
         log('info', 'monteur.copy', {
             source_id: source.id, creator_id: source.creator_id, ...usageFields(copy.cost),
             clips: picked.kept.length, usable: copy.outcomes.filter((o) => 'copy' in o).length,
@@ -214,7 +295,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         if (unusable.length) log('warn', 'monteur.copy_unusable', { source_id: source.id, dropped: unusable.length, reasons: unusable });
         if (!ready.length) throw new Error(`The Marketer's copy could not be used: ${unusable.join('; ')}`);
 
-        const handed = await handOff(source, settings, ready, record);
+        const handed = await handOff(source, settings, ready, record, picked.topic);
         return { source_id: source.id, outcome: handed.outcome, clips: handed.clips };
     } catch (err) {
         return failAttempt(source, err);

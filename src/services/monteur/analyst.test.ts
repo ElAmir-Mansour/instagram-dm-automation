@@ -134,7 +134,7 @@ describe('runAnalyst', () => {
         assert.match(call!.system, /in Arabic/);
         assert.match(call!.turns[0]!.text, /- Old rule \(old\)/, 'the current lessons go in');
         assert.match(call!.turns[0]!.text, /75% of the account's Instagram reach came from non-followers/);
-        assert.ok(call!.maxOutputTokens && call!.maxOutputTokens <= 3072);
+        assert.equal(call!.maxOutputTokens, 8192, 'room above the thinking budget, which Gemini may overrun');
     });
 
     it('records a failure on the row instead of throwing, and keeps the current lessons', async () => {
@@ -157,13 +157,14 @@ describe('runAnalyst', () => {
 
     it('runs from the sweep only for a tenant using the Monteur whose lessons are due', async () => {
         db.routes.unshift(
-            [/^SELECT s\.creator_id FROM studio_settings s JOIN creators c/, () => ({ rows: [{ creator_id: TENANT }] })],
+            [/^SELECT c\.id AS creator_id FROM creators c/, () => ({ rows: [{ creator_id: TENANT }] })],
             [/AS last_done_at/, () => ({ rows: [{ last_done_at: new Date(Date.now() - 2 * DAY), last_run_at: new Date(Date.now() - 2 * DAY), posts: 30 }] })],
         );
         assert.equal(await runDueAnalyst(Date.now() + 100_000), null, 'lessons 2 days old are fresh');
         assert.equal(calls.length, 0);
-        const [tenants] = db.ran(/^SELECT s\.creator_id FROM studio_settings/);
-        assert.match(tenants!.sql, /s\.monteur->>'enabled' = 'true'/);
+        const [tenants] = db.ran(/^SELECT c\.id AS creator_id FROM creators c/);
+        assert.match(tenants!.sql, /s\.monteur->>'enabled' = 'true'\) OR EXISTS \(SELECT 1 FROM monteur_sources m WHERE m\.creator_id = c\.id\)/,
+            'switched on, or with videos: Run now picks with the lessons even while the daily run is off');
         assert.match(tenants!.sql, /c\.is_active = TRUE/);
 
         db.routes[1] = [/AS last_done_at/, () => ({ rows: [{ last_done_at: null, last_run_at: null, posts: 30 }] })];

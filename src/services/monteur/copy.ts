@@ -1,12 +1,16 @@
 /**
- * The Marketer (MONTEUR.md §6.2): ONE Gemini call writes the copy for every clip of a video, and
- * code turns each answer into a `ClipCopy` with the Studio writer's own helpers, so a reel's
- * caption, keyword and DM follow exactly the rules a carousel's do:
+ * The Marketer (MONTEUR.md §6 and §6.1): ONE Gemini call writes the copy for every clip of a
+ * video, and code assembles each `ClipCopy`:
  *
- *   keyword    `chooseKeyword` against the live campaigns' keywords, and the keywords this batch
- *              already took, so two reels of one video don't ask for overlapping words
- *   caption    `normalizeInstagramCaption`: the tenant's exact keyword ask and save line
- *   tiktok     `normalizeTiktokCaption`: no ask (TikTok can't auto-reply), the tenant's link line
+ *   keyword    one word of 4+ letters, chosen with the Studio's `chooseKeyword` against the live
+ *              campaigns' keywords and every keyword a reel in flight already asks for
+ *   caption    first_line, body, the ask (the model's `ask_line` with «keyword»), hashtags. One
+ *              ask per post: no save line, and any other ask the model wrote is stripped. An ask
+ *              without {keyword}, or too like the tenant's last 5, falls back to a built-in pool
+ *              of question-style asks — never to `cta.instagramAsk`
+ *   tiktok     first_line, tiktok_body, the tenant's TikTok line, hashtags, through the Studio's
+ *              `normalizeTiktokCaption`: TikTok can't auto-reply, so no ask
+ *   hashtags   3–5, none of the reach-bait tags, at least one Arabic tag for an Arabic tenant
  *   dm         `buildDm` over the tenant's template, `{username}` left for the webhook
  *   digits     `toArabicDigits` when the tenant writes Arabic-Indic digits
  *
@@ -15,25 +19,50 @@
 import type { ClipCopy, StudioLesson, StudioSettings } from '../../db/rows.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import {
-    chooseKeyword, cleanVariants, normalizeInstagramCaption, normalizeTiktokCaption, toArabicDigits, trimText,
-    type GeminiSchema, type GenContext,
+    chooseKeyword, cleanVariants, normalizeTiktokCaption, toArabicDigits, trimText, type GeminiSchema, type GenContext,
 } from '../studio/generate.js';
 import { buildDm, languageKit, oneLine } from '../studio/prompts.js';
 import { ask, emptyCost, type CallCost } from './model.js';
-import { formatLines, type PickedClip, type TranscriptLine } from './transcript.js';
+import { formatLines, textOverlap, tokens, type PickedClip, type TranscriptLine } from './transcript.js';
 
 export const COPY_CALL_MS = 90_000;
 const COPY_THINKING = 512;
-/** Thinking, plus about 700 tokens of Arabic copy per clip. */
-const copyMaxOutput = (clips: number): number => COPY_THINKING + 700 * Math.max(1, clips);
+/** Thinking counts toward the cap and may run past its budget: see PICK_MAX_OUTPUT. */
+export const COPY_MAX_OUTPUT = 8192;
 export const MAX_HASHTAGS = 5;
+const MAX_HASHTAG_LENGTH = 30;
+export const MAX_FIRST_LINE = 60;
+/** §6.1: a keyword shorter than this fires on too much. */
+export const MIN_KEYWORD_LETTERS = 4;
+/** §6.1: an ask this like one of the tenant's last 5 is a repeat. */
+export const ASK_OVERLAP = 0.6;
 const ALT_TEXT_MAX = 300;
 const VOICE_GUIDE_MAX = 2000;
+/** §6.1: tags that ask for reach rather than name the topic. Compared without the #, case-folded. */
+export const HASHTAG_BLOCKLIST: readonly string[] = ['اكسبلور', 'explore', 'fyp', 'foryou'];
+
+/** Question-style asks for when the model's own can't be used, per language. `{keyword}` is filled. */
+export const ASK_POOL: Record<'ar' | 'en', readonly string[]> = {
+    ar: [
+        'تبي الرابط؟ اكتب «{keyword}» ويوصلك بالخاص 📩',
+        'حاب تطبقها بنفسك؟ علّق «{keyword}» وأرسل لك التفاصيل 📩',
+        'تحتاج الشرح كامل؟ اكتب «{keyword}» ويجيك بالخاص 👇',
+        'ودك بالخطوات؟ علّق «{keyword}» وتوصلك رسالة مني 📩',
+        'تبي تجربها؟ اكتب «{keyword}» بالتعليقات 👇',
+    ],
+    en: [
+        'Want the link? Comment «{keyword}» and I\'ll DM it to you 📩',
+        'Want to try it yourself? Comment «{keyword}» 👇',
+        'Need the full walkthrough? Comment «{keyword}» and check your DMs 📩',
+        'Want the steps? Comment «{keyword}» and I\'ll send them 👇',
+        'Should I send you the details? Comment «{keyword}» 📩',
+    ],
+};
 
 const str = (description: string): GeminiSchema => ({ type: 'STRING', description });
 const strs = (description: string): GeminiSchema => ({ type: 'ARRAY', items: { type: 'STRING' }, description });
 const COPY_FIELDS = [
-    'clip', 'first_line', 'body', 'tiktok_body', 'hashtags', 'keyword_candidates', 'variants', 'question', 'pitch', 'alt_text',
+    'clip', 'first_line', 'body', 'ask_line', 'tiktok_body', 'hashtags', 'keyword_candidates', 'variants', 'question', 'pitch', 'alt_text',
 ] as const;
 
 export const COPY_SCHEMA: GeminiSchema = {
@@ -45,15 +74,16 @@ export const COPY_SCHEMA: GeminiSchema = {
                 type: 'OBJECT',
                 properties: {
                     clip: { type: 'INTEGER', description: 'the clip\'s number, [n]' },
-                    first_line: str('the caption\'s hook line, one emoji'),
-                    body: str('1–3 short lines, each opening with an emoji'),
-                    tiktok_body: str('the same for TikTok, ending with a question 👇'),
+                    first_line: str(`at most ${MAX_FIRST_LINE} characters`),
+                    body: str('1–3 short lines'),
+                    ask_line: str('a question, then «{keyword}»'),
+                    tiktok_body: str('one descriptive sentence'),
                     hashtags: strs('3–5, without #'),
-                    keyword_candidates: strs('3 single words, best first'),
+                    keyword_candidates: strs('3 single words of 4+ letters, best first'),
                     variants: strs('0–3 other spellings of the first candidate'),
                     question: str('one line opening the DM'),
                     pitch: str('one sentence'),
-                    alt_text: str('one plain sentence'),
+                    alt_text: str('at most 2 sentences'),
                 },
                 required: [...COPY_FIELDS],
                 propertyOrdering: [...COPY_FIELDS],
@@ -71,6 +101,8 @@ const line = (v: unknown): string => (typeof v === 'string' ? oneLine(v) : '');
 const block = (v: unknown): string =>
     (typeof v === 'string' ? v : '').replace(/\r\n?/g, '\n').split('\n').map(oneLine).filter(Boolean).join('\n');
 const joinParas = (parts: readonly string[]): string => parts.filter((p) => p.trim()).join('\n\n');
+const letters = (s: string): number => (s.match(/\p{L}/gu) ?? []).length;
+const isArabic = (s: string): boolean => /[؀-ۿ]/.test(s);
 
 function whoFor(settings: StudioSettings): string {
     const brand = settings.brand?.name?.trim();
@@ -81,22 +113,21 @@ function whoFor(settings: StudioSettings): string {
 
 export function copySystemPrompt(settings: StudioSettings): string {
     const lang = languageKit(settings);
-    const digits = settings.voice?.digits === 'arabic-indic'
-        ? ' Use Arabic-Indic digits (٠-٩) in Arabic text.'
-        : ' Use Latin digits.';
+    const ar = settings.voice?.language === 'ar';
+    const digits = settings.voice?.digits === 'arabic-indic' ? ' Use Arabic-Indic digits (٠-٩) in Arabic text.' : ' Use Latin digits.';
     const guide = (settings.voice?.guide ?? '').trim().slice(0, VOICE_GUIDE_MAX);
-    return `You write the post copy for short vertical reels by ${whoFor(settings)}. Answer with JSON only, everything in ${lang.name}.${digits}
+    return `You write the post copy for short vertical reels by ${whoFor(settings)}. Answer with JSON only, in ${lang.name}.${digits}
 For each clip:
-- first_line: the hook as the caption's first line, with one emoji. Instagram search reads it: name the topic in the words people search for.
-- body: 1-3 short lines of value from the clip, each opening with an emoji.
-- tiktok_body: the same for TikTok, ending with a question to the viewer 👇. No time words (${lang.timeWords.slice(0, 4).join(', ')}).
-- hashtags: 3-5 topical hashtags, without #.
-- keyword_candidates: 3 single easy ${lang.name} words tied to the clip's topic, best first, like ${lang.keywordExamples}: viewers comment one to get the link by DM.
+- first_line: at most ${MAX_FIRST_LINE} characters: the result or problem, naming the topic once the way people search it. One language. Not the title. No hype, no ask.
+- body: 1-3 short lines: the takeaway worth forwarding. Never "share this".
+- ask_line: a question, then «{keyword}», written so it fits any of the candidates. Not one of the recent asks listed.
+- keyword_candidates: 3 single ${lang.name} words of 4 or more letters, best first, tied to what the DM sends, like ${lang.keywordExamples}.
 - variants: 0-3 other spellings of the first candidate, one word each.
-- question: one line that opens the DM, about the clip's topic.
-- pitch: one sentence tying the topic to the product.
-- alt_text: one plain sentence on what the video shows, for screen readers. No hashtags, no emoji.
-Use only what the clip says and the product facts. Invent nothing.
+- hashtags: 3-5 topic tags without #${ar ? ', mostly Arabic' : ''}. Never #اكسبلور #explore #fyp #foryou.
+- tiktok_body: one descriptive sentence with the topic words, and no ask.
+- question: one line that opens the DM, about the clip's topic. pitch: one sentence tying the topic to the product.
+- alt_text: ${ar ? 'neutral MSA, ' : ''}at most 2 sentences: ${ar ? '«متحدث يشرح …»' : '"A speaker explains …"'} plus what the clip says. No hashtags, no ask.
+Invent nothing: only the numbers, tools and results the clip says, and the product facts.
 The creator's voice guide wins where it differs:
 <voice>
 ${guide || '(none: write plainly and warmly)'}
@@ -109,6 +140,7 @@ export function copyUserPrompt(args: {
     settings: StudioSettings;
     lessons: readonly StudioLesson[];
     activeKeywords: readonly string[];
+    recentAsks?: readonly string[];
     seo?: GenContext['seo'];
 }): string {
     const { clips, lines, settings, lessons, activeKeywords, seo } = args;
@@ -116,15 +148,17 @@ export function copyUserPrompt(args: {
     const avoid = strings(settings.voice?.avoid);
     const searchTerms = strings(seo?.keywords).slice(0, 8);
     const tags = strings(seo?.hashtags).slice(0, 15);
+    const recent = strings(args.recentAsks).slice(0, 5);
     const out: string[] = [
         facts.length
             ? `Product: «${settings.product.name || 'the product'}». Facts: ${facts.join(' · ')}`
             : 'There are no product facts: state no numbers about the product.',
         activeKeywords.length
-            ? `Active keywords: ${activeKeywords.slice(0, 60).join(', ')}. A new keyword must neither contain nor sit inside one of these; one that fits the topic may be reused exactly.`
-            : 'There are no active keywords yet.',
+            ? `Keywords in use: ${activeKeywords.slice(0, 60).join(', ')}. A new keyword must neither contain nor sit inside one of these; one that fits the topic may be reused exactly.`
+            : 'No keywords are in use yet.',
     ];
-    if (searchTerms.length) out.push(`Search terms this audience types: ${searchTerms.map((k) => `«${k}»`).join(', ')}. Put one in first_line where it fits.`);
+    if (recent.length) out.push('Recent asks (don\'t reuse):', ...recent.map((a) => `- ${a}`));
+    if (searchTerms.length) out.push(`Search terms this audience types: ${searchTerms.map((k) => `«${k}»`).join(', ')}.`);
     if (tags.length) out.push(`Prefer hashtags from: ${tags.join(' ')}`);
     if (lessons.length) out.push('Lessons from past reels:', ...lessons.map((l) => `- ${l.rule}`));
     if (avoid.length) out.push(`Never mention: ${avoid.join(', ')}.`);
@@ -135,54 +169,111 @@ export function copyUserPrompt(args: {
     return out.join('\n');
 }
 
-/** 3–5 hashtags without '#': one token each, de-duplicated regardless of case. */
-export function cleanHashtags(raw: unknown): string[] {
+/**
+ * 3–5 hashtags without '#': one token each, none on the blocklist, de-duplicated regardless of
+ * case. An Arabic tenant gets at least one Arabic tag, from its own sets when the model gave none.
+ */
+export function cleanHashtags(raw: unknown, settings?: StudioSettings, fallback: readonly string[] = []): string[] {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const tag of strings(raw)) {
+    const add = (tag: string, front = false): void => {
         const t = tag.replace(/^#+/, '').replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_]/gu, '');
-        if (!t || seen.has(t.toLowerCase())) continue;
-        seen.add(t.toLowerCase());
-        out.push(t);
-        if (out.length === MAX_HASHTAGS) break;
+        const key = normalizeArabic(t);
+        if (!t || t.length > MAX_HASHTAG_LENGTH || seen.has(key) || HASHTAG_BLOCKLIST.includes(key)) return;
+        seen.add(key);
+        if (front) out.unshift(t);
+        else out.push(t);
+    };
+    for (const tag of strings(raw)) add(tag);
+    if (settings?.voice?.language === 'ar' && !out.some(isArabic)) {
+        const arabic = strings(fallback).find(isArabic);
+        if (arabic) add(arabic, true);
     }
-    return out;
+    return out.slice(0, MAX_HASHTAGS);
 }
 
-export type CopyOutcome = { copy: ClipCopy } | { error: string };
+/** The ask as a template: its «keyword» (in any quote, or bare {keyword}) as «{keyword}». */
+export function askTemplate(askLine: string, keyword?: string): string {
+    let t = askLine.replace(/[«"“]?\s*\{keyword\}\s*[»"”]?/g, '«{keyword}»');
+    if (keyword) t = t.split(`«${keyword}»`).join('«{keyword}»');
+    return oneLine(t);
+}
+
+const askWords = (t: string): string => t.replace(/«\{keyword\}»|\{keyword\}/g, ' ');
 
 /**
- * One answer as a `ClipCopy`. `taken` is the keywords earlier clips of this batch chose; a new one
- * chosen here is added to it. A keyword equal to a sibling's is shared (the campaign is created
- * once, by whichever reel is approved first) and still marked for creation, so neither reel
- * depends on the other being approved.
+ * The ask this clip posts with, as a template: the model's when it has {keyword} and isn't one of
+ * the last asks said again; else the first pool ask neither recent nor already used in this batch.
+ */
+export function chooseAsk(
+    modelAsk: string, recentAsks: readonly string[], used: readonly string[], language: 'ar' | 'en', turn: number
+): string {
+    const recent = [...recentAsks, ...used];
+    const own = askTemplate(modelAsk);
+    const tooLike = (t: string) => recent.some((r) => textOverlap(askWords(t), askWords(r)) >= ASK_OVERLAP);
+    if (own.includes('«{keyword}»') && !tooLike(own)) return own;
+    const pool = ASK_POOL[language];
+    for (let k = 0; k < pool.length; k++) {
+        const candidate = pool[(turn + k) % pool.length]!;
+        if (!recent.includes(candidate)) return candidate;
+    }
+    return pool[turn % pool.length]!;
+}
+
+export type CopyOutcome = { copy: ClipCopy; ask: string } | { error: string };
+
+export interface CopyContext {
+    /** Keywords live campaigns answer. */
+    activeKeywords: readonly string[];
+    seo?: GenContext['seo'];
+    /** The tenant's last asks, as templates, newest first. */
+    recentAsks?: readonly string[];
+}
+
+/**
+ * One answer as a `ClipCopy`. `taken` holds the keywords reels in flight already ask for, and this
+ * batch's; a new one chosen here is added to it. A keyword equal to one in flight is shared (the
+ * campaign is created once, by whichever reel is approved first); one overlapping it is refused.
  */
 export function toClipCopy(
-    item: unknown, clip: Pick<PickedClip, 'title'>, settings: StudioSettings, active: readonly string[], taken: string[]
+    item: unknown, clip: Pick<PickedClip, 'title'>, settings: StudioSettings, ctx: CopyContext, taken: string[], usedAsks: string[], turn = 0,
 ): CopyOutcome {
     const r = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
     const digits = settings.voice?.digits === 'arabic-indic' ? toArabicDigits : (s: string) => s;
     const lang = languageKit(settings);
+    const language = settings.voice?.language === 'ar' ? 'ar' : 'en';
 
-    const candidates = strings(r.keyword_candidates);
-    const { choice, rejected } = chooseKeyword(candidates, [...active, ...taken]);
+    const candidates = strings(r.keyword_candidates).filter((k) => letters(k) >= MIN_KEYWORD_LETTERS);
+    const { choice, rejected } = chooseKeyword(candidates, [...ctx.activeKeywords, ...taken]);
     if (!choice) {
-        return { error: `No usable comment keyword (${rejected.join('; ') || 'none given'}).` };
+        const short = strings(r.keyword_candidates).filter((k) => letters(k) < MIN_KEYWORD_LETTERS);
+        const reasons = [...rejected, ...short.map((k) => `«${k}» is under ${MIN_KEYWORD_LETTERS} letters`)];
+        return { error: `No usable comment keyword (${reasons.join('; ') || 'none given'}).` };
     }
-    const n = normalizeArabic(choice.keyword);
+    const keyword = choice.keyword;
+    const n = normalizeArabic(keyword);
     const shared = taken.some((t) => normalizeArabic(t) === n);
-    const create = choice.create || shared;
-    const variants = choice.create ? cleanVariants(r.variants, choice.keyword, [...active, ...taken]) : [];
-    if (choice.create) taken.push(choice.keyword);
+    const variants = choice.create ? cleanVariants(r.variants, keyword, [...ctx.activeKeywords, ...taken]) : [];
+    if (choice.create) taken.push(keyword);
 
-    const hashtags = cleanHashtags(r.hashtags);
+    const template = chooseAsk(line(r.ask_line), ctx.recentAsks ?? [], usedAsks, language, turn);
+    usedAsks.push(template);
+    const ask = digits(template.split('{keyword}').join(keyword));
+    // One ask per post: a line naming a quoted keyword anywhere else is another ask.
+    const quoted = new Set([keyword, ...candidates].map((k) => normalizeArabic(k)));
+    const notAnAsk = (l: string): boolean => {
+        if (l.includes('{keyword}')) return false;
+        const inQuotes = [...l.matchAll(/[«"“]\s*([^»"”]+?)\s*[»"”]/g)].map((m) => normalizeArabic(m[1]!));
+        return !inQuotes.some((q) => quoted.has(q));
+    };
+    const keepLines = (text: string): string => text.split('\n').filter(notAnAsk).join('\n');
+
+    const hashtags = cleanHashtags(r.hashtags, settings, ctx.seo?.hashtags ?? []);
     const tagLine = hashtags.map((t) => `#${t}`).join(' ');
-    const first = digits(line(r.first_line)) || clip.title;
-    const caption = normalizeInstagramCaption(
-        joinParas([first, digits(block(r.body)), tagLine]), choice.keyword, candidates, settings,
-    );
+    const first = keepLines(trimText(digits(line(r.first_line)), MAX_FIRST_LINE)) || clip.title;
+    const caption = joinParas([first, keepLines(digits(block(r.body))), ask, tagLine]);
     const tiktok = normalizeTiktokCaption(
-        joinParas([first, digits(block(r.tiktok_body)), tagLine]), [...candidates, choice.keyword], settings,
+        joinParas([first, keepLines(digits(block(r.tiktok_body))), tagLine]), [...candidates, keyword], settings,
     );
     const dm = buildDm(settings.cta?.dmTemplate ?? '', {
         question: digits(line(r.question)) || lang.fallbackQuestion,
@@ -191,13 +282,14 @@ export function toClipCopy(
         bullets: settings.product?.dmBullets ?? [],
     });
     return {
+        ask: template,
         copy: {
             caption,
             tiktok_caption: tiktok,
             hashtags,
-            keyword: choice.keyword,
+            keyword,
             variants,
-            keyword_create: create,
+            keyword_create: choice.create || shared,
             dm,
             alt_text: trimText(digits(line(r.alt_text)), ALT_TEXT_MAX) || clip.title,
         },
@@ -210,12 +302,16 @@ export interface CopyResult {
     cost: CallCost;
 }
 
-/** The copy for every clip of one video, in one call. */
+/**
+ * The copy for every clip of one video, in one call. When the model numbers its answers, an
+ * answer is matched by its number only: falling back to position would give a clip the model
+ * skipped its neighbour's copy.
+ */
 export async function writeCopy(
     clips: readonly PickedClip[],
     lines: readonly TranscriptLine[],
     settings: StudioSettings,
-    ctx: Pick<GenContext, 'activeKeywords' | 'seo'>,
+    ctx: CopyContext & { inFlightKeywords?: readonly string[] },
     lessons: readonly StudioLesson[],
     deadline: number,
 ): Promise<CopyResult> {
@@ -223,22 +319,41 @@ export async function writeCopy(
     const raw = await ask({
         purpose: 'monteur.copy',
         system: copySystemPrompt(settings),
-        turns: [{ role: 'user', text: copyUserPrompt({ clips, lines, settings, lessons, activeKeywords: ctx.activeKeywords, seo: ctx.seo }) }],
+        turns: [{
+            role: 'user',
+            text: copyUserPrompt({
+                clips, lines, settings, lessons, activeKeywords: [...ctx.activeKeywords, ...(ctx.inFlightKeywords ?? [])],
+                recentAsks: ctx.recentAsks, seo: ctx.seo,
+            }),
+        }],
         schema: COPY_SCHEMA,
         temperature: 0.7,
         thinkingBudget: COPY_THINKING,
-        maxOutputTokens: copyMaxOutput(clips.length),
+        maxOutputTokens: COPY_MAX_OUTPUT,
         capMs: COPY_CALL_MS,
     }, deadline, cost);
     const items = raw && typeof raw === 'object' && Array.isArray((raw as { clips?: unknown }).clips)
         ? (raw as { clips: unknown[] }).clips
         : [];
-    const numbered = (n: number) => items.find((it) => it && typeof it === 'object' && (it as { clip?: unknown }).clip === n);
-    const taken: string[] = [];
+    const numbered = items.some((it) => it && typeof it === 'object' && Number.isInteger((it as { clip?: unknown }).clip));
+    const byNumber = (n: number) => items.find((it) => it && typeof it === 'object' && (it as { clip?: unknown }).clip === n);
+    const taken: string[] = [...(ctx.inFlightKeywords ?? [])];
+    const usedAsks: string[] = [];
     const outcomes = clips.map((clip, i): CopyOutcome => {
-        const item = numbered(i + 1) ?? items[i];
+        const item = numbered ? byNumber(i + 1) : items[i];
         if (!item) return { error: 'The Marketer wrote nothing for this clip.' };
-        return toClipCopy(item, clip, settings, ctx.activeKeywords, taken);
+        return toClipCopy(item, clip, settings, ctx, taken, usedAsks, (ctx.recentAsks?.length ?? 0) + i);
     });
     return { outcomes, cost };
+}
+
+/** The ask in a caption, as a template: the line holding «keyword». Null when there is none. */
+export function askOf(caption: string, keyword: string): string | null {
+    const l = caption.split('\n').find((x) => x.includes(`«${keyword}»`));
+    return l ? askTemplate(l, keyword) : null;
+}
+
+/** Whether a word counts as a keyword at all: one word of 4+ letters. */
+export function keywordLongEnough(keyword: string): boolean {
+    return letters(keyword) >= MIN_KEYWORD_LETTERS && tokens(keyword).length === 1;
 }

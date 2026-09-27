@@ -57,6 +57,8 @@ export async function ask(req: AskRequest, deadline: number, cost: CallCost): Pr
     return callModel({
         ...rest,
         timeoutMs: Math.min(capMs, left),
+        // The chain falls back through several models; the deadline bounds all of them together.
+        deadline: Math.min(deadline, Date.now() + capMs),
         onUsage: (usage) => {
             cost.model = usage.model;
             cost.tokens_in += usage.tokensIn;

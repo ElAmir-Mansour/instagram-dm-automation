@@ -78,3 +78,40 @@ describe('callGemini — the key', () => {
         assert.deepEqual(sentKeys, []);
     });
 });
+
+describe('callGemini — one deadline for the whole fallback chain', () => {
+    it('gives each model only what is left of the deadline, and tries no model once it has passed', async () => {
+        process.env.GEMINI_API_KEY = 'AIza-the-environment-one';
+        const timeouts: number[] = [];
+        let clock = Date.now();
+        const realNow = Date.now;
+        Date.now = () => clock;
+        (axios as any).post = async (_url: string, _body: unknown, config: any) => {
+            timeouts.push(config.timeout);
+            clock += 40_000; // every model spends 40 s and then answers 503
+            throw Object.assign(new Error('overloaded'), { response: { status: 503, data: { error: { message: 'overloaded' } } } });
+        };
+        try {
+            await assert.rejects(
+                callGemini({ ...REQUEST, timeoutMs: 60_000, deadline: clock + 90_000 }),
+                (err: Error) => /Out of time before trying/.test(err.message),
+            );
+        } finally {
+            Date.now = realNow;
+        }
+        assert.deepEqual(timeouts, [60_000, 50_000, 10_000], 'three models, each capped by what was left; the fourth never tried');
+    });
+
+    it('caps the answer when asked, and reports what the call cost', async () => {
+        process.env.GEMINI_API_KEY = 'AIza-the-environment-one';
+        let sent: any;
+        (axios as any).post = async (_url: string, body: unknown) => {
+            sent = body;
+            return { data: { candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }], usageMetadata: { promptTokenCount: 700, candidatesTokenCount: 30, thoughtsTokenCount: 12 } } };
+        };
+        const usage: unknown[] = [];
+        await callGemini({ ...REQUEST, maxOutputTokens: 8192, onUsage: (u) => usage.push(u) });
+        assert.equal(sent.generationConfig.maxOutputTokens, 8192);
+        assert.deepEqual(usage, [{ model: 'gemini-3.1-pro-preview', tokensIn: 700, tokensOut: 30, thinking: 12 }]);
+    });
+});

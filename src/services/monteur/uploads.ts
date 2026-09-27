@@ -38,7 +38,7 @@ export function parseSignRequest(body: unknown): { filename: string; mimeType: s
     if (typeof size !== 'number' || !Number.isSafeInteger(size) || size <= 0) {
         problems.push('size_bytes must be the file\'s size, a whole number of bytes');
     } else if (size > MAX_SIGNED_UPLOAD_BYTES) {
-        problems.push(`An upload is at most 100MB; this one is ${(size / 1024 / 1024).toFixed(1)}MB`);
+        problems.push(`size_bytes is over the 100MB limit: this upload is ${(size / 1024 / 1024).toFixed(1)}MB`);
     }
     if (problems.length) throw problemsError(problems, 'the upload');
     return { filename: clipText(b.filename, 200) ?? 'monteur-upload', mimeType: b.mime_type as string, sizeBytes: size as number };

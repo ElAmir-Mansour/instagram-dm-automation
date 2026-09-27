@@ -39,7 +39,8 @@ export const SUMMARY_MAX = 280;
 export const STALE_RUN_MS = 10 * 60 * 1000;
 export const ANALYST_CALL_MS = 90_000;
 const ANALYST_THINKING = 1024;
-const ANALYST_MAX_OUTPUT = 3072;
+/** Thinking counts toward the cap and may run past its budget: see PICK_MAX_OUTPUT. */
+export const ANALYST_MAX_OUTPUT = 8192;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -287,15 +288,17 @@ export async function refreshLessons(creatorId: string, deadline: number = Date.
 
 /**
  * From the sweep: the first tenant using the Monteur whose lessons are due, if any, run to the
- * deadline. Tenants with the Monteur switched off are left alone: nothing reads their lessons.
+ * deadline. "Using" is switched on, or with videos already: Run now picks with the lessons even
+ * while the daily run is off. A tenant that never touched the Monteur spends no tokens here.
  */
 export async function runDueAnalyst(deadline: number, now: number = Date.now()): Promise<{ creator_id: string; status: StudioLessonRow['status'] } | null> {
     const { rows: tenants } = await pool.query<{ creator_id: string }>(
-        `SELECT s.creator_id
-           FROM studio_settings s
-           JOIN creators c ON c.id = s.creator_id AND c.is_active = TRUE
-          WHERE s.monteur->>'enabled' = 'true'
-          ORDER BY s.creator_id
+        `SELECT c.id AS creator_id
+           FROM creators c
+          WHERE c.is_active = TRUE
+            AND (EXISTS (SELECT 1 FROM studio_settings s WHERE s.creator_id = c.id AND s.monteur->>'enabled' = 'true')
+                 OR EXISTS (SELECT 1 FROM monteur_sources m WHERE m.creator_id = c.id))
+          ORDER BY c.id
           LIMIT 50`
     );
     for (const { creator_id: creatorId } of tenants) {

@@ -172,6 +172,8 @@ const MIN_REPAIR_MS = 40_000;
 /** A retry of a failed first call needs time for a full answer. */
 const MIN_RETRY_MS = 50_000;
 const MIN_CALL_MS = 8_000;
+/** A model in the fallback chain is not tried with less than this left before the call's deadline. */
+const MIN_MODEL_MS = 5_000;
 const MAX_OUTPUT_TOKENS = 24_576;
 /** 2.5 Pro can't switch thinking off (minimum 128); these keep it inside the budget. */
 const THINKING = { draft: 2048, repair: 1024, rewrite: 1024, plan: 2048 } as const;
@@ -207,6 +209,11 @@ export type ModelRequest = {
     maxOutputTokens?: number;
     /** Told what the call cost, once it answered: the model that did, and its tokens. */
     onUsage?: (usage: ModelUsage) => void;
+    /**
+     * An instant (ms) the whole call — every model the chain falls back to — must finish by.
+     * `timeoutMs` applies to each model; without this, four models could take four timeouts.
+     */
+    deadline?: number;
 };
 
 /** What one answered call cost. `tokensOut` is the answer; `thinking` is counted apart. */
@@ -274,9 +281,13 @@ export async function callGemini(req: ModelRequest): Promise<unknown> {
     let model = STUDIO_MODELS[0]!;
     for (const [i, candidate] of STUDIO_MODELS.entries()) {
         model = candidate;
+        const left = req.deadline === undefined ? req.timeoutMs : req.deadline - Date.now();
+        if (left < MIN_MODEL_MS) {
+            throw new ModelError(`Out of time before trying ${candidate}${i ? ' (the models before it failed)' : ''}.`, false);
+        }
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${candidate}:generateContent`;
         try {
-            const res = await axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout: req.timeoutMs });
+            const res = await axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout: Math.min(req.timeoutMs, left) });
             data = res.data;
             break;
         } catch (err: any) {
