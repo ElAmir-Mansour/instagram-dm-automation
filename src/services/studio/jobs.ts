@@ -23,7 +23,8 @@ import { log } from '../../utils/log.js';
 import { getPublicBaseUrl } from '../appSettings.js';
 import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
 import {
-    MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parsePickFolderResult, parseTranscribeResult,
+    MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parseMonteurThinkResult, parsePickFolderResult,
+    parseTranscribeResult,
 } from '../monteur/results.js';
 import { getMediaStore, SupabaseStorageMediaStore, uploadIdFromUrl } from '../storage.js';
 import {
@@ -59,6 +60,7 @@ export const MAX_RENDER_FILE_BYTES = 100 * 1024 * 1024;
 /** Every job kind, for a claim that asks for some of them only. */
 export const STUDIO_JOB_KINDS: readonly StudioJobKind[] = [
     'scan_library', 'index_lesson', 'render_carousel', 'pick_folder', 'monteur_scan', 'monteur_transcribe', 'monteur_render',
+    'monteur_think',
 ];
 
 export type StudioJobView = Pick<
@@ -217,6 +219,7 @@ export async function markSourceDoneIfRendered(exec: Exec, creatorId: string, so
  * fewer than three claims behind it. Oldest first within each rank:
  *   0  pick_folder         someone is looking at the Mac, waiting for the folder dialog
  *   1  render_carousel     someone is waiting at the editor
+ *   1  monteur_think       Claude on the Mac: a minute, and the Monteur's next step waits for it
  *   2  monteur_render      a reel for the review queue, often right after an edit
  *   3  scan_library, monteur_scan   quick folder listings that queue the real work
  *   4  index_lesson, monteur_transcribe   minutes each: the backlog that must not hold the rest
@@ -235,7 +238,7 @@ export const CLAIM_SQL = `
                 OR (status = 'claimed'
                     AND COALESCE(heartbeat_at, claimed_at, created_at) < NOW() - make_interval(mins => $2)
                     AND attempts < $3))
-         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_render' THEN 2
+         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'monteur_render' THEN 2
                             WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END,
                   created_at, id
          LIMIT 1
@@ -361,6 +364,9 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
             const applied = await applyMonteurRender(client, job, result);
             stored = applied.stored;
             outcome = applied.outcome;
+        } else if (job.kind === 'monteur_think') {
+            // Only stored: the sweep reads it by its request id on its next drain (think.ts).
+            stored = parseMonteurThinkResult(result);
         } else {
             throw new StudioError(409, `Unknown job kind "${String(job.kind)}".`);
         }
@@ -947,7 +953,8 @@ export async function failJob(creatorId: string, jobId: string, error: string): 
  * The lesson, draft, source or clip a failed job was for goes `failed` with the error. A render
  * that is no longer the draft's (or clip's) latest leaves it alone: the newer one is still on its
  * way, and a scheduled one is past rendering. A failed `pick_folder` or `monteur_scan` is only a
- * failed job: neither has a row of its own.
+ * failed job: neither has a row of its own. Nor is a failed `monteur_think`: it is one try, and the
+ * sweep decides what comes next (think.ts).
  */
 async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<void> {
     if (job.kind === 'index_lesson') {

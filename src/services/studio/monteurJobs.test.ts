@@ -348,6 +348,34 @@ describe('completeJob — monteur_render', () => {
 
 // ─── Fail ───────────────────────────────────────────────────────────────────────────────
 
+describe('completeJob — monteur_think', () => {
+    beforeEach(() => {
+        lockReturns({ id: JOB, kind: 'monteur_think', status: 'claimed', payload: { request: `source/${SOURCE}/a1/monteur.pick`, try: 1 } });
+    });
+
+    it('stores Claude’s answer, its model and its tokens, and touches nothing else: the sweep reads it', async () => {
+        const outcome = await completeJob(TENANT, JOB, { output: { topic: 't', clips: [] }, model: 'claude-opus-5-5', usage: { input_tokens: 9, output_tokens: 3 } });
+        assert.equal(outcome, 'applied');
+        assert.deepEqual(storedResult(), {
+            output: { topic: 't', clips: [] }, model: 'claude-opus-5-5',
+            usage: { input_tokens: 9, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        });
+        assert.equal(writes().length, 1);
+        assert.match(writes()[0]!.sql, /^UPDATE studio_jobs SET status = 'done', result = \$2::jsonb/);
+    });
+
+    it('refuses a result with no answer, so the job stays claimed and the worker fails it', async () => {
+        await assert.rejects(completeJob(TENANT, JOB, { model: 'claude-opus-5-5' }), isStudioError(400));
+        assert.equal(writes().length, 0);
+    });
+
+    it('a failed think is only a failed job: the sweep decides the next try', async () => {
+        await failJob(TENANT, JOB, 'claude exited 1');
+        assert.equal(writes().length, 1);
+        assert.match(writes()[0]!.sql, /^UPDATE studio_jobs SET status = 'failed', error = \$2/);
+    });
+});
+
 describe('failJob — what a Monteur failure marks failed', () => {
     it('a transcription fails its source', async () => {
         lockReturns({ id: JOB, kind: 'monteur_transcribe', status: 'claimed', payload: { sourceId: SOURCE } });

@@ -214,9 +214,16 @@ describe('getStudioSettings / updateStudioSettings', () => {
 describe('the monteur section (MONTEUR.md §1)', () => {
     it('defaults to off, no folder, one reel a day from one video, on all three platforms, each reviewed', () => {
         assert.deepEqual(defaultStudioSettings().monteur, {
-            enabled: false, source: 'folder', mode: 'review', folder: null, run_at: '07:00', videos_per_run: 1, reels_per_video: 1,
+            enabled: false, source: 'folder', mode: 'review', brain: 'gemini', folder: null, run_at: '07:00', videos_per_run: 1, reels_per_video: 1,
             platforms: ['instagram', 'facebook', 'tiktok'], post_at: ['19:00'], min_seconds: 20, max_seconds: 45,
         });
+    });
+
+    it('brain: Gemini by default, Claude on the Mac when chosen, nothing else', () => {
+        assert.equal(overDefaults({ monteur: { enabled: true } } as never).monteur.brain, 'gemini', 'a section saved before brain existed');
+        assert.deepEqual(problemsFor({ monteur: { brain: 'claude_mac' } }), []);
+        assert.deepEqual(problemsFor({ monteur: { brain: 'claude' } }), ['monteur.brain must be one of gemini, claude_mac']);
+        assert.deepEqual(problemsFor({ monteur: { brain: null } }), ['monteur.brain must be one of gemini, claude_mac']);
     });
 
     it('reads a section saved before source and mode existed as the folder, reviewed', () => {

@@ -136,6 +136,16 @@ describe('retrySource', () => {
         assert.match(update!.sql, /attempts = 0, claimed_at = NULL, error = NULL, pick = NULL/);
     });
 
+    it('retires the source’s calls to Claude on the Mac, so its fresh attempts ask again from try 1', async () => {
+        db.routes.unshift([/^SELECT id, status, path, words IS NOT NULL AS has_words/, () => ({ rows: [{ id: SOURCE, status: 'failed', path: '/v/a.mp4', has_words: true }] })]);
+        db.routes.unshift([/FROM monteur_sources s WHERE s\.id = \$1/, () => ({ rows: [{ id: SOURCE, name: 'a', path: '/v/a.mp4', duration: 1, status: 'transcribed', error: null, clips: 0, created_at: new Date(), updated_at: new Date() }] })]);
+        await retrySource(TENANT, SOURCE);
+        const [retire] = db.ran(/^UPDATE studio_jobs SET payload = payload \|\| '\{"retired": true\}'::jsonb/);
+        assert.deepEqual(retire!.params, [TENANT, `source/${SOURCE}/%`]);
+        assert.match(retire!.sql, /kind = 'monteur_think'/);
+        assert.match(retire!.sql, /status = CASE WHEN status IN \('pending', 'claimed'\) THEN 'failed'/, 'an open try stops: the worker gets a 409');
+    });
+
     it('409s a source that is neither failed nor without clips', async () => {
         db.routes.unshift([/^SELECT id, status, path, words IS NOT NULL AS has_words/, () => ({ rows: [{ id: SOURCE, status: 'rendering', path: '/v', has_words: true }] })]);
         await assert.rejects(retrySource(TENANT, SOURCE), (err: unknown) => err instanceof StudioError && err.status === 409);

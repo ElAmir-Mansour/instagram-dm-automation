@@ -79,6 +79,11 @@ export type MonteurPlatform = 'instagram' | 'facebook' | 'tiktok';
  */
 export type MonteurSource = 'folder' | 'course';
 export type MonteurMode = 'review' | 'auto';
+/**
+ * Who makes the Monteur's model calls — the pick, the Marketer, the Editor and the Analyst:
+ * Gemini, from this app, or Claude, on the Mac worker with the owner's Claude plan (MONTEUR.md §6.3).
+ */
+export type MonteurBrain = 'gemini' | 'claude_mac';
 
 export type MonteurConfig = {
     /** Off = no daily run. Run now still works. */
@@ -90,6 +95,8 @@ export type MonteurConfig = {
     source: MonteurSource;
     /** 'review': a rendered reel waits for Approve. 'auto': the drain approves it, as Approve would. */
     mode: MonteurMode;
+    /** 'claude_mac': every call is a `monteur_think` job for the Mac, and Gemini is never called for them. */
+    brain: MonteurBrain;
     /** Absolute, on the worker's machine; `null` = not chosen yet. */
     folder: string | null;
     /** 'HH:MM': the daily scan. */
@@ -126,6 +133,7 @@ export function defaultMonteurConfig(): MonteurConfig {
         enabled: false,
         source: 'folder',
         mode: 'review',
+        brain: 'gemini',
         folder: null,
         run_at: '07:00',
         videos_per_run: 1,

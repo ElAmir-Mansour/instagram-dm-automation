@@ -503,7 +503,9 @@ export interface CarouselDraftRow {
 export type StudioJobKind =
     | 'scan_library' | 'index_lesson' | 'render_carousel'
     /** The Monteur (v24, MONTEUR.md §3). */
-    | 'pick_folder' | 'monteur_scan' | 'monteur_transcribe' | 'monteur_render';
+    | 'pick_folder' | 'monteur_scan' | 'monteur_transcribe' | 'monteur_render'
+    /** Claude on the Mac (v28, MONTEUR.md §6.3). */
+    | 'monteur_think';
 export type StudioJobStatus = 'pending' | 'claimed' | 'done' | 'failed';
 
 export interface ScanLibraryPayload { root: string }
@@ -528,7 +530,7 @@ export interface StudioJobRow {
     kind: StudioJobKind;
     payload:
         | ScanLibraryPayload | IndexLessonPayload | RenderCarouselPayload
-        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload;
+        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload | MonteurThinkPayload;
     status: StudioJobStatus;
     progress: string | null;
     claimed_at: Timestamptz | null;
@@ -803,6 +805,8 @@ export interface StudioLessonRow {
     model: string | null;
     error: string | null;
     created_at: Timestamptz;
+    /** Selected by the lessons view only: the run's call is a `monteur_think` job (MONTEUR.md §6.3). */
+    thinking?: boolean;
 }
 
 /** `pick_folder`: the worker shows the native folder dialog with this title. */
@@ -845,6 +849,32 @@ export interface MonteurRenderPayload {
     cover_at: number;
     /** The Editor's pro edits, `t` in seconds on the clip's clock; `[]` renders the reel without any. */
     edits: ClipEdit[];
+}
+
+/**
+ * `monteur_think` (v28, MONTEUR.md §6.3): one of the Monteur's model calls, answered on the Mac by
+ * the claude CLI on the owner's plan. `request` is the call's stable id and `try` its attempt;
+ * `retired` is set when a Retry starts the source over.
+ */
+export interface MonteurThinkPayload {
+    request: string;
+    try: number;
+    step: 'pick' | 'copy' | 'edit' | 'analyst';
+    purpose: string;
+    model: string;
+    system: string;
+    user: string;
+    /** JSON Schema, converted from the Gemini `responseSchema` (think.ts `toJsonSchema`). */
+    schema: Record<string, unknown>;
+    retired?: true;
+}
+
+/** What the worker sends back for a `monteur_think`, as `completeJob` stores it. */
+export interface MonteurThinkResult {
+    /** Claude's `structured_output`, or its `result` text when there was none. */
+    output: unknown;
+    model: string;
+    usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
 }
 
 // ─── Growth & SEO hub (v22, GROWTH.md) ──────────────────────────────────────────────────

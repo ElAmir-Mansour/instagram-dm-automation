@@ -1,12 +1,12 @@
 /**
- * What the worker may send back for the Monteur's four job kinds (MONTEUR.md §3), checked before
+ * What the worker may send back for the Monteur's job kinds (MONTEUR.md §3, §6.3), checked before
  * anything is written. Pure: `completeJob` (src/services/studio/jobs.ts) applies what these return.
  *
  * The rule is the Studio's: a result that is the wrong shape is a 400 and changes nothing, so the
  * worker sees its own bug; one odd entry in an otherwise good scan is skipped and named, so one
  * strange file cannot keep every other new video out.
  */
-import type { TranscriptWord } from '../../db/rows.js';
+import type { MonteurThinkResult, TranscriptWord } from '../../db/rows.js';
 import { uploadIdFromUrl } from '../storage.js';
 import { clipText, isFiniteNumber, isPlainObject, problemsError, StudioError } from '../studio/common.js';
 
@@ -198,4 +198,46 @@ export function parseMonteurRenderResult(result: unknown): ParsedRender {
     if (!(isFiniteNumber(result.duration) && result.duration > 0)) problems.push('duration must be the video\'s length in seconds');
     if (problems.length) throw problemsError(problems, 'the render result');
     return { videoId: videoId!, tiktokVideoId, coverId: coverId!, duration: round2(result.duration as number) };
+}
+
+// ─── monteur_think ──────────────────────────────────────────────────────────────────────
+
+/** Claude's answer is a pick, a copy, the edits or the lessons: a few KB. This bounds a runaway one. */
+export const MAX_THINK_OUTPUT_CHARS = 200_000;
+const MAX_MODEL_ID = 100;
+
+/**
+ * `{ output, model, usage }` (MONTEUR.md §6.3): `output` is Claude's structured output, or its
+ * text; `model` the one that answered (from `modelUsage`); `usage` its tokens. Stored as it
+ * comes; whether `output` is JSON the pick can use is the sweep's question (think.ts), because an
+ * unusable answer is a failed try, not a worker bug.
+ */
+export function parseMonteurThinkResult(result: unknown): MonteurThinkResult {
+    if (!isPlainObject(result)) throw new StudioError(400, 'A think result is { output, model, usage }.');
+    const problems: string[] = [];
+    const { output } = result;
+    if (output === undefined || output === null || (typeof output !== 'string' && typeof output !== 'object')) {
+        problems.push('output must be Claude\'s structured output, or its text');
+    } else if ((typeof output === 'string' ? output : JSON.stringify(output)).length > MAX_THINK_OUTPUT_CHARS) {
+        problems.push(`output is over ${MAX_THINK_OUTPUT_CHARS} characters`);
+    }
+    const model = typeof result.model === 'string' ? result.model.trim() : '';
+    if (!model || model.length > MAX_MODEL_ID) problems.push('model must name the model that answered');
+    const usage = result.usage === undefined ? {} : result.usage;
+    if (!isPlainObject(usage)) problems.push('usage must be an object of token counts');
+    if (problems.length) throw problemsError(problems, 'the think result');
+    const count = (key: string): number => {
+        const v = (usage as Record<string, unknown>)[key];
+        return isFiniteNumber(v) && v >= 0 ? Math.round(v) : 0;
+    };
+    return {
+        output,
+        model,
+        usage: {
+            input_tokens: count('input_tokens'),
+            output_tokens: count('output_tokens'),
+            cache_read_input_tokens: count('cache_read_input_tokens'),
+            cache_creation_input_tokens: count('cache_creation_input_tokens'),
+        },
+    };
 }
