@@ -143,7 +143,7 @@ export function copySystemPrompt(settings: StudioSettings): string {
     return `You write the post copy for short vertical reels by ${whoFor(settings)}. Answer with JSON only, in ${lang.name}.${digits}
 For each clip:
 - first_line: at most ${MAX_FIRST_LINE} characters: the result or problem, naming the topic once the way people search it. One language. Not the title. No hype, no ask.
-- body: 1-3 short lines: the takeaway worth forwarding. Never "share this".
+- body: 1-3 short lines: the takeaway worth forwarding, then one line naming who to send it to${ar ? ' («ابعتها لصاحبك اللي …»)' : ' ("Send this to the friend who …")'}. Never a bare "share this".
 - ask_line: a question, then «{keyword}», written so it fits any of the candidates. Not one of the recent asks listed.
 - keyword_candidates: 3 single ${lang.name} words of 4 or more letters, best first, tied to what the DM sends, like ${lang.keywordExamples}.
 - variants: 0-3 other spellings of the first candidate, one word each.

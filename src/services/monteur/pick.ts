@@ -97,6 +97,8 @@ export function pickUserPrompt(args: {
     const examples = (args.examples ?? []).filter((e) => e.trim()).slice(0, 2);
     return [
         `Pick up to ${candidatesWanted(m.reels_per_video)} clips, best first, each ${m.min_seconds}–${m.max_seconds} seconds, none overlapping.`,
+        // Past 90 s only a full walkthrough earns the length: watch time is what Facebook ranks on.
+        ...(m.max_seconds > 90 ? [`Most clips should run about ${Math.max(m.min_seconds, 45)}–90 seconds; go up to ${m.max_seconds} only for a complete walkthrough that a shorter cut would leave unfinished.`] : []),
         ...(examples.length ? ['Openings of this creator\'s most-viewed posts:', ...examples.map((e) => `- ${e}`)] : []),
         ...(lessons.length ? ['Lessons from this creator\'s past reels:', ...lessons.map((l) => `- ${l.rule}`)] : []),
         ...(avoid.length ? [`Never pick a moment about: ${avoid.join(', ')}.`] : []),

@@ -125,7 +125,7 @@ const MonteurPage = {
         videos_per_run: Object.freeze([1, 10]),
         reels_per_video: Object.freeze([1, 5]),
         min_seconds: Object.freeze([10, 60]),
-        max_seconds: Object.freeze([15, 90]),
+        max_seconds: Object.freeze([15, 180]),
     }),
     POST_AT_MAX: 4,
     FOLDER_MAX: 1024,
