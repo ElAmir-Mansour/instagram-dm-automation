@@ -28,6 +28,8 @@ type MonteurConfig = {
                              // or the course library's next lessons (`course_lessons`), which needs no folder
   mode: 'review' | 'auto';   // default 'review'. 'auto': the drain approves each rendered reel itself, through
                              // Approve (§6, "Auto mode"); a refused one stays in review with the reason
+  brain: 'gemini' | 'claude_mac';  // default 'gemini'. 'claude_mac': the pick, the Marketer, the Editor and the
+                             // Analyst are Claude's, on the Mac worker with the owner's plan, never Gemini (§6.3)
   folder: string | null;     // absolute path on the worker's machine, ≤ 1024 chars; needed only for 'folder'
   run_at: string;            // 'HH:MM' in schedule.timezone, default '07:00'
   videos_per_run: number;    // 1–10, default 1: new videos taken per run, oldest first
@@ -539,6 +541,39 @@ with `edits: []`, and is logged as `monteur.edit_failed`. The attempt does not f
 
 **Stored** in `clip_drafts.edits` (v27) and sent in every `monteur_render` of the clip: the first, `POST /rerender`,
 and a PATCH that re-renders. `ClipView.edits` carries them to the page.
+
+## 6.3 Claude on the Mac: `src/services/monteur/think.ts` (v28)
+
+With `monteur.brain: 'claude_mac'` (the owner's choice, 2026-09-28), every model call of §6 and §8 is a
+`monteur_think` job for the Mac worker, which answers it with the claude CLI on the owner's Claude plan.
+**Gemini is never called for them**: `ask()` returns `think()` before it reaches `callModel`.
+
+**`monteur_think`** `{ request, try, step: 'pick'|'copy'|'edit'|'analyst', purpose, model, system, user, schema }`
+→ `{ output, model, usage }`
+- `model` is `THINK_MODEL` (`claude-opus-5-5`); the worker takes it from the payload.
+- `schema` is the Gemini `responseSchema` through `toJsonSchema`: types lower-cased, no `propertyOrdering`,
+  no array bounds, `additionalProperties: false` on every object. `user` is the turns in one prompt.
+- The worker runs `claude -p --output-format json --tools "" --strict-mcp-config --setting-sources ""
+  --no-session-persistence --system-prompt-file … --json-schema …` in an empty temp folder, the prompt on stdin,
+  without `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`, for at most 10 minutes. `output` is `structured_output`,
+  else the `result` text; `model` the one `modelUsage` names.
+- Claimed at rank 1 (with `render_carousel`), and in the worker's fast lane beside a busy render.
+
+**A drain never waits for the Mac.** Each call has a stable `request`: `source/<id>/a<pick attempt>/<purpose>`
+(the Editor's also names its clips, `…/clips-<sha1>/monteur.edit`), or `lessons/<run id>/monteur.analyst`. A
+drain that finds the call still open hands the source back as it was (`transcribed`, the pick attempt given
+back) and moves on to the next source; the drain that finds the answer parses it as Gemini's text would be,
+through the same clean functions, and goes on. The Analyst's run stays `running` meanwhile.
+
+**Tries.** Each job is one try. An open try quiet for 20 minutes (no heartbeat: the Mac asleep, the worker off)
+is failed; a failed try is asked again after 10 min, 30 min, then 2 h; an answer that is not JSON is a failed
+try. The fourth failure stops the item — the source `failed`, or the run — with **"Claude on the Mac didn't
+answer: …"** and the last reason, on any pick attempt, the Editor's included (no reel goes out without its
+edits). Retry retires the source's tries (`payload.retired`), so its fresh attempts start from try 1. A unique
+index on `(request, try)` makes a try queue once.
+
+**Rollout:** migrate (v28), deploy, update the worker, then switch the tenant's brain. An old worker fails a
+think it doesn't know, which is a failed try, never a lost day.
 
 ## 7. The daily run
 

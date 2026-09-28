@@ -88,8 +88,8 @@ describe('claim — the SQL', () => {
     it('takes a pending job, or a claimed one gone quiet for 15 minutes with claims left, oldest first', () => {
         const sql = CLAIM_SQL.replace(/\s+/g, ' ');
         assert.match(sql, /status = 'pending' OR \(status = 'claimed' AND COALESCE\(heartbeat_at, claimed_at, created_at\) < NOW\(\) - make_interval\(mins => \$2\) AND attempts < \$3\)/);
-        assert.match(sql, /ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_render' THEN 2 WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END, created_at, id/,
-            'the folder dialog first (someone is at the Mac), renders next (someone is at the editor), the long transcribe and index backlog last');
+        assert.match(sql, /ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'monteur_render' THEN 2 WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END, created_at, id/,
+            'the folder dialog first (someone is at the Mac), renders and Claude\'s thinks next (someone is at the editor; the Monteur waits on the think), the long transcribe and index backlog last');
         assert.match(sql, /attempts = j\.attempts \+ 1/);
         assert.match(sql, /heartbeat_at = NOW\(\)/);
     });

@@ -13,6 +13,7 @@ import { log } from '../../utils/log.js';
 import type { GeminiSchema, ModelTurn } from '../studio/generate.js';
 import { languageKit } from '../studio/prompts.js';
 import { ask, emptyCost, type CallCost } from './model.js';
+import { ThinkWaiting, thinkRoute, type ThinkOn } from './think.js';
 import {
     chooseClips, formatLines, groupLines, HOOK_TYPES, MAX_TITLE, spokenSpan, type PickedClip, type TranscriptLine,
 } from './transcript.js';
@@ -124,13 +125,14 @@ export interface PickOutcome {
 /**
  * The clips for one source. A transcript with no words, or one shorter than the shortest clip,
  * has nothing to pick and costs no call. The repair round runs only when something needs
- * repairing and fewer clips than wanted survived.
+ * repairing and fewer clips than wanted survived. `think` sends both calls to Claude on the Mac.
  */
 export async function pickClips(
     source: { words: readonly TranscriptWord[]; duration: number | null },
     settings: StudioSettings,
     context: { lessons: readonly StudioLesson[]; examples?: readonly string[]; existingTexts?: readonly string[] },
     deadline: number,
+    think?: ThinkOn,
 ): Promise<PickOutcome> {
     const cost = emptyCost();
     const lines = groupLines(source.words);
@@ -145,7 +147,7 @@ export async function pickClips(
     const turns: ModelTurn[] = [{ role: 'user', text: pickUserPrompt({ lines, settings, lessons: context.lessons, examples: context.examples }) }];
     const call = (purpose: string) => ask({
         purpose, system, turns, schema: PICK_SCHEMA, temperature: 0.4, thinkingBudget: PICK_THINKING,
-        maxOutputTokens: PICK_MAX_OUTPUT, capMs: PICK_CALL_MS,
+        maxOutputTokens: PICK_MAX_OUTPUT, capMs: PICK_CALL_MS, think: thinkRoute(think, purpose, 'pick'),
     }, deadline, cost);
 
     const raw = await call('monteur.pick');
@@ -158,6 +160,8 @@ export async function pickClips(
                 choice = { ...again, topic: again.topic ?? choice.topic, considered: Math.max(again.considered, choice.considered) };
             }
         } catch (err) {
+            // A repair still on the Mac is waited for, like any call; one that never came is not.
+            if (err instanceof ThinkWaiting) throw err;
             // The first answer stands: a repair is an improvement, never a requirement.
             log('warn', 'monteur.pick_repair_failed', { message: err instanceof Error ? err.message : String(err) });
         }

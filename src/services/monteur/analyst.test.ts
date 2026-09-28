@@ -183,3 +183,105 @@ describe('presentLessons', () => {
         assert.deepEqual(view.basis, { posts: 0, from: null, to: null });
     });
 });
+
+describe('the Analyst on Claude on the Mac (monteur.brain = claude_mac, MONTEUR.md §6.3)', () => {
+    let db: FakeDb;
+    let gemini: ModelRequest[];
+    let previousCaller: CallModel;
+    let restoreSink: (() => void) | undefined;
+    let tries: Record<string, unknown>[];
+    const REQUEST = 'lessons/run-1/monteur.analyst';
+    const reel = { id: 'insight-1', platform: 'instagram', media_type: 'REELS', caption: 'hook', published_at: new Date('2026-09-20T16:00:00Z'), metrics: { views: 900 } };
+    const running = { id: 'run-1', creator_id: TENANT, status: 'running', lessons: null, summary: null, basis: null, model: null, error: null, created_at: new Date(Date.now() - 3 * HOUR) };
+    const done = (output: unknown) => [{ id: 't1', status: 'done', try: 1, quiet_s: 1, since_s: 1, error: null, result: { output, model: 'claude-opus-5-5', usage: { input_tokens: 700, output_tokens: 90 } } }];
+
+    before(() => {
+        const previous = setLogSink(() => {});
+        restoreSink = () => setLogSink(previous);
+    });
+    after(() => restoreSink?.());
+
+    beforeEach(() => {
+        db = installFakeDb();
+        gemini = [];
+        tries = [];
+        previousCaller = setModelCaller(async (req) => {
+            gemini.push(req);
+            throw new Error('Gemini was reached');
+        });
+        db.routes.push(
+            [/FROM studio_settings/, () => ({ rows: [{ voice: { language: 'ar', digits: 'arabic-indic', guide: '' }, monteur: { brain: 'claude_mac' } }] })],
+            [/^INSERT INTO studio_lessons/, () => ({ rows: [{ id: 'run-1', creator_id: TENANT, status: 'running', created_at: new Date() }] })],
+            [/FROM post_insights WHERE creator_id = \$1 AND media_type/, () => ({ rows: [reel] })],
+            [/FROM account_insights_daily/, () => ({ rows: [] })],
+            [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [] })],
+            [/^SELECT id, status, result, error, \(payload->>'try'\)::int AS try/, (p) => ({ rows: p[1] === REQUEST ? tries : [] })],
+            [/^INSERT INTO studio_jobs \(creator_id, kind, payload\) VALUES \(\$1, 'monteur_think'/, () => ({ rows: [{ id: 'think-job' }] })],
+            [/^UPDATE studio_lessons SET status = 'done'/, (p) => ({ rows: [{ id: p[0], status: 'done', lessons: JSON.parse(p[1]), summary: p[2], basis: JSON.parse(p[3]), model: p[4], created_at: new Date() }] })],
+            [/^UPDATE studio_lessons SET status = 'failed'/, (p) => ({ rows: [{ id: p[0], status: 'failed', error: p[1], lessons: null, created_at: new Date() }] })],
+        );
+    });
+    afterEach(() => {
+        db.restore();
+        setModelCaller(previousCaller);
+    });
+
+    const queued = () => db.ran(/^INSERT INTO studio_jobs/).map((s) => JSON.parse(s.params[1]));
+
+    it('queues its call for the Mac under the run’s id, and leaves the run running, not failed', async () => {
+        const row = await runAnalyst(TENANT, Date.now() + 100_000);
+        assert.equal(row.status, 'running');
+        const [job] = queued();
+        assert.deepEqual([job.request, job.step, job.model, job.purpose], [REQUEST, 'analyst', 'claude-opus-5-5', 'monteur.analyst']);
+        assert.match(job.user, /Reels, newest first:/);
+        assert.equal(db.ran(/^UPDATE studio_lessons/).length, 0);
+        assert.equal(gemini.length, 0);
+    });
+
+    it('fills the run done from Claude’s answer, with Claude’s model', async () => {
+        tries = done({ lessons: [{ rule: 'Open on the result', evidence: 'skip 40%' }], summary: 'Hooks work.' });
+        const row = await runAnalyst(TENANT, Date.now() + 100_000, running as never);
+        assert.equal(row.status, 'done');
+        assert.deepEqual(row.lessons, [{ rule: 'Open on the result', evidence: 'skip 40%' }]);
+        assert.equal(row.model, 'claude-opus-5-5');
+        assert.equal(db.ran(/^INSERT INTO studio_lessons/).length, 0, 'the waiting run, resumed: no second row');
+        assert.equal(gemini.length, 0);
+    });
+
+    it('fails the run once every try failed, saying Claude on the Mac didn’t answer', async () => {
+        tries = [4, 3, 2, 1].map((n) => ({ id: `t${n}`, status: 'failed', try: n, quiet_s: 1e6, since_s: 1e6, error: 'claude not found', result: null }));
+        const row = await runAnalyst(TENANT, Date.now() + 100_000, running as never);
+        assert.equal(row.status, 'failed');
+        assert.equal(row.error, 'Claude on the Mac didn\'t answer: claude not found');
+        assert.equal(gemini.length, 0);
+    });
+
+    it('the sweep resumes a waiting run before any other, and never starts a second one beside it', async () => {
+        db.routes.unshift(
+            [/^SELECT l\.\* FROM studio_lessons l JOIN creators c/, () => ({ rows: [running] })],
+            [/^SELECT c\.id AS creator_id FROM creators c/, () => ({ rows: [{ creator_id: TENANT }] })],
+            [/AS last_done_at/, () => ({ rows: [{ last_done_at: null, last_run_at: null, posts: 30 }] })],
+        );
+        assert.equal(await runDueAnalyst(Date.now() + 100_000), null, 'still waiting, and its tenant is not due beside it');
+        assert.equal(db.ran(/^INSERT INTO studio_lessons/).length, 0);
+        const [waiting] = db.ran(/^SELECT l\.\* FROM studio_lessons l JOIN creators c/);
+        assert.match(waiting!.sql, /l\.status = 'running' AND EXISTS \(SELECT 1 FROM studio_jobs j/);
+
+        tries = done({ lessons: [{ rule: 'Keep it short', evidence: 'skip 30%' }], summary: null });
+        assert.deepEqual(await runDueAnalyst(Date.now() + 100_000), { creator_id: TENANT, status: 'done' });
+        assert.equal(gemini.length, 0);
+    });
+
+    it('Run now is refused while a run waits for the Mac, however old', async () => {
+        db.routes.unshift([/AS running/, () => ({ rows: [{ running: 1, posts: 9 }] })]);
+        await assert.rejects(refreshLessons(TENANT), (err: unknown) => err instanceof StudioError && err.status === 409);
+        const [guard] = db.ran(/AS running/);
+        assert.match(guard!.sql, /l\.created_at > NOW\(\) - make_interval\(secs => \$2\) OR EXISTS \(SELECT 1 FROM studio_jobs j/);
+    });
+
+    it('a waiting run shows as running, not as cut off after 10 minutes', () => {
+        const view = presentLessons({ ...running, thinking: true } as never);
+        assert.equal(view.status, 'running');
+        assert.equal(presentLessons({ ...running, thinking: false } as never).status, 'failed', 'a Gemini run that old was cut off');
+    });
+});

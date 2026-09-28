@@ -101,6 +101,8 @@ export const STUDIO_SETTINGS = {
         enabled: false,
         source: 'folder',
         mode: 'review',
+        // The owner's choice (2026-09-28): the pick, the copy, the edits and the Analyst by Claude on his Mac, never Gemini.
+        brain: 'claude_mac',
         folder: null,
         run_at: '07:00',
         videos_per_run: 1,

@@ -24,6 +24,7 @@ import { languageKit } from '../studio/prompts.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import type { TranscriptWord } from '../../db/rows.js';
 import { ask, type CallCost, emptyCost } from './model.js';
+import { thinkRoute, type ThinkOn } from './think.js';
 import type { TranscriptLine } from './transcript.js';
 import { formatStamp } from './transcript.js';
 
@@ -371,7 +372,7 @@ export interface EditResult {
 /**
  * The Editor's one call for every clip of a video, C1… in the order given (the clips that got
  * copy), each read on its own clock. Throws what the call throws: the sweep catches it, since a
- * failed Editor call must never hold a reel back.
+ * failed Editor call must never hold a reel back. `think` sends the call to Claude on the Mac.
  */
 export async function writeEdits(
     clips: readonly { start: number; end: number }[],
@@ -379,6 +380,7 @@ export async function writeEdits(
     words: readonly TranscriptWord[],
     settings: StudioSettings,
     deadline: number,
+    think?: ThinkOn,
 ): Promise<EditResult> {
     const cost = emptyCost();
     const perClip = clips.map((c) => clipLines(lines, words, c.start, c.end));
@@ -391,6 +393,7 @@ export async function writeEdits(
         thinkingBudget: EDITOR_THINKING,
         maxOutputTokens: EDITOR_MAX_OUTPUT,
         capMs: EDITOR_CALL_MS,
+        think: thinkRoute(think, 'monteur.edit', 'edit'),
     }, deadline, cost);
     return { edits: editsByClip(raw, perClip), cost };
 }

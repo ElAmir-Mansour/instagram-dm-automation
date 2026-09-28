@@ -697,7 +697,7 @@ describe('Monteur — settings', () => {
         const put = s.calls.find((c) => c.method === 'saveStudioSettings')!;
         assert.deepEqual(JSON.parse(JSON.stringify(put.args[0])), {
             monteur: {
-                enabled: true, source: 'folder', mode: 'review', folder: '/Users/elamir/Videos/Reels', run_at: '06:30', videos_per_run: 3, reels_per_video: 2,
+                enabled: true, source: 'folder', mode: 'review', brain: 'gemini', folder: '/Users/elamir/Videos/Reels', run_at: '06:30', videos_per_run: 3, reels_per_video: 2,
                 platforms: ['instagram', 'tiktok'], post_at: ['20:00', '21:00'], min_seconds: 20, max_seconds: 45,
             },
         });
@@ -1029,16 +1029,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.doesNotMatch(studioTabs, /href="#\/monteur"\s+aria-current/);
     });
 
-    it('ships at cache version 11.7: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 11.8: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '11.7');
+        assert.equal(version, '11.8');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['11.7']);
+        assert.deepEqual([...new Set(refs)], ['11.8']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.7'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.8'], page);
         }
     });
 });
@@ -1533,5 +1533,52 @@ describe('Monteur — source and mode (MONTEUR.md §1)', () => {
             assert.ok(form.includes(escaped(text)), key);
         }
         s.Page.destroy();
+    });
+});
+
+describe('Monteur — who thinks: Gemini or Claude on the Mac (MONTEUR.md §6.3)', () => {
+    const pick = (value: string): FakeEl => fakeEl('mt-brain', { dataset: { key: 'brain' }, value });
+
+    it('the settings card asks it as a select, in both forms, with the saved choice selected', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ settings: settings({ brain: 'claude_mac' }) }));
+        await renderPage(s);
+        for (const form of [String(s.Page.formMarkup()), String(s.Page.setupMarkup())]) {
+            const select = tagOf(form, 'mt-brain');
+            assert.ok(select.startsWith('<select') && select.includes('data-change="monteur:setting"') && select.includes('data-key="brain"'), select);
+            assert.match(form, /<option value="claude_mac" selected>/);
+            assert.doesNotMatch(form, /<option value="gemini" selected>/);
+            for (const key of ['monteur.settings.brain', 'monteur.settings.brainGemini', 'monteur.settings.brainClaude']) {
+                assert.ok(form.includes(escaped(s.t(key))), key);
+            }
+        }
+        s.Page.destroy();
+    });
+
+    it('reads a section saved before it existed, or an unknown value, as Gemini', () => {
+        const s = loadMonteur('en');
+        assert.equal(s.Page.normalizeConfig({ enabled: true }).brain, 'gemini');
+        assert.equal(s.Page.normalizeConfig({ brain: 'gpt' }).brain, 'gemini');
+        assert.equal(s.Page.normalizeConfig({ brain: 'claude_mac' }).brain, 'claude_mac');
+    });
+
+    it('sends the choice with the section, and ignores a value that is neither', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        s.Page.setting(pick('claude'));
+        assert.equal(s.Page.work.brain, 'gemini');
+        s.Page.setting(pick('claude_mac'));
+        assert.equal(s.Page.work.brain, 'claude_mac');
+        assert.equal(s.Page.settingsPayload().brain, 'claude_mac');
+        s.Page.destroy();
+    });
+
+    it('says it in Arabic too', () => {
+        const s = loadMonteur('ar');
+        for (const key of ['monteur.settings.brain', 'monteur.settings.brainGemini', 'monteur.settings.brainClaude', 'monteur.settings.brainHint']) {
+            assert.notEqual(s.t(key), key, key);
+        }
+        assert.match(s.t('monteur.settings.brainClaude'), /Claude/);
     });
 });

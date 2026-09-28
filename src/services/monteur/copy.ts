@@ -23,6 +23,7 @@ import {
 } from '../studio/generate.js';
 import { buildDm, languageKit, oneLine } from '../studio/prompts.js';
 import { ask, emptyCost, type CallCost } from './model.js';
+import { thinkRoute, type ThinkOn } from './think.js';
 import { formatLines, textOverlap, tokens, type PickedClip, type TranscriptLine } from './transcript.js';
 
 export const COPY_CALL_MS = 90_000;
@@ -353,7 +354,7 @@ export interface CopyResult {
 /**
  * The copy for every clip of one video, in one call. When the model numbers its answers, an
  * answer is matched by its number only: falling back to position would give a clip the model
- * skipped its neighbour's copy.
+ * skipped its neighbour's copy. `think` sends the call to Claude on the Mac.
  */
 export async function writeCopy(
     clips: readonly PickedClip[],
@@ -362,6 +363,7 @@ export async function writeCopy(
     ctx: CopyContext & { inFlightKeywords?: readonly string[] },
     lessons: readonly StudioLesson[],
     deadline: number,
+    think?: ThinkOn,
 ): Promise<CopyResult> {
     const cost = emptyCost();
     const raw = await ask({
@@ -380,6 +382,7 @@ export async function writeCopy(
         thinkingBudget: COPY_THINKING,
         maxOutputTokens: COPY_MAX_OUTPUT,
         capMs: COPY_CALL_MS,
+        think: thinkRoute(think, 'monteur.copy', 'copy'),
     }, deadline, cost);
     const items = raw && typeof raw === 'object' && Array.isArray((raw as { clips?: unknown }).clips)
         ? (raw as { clips: unknown[] }).clips

@@ -16,6 +16,11 @@
  * When it runs (the sweep): no `done` row in the last 7 days, no row at all in the last 6 hours —
  * so a failing run can't hammer Gemini — and at least 5 reels or videos with insights. Or now, on
  * POST /lessons/refresh.
+ *
+ * With `monteur.brain: 'claude_mac'` the call is Claude's, on the Mac (think.ts, MONTEUR.md §6.3):
+ * the run's row stays `running` while the call waits there, the sweep resumes it on every drain
+ * until the answer is in, and a call whose every try failed fails the run with "Claude on the Mac
+ * didn't answer: …". Gemini is never asked.
  */
 import { pool } from '../../config/db.js';
 import type { LessonBasis, StudioLesson, StudioLessonRow, StudioSettings } from '../../db/rows.js';
@@ -25,6 +30,7 @@ import { trimText, type GeminiSchema } from '../studio/generate.js';
 import { languageKit, oneLine } from '../studio/prompts.js';
 import { getStudioSettings } from '../studio/settings.js';
 import { ask, emptyCost, usageFields } from './model.js';
+import { lessonsThinkKey, ThinkWaiting, thinkRoute } from './think.js';
 
 export const ANALYST_FRESH_DAYS = 7;
 export const ANALYST_RETRY_HOURS = 6;
@@ -43,6 +49,25 @@ const ANALYST_THINKING = 1024;
 export const ANALYST_MAX_OUTPUT = 8192;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+
+export const ANALYST_PURPOSE = 'monteur.analyst';
+
+/**
+ * True for a run (`studio_lessons l`) whose call went to Claude on the Mac: it has a think try under
+ * the request `thinkRoute` gives it. Such a run waits as long as its tries do, so it is neither
+ * "cut off" after 10 minutes nor run again beside itself.
+ */
+export const THINKING_RUN = `EXISTS (SELECT 1 FROM studio_jobs j
+    WHERE j.creator_id = l.creator_id AND j.kind = 'monteur_think'
+      AND j.payload->>'request' = 'lessons/' || l.id::text || '/${ANALYST_PURPOSE}')`;
+
+/** Runs waiting for Claude on the Mac, oldest first: the sweep resumes these before starting any. */
+export const WAITING_RUNS_SQL = `
+    SELECT l.* FROM studio_lessons l
+      JOIN creators c ON c.id = l.creator_id AND c.is_active = TRUE
+     WHERE l.status = 'running' AND ${THINKING_RUN}
+     ORDER BY l.created_at
+     LIMIT 20`;
 
 /** Reels (Instagram) and videos (Facebook), with numbers from the insights edge, not just the node. */
 const REEL_WITH_INSIGHTS = `media_type IN ('REELS', 'VIDEO') AND (metrics ? 'views' OR metrics ? 'reach')`;
@@ -214,14 +239,16 @@ const iso = (d: Date | null): string | null => (d ? new Date(d).toISOString() : 
 
 /**
  * One run: a `running` row first, then `done` or `failed`. A failure is recorded on the row and
- * returned, not thrown: the row is the answer either way. Only a database error throws.
+ * returned, not thrown: the row is the answer either way. Only a database error throws. `resume`
+ * is a run waiting for Claude on the Mac, taken up again; while it still waits it is returned
+ * `running`, as it was.
  */
-export async function runAnalyst(creatorId: string, deadline: number): Promise<StudioLessonRow> {
+export async function runAnalyst(creatorId: string, deadline: number, resume: StudioLessonRow | null = null): Promise<StudioLessonRow> {
     const settings = await getStudioSettings(creatorId);
-    const { rows: started } = await pool.query<StudioLessonRow>(
+    const run = resume ?? (await pool.query<StudioLessonRow>(
         `INSERT INTO studio_lessons (creator_id, status) VALUES ($1, 'running') RETURNING *`, [creatorId]
-    );
-    const run = started[0]!;
+    )).rows[0]!;
+    const think = settings.monteur.brain === 'claude_mac' ? { creatorId, key: lessonsThinkKey(run.id) } : undefined;
     const cost = emptyCost();
     const began = Date.now();
     try {
@@ -235,7 +262,7 @@ export async function runAnalyst(creatorId: string, deadline: number): Promise<S
             currentLessons(pool, creatorId),
         ]);
         const raw = await ask({
-            purpose: 'monteur.analyst',
+            purpose: ANALYST_PURPOSE,
             system: analystSystemPrompt(settings),
             turns: [{ role: 'user', text: analystUserPrompt({ reels, current, share }) }],
             schema: LESSONS_SCHEMA,
@@ -243,6 +270,7 @@ export async function runAnalyst(creatorId: string, deadline: number): Promise<S
             thinkingBudget: ANALYST_THINKING,
             maxOutputTokens: ANALYST_MAX_OUTPUT,
             capMs: ANALYST_CALL_MS,
+            think: thinkRoute(think, ANALYST_PURPOSE, 'analyst'),
         }, deadline, cost);
         const { lessons, summary } = parseLessons(raw);
         log('info', 'monteur.analyst', {
@@ -258,6 +286,10 @@ export async function runAnalyst(creatorId: string, deadline: number): Promise<S
         );
         return rows[0] ?? run;
     } catch (err) {
+        if (err instanceof ThinkWaiting) {
+            log('info', 'monteur.analyst_waiting', { creator_id: creatorId, run_id: run.id, why: err.message });
+            return run;
+        }
         const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
         log('warn', 'monteur.analyst_failed', { creator_id: creatorId, ...describeError(err) });
         const { rows } = await pool.query<StudioLessonRow>(
@@ -270,12 +302,14 @@ export async function runAnalyst(creatorId: string, deadline: number): Promise<S
 
 /**
  * POST /lessons/refresh: run now, whatever the week's guards say — the operator asked. Refused
- * while a run is in progress, and when there is nothing to learn from.
+ * while a run is in progress (one waiting for Claude on the Mac is, however old), and when there is
+ * nothing to learn from.
  */
 export async function refreshLessons(creatorId: string, deadline: number = Date.now() + ANALYST_CALL_MS + 20_000): Promise<StudioLessonRow> {
     const { rows } = await pool.query<{ running: number; posts: number }>(
-        `SELECT (SELECT COUNT(*)::int FROM studio_lessons
-                  WHERE creator_id = $1 AND status = 'running' AND created_at > NOW() - make_interval(secs => $2)) AS running,
+        `SELECT (SELECT COUNT(*)::int FROM studio_lessons l
+                  WHERE l.creator_id = $1 AND l.status = 'running'
+                    AND (l.created_at > NOW() - make_interval(secs => $2) OR ${THINKING_RUN})) AS running,
                 (SELECT COUNT(*)::int FROM post_insights WHERE creator_id = $1 AND ${REEL_WITH_INSIGHTS}) AS posts`,
         [creatorId, STALE_RUN_MS / 1000]
     );
@@ -290,8 +324,17 @@ export async function refreshLessons(creatorId: string, deadline: number = Date.
  * From the sweep: the first tenant using the Monteur whose lessons are due, if any, run to the
  * deadline. "Using" is switched on, or with videos already: Run now picks with the lessons even
  * while the daily run is off. A tenant that never touched the Monteur spends no tokens here.
+ *
+ * Runs waiting for Claude on the Mac come first: each is a few queries until its answer is in, and
+ * the first that finishes is this sweep's run. A tenant with one waiting never starts another.
  */
 export async function runDueAnalyst(deadline: number, now: number = Date.now()): Promise<{ creator_id: string; status: StudioLessonRow['status'] } | null> {
+    const { rows: waiting } = await pool.query<StudioLessonRow>(WAITING_RUNS_SQL);
+    for (const row of waiting) {
+        const resumed = await runAnalyst(row.creator_id, deadline, row);
+        if (resumed.status !== 'running') return { creator_id: row.creator_id, status: resumed.status };
+    }
+    const busy = new Set(waiting.map((r) => r.creator_id));
     const { rows: tenants } = await pool.query<{ creator_id: string }>(
         `SELECT c.id AS creator_id
            FROM creators c
@@ -302,7 +345,7 @@ export async function runDueAnalyst(deadline: number, now: number = Date.now()):
           LIMIT 50`
     );
     for (const { creator_id: creatorId } of tenants) {
-        if (!analystDue(await analystStats(pool, creatorId), now)) continue;
+        if (busy.has(creatorId) || !analystDue(await analystStats(pool, creatorId), now)) continue;
         const row = await runAnalyst(creatorId, deadline);
         return { creator_id: creatorId, status: row.status };
     }

@@ -113,10 +113,12 @@ const MonteurPage = {
     STALE_MS: 30 * 1000,
 
     PLATFORMS: Object.freeze(['instagram', 'facebook', 'tiktok']),
-    FIELDS: Object.freeze(['enabled', 'source', 'mode', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
+    FIELDS: Object.freeze(['enabled', 'source', 'mode', 'brain', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
     /** MONTEUR.md §1: where a run takes its videos, and what happens to a reel once it is ready. */
     SOURCES: Object.freeze(['folder', 'course']),
     MODES: Object.freeze(['review', 'auto']),
+    /** MONTEUR.md §6.3: who makes the pick, the captions, the edits and the lessons. */
+    BRAINS: Object.freeze(['gemini', 'claude_mac']),
     NUMBER_FIELDS: Object.freeze(['videos_per_run', 'reels_per_video', 'min_seconds', 'max_seconds']),
     /** MONTEUR.md §1: the ranges the server validates. The server stays the authority. */
     LIMITS: Object.freeze({
@@ -156,6 +158,7 @@ const MonteurPage = {
             enabled: false,
             source: 'folder',
             mode: 'review',
+            brain: 'gemini',
             folder: null,
             run_at: '07:00',
             videos_per_run: 1,
@@ -282,6 +285,7 @@ const MonteurPage = {
             enabled: typeof s.enabled === 'boolean' ? s.enabled : d.enabled,
             source: this.SOURCES.includes(s.source) ? s.source : d.source,
             mode: this.MODES.includes(s.mode) ? s.mode : d.mode,
+            brain: this.BRAINS.includes(s.brain) ? s.brain : d.brain,
             folder: typeof s.folder === 'string' && s.folder.trim() ? s.folder : null,
             run_at: typeof s.run_at === 'string' ? s.run_at : d.run_at,
             videos_per_run: num(s.videos_per_run, d.videos_per_run),
@@ -1592,6 +1596,7 @@ const MonteurPage = {
                         ${this.lengthMarkup()}
                         ${this.platformsMarkup()}
                         ${this.modeMarkup()}
+                        ${this.brainMarkup()}
                     `)}
                 </ol>
                 ${this.enabledMarkup()}
@@ -1615,6 +1620,7 @@ const MonteurPage = {
                 ${this.lengthMarkup()}
                 ${this.platformsMarkup()}
                 ${this.modeMarkup()}
+                ${this.brainMarkup()}
                 <div id="mt-settings-savebar">${this.seed('mt-settings-savebar', this.saveBarMarkup())}</div>
             </form>
         `;
@@ -1719,6 +1725,22 @@ const MonteurPage = {
             ['review', t('monteur.settings.modeReview'), t('monteur.settings.modeReviewHint')],
             ['auto', t('monteur.settings.modeAuto'), t('monteur.settings.modeAutoHint')],
         ]);
+    },
+
+    /** "AI for picking, captions and edits": Gemini, in the app, or Claude, on the Mac worker. */
+    brainMarkup() {
+        const chosen = this.work.brain;
+        const option = (value, label) => html`<option value="${value}"${chosen === value ? html.raw(' selected') : ''}>${label}</option>`;
+        return html`
+            <div class="form-group">
+                <label class="form-label" for="mt-brain">${t('monteur.settings.brain')}</label>
+                <select class="select" id="mt-brain" data-change="monteur:setting" data-key="brain" aria-describedby="mt-brain-hint">
+                    ${option('gemini', t('monteur.settings.brainGemini'))}
+                    ${option('claude_mac', t('monteur.settings.brainClaude'))}
+                </select>
+                <p class="form-hint" id="mt-brain-hint">${t('monteur.settings.brainHint', { name: this.workerName() })}</p>
+            </div>
+        `;
     },
 
     folderFieldMarkup() {
@@ -1917,9 +1939,9 @@ const MonteurPage = {
         let problemKey = key;
         if (key === 'enabled') {
             w.enabled = !!el.checked;
-        } else if (key === 'source' || key === 'mode') {
+        } else if (key === 'source' || key === 'mode' || key === 'brain') {
             const value = String(el.value || '');
-            if (!(key === 'source' ? this.SOURCES : this.MODES).includes(value)) return;
+            if (!({ source: this.SOURCES, mode: this.MODES, brain: this.BRAINS })[key].includes(value)) return;
             w[key] = value;
             // The folder is asked for only when the videos come from it.
             if (key === 'source') {
@@ -2038,6 +2060,7 @@ const MonteurPage = {
             enabled: !!w.enabled,
             source: this.SOURCES.includes(w.source) ? w.source : 'folder',
             mode: this.MODES.includes(w.mode) ? w.mode : 'review',
+            brain: this.BRAINS.includes(w.brain) ? w.brain : 'gemini',
             folder: typeof w.folder === 'string' && w.folder.trim() ? w.folder.trim() : null,
             run_at: String(w.run_at || '').trim(),
             videos_per_run: num(w.videos_per_run),

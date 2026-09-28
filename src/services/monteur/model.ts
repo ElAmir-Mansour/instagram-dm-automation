@@ -1,12 +1,16 @@
 /**
- * The Monteur's three Gemini calls (the pick, the copy, the Analyst) go through here: the Studio's
- * writer chain (`callModel` → `callGemini`, `STUDIO_MODELS` in order, never the DM bot's model),
- * JSON under a `responseSchema`, a capped answer, and a running count of what each call cost.
+ * The Monteur's model calls (the pick, the copy, the Editor, the Analyst) go through here: the
+ * Studio's writer chain (`callModel` → `callGemini`, `STUDIO_MODELS` in order, never the DM bot's
+ * model), JSON under a `responseSchema`, a capped answer, and a running count of what each call cost.
+ *
+ * A call with a `think` route goes to Claude on the Mac instead (think.ts, MONTEUR.md §6.3), and
+ * never to Gemini: the tenant's `monteur.brain` is `claude_mac`.
  *
  * The call is whatever `setModelCaller` last installed, so tests stand in for Gemini the same way
  * the Studio's do.
  */
 import { callModel, type GeminiSchema, type ModelTurn } from '../studio/generate.js';
+import { think, type ThinkRoute } from './think.js';
 
 /** What a pass (one call, or a call and its repair) cost. `tokens_out` counts thinking too. */
 export interface CallCost {
@@ -47,13 +51,17 @@ export interface AskRequest {
     maxOutputTokens: number;
     /** This call's own ceiling; the pass's deadline may cut it shorter. */
     capMs: number;
+    /** Set when the brain is Claude on the Mac: the call is a `monteur_think` job, and Gemini is never asked. */
+    think?: ThinkRoute;
 }
 
 /** One call, timed to fit before `deadline`, with its tokens added to `cost`. */
 export async function ask(req: AskRequest, deadline: number, cost: CallCost): Promise<unknown> {
+    // No deadline to fit: a think only reads and writes the queue, and the Mac answers in its own time.
+    if (req.think) return think(req.think, req, cost);
     const left = deadline - Date.now();
     if (left < MIN_CALL_MS) throw new MonteurModelError(`Out of time before the ${req.purpose} call.`);
-    const { capMs, ...rest } = req;
+    const { capMs, think: _think, ...rest } = req;
     return callModel({
         ...rest,
         timeoutMs: Math.min(capMs, left),

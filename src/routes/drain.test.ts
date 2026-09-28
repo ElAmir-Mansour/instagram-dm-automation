@@ -75,7 +75,7 @@ describe('drain response shaping', () => {
 });
 
 describe('drain response shaping — the Monteur’s sweep', () => {
-    const MONTEUR = { exhausted: 0, auto: { approved: 1, refused: 0 }, pick: { source_id: 's-1', outcome: 'rendering' as const, clips: 1 }, analyst: null };
+    const MONTEUR = { exhausted: 0, auto: { approved: 1, refused: 0 }, pick: { source_id: 's-1', outcome: 'rendering' as const, clips: 1 }, waiting: 0, analyst: null };
 
     it('reports the sweep beside both halves', () => {
         const { status, body } = composeDrainResponse(JOBS as never, null, PUBLISH, null, { result: MONTEUR, error: null });

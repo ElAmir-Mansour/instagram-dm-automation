@@ -14,8 +14,9 @@ import { getMonteurSettings, getStudioSettings } from '../studio/settings.js';
 import { nextFreeSlots } from '../studio/slots.js';
 import { workerSummary } from '../studio/worker.js';
 import { log } from '../../utils/log.js';
-import { STALE_RUN_MS } from './analyst.js';
+import { STALE_RUN_MS, THINKING_RUN } from './analyst.js';
 import { nextRunAt } from './daily.js';
+import { RETIRE_SOURCE_THINKS_SQL, sourceThinkPattern } from './think.js';
 
 export const MAX_SOURCES_SHOWN = 30;
 export const MAX_CLIPS_SHOWN = 60;
@@ -147,9 +148,12 @@ export async function tiktokPrivacyNow(monteur: Pick<MonteurConfig, 'platforms'>
     return (await getTikTokPostingFlags()).audited ? 'PUBLIC_TO_EVERYONE' : 'SELF_ONLY';
 }
 
-/** A `running` row older than 10 minutes was cut off: shown as failed, not rewritten. */
+/**
+ * A `running` row older than 10 minutes was cut off: shown as failed, not rewritten. One waiting
+ * for Claude on the Mac (`thinking`) is not: the sweep finishes it, done or failed, however long it takes.
+ */
 function runState(row: StudioLessonRow, now: number): { status: StudioLessonRow['status']; error: string | null } {
-    const stale = row.status === 'running' && now - new Date(row.created_at).getTime() > STALE_RUN_MS;
+    const stale = row.status === 'running' && !row.thinking && now - new Date(row.created_at).getTime() > STALE_RUN_MS;
     return { status: stale ? 'failed' : row.status, error: stale ? (row.error ?? STALE_RUN_ERROR) : row.error };
 }
 
@@ -222,9 +226,11 @@ export async function releaseOrphanedClips(exec: Exec, creatorId: string, clipId
  */
 async function lessonsView(creatorId: string, now: number): Promise<LessonsView | null> {
     const { rows } = await pool.query<StudioLessonRow>(
-        `(SELECT * FROM studio_lessons WHERE creator_id = $1 AND status = 'done' ORDER BY created_at DESC LIMIT 1)
+        `(SELECT l.*, ${THINKING_RUN} AS thinking FROM studio_lessons l
+           WHERE l.creator_id = $1 AND l.status = 'done' ORDER BY l.created_at DESC LIMIT 1)
          UNION ALL
-         (SELECT * FROM studio_lessons WHERE creator_id = $1 ORDER BY created_at DESC LIMIT 1)`,
+         (SELECT l.*, ${THINKING_RUN} AS thinking FROM studio_lessons l
+           WHERE l.creator_id = $1 ORDER BY l.created_at DESC LIMIT 1)`,
         [creatorId]
     );
     const done = rows.find((r) => r.status === 'done') ?? null;
@@ -306,7 +312,8 @@ export async function getMonteurView(creatorId: string, now: number = Date.now()
 /**
  * POST /sources/:id/retry, for a source that failed or found no clips. Without words it is
  * transcribed again; with them it goes back to `transcribed` with its attempts reset, and the next
- * drain picks it. The row is locked first, so two presses queue one transcription.
+ * drain picks it. The row is locked first, so two presses queue one transcription. Its calls to
+ * Claude on the Mac are retired too, so the fresh attempts ask again from try 1 (think.ts).
  */
 export async function retrySource(creatorId: string, sourceId: string): Promise<SourceView> {
     return withTransaction(async (client) => {
@@ -328,6 +335,7 @@ export async function retrySource(creatorId: string, sourceId: string): Promise<
                   WHERE id = $1`,
                 [source.id]
             );
+            await client.query(RETIRE_SOURCE_THINKS_SQL, [creatorId, sourceThinkPattern(source.id)]);
         } else {
             await client.query(
                 `UPDATE monteur_sources SET status = 'transcribing', error = NULL, updated_at = NOW() WHERE id = $1`,

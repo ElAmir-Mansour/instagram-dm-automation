@@ -17,6 +17,7 @@ import {
     transientModelError,
 } from './sweep.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
+import type { ThinkTry } from './think.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const SOURCE = '66666666-6666-4666-8666-666666666666';
@@ -98,7 +99,8 @@ beforeEach(() => {
     db.routes.push(
         [/^SELECT c\.id AS creator_id FROM creators c/, () => ({ rows: [] })],
         [/^UPDATE monteur_sources SET status = 'failed', claimed_at = NULL/, () => ({ rows: [], rowCount: 0 })],
-        [/^WITH picked AS \( SELECT s\.id FROM monteur_sources s/, () => ({ rows: source ? [source] : [] })],
+        // A source the sweep already handed back ($3) is not claimed again in the same sweep.
+        [/^WITH picked AS \( SELECT s\.id FROM monteur_sources s/, (p) => ({ rows: source && !(p[2] ?? []).includes(source.id) ? [source] : [] })],
         [/FROM studio_settings/, () => ({ rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: reelsPerVideo } }] })],
         [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [{ lessons: [{ rule: 'ابدأ بالنتيجة', evidence: 'skip 40%' }] }] })],
         [/^SELECT caption FROM post_insights/, () => ({ rows: [{ caption: 'هذي أسرع طريقة تلخص فيها درس كامل\nbody' }, { caption: 'غلطة يسويها الكل' }] })],
@@ -134,6 +136,7 @@ describe('the claim — the SQL', () => {
         assert.match(sql, /s\.status = 'transcribed' OR \(s\.status = 'picking' AND s\.claimed_at < NOW\(\) - make_interval\(mins => \$1\)\)/);
         assert.match(sql, /attempts = s\.attempts \+ 1/);
         assert.match(sql, /c\.is_active = TRUE/, 'a deactivated tenant’s videos wait');
+        assert.match(sql, /AND NOT \(s\.id = ANY\(\$3::uuid\[\]\)\)/, 'never one this sweep already handed back, waiting for the Mac');
         assert.match(sql, /RETURNING .*s\.pick/, 'with any pick saved by an earlier attempt');
         assert.equal(PICK_STALE_MINUTES, 10);
         assert.equal(MAX_PICK_ATTEMPTS, 3);
@@ -147,7 +150,7 @@ describe('the claim — the SQL', () => {
         assert.equal(exhaust!.sql, EXHAUST_SOURCES_SQL.replace(/\s+/g, ' ').trim());
         assert.deepEqual(exhaust!.params, [10, 3, EXHAUSTED_PICK_ERROR]);
         assert.match(exhaust!.sql, /attempts >= \$2/);
-        assert.deepEqual(claim!.params, [10, 3]);
+        assert.deepEqual(claim!.params, [10, 3, []], 'and no source this sweep already handed back');
     });
 });
 
@@ -509,6 +512,195 @@ describe('sweepMonteur — attempts', () => {
         const result = await sweepMonteur({ deadline: Date.now() + 30_000 });
         assert.equal(result.skipped, 'no_time_for_pick');
         assert.equal(db.ran(/^WITH picked AS/).length, 0);
+        assert.equal(calls.length, 0);
+    });
+});
+
+// ─── Claude on the Mac (MONTEUR.md §6.3) ────────────────────────────────────────────────
+
+describe('sweepMonteur — Claude on the Mac (monteur.brain = claude_mac)', () => {
+    /** Each request's tries, newest first, as the think lookup returns them; keyed by the call's purpose. */
+    let thinks: Record<string, ThinkTry[]>;
+    let brains: Record<string, 'gemini' | 'claude_mac'>;
+    let sources: Record<string, unknown>[] | null;
+    const claude = (output: unknown): ThinkTry[] => [{
+        id: `done-${Math.random()}`, status: 'done', try: 1, quiet_s: 5, since_s: 5, error: null,
+        result: { output, model: 'claude-opus-5-5', usage: { input_tokens: 40, cache_read_input_tokens: 2000, output_tokens: 300 } },
+    }];
+    const failedTries = (n: number, error: string): ThinkTry[] =>
+        Array.from({ length: n }, (_, i) => ({ id: `f${i}`, status: 'failed' as const, try: n - i, quiet_s: 99_999, since_s: 99_999, result: null, error }));
+    const purposeOf = (request: string) => request.split('/').pop()!;
+    const queued = () => db.ran(/^INSERT INTO studio_jobs \(creator_id, kind, payload\) VALUES \(\$1, 'monteur_think'/).map((s) => JSON.parse(s.params[1]));
+    const released = () => db.ran(/^UPDATE monteur_sources SET status = 'transcribed', attempts = attempts - 1/);
+
+    beforeEach(() => {
+        thinks = {};
+        brains = { [TENANT]: 'claude_mac' };
+        sources = null;
+        db.routes.unshift(
+            [/FROM studio_settings/, (p) => ({
+                rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: reelsPerVideo, brain: brains[p[0]] ?? 'gemini' } }],
+            })],
+            [/^SELECT id, status, result, error, \(payload->>'try'\)::int AS try/, (p) => ({ rows: (thinks[purposeOf(p[1])] ?? []).map((t) => ({ ...t })) })],
+            [/^INSERT INTO studio_jobs \(creator_id, kind, payload\) VALUES \(\$1, 'monteur_think'/, () => ({ rows: [{ id: 'think-job' }] })],
+            [/^UPDATE monteur_sources SET status = 'transcribed', attempts = attempts - 1/, () => ({ rows: [], rowCount: 1 })],
+            [/^WITH picked AS \( SELECT s\.id FROM monteur_sources s/, (p) => {
+                const list = sources ?? (source ? [source] : []);
+                const next = list.find((s) => !(p[2] as string[]).includes(s.id as string));
+                return { rows: next ? [next] : [] };
+            }],
+        );
+    });
+
+    it('never reaches Gemini, whatever state the calls are in', async () => {
+        // Waiting on the pick, on the copy, on the Editor; answered; stopped: every drain of a pick.
+        const drains: Record<string, ThinkTry[]>[] = [
+            {},
+            { 'monteur.pick': claude(PICK) },
+            { 'monteur.pick': claude(PICK), 'monteur.copy': claude(COPY) },
+            { 'monteur.pick': claude(PICK), 'monteur.copy': claude(COPY), 'monteur.edit': claude(EDIT) },
+            { 'monteur.pick': failedTries(4, 'plan limit') },
+            { 'monteur.pick': [{ ...failedTries(1, 'x')[0]!, status: 'pending', quiet_s: 40 * 60 }] },
+        ];
+        for (const state of drains) {
+            thinks = state;
+            await sweepMonteur(later());
+        }
+        assert.deepEqual(calls.map((c) => c.purpose), [], 'Gemini is never called with the brain on Claude');
+    });
+
+    it('a call still on the Mac hands the source back as it was: transcribed, its attempt unspent', async () => {
+        const result = await sweepMonteur(later());
+        assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'waiting', clips: 0 });
+        assert.equal(result.waiting, 1);
+        const [job] = queued();
+        assert.equal(job.request, `source/${SOURCE}/a1/monteur.pick`, 'keyed by the source, its attempt and the call');
+        assert.equal(job.step, 'pick');
+        assert.equal(job.model, 'claude-opus-5-5');
+        assert.match(job.user, /^L3 \[00:10\.0\] جملة3\.$/m, 'the same prompt Gemini gets');
+        const [release] = released();
+        assert.deepEqual(release!.params, [SOURCE, 1]);
+        assert.match(release!.sql, /claimed_at = NULL, updated_at = NOW\(\) WHERE id = \$1 AND status = 'picking' AND attempts = \$2/);
+        assert.equal(db.ran(/^UPDATE monteur_sources SET (error = \$2|status = 'failed', error = \$2)/).length, 0, 'no attempt failed, none burned');
+        assert.equal(calls.length, 0);
+    });
+
+    it('moves on: the next source is claimed in the same sweep, never the one handed back', async () => {
+        const OTHER_TENANT = '22222222-2222-4222-8222-222222222222';
+        sources = [source!, { ...source!, id: 'second-source', creator_id: OTHER_TENANT }];
+        const result = await sweepMonteur(later());
+        const claims = db.ran(/^WITH picked AS/);
+        assert.deepEqual(claims.map((c) => c.params[2]), [[], [SOURCE]]);
+        assert.equal(result.waiting, 1);
+        assert.deepEqual(result.pick, { source_id: 'second-source', outcome: 'rendering', clips: 1 }, 'a Gemini tenant’s source, picked as before');
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.copy', 'monteur.edit']);
+    });
+
+    it('parses the answers exactly as Gemini’s, and records Claude’s model and tokens', async () => {
+        brains[TENANT] = 'gemini';
+        await sweepMonteur(later());
+        const viaGemini = { copy: savedCopy(), edits: db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14] };
+        db.statements.length = 0;
+        calls.length = 0;
+
+        brains[TENANT] = 'claude_mac';
+        thinks = { 'monteur.pick': claude(PICK), 'monteur.copy': claude(COPY), 'monteur.edit': claude(EDIT) };
+        const result = await sweepMonteur(later());
+        assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 });
+        assert.equal(calls.length, 0);
+        assert.deepEqual(savedCopy(), viaGemini.copy);
+        assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14]), EDITS);
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14], viaGemini.edits);
+        const record = JSON.parse(db.ran(/^UPDATE monteur_sources SET status = 'rendering'/)[0]!.params[1]);
+        assert.deepEqual([record.model, record.tokens_in, record.tokens_out], ['claude-opus-5-5', 2040, 300]);
+        assert.deepEqual(record.copy, { model: 'claude-opus-5-5', tokens_in: 2040, tokens_out: 300 });
+        assert.deepEqual(record.edit, { model: 'claude-opus-5-5', tokens_in: 2040, tokens_out: 300 });
+        assert.equal(queued().length, 0, 'nothing asked twice');
+    });
+
+    it('asks the Marketer once the pick is in, and the Editor about exactly the clips that got copy', async () => {
+        thinks = { 'monteur.pick': claude(PICK) };
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'waiting');
+        assert.deepEqual(queued().map((j) => j.request), [`source/${SOURCE}/a1/monteur.copy`]);
+        assert.equal(db.ran(/^UPDATE monteur_sources SET pick = \$2::jsonb/).length, 1, 'the pick is saved while the copy waits');
+
+        db.statements.length = 0;
+        thinks['monteur.copy'] = claude(COPY);
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'waiting');
+        const [edit] = queued();
+        assert.match(edit.request, new RegExp(`^source/${SOURCE}/a1/clips-[0-9a-f]{10}/monteur\\.edit$`));
+        assert.match(edit.user, /^C1\nL1 \[00:00\.2\] جملة3\./, 'the clip’s own lines, on its own clock');
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0, 'a reel never goes out without the edits it waits for');
+    });
+
+    it('a repair still on the Mac is waited for; one whose every try failed leaves the first answer standing', async () => {
+        reelsPerVideo = 2;
+        thinks = { 'monteur.pick': claude({ ...PICK, clips: [...PICK.clips, { ...PICK.clips[0], start_line: 90, end_line: 95 }] }) };
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'waiting');
+        const [repair] = queued();
+        assert.equal(repair.request, `source/${SOURCE}/a1/monteur.pick-repair`);
+        assert.equal(repair.step, 'pick');
+        assert.match(repair.user, /\n\nYour previous answer:\n\{"topic"/, 'the prompt, the answer it got, then what to fix');
+        assert.match(repair.user, /clip 2: L90–L95 is not a range of lines/);
+        assert.equal(db.ran(/^UPDATE monteur_sources SET (status = 'no_clips'|pick = \$2::jsonb)/).length, 0, 'the first answer is not taken while the repair may still come');
+
+        db.statements.length = 0;
+        thinks['monteur.pick-repair'] = failedTries(4, 'plan limit');
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'waiting', 'on to the Marketer, which waits');
+        const saved = JSON.parse(db.ran(/^UPDATE monteur_sources SET pick = \$2::jsonb/)[0]!.params[1]);
+        assert.equal(saved.saved.clips.length, 1, 'the first answer’s good clip stands');
+        assert.deepEqual(queued().map((j) => j.request), [`source/${SOURCE}/a1/monteur.copy`]);
+        assert.equal(calls.length, 0);
+    });
+
+    it('a source asks again on its next pick attempt: a failed attempt is a new request', async () => {
+        source = { ...source, attempts: 2 };
+        await sweepMonteur(later());
+        assert.equal(queued()[0].request, `source/${SOURCE}/a2/monteur.pick`);
+    });
+
+    it('stops the source when every try of a call failed, on any attempt, with what Claude said', async () => {
+        thinks = { 'monteur.pick': failedTries(4, 'You have hit your usage limit') };
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'failed');
+        const [failed] = db.ran(/^UPDATE monteur_sources SET status = 'failed', error = \$2/);
+        assert.deepEqual(failed!.params, [SOURCE, 'Claude on the Mac didn\'t answer: You have hit your usage limit', 1]);
+        assert.equal(released().length, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    it('an Editor whose tries all failed stops the source too: no reel without its edits, and no Gemini', async () => {
+        thinks = { 'monteur.pick': claude(PICK), 'monteur.copy': claude(COPY), 'monteur.edit': failedTries(4, 'timed out') };
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'failed');
+        assert.match(result.pick?.error ?? '', /^Claude on the Mac didn't answer: timed out$/);
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    it('any other failure of the Editor’s call fails the attempt: the edits are never dropped', async () => {
+        thinks = { 'monteur.pick': claude(PICK), 'monteur.copy': claude(COPY) };
+        db.routes.unshift([/^SELECT id, status, result, error, \(payload->>'try'\)::int AS try/, (p) => {
+            if (String(p[1]).endsWith('/monteur.edit')) throw new Error('connection terminated unexpectedly');
+            return { rows: (thinks[String(p[1]).split('/').pop()!] ?? []).map((t) => ({ ...t })) };
+        }]);
+        const result = await sweepMonteur(later());
+        assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'retry', error: 'connection terminated unexpectedly' });
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+        assert.equal(calls.length, 0);
+    });
+
+    it('a try gone quiet for 20 minutes is failed and asked again after the backoff; the source waits', async () => {
+        thinks = { 'monteur.pick': [{ id: 'quiet', status: 'pending', try: 1, quiet_s: 21 * 60, since_s: 21 * 60, result: null, error: null }] };
+        db.routes.unshift([/^UPDATE studio_jobs SET status = 'failed'/, (p) => {
+            thinks['monteur.pick'] = [{ ...thinks['monteur.pick']![0]!, status: 'failed', error: p[1], since_s: 0 }];
+            return { rows: [], rowCount: 1 };
+        }]);
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'waiting');
+        assert.equal(db.ran(/^UPDATE studio_jobs SET status = 'failed'/)[0]!.params[0], 'quiet');
+        assert.equal(queued().length, 0, 'try 2 after 10 minutes, not at once');
+        assert.equal(released().length, 1);
         assert.equal(calls.length, 0);
     });
 });
