@@ -253,7 +253,7 @@ describe('the monteur section (MONTEUR.md §1)', () => {
         ['a posting slot that is not HH:MM', { post_at: ['7pm'] }, /monteur\.post_at\[0\] must be a time/],
         ['a slot twice', { post_at: ['19:00', '19:00'] }, /monteur\.post_at lists a time twice/],
         ['a minimum under 10 s', { min_seconds: 5 }, /monteur\.min_seconds must be a number from 10 to 60/],
-        ['a maximum over 90 s', { max_seconds: 120 }, /monteur\.max_seconds must be a number from 15 to 90/],
+        ['a maximum over 3 minutes', { max_seconds: 200 }, /monteur\.max_seconds must be a number from 15 to 180/],
         ['a maximum not above the minimum', { min_seconds: 30, max_seconds: 30 }, /max_seconds must be more than monteur\.min_seconds/],
         ['enabled as text', { enabled: 'yes' }, /monteur\.enabled must be true or false/],
         ['a source it cannot read', { source: 'drive' }, /^monteur\.source must be one of folder, course$/],

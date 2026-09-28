@@ -233,7 +233,7 @@ export function settingsProblems(s: StudioSettings): string[] {
         }
         times(monteur.post_at, 'monteur.post_at', 1, 4);
         between(monteur.min_seconds, 'monteur.min_seconds', 10, 60, false);
-        between(monteur.max_seconds, 'monteur.max_seconds', 15, 90, false);
+        between(monteur.max_seconds, 'monteur.max_seconds', 15, 180, false);
         if (typeof monteur.min_seconds === 'number' && typeof monteur.max_seconds === 'number'
             && monteur.max_seconds <= monteur.min_seconds) {
             problems.push('monteur.max_seconds must be more than monteur.min_seconds');
