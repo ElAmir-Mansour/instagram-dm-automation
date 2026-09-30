@@ -214,6 +214,7 @@ export function settingsProblems(s: StudioSettings): string[] {
         oneOf(monteur.mode, 'monteur.mode', MONTEUR_MODES);
         oneOf(monteur.brain, 'monteur.brain', MONTEUR_BRAINS);
         oneOf(monteur.style, 'monteur.style', MONTEUR_STYLES);
+        if (typeof monteur.human !== 'boolean') problems.push('monteur.human must be true or false');
         if (monteur.folder !== null) {
             text(monteur.folder, 'monteur.folder', 1024, true);
             if (typeof monteur.folder === 'string' && monteur.folder.trim() && !ABSOLUTE_FOLDER.test(monteur.folder)) {

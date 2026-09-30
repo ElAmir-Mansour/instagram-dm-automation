@@ -473,6 +473,43 @@ describe('rerenderClip', () => {
         assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[2]).edits, edits);
     });
 
+    it('re-sends the stored human touches — on /rerender and on an edit that re-renders', async () => {
+        const direction = {
+            cuts: [{ t: 4.2, shot: 'close' }], doodles: [{ t: 6, shape: 'underline', target: 'caption' }], freezes: [{ t: 9, text: 'لحظة' }],
+            transitions: [{ t: 12, kind: 'leak' }], behind: [{ t: 15, text: 'دفتر' }], emphasis: [4.2, 7.5],
+        };
+        clip = { ...clip, status: 'failed', direction };
+        await rerenderClip(TENANT, CLIP);
+        assert.match(db.ran(/^SELECT id, creator_id, source_id, rank, status, start_s::float8/)[0]!.sql, /\bedits, direction\b/);
+        const payload = JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[2]);
+        assert.deepEqual(payload.direction, { cuts: direction.cuts, doodles: direction.doodles, freezes: direction.freezes, transitions: direction.transitions });
+        assert.deepEqual(payload.emphasis, [4.2, 7.5]);
+        assert.deepEqual(payload.behind, [{ t: 15, text: 'دفتر' }]);
+        clip = { ...clip, status: 'review' };
+        db.statements.length = 0;
+        await patchClip(TENANT, CLIP, { title: 'عنوان أقوى' });
+        assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[2]).emphasis, [4.2, 7.5]);
+    });
+
+    it('renders again without them once monteur.human is off, though the clip keeps its plan', async () => {
+        monteur = { platforms: ['instagram'], post_at: ['19:00'], human: false };
+        clip = { ...clip, status: 'failed', direction: { cuts: [], doodles: [], freezes: [], transitions: [{ t: 12, kind: 'leak' }], behind: [], emphasis: [3] } };
+        await rerenderClip(TENANT, CLIP);
+        const payload = JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[2]);
+        for (const key of ['direction', 'emphasis', 'behind']) assert.ok(!(key in payload), key);
+        assert.equal(db.ran(/^UPDATE clip_drafts SET direction/).length, 0, 'nothing is erased');
+    });
+
+    it('renders a clip with no plan (cut before v29, or while off) as before: nothing new in the payload', async () => {
+        for (const direction of [null, undefined]) {
+            clip = { ...clip, status: 'failed', direction };
+            db.statements.length = 0;
+            await rerenderClip(TENANT, CLIP);
+            const payload = JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[2]);
+            for (const key of ['direction', 'emphasis', 'behind']) assert.ok(!(key in payload), `${key} with ${direction}`);
+        }
+    });
+
     it('renders a clip cut before v27 with no edits', async () => {
         clip = { ...clip, status: 'failed', edits: null };
         await rerenderClip(TENANT, CLIP);

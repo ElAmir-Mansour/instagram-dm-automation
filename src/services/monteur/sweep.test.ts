@@ -10,7 +10,7 @@ import { setLogSink } from '../../utils/log.js';
 import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import { ASK_POOL } from './copy.js';
-import { EDITOR_MAX_OUTPUT, EDITOR_SCHEMA, EDITOR_THINKING } from './editor.js';
+import { EDITOR_MAX_OUTPUT, EDITOR_SCHEMA, EDITOR_THINKING, editorSchema, HUMAN_TOUCHES_PROMPT } from './editor.js';
 import { PICK_MAX_OUTPUT } from './pick.js';
 import {
     CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, setEditRetryWaits, sweepMonteur,
@@ -52,6 +52,32 @@ const EDITS = [
     { t: 10.15, kind: 'emoji', emoji: '💡', sfx: 'switch' },
 ];
 
+/**
+ * The same edits with the human touches, on the clip's lines: L1 «جملة3.» at 0.15 s (inside the
+ * first 0.8 s), L2 at 5.15, L3 at 10.15, L4 at 15.15, L5 «جملة7.» at 20.15, in a 24.95 s clip.
+ */
+const EDIT_HUMAN = {
+    clips: [{
+        ...EDIT.clips[0]!,
+        emphasis: [{ line: 2, word: 'جملة4' }, { line: 1, word: 'جملة3' }],
+        doodles: [{ line: 3, word: 'جملة5', shape: 'circle', target: 'caption' }, { line: 4, word: 'جملة6', shape: 'heart', target: 'caption' }],
+        transitions: [{ line: 4, word: 'جملة6', kind: 'flash' }],
+        cuts: [{ line: 4, word: 'جملة6', shot: 'wide' }, { line: 2, word: 'جملة4', shot: 'close' }],
+        freezes: [{ line: 3, word: 'جملة5', text: 'لحظة' }],
+        behind: [{ line: 5, word: 'جملة7', text: 'مهم جدا' }],
+    }],
+};
+/** What the sweep stores for EDIT_HUMAN: the clip's clock, L1's emphasis and the heart dropped, the cuts in time order. */
+const DIRECTION = {
+    cuts: [{ t: 5.15, shot: 'close' }, { t: 15.15, shot: 'wide' }],
+    doodles: [{ t: 10.15, shape: 'circle', target: 'caption' }],
+    freezes: [{ t: 10.15, text: 'لحظة' }],
+    transitions: [{ t: 15.15, kind: 'flash' }],
+    behind: [{ t: 20.15, text: 'مهم جدا' }],
+    emphasis: [5.15],
+};
+const NO_TOUCHES = { cuts: [], doodles: [], freezes: [], transitions: [], behind: [], emphasis: [] };
+
 let db: FakeDb;
 let source: Record<string, unknown> | null;
 let handOffClaimed: boolean;
@@ -66,6 +92,7 @@ let existingTexts: string[];
 let recentCaptions: { caption: string; keyword: string }[];
 let previousCaller: CallModel;
 let reelsPerVideo: number;
+let human: boolean | undefined;
 let previousSink: ReturnType<typeof setLogSink>;
 let previousWaits: readonly number[];
 
@@ -76,6 +103,7 @@ beforeEach(() => {
     calls = [];
     answers = { 'monteur.pick': PICK, 'monteur.copy': COPY, 'monteur.edit': EDIT };
     reelsPerVideo = 1;
+    human = undefined;
     logs = [];
     copyCalledAt = -1;
     inFlight = [];
@@ -101,7 +129,9 @@ beforeEach(() => {
         [/^UPDATE monteur_sources SET status = 'failed', claimed_at = NULL/, () => ({ rows: [], rowCount: 0 })],
         // A source the sweep already handed back ($3) is not claimed again in the same sweep.
         [/^WITH picked AS \( SELECT s\.id FROM monteur_sources s/, (p) => ({ rows: source && !(p[2] ?? []).includes(source.id) ? [source] : [] })],
-        [/FROM studio_settings/, () => ({ rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: reelsPerVideo } }] })],
+        [/FROM studio_settings/, () => ({
+            rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: reelsPerVideo, ...(human === undefined ? {} : { human }) } }],
+        })],
         [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [{ lessons: [{ rule: 'ابدأ بالنتيجة', evidence: 'skip 40%' }] }] })],
         [/^SELECT caption FROM post_insights/, () => ({ rows: [{ caption: 'هذي أسرع طريقة تلخص فيها درس كامل\nbody' }, { caption: 'غلطة يسويها الكل' }] })],
         [/^SELECT text FROM clip_drafts/, () => ({ rows: existingTexts.map((text) => ({ text })) })],
@@ -414,6 +444,79 @@ describe('sweepMonteur — the Editor (MONTEUR.md §6.2)', () => {
     });
 });
 
+describe('sweepMonteur — the human touches (MONTEUR.md §6.2)', () => {
+    const insert = () => db.ran(/^INSERT INTO clip_drafts/)[0]!;
+    const editCall = () => calls.find((c) => c.purpose === 'monteur.edit')!;
+
+    it('asks for them by default, and stores the plan in clip_drafts.direction on the clip’s clock', async () => {
+        answers['monteur.edit'] = EDIT_HUMAN;
+        await sweepMonteur(later());
+        assert.deepEqual(editCall().schema, EDITOR_SCHEMA);
+        assert.ok(editCall().system.includes(HUMAN_TOUCHES_PROMPT));
+        assert.match(insert().sql, /\(creator_id, source_id, .*, copy, edits, direction\) VALUES \(.*\$15::jsonb, \$16::jsonb\)/);
+        assert.deepEqual(JSON.parse(insert().params[15]), DIRECTION);
+        assert.deepEqual(JSON.parse(insert().params[14]), EDITS, 'the edits as before');
+        const line = logs.find((l) => l.event === 'monteur.edit');
+        assert.equal(line!.touches, 7);
+    });
+
+    it('sends the plan in the render: direction without emphasis and behind, which ride beside it', async () => {
+        answers['monteur.edit'] = EDIT_HUMAN;
+        await sweepMonteur(later());
+        const [payload] = renderPayloads();
+        const { emphasis, behind, ...rest } = DIRECTION;
+        assert.deepEqual(payload.direction, rest);
+        assert.deepEqual(Object.keys(payload.direction), ['cuts', 'doodles', 'freezes', 'transitions']);
+        assert.deepEqual(payload.emphasis, emphasis);
+        assert.deepEqual(payload.behind, behind);
+        assert.deepEqual(payload.edits, EDITS);
+    });
+
+    it('an answer without touches is an empty plan, sent as empty lists', async () => {
+        await sweepMonteur(later());
+        assert.deepEqual(JSON.parse(insert().params[15]), NO_TOUCHES);
+        const [payload] = renderPayloads();
+        assert.deepEqual([payload.direction, payload.emphasis, payload.behind], [{ cuts: [], doodles: [], freezes: [], transitions: [] }, [], []]);
+    });
+
+    it('switched off: the Editor is not asked for them, nothing is stored, and the render carries none, whatever the answer holds', async () => {
+        human = false;
+        answers['monteur.edit'] = EDIT_HUMAN;
+        await sweepMonteur(later());
+        assert.deepEqual(editCall().schema, editorSchema(false));
+        assert.ok(!editCall().system.includes('Human touches'));
+        assert.equal(insert().params[15], null, 'SQL NULL, not the JSON null');
+        assert.deepEqual(JSON.parse(insert().params[14]), EDITS, 'the edits still go out');
+        const [payload] = renderPayloads();
+        for (const key of ['direction', 'emphasis', 'behind']) assert.ok(!(key in payload), key);
+        assert.equal(logs.find((l) => l.event === 'monteur.edit')!.touches, 0);
+    });
+
+    it('a failed Editor call stores no plan and sends nothing new', async () => {
+        answers['monteur.edit'] = new Error('Gemini request failed [HTTP 400]');
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'rendering');
+        assert.equal(insert().params[15], null);
+        const [payload] = renderPayloads();
+        for (const key of ['direction', 'emphasis', 'behind']) assert.ok(!(key in payload), key);
+    });
+
+    it('a clip the answer skipped gets no plan; the other gets its own', async () => {
+        reelsPerVideo = 2;
+        answers['monteur.pick'] = {
+            topic: PICK.topic,
+            clips: [PICK.clips[0], { ...PICK.clips[0], start_line: 11, end_line: 15, title: 'عنوان ثاني', scores: { hook: 3, alone: 3, payoff: 2, send: 1 } }],
+        };
+        answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, clip: 1 }, { ...COPY_ITEM, clip: 2, keyword_candidates: ['ملاحظة'] }] };
+        answers['monteur.edit'] = { clips: [{ ...EDIT_HUMAN.clips[0]!, clip: 2, edits: [] }] };
+        await sweepMonteur(later());
+        const stored = db.ran(/^INSERT INTO clip_drafts/).map((i) => i.params[15]);
+        assert.equal(stored[0], null);
+        // Clip 2 starts at 49.85 s: its L2 is «جملة12.», so words anchored on «جملة4» fall to the line's start.
+        assert.deepEqual(JSON.parse(stored[1]).emphasis, [5.15]);
+        assert.ok(!('direction' in renderPayloads()[0]!) && 'direction' in renderPayloads()[1]!);
+    });
+});
+
 describe('sweepMonteur — keywords and asks', () => {
     it('shares a keyword a reel in flight already asks for, and still marks it for a campaign', async () => {
         inFlight = ['دفتر'];
@@ -611,7 +714,7 @@ describe('sweepMonteur — Claude on the Mac (monteur.brain = claude_mac)', () =
     it('parses the answers exactly as Gemini’s, and records Claude’s model and tokens', async () => {
         brains[TENANT] = 'gemini';
         await sweepMonteur(later());
-        const viaGemini = { copy: savedCopy(), edits: db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14] };
+        const viaGemini = { copy: savedCopy(), edits: db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14], direction: db.ran(/^INSERT INTO clip_drafts/)[0]!.params[15] };
         db.statements.length = 0;
         calls.length = 0;
 
@@ -623,6 +726,7 @@ describe('sweepMonteur — Claude on the Mac (monteur.brain = claude_mac)', () =
         assert.deepEqual(savedCopy(), viaGemini.copy);
         assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14]), EDITS);
         assert.equal(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14], viaGemini.edits);
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[15], viaGemini.direction, 'the human touches too');
         const record = JSON.parse(db.ran(/^UPDATE monteur_sources SET status = 'rendering'/)[0]!.params[1]);
         assert.deepEqual([record.model, record.tokens_in, record.tokens_out], ['claude-opus-5-5', 2040, 300]);
         assert.deepEqual(record.copy, { model: 'claude-opus-5-5', tokens_in: 2040, tokens_out: 300 });

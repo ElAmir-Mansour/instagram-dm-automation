@@ -63,7 +63,7 @@ function isOneWord(value: string): boolean {
 async function lockClip(exec: Exec, creatorId: string, clipId: string): Promise<ClipDraftRow> {
     const { rows } = await exec.query<ClipDraftRow>(
         `SELECT id, creator_id, source_id, rank, status, start_s::float8 AS start_s, end_s::float8 AS end_s, title, hook, why,
-                score::float8 AS score, topic, hook_type, scores, text, copy, edits, render, schedule, error, created_at, updated_at
+                score::float8 AS score, topic, hook_type, scores, text, copy, edits, direction, render, schedule, error, created_at, updated_at
            FROM clip_drafts WHERE id = $1 AND creator_id = $2 FOR UPDATE`,
         [clipId, creatorId]
     );
@@ -200,6 +200,8 @@ async function queueRender(exec: Exec, creatorId: string, clip: ClipDraftRow, ti
         clipId: clip.id, source: rows[0], start: clip.start_s, end: clip.end_s, title, keyword, accent, settings,
         // The Editor's edits are the clip's, written once at the pick: every render carries them.
         edits: Array.isArray(clip.edits) ? clip.edits : [],
+        // So are its human touches; buildRenderPayload leaves them out while `monteur.human` is off.
+        direction: clip.direction && typeof clip.direction === 'object' ? clip.direction : null,
     }));
 }
 

@@ -1,14 +1,16 @@
 /**
  * What the worker needs to render one reel (MONTEUR.md §3 `monteur_render`): the cut, its words on
- * the clip's own clock, the hook, the CTA card's two lines, the brand (with the edits' style), and the Editor's edits.
+ * the clip's own clock, the hook, the CTA card's two lines, the brand (with the edits' style), the Editor's edits,
+ * and — while `monteur.human` is on — its human touches.
  *
  * The same builder serves the first render and every re-render after an edit, so both cut the
  * words the same way and carry the same edits (the ones stored on the clip). A clip keeps the accent it was first rendered in; a new clip takes the next
  * palette colour not used by the tenant's latest reels, so neighbouring tiles in the grid differ.
  */
-import type { ClipEdit, MonteurRenderPayload, StudioSettings, TranscriptWord } from '../../db/rows.js';
+import type { ClipDirection, ClipEdit, MonteurRenderPayload, StudioSettings, TranscriptWord } from '../../db/rows.js';
 import type { Exec } from '../studio/common.js';
 import { pickAccents } from '../studio/generate.js';
+import { humanTouchesOn } from './editor.js';
 
 /** Seconds into the clip. The title is on screen from frame 0 anyway; this avoids a mid-blink frame. */
 export const COVER_AT_S = 0.5;
@@ -46,6 +48,20 @@ export function clipWords(words: readonly TranscriptWord[], start: number, end: 
         .map(([t0, t1, text]) => [round2(t0 - start), Math.min(length, round2(t1 - start)), text] as TranscriptWord);
 }
 
+/**
+ * A clip's stored plan as the worker takes it (MONTEUR.md §3): `direction` holds the cuts, doodles,
+ * freezes and transitions; the highlighter's word starts and the words behind the speaker ride
+ * beside it, as `emphasis` and `behind`. A list missing from the stored plan is sent empty.
+ */
+export function touchFields(plan: ClipDirection): Required<Pick<MonteurRenderPayload, 'direction' | 'emphasis' | 'behind'>> {
+    const list = <T>(v: readonly T[] | undefined): T[] => (Array.isArray(v) ? [...v] : []);
+    return {
+        direction: { cuts: list(plan.cuts), doodles: list(plan.doodles), freezes: list(plan.freezes), transitions: list(plan.transitions) },
+        emphasis: list(plan.emphasis),
+        behind: list(plan.behind),
+    };
+}
+
 export function buildRenderPayload(input: {
     clipId: string;
     source: { id: string; path: string; words: readonly TranscriptWord[] | null };
@@ -57,6 +73,8 @@ export function buildRenderPayload(input: {
     settings: StudioSettings;
     /** The clip's stored edits (MONTEUR.md §6.2), already on its clock. */
     edits: readonly ClipEdit[];
+    /** The clip's stored human touches (§6.2), on its clock; null or absent for none. */
+    direction?: ClipDirection | null;
 }): MonteurRenderPayload {
     const { settings } = input;
     return {
@@ -74,6 +92,9 @@ export function buildRenderPayload(input: {
         brand: { accent: input.accent, font: settings.brand.fonts.display, direction: settings.brand.direction, style: settings.monteur.style },
         cover_at: COVER_AT_S,
         edits: [...input.edits],
+        // Read at every render, like the style: switched off, a re-render leaves them out. No plan
+        // (a failed Editor call, a clip cut before v29 or while off) sends nothing new.
+        ...(input.direction && humanTouchesOn(settings) ? touchFields(input.direction) : {}),
     };
 }
 

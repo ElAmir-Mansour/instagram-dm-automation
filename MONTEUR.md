@@ -31,6 +31,7 @@ type MonteurConfig = {
   brain: 'gemini' | 'claude_mac';  // default 'gemini'. 'claude_mac': the pick, the Marketer, the Editor and the
                              // Analyst are Claude's, on the Mac worker with the owner's plan, never Gemini (§6.3)
   style: 'classic' | 'paper';  // default 'classic'. How the worker draws the edits, sent as brand.style (§6.2)
+  human: boolean;            // default true. The Editor's human touches: cuts, doodles, highlights, transitions (§6.2)
   folder: string | null;     // absolute path on the worker's machine, ≤ 1024 chars; needed only for 'folder'
   run_at: string;            // 'HH:MM' in schedule.timezone, default '07:00'
   videos_per_run: number;    // 1–10, default 1: new videos taken per run, oldest first
@@ -110,6 +111,9 @@ studio_lessons (
 **v27** (`migration_v27_monteur_edits.sql`) adds `clip_drafts.edits jsonb NOT NULL DEFAULT '[]'`: the Editor's
 edits (§6.2), written once by the sweep and sent with every render of the clip. Migrate before deploying.
 
+**v29** (`migration_v29_monteur_direction.sql`) adds `clip_drafts.direction jsonb` (nullable): the Editor's human
+touches (§6.2), written next to `edits`; NULL is no plan. Migrate before deploying.
+
 **Media references.** The media in `render` for a clip that is `rendering`, `review` or `scheduled` counts as
 referenced. Both the retention sweep (`src/services/retention.ts`) and `deleteUnreferencedUploads` must treat
 it that way. A rejected or failed clip's media is not referenced.
@@ -168,7 +172,7 @@ What the app does on apply:
 - Stores `words` and `duration`, and sets the status to `transcribed`. The drain sweep (§6) takes it from there.
 
 **`monteur_render`**
-`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction, style }, cover_at, edits: ClipEdit[] }`
+`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction, style }, cover_at, edits: ClipEdit[], direction?: { cuts, doodles, freezes, transitions }, emphasis?: number[], behind?: [{ t, text }] }`
 → `{ video_url, tiktok_video_url: string | null, cover_url, duration, width: 1080, height: 1920 }`
 
 `cta_tiktok` makes a second MP4 from the same cut, identical except for the CTA text (e.g. «الرابط في البايو»),
@@ -470,7 +474,7 @@ The pro edits on each reel, asked for by the owner: images and edits tied to the
 edits that follow instructional-design and e-learning practice.
 
 **One Gemini call** for all of a video's clips, after the Marketer, for the clips that got copy. `writeEdits` goes
-through `ask()` like the Marketer (`EDITOR_SCHEMA`, `maxOutputTokens` 8192, thinking 1024, a 90 s cap inside the
+through `ask()` like the Marketer (`EDITOR_SCHEMA`, `maxOutputTokens` 16384 for the touches too, thinking 1024, a 90 s cap inside the
 sweep's deadline) and is logged as `monteur.edit` with its tokens. The call is recorded on the source's `pick` as
 `edit: { model, tokens_in, tokens_out, error? }`.
 
@@ -497,6 +501,23 @@ a reason; the older kinds fill in.
 **`icon`** (2026-09-30): a line drawing the video draws on, stroke by stroke, for a concept or object no photo fits; `icon` is one of `ICON_NAMES` (kept in step with the worker's `scripts/monteur/icons.mjs`), lowercased and trimmed, and any other name drops the edit; an optional `text` label of 1–3 words (≤ 24 characters, else dropped and the icon kept); pop; not a picture, and counted in the variety rule.
 
 **`monteur.style`** (`'classic' | 'paper'`, default `'classic'`, Settings → Edit style): sent in every `monteur_render` as `brand.style`, read at each render, so a re-render takes the current style; 'paper' is the Ali Abdaal look (unfolding cards, paper letters, drawn icons, black-and-white b-roll), and a worker that doesn't know the field renders classic.
+
+**Human touches** (2026-09-30, `monteur.human`, default on, Settings → Human touches): so a reel looks edited by
+hand, the same call plans per clip, next to `edits`, `emphasis` (6–12 caption words the captions swipe a highlighter
+over), `doodles` (4–8 marker `circle | underline | arrow | stars | check | cross` on the `caption` or the speaker's
+`head`), `transitions` (3–5 `leak | flash | whip | glitch` at a change of section) and, for a talking head only,
+`cuts` (`wide | close`, a two-camera feel), `freezes` (≤ 2, 1–2 words) and `behind` (3–6 big words behind him).
+Each item is `{ line, word, … }`, anchored by `anchorTime`, the edits' own rule, but never onto a fallback line;
+the enums are small. `placeDirection` drops a bad enum, a freeze's text over 2 words / 18 characters or a behind's
+over 2 / 16 (`phrase()`), anything in the clip's first 0.8 s or last 3.2 s, a second item of a list at the same `t`,
+and a cut to the shot already on; it sorts each list and caps it (emphasis 12, doodles 8, transitions 5, cuts 16,
+freezes 2, behind 6). The source's orientation is not known (`monteur_sources` has no width or height), so the prompt
+asks for the talking-head lists with a rule to leave them empty for a screen recording, and the worker drops them
+for a landscape video. Stored in `clip_drafts.direction` (v29) as `{ cuts, doodles, freezes, transitions, behind,
+emphasis: number[] }` on the clip's clock, NULL when off, when the call failed, or before v29. Every render, the
+first and each re-render, sends `direction` (without `emphasis` and `behind`), `emphasis` (the times) and `behind`
+(`[{ t, text }]`) while the setting is on; with no plan or the setting off it sends none of the three, and the
+worker renders as before. Off, the Editor is not asked for them (schema and prompt as before).
 
 **The prompt's rules:** show what he refers to (example); guide the eye while he demonstrates (callout); segment
 a procedure (step), pre-train a term (define), contrast (compare), close with one recap; each edit on the exact

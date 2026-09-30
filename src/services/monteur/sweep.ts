@@ -5,8 +5,8 @@
  *   claim one source     `transcribed`, or `picking` with a claim older than 10 minutes, atomically
  *   1. the Monteur       one call: which lines make the reels (pick.ts)
  *   2. the Marketer      one call for all of them: captions, keyword, DM (copy.ts)
- *   3. the Editor        one call for all of them: the pro edits on each reel (editor.ts). Never
- *                        blocks: a failed call renders the reels with no edits
+ *   3. the Editor        one call for all of them: the pro edits and the human touches on each reel
+ *                        (editor.ts). Never blocks: a failed call renders the reels with neither
  *   4. hand-off          clip rows `rendering`, one `monteur_render` job each, the source `rendering`
  *   the Analyst          when a tenant's lessons are due (analyst.ts)
  *
@@ -25,7 +25,7 @@
  * throws so that nothing here can fail the drain's response.
  */
 import { pool } from '../../config/db.js';
-import type { ClipCopy, ClipEdit, MonteurSourceRow, SourcePick, StudioSettings, TranscriptWord } from '../../db/rows.js';
+import type { ClipCopy, ClipDirection, ClipEdit, MonteurSourceRow, SourcePick, StudioSettings, TranscriptWord } from '../../db/rows.js';
 import { describeError, log } from '../../utils/log.js';
 import { withTransaction } from '../studio/common.js';
 import { buildGenContext } from '../studio/drafts.js';
@@ -226,7 +226,7 @@ async function failAttempt(source: ClaimedSource, err: unknown): Promise<Monteur
     return { source_id: source.id, outcome: final ? 'failed' : 'retry', error: message };
 }
 
-type ReadyClip = { clip: PickedClip; copy: ClipCopy; edits: ClipEdit[] };
+type ReadyClip = { clip: PickedClip; copy: ClipCopy; edits: ClipEdit[]; direction: ClipDirection | null };
 
 /**
  * Clips, and their renders, in one transaction with the source's own move to `rendering` — and
@@ -247,22 +247,24 @@ async function handOff(
         if (!rows[0]) return { outcome: 'lost', clips: 0 };
         const accents = await accentsFor(client, source.creator_id, settings, ready.length);
         const digits = settings.voice.digits === 'arabic-indic' ? toArabicDigits : (s: string) => s;
-        for (const [i, { clip, copy, edits }] of ready.entries()) {
+        for (const [i, { clip, copy, edits, direction }] of ready.entries()) {
             const title = digits(clip.title);
             const { rows: inserted } = await client.query<{ id: string }>(
                 `INSERT INTO clip_drafts
-                     (creator_id, source_id, rank, status, start_s, end_s, title, hook, why, score, topic, hook_type, scores, text, copy, edits)
-                 VALUES ($1, $2, $3, 'rendering', $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15::jsonb)
+                     (creator_id, source_id, rank, status, start_s, end_s, title, hook, why, score, topic, hook_type, scores, text, copy, edits, direction)
+                 VALUES ($1, $2, $3, 'rendering', $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15::jsonb, $16::jsonb)
                  RETURNING id`,
                 [
                     source.creator_id, source.id, i + 1, clip.start, clip.end, title, clip.hook, clip.why, clip.score,
                     topic, clip.hookType, JSON.stringify(clip.scores), clip.text, JSON.stringify(copy), JSON.stringify(edits),
+                    // SQL NULL, never the JSON null: "no plan" is the column's NULL (v29).
+                    direction ? JSON.stringify(direction) : null,
                 ]
             );
             await enqueueMonteurRender(client, source.creator_id, buildRenderPayload({
                 clipId: inserted[0]!.id,
                 source: { id: source.id, path: source.path, words: source.words as TranscriptWord[] | null },
-                start: clip.start, end: clip.end, title, keyword: copy.keyword, accent: accents[i]!, settings, edits,
+                start: clip.start, end: clip.end, title, keyword: copy.keyword, accent: accents[i]!, settings, edits, direction,
             }));
         }
         return { outcome: 'rendering', clips: ready.length };
@@ -271,8 +273,9 @@ async function handOff(
 
 /**
  * The Editor (MONTEUR.md §6.2): one call for the clips that got copy, numbered C1… in that order,
- * each clip's edits set on it. Best effort — any failure, the call's or its answer's, leaves every
- * clip with no edits and is logged; the reels go out regardless.
+ * each clip's edits and human touches (its `direction`, null while `monteur.human` is off) set on
+ * it. Best effort — any failure, the call's or its answer's, leaves every clip with no edits and
+ * no touches and is logged; the reels go out regardless.
  */
 async function editReady(
     source: ClaimedSource, settings: StudioSettings, ready: ReadyClip[], lines: PickOutcome['lines'],
@@ -283,12 +286,16 @@ async function editReady(
     const on = think ? { ...think, key: clipsThinkKey(think.key, ready.map((r) => r.clip)) } : undefined;
     for (let attempt = 0; ; attempt++) {
         try {
-            const { edits, cost } = await writeEdits(ready.map((r) => r.clip), lines, words, settings, deadline, on);
-            ready.forEach((r, i) => { r.edits = edits[i] ?? []; });
+            const { edits, directions, cost } = await writeEdits(ready.map((r) => r.clip), lines, words, settings, deadline, on);
+            ready.forEach((r, i) => {
+                r.edits = edits[i] ?? [];
+                r.direction = directions[i] ?? null;
+            });
             record.edit = { model: cost.model, tokens_in: cost.tokens_in, tokens_out: cost.tokens_out };
             log('info', 'monteur.edit', {
                 source_id: source.id, creator_id: source.creator_id, ...usageFields(cost),
-                clips: ready.length, edits: edits.reduce((n, e) => n + e.length, 0), attempt: attempt + 1,
+                clips: ready.length, edits: edits.reduce((n, e) => n + e.length, 0), touches: directions.reduce((n, d) => n + touchCount(d), 0),
+                attempt: attempt + 1,
             });
             return;
         } catch (err) {
@@ -306,10 +313,16 @@ async function editReady(
             await new Promise((r) => setTimeout(r, wait));
         }
     }
-    for (const r of ready) r.edits = [];
+    for (const r of ready) {
+        r.edits = [];
+        r.direction = null;
+    }
     record.edit = { model: null, tokens_in: 0, tokens_out: 0, error: errorText(lastErr) };
     log('warn', 'monteur.edit_failed', { source_id: source.id, creator_id: source.creator_id, error: errorText(lastErr), ...describeError(lastErr) });
 }
+
+/** How many touches a plan holds, every list together. */
+const touchCount = (d: ClipDirection | null): number => (d ? Object.values(d).reduce((n, list) => n + (Array.isArray(list) ? list.length : 0), 0) : 0);
 
 /** How long the Editor waits before each retry of a busy model. Tests set it to [0, 0]. */
 let editRetryWaitsMs: readonly number[] = [6_000, 20_000];
@@ -400,7 +413,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         const unusable: string[] = [];
         picked.kept.forEach((clip, i) => {
             const outcome = copy.outcomes[i];
-            if (outcome && 'copy' in outcome) ready.push({ clip, copy: outcome.copy, edits: [] });
+            if (outcome && 'copy' in outcome) ready.push({ clip, copy: outcome.copy, edits: [], direction: null });
             else unusable.push(`clip ${i + 1}: ${outcome?.error ?? 'no copy'}`);
         });
         if (unusable.length) log('warn', 'monteur.copy_unusable', { source_id: source.id, dropped: unusable.length, reasons: unusable });

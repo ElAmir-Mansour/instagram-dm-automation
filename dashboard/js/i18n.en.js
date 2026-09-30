@@ -2477,6 +2477,8 @@
     'monteur.settings.styleClassic': 'Classic',
     'monteur.settings.stylePaper': 'Paper',
     'monteur.settings.styleHint': 'Paper is Ali Abdaal style: unfolding cards, paper letters, drawn icons and black-and-white b-roll. A change applies to the next video prepared.',
+    'monteur.settings.human': 'Human touches (camera cuts, doodles, highlights, transitions, freeze-frames)',
+    'monteur.settings.humanHint': 'So a reel looks edited by hand. Camera cuts, freeze-frames and words behind you are only for videos of you talking to camera. A change applies to the next video prepared.',
     'monteur.settings.folder': 'Folder',
     'monteur.settings.folderHint': 'The folder on {name} that you drop new videos into. Only its top level is read, and a file is taken once it has been there a minute, so it isn’t still copying.',
     'monteur.settings.folderPlaceholder': '/Users/you/Videos/Reels',
