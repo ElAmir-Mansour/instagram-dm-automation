@@ -8,8 +8,8 @@ import { describe, it } from 'node:test';
 import type { TranscriptWord } from '../../db/rows.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import {
-    EDIT_KINDS, EDITOR_SCHEMA, echoesSpeech, editorSystemPrompt, KIND_CAP, LIBRARY_TOPICS, MAX_IMAGES_PER_CLIP, MAX_QUERY, phrase,
-    PHRASE_LIMITS, placeEdits, TEACHING_SFX,
+    EDIT_KINDS, EDITOR_SCHEMA, echoesSpeech, editorSystemPrompt, ICON_NAMES, KIND_CAP, LIBRARY_TOPICS, MAX_IMAGES_PER_CLIP, MAX_QUERY,
+    phrase, PHRASE_LIMITS, placeEdits, TEACHING_SFX,
 } from './editor.js';
 
 /** One clip's lines on its clock: L1 «خريطة العالم» at 1 s, L2 «كتاب وصفات» at 6 s. */
@@ -78,7 +78,7 @@ describe('the Editor prompt and schema', () => {
         // No enum: 81 values in the schema made Gemini refuse the request (HTTP 400). The prompt lists them.
         assert.equal((item.properties.query as unknown as { enum?: string[] }).enum, undefined);
         assert.ok(editorSystemPrompt(ELAMIR_SETTINGS).includes(LIBRARY_TOPICS.join(', ')), 'the topics are in the prompt');
-        assert.deepEqual(item.propertyOrdering, ['line', 'word', 'kind', 'text', 'meaning', 'items', 'emoji', 'query', 'sfx']);
+        assert.deepEqual(item.propertyOrdering, ['line', 'word', 'kind', 'text', 'meaning', 'items', 'emoji', 'icon', 'query', 'sfx']);
     });
 
     it('keeps every enum small and every new field a plain string or a list of strings (a big enum is an HTTP 400)', () => {
@@ -103,7 +103,8 @@ describe('the Editor prompt and schema', () => {
         assert.ok(system.includes('«مثال: مطعم»') && system.includes('never «هنا»'));
         assert.ok(system.includes('except steps and callouts'));
         assert.ok(system.includes('Never a woman or a girl'));
-        assert.ok(system.length < 5200, `the prompt runs daily: ${system.length} characters`);
+        // The icon names (about 1,150 characters) are in the prompt, not a schema enum: a big enum is an HTTP 400.
+        assert.ok(system.length < 6500, `the prompt runs daily: ${system.length} characters`);
     });
 });
 
@@ -232,5 +233,58 @@ describe('placeEdits — redundancy: a keyword never repeats the words being sai
             at(1, 'تعليمات', { kind: 'define', text: 'تعليمات', meaning: 'قواعد ثابتة' }),
         ], LESSON);
         assert.deepEqual(edits.map((e) => e.kind), ['tool', 'step', 'define', 'step']);
+    });
+});
+
+describe('placeEdits — an icon is a line drawing from the worker\'s set', () => {
+    const icon = (fields: Record<string, unknown>) => placeEdits([{ line: 1, word: 'خريطة', kind: 'icon', sfx: 'pop', ...fields }], LINES);
+
+    it('keeps a known name, lowercased and trimmed, on its word, with the model\'s sound', () => {
+        assert.deepEqual(icon({ icon: 'rocket' }), [{ t: 1, kind: 'icon', icon: 'rocket', sfx: 'pop' }]);
+        assert.deepEqual(icon({ icon: '  Chart-Bar \n' }), [{ t: 1, kind: 'icon', icon: 'chart-bar', sfx: 'pop' }]);
+        assert.deepEqual(icon({ icon: 'dna-2', sfx: 'none' }), [{ t: 1, kind: 'icon', icon: 'dna-2' }]);
+    });
+
+    it('drops an icon whose name is not in ICON_NAMES, or that has none', () => {
+        for (const name of ['unicorn', 'rockets', 'user', 'woman', 'dna 2', '', '   ', null, 42, ['rocket'], undefined]) {
+            assert.deepEqual(icon({ icon: name }), [], JSON.stringify(name));
+        }
+        assert.deepEqual(icon({ emoji: '🚀' }), [], 'an emoji is not an icon');
+    });
+
+    it('keeps an optional label of 1-3 words, and the icon without one that is longer', () => {
+        assert.deepEqual(icon({ icon: 'brain', text: '  ذاكرة   النموذج ' }), [{ t: 1, kind: 'icon', icon: 'brain', text: 'ذاكرة النموذج', sfx: 'pop' }]);
+        assert.deepEqual(icon({ icon: 'brain', text: 'كلمة واحدة اثنين ثلاثة' }), [{ t: 1, kind: 'icon', icon: 'brain', sfx: 'pop' }], 'four words');
+        assert.deepEqual(icon({ icon: 'brain', text: 'ك'.repeat(25) }), [{ t: 1, kind: 'icon', icon: 'brain', sfx: 'pop' }], 'over 24 characters');
+        assert.deepEqual(icon({ icon: 'brain', text: 42 }), [{ t: 1, kind: 'icon', icon: 'brain', sfx: 'pop' }]);
+    });
+
+    it('is not a picture: icons never count toward the four pictures a clip', () => {
+        const edits = placeEdits([
+            image('world map'), image('recipe', 2), image('laptop', 2), image('clock', 2),
+            { line: 2, word: 'كتاب', kind: 'icon', icon: 'book', sfx: 'pop' },
+        ], LINES);
+        assert.equal(edits.length, 5);
+        assert.equal(edits.filter((e) => e.kind === 'icon').length, 1);
+    });
+
+    it('holds the worker\'s list: 121 lower-case names, each once, and no person', () => {
+        assert.equal(ICON_NAMES.length, 121);
+        assert.equal(new Set(ICON_NAMES).size, ICON_NAMES.length);
+        for (const name of ICON_NAMES) assert.match(name, /^[a-z0-9]+(?:-[a-z0-9]+)*$/, name);
+        for (const person of ['user', 'man', 'woman', 'girl', 'friends']) assert.ok(!(ICON_NAMES as readonly string[]).includes(person), person);
+        assert.ok(EDIT_KINDS.includes('icon'));
+    });
+
+    it('is asked for in the prompt with its names and its sound, and is a plain string in the schema', () => {
+        const system = editorSystemPrompt(ELAMIR_SETTINGS);
+        assert.ok(system.includes("\n- icon: an animated line drawing of a concept or object when no photo fits and it's worth a picture (the video draws it on)."));
+        assert.ok(system.includes(`icon: exactly one name from: ${ICON_NAMES.join(', ')}; text: an optional label, 1-3 words.`));
+        assert.ok(system.includes('pop for an emoji, icon or step'));
+        assert.ok(system.includes('Mix the kinds, icons included; never two of the same in a row'));
+        const item = (EDITOR_SCHEMA as unknown as { properties: { clips: { items: { properties: { edits: { items: { properties: Record<string, { type: string; enum?: string[] }> } } } } } } })
+            .properties.clips.items.properties.edits.items;
+        assert.equal(item.properties.icon!.type, 'STRING');
+        assert.equal(item.properties.icon!.enum, undefined, 'a 121-value enum would be an HTTP 400');
     });
 });

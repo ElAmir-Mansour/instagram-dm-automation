@@ -342,6 +342,15 @@ describe('patchClip', () => {
         assert.deepEqual(payload.cta, { line1: 'اكتب في التعليقات «دفتر»', line2: 'ويوصلك الرابط بالخاص 📩' });
         assert.deepEqual(payload.cta_tiktok, { line1: 'رابطه في البايو', line2: 'ادخل البروفايل واضغط الرابط 👆' });
         assert.equal(payload.cover_at, 0.5);
+        assert.equal(payload.brand.style, 'classic');
+    });
+
+    it('renders again in the style the settings hold now', async () => {
+        monteur = { platforms: ['instagram'], post_at: ['19:00'], style: 'paper' };
+        await patchClip(TENANT, CLIP, { title: 'عنوان أقوى' });
+        const brand = JSON.parse(renders()[0]!.params[2]).brand;
+        assert.equal(brand.style, 'paper');
+        assert.deepEqual(Object.keys(brand).sort(), ['accent', 'direction', 'font', 'style']);
     });
 
     it('sends no TikTok CTA when TikTok is off', async () => {

@@ -697,7 +697,7 @@ describe('Monteur — settings', () => {
         const put = s.calls.find((c) => c.method === 'saveStudioSettings')!;
         assert.deepEqual(JSON.parse(JSON.stringify(put.args[0])), {
             monteur: {
-                enabled: true, source: 'folder', mode: 'review', brain: 'gemini', folder: '/Users/elamir/Videos/Reels', run_at: '06:30', videos_per_run: 3, reels_per_video: 2,
+                enabled: true, source: 'folder', mode: 'review', brain: 'gemini', style: 'classic', folder: '/Users/elamir/Videos/Reels', run_at: '06:30', videos_per_run: 3, reels_per_video: 2,
                 platforms: ['instagram', 'tiktok'], post_at: ['20:00', '21:00'], min_seconds: 20, max_seconds: 45,
             },
         });
@@ -1029,16 +1029,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.doesNotMatch(studioTabs, /href="#\/monteur"\s+aria-current/);
     });
 
-    it('ships at cache version 11.9: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 12.0: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '11.9');
+        assert.equal(version, '12.0');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['11.9']);
+        assert.deepEqual([...new Set(refs)], ['12.0']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['11.9'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.0'], page);
         }
     });
 });
@@ -1580,5 +1580,54 @@ describe('Monteur — who thinks: Gemini or Claude on the Mac (MONTEUR.md §6.3)
             assert.notEqual(s.t(key), key, key);
         }
         assert.match(s.t('monteur.settings.brainClaude'), /Claude/);
+    });
+});
+
+describe('Monteur — the edit style: classic or paper (MONTEUR.md §6.2)', () => {
+    const pick = (value: string): FakeEl => fakeEl('mt-style', { dataset: { key: 'style' }, value });
+    const KEYS = ['monteur.settings.style', 'monteur.settings.styleClassic', 'monteur.settings.stylePaper', 'monteur.settings.styleHint'];
+
+    it('the settings card asks it as a select labelled Edit style, in both forms, with the saved choice selected', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ settings: settings({ style: 'paper' }) }));
+        await renderPage(s);
+        assert.equal(s.t('monteur.settings.style'), 'Edit style');
+        assert.match(s.t('monteur.settings.styleHint'), /Ali Abdaal style: unfolding cards, paper letters, drawn icons and black-and-white b-roll/);
+        for (const form of [String(s.Page.formMarkup()), String(s.Page.setupMarkup())]) {
+            const select = tagOf(form, 'mt-style');
+            assert.ok(select.startsWith('<select') && select.includes('data-change="monteur:setting"') && select.includes('data-key="style"'), select);
+            assert.match(form, /<option value="paper" selected>/);
+            assert.doesNotMatch(form, /<option value="classic" selected>/);
+            for (const key of KEYS) assert.ok(form.includes(escaped(s.t(key))), key);
+        }
+        s.Page.destroy();
+    });
+
+    it('reads a section saved before it existed, or an unknown value, as classic', () => {
+        const s = loadMonteur('en');
+        assert.equal(s.Page.normalizeConfig({ enabled: true }).style, 'classic');
+        assert.equal(s.Page.normalizeConfig({ style: 'ali' }).style, 'classic');
+        assert.equal(s.Page.normalizeConfig({ style: 'paper' }).style, 'paper');
+    });
+
+    it('sends the choice with the section, and ignores a value that is neither', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        assert.equal(s.Page.settingsPayload().style, 'classic');
+        s.Page.setting(pick('Paper'));
+        assert.equal(s.Page.work.style, 'classic');
+        s.Page.setting(pick('paper'));
+        assert.equal(s.Page.work.style, 'paper');
+        assert.equal(s.Page.settingsPayload().style, 'paper');
+        s.Page.destroy();
+    });
+
+    it('says it in Arabic too', () => {
+        const s = loadMonteur('ar');
+        for (const key of KEYS) {
+            assert.notEqual(s.t(key), key, key);
+            assert.match(s.t(key), /[\u0600-\u06FF]/, key);
+        }
     });
 });

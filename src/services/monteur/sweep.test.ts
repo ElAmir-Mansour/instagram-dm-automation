@@ -198,6 +198,18 @@ describe('sweepMonteur — a pick', () => {
         assert.deepEqual(payload.cta, { line1: 'اكتب في التعليقات «دفتر»', line2: 'ويوصلك الرابط بالخاص 📩' });
         assert.deepEqual(payload.cta_tiktok, { line1: 'رابطه في البايو', line2: 'ادخل البروفايل واضغط الرابط 👆' });
         assert.deepEqual(payload.words[0], [0.15, 4.65, 'جملة3.'], 'relative to the clip');
+        assert.deepEqual(Object.keys(payload.brand).sort(), ['accent', 'direction', 'font', 'style']);
+        assert.equal(payload.brand.style, 'classic', 'the default style');
+    });
+
+    it('sends the tenant’s edit style to the worker as brand.style', async () => {
+        db.routes.unshift([/FROM studio_settings/, () => ({ rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, style: 'paper' } }] })]);
+        await sweepMonteur(later());
+        const [job] = db.ran(/^INSERT INTO studio_jobs/);
+        const payload = JSON.parse(job!.params[2]);
+        assert.equal(payload.brand.style, 'paper');
+        assert.equal(payload.brand.font, ELAMIR_SETTINGS.brand.fonts.display);
+        assert.equal(payload.brand.direction, ELAMIR_SETTINGS.brand.direction);
     });
 
     it('saves the pick before the Marketer’s call', async () => {

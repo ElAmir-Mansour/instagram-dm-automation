@@ -9,7 +9,7 @@
  */
 import { pool } from '../../config/db.js';
 import type { MonteurConfig, MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
-import type { MonteurBrain, MonteurMode, MonteurSource } from './settingsTypes.js';
+import type { MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
 import { type Exec, isPlainObject, problemsError, StudioError } from './common.js';
 import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
 
@@ -23,6 +23,7 @@ export const MONTEUR_PLATFORMS: readonly MonteurPlatform[] = ['instagram', 'face
 export const MONTEUR_SOURCES: readonly MonteurSource[] = ['folder', 'course'];
 export const MONTEUR_MODES: readonly MonteurMode[] = ['review', 'auto'];
 export const MONTEUR_BRAINS: readonly MonteurBrain[] = ['gemini', 'claude_mac'];
+export const MONTEUR_STYLES: readonly MonteurStyle[] = ['classic', 'paper'];
 /** An absolute folder: `/…` on macOS and Linux, `C:\…` or `\\server\share` on Windows. */
 const ABSOLUTE_FOLDER = /^(\/|[A-Za-z]:[\\/]|\\\\)/;
 /** NUL, newlines and the other control characters: never part of a folder the worker can open. */
@@ -212,6 +213,7 @@ export function settingsProblems(s: StudioSettings): string[] {
         oneOf(monteur.source, 'monteur.source', MONTEUR_SOURCES);
         oneOf(monteur.mode, 'monteur.mode', MONTEUR_MODES);
         oneOf(monteur.brain, 'monteur.brain', MONTEUR_BRAINS);
+        oneOf(monteur.style, 'monteur.style', MONTEUR_STYLES);
         if (monteur.folder !== null) {
             text(monteur.folder, 'monteur.folder', 1024, true);
             if (typeof monteur.folder === 'string' && monteur.folder.trim() && !ABSOLUTE_FOLDER.test(monteur.folder)) {
