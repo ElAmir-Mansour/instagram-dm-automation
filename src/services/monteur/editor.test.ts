@@ -4,13 +4,17 @@
  * what a failure does to a reel, are in sweep.test.ts.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import type { TranscriptWord } from '../../db/rows.js';
+import type { GeminiSchema } from '../studio/generate.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import {
-    EDIT_KINDS, EDITOR_SCHEMA, echoesSpeech, editorSystemPrompt, ICON_NAMES, KIND_CAP, LIBRARY_TOPICS, MAX_IMAGES_PER_CLIP, MAX_QUERY,
-    phrase, PHRASE_LIMITS, placeEdits, TEACHING_SFX,
+    anchorTime, directionsByClip, DOODLE_SHAPES, DOODLE_TARGETS, EDIT_KINDS, EDITOR_SCHEMA, editorSchema, echoesSpeech, editorSystemPrompt,
+    HUMAN_TOUCHES_PROMPT, humanTouchesOn, ICON_NAMES, KIND_CAP, LIBRARY_TOPICS, MAX_IMAGES_PER_CLIP, MAX_QUERY, phrase, PHRASE_LIMITS,
+    placeDirection, placeEdits, SHOTS, TALKING_HEAD_TOUCHES, TEACHING_SFX, TOUCH_CAP, TOUCH_LEAD_S, TOUCH_TAIL_S, TRANSITION_KINDS,
 } from './editor.js';
+import { toJsonSchema } from './think.js';
 
 /** One clip's lines on its clock: L1 «خريطة العالم» at 1 s, L2 «كتاب وصفات» at 6 s. */
 const LINES: { t: number; words: TranscriptWord[] }[] = [
@@ -104,7 +108,10 @@ describe('the Editor prompt and schema', () => {
         assert.ok(system.includes('except steps and callouts'));
         assert.ok(system.includes('Never a woman or a girl'));
         // The icon names (about 1,150 characters) are in the prompt, not a schema enum: a big enum is an HTTP 400.
-        assert.ok(system.length < 6500, `the prompt runs daily: ${system.length} characters`);
+        // The human touches add about 1,200 (MONTEUR.md §6.2); without them the prompt is as it was.
+        assert.ok(system.length < 8000, `the prompt runs daily: ${system.length} characters`);
+        const plain = editorSystemPrompt({ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, human: false } });
+        assert.ok(plain.length < 6500, `without the human touches: ${plain.length} characters`);
     });
 });
 
@@ -152,7 +159,9 @@ describe('placeEdits — the teaching kinds', () => {
         assert.equal(phrase('واحد اثنين ثلاثة أربعة خمسة ستة', PHRASE_LIMITS.meaning), '', 'six words is not five');
         assert.equal(phrase('ك'.repeat(33), PHRASE_LIMITS.meaning), '', 'over 32 characters');
         assert.equal(phrase(42, PHRASE_LIMITS.step), '');
-        assert.deepEqual(PHRASE_LIMITS, { example: [4, 28], callout: [3, 24], step: [4, 28], term: [3, 24], meaning: [5, 32], side: [4, 26], takeaway: [5, 32] });
+        assert.deepEqual(PHRASE_LIMITS, {
+            example: [4, 28], callout: [3, 24], step: [4, 28], term: [3, 24], meaning: [5, 32], side: [4, 26], takeaway: [5, 32], freeze: [2, 18], behind: [2, 16],
+        });
         const dropped = placeEdits([
             at(1, 'هنا', { kind: 'callout', text: 'اضغط هنا على الزر الأزرق' }),
             at(1, 'تعليمات', { kind: 'define', text: 'التعليمات', meaning: 'هي القواعد التي يتبعها النموذج دائما' }),
@@ -286,5 +295,251 @@ describe('placeEdits — an icon is a line drawing from the worker\'s set', () =
             .properties.clips.items.properties.edits.items;
         assert.equal(item.properties.icon!.type, 'STRING');
         assert.equal(item.properties.icon!.enum, undefined, 'a 121-value enum would be an HTTP 400');
+    });
+});
+
+// ─── The human touches (MONTEUR.md §6.2, 2026-09-30) ─────────────────────────────────────
+
+/**
+ * A 30-second clip: L1 «أهلا وسهلا» at 0.2 s (inside the first 0.8 s), L2 «عشرة أضعاف» at 5 s,
+ * L3 «الخرافة الكبيرة» at 12 s, L4 «انتبه هنا» at 20 s, L5 «اكتب كلمة» at 27.5 s (inside the last 3.2 s).
+ */
+const CLIP_S = 30;
+const TALK: { t: number; words: TranscriptWord[] }[] = [
+    { t: 0.2, words: [[0.2, 0.6, 'أهلا'], [0.6, 1.2, 'وسهلا']] },
+    { t: 5, words: [[5, 5.4, 'عشرة'], [5.4, 6, 'أضعاف.']] },
+    { t: 12, words: [[12, 12.5, 'الخرافة'], [12.5, 13, 'الكبيرة']] },
+    { t: 20, words: [[20, 20.4, 'انتبه'], [20.4, 21, 'هنا']] },
+    { t: 27.5, words: [[27.5, 28, 'اكتب'], [28, 28.5, 'كلمة']] },
+];
+/** 50 one-word lines, L<n> at n seconds, in a 60-second clip: room to test every cap. */
+const MANY: { t: number; words: TranscriptWord[] }[] = Array.from({ length: 50 }, (_, i) => ({ t: i + 1, words: [[i + 1, i + 1.5, `كلمة${i + 1}`]] as TranscriptWord[] }));
+const direction = (raw: Record<string, unknown>, lines = TALK, length = CLIP_S) => placeDirection(raw, lines, length);
+const EMPTY = { cuts: [], doodles: [], freezes: [], transitions: [], behind: [], emphasis: [] };
+
+describe('placeDirection — every touch anchored as an edit is', () => {
+    it('lands on its word’s start, else a word containing it, else its line’s start: anchorTime, the edits’ own rule', () => {
+        const at = (word: string, line = 2) => direction({ emphasis: [{ line, word }] }).emphasis[0];
+        assert.equal(at('أضعاف'), 5.4, 'the word (its trailing «.» ignored)');
+        assert.equal(at('ضعاف'), 5.4, 'a word containing it');
+        assert.equal(at('غائبة'), 5, 'no such word: the line’s start');
+        assert.equal(at('عشرة', 99), undefined, 'no such line: dropped, never another line');
+        assert.deepEqual(direction({ emphasis: [{ line: 99, word: 'كلمة1' }], cuts: [{ line: 0, word: 'كلمة1', shot: 'close' }] }, MANY, 60), EMPTY,
+            'not even onto L1, whose word it names and which is inside the window');
+        for (const [line, word] of [[2, 'أضعاف'], [3, 'الكبيرة'], [4, 'غائبة']] as const) {
+            const [edit] = placeEdits([{ line, word, kind: 'punch', sfx: 'none' }], TALK);
+            assert.equal(anchorTime({ line, word }, TALK), edit!.t, 'the same t as an edit on the same word');
+        }
+        assert.equal(anchorTime({ line: 0, word: 'x' }, TALK), null);
+        assert.equal(anchorTime({ line: '2', word: 'عشرة' }, TALK), null, 'a line number, not text');
+    });
+
+    it('places each list with its own fields, t first, sorted by t', () => {
+        const d = direction({
+            emphasis: [{ line: 4, word: 'انتبه' }, { line: 2, word: 'عشرة' }],
+            doodles: [{ line: 3, word: 'الخرافة', shape: 'cross', target: 'caption' }, { line: 2, word: 'أضعاف', shape: 'stars', target: 'head' }],
+            transitions: [{ line: 3, word: 'الخرافة', kind: 'leak' }],
+            cuts: [{ line: 3, word: 'الخرافة', shot: 'close' }, { line: 2, word: 'عشرة', shot: 'wide' }],
+            freezes: [{ line: 2, word: 'أضعاف', text: '  عشرة   أضعاف! ' }],
+            behind: [{ line: 4, word: 'انتبه', text: 'انتبه' }],
+        });
+        assert.deepEqual(d, {
+            cuts: [{ t: 5, shot: 'wide' }, { t: 12, shot: 'close' }],
+            doodles: [{ t: 5.4, shape: 'stars', target: 'head' }, { t: 12, shape: 'cross', target: 'caption' }],
+            freezes: [{ t: 5.4, text: 'عشرة أضعاف!' }],
+            transitions: [{ t: 12, kind: 'leak' }],
+            behind: [{ t: 20, text: 'انتبه' }],
+            emphasis: [5, 20],
+        });
+    });
+
+    it('an answer with no touches, or not an object, is an empty plan', () => {
+        assert.deepEqual(direction({ clip: 1, edits: [] }), EMPTY);
+        for (const raw of [null, 42, 'x', [], { emphasis: 'x', cuts: {} }]) assert.deepEqual(direction(raw as never), EMPTY, JSON.stringify(raw));
+        assert.deepEqual(direction({ emphasis: [null, 7, 'x', { word: 'عشرة' }] }).emphasis, [], 'items that anchor nowhere');
+    });
+});
+
+describe('placeDirection — the clip’s window: nothing in its first 0.8 s or last 3.2 s', () => {
+    it('drops a touch that lands in the first 0.8 s or the last 3.2 s, of every kind', () => {
+        assert.equal(TOUCH_LEAD_S, 0.8);
+        assert.equal(TOUCH_TAIL_S, 3.2);
+        const d = direction({
+            emphasis: [{ line: 1, word: 'وسهلا' }, { line: 5, word: 'اكتب' }, { line: 2, word: 'عشرة' }],
+            doodles: [{ line: 1, word: 'أهلا', shape: 'arrow', target: 'head' }],
+            transitions: [{ line: 5, word: 'كلمة', kind: 'flash' }],
+            cuts: [{ line: 1, word: 'أهلا', shot: 'close' }],
+            freezes: [{ line: 5, word: 'اكتب', text: 'اكتب' }],
+            behind: [{ line: 1, word: 'أهلا', text: 'أهلا' }],
+        });
+        assert.deepEqual(d, { ...EMPTY, emphasis: [5] }, 'L1 is at 0.2 and 0.6 s, L5 at 27.5 and 28 s: past 26.8');
+    });
+
+    it('keeps the window’s edges: 0.8 s, and length − 3.2 s', () => {
+        const edge: { t: number; words: TranscriptWord[] }[] = [{ t: 0.79, words: [[0.79, 1, 'قبل']] }, { t: 0.8, words: [[0.8, 1, 'أول']] }, { t: 26.8, words: [[26.8, 27, 'آخر']] }, { t: 26.81, words: [[26.81, 27, 'بعد']] }];
+        const ts = direction({ emphasis: [1, 2, 3, 4].map((line) => ({ line, word: '' })) }, edge).emphasis;
+        assert.deepEqual(ts, [0.8, 26.8]);
+        assert.deepEqual(direction({ emphasis: [{ line: 3, word: '' }] }, edge, 29).emphasis, [], 'the tail moves with the clip’s length');
+    });
+
+    it('a clip shorter than 4 s takes none', () => {
+        assert.deepEqual(direction({ emphasis: [{ line: 1, word: '' }] }, [{ t: 1, words: [[1, 1.5, 'كلمة']] }], 3.9), EMPTY);
+    });
+});
+
+describe('placeDirection — the caps and the enums', () => {
+    const list = (n: number, extra: (i: number) => Record<string, unknown> = () => ({})) =>
+        Array.from({ length: n }, (_, i) => ({ line: i + 1, word: `كلمة${i + 1}`, ...extra(i) }));
+
+    it('holds each list to its cap: emphasis 12, doodles 8, transitions 5, cuts 16, freezes 2, behind 6', () => {
+        assert.deepEqual(TOUCH_CAP, { emphasis: 12, doodles: 8, transitions: 5, cuts: 16, freezes: 2, behind: 6 });
+        const d = direction({
+            emphasis: list(20),
+            doodles: list(20, () => ({ shape: 'circle', target: 'caption' })),
+            transitions: list(20, () => ({ kind: 'whip' })),
+            cuts: list(30, (i) => ({ shot: i % 2 ? 'close' : 'wide' })),
+            freezes: list(20, () => ({ text: 'لحظة' })),
+            behind: list(20, () => ({ text: 'كلمة' })),
+        }, MANY, 60);
+        assert.deepEqual(Object.fromEntries(Object.entries(d).map(([k, v]) => [k, v.length])), TOUCH_CAP);
+        assert.deepEqual(d.emphasis, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], 'the first ones, in time order');
+    });
+
+    it('never two of one list at the same moment', () => {
+        const d = direction({
+            emphasis: [{ line: 2, word: 'عشرة' }, { line: 2, word: 'عشرة' }, { line: 2, word: 'غائبة' }],
+            doodles: [{ line: 2, word: 'عشرة', shape: 'circle', target: 'caption' }, { line: 2, word: 'عشرة', shape: 'stars', target: 'caption' }],
+        });
+        assert.deepEqual(d.emphasis, [5]);
+        assert.deepEqual(d.doodles, [{ t: 5, shape: 'circle', target: 'caption' }], 'the first said wins');
+    });
+
+    it('a cut to the shot already on is no cut', () => {
+        const d = direction({ cuts: list(6, (i) => ({ shot: ['wide', 'wide', 'close', 'close', 'close', 'wide'][i] })) }, MANY, 60);
+        assert.deepEqual(d.cuts, [{ t: 1, shot: 'wide' }, { t: 3, shot: 'close' }, { t: 6, shot: 'wide' }]);
+    });
+
+    it('takes only the small enums, exactly as written', () => {
+        assert.deepEqual([...DOODLE_SHAPES], ['circle', 'underline', 'arrow', 'stars', 'check', 'cross']);
+        assert.deepEqual([...DOODLE_TARGETS], ['caption', 'head']);
+        assert.deepEqual([...TRANSITION_KINDS], ['leak', 'flash', 'whip', 'glitch']);
+        assert.deepEqual([...SHOTS], ['wide', 'close']);
+        const at = { line: 2, word: 'عشرة' };
+        for (const [shape, target] of [['Circle', 'caption'], ['circle ', 'caption'], ['heart', 'caption'], ['circle', 'face'], ['circle', undefined], [undefined, 'head'], [1, 'head']]) {
+            assert.deepEqual(direction({ doodles: [{ ...at, shape, target }] }).doodles, [], JSON.stringify([shape, target]));
+        }
+        for (const kind of ['cut', 'Leak', '', null, 'fade']) assert.deepEqual(direction({ transitions: [{ ...at, kind }] }).transitions, [], String(kind));
+        for (const shot of ['medium', 'Close', '', null]) assert.deepEqual(direction({ cuts: [{ ...at, shot }] }).cuts, [], String(shot));
+        for (const shape of DOODLE_SHAPES) assert.equal(direction({ doodles: [{ ...at, shape, target: 'head' }] }).doodles.length, 1, shape);
+        for (const kind of TRANSITION_KINDS) assert.equal(direction({ transitions: [{ ...at, kind }] }).transitions.length, 1, kind);
+    });
+
+    it('keeps a freeze’s or a behind’s text through phrase(): 1-2 words, within its characters, else the touch is dropped', () => {
+        const freeze = (text: unknown) => direction({ freezes: [{ line: 3, word: 'الخرافة', text }] }).freezes;
+        const behind = (text: unknown) => direction({ behind: [{ line: 3, word: 'الخرافة', text }] }).behind;
+        assert.deepEqual(PHRASE_LIMITS.freeze, [2, 18]);
+        assert.deepEqual(PHRASE_LIMITS.behind, [2, 16]);
+        assert.deepEqual(freeze(' ❌ خرافة  '), [{ t: 12, text: 'خرافة' }], 'trimmed, the drawn mark stripped');
+        assert.deepEqual(behind('الذكاء الاصطناعي'), [{ t: 12, text: 'الذكاء الاصطناعي' }], 'two words, 16 characters');
+        for (const bad of ['ثلاث كلمات هنا', '', '   ', null, 7, ['خرافة'], 'ك'.repeat(19)]) assert.deepEqual(freeze(bad), [], JSON.stringify(bad));
+        for (const bad of ['ثلاث كلمات هنا', 'ك'.repeat(17), undefined]) assert.deepEqual(behind(bad), [], JSON.stringify(bad));
+    });
+});
+
+describe('directionsByClip — by C<n>, on each clip’s own clock', () => {
+    it('gives each clip its plan by number, and null to a clip the answer skipped', () => {
+        const raw = { clips: [{ clip: 2, emphasis: [{ line: 1, word: 'كلمة1' }] }, { clip: 1, emphasis: [{ line: 2, word: 'عشرة' }] }] };
+        assert.deepEqual(directionsByClip(raw, [TALK, MANY, TALK], [CLIP_S, 60, CLIP_S]), [{ ...EMPTY, emphasis: [5] }, { ...EMPTY, emphasis: [1] }, null]);
+        assert.deepEqual(directionsByClip(null, [TALK], [CLIP_S]), [null]);
+    });
+
+    it('holds each clip to its own length', () => {
+        const raw = { clips: [{ clip: 1, emphasis: [{ line: 4, word: 'انتبه' }] }, { clip: 2, emphasis: [{ line: 4, word: 'انتبه' }] }] };
+        assert.deepEqual(directionsByClip(raw, [TALK, TALK], [CLIP_S, 22]).map((d) => d!.emphasis), [[20], []], '20 s is past 22 − 3.2');
+    });
+});
+
+describe('the Editor prompt and schema — the human touches', () => {
+    const OFF = { ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, human: false } };
+    const clipItem = (schema: GeminiSchema) => schema.properties!.clips!.items!;
+
+    it('asks for them, with the rules, when monteur.human is on (the default), and not when it is off', () => {
+        assert.equal(ELAMIR_SETTINGS.monteur.human, true);
+        assert.equal(humanTouchesOn(ELAMIR_SETTINGS), true);
+        assert.equal(humanTouchesOn(OFF), false);
+        const on = editorSystemPrompt(ELAMIR_SETTINGS);
+        assert.ok(on.includes(`\n${HUMAN_TOUCHES_PROMPT}\n`));
+        for (const rule of [
+            'emphasis: 6-12 caption words that carry the meaning', 'doodles: 4-8 hand-drawn marker doodles', 'a cross on a myth, a check on the truth',
+            'transitions: 3-5, each at a change of section', 'leak for a new chapter, flash for a reveal, whip for a fast change, glitch for a tech or signal moment',
+            'Talking-head clips only (a person speaking to camera, portrait); leave cuts, freezes and behind empty for a screen recording',
+            'switching at a sentence\'s start every 3-7 seconds, close on the key lines', 'freezes: at most 2 freeze-frames', 'behind: 3-6 big words',
+            'vary them, nothing on a fixed rhythm; invent nothing',
+        ]) assert.ok(on.includes(rule), rule);
+        assert.match(on, /^You are the editor of short vertical reels cut from a creator's lessons, screen-recorded or spoken to camera\./);
+        const off = editorSystemPrompt(OFF);
+        assert.ok(!off.includes('Human touches') && !off.includes('doodle') && !off.includes('emphasis'));
+        assert.match(off, /^You are the editor of short vertical reels cut from a creator's screen-recorded lessons\./, 'the prompt as it was');
+        assert.equal(off, on.replace(`\n${HUMAN_TOUCHES_PROMPT}`, '').replace("creator's lessons, screen-recorded or spoken to camera", "creator's screen-recorded lessons"));
+    });
+
+    it('puts six optional lists next to each clip’s edits, in order, each anchored on line and word', () => {
+        const item = clipItem(EDITOR_SCHEMA);
+        assert.deepEqual(item.propertyOrdering, ['clip', 'edits', 'emphasis', 'doodles', 'transitions', 'cuts', 'freezes', 'behind']);
+        assert.deepEqual([...item.propertyOrdering!].sort(), Object.keys(item.properties!).sort());
+        assert.deepEqual(item.required, ['clip', 'edits'], 'the touches are optional');
+        const fields: Record<string, string[]> = { emphasis: [], doodles: ['shape', 'target'], transitions: ['kind'], cuts: ['shot'], freezes: ['text'], behind: ['text'] };
+        for (const [key, extra] of Object.entries(fields)) {
+            const list = item.properties![key]!;
+            assert.equal(list.type, 'ARRAY', key);
+            const touch = list.items!;
+            assert.deepEqual(touch.propertyOrdering, ['line', 'word', ...extra], key);
+            assert.deepEqual(touch.required, ['line', 'word', ...extra], key);
+            assert.deepEqual([...touch.propertyOrdering!].sort(), Object.keys(touch.properties!).sort(), key);
+            assert.equal(touch.properties!.line!.type, 'INTEGER');
+            for (const [name, prop] of Object.entries(touch.properties!)) assert.ok((prop.enum?.length ?? 0) <= 6, `${key}.${name}: a big enum is an HTTP 400`);
+        }
+        assert.deepEqual(item.properties!.doodles!.items!.properties!.shape!.enum, [...DOODLE_SHAPES]);
+        assert.deepEqual(item.properties!.doodles!.items!.properties!.target!.enum, [...DOODLE_TARGETS]);
+        assert.deepEqual(item.properties!.transitions!.items!.properties!.kind!.enum, [...TRANSITION_KINDS]);
+        assert.deepEqual(item.properties!.cuts!.items!.properties!.shot!.enum, [...SHOTS]);
+        assert.equal(item.properties!.freezes!.items!.properties!.text!.enum, undefined);
+        assert.deepEqual([...TALKING_HEAD_TOUCHES], ['cuts', 'freezes', 'behind']);
+    });
+
+    it('has none of them when monteur.human is off: the schema as it was', () => {
+        const item = clipItem(editorSchema(false));
+        assert.deepEqual(item.propertyOrdering, ['clip', 'edits']);
+        assert.deepEqual(Object.keys(item.properties!), ['clip', 'edits']);
+        assert.deepEqual(item.properties!.edits, clipItem(EDITOR_SCHEMA).properties!.edits, 'the same edits either way');
+        assert.deepEqual(editorSchema(true), EDITOR_SCHEMA);
+    });
+
+    it('converts for Claude on the Mac: enums kept, every object closed, no propertyOrdering', () => {
+        const json = toJsonSchema(EDITOR_SCHEMA) as { properties: { clips: { items: { properties: Record<string, { type: string; items: Record<string, unknown> & { properties: Record<string, { type: string; enum?: string[] }> } }>; required: string[] } } } };
+        const clip = json.properties.clips.items;
+        assert.deepEqual(clip.required, ['clip', 'edits']);
+        assert.deepEqual(clip.properties.doodles!.items, {
+            type: 'object',
+            properties: {
+                line: { type: 'integer', description: 'the n of the line, L<n>' },
+                word: { type: 'string', description: 'the exact word in that line it lands on' },
+                shape: { type: 'string', enum: [...DOODLE_SHAPES] },
+                target: { type: 'string', enum: [...DOODLE_TARGETS] },
+            },
+            required: ['line', 'word', 'shape', 'target'],
+            additionalProperties: false,
+        });
+        assert.deepEqual(clip.properties.cuts!.items.properties.shot, { type: 'string', enum: ['wide', 'close'] });
+        assert.deepEqual(clip.properties.emphasis!.items.required, ['line', 'word']);
+        assert.ok(!JSON.stringify(json).includes('propertyOrdering'));
+    });
+});
+
+describe('migration v29', () => {
+    const sql = readFileSync(new URL('../../config/migration_v29_monteur_direction.sql', import.meta.url), 'utf8');
+    it('adds clip_drafts.direction, nullable and idempotent', () => {
+        const statements = sql.split('\n').filter((l) => !l.startsWith('--') && l.trim());
+        assert.deepEqual(statements, ['ALTER TABLE clip_drafts ADD COLUMN IF NOT EXISTS direction JSONB;']);
     });
 });

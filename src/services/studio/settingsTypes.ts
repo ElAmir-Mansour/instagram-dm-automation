@@ -104,6 +104,11 @@ export type MonteurConfig = {
     brain: MonteurBrain;
     /** Sent to the worker as `brand.style` in every `monteur_render`. */
     style: MonteurStyle;
+    /**
+     * The Editor's human touches (MONTEUR.md §6.2): camera cuts, doodles, highlights, transitions,
+     * freeze-frames. Off: the Editor isn't asked for them, and no render carries them.
+     */
+    human: boolean;
     /** Absolute, on the worker's machine; `null` = not chosen yet. */
     folder: string | null;
     /** 'HH:MM': the daily scan. */
@@ -142,6 +147,7 @@ export function defaultMonteurConfig(): MonteurConfig {
         mode: 'review',
         brain: 'gemini',
         style: 'classic',
+        human: true,
         folder: null,
         run_at: '07:00',
         videos_per_run: 1,

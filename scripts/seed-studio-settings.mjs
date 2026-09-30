@@ -105,6 +105,8 @@ export const STUDIO_SETTINGS = {
         brain: 'claude_mac',
         // The edits' look (MONTEUR.md §6.2): 'classic', or 'paper' (unfolding cards, drawn icons).
         style: 'classic',
+        // The Editor's human touches (MONTEUR.md §6.2): camera cuts, doodles, highlights, transitions, freeze-frames.
+        human: true,
         folder: null,
         run_at: '07:00',
         videos_per_run: 1,

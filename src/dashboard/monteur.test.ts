@@ -697,7 +697,7 @@ describe('Monteur — settings', () => {
         const put = s.calls.find((c) => c.method === 'saveStudioSettings')!;
         assert.deepEqual(JSON.parse(JSON.stringify(put.args[0])), {
             monteur: {
-                enabled: true, source: 'folder', mode: 'review', brain: 'gemini', style: 'classic', folder: '/Users/elamir/Videos/Reels', run_at: '06:30', videos_per_run: 3, reels_per_video: 2,
+                enabled: true, source: 'folder', mode: 'review', brain: 'gemini', style: 'classic', human: true, folder: '/Users/elamir/Videos/Reels', run_at: '06:30', videos_per_run: 3, reels_per_video: 2,
                 platforms: ['instagram', 'tiktok'], post_at: ['20:00', '21:00'], min_seconds: 20, max_seconds: 45,
             },
         });
@@ -1029,16 +1029,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.doesNotMatch(studioTabs, /href="#\/monteur"\s+aria-current/);
     });
 
-    it('ships at cache version 12.0: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 12.1: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.0');
+        assert.equal(version, '12.1');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['12.0']);
+        assert.deepEqual([...new Set(refs)], ['12.1']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.0'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.1'], page);
         }
     });
 });
@@ -1620,6 +1620,59 @@ describe('Monteur — the edit style: classic or paper (MONTEUR.md §6.2)', () =
         s.Page.setting(pick('paper'));
         assert.equal(s.Page.work.style, 'paper');
         assert.equal(s.Page.settingsPayload().style, 'paper');
+        s.Page.destroy();
+    });
+
+    it('says it in Arabic too', () => {
+        const s = loadMonteur('ar');
+        for (const key of KEYS) {
+            assert.notEqual(s.t(key), key, key);
+            assert.match(s.t(key), /[\u0600-\u06FF]/, key);
+        }
+    });
+});
+
+describe('Monteur — human touches: camera cuts, doodles, highlights, transitions, freeze-frames (MONTEUR.md §6.2)', () => {
+    const tick = (checked: boolean): FakeEl => fakeEl('mt-human', { dataset: { key: 'human' }, checked });
+    const KEYS = ['monteur.settings.human', 'monteur.settings.humanHint'];
+
+    it('the settings card asks it as a checkbox, in both forms, checked by default', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        assert.equal(s.t('monteur.settings.human'), 'Human touches (camera cuts, doodles, highlights, transitions, freeze-frames)');
+        assert.match(s.t('monteur.settings.humanHint'), /only for videos of you talking to camera/);
+        for (const form of [String(s.Page.formMarkup()), String(s.Page.setupMarkup())]) {
+            const box = tagOf(form, 'mt-human');
+            assert.ok(box.startsWith('<input') && box.includes('type="checkbox"') && box.includes('data-change="monteur:setting"') && box.includes('data-key="human"'), box);
+            assert.ok(box.includes('checked'), 'on by default');
+            assert.ok(box.includes('aria-describedby="mt-human-hint"'));
+            for (const key of KEYS) assert.ok(form.includes(escaped(s.t(key))), key);
+        }
+        s.Page.destroy();
+    });
+
+    it('shows a saved off as unchecked, and reads a section saved before it existed as on', async () => {
+        const s = loadMonteur('en');
+        stub(s, monteurView({ settings: settings({ human: false }) }));
+        await renderPage(s);
+        assert.ok(!tagOf(String(s.Page.formMarkup()), 'mt-human').includes('checked'));
+        assert.equal(s.Page.normalizeConfig({ enabled: true }).human, true);
+        assert.equal(s.Page.normalizeConfig({ human: 'no' }).human, true);
+        assert.equal(s.Page.normalizeConfig({ human: false }).human, false);
+        s.Page.destroy();
+    });
+
+    it('sends the choice with the section', async () => {
+        const s = loadMonteur('en');
+        stub(s);
+        await renderPage(s);
+        assert.equal(s.Page.settingsPayload().human, true);
+        s.Page.setting(tick(false));
+        assert.equal(s.Page.work.human, false);
+        assert.equal(s.Page.settingsPayload().human, false);
+        s.Page.setting(tick(true));
+        assert.equal(s.Page.settingsPayload().human, true);
         s.Page.destroy();
     });
 

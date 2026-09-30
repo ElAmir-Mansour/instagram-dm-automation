@@ -17,6 +17,12 @@
  *
  * Asked for in the owner's words (2026-09-27): "the editing must be more … images or edits
  * related to the topic … with some audio sounds for those things".
+ *
+ * The human touches (2026-09-30, `monteur.human`): so a reel looks hand-edited, not AI-made, the
+ * same call also plans, per clip, the caption words a highlighter swipes, marker doodles,
+ * transitions at a change of section, and — for a talking head — camera cuts, freeze-frames and
+ * big words behind the speaker. Anchored like the edits, placed by code (`placeDirection`), and
+ * stored as the clip's `direction` (v29).
  */
 import type { GeminiSchema } from '../studio/generate.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
@@ -95,6 +101,8 @@ export type TeachingKind = keyof typeof TEACHING_SFX;
  */
 export const PHRASE_LIMITS = {
     example: [4, 28], callout: [3, 24], step: [4, 28], term: [3, 24], meaning: [5, 32], side: [4, 26], takeaway: [5, 32],
+    // The human touches' words: a freeze-frame's label, and the big words behind the speaker.
+    freeze: [2, 18], behind: [2, 16],
 } as const satisfies Record<string, readonly [number, number]>;
 
 /** At most this many of a kind in one clip: one recap, and terms and contrasts kept rare enough to matter. */
@@ -120,9 +128,52 @@ export interface ClipEdit {
     sfx?: Exclude<EditSfx, 'none'>;
 }
 
+// ─── The human touches (MONTEUR.md §6.2, 2026-09-30) ────────────────────────────────────
+
+/** A marker doodle's shape. */
+export const DOODLE_SHAPES = ['circle', 'underline', 'arrow', 'stars', 'check', 'cross'] as const;
+export type DoodleShape = (typeof DOODLE_SHAPES)[number];
+/** What a doodle is drawn on: the caption line, or the speaker's head (a talking head only). */
+export const DOODLE_TARGETS = ['caption', 'head'] as const;
+export type DoodleTarget = (typeof DOODLE_TARGETS)[number];
+/** leak: a new chapter; flash: a reveal; whip: a fast change; glitch: a tech or signal moment. */
+export const TRANSITION_KINDS = ['leak', 'flash', 'whip', 'glitch'] as const;
+export type TransitionKind = (typeof TRANSITION_KINDS)[number];
+/** A talking head's two cameras: the wide shot and the close-up. */
+export const SHOTS = ['wide', 'close'] as const;
+export type Shot = (typeof SHOTS)[number];
+
+/**
+ * One clip's human touches, `t` in seconds on the clip's clock, each list sorted by `t`. Stored
+ * in `clip_drafts.direction` (v29). `cuts`, `freezes` and `behind` are for a talking head; the
+ * source's orientation is not known here, so the worker drops them for a landscape video.
+ */
+export interface ClipDirection {
+    cuts: { t: number; shot: Shot }[];
+    doodles: { t: number; shape: DoodleShape; target: DoodleTarget }[];
+    freezes: { t: number; text: string }[];
+    transitions: { t: number; kind: TransitionKind }[];
+    behind: { t: number; text: string }[];
+    /** The caption words the highlighter swipes: each word's start. */
+    emphasis: number[];
+}
+export type TouchKey = keyof ClipDirection;
+
+/** At most this many of each a clip. */
+export const TOUCH_CAP: Readonly<Record<TouchKey, number>> = { emphasis: 12, doodles: 8, transitions: 5, cuts: 16, freezes: 2, behind: 6 };
+/** No touch in a clip's first 0.8 s (the hook is being read) or its last 3.2 s (the CTA). */
+export const TOUCH_LEAD_S = 0.8;
+export const TOUCH_TAIL_S = 3.2;
+/** The touches only a talking head gets: a person speaking to camera, in portrait. */
+export const TALKING_HEAD_TOUCHES: readonly TouchKey[] = ['cuts', 'freezes', 'behind'];
+
+/** `monteur.human`, on unless switched off: the Editor asks for the touches, and the render carries them. */
+export const humanTouchesOn = (settings: StudioSettings): boolean => settings.monteur?.human !== false;
+
 /** About one edit every 7 s, never more than this per clip. */
 export const MAX_EDITS_PER_CLIP = 18;
-export const EDITOR_MAX_OUTPUT = 8192;
+/** Room for the edits and the human touches of up to 5 clips: a cut-off answer is not JSON, and the reels would go without. */
+export const EDITOR_MAX_OUTPUT = 16384;
 export const EDITOR_THINKING = 1024;
 /** The call's own ceiling; the sweep's deadline may cut it shorter. */
 export const EDITOR_CALL_MS = 90_000;
@@ -135,51 +186,100 @@ const PICTURE_KINDS: readonly EditKind[] = ['image', 'broll', 'example'];
 
 const str = (description: string): GeminiSchema => ({ type: 'STRING', description });
 
-export const EDITOR_SCHEMA: GeminiSchema = {
+/** One edit, anchored on a line and a word. */
+const EDIT_ITEM: GeminiSchema = {
     type: 'OBJECT',
     properties: {
-        clips: {
-            type: 'ARRAY',
-            items: {
-                type: 'OBJECT',
-                properties: {
-                    clip: { type: 'INTEGER', description: 'the clip\'s number, C<n>' },
-                    edits: {
-                        type: 'ARRAY',
-                        items: {
-                            type: 'OBJECT',
-                            properties: {
-                                line: { type: 'INTEGER', description: 'the n of the line, L<n>' },
-                                word: str('the exact word in that line the edit lands on'),
-                                kind: { type: 'STRING', enum: [...EDIT_KINDS] },
-                                text: str(`keyword: 2-4 words, at most ${MAX_TEXT} characters; tool: the tool's name in Latin script; example, callout, step: its label; define: the term`),
-                                meaning: str('define: what the term means, at most 5 plain words'),
-                                items: { type: 'ARRAY', items: { type: 'STRING' }, description: 'compare: [wrong or before, right or after]; recap: 2-3 takeaways' },
-                                emoji: str('emoji: one emoji'),
-                                // A plain string too, for the same reason: the icon names are in the prompt, and placeEdits keeps only those.
-                                icon: str('icon: one name from the icon list, exactly as written'),
-                                // A plain string: an 81-value enum here makes Gemini refuse the whole request (HTTP 400,
-                                // 2026-09-27). The topics are in the prompt, and placeEdits keeps only those.
-                                query: str('image, broll or example: one topic from the picture library list, exactly as written'),
-                                sfx: { type: 'STRING', enum: [...EDIT_SFX] },
-                            },
-                            required: ['line', 'word', 'kind', 'sfx'],
-                            propertyOrdering: ['line', 'word', 'kind', 'text', 'meaning', 'items', 'emoji', 'icon', 'query', 'sfx'],
-                        },
+        line: { type: 'INTEGER', description: 'the n of the line, L<n>' },
+        word: str('the exact word in that line the edit lands on'),
+        kind: { type: 'STRING', enum: [...EDIT_KINDS] },
+        text: str(`keyword: 2-4 words, at most ${MAX_TEXT} characters; tool: the tool's name in Latin script; example, callout, step: its label; define: the term`),
+        meaning: str('define: what the term means, at most 5 plain words'),
+        items: { type: 'ARRAY', items: { type: 'STRING' }, description: 'compare: [wrong or before, right or after]; recap: 2-3 takeaways' },
+        emoji: str('emoji: one emoji'),
+        // A plain string too, for the same reason: the icon names are in the prompt, and placeEdits keeps only those.
+        icon: str('icon: one name from the icon list, exactly as written'),
+        // A plain string: an 81-value enum here makes Gemini refuse the whole request (HTTP 400,
+        // 2026-09-27). The topics are in the prompt, and placeEdits keeps only those.
+        query: str('image, broll or example: one topic from the picture library list, exactly as written'),
+        sfx: { type: 'STRING', enum: [...EDIT_SFX] },
+    },
+    required: ['line', 'word', 'kind', 'sfx'],
+    propertyOrdering: ['line', 'word', 'kind', 'text', 'meaning', 'items', 'emoji', 'icon', 'query', 'sfx'],
+};
+
+/** A list of one touch, each anchored like an edit on a line and a word, then `fields`. Small enums only. */
+const touchList = (fields: Record<string, GeminiSchema> = {}): GeminiSchema => ({
+    type: 'ARRAY',
+    items: {
+        type: 'OBJECT',
+        properties: {
+            line: { type: 'INTEGER', description: 'the n of the line, L<n>' },
+            word: str('the exact word in that line it lands on'),
+            ...fields,
+        },
+        required: ['line', 'word', ...Object.keys(fields)],
+        propertyOrdering: ['line', 'word', ...Object.keys(fields)],
+    },
+});
+
+/** The touches next to a clip's edits, in this order. Optional: an answer without them is a clip without touches. */
+const TOUCH_SCHEMA: Record<TouchKey, GeminiSchema> = {
+    emphasis: touchList(),
+    doodles: touchList({ shape: { type: 'STRING', enum: [...DOODLE_SHAPES] }, target: { type: 'STRING', enum: [...DOODLE_TARGETS] } }),
+    transitions: touchList({ kind: { type: 'STRING', enum: [...TRANSITION_KINDS] } }),
+    cuts: touchList({ shot: { type: 'STRING', enum: [...SHOTS] } }),
+    freezes: touchList({ text: str('1-2 words') }),
+    behind: touchList({ text: str('1-2 words') }),
+};
+
+/** The Editor's answer: per clip its edits, and with `human` its touches too. */
+export function editorSchema(human: boolean): GeminiSchema {
+    const touches = human ? TOUCH_SCHEMA : {};
+    return {
+        type: 'OBJECT',
+        properties: {
+            clips: {
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    properties: {
+                        clip: { type: 'INTEGER', description: 'the clip\'s number, C<n>' },
+                        edits: { type: 'ARRAY', items: EDIT_ITEM },
+                        ...touches,
                     },
+                    required: ['clip', 'edits'],
+                    propertyOrdering: ['clip', 'edits', ...Object.keys(touches)],
                 },
-                required: ['clip', 'edits'],
-                propertyOrdering: ['clip', 'edits'],
             },
         },
-    },
-    required: ['clips'],
-    propertyOrdering: ['clips'],
-};
+        required: ['clips'],
+        propertyOrdering: ['clips'],
+    };
+}
+
+/** The schema with the human touches: `monteur.human`'s default. */
+export const EDITOR_SCHEMA: GeminiSchema = editorSchema(true);
+
+/**
+ * The human touches' rules, added to the prompt when `monteur.human` is on. The source's orientation
+ * is not known here (monteur_sources has no width or height), so the talking-head touches are
+ * asked for with the rule, and the worker drops them for a landscape video.
+ */
+export const HUMAN_TOUCHES_PROMPT = `Human touches, so the reel looks edited by hand. Each is anchored like an edit, on a line and a word; vary them, nothing on a fixed rhythm; invent nothing; none in the first second or last 3 seconds:
+- emphasis: 6-12 caption words that carry the meaning (a number, the key term, the action). The captions swipe a highlighter over them.
+- doodles: 4-8 hand-drawn marker doodles. shape: a circle or underline on a key sentence, stars at a surprise, an arrow at him when he addresses the viewer, a cross on a myth, a check on the truth. target: caption (the caption line) or head (his head, talking-head clips only).
+- transitions: 3-5, each at a change of section. kind: leak for a new chapter, flash for a reveal, whip for a fast change, glitch for a tech or signal moment.
+Talking-head clips only (a person speaking to camera, portrait); leave cuts, freezes and behind empty for a screen recording:
+- cuts: a two-camera feel. shot: wide or close, switching at a sentence's start every 3-7 seconds, close on the key lines.
+- freezes: at most 2 freeze-frames, on the strongest moments. text: 1-2 words.
+- behind: 3-6 big words set behind him. text: 1-2 words.`;
 
 export function editorSystemPrompt(settings: StudioSettings): string {
     const lang = languageKit(settings).name;
-    return `You are the editor of short vertical reels cut from a creator's screen-recorded lessons. Your edits help a viewer learn from the reel and keep watching. Answer with JSON only.
+    const human = humanTouchesOn(settings);
+    const lessons = human ? 'lessons, screen-recorded or spoken to camera' : 'screen-recorded lessons';
+    return `You are the editor of short vertical reels cut from a creator's ${lessons}. Your edits help a viewer learn from the reel and keep watching. Answer with JSON only.
 Teach, don't decorate (multimedia learning, on a phone):
 - Show what he refers to: a real-world thing, an analogy, an example or a workplace situation outside the lesson gets an example.
 - Guide the eye: while he demonstrates on screen, a callout points at what he is using.
@@ -205,7 +305,7 @@ For each clip, mark a moment about every 5 seconds (12 in a 60-second clip), eac
 - highlight: a ring on what he points at, when it needs no name.
 - punch: a quick zoom-in when a result appears on screen or on a strong claim. At most 2 per clip.
 sfx: whoosh for a keyword, tool, picture, example or recap; pop for an emoji, icon or step; click for a UI action, highlight or callout; ding for a result, ✅ or define; impact for a punch or a strong claim; glitch for a tech moment; error for a mistake, ❌ or compare; none when a sound would be too much.
-Mix the kinds, icons included; never two of the same in a row, except steps and callouts. Invent nothing: only what the clip says.
+Mix the kinds, icons included; never two of the same in a row, except steps and callouts. Invent nothing: only what the clip says.${human ? `\n${HUMAN_TOUCHES_PROMPT}` : ''}
 Never a woman or a girl in any picture, emoji or sticker (the creator's rule); prefer objects and scenes to people.`;
 }
 
@@ -339,6 +439,22 @@ function fieldsOf(kind: EditKind, e: Record<string, unknown>): Omit<ClipEdit, 't
     }
 }
 
+type AnchorLine = { t: number; words: TranscriptWord[] };
+
+/**
+ * Where an item anchored on `line` (L<n>) and `word` lands, on the clip's clock: the start of the
+ * first word of that line that is `word`, else of the first that contains it, else the line's
+ * start; `fallback` when there is no such line; null when there is neither. Edits and touches alike.
+ */
+export function anchorTime(e: Record<string, unknown>, lines: readonly AnchorLine[], fallback?: AnchorLine): number | null {
+    const n = typeof e.line === 'number' && Number.isInteger(e.line) ? e.line : 0;
+    const line = lines[n - 1] ?? fallback;
+    if (!line) return null;
+    const target = norm(typeof e.word === 'string' ? e.word : '');
+    const hit = target ? line.words.find((w) => norm(w[2]) === target) ?? line.words.find((w) => norm(w[2]).includes(target)) : undefined;
+    return Math.round((hit ? hit[0] : line.t) * 100) / 100;
+}
+
 /**
  * The model's edits for one clip, placed on the clip's clock: each lands on the start of its word
  * in its line (the first match, else the line's start); a recap with no such line takes the last
@@ -356,12 +472,8 @@ export function placeEdits(raw: unknown, lines: readonly { t: number; words: Tra
         const e = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
         const kind = e.kind as EditKind;
         if (!(EDIT_KINDS as readonly string[]).includes(kind)) continue;
-        const n = typeof e.line === 'number' && Number.isInteger(e.line) ? e.line : 0;
-        const line = lines[n - 1] ?? (kind === 'recap' ? lines[lines.length - 1] : undefined);
-        if (!line) continue;
-        const target = norm(typeof e.word === 'string' ? e.word : '');
-        const hit = target ? line.words.find((w) => norm(w[2]) === target) ?? line.words.find((w) => norm(w[2]).includes(target)) : undefined;
-        const t = Math.round((hit ? hit[0] : line.t) * 100) / 100;
+        const t = anchorTime(e, lines, kind === 'recap' ? lines[lines.length - 1] : undefined);
+        if (t === null) continue;
         const fields = fieldsOf(kind, e);
         if (!fields) continue;
         if (kind === 'keyword' && echoesSpeech(fields.text!, lines, t)) continue;
@@ -384,19 +496,86 @@ export function placeEdits(raw: unknown, lines: readonly { t: number; words: Tra
     return out.sort((a, b) => a.t - b.t);
 }
 
+const record = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+const oneOf = <V extends string>(values: readonly V[], v: unknown): V | null => ((values as readonly unknown[]).includes(v) ? (v as V) : null);
+
+/**
+ * One clip's human touches, from its answer, placed on its clock (`length` = end − start). Each
+ * lands as an edit does (`anchorTime`, never a fallback line). Dropped: a line that doesn't exist,
+ * a value outside its small enum, a freeze's or a behind's text over its PHRASE_LIMITS (2 words),
+ * a touch in the first 0.8 s or the last 3.2 s, a second one of the same list at the same `t`,
+ * and a cut to the shot already on. Then each list is sorted by `t` and held to its TOUCH_CAP.
+ */
+export function placeDirection(raw: unknown, lines: readonly AnchorLine[], length: number): ClipDirection {
+    const r = record(raw);
+    const inside = (t: number) => t >= TOUCH_LEAD_S && t <= length - TOUCH_TAIL_S;
+    const place = <T extends object>(key: TouchKey, read: (e: Record<string, unknown>) => T | null): (T & { t: number })[] => {
+        const out: (T & { t: number })[] = [];
+        for (const item of Array.isArray(r[key]) ? (r[key] as unknown[]) : []) {
+            const e = record(item);
+            const t = anchorTime(e, lines);
+            if (t === null || !inside(t) || out.some((o) => o.t === t)) continue;
+            const fields = read(e);
+            if (fields) out.push({ ...fields, t });
+        }
+        return out.sort((a, b) => a.t - b.t);
+    };
+    const cap = <T>(key: TouchKey, list: T[]): T[] => list.slice(0, TOUCH_CAP[key]);
+    const text = (limit: readonly [number, number]) => (e: Record<string, unknown>) => {
+        const s = phrase(e.text, limit);
+        return s ? { text: s } : null;
+    };
+    const cuts = place('cuts', (e) => {
+        const shot = oneOf(SHOTS, e.shot);
+        return shot ? { shot } : null;
+    }).filter((c, i, all) => i === 0 || c.shot !== all[i - 1]!.shot);
+    return {
+        cuts: cap('cuts', cuts.map(({ t, shot }) => ({ t, shot }))),
+        doodles: cap('doodles', place('doodles', (e) => {
+            const shape = oneOf(DOODLE_SHAPES, e.shape);
+            const target = oneOf(DOODLE_TARGETS, e.target);
+            return shape && target ? { shape, target } : null;
+        }).map(({ t, shape, target }) => ({ t, shape, target }))),
+        freezes: cap('freezes', place('freezes', text(PHRASE_LIMITS.freeze)).map(({ t, text: s }) => ({ t, text: s }))),
+        transitions: cap('transitions', place('transitions', (e) => {
+            const kind = oneOf(TRANSITION_KINDS, e.kind);
+            return kind ? { kind } : null;
+        }).map(({ t, kind }) => ({ t, kind }))),
+        behind: cap('behind', place('behind', text(PHRASE_LIMITS.behind)).map(({ t, text: s }) => ({ t, text: s }))),
+        emphasis: cap('emphasis', place('emphasis', () => ({})).map((e) => e.t)),
+    };
+}
+
+/** Clip `i`'s item of the model's answer, by its C<n> (never by position). */
+function answerFor(raw: unknown, i: number): Record<string, unknown> | undefined {
+    const items = Array.isArray(record(raw).clips) ? (record(raw).clips as unknown[]) : [];
+    return items.find((c) => record(c).clip === i + 1) as Record<string, unknown> | undefined;
+}
+
 /** The model's answer mapped back to clips by their C<n>, never by position. */
-export function editsByClip(raw: unknown, clipLinesList: readonly { t: number; words: TranscriptWord[] }[][]): ClipEdit[][] {
-    const r = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-    const items = Array.isArray(r.clips) ? r.clips : [];
+export function editsByClip(raw: unknown, clipLinesList: readonly AnchorLine[][]): ClipEdit[][] {
     return clipLinesList.map((lines, i) => {
-        const mine = items.find((c) => c && typeof c === 'object' && (c as Record<string, unknown>).clip === i + 1) as Record<string, unknown> | undefined;
+        const mine = answerFor(raw, i);
         return mine ? placeEdits(mine.edits, lines) : [];
+    });
+}
+
+/** Each clip's human touches, by its C<n>; null for a clip the answer skipped. `lengths[i]` is clip i's end − start. */
+export function directionsByClip(raw: unknown, clipLinesList: readonly AnchorLine[][], lengths: readonly number[]): (ClipDirection | null)[] {
+    return clipLinesList.map((lines, i) => {
+        const mine = answerFor(raw, i);
+        return mine ? placeDirection(mine, lines, lengths[i] ?? 0) : null;
     });
 }
 
 export interface EditResult {
     /** One list per clip, in the clips' order; `[]` for a clip the answer skipped. */
     edits: ClipEdit[][];
+    /**
+     * One plan per clip, in the same order: null for a clip the answer skipped, and for every clip
+     * when `monteur.human` is off (the Editor was not asked).
+     */
+    directions: (ClipDirection | null)[];
     cost: CallCost;
 }
 
@@ -414,17 +593,23 @@ export async function writeEdits(
     think?: ThinkOn,
 ): Promise<EditResult> {
     const cost = emptyCost();
+    const human = humanTouchesOn(settings);
     const perClip = clips.map((c) => clipLines(lines, words, c.start, c.end));
     const raw = await ask({
         purpose: 'monteur.edit',
         system: editorSystemPrompt(settings),
         turns: [{ role: 'user', text: editorUserPrompt(perClip.map((l) => ({ lines: l }))) }],
-        schema: EDITOR_SCHEMA,
+        schema: editorSchema(human),
         temperature: 0.6,
         thinkingBudget: EDITOR_THINKING,
         maxOutputTokens: EDITOR_MAX_OUTPUT,
         capMs: EDITOR_CALL_MS,
         think: thinkRoute(think, 'monteur.edit', 'edit'),
     }, deadline, cost);
-    return { edits: editsByClip(raw, perClip), cost };
+    return {
+        edits: editsByClip(raw, perClip),
+        // Off: not asked for, and an answer that has them anyway (a think asked before the switch) is ignored.
+        directions: human ? directionsByClip(raw, perClip, clips.map((c) => c.end - c.start)) : clips.map(() => null),
+        cost,
+    };
 }

@@ -79,7 +79,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.0',
+    ASSET_VERSION: '12.1',
 
     _modules: Object.create(null),
 

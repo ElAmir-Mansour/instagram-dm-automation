@@ -21,11 +21,11 @@
  * database. Selecting a subset of columns is expressed at the call site with `Pick<>`, so the
  * type says which columns the query actually asked for.
  */
-import type { ClipEdit } from '../services/monteur/editor.js';
+import type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
 import type { Carousel } from '../services/studio/carouselTypes.js';
 import type { MonteurConfig, MonteurStyle } from '../services/studio/settingsTypes.js';
 
-export type { ClipEdit } from '../services/monteur/editor.js';
+export type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
 
 export type { MonteurConfig, MonteurPlatform } from '../services/studio/settingsTypes.js';
 
@@ -773,6 +773,12 @@ export interface ClipDraftRow {
      * failed Editor call, or a clip cut before v27. Sent with every render of the clip.
      */
     edits: ClipEdit[];
+    /**
+     * v29. The Editor's human touches (MONTEUR.md §6.2), all on the clip's clock; null for none — the
+     * setting off, a failed Editor call, or a clip cut before v29. Sent with every render of the clip
+     * while `monteur.human` is on.
+     */
+    direction: ClipDirection | null;
     render: ClipRender | null;
     schedule: ClipSchedule | null;
     /**
@@ -850,6 +856,16 @@ export interface MonteurRenderPayload {
     cover_at: number;
     /** The Editor's pro edits, `t` in seconds on the clip's clock; `[]` renders the reel without any. */
     edits: ClipEdit[];
+    /**
+     * The Editor's human touches (MONTEUR.md §6.2), `t` on the clip's clock. All three are absent
+     * when the clip has no plan or `monteur.human` is off, and the worker renders as before.
+     * `cuts`, `freezes` and `behind` are for a talking head: the worker drops them for landscape.
+     */
+    direction?: Pick<ClipDirection, 'cuts' | 'doodles' | 'freezes' | 'transitions'>;
+    /** The caption words the highlighter swipes: each word's start. */
+    emphasis?: number[];
+    /** Big words set behind the speaker. */
+    behind?: ClipDirection['behind'];
 }
 
 /**

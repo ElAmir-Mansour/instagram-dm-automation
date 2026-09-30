@@ -113,7 +113,7 @@ const MonteurPage = {
     STALE_MS: 30 * 1000,
 
     PLATFORMS: Object.freeze(['instagram', 'facebook', 'tiktok']),
-    FIELDS: Object.freeze(['enabled', 'source', 'mode', 'brain', 'style', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
+    FIELDS: Object.freeze(['enabled', 'source', 'mode', 'brain', 'style', 'human', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
     /** MONTEUR.md §1: where a run takes its videos, and what happens to a reel once it is ready. */
     SOURCES: Object.freeze(['folder', 'course']),
     MODES: Object.freeze(['review', 'auto']),
@@ -162,6 +162,7 @@ const MonteurPage = {
             mode: 'review',
             brain: 'gemini',
             style: 'classic',
+            human: true,
             folder: null,
             run_at: '07:00',
             videos_per_run: 1,
@@ -290,6 +291,7 @@ const MonteurPage = {
             mode: this.MODES.includes(s.mode) ? s.mode : d.mode,
             brain: this.BRAINS.includes(s.brain) ? s.brain : d.brain,
             style: this.STYLES.includes(s.style) ? s.style : d.style,
+            human: typeof s.human === 'boolean' ? s.human : d.human,
             folder: typeof s.folder === 'string' && s.folder.trim() ? s.folder : null,
             run_at: typeof s.run_at === 'string' ? s.run_at : d.run_at,
             videos_per_run: num(s.videos_per_run, d.videos_per_run),
@@ -1602,6 +1604,7 @@ const MonteurPage = {
                         ${this.modeMarkup()}
                         ${this.brainMarkup()}
                         ${this.styleMarkup()}
+                        ${this.humanMarkup()}
                     `)}
                 </ol>
                 ${this.enabledMarkup()}
@@ -1627,6 +1630,7 @@ const MonteurPage = {
                 ${this.modeMarkup()}
                 ${this.brainMarkup()}
                 ${this.styleMarkup()}
+                ${this.humanMarkup()}
                 <div id="mt-settings-savebar">${this.seed('mt-settings-savebar', this.saveBarMarkup())}</div>
             </form>
         `;
@@ -1761,6 +1765,22 @@ const MonteurPage = {
                     ${option('paper', t('monteur.settings.stylePaper'))}
                 </select>
                 <p class="form-hint" id="mt-style-hint">${t('monteur.settings.styleHint')}</p>
+            </div>
+        `;
+    },
+
+    /** "Human touches": camera cuts, doodles, highlights, transitions and freeze-frames, planned by the Editor (MONTEUR.md §6.2). */
+    humanMarkup() {
+        return html`
+            <div class="form-group">
+                <label class="check-row" for="mt-human">
+                    <input type="checkbox" id="mt-human" data-change="monteur:setting" data-key="human"
+                           aria-describedby="mt-human-hint" ${this.work.human ? html.raw('checked') : ''}>
+                    <span class="check-text">
+                        <span class="check-label">${t('monteur.settings.human')}</span>
+                        <span class="form-hint" id="mt-human-hint">${t('monteur.settings.humanHint')}</span>
+                    </span>
+                </label>
             </div>
         `;
     },
@@ -1959,8 +1979,8 @@ const MonteurPage = {
         const key = String(el.dataset.key || '');
         const w = this.work;
         let problemKey = key;
-        if (key === 'enabled') {
-            w.enabled = !!el.checked;
+        if (key === 'enabled' || key === 'human') {
+            w[key] = !!el.checked;
         } else if (key === 'source' || key === 'mode' || key === 'brain' || key === 'style') {
             const value = String(el.value || '');
             if (!({ source: this.SOURCES, mode: this.MODES, brain: this.BRAINS, style: this.STYLES })[key].includes(value)) return;
@@ -2084,6 +2104,7 @@ const MonteurPage = {
             mode: this.MODES.includes(w.mode) ? w.mode : 'review',
             brain: this.BRAINS.includes(w.brain) ? w.brain : 'gemini',
             style: this.STYLES.includes(w.style) ? w.style : 'classic',
+            human: typeof w.human === 'boolean' ? w.human : true,
             folder: typeof w.folder === 'string' && w.folder.trim() ? w.folder.trim() : null,
             run_at: String(w.run_at || '').trim(),
             videos_per_run: num(w.videos_per_run),

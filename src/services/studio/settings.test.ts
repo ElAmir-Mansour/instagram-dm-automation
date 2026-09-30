@@ -214,7 +214,7 @@ describe('getStudioSettings / updateStudioSettings', () => {
 describe('the monteur section (MONTEUR.md §1)', () => {
     it('defaults to off, no folder, one reel a day from one video, on all three platforms, each reviewed', () => {
         assert.deepEqual(defaultStudioSettings().monteur, {
-            enabled: false, source: 'folder', mode: 'review', brain: 'gemini', style: 'classic', folder: null, run_at: '07:00', videos_per_run: 1, reels_per_video: 1,
+            enabled: false, source: 'folder', mode: 'review', brain: 'gemini', style: 'classic', human: true, folder: null, run_at: '07:00', videos_per_run: 1, reels_per_video: 1,
             platforms: ['instagram', 'facebook', 'tiktok'], post_at: ['19:00'], min_seconds: 20, max_seconds: 45,
         });
     });
@@ -232,6 +232,15 @@ describe('the monteur section (MONTEUR.md §1)', () => {
         assert.deepEqual(problemsFor({ monteur: { style: 'classic' } }), []);
         for (const bad of ['Paper', 'ali-abdaal', '', null, 1, ['paper']]) {
             assert.deepEqual(problemsFor({ monteur: { style: bad } }), ['monteur.style must be one of classic, paper'], JSON.stringify(bad));
+        }
+    });
+
+    it('human: on by default, true or false, nothing else', () => {
+        assert.equal(overDefaults({ monteur: { enabled: true, style: 'paper' } } as never).monteur.human, true, 'a section saved before human existed');
+        assert.deepEqual(problemsFor({ monteur: { human: false } }), []);
+        assert.deepEqual(problemsFor({ monteur: { human: true } }), []);
+        for (const bad of ['true', 'off', 0, 1, null, [true]]) {
+            assert.deepEqual(problemsFor({ monteur: { human: bad } }), ['monteur.human must be true or false'], JSON.stringify(bad));
         }
     });
 
