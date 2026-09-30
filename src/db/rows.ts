@@ -23,7 +23,7 @@
  */
 import type { ClipEdit } from '../services/monteur/editor.js';
 import type { Carousel } from '../services/studio/carouselTypes.js';
-import type { MonteurConfig } from '../services/studio/settingsTypes.js';
+import type { MonteurConfig, MonteurStyle } from '../services/studio/settingsTypes.js';
 
 export type { ClipEdit } from '../services/monteur/editor.js';
 
@@ -844,7 +844,8 @@ export interface MonteurRenderPayload {
     cta: { line1: string; line2: string };
     /** A second MP4 with TikTok's CTA (`slide.ttPill`, `slide.ttSub`), or null when TikTok is off. */
     cta_tiktok: { line1: string; line2: string } | null;
-    brand: { accent: string; font: StudioDisplayFont; direction: 'rtl' | 'ltr' };
+    /** `style` is the tenant's `monteur.style`; a worker that doesn't know it renders 'classic'. */
+    brand: { accent: string; font: StudioDisplayFont; direction: 'rtl' | 'ltr'; style: MonteurStyle };
     /** Seconds into the clip. */
     cover_at: number;
     /** The Editor's pro edits, `t` in seconds on the clip's clock; `[]` renders the reel without any. */

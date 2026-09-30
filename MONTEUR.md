@@ -30,6 +30,7 @@ type MonteurConfig = {
                              // Approve (§6, "Auto mode"); a refused one stays in review with the reason
   brain: 'gemini' | 'claude_mac';  // default 'gemini'. 'claude_mac': the pick, the Marketer, the Editor and the
                              // Analyst are Claude's, on the Mac worker with the owner's plan, never Gemini (§6.3)
+  style: 'classic' | 'paper';  // default 'classic'. How the worker draws the edits, sent as brand.style (§6.2)
   folder: string | null;     // absolute path on the worker's machine, ≤ 1024 chars; needed only for 'folder'
   run_at: string;            // 'HH:MM' in schedule.timezone, default '07:00'
   videos_per_run: number;    // 1–10, default 1: new videos taken per run, oldest first
@@ -167,7 +168,7 @@ What the app does on apply:
 - Stores `words` and `duration`, and sets the status to `transcribed`. The drain sweep (§6) takes it from there.
 
 **`monteur_render`**
-`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction }, cover_at, edits: ClipEdit[] }`
+`{ clipId, sourceId, path, start, end, title, words: [[t0,t1,text]], cta: { line1, line2 }, cta_tiktok: { line1, line2 } | null, brand: { accent, font, direction, style }, cover_at, edits: ClipEdit[] }`
 → `{ video_url, tiktok_video_url: string | null, cover_url, duration, width: 1080, height: 1920 }`
 
 `cta_tiktok` makes a second MP4 from the same cut, identical except for the CTA text (e.g. «الرابط في البايو»),
@@ -476,9 +477,9 @@ sweep's deadline) and is logged as `monteur.edit` with its tokens. The call is r
 **What goes in** (`editorUserPrompt(clipLines(...))`): `C<n>` for each clip in order, then its own lines numbered
 from `L1`, each `[mm:ss.s]` on the clip's clock.
 
-**What comes out:** `{ clips: [{ clip, edits: [{ line, word, kind, text?, meaning?, items?, emoji?, query?, sfx }] }] }`.
-The schema's only enums are `kind` (13 values) and `sfx` (10): a big enum is an HTTP 400 (2026-09-27), so `query`
-is a plain string and the library topics are listed in the prompt. `meaning` is a string, `items` an array of
+**What comes out:** `{ clips: [{ clip, edits: [{ line, word, kind, text?, meaning?, items?, emoji?, icon?, query?, sfx }] }] }`.
+The schema's only enums are `kind` (14 values) and `sfx` (10): a big enum is an HTTP 400 (2026-09-27), so `query`
+and `icon` are plain strings and the library topics and icon names are listed in the prompt. `meaning` is a string, `items` an array of
 strings.
 
 **The teaching kinds** (2026-09-27): Mayer's multimedia principles on a reel. They come first when the clip gives
@@ -492,6 +493,10 @@ a reason; the older kinds fill in.
 | `define` | `text` the term ≤ 3 words, `meaning` ≤ 5 plain words | he introduces a term (pre-training) | ding |
 | `compare` | `items`: [wrong or before, right or after], ≤ 4 words each | he contrasts two things | error, then ding as ✓ lands |
 | `recap` | `items`: 2–3 takeaways, ≤ 5 words each | once, on the last line; the worker shows it just before the CTA | whoosh |
+
+**`icon`** (2026-09-30): a line drawing the video draws on, stroke by stroke, for a concept or object no photo fits; `icon` is one of `ICON_NAMES` (kept in step with the worker's `scripts/monteur/icons.mjs`), lowercased and trimmed, and any other name drops the edit; an optional `text` label of 1–3 words (≤ 24 characters, else dropped and the icon kept); pop; not a picture, and counted in the variety rule.
+
+**`monteur.style`** (`'classic' | 'paper'`, default `'classic'`, Settings → Edit style): sent in every `monteur_render` as `brand.style`, read at each render, so a re-render takes the current style; 'paper' is the Ali Abdaal look (unfolding cards, paper letters, drawn icons, black-and-white b-roll), and a worker that doesn't know the field renders classic.
 
 **The prompt's rules:** show what he refers to (example); guide the eye while he demonstrates (callout); segment
 a procedure (step), pre-train a term (define), contrast (compare), close with one recap; each edit on the exact

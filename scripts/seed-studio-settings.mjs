@@ -103,6 +103,8 @@ export const STUDIO_SETTINGS = {
         mode: 'review',
         // The owner's choice (2026-09-28): the pick, the copy, the edits and the Analyst by Claude on his Mac, never Gemini.
         brain: 'claude_mac',
+        // The edits' look (MONTEUR.md §6.2): 'classic', or 'paper' (unfolding cards, drawn icons).
+        style: 'classic',
         folder: null,
         run_at: '07:00',
         videos_per_run: 1,

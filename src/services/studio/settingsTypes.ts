@@ -84,6 +84,11 @@ export type MonteurMode = 'review' | 'auto';
  * Gemini, from this app, or Claude, on the Mac worker with the owner's Claude plan (MONTEUR.md §6.3).
  */
 export type MonteurBrain = 'gemini' | 'claude_mac';
+/**
+ * How the worker renders a reel's edits (MONTEUR.md §6.2): 'classic', the dark cards, or 'paper'
+ * (Ali Abdaal style: unfolding paper cards, paper letters, drawn icons, black-and-white b-roll).
+ */
+export type MonteurStyle = 'classic' | 'paper';
 
 export type MonteurConfig = {
     /** Off = no daily run. Run now still works. */
@@ -97,6 +102,8 @@ export type MonteurConfig = {
     mode: MonteurMode;
     /** 'claude_mac': every call is a `monteur_think` job for the Mac, and Gemini is never called for them. */
     brain: MonteurBrain;
+    /** Sent to the worker as `brand.style` in every `monteur_render`. */
+    style: MonteurStyle;
     /** Absolute, on the worker's machine; `null` = not chosen yet. */
     folder: string | null;
     /** 'HH:MM': the daily scan. */
@@ -134,6 +141,7 @@ export function defaultMonteurConfig(): MonteurConfig {
         source: 'folder',
         mode: 'review',
         brain: 'gemini',
+        style: 'classic',
         folder: null,
         run_at: '07:00',
         videos_per_run: 1,

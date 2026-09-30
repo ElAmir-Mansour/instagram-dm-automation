@@ -3,7 +3,7 @@
  *
  * One Gemini call for all of a video's clips, after the Marketer. For each clip it reads the
  * clip's own lines and names the moments worth marking: a pop-up keyword restating the point, a
- * chip for a tool the speaker names, an emoji for a concept, a photo of a real-world thing it
+ * chip for a tool the speaker names, an emoji or a drawn line icon for a concept, a photo of a real-world thing it
  * mentions (from a free photo library, never generated), or a punch-in on a result. Each edit
  * is anchored on a spoken word, so it lands when the word is said, and carries a sound effect from
  * the worker's own library. Code, not the model, decides the timing: the word's start, spacing,
@@ -30,7 +30,7 @@ import { formatStamp } from './transcript.js';
 
 export const EDIT_KINDS = [
     'keyword', 'tool', 'emoji', 'image', 'broll', 'highlight', 'punch',
-    'example', 'callout', 'step', 'define', 'compare', 'recap',
+    'example', 'callout', 'step', 'define', 'compare', 'recap', 'icon',
 ] as const;
 export type EditKind = (typeof EDIT_KINDS)[number];
 /** Sound families the worker has (its own files plus Kenney's CC0 packs); 'whip' and 'switch' are the older names. */
@@ -57,6 +57,25 @@ export const LIBRARY_TOPICS = [
     'price tag',
 ] as const;
 export type EditSfx = (typeof EDIT_SFX)[number];
+
+/**
+ * The line icons an icon edit can draw on (Tabler Icons, the paper style). Keep this list in step
+ * with the worker's own, aicourse-captions/scripts/monteur/icons.mjs ICON_NAMES: an icon the worker
+ * doesn't have is left out of the reel. Objects and symbols only, never a person.
+ */
+export const ICON_NAMES = [
+    'heart', 'heartbeat', 'activity-heartbeat', 'brain', 'ambulance', 'first-aid-kit', 'stethoscope', 'pill', 'vaccine', 'dna-2',
+    'microscope', 'flask', 'virus', 'droplet', 'lungs', 'bone', 'eye', 'ear', 'bed', 'zzz', 'moon', 'sun', 'alert-triangle', 'alarm',
+    'clock', 'hourglass', 'calendar', 'bulb', 'rocket', 'robot', 'code', 'terminal-2', 'database', 'cloud', 'server', 'cpu',
+    'device-laptop', 'device-mobile', 'world', 'map-pin', 'map', 'compass', 'target', 'trophy', 'star', 'flame', 'bolt', 'search',
+    'question-mark', 'check', 'x', 'circle-check', 'circle-x', 'arrow-big-up', 'arrow-big-down', 'arrow-right', 'trending-up',
+    'trending-down', 'chart-bar', 'chart-pie', 'report-analytics', 'file-text', 'files', 'folder', 'book', 'books', 'notebook',
+    'pencil', 'writing', 'message-circle', 'messages', 'mail', 'phone', 'lock', 'lock-open', 'key', 'shield-check', 'settings',
+    'tool', 'tools', 'puzzle', 'school', 'certificate', 'building-hospital', 'building-bank', 'shopping-cart', 'coin', 'cash', 'gift',
+    'camera', 'video', 'microphone', 'headphones', 'music', 'photo', 'palette', 'brush', 'wand', 'sparkles', 'link', 'share',
+    'download', 'upload', 'refresh', 'repeat', 'player-play', 'news', 'mood-happy', 'mood-sad', 'chess-knight',
+    'stairs-up', 'plant-2', 'coffee', 'home', 'building-store', 'car', 'plane', 'bike', 'battery-charging', 'wifi', 'language',
+] as const;
 
 /**
  * The teaching kinds and their sounds, set here rather than by the model (each kind always sounds
@@ -92,6 +111,8 @@ export interface ClipEdit {
      * checked photo of (MONTEUR.md §6.2). Letters, digits and spaces, at most 40 characters.
      */
     query?: string;
+    /** icon: one of ICON_NAMES, the line drawing the video draws on; its `text`, if any, is a 1–3 word label. */
+    icon?: string;
     /** define: the term's plain meaning, at most 5 words (`text` is the term). */
     meaning?: string;
     /** compare: [the wrong or before, the right or after]; recap: its 2–3 takeaways. */
@@ -135,13 +156,15 @@ export const EDITOR_SCHEMA: GeminiSchema = {
                                 meaning: str('define: what the term means, at most 5 plain words'),
                                 items: { type: 'ARRAY', items: { type: 'STRING' }, description: 'compare: [wrong or before, right or after]; recap: 2-3 takeaways' },
                                 emoji: str('emoji: one emoji'),
+                                // A plain string too, for the same reason: the icon names are in the prompt, and placeEdits keeps only those.
+                                icon: str('icon: one name from the icon list, exactly as written'),
                                 // A plain string: an 81-value enum here makes Gemini refuse the whole request (HTTP 400,
                                 // 2026-09-27). The topics are in the prompt, and placeEdits keeps only those.
                                 query: str('image, broll or example: one topic from the picture library list, exactly as written'),
                                 sfx: { type: 'STRING', enum: [...EDIT_SFX] },
                             },
                             required: ['line', 'word', 'kind', 'sfx'],
-                            propertyOrdering: ['line', 'word', 'kind', 'text', 'meaning', 'items', 'emoji', 'query', 'sfx'],
+                            propertyOrdering: ['line', 'word', 'kind', 'text', 'meaning', 'items', 'emoji', 'icon', 'query', 'sfx'],
                         },
                     },
                 },
@@ -174,14 +197,15 @@ For each clip, mark a moment about every 5 seconds (12 in a 60-second clip), eac
 - keyword: 2-4 words that restate the point right then in other words than his, like a headline. Never the title again, never filler.
 - tool: when the speaker names a tool or product (Gemini, ChatGPT, Claude, n8n, Python…), its name in Latin script; never one he doesn't name.
 - emoji: one emoji for a concept being said (🔒 privacy, ⚡ speed, 🌍 language, 🐍 Python, 🧠 thinking, 📄 document, ✅ it works, ❌ a mistake, 🤯 a surprise, 💡 an idea); only from this set: 🔒🔓🔑🌍🌎🐍📄📝📋📚📖✅❌⚠🤯💡🧠⚡🤖🚀💻📱🔍🔎⚙🛠📈📉📊💰💸⏳⌛⏱📅💬🎯✨🔥🤩🤔😎🥳🎉🏆📦🧩🔗✉📧🎬🎥🎙🎧🖼🎨🧪🗂🗃💾☁🌐🏠🏢🛒🧾📌🍳🗺🧭🖥⌨🖱🖨💽🔌🔋🪫📡🛰🧮🗄📁📂📇🗒📎📏📐✂✏🖌📓🔖🏷📬📨📤📥📞☎🔔📢📣📻📺📹📷🎤🧰🔧🔨🧲🪜🏗🧱🏭🚚🏪💳🪙💎🎁🔐🗝🛡🚦🚧📍🔭🔬⏰❓❗💯🔄▶⭐🌟🆕🆓🚫🥇🦾🎓💼🪄🍽🛎☕🚗🌱🧯💭🎛🗑.
+- icon: an animated line drawing of a concept or object when no photo fits and it's worth a picture (the video draws it on). icon: exactly one name from: ${ICON_NAMES.join(', ')}; text: an optional label, 1-3 words.
 - image: a photo card for a concrete object he names in passing, never for an abstract idea. query: the closest library topic.
 - broll: a full-screen photo cutaway for a bigger idea or a scene change, never while he demonstrates (the voice goes on). query: the closest library topic.
   At most 4 pictures per clip (example, image and broll together), each a different topic, and only of what he says.
   Picture library topics (query is exactly one of these): ${LIBRARY_TOPICS.join(', ')}.
 - highlight: a ring on what he points at, when it needs no name.
 - punch: a quick zoom-in when a result appears on screen or on a strong claim. At most 2 per clip.
-sfx: whoosh for a keyword, tool, picture, example or recap; pop for an emoji or step; click for a UI action, highlight or callout; ding for a result, ✅ or define; impact for a punch or a strong claim; glitch for a tech moment; error for a mistake, ❌ or compare; none when a sound would be too much.
-Mix the kinds; never two of the same in a row, except steps and callouts. Invent nothing: only what the clip says.
+sfx: whoosh for a keyword, tool, picture, example or recap; pop for an emoji, icon or step; click for a UI action, highlight or callout; ding for a result, ✅ or define; impact for a punch or a strong claim; glitch for a tech moment; error for a mistake, ❌ or compare; none when a sound would be too much.
+Mix the kinds, icons included; never two of the same in a row, except steps and callouts. Invent nothing: only what the clip says.
 Never a woman or a girl in any picture, emoji or sticker (the creator's rule); prefer objects and scenes to people.`;
 }
 
@@ -277,6 +301,13 @@ function fieldsOf(kind: EditKind, e: Record<string, unknown>): Omit<ClipEdit, 't
             const emoji = typeof e.emoji === 'string' ? [...e.emoji.trim()].slice(0, 2).join('') : '';
             return emoji ? { emoji } : null;
         }
+        case 'icon': {
+            const icon = typeof e.icon === 'string' ? e.icon.trim().toLowerCase() : '';
+            if (!(ICON_NAMES as readonly string[]).includes(icon)) return null;
+            // The label is optional: one over a callout's limits (3 words, 24 characters) is dropped, the icon kept.
+            const label = phrase(e.text, PHRASE_LIMITS.callout);
+            return label ? { icon, text: label } : { icon };
+        }
         case 'image': case 'broll': {
             const query = cleanQuery(e.query);
             return query ? { query } : null;
@@ -313,8 +344,8 @@ function fieldsOf(kind: EditKind, e: Record<string, unknown>): Omit<ClipEdit, 't
  * in its line (the first match, else the line's start); a recap with no such line takes the last
  * one, since the worker moves it to just before the CTA anyway. Dropped: unknown kinds, lines that
  * don't exist, an edit without what its kind needs (text, emoji, query, a define's meaning, a
- * compare's two sides, a recap's 2–3 takeaways), a teaching kind's words over their limits, a
- * keyword that repeats the words being said, a fifth picture, and a kind past its KIND_CAP. A lone
+ * compare's two sides, a recap's 2–3 takeaways), an icon not in ICON_NAMES, a teaching kind's words over
+ * their limits, a keyword that repeats the words being said, a fifth picture, and a kind past its KIND_CAP. A lone
  * step becomes a keyword: one step is no procedure.
  * Spacing and the other limits are the renderer's (cleanEdits).
  */

@@ -1,6 +1,6 @@
 /**
  * What the worker needs to render one reel (MONTEUR.md §3 `monteur_render`): the cut, its words on
- * the clip's own clock, the hook, the CTA card's two lines, the brand, and the Editor's edits.
+ * the clip's own clock, the hook, the CTA card's two lines, the brand (with the edits' style), and the Editor's edits.
  *
  * The same builder serves the first render and every re-render after an edit, so both cut the
  * words the same way and carry the same edits (the ones stored on the clip). A clip keeps the accent it was first rendered in; a new clip takes the next
@@ -70,7 +70,8 @@ export function buildRenderPayload(input: {
         cta: ctaLines(settings, input.keyword),
         // Only when TikTok is on: a second render nobody would post is minutes of the Mac's time.
         cta_tiktok: settings.monteur.platforms.includes('tiktok') ? tiktokCtaLines(settings) : null,
-        brand: { accent: input.accent, font: settings.brand.fonts.display, direction: settings.brand.direction },
+        // The edits' look, read at every render: a re-render after a change of style takes the new one.
+        brand: { accent: input.accent, font: settings.brand.fonts.display, direction: settings.brand.direction, style: settings.monteur.style },
         cover_at: COVER_AT_S,
         edits: [...input.edits],
     };

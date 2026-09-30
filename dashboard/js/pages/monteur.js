@@ -113,12 +113,14 @@ const MonteurPage = {
     STALE_MS: 30 * 1000,
 
     PLATFORMS: Object.freeze(['instagram', 'facebook', 'tiktok']),
-    FIELDS: Object.freeze(['enabled', 'source', 'mode', 'brain', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
+    FIELDS: Object.freeze(['enabled', 'source', 'mode', 'brain', 'style', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
     /** MONTEUR.md §1: where a run takes its videos, and what happens to a reel once it is ready. */
     SOURCES: Object.freeze(['folder', 'course']),
     MODES: Object.freeze(['review', 'auto']),
     /** MONTEUR.md §6.3: who makes the pick, the captions, the edits and the lessons. */
     BRAINS: Object.freeze(['gemini', 'claude_mac']),
+    /** MONTEUR.md §6.2: how the worker draws the edits, sent to it as `brand.style`. */
+    STYLES: Object.freeze(['classic', 'paper']),
     NUMBER_FIELDS: Object.freeze(['videos_per_run', 'reels_per_video', 'min_seconds', 'max_seconds']),
     /** MONTEUR.md §1: the ranges the server validates. The server stays the authority. */
     LIMITS: Object.freeze({
@@ -159,6 +161,7 @@ const MonteurPage = {
             source: 'folder',
             mode: 'review',
             brain: 'gemini',
+            style: 'classic',
             folder: null,
             run_at: '07:00',
             videos_per_run: 1,
@@ -286,6 +289,7 @@ const MonteurPage = {
             source: this.SOURCES.includes(s.source) ? s.source : d.source,
             mode: this.MODES.includes(s.mode) ? s.mode : d.mode,
             brain: this.BRAINS.includes(s.brain) ? s.brain : d.brain,
+            style: this.STYLES.includes(s.style) ? s.style : d.style,
             folder: typeof s.folder === 'string' && s.folder.trim() ? s.folder : null,
             run_at: typeof s.run_at === 'string' ? s.run_at : d.run_at,
             videos_per_run: num(s.videos_per_run, d.videos_per_run),
@@ -1597,6 +1601,7 @@ const MonteurPage = {
                         ${this.platformsMarkup()}
                         ${this.modeMarkup()}
                         ${this.brainMarkup()}
+                        ${this.styleMarkup()}
                     `)}
                 </ol>
                 ${this.enabledMarkup()}
@@ -1621,6 +1626,7 @@ const MonteurPage = {
                 ${this.platformsMarkup()}
                 ${this.modeMarkup()}
                 ${this.brainMarkup()}
+                ${this.styleMarkup()}
                 <div id="mt-settings-savebar">${this.seed('mt-settings-savebar', this.saveBarMarkup())}</div>
             </form>
         `;
@@ -1739,6 +1745,22 @@ const MonteurPage = {
                     ${option('claude_mac', t('monteur.settings.brainClaude'))}
                 </select>
                 <p class="form-hint" id="mt-brain-hint">${t('monteur.settings.brainHint', { name: this.workerName() })}</p>
+            </div>
+        `;
+    },
+
+    /** "Edit style": the classic cards, or paper (unfolding cards, paper letters, drawn icons, black-and-white b-roll). */
+    styleMarkup() {
+        const chosen = this.work.style;
+        const option = (value, label) => html`<option value="${value}"${chosen === value ? html.raw(' selected') : ''}>${label}</option>`;
+        return html`
+            <div class="form-group">
+                <label class="form-label" for="mt-style">${t('monteur.settings.style')}</label>
+                <select class="select" id="mt-style" data-change="monteur:setting" data-key="style" aria-describedby="mt-style-hint">
+                    ${option('classic', t('monteur.settings.styleClassic'))}
+                    ${option('paper', t('monteur.settings.stylePaper'))}
+                </select>
+                <p class="form-hint" id="mt-style-hint">${t('monteur.settings.styleHint')}</p>
             </div>
         `;
     },
@@ -1939,9 +1961,9 @@ const MonteurPage = {
         let problemKey = key;
         if (key === 'enabled') {
             w.enabled = !!el.checked;
-        } else if (key === 'source' || key === 'mode' || key === 'brain') {
+        } else if (key === 'source' || key === 'mode' || key === 'brain' || key === 'style') {
             const value = String(el.value || '');
-            if (!({ source: this.SOURCES, mode: this.MODES, brain: this.BRAINS })[key].includes(value)) return;
+            if (!({ source: this.SOURCES, mode: this.MODES, brain: this.BRAINS, style: this.STYLES })[key].includes(value)) return;
             w[key] = value;
             // The folder is asked for only when the videos come from it.
             if (key === 'source') {
@@ -2061,6 +2083,7 @@ const MonteurPage = {
             source: this.SOURCES.includes(w.source) ? w.source : 'folder',
             mode: this.MODES.includes(w.mode) ? w.mode : 'review',
             brain: this.BRAINS.includes(w.brain) ? w.brain : 'gemini',
+            style: this.STYLES.includes(w.style) ? w.style : 'classic',
             folder: typeof w.folder === 'string' && w.folder.trim() ? w.folder.trim() : null,
             run_at: String(w.run_at || '').trim(),
             videos_per_run: num(w.videos_per_run),
