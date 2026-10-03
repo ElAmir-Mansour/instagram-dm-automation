@@ -148,6 +148,33 @@ describe('sendPrivateReply', () => {
         assert.match(err.message, /Private Reply Failed \[me\]/);
         assert.match(err.message, /Code: 190/);
     });
+
+    it('a retry answered "already has a reply" is the DM that timed out on our side: sent, not failed', async () => {
+        // 2026-10-03: Instagram took 25 s, the 10 s timeout fired, the retry was refused with
+        // "already has a reply", and a delivered DM was logged as a failure.
+        let n = 0;
+        onPost = async () => {
+            n++;
+            if (n === 1) throw Object.assign(new Error('timeout of 30000ms exceeded'), { code: 'ECONNABORTED' });
+            throw metaError(-1, 'The comment you are trying to reply to, already has a reply.');
+        };
+
+        const result = await sendPrivateReply('c', 'x', TOKEN);
+
+        assert.equal(n, 2);
+        assert.deepEqual(result, { delivered: true, landed_before_retry: true });
+        assert.equal(calls[0]!.config.timeout, 30_000, 'private replies wait 30 s, not the 10 s default');
+    });
+
+    it('"already has a reply" on the first try is a real refusal: someone else replied', async () => {
+        onPost = async () => {
+            throw metaError(-1, 'The comment you are trying to reply to, already has a reply.');
+        };
+
+        const err = await sendPrivateReply('c', 'x', TOKEN).then(() => null, (e) => e);
+
+        assert.ok(err instanceof MetaApiError);
+    });
 });
 
 describe('sendPublicReply', () => {

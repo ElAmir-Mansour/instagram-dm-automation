@@ -232,6 +232,10 @@ export class MediaProcessingTimeoutError extends Error {
  * Limit: 1 private reply per comment, must be sent within 7 days.
  * @see https://developers.facebook.com/docs/messenger-platform/instagram/features/private-replies
  */
+/** Instagram has taken 25 s to answer a private reply that it did send: 10 s timed out on a sent DM. */
+export const PRIVATE_REPLY_TIMEOUT_MS = 30_000;
+const ALREADY_REPLIED = /already has a reply/i;
+
 export async function sendPrivateReply(
     commentId: string,
     message: string,
@@ -242,19 +246,32 @@ export async function sendPrivateReply(
     const endpoint = pageId ? pageId : 'me';
     const url = `${GRAPH_BASE}/${endpoint}/messages`;
 
+    let tries = 0;
     try {
         const response = await withRetry(
-            () => metaHttp.post(url, {
-                recipient: { comment_id: commentId },
-                message: { text: message },
-                messaging_type: 'RESPONSE'
-            }, {
-                headers: { Authorization: `Bearer ${accessToken}` }
-            }),
+            () => {
+                tries++;
+                return metaHttp.post(url, {
+                    recipient: { comment_id: commentId },
+                    message: { text: message },
+                    messaging_type: 'RESPONSE'
+                }, {
+                    headers: { Authorization: `Bearer ${accessToken}` },
+                    timeout: PRIVATE_REPLY_TIMEOUT_MS,
+                });
+            },
             { label: `sendPrivateReply[${endpoint}]` }
         );
         return response.data;
     } catch (error: any) {
+        // A retry that Meta answers "already has a reply" means an earlier try went through after
+        // all: it timed out on our side, not on Meta's (2026-10-03: the DM was sent, and the retry's
+        // refusal was logged as a failed DM). One private reply per comment is Meta's rule, so the
+        // only reply that comment can have is ours.
+        if (tries > 1 && ALREADY_REPLIED.test(String(error?.response?.data?.error?.message ?? ''))) {
+            log('warn', 'dm.private_reply_landed_before_retry', { comment_id: commentId, tries });
+            return { delivered: true, landed_before_retry: true };
+        }
         throw metaFailure(`Private Reply Failed [${endpoint}]`, error);
     }
 }
