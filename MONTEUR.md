@@ -414,7 +414,11 @@ See §6.2. It never holds a reel back.
 - **hook_type** (of the spoken start line): promise, problem, intent or question.
 - **why:** at most 10 words: what the viewer gets.
 - **Invent nothing:** use only numbers, tools and results the clip actually says.
-- **Examples:** the first lines of the tenant's 2 most-viewed posts in the last 90 days, taken from `post_insights`.
+- **Evidence** (`reelEvidence.ts`): the tenant's 3 reels with the most views in the last 90 days and, once there are 6,
+  the 2 with the fewest (only reels at least 3 days old), from `post_insights` reels and videos. A reel is one post
+  across platforms (views added, Instagram's skip rate) and a repost counts once. Each line gives the views, the skip
+  rate, and what the reel was about: the clip's `title` and `topic` when the Monteur cut it, else the caption's first
+  line. The best are worth more on `send`; the prompt prefers other moments over the worst.
 
 **Code:**
 - **Rank:** `rank = 3·hook + alone + payoff + send`.

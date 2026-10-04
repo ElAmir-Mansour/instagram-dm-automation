@@ -133,7 +133,10 @@ beforeEach(() => {
             rows: [{ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: reelsPerVideo, ...(human === undefined ? {} : { human }) } }],
         })],
         [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [{ lessons: [{ rule: 'ابدأ بالنتيجة', evidence: 'skip 40%' }] }] })],
-        [/^SELECT caption FROM post_insights/, () => ({ rows: [{ caption: 'هذي أسرع طريقة تلخص فيها درس كامل\nbody' }, { caption: 'غلطة يسويها الكل' }] })],
+        [/FROM post_insights p LEFT JOIN clip_drafts c/, () => ({ rows: [
+            { group_key: 'p1', platform: 'facebook', caption: 'هذي أسرع طريقة تلخص فيها درس كامل\nbody', published_at: '2026-09-20T00:00:00Z', metrics: { views: 977 }, title: 'Google Stitch: صفحة كاملة', topic: 'شرح Google Stitch' },
+            { group_key: 'p2', platform: 'instagram', caption: 'غلطة يسويها الكل', published_at: '2026-09-21T00:00:00Z', metrics: { views: 40, skip_rate: 82 }, title: null, topic: null },
+        ] })],
         [/^SELECT text FROM clip_drafts/, () => ({ rows: existingTexts.map((text) => ({ text })) })],
         [/^SELECT copy->>'keyword' AS keyword, copy->'variants' AS variants FROM clip_drafts/, () => ({
             rows: [...inFlight.map((keyword) => ({ keyword, variants: [] })), ...(inFlightVariants.length ? [{ keyword: null, variants: inFlightVariants }] : [])],
@@ -193,7 +196,7 @@ describe('sweepMonteur — a pick', () => {
         const [pick, copy] = calls;
         assert.match(pick!.turns[0]!.text, /^L3 \[00:10\.0\] جملة3\.$/m, 'numbered lines, L<n> [mm:ss.s] text');
         assert.match(pick!.turns[0]!.text, /^Pick up to 3 clips/m, 'reels_per_video + 2 candidates');
-        assert.match(pick!.turns[0]!.text, /- هذي أسرع طريقة تلخص فيها درس كامل\n- غلطة يسويها الكل/, 'the openings of the two most-viewed posts');
+        assert.match(pick!.turns[0]!.text, /reels with the most views \(90 days\)[^\n]*\n- 977 views: title «Google Stitch: صفحة كاملة»; topic «شرح Google Stitch»; opening «هذي أسرع طريقة تلخص فيها درس كامل»\n- 40 views, skipped in 3s 82%: opening «غلطة يسويها الكل»/, 'what the best reels were about, with their numbers');
         assert.match(pick!.turns[0]!.text, /- ابدأ بالنتيجة/, 'the latest lessons go in');
         assert.match(pick!.turns[0]!.text, /Never pick a moment about: MCP/, 'and the avoid terms');
         assert.equal(pick!.maxOutputTokens, PICK_MAX_OUTPUT);

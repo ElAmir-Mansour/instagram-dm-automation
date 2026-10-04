@@ -38,6 +38,7 @@ import { askOf, writeCopy } from './copy.js';
 import { writeEdits } from './editor.js';
 import { inFlightTriggers } from './keywords.js';
 import { pickClips, type PickOutcome } from './pick.js';
+import { loadReelEvidence, type ReelEvidenceSet } from './reelEvidence.js';
 import { MIN_CALL_MS, usageFields } from './model.js';
 import { clipsThinkKey, isThinkSignal, sourceThinkKey, ThinkExhausted, ThinkWaiting, type ThinkOn } from './think.js';
 import { accentsFor, buildRenderPayload } from './render.js';
@@ -108,8 +109,8 @@ type ClaimedSource = Pick<MonteurSourceRow, 'id' | 'creator_id' | 'name' | 'path
 
 /** What both prompts and the cut read besides the transcript (MONTEUR.md §6.1). */
 export interface PickContext {
-    /** The first lines of the tenant's 2 most-viewed posts of the last 90 days. */
-    examples: string[];
+    /** The tenant's reels with the most and the fewest views of the last 90 days, and what each was about. */
+    reels: ReelEvidenceSet;
     /** The words of every clip in flight or scheduled, and of every clip from the last 90 days. */
     existingTexts: string[];
     /** Keywords and variants reels in flight ask for: a new one must not overlap them. */
@@ -120,17 +121,8 @@ export interface PickContext {
 }
 
 export async function loadPickContext(creatorId: string): Promise<PickContext> {
-    const firstLine = (text: string | null) => (text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
-    const [examples, texts, keywords, asks] = await Promise.all([
-        // Fail-soft: without the Growth hub's table the prompt just has no examples.
-        pool.query<{ caption: string | null }>(
-            `SELECT caption FROM post_insights
-              WHERE creator_id = $1 AND caption IS NOT NULL AND metrics ? 'views'
-                AND published_at > NOW() - make_interval(days => 90)
-              ORDER BY (metrics->>'views')::numeric DESC
-              LIMIT 2`,
-            [creatorId]
-        ).catch(() => ({ rows: [] as { caption: string | null }[] })),
+    const [reels, texts, keywords, asks] = await Promise.all([
+        loadReelEvidence(creatorId),
         pool.query<{ text: string }>(
             `SELECT text FROM clip_drafts
               WHERE creator_id = $1 AND text IS NOT NULL
@@ -147,7 +139,7 @@ export async function loadPickContext(creatorId: string): Promise<PickContext> {
         ),
     ]);
     return {
-        examples: examples.rows.map((r) => firstLine(r.caption).slice(0, 120)).filter(Boolean),
+        reels,
         existingTexts: texts.rows.map((r) => r.text),
         inFlightKeywords: keywords.keywords,
         inFlightVariants: keywords.variants,

@@ -6,13 +6,14 @@
  *
  * The prompt is short on purpose: the transcript is most of the tokens, and it is sent once, as
  * numbered lines. The rules are the research review's (§6.1). The creator's own evidence goes in
- * ahead of the transcript: the Analyst's lessons, and the openings of their two most-viewed posts.
+ * ahead of the transcript: the Analyst's lessons, and what their best and worst reels were about.
  */
 import type { StudioLesson, StudioSettings, TranscriptWord } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
 import type { GeminiSchema, ModelTurn } from '../studio/generate.js';
 import { languageKit } from '../studio/prompts.js';
 import { ask, emptyCost, type CallCost } from './model.js';
+import { evidenceLine, type ReelEvidenceSet } from './reelEvidence.js';
 import { ThinkWaiting, thinkRoute, type ThinkOn } from './think.js';
 import {
     chooseClips, formatLines, groupLines, HOOK_TYPES, MAX_TITLE, spokenSpan, type PickedClip, type TranscriptLine,
@@ -89,17 +90,20 @@ export function candidatesWanted(reelsPerVideo: number): number {
 }
 
 export function pickUserPrompt(args: {
-    lines: readonly TranscriptLine[]; settings: StudioSettings; lessons: readonly StudioLesson[]; examples?: readonly string[];
+    lines: readonly TranscriptLine[]; settings: StudioSettings; lessons: readonly StudioLesson[]; reels?: ReelEvidenceSet;
 }): string {
     const { lines, settings, lessons } = args;
     const m = settings.monteur;
     const avoid = (settings.voice?.avoid ?? []).filter((a) => a.trim());
-    const examples = (args.examples ?? []).filter((e) => e.trim()).slice(0, 2);
+    const best = args.reels?.best ?? [];
+    const worst = args.reels?.worst ?? [];
     return [
         `Pick up to ${candidatesWanted(m.reels_per_video)} clips, best first, each ${m.min_seconds}–${m.max_seconds} seconds, none overlapping.`,
         // Past 90 s only a full walkthrough earns the length: watch time is what Facebook ranks on.
         ...(m.max_seconds > 90 ? [`Most clips should run about ${Math.max(m.min_seconds, 45)}–90 seconds; go up to ${m.max_seconds} only for a complete walkthrough that a shorter cut would leave unfinished.`] : []),
-        ...(examples.length ? ['Openings of this creator\'s most-viewed posts:', ...examples.map((e) => `- ${e}`)] : []),
+        // The audience's own vote: a moment on a topic that already spread scores higher on send.
+        ...(best.length ? ['This creator\'s reels with the most views (90 days). A moment on a topic like these, or of the same kind, is worth more on send:', ...best.map(evidenceLine)] : []),
+        ...(worst.length ? ['Their reels with the fewest views. Prefer other moments over ones like these:', ...worst.map(evidenceLine)] : []),
         ...(lessons.length ? ['Lessons from this creator\'s past reels:', ...lessons.map((l) => `- ${l.rule}`)] : []),
         ...(avoid.length ? [`Never pick a moment about: ${avoid.join(', ')}.`] : []),
         `Transcript (${languageKit(settings).name}):`,
@@ -132,7 +136,7 @@ export interface PickOutcome {
 export async function pickClips(
     source: { words: readonly TranscriptWord[]; duration: number | null },
     settings: StudioSettings,
-    context: { lessons: readonly StudioLesson[]; examples?: readonly string[]; existingTexts?: readonly string[] },
+    context: { lessons: readonly StudioLesson[]; reels?: ReelEvidenceSet; existingTexts?: readonly string[] },
     deadline: number,
     think?: ThinkOn,
 ): Promise<PickOutcome> {
@@ -146,7 +150,7 @@ export async function pickClips(
         existingTexts: context.existingTexts ?? [],
     };
     const system = pickSystemPrompt(settings);
-    const turns: ModelTurn[] = [{ role: 'user', text: pickUserPrompt({ lines, settings, lessons: context.lessons, examples: context.examples }) }];
+    const turns: ModelTurn[] = [{ role: 'user', text: pickUserPrompt({ lines, settings, lessons: context.lessons, reels: context.reels }) }];
     const call = (purpose: string) => ask({
         purpose, system, turns, schema: PICK_SCHEMA, temperature: 0.4, thinkingBudget: PICK_THINKING,
         maxOutputTokens: PICK_MAX_OUTPUT, capMs: PICK_CALL_MS, think: thinkRoute(think, purpose, 'pick'),
