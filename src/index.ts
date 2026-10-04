@@ -238,6 +238,11 @@ app.get('/site.webmanifest', (_req, res) => {
     res.type('application/manifest+json');
     res.sendFile(path.join(__dirname, '../public/site.webmanifest'), { maxAge: ROOT_ASSET_MAX_AGE });
 });
+// Google Search Console's ownership file for this domain (the YouTube upload app's OAuth branding).
+// Exactly this one name: a route answering any google<token>.html would let anyone claim the domain.
+app.get('/google9fa1db13cbba5ece.html', (_req, res) => {
+    res.type('text/html').send('google-site-verification: google9fa1db13cbba5ece.html');
+});
 
 // ─── Health Check ───────────────────────────────────────────────────────────
 
