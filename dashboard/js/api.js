@@ -162,6 +162,9 @@ const API = {
     removeGeminiKey: () => API.request('/admin/gemini-key', { method: 'DELETE' }),
     // Where uploads are kept (Supabase Storage). The key is only ever sent, never read back.
     getMediaStorage: () => API.request('/admin/media-storage'),
+    getMediaCleanup: () => API.request('/admin/media-storage/cleanup'),
+    setMediaCleanup: (on) => API.request('/admin/media-storage/cleanup', { method: 'PUT', body: JSON.stringify({ on }) }),
+    runMediaCleanup: () => API.request('/admin/media-storage/cleanup', { method: 'POST' }),
     saveMediaStorage: (data) => API.request('/admin/media-storage', { method: 'PUT', body: JSON.stringify(data) }),
     removeMediaStorage: () => API.request('/admin/media-storage', { method: 'DELETE' }),
 

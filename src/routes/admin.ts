@@ -52,6 +52,7 @@ import {
 } from '../services/erasure.js';
 import { APP_SETTING_KEYS, describeGeminiKey, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
 import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
+import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
 import { storageKeyKind, storageKeyProblem } from '../services/supabaseStorage.js';
 import { checkGeminiKey } from '../services/geminiKey.js';
 import { dmModelsInUse } from '../services/ai.js';
@@ -320,6 +321,44 @@ router.delete('/media-storage', async (req, res) => {
         res.json(await describeMediaStorage());
     } catch (err) {
         failWith(res, err, 'admin.media_storage_remove_failed', 'Failed to remove the media storage settings.');
+    }
+});
+
+/**
+ * "Delete files once posted" (`storage.cleanup_after_publish`, src/services/retention.ts): the
+ * switch, and what a clean-up would remove now.
+ */
+router.get('/media-storage/cleanup', async (_req, res) => {
+    try {
+        const [on, preview] = await Promise.all([getSetting(APP_SETTING_KEYS.mediaCleanup), previewMediaCleanup()]);
+        res.json({ on: on === 'true', preview });
+    } catch (err) {
+        failWith(res, err, 'admin.media_cleanup_read_failed', 'Failed to read the clean-up settings.');
+    }
+});
+
+router.put('/media-storage/cleanup', async (req, res) => {
+    try {
+        if (typeof req.body?.on !== 'boolean') {
+            res.status(400).json({ error: 'Send { on: true } or { on: false }.' });
+            return;
+        }
+        await setSetting(APP_SETTING_KEYS.mediaCleanup, req.body.on ? 'true' : null, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.settingsMediaCleanup, 'app', null, { change: req.body.on ? 'on' : 'off' });
+        res.json({ on: req.body.on, preview: await previewMediaCleanup() });
+    } catch (err) {
+        failWith(res, err, 'admin.media_cleanup_save_failed', 'Failed to save the clean-up setting.');
+    }
+});
+
+/** "Clean up now": the same rule, at once. Irreversible, so only on this explicit request. */
+router.post('/media-storage/cleanup', async (req, res) => {
+    try {
+        const out = await cleanUpMediaNow();
+        await audit(req, AUDIT_ACTIONS.settingsMediaCleanup, 'app', null, { change: 'cleaned', files: out.files, bytes: out.bytes });
+        res.json({ ...out, preview: await previewMediaCleanup() });
+    } catch (err) {
+        failWith(res, err, 'admin.media_cleanup_failed', 'The clean-up failed.');
     }
 });
 

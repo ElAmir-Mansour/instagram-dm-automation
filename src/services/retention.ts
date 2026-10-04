@@ -26,7 +26,8 @@
  * value (90) is in ARCHITECTURE.md rather than hardcoded here. Set it and the next cron run
  * begins clearing.
  */
-import { queryCount } from '../db/query.js';
+import { queryCount, queryOne } from '../db/query.js';
+import { APP_SETTING_KEYS, getSetting } from './appSettings.js';
 import { getJobQueue } from '../jobs/queue.js';
 import { log } from '../utils/log.js';
 import { removeQueuedMediaObjects } from './storage.js';
@@ -217,43 +218,59 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
  * operator's own media, and it should be their decision rather than a surprise on upgrade.
  * Never throws — it runs in the same cron invocation as the publishes.
  */
-export type MediaPruneOutcome =
-    | { deleted: number; skipped: false }
-    /** Retention is off, or configured below the minimum. Nothing was attempted. */
-    | { deleted: 0; skipped: true; reason: 'disabled' }
-    /** It was attempted and the query failed. Materially different from `disabled`. */
-    | { deleted: 0; skipped: true; reason: 'error' };
+/**
+ * How the media prune runs: `days`, after which a file nothing names goes; `published`, whether a
+ * file whose post is PUBLISHED (and that nothing else needs) goes at once.
+ *
+ * Settings → Media storage → "Delete files once posted" (`storage.cleanup_after_publish`) turns on
+ * both, with the minimum window for unnamed files: a week covers a render or a composer upload
+ * that has landed and is not yet named by the row it is for. Without it, `MEDIA_RETENTION_DAYS`
+ * decides as it always did: age only.
+ */
+export type MediaCleanupPolicy =
+    | { enabled: true; days: number; published: boolean; source: 'setting' | 'env' }
+    | { enabled: false; reason: 'unset' | 'invalid' | 'too_short' };
 
-export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
-    const setting = resolveRetention(process.env.MEDIA_RETENTION_DAYS);
-
-    if (!setting.enabled) {
-        if (setting.reason !== 'unset') {
-            log('warn', 'retention.media_misconfigured', {
-                reason: setting.reason,
-                value: process.env.MEDIA_RETENTION_DAYS,
-                minimum_days: MIN_RETENTION_DAYS,
-            });
-        }
-        return { deleted: 0, skipped: true, reason: 'disabled' };
-    }
-
+export async function mediaCleanupPolicy(): Promise<MediaCleanupPolicy> {
+    let on = false;
     try {
-        const deleted = await queryCount(
-            `DELETE FROM media_uploads
-              WHERE id IN (
+        on = (await getSetting(APP_SETTING_KEYS.mediaCleanup)) === 'true';
+    } catch (err) {
+        // The setting cannot be read: fall back to the environment, which deletes less.
+        log('warn', 'retention.media_setting_unreadable', { message: (err as Error)?.message });
+    }
+    if (on) return { enabled: true, days: MIN_RETENTION_DAYS, published: true, source: 'setting' };
+    const env = resolveRetention(process.env.MEDIA_RETENTION_DAYS);
+    return env.enabled ? { enabled: true, days: env.days, published: false, source: 'env' } : env;
+}
+
+/** Where `m.id` appears in a scheduled post: its video or image, its cover, any carousel slide. */
+const NAMED_BY_POST = `(
+                                    s.media_url LIKE '%' || m.id::text || '%'
+                                 OR s.cover_url LIKE '%' || m.id::text || '%'
+                                 OR array_to_string(s.media_urls, ' ') LIKE '%' || m.id::text || '%'
+                              )`;
+
+/**
+ * The files the prune may delete. `$1` is the window in days for a file nothing names; `$2`, when
+ * true, lets a file go at once if a PUBLISHED post names it. Either way nothing that may still be
+ * needed goes — every guard below is ANDed.
+ */
+export const MEDIA_CANDIDATES_SQL = `
                     SELECT m.id
                       FROM media_uploads m
-                     WHERE m.created_at < NOW() - make_interval(days => $1)
+                     WHERE (
+                           m.created_at < NOW() - make_interval(days => $1)
+                        OR ($2::boolean AND EXISTS (
+                               SELECT 1 FROM scheduled_posts s
+                                WHERE s.status = 'PUBLISHED' AND ${NAMED_BY_POST}
+                           ))
+                       )
                        AND NOT EXISTS (
                            SELECT 1
                              FROM scheduled_posts s
                             WHERE s.status IN ('PENDING', 'PUBLISHING', 'PROCESSING', 'FAILED')
-                              AND (
-                                    s.media_url LIKE '%' || m.id::text || '%'
-                                 OR s.cover_url LIKE '%' || m.id::text || '%'
-                                 OR array_to_string(s.media_urls, ' ') LIKE '%' || m.id::text || '%'
-                              )
+                              AND ${NAMED_BY_POST}
                        )
                        AND NOT EXISTS (
                            SELECT 1
@@ -269,20 +286,48 @@ export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
                        AND NOT EXISTS (
                            SELECT 1
                              FROM clip_drafts c
-                            WHERE c.status IN ('rendering', 'review', 'scheduled')
+                            WHERE (c.status IN ('rendering', 'review')
+                                   OR (c.status = 'scheduled' AND (c.schedule->>'scheduled_time')::timestamptz > NOW()))
                               AND (COALESCE(c.render->>'video_url', '') || ' ' || COALESCE(c.render->>'tiktok_video_url', '')
                                    || ' ' || COALESCE(c.render->>'cover_url', ''))
                                   LIKE '%' || m.id::text || '%'
-                       )
-                     LIMIT $2
+                       )`;
+
+export type MediaPruneOutcome =
+    | { deleted: number; skipped: false }
+    /** Retention is off, or configured below the minimum. Nothing was attempted. */
+    | { deleted: 0; skipped: true; reason: 'disabled' }
+    /** It was attempted and the query failed. Materially different from `disabled`. */
+    | { deleted: 0; skipped: true; reason: 'error' };
+
+export async function pruneOrphanedMedia(policy?: MediaCleanupPolicy): Promise<MediaPruneOutcome> {
+    const setting = policy ?? await mediaCleanupPolicy();
+
+    if (!setting.enabled) {
+        if (setting.reason !== 'unset') {
+            log('warn', 'retention.media_misconfigured', {
+                reason: setting.reason,
+                value: process.env.MEDIA_RETENTION_DAYS,
+                minimum_days: MIN_RETENTION_DAYS,
+            });
+        }
+        return { deleted: 0, skipped: true, reason: 'disabled' };
+    }
+
+    try {
+        const deleted = await queryCount(
+            `DELETE FROM media_uploads
+              WHERE id IN (${MEDIA_CANDIDATES_SQL}
+                     LIMIT $3
               )`,
-            [setting.days, PRUNE_BATCH_SIZE]
+            [setting.days, setting.published, PRUNE_BATCH_SIZE]
         );
 
         if (deleted > 0) {
             log('info', 'retention.media_pruned', {
                 deleted,
                 retention_days: setting.days,
+                published_at_once: setting.published,
                 more_likely: deleted === PRUNE_BATCH_SIZE,
             });
         }
@@ -291,6 +336,42 @@ export async function pruneOrphanedMedia(): Promise<MediaPruneOutcome> {
         log('error', 'retention.media_prune_failed', { message: (err as Error)?.message });
         return { deleted: 0, skipped: true, reason: 'error' };
     }
+}
+
+/** The rule "Delete files once posted" applies, whatever is saved: what the button runs and previews. */
+export const CLEANUP_NOW_POLICY: Extract<MediaCleanupPolicy, { enabled: true }> = { enabled: true, days: MIN_RETENTION_DAYS, published: true, source: 'setting' };
+
+/** What a clean-up would remove now: the files and their bytes. */
+export async function previewMediaCleanup(): Promise<{ files: number; bytes: number }> {
+    const row = await queryOne<{ files: string; bytes: string | null }>(
+        `SELECT count(*) AS files, COALESCE(sum(COALESCE(u.size_bytes, octet_length(u.data))), 0) AS bytes
+           FROM media_uploads u WHERE u.id IN (${MEDIA_CANDIDATES_SQL})`,
+        [CLEANUP_NOW_POLICY.days, true]
+    );
+    return { files: Number(row?.files ?? 0), bytes: Number(row?.bytes ?? 0) };
+}
+
+/**
+ * Settings → Media storage → "Clean up now": the rule, applied at once rather than at the next
+ * daily sweep, then the deleted rows' objects removed from Storage. Returns what went.
+ */
+export async function cleanUpMediaNow(): Promise<{ files: number; bytes: number; objectsRemoved: number }> {
+    const before = await previewMediaCleanup();
+    let files = 0;
+    for (let pass = 0; pass < MAX_SWEEP_PASSES; pass++) {
+        const out = await pruneOrphanedMedia(CLEANUP_NOW_POLICY);
+        if (out.skipped) throw new Error('The clean-up query failed; nothing more was deleted. See the logs.');
+        files += out.deleted;
+        if (out.deleted < PRUNE_BATCH_SIZE) break;
+    }
+    let objectsRemoved = 0;
+    for (let pass = 0; pass < MAX_SWEEP_PASSES; pass++) {
+        const out = await removeQueuedMediaObjects();
+        objectsRemoved += out.removed;
+        if (!out.removed) break;
+    }
+    log('info', 'retention.media_cleanup_now', { files, objects_removed: objectsRemoved, bytes: before.bytes });
+    return { files, bytes: files ? before.bytes : 0, objectsRemoved };
 }
 
 export interface RetentionSweepResult {
