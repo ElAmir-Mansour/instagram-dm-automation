@@ -107,6 +107,9 @@ export const AUDIT_ACTIONS = {
     tiktokConnect: 'tiktok.connect',
     tiktokDisconnect: 'tiktok.disconnect',
     settingsTikTokAppWrite: 'settings.tiktok_app_write',
+    youtubeConnect: 'youtube.connect',
+    youtubeDisconnect: 'youtube.disconnect',
+    settingsYouTubeAppWrite: 'settings.youtube_app_write',
     /** The platform's Gemini key was saved (after Google accepted it) or removed, from Operations. */
     settingsGeminiKeyWrite: 'settings.gemini_key_write',
     /** The Supabase Storage config media goes to was saved (after Supabase accepted it) or removed. */

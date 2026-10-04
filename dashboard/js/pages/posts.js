@@ -150,7 +150,7 @@ const PostsPage = {
     POST_TYPES: [
         { value: 'image', labelKey: 'posts.type.image', platforms: ['instagram', 'facebook', 'both', 'tiktok'] },
         { value: 'carousel', labelKey: 'posts.type.carousel', platforms: ['instagram', 'facebook', 'both', 'tiktok'] },
-        { value: 'video', labelKey: 'posts.type.video', platforms: ['instagram', 'facebook', 'both', 'tiktok'] },
+        { value: 'video', labelKey: 'posts.type.video', platforms: ['instagram', 'facebook', 'both', 'tiktok', 'youtube'] },
         { value: 'story', labelKey: 'posts.type.story', platforms: ['instagram'] },
         { value: 'feed', labelKey: 'posts.type.feed', platforms: ['facebook'] },
     ],
@@ -536,6 +536,7 @@ const PostsPage = {
         if (value === 'instagram') return { cls: 'badge-instagram', icon: 'instagram', label: t('common.instagram') };
         if (value === 'facebook') return { cls: 'badge-facebook', icon: 'facebook', label: t('common.facebook') };
         if (value === 'tiktok') return { cls: 'badge-tiktok', icon: 'music-2', label: t('common.tiktok') };
+        if (value === 'youtube') return { cls: 'badge-youtube', icon: 'youtube', label: t('common.youtube') };
         if (value === 'both') return { cls: 'badge-neutral', icon: 'share-2', label: t('common.both') };
         // Anything else used to fall through to "Both platforms" — a label that
         // was a claim about where the post would go. Say what the row says.
@@ -888,6 +889,13 @@ const PostsPage = {
                 ${isPublished && post.published_post_id ? html`
                     <p class="post-card-id"><strong>${t('posts.publishedIdLabel')}</strong> ${UI.ltr(post.published_post_id)}</p>
                 ` : ''}
+                ${isPublished && post.platform === 'youtube' && /^YT:[\w-]+$/.test(post.published_post_id || '') ? html`
+                    <p class="post-card-meta post-card-meta--note">
+                        <i data-lucide="youtube" aria-hidden="true"></i>
+                        <a href="https://www.youtube.com/shorts/${post.published_post_id.slice(3)}" target="_blank" rel="noopener noreferrer">${t('posts.youtube.open')}</a>
+                        ${post.error_log ? html`<span class="form-hint" dir="auto">${post.error_log}</span>` : ''}
+                    </p>
+                ` : ''}
                 ${isPublished && isTikTok && (isDirect || !post.published_post_id) ? html`
                     <!-- TikTok returns a post id only for public posts that have
                          passed moderation; a private or friends-only post never
@@ -1115,12 +1123,16 @@ const PostsPage = {
         if (platform === 'facebook') return t('common.facebook');
         if (platform === 'both') return t('common.both');
         if (platform === 'tiktok') return t('common.tiktokOnly');
+        if (platform === 'youtube') return t('common.youtubeOnly');
         return t('common.instagram');
     },
 
     /** The four platform options, one selected. Written once for both modals. */
     platformOptions(selected) {
-        return this.PLATFORMS.map((p) => html`
+        // A YouTube row (made by the Monteur) keeps its platform when edited: the composer does not
+        // offer YouTube for a new post, but the select must not silently turn this one into Instagram.
+        const list = selected === 'youtube' ? [...this.PLATFORMS, 'youtube'] : this.PLATFORMS;
+        return list.map((p) => html`
             <option value="${p}" ${p === selected ? html.raw('selected') : ''}>${this.platformLabel(p)}</option>
         `);
     },

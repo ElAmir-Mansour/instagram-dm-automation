@@ -38,6 +38,9 @@ import { StorageApiError } from '../services/supabaseStorage.js';
 import { isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
 import adminRouter from './admin.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
+import { youtubePublicRouter, youtubeRouter } from './youtube.js';
+import { publishYouTubePost } from '../services/youtubePublish.js';
+import { refreshAllYouTubeConnections } from '../services/youtubeConnections.js';
 import { studioRouter, studioWorkerRouter } from './studio.js';
 import {
     publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokInboxOptions, validateTikTokOptions,
@@ -431,7 +434,7 @@ export { formatPublishedIds, publishedPlatforms };
  * log nobody reads.
  */
 export function unsupportedPlatformCombination(platform: unknown, postType: unknown): string | null {
-    if (!isMetaPlatform(platform) && platform !== 'tiktok') {
+    if (!isMetaPlatform(platform) && platform !== 'tiktok' && platform !== 'youtube') {
         // Before the dispatcher failed closed, an unknown platform was accepted here and then
         // marked PUBLISHED by the sweep without going anywhere.
         return `Unknown platform "${String(platform)}".`;
@@ -441,6 +444,9 @@ export function unsupportedPlatformCombination(platform: unknown, postType: unkn
     }
     if (platform === 'tiktok' && postType !== 'video' && !isTikTokPhotoType(postType)) {
         return 'TikTok posts must be a video, a photo or a carousel of photos.';
+    }
+    if (platform === 'youtube' && postType !== 'video') {
+        return 'YouTube posts must be a video (a Short).';
     }
     return null;
 }
@@ -625,7 +631,7 @@ export async function attemptPublish(
     try {
         // Fail closed. A platform this function does not publish to used to match neither
         // branch below and fall straight through to the PUBLISHED write with an empty id — a
-        // post reported live that went nowhere. `tiktok` rows are routed elsewhere by
+        // post reported live that went nowhere. `tiktok` and `youtube` rows are routed elsewhere by
         // `publishClaimedPost`; anything reaching here that is not a Meta platform is a bug.
         if (!isMetaPlatform(post.platform)) {
             throw new Error(`Unsupported platform "${String(post.platform)}" — nothing was published.`);
@@ -757,7 +763,7 @@ export async function attemptPublish(
     }
 }
 
-/** The platforms `attemptPublish` owns. `both` means Instagram + Facebook, never TikTok. */
+/** The platforms `attemptPublish` owns. `both` means Instagram + Facebook, never TikTok or YouTube. */
 export function isMetaPlatform(platform: unknown): platform is 'instagram' | 'facebook' | 'both' {
     return platform === 'instagram' || platform === 'facebook' || platform === 'both';
 }
@@ -778,6 +784,17 @@ type ClaimedPost = PublishTarget & Pick<ScheduledPostRow, 'creator_id' | 'extern
  * `TikTokInboxFullError`, which callers report as "held", not "failed".
  */
 export async function publishClaimedPost(post: ClaimedPost, creator: PublishCreator): Promise<string> {
+    if (post.platform === 'youtube') {
+        return publishYouTubePost({
+            id: post.id,
+            creator_id: post.creator_id,
+            post_type: post.post_type,
+            caption: post.caption,
+            media_url: post.media_url,
+            external_publish_id: post.external_publish_id ?? null,
+            platform_options: post.platform_options ?? null,
+        });
+    }
     if (post.platform === 'tiktok') {
         return publishTikTokPost({
             id: post.id,
@@ -972,6 +989,12 @@ router.get('/cron/publish', async (req, res) => {
             log('info', 'cron.tiktok_refresh', { ...tiktokRefresh });
         }
         await reconcileTikTokPosts(25);
+
+        // YouTube: the same daily health check, which also re-reads each channel's name and picture.
+        const youtubeRefresh = await refreshAllYouTubeConnections();
+        if (youtubeRefresh.refreshed > 0 || youtubeRefresh.failed > 0) {
+            log('info', 'cron.youtube_refresh', { ...youtubeRefresh });
+        }
 
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
         // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
@@ -1235,6 +1258,8 @@ router.get('/interactions/export', async (req, res) => {
 // carry no session. Each authenticates itself (single-use state; HMAC signature). Requests for
 // any other /tiktok path fall through this router to the authenticated one below.
 router.use('/tiktok', tiktokPublicRouter);
+// Google's OAuth redirect, likewise reached without a session.
+router.use('/youtube', youtubePublicRouter);
 
 // ─── Carousel Studio worker ─────────────────────────────────────────────────
 // Called by the Mac worker, which has no session: its bearer token resolves its tenant
@@ -1459,6 +1484,7 @@ router.use(resolveTenant);
 
 // TikTok connection management — tenant-scoped, so below resolveTenant.
 router.use('/tiktok', tiktokRouter);
+router.use('/youtube', youtubeRouter);
 
 // Carousel Studio (STUDIO.md) — tenant-scoped, operator role; carries its own guards.
 router.use('/studio', studioRouter);

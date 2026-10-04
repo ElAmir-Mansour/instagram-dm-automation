@@ -112,7 +112,7 @@ const MonteurPage = {
     /** Coming back to the tab re-reads the view when the last read is older than this. */
     STALE_MS: 30 * 1000,
 
-    PLATFORMS: Object.freeze(['instagram', 'facebook', 'tiktok']),
+    PLATFORMS: Object.freeze(['instagram', 'facebook', 'tiktok', 'youtube']),
     FIELDS: Object.freeze(['enabled', 'source', 'mode', 'brain', 'style', 'human', 'folder', 'run_at', 'videos_per_run', 'reels_per_video', 'platforms', 'post_at', 'min_seconds', 'max_seconds']),
     /** MONTEUR.md §1: where a run takes its videos, and what happens to a reel once it is ready. */
     SOURCES: Object.freeze(['folder', 'course']),

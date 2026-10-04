@@ -98,7 +98,7 @@ describe('nextFreeSlots', () => {
         assert.match(query!.sql, /status = 'PENDING'/);
         // Meta rows hold a slot; a TikTok row does when no Meta row shares its group: a Studio
         // TikTok sibling adds no time of its own, a TikTok-only reel does.
-        assert.match(query!.sql, /p\.platform IN \('instagram', 'facebook', 'both'\) OR \(p\.platform = 'tiktok' AND \(p\.group_id IS NULL OR NOT EXISTS \( SELECT 1 FROM scheduled_posts m WHERE m\.group_id = p\.group_id AND m\.platform <> 'tiktok'\)\)\)/);
+        assert.match(query!.sql, /p\.platform IN \('instagram', 'facebook', 'both'\) OR \(p\.platform IN \('tiktok', 'youtube'\) AND \(p\.group_id IS NULL OR NOT EXISTS \( SELECT 1 FROM scheduled_posts m WHERE m\.group_id = p\.group_id AND m\.platform IN \('instagram', 'facebook', 'both'\)\)\)\)/);
         assert.equal(query!.params.length, 3);
     });
 

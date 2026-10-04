@@ -162,7 +162,7 @@ export interface MessageRow {
  * `both` means Instagram + Facebook — it predates TikTok and keeps that meaning. A TikTok post
  * is always its own row (`tiktok`), linked to its Meta sibling by `group_id` (v18).
  */
-export type SchedulePlatform = 'instagram' | 'facebook' | 'both' | 'tiktok';
+export type SchedulePlatform = 'instagram' | 'facebook' | 'both' | 'tiktok' | 'youtube';
 
 /**
  * `PROCESSING` and `IN_INBOX` arrived with TikTok (v18), whose publish is asynchronous:
@@ -263,14 +263,14 @@ export interface TikTokPostOptions {
 
 // ─── platform connections (v18) ─────────────────────────────────────────────────────────
 
-export type ConnectionPlatform = 'tiktok';
+export type ConnectionPlatform = 'tiktok' | 'youtube';
 export type ConnectionStatus = 'active' | 'invalid' | 'revoked';
 
 export interface PlatformConnectionRow {
     id: string;
     creator_id: string;
     platform: ConnectionPlatform;
-    /** TikTok `open_id` — per-app, and what TikTok webhooks identify the account by. */
+    /** TikTok `open_id` — per-app, and what TikTok webhooks identify the account by. YouTube: the channel id. */
     external_account_id: string;
     display_name: string | null;
     avatar_url: string | null;
@@ -722,7 +722,7 @@ export interface ClipCopy {
  */
 export interface ClipRender {
     video_url: string;
-    /** The same cut with TikTok's CTA ("link in bio"); null when TikTok was off. Its sibling falls back to `video_url`. */
+    /** The same cut with TikTok's CTA ("link in bio"); null when TikTok and YouTube were off. Their siblings fall back to `video_url`. */
     tiktok_video_url: string | null;
     cover_url: string;
     duration: number;
@@ -734,6 +734,8 @@ export interface ClipSchedule {
     scheduled_time: string;
     meta_row_id: string | null;
     tiktok_row_id: string | null;
+    /** The YouTube Short's row, when YouTube is one of the Monteur's platforms. Absent before v30. */
+    youtube_row_id?: string | null;
     campaign_id: string | null;
     /** What the TikTok sibling went out as: SELF_ONLY until TikTok audits the app. */
     tiktok_privacy?: TikTokPrivacyLevel | null;

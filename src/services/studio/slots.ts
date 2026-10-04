@@ -88,14 +88,15 @@ export interface SlotOptions {
 }
 
 /**
- * Which PENDING rows hold a slot. `both` is Instagram + Facebook. A TikTok row is usually the
- * sibling of a Meta post that already holds its slot (same `group_id`); one with no Meta sibling —
- * a TikTok-only reel, whatever the platforms are now — holds its own, or every such post, and
- * whatever the Studio or the Monteur schedules next, would land on the same instant.
+ * Which PENDING rows hold a slot. `both` is Instagram + Facebook. A TikTok or YouTube row is
+ * usually the sibling of a Meta post that already holds its slot (same `group_id`); one with no
+ * Meta sibling — a TikTok- or YouTube-only reel, whatever the platforms are now — holds its own,
+ * or every such post, and whatever the Studio or the Monteur schedules next, would land on the
+ * same instant.
  */
 export const SLOT_HOLDING_ROWS = `(p.platform IN ('instagram', 'facebook', 'both')
-            OR (p.platform = 'tiktok' AND (p.group_id IS NULL OR NOT EXISTS (
-                SELECT 1 FROM scheduled_posts m WHERE m.group_id = p.group_id AND m.platform <> 'tiktok'))))`;
+            OR (p.platform IN ('tiktok', 'youtube') AND (p.group_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM scheduled_posts m WHERE m.group_id = p.group_id AND m.platform IN ('instagram', 'facebook', 'both')))))`;
 
 export async function nextFreeSlots(
     creatorId: string, schedule: ScheduleConfig, count: number, now: number = Date.now(), opts: SlotOptions = {}

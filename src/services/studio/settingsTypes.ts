@@ -71,7 +71,7 @@ export type ScheduleConfig = { timezone: string; slots: string[] };
 /** The folder the worker scans; `null` = not set. */
 export type LibraryConfig = { root: string | null };
 
-export type MonteurPlatform = 'instagram' | 'facebook' | 'tiktok';
+export type MonteurPlatform = 'instagram' | 'facebook' | 'tiktok' | 'youtube';
 
 /**
  * The Monteur (MONTEUR.md §1): the folder it watches, when it runs, how much it cuts and where
@@ -117,7 +117,7 @@ export type MonteurConfig = {
     videos_per_run: number;
     /** 1–5. */
     reels_per_video: number;
-    /** At least one. Instagram and Facebook share one post; TikTok is its sibling. */
+    /** At least one. Instagram and Facebook share one post; TikTok and YouTube are its siblings. */
     platforms: MonteurPlatform[];
     /** 1–4 'HH:MM' posting slots. */
     post_at: string[];

@@ -296,6 +296,13 @@ const API = {
     getTikTokAppSettings: () => API.request('/tiktok/app-settings'),
     saveTikTokAppSettings: (data) => API.request('/tiktok/app-settings', { method: 'POST', body: JSON.stringify(data) }),
 
+    // YouTube — the channel is per account; the Google OAuth client is platform-admin only.
+    getYouTubeConnection: () => API.request('/youtube/connection'),
+    startYouTubeConnect: () => API.request('/youtube/connect', { method: 'POST' }),
+    disconnectYouTube: () => API.request('/youtube/disconnect', { method: 'POST' }),
+    getYouTubeAppSettings: () => API.request('/youtube/app-settings'),
+    saveYouTubeAppSettings: (data) => API.request('/youtube/app-settings', { method: 'POST', body: JSON.stringify(data) }),
+
     // Posts Scheduler
     getScheduledPosts: () => API.request('/posts/scheduled'),
     createScheduledPost: (data) => API.request('/posts/scheduled', { method: 'POST', body: JSON.stringify(data) }),

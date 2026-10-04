@@ -993,6 +993,7 @@ input[type='checkbox']:disabled { cursor: not-allowed; opacity: var(--opacity-di
 .badge-instagram { background: var(--brand-instagram-soft); color: var(--brand-instagram-text); }
 .badge-facebook { background: var(--brand-facebook-soft); color: var(--brand-facebook-text); }
 .badge-tiktok { background: var(--brand-tiktok-soft); color: var(--text-strong); }
+.badge-youtube { background: var(--brand-youtube-soft); color: var(--text-strong); }
 
 .status-pill {
     display: inline-flex; align-items: center; gap: var(--space-1);
