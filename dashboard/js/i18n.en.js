@@ -815,6 +815,17 @@
 
     // ─── Media storage (platform admin) ─────────────────────────────────
     'settings.media.title': 'Media storage',
+    'settings.media.cleanupOn': 'Delete files once posted',
+    'settings.media.cleanupHint': 'Every day, the files of posts already published are deleted, since Instagram, Facebook, TikTok and YouTube keep their own copy, and so is any file nothing has used for a week. Files of posts still waiting, failed posts, reels in review and drafts are kept. Deleted files can’t be restored.',
+    'settings.media.cleanupPreview': '{files} files ({size}) can be deleted now.',
+    'settings.media.cleanupNothing': 'Nothing to delete right now.',
+    'settings.media.cleanupNow': 'Clean up now',
+    'settings.media.cleanupSavedOn': 'Files will be deleted once posted.',
+    'settings.media.cleanupSavedOff': 'Files will be kept.',
+    'settings.media.cleanupTitle': 'Delete the files of published posts now?',
+    'settings.media.cleanupBody': 'The files of posts already published, and files nothing has used for a week, are deleted from storage. The posts stay live on every platform.',
+    'settings.media.cleanupConfirmHint': 'This can’t be undone. Previews of those posts in the dashboard will be empty.',
+    'settings.media.cleanupDone': 'Deleted {files} files ({size}).',
     'settings.media.intro': 'Uploads are kept in Supabase Storage instead of the database, and are still served from this app’s own address (/api/uploads/…): the only address TikTok accepts, and the one Meta already holds. Without a project here, uploads stay in the database.',
     'settings.media.loadFailed': 'Couldn’t read the media storage status: {message}',
     'settings.media.statusConnected': 'Connected',

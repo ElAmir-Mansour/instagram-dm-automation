@@ -927,6 +927,17 @@
 
     // ─── Media storage (platform admin) ─────────────────────────────────
     'settings.media.title': 'تخزين الوسائط',
+    'settings.media.cleanupOn': 'احذف الملفات بعد النشر',
+    'settings.media.cleanupHint': 'كل يوم تُحذف ملفات المنشورات المنشورة، لأن إنستجرام وفيسبوك وتيك توك ويوتيوب تحتفظ بنسختها، وكذلك أي ملف لم يُستخدم منذ أسبوع. وتبقى ملفات المنشورات المنتظرة والفاشلة والريلز قيد المراجعة والمسودات. الملفات المحذوفة لا تُسترجع.',
+    'settings.media.cleanupPreview': 'يمكن حذف {files} ملف ({size}) الآن.',
+    'settings.media.cleanupNothing': 'لا شيء للحذف الآن.',
+    'settings.media.cleanupNow': 'نظّف الآن',
+    'settings.media.cleanupSavedOn': 'ستُحذف الملفات بعد النشر.',
+    'settings.media.cleanupSavedOff': 'ستبقى الملفات.',
+    'settings.media.cleanupTitle': 'تحذف ملفات المنشورات المنشورة الآن؟',
+    'settings.media.cleanupBody': 'تُحذف من التخزين ملفات المنشورات المنشورة، والملفات التي لم يستخدمها شيء منذ أسبوع. وتبقى المنشورات حيّة على كل المنصات.',
+    'settings.media.cleanupConfirmHint': 'لا يمكن التراجع. ستظهر معاينات تلك المنشورات فارغة في لوحة التحكم.',
+    'settings.media.cleanupDone': 'حُذف {files} ملف ({size}).',
     'settings.media.intro': 'تُحفظ الملفات المرفوعة في Supabase Storage بدلاً من قاعدة البيانات، وتبقى تُقدَّم من عنوان اللوحة نفسه (‎/api/uploads/…‎): العنوان الوحيد الذي تقبله تيك توك، والذي تحمله ميتا أصلاً. وبدون مشروع هنا تبقى الملفات في قاعدة البيانات.',
     'settings.media.loadFailed': 'تعذّرت قراءة حالة تخزين الوسائط: {message}',
     'settings.media.statusConnected': 'متصل',

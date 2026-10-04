@@ -228,6 +228,9 @@ describe('media retention gating', () => {
 describe('pruneOrphanedMedia — what still counts as in use', () => {
     let saved: string | undefined;
     let statements: string[] = [];
+    let params: unknown[][] = [];
+    /** What `storage.cleanup_after_publish` holds, as the app_settings read sees it. */
+    let cleanupSetting: string | null = null;
     const originalQuery = pool.query;
     let restoreSink: (() => void) | undefined;
 
@@ -241,8 +244,14 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         saved = process.env.MEDIA_RETENTION_DAYS;
         process.env.MEDIA_RETENTION_DAYS = '30';
         statements = [];
-        (pool as unknown as { query: unknown }).query = async (sql: string) => {
+        params = [];
+        cleanupSetting = null;
+        (pool as unknown as { query: unknown }).query = async (sql: string, values: unknown[] = []) => {
+            if (/FROM app_settings/.test(sql)) {
+                return { rows: cleanupSetting ? [{ value: cleanupSetting, is_secret: false }] : [], rowCount: 0 };
+            }
             statements.push(sql.replace(/\s+/g, ' '));
+            params.push(values);
             return { rows: [], rowCount: 0 };
         };
     });
@@ -292,11 +301,12 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         assert.match(clause, /NOT EXISTS \( SELECT 1 FROM lesson_moments lm WHERE lm\.thumb_url LIKE '%' \|\| m\.id::text \|\| '%'/);
     });
 
-    it('keeps a Monteur reel\u2019s video and cover while it is rendering, in review or scheduled', async () => {
+    it('keeps a Monteur reel\u2019s video and cover while it is rendering, in review or scheduled for later', async () => {
         // A reel in review is waiting for Approve, and no scheduled post names its files until
         // then. A rejected or failed reel's files are free to go (MONTEUR.md §2).
         const clause = await keepClause();
-        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM clip_drafts c WHERE c\.status IN \('rendering', 'review', 'scheduled'\)/);
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM clip_drafts c WHERE \(c\.status IN \('rendering', 'review'\) OR \(c\.status = 'scheduled' AND \(c\.schedule->>'scheduled_time'\)::timestamptz > NOW\(\)\)\)/,
+            'a scheduled reel only until its time: after it, its posts name what is still needed');
         assert.match(clause, /COALESCE\(c\.render->>'video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'tiktok_video_url', ''\) \|\| ' ' \|\| COALESCE\(c\.render->>'cover_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/,
             'the TikTok cut too');
         const clips = clause.slice(clause.indexOf('FROM clip_drafts'));
@@ -311,6 +321,26 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 4);
         assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 4);
         assert.doesNotMatch(sql, /OR NOT EXISTS/);
+    });
+
+    it('without the setting: MEDIA_RETENTION_DAYS, by age only — a published post’s file waits like any other', async () => {
+        await pruneOrphanedMedia();
+        assert.deepEqual(params[0], [30, false, 5000]);
+        assert.match(statements[0]!, /\$2::boolean AND EXISTS \( SELECT 1 FROM scheduled_posts s WHERE s\.status = 'PUBLISHED'/);
+    });
+
+    it('with "Delete files once posted": a published post’s files at once, anything unnamed after a week', async () => {
+        cleanupSetting = 'true';
+        delete process.env.MEDIA_RETENTION_DAYS;
+        await pruneOrphanedMedia();
+        assert.deepEqual(params[0], [MIN_RETENTION_DAYS, true, 5000]);
+    });
+
+    it('the published branch is ORed with the age only: the keep-guards still bind it', async () => {
+        await pruneOrphanedMedia();
+        const sql = statements[0]!;
+        const where = sql.slice(sql.indexOf('WHERE ('), sql.indexOf(') AND NOT EXISTS'));
+        assert.match(where, /m\.created_at < NOW\(\) - make_interval\(days => \$1\) OR \(\$2::boolean AND EXISTS/);
     });
 });
 

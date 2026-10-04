@@ -73,6 +73,13 @@ export const APP_SETTING_KEYS = {
      */
     mediaStorageKey: 'storage.supabase_service_key',
     /**
+     * 'true': the daily sweep deletes a file as soon as the post that used it is PUBLISHED and
+     * nothing else still needs it (Meta, TikTok and YouTube keep their own copies), and any file
+     * nothing names after a week (src/services/retention.ts). The owner asked for it on 2026-10-04,
+     * with the 1 GB Storage tier full. Unset: `MEDIA_RETENTION_DAYS` decides, as before.
+     */
+    mediaCleanup: 'storage.cleanup_after_publish',
+    /**
      * The three values the public site prints (src/index.ts `renderPublicPage`). Each was a
      * literal in six HTML files before; now the public pages carry `{{…}}` tokens and read
      * these on every request. Env fallbacks: SITE_WHATSAPP_NUMBER / SITE_CONTACT_EMAIL /

@@ -114,6 +114,8 @@ export const AUDIT_ACTIONS = {
     settingsGeminiKeyWrite: 'settings.gemini_key_write',
     /** The Supabase Storage config media goes to was saved (after Supabase accepted it) or removed. */
     settingsMediaStorageWrite: 'settings.media_storage_write',
+    /** "Delete files once posted" was switched, or "Clean up now" deleted files. */
+    settingsMediaCleanup: 'settings.media_cleanup',
     /** A Studio worker credential was minted. Its token acts as the tenant for claims and uploads. */
     studioWorkerCreate: 'studio.worker_create',
     /** A Studio worker credential was revoked; its token stopped working at that moment. */

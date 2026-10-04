@@ -105,14 +105,18 @@ const SettingsPage = {
         let youtubeError = null;
         let youtubeApp = null;
         let youtubeAppError = null;
-        const [tt, ttApp, ms, st, yt, ytApp] = await Promise.allSettled([
+        let cleanup = null;
+        const [tt, ttApp, ms, st, yt, ytApp, cu] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
             App.isAdmin() ? API.getSiteSettings() : Promise.resolve(null),
             API.getYouTubeConnection(),
             App.isAdmin() ? API.getYouTubeAppSettings() : Promise.resolve(null),
+            App.isAdmin() ? API.getMediaCleanup() : Promise.resolve(null),
         ]);
+        // The clean-up block is extra: if it fails to load, the storage card shows without it.
+        if (cu.status === 'fulfilled') cleanup = cu.value;
         if (yt.status === 'fulfilled') youtube = yt.value; else youtubeError = yt.reason;
         if (ytApp.status === 'fulfilled') youtubeApp = ytApp.value; else youtubeAppError = ytApp.reason;
         if (tt.status === 'fulfilled') tiktok = tt.value; else tiktokError = tt.reason;
@@ -344,7 +348,7 @@ const SettingsPage = {
 
             ${this.youtubeSection({ youtube, youtubeError, youtubeApp, youtubeAppError })}
 
-            ${App.isAdmin() ? this.mediaStorageSection(media, mediaError) : ''}
+            ${App.isAdmin() ? this.mediaStorageSection(media, mediaError, cleanup) : ''}
 
             ${App.isAdmin() ? this.siteSection(site, siteError) : ''}
 
@@ -929,7 +933,7 @@ const SettingsPage = {
      * so platform admins only. The pill is Supabase's live answer, not the
      * saved config — a key that stopped working shows as not connected.
      */
-    mediaStorageSection(ms, error) {
+    mediaStorageSection(ms, error, cleanup) {
         let body = '';
         if (error) {
             body = html`
@@ -942,7 +946,7 @@ const SettingsPage = {
                 })}
             `;
         } else if (ms) {
-            body = html`${this.mediaStorageStatus(ms)}${this.mediaStorageForm(ms)}`;
+            body = html`${this.mediaStorageStatus(ms)}${cleanup ? this.mediaCleanupBlock(cleanup) : ''}${this.mediaStorageForm(ms)}`;
         }
         return html`
             <section class="section">
@@ -953,6 +957,67 @@ const SettingsPage = {
                 </div>
             </section>
         `;
+    },
+
+    /**
+     * "Delete files once posted": the switch the daily sweep reads, and a button that applies the
+     * same rule now. Instagram, Facebook and YouTube keep their own copy of what was posted.
+     */
+    mediaCleanupBlock(cleanup) {
+        const p = cleanup.preview || { files: 0, bytes: 0 };
+        return html`
+            <div class="settings-block mbe-4">
+                <label class="check-row" for="media-cleanup-on">
+                    <input type="checkbox" id="media-cleanup-on" data-change="settings:toggleMediaCleanup"
+                           aria-describedby="media-cleanup-hint" ${cleanup.on ? html.raw('checked') : ''}>
+                    <span class="check-label">${t('settings.media.cleanupOn')}</span>
+                </label>
+                <p class="form-hint" id="media-cleanup-hint">${t('settings.media.cleanupHint')}</p>
+                <p class="token-info mbs-2">
+                    ${p.files > 0
+                        ? t('settings.media.cleanupPreview', { files: UI.formatNumber(p.files), size: Admin.bytes(p.bytes) })
+                        : t('settings.media.cleanupNothing')}
+                </p>
+                ${p.files > 0 ? UI.button({
+                    variant: 'secondary', size: 'sm', icon: 'trash-2',
+                    label: t('settings.media.cleanupNow'), action: 'settings:cleanUpMedia', id: 'media-cleanup-now',
+                }) : ''}
+            </div>
+        `;
+    },
+
+    async toggleMediaCleanup(box) {
+        if (!box) return;
+        const on = box.checked;
+        box.disabled = true;
+        try {
+            await API.setMediaCleanup(on);
+            UI.toast(on ? t('settings.media.cleanupSavedOn') : t('settings.media.cleanupSavedOff'), 'success');
+        } catch (err) {
+            box.checked = !on;
+            UI.toast(err.message, 'error');
+        } finally {
+            box.disabled = false;
+        }
+    },
+
+    cleanUpMedia(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.media.cleanupTitle'),
+            body: t('settings.media.cleanupBody'),
+            hint: t('settings.media.cleanupConfirmHint'),
+            confirmLabel: t('settings.media.cleanupNow'),
+            confirmIcon: 'trash-2',
+            onConfirm: () => SettingsPage.cleanUpMediaConfirmed(),
+        });
+    },
+
+    /** A failure shows inside the confirm dialog, which stays open (Admin.runConfirm). */
+    async cleanUpMediaConfirmed() {
+        const out = await API.runMediaCleanup();
+        UI.toast(t('settings.media.cleanupDone', { files: UI.formatNumber(out.files), size: Admin.bytes(out.bytes) }), 'success');
+        await this.render();
     },
 
     mediaStorageStatus(ms) {
@@ -1480,6 +1545,8 @@ UI.registerActions('settings', {
     saveYouTubeApp: (el, e) => SettingsPage.saveYouTubeApp(el, e),
     readYouTubeJson: (el) => SettingsPage.readYouTubeJson(el),
     saveMediaStorage: (el, e) => SettingsPage.saveMediaStorage(el, e),
+    toggleMediaCleanup: (el) => SettingsPage.toggleMediaCleanup(el),
+    cleanUpMedia: (el) => SettingsPage.cleanUpMedia(el),
     removeMediaStorage: (el) => SettingsPage.removeMediaStorage(el),
     testWebhook: (el) => SettingsPage.testWebhook(el),
     previewDirectPost: (el) => SettingsPage.previewDirectPost(el),
