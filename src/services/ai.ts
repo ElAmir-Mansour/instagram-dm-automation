@@ -27,20 +27,25 @@ type HistoryRow = Pick<MessageRow, 'direction' | 'text'>;
  *   - `gemini-3.1-pro-preview` has no free tier. On a free-tier key it answers 429 every time,
  *     which for a DM means no reply at all.
  *
+ * Cut from ten to these three on 2026-10-04, each dropped model for a measured reason:
+ *
+ *   - `gemini-2.5-pro` and `gemini-2.5-flash-lite` answered 404 "no longer available to new
+ *     users" to every request with the key that still runs 2.5 Flash: this key never used them.
+ *   - `gemini-3.5-flash-lite` and `gemini-3.1-flash-lite` loop inside structured replies (below).
+ *   - `gemini-3.1-pro-preview` has no free tier (above).
+ *   - `gemini-3.6-flash` and `gemini-3.7-flash` add nothing over 3.5 and 3.8 Flash: they cost what
+ *     3.8 does, and both are already the Studio writer's.
+ *
+ * A row naming a dropped model runs on the default (`resolveModel`), with a warning. Production's
+ * only agent was on 2.5 Flash.
+ *
  * The dashboard's model picker (dashboard/js/pages/ai_settings.js) offers exactly this list,
  * and src/dashboard/screens.test.ts fails if the two drift apart.
  */
 export const SUPPORTED_MODELS: ReadonlySet<string> = new Set([
     'gemini-2.5-flash',
-    'gemini-3.8-flash',
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
     'gemini-3.5-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-3.1-flash-lite',
-    'gemini-3.1-pro-preview',
-    'gemini-2.5-flash-lite',
-    'gemini-2.5-pro',
+    'gemini-3.8-flash',
 ]);
 
 /**

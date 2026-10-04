@@ -556,9 +556,9 @@ describe('/settings/ai — the model shown and saved', () => {
     });
 
     it('saves a supported model as chosen', async () => {
-        const { statements } = await call('post', null, { system_prompt: 'p', model: 'gemini-3.5-flash-lite' });
+        const { statements } = await call('post', null, { system_prompt: 'p', model: 'gemini-3.5-flash' });
         const insert = statements.find((st) => /INSERT INTO ai_agents/.test(st.sql));
-        assert.equal(insert?.params[3], 'gemini-3.5-flash-lite');
+        assert.equal(insert?.params[3], 'gemini-3.5-flash');
     });
 });
 

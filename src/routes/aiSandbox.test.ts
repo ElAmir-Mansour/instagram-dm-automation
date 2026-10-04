@@ -76,10 +76,10 @@ async function test(body: Record<string, unknown>) {
 
 describe('POST /settings/ai/test — model and temperature from the form', () => {
     it('sends the model and temperature on screen, not the saved pair', async () => {
-        const res = await test({ user_message: 'كم السعر؟', model: 'gemini-2.5-pro', temperature: 0 });
+        const res = await test({ user_message: 'كم السعر؟', model: 'gemini-3.8-flash', temperature: 0 });
         assert.equal(res.statusCode, 200, JSON.stringify(res.body));
         assert.equal(sent.length, 1);
-        assert.match(sent[0]!.url, /\/models\/gemini-2\.5-pro:generateContent$/);
+        assert.match(sent[0]!.url, /\/models\/gemini-3\.8-flash:generateContent$/);
         // 0 is a real choice (the "stop improvising" setting), not a missing value.
         assert.equal(sent[0]!.body.generationConfig.temperature, 0);
     });
