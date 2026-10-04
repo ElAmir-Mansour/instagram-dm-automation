@@ -264,7 +264,7 @@ describe('the monteur section (MONTEUR.md §1)', () => {
         ['half a video per run', { videos_per_run: 1.5 }, /monteur\.videos_per_run/],
         ['six reels per video', { reels_per_video: 6 }, /monteur\.reels_per_video must be a whole number from 1 to 5/],
         ['no platforms', { platforms: [] }, /monteur\.platforms needs at least one platform/],
-        ['a platform it cannot post to', { platforms: ['youtube'] }, /monteur\.platforms\[0\] must be one of instagram, facebook, tiktok/],
+        ['a platform it cannot post to', { platforms: ['threads'] }, /monteur\.platforms\[0\] must be one of instagram, facebook, tiktok, youtube/],
         ['a platform twice', { platforms: ['instagram', 'instagram'] }, /lists a platform twice/],
         ['no posting slot', { post_at: [] }, /monteur\.post_at needs at least one time/],
         ['five posting slots', { post_at: ['08:00', '10:00', '12:00', '14:00', '16:00'] }, /monteur\.post_at holds at most 4/],

@@ -32,6 +32,11 @@ export function ctaLines(settings: StudioSettings, keyword: string): { line1: st
  * TikTok's CTA for its own cut: TikTok can't auto-DM, so its video must not say "comment X". The
  * slide's pill ("link in bio") and its sub-line.
  */
+/** The platforms that cannot answer a comment with a DM, and so post the "link in bio" cut. */
+export function needsLinkInBioCut(platforms: readonly string[]): boolean {
+    return platforms.includes('tiktok') || platforms.includes('youtube');
+}
+
 export function tiktokCtaLines(settings: StudioSettings): { line1: string; line2: string } {
     return { line1: settings.cta?.slide?.ttPill?.trim() ?? '', line2: settings.cta?.slide?.ttSub?.trim() ?? '' };
 }
@@ -86,8 +91,9 @@ export function buildRenderPayload(input: {
         title: input.title,
         words: clipWords(input.source.words ?? [], input.start, input.end),
         cta: ctaLines(settings, input.keyword),
-        // Only when TikTok is on: a second render nobody would post is minutes of the Mac's time.
-        cta_tiktok: settings.monteur.platforms.includes('tiktok') ? tiktokCtaLines(settings) : null,
+        // Only when TikTok or YouTube is on: a second render nobody would post is minutes of the
+        // Mac's time. YouTube takes this cut too — it has no comment-to-DM, so "link in bio" is its CTA.
+        cta_tiktok: needsLinkInBioCut(settings.monteur.platforms) ? tiktokCtaLines(settings) : null,
         // The edits' look, read at every render: a re-render after a change of style takes the new one.
         brand: { accent: input.accent, font: settings.brand.fonts.display, direction: settings.brand.direction, style: settings.monteur.style },
         cover_at: COVER_AT_S,

@@ -19,7 +19,7 @@ type Section = (typeof STUDIO_SETTINGS_SECTIONS)[number];
 export const DISPLAY_FONTS: readonly StudioDisplayFont[] = ['Cairo', 'Tajawal', 'IBM Plex Sans Arabic', 'Inter'];
 /** Placeholders `cta.dmTemplate` may use; anything else is a typo that would reach a customer. */
 export const DM_PLACEHOLDERS = ['username', 'question', 'pitch', 'url', 'bullets'] as const;
-export const MONTEUR_PLATFORMS: readonly MonteurPlatform[] = ['instagram', 'facebook', 'tiktok'];
+export const MONTEUR_PLATFORMS: readonly MonteurPlatform[] = ['instagram', 'facebook', 'tiktok', 'youtube'];
 export const MONTEUR_SOURCES: readonly MonteurSource[] = ['folder', 'course'];
 export const MONTEUR_MODES: readonly MonteurMode[] = ['review', 'auto'];
 export const MONTEUR_BRAINS: readonly MonteurBrain[] = ['gemini', 'claude_mac'];

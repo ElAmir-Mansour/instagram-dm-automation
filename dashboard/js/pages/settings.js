@@ -100,12 +100,21 @@ const SettingsPage = {
         // platform admins only, and isolated for the same reason.
         let site = null;
         let siteError = null;
-        const [tt, ttApp, ms, st] = await Promise.allSettled([
+        // YouTube, isolated the same way.
+        let youtube = null;
+        let youtubeError = null;
+        let youtubeApp = null;
+        let youtubeAppError = null;
+        const [tt, ttApp, ms, st, yt, ytApp] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
             App.isAdmin() ? API.getSiteSettings() : Promise.resolve(null),
+            API.getYouTubeConnection(),
+            App.isAdmin() ? API.getYouTubeAppSettings() : Promise.resolve(null),
         ]);
+        if (yt.status === 'fulfilled') youtube = yt.value; else youtubeError = yt.reason;
+        if (ytApp.status === 'fulfilled') youtubeApp = ytApp.value; else youtubeAppError = ytApp.reason;
         if (tt.status === 'fulfilled') tiktok = tt.value; else tiktokError = tt.reason;
         if (ttApp.status === 'fulfilled') tiktokApp = ttApp.value; else tiktokAppError = ttApp.reason;
         if (ms.status === 'fulfilled') media = ms.value; else mediaError = ms.reason;
@@ -333,6 +342,8 @@ const SettingsPage = {
 
             ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
 
+            ${this.youtubeSection({ youtube, youtubeError, youtubeApp, youtubeAppError })}
+
             ${App.isAdmin() ? this.mediaStorageSection(media, mediaError) : ''}
 
             ${App.isAdmin() ? this.siteSection(site, siteError) : ''}
@@ -372,6 +383,265 @@ const SettingsPage = {
         UI.restoreFocus(focus);
         Motion.announce(`${t('nav.settings')} — ${t('common.loaded')}`);
         this.announceTikTokReturn();
+        this.announceYouTubeReturn();
+    },
+
+    /** Reasons Google's callback can send back, each with its own sentence. */
+    YOUTUBE_RETURN_REASONS: ['denied', 'state_mismatch', 'state_expired', 'channel_in_use', 'no_channel', 'scope_missing',
+        'redirect_mismatch', 'bad_client', 'exchange_failed', 'no_base_url'],
+
+    /** Back from Google's consent screen: `#/settings?youtube=connected|error&reason=…`, said once. */
+    announceYouTubeReturn() {
+        const outcome = App.hashParam('youtube');
+        if (!outcome) return;
+        if (outcome === 'connected') {
+            UI.toast(t('settings.youtube.connectedToast'), 'success');
+        } else {
+            const reason = App.hashParam('reason');
+            const known = this.YOUTUBE_RETURN_REASONS.includes(reason);
+            UI.toast(known ? t(`settings.youtube.return.${reason}`) : t('settings.youtube.return.generic'), 'error');
+        }
+        try {
+            history.replaceState(null, '', `${location.pathname}#/settings`);
+        } catch {
+            // Only the repeat-on-reload is lost.
+        }
+    },
+
+    youtubeSection({ youtube, youtubeError, youtubeApp, youtubeAppError }) {
+        const isAdmin = App.isAdmin();
+        const canAdminister = App.canAdminister();
+        const c = youtube && youtube.connection;
+        const connected = !!(c && c.connected);
+        const needsReconnect = !!(c && c.status === 'invalid');
+        const thumb = c ? safeUrl(c.thumbnailUrl) : '';
+        // Only a Google app still in Testing hands out a refresh token with an end date (7 days).
+        const refreshExpires = c && c.refreshExpiresAt ? new Date(c.refreshExpiresAt) : null;
+
+        let body;
+        if (youtubeError) {
+            body = html`
+                <div class="inline-error" role="alert">
+                    <i data-lucide="alert-circle" aria-hidden="true"></i>
+                    <div><strong dir="auto">${t('settings.youtube.loadFailed', { message: youtubeError.message })}</strong></div>
+                </div>
+                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+            `;
+        } else if (!youtube.appConfigured) {
+            body = html`<p class="form-hint">${isAdmin ? t('settings.youtube.notConfiguredAdmin') : t('settings.youtube.notConfiguredMember')}</p>`;
+        } else if (connected || needsReconnect) {
+            body = html`
+                <div class="row row--start gap-3 mbe-4">
+                    ${thumb
+                        ? html`<img class="tiktok-avatar-lg" src="${thumb}" alt="" width="44" height="44">`
+                        : html`<span class="stat-icon shrink-0"><i data-lucide="youtube" aria-hidden="true"></i></span>`}
+                    <div class="stack gap-1">
+                        <strong dir="auto">${c.channelTitle || t('settings.youtube.unnamed')}</strong>
+                        <span class="health-pill ${needsReconnect ? html.raw('health-stale') : html.raw('health-fresh')}">
+                            <i data-lucide="${needsReconnect ? 'alert-triangle' : 'check-circle'}" aria-hidden="true"></i>
+                            ${needsReconnect ? t('settings.youtube.statusInvalid') : t('settings.youtube.statusActive')}
+                        </span>
+                    </div>
+                </div>
+                ${needsReconnect && c.lastError ? html`
+                    <p class="form-hint text-warning mbe-3" dir="auto">${t('settings.youtube.lastError', { message: c.lastError })}</p>
+                ` : ''}
+                ${connected && !c.canUpload ? html`<p class="form-hint text-warning mbe-3">${t('settings.youtube.cannotUpload')}</p>` : ''}
+                <p class="token-info mbe-2">${youtube.audited ? t('settings.youtube.privacyPublic') : t('settings.youtube.privacyPrivate')}</p>
+                ${refreshExpires ? html`
+                    <p class="form-hint text-warning mbe-3">${t('settings.youtube.testingExpiry', { date: UI.formatDay(refreshExpires) })}</p>
+                ` : ''}
+                ${canAdminister ? html`
+                    <div class="row row--wrap gap-2">
+                        ${UI.button({
+                            variant: needsReconnect ? 'primary' : 'secondary', size: 'sm', icon: 'refresh-cw',
+                            label: t('settings.youtube.reconnect'), action: 'settings:connectYouTube', id: 'settings-youtube-connect',
+                        })}
+                        ${UI.button({
+                            variant: 'danger', size: 'sm', icon: 'unlink',
+                            label: t('settings.youtube.disconnect'), action: 'settings:disconnectYouTube', id: 'settings-youtube-disconnect',
+                        })}
+                    </div>
+                ` : html`<p class="form-hint">${t('settings.youtube.ownerOnly')}</p>`}
+            `;
+        } else {
+            body = html`
+                ${canAdminister ? UI.button({
+                    variant: 'primary', size: 'sm', icon: 'link',
+                    label: t('settings.youtube.connect'), action: 'settings:connectYouTube', id: 'settings-youtube-connect',
+                }) : html`<p class="form-hint">${t('settings.youtube.ownerOnly')}</p>`}
+                ${canAdminister ? html`<p class="form-hint mbs-2">${t('settings.youtube.unverifiedHint')}</p>` : ''}
+            `;
+        }
+
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.youtube.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.youtube.intro')}</p>
+                    ${body}
+                    ${isAdmin ? this.youtubeAppBlock(youtubeApp, youtubeAppError, !!(youtube && youtube.appConfigured)) : ''}
+                </div>
+            </section>
+        `;
+    },
+
+    /** The Google OAuth client — one for the whole deployment, so platform admins only. */
+    youtubeAppBlock(app, error, configured) {
+        if (error) {
+            return html`<p class="form-hint text-warning" dir="auto">${t('settings.youtube.app.loadFailed', { message: error.message })}</p>`;
+        }
+        if (!app) return '';
+        const secretHint = app.clientSecret.source === 'env'
+            ? t('settings.tiktok.app.secretFromEnv')
+            : (app.clientSecret.preview ? t('settings.tiktok.app.secretSet', { preview: app.clientSecret.preview }) : '');
+        const reg = app.register;
+        const row = (label, value) => html`
+            <li>
+                <span class="form-label">${label}</span>
+                <code dir="ltr">${UI.ltr(value)}</code>
+                ${UI.button({
+                    variant: 'ghost', size: 'sm', icon: 'copy',
+                    ariaLabel: t('setup.copyUrl'), title: t('setup.copyUrl'),
+                    action: 'app:copyValue', data: { copy: value },
+                })}
+            </li>
+        `;
+        return html`
+            <details class="settings-block" ${configured ? '' : html.raw('open')}>
+                <summary class="form-label tiktok-app-summary">
+                    <i data-lucide="chevron-down" aria-hidden="true"></i>
+                    ${t('settings.youtube.app.title')}
+                </summary>
+                <p class="form-hint mbe-3">${t('settings.youtube.app.hint')}</p>
+                ${reg ? html`
+                    <p class="form-label">${t('settings.youtube.app.register')}</p>
+                    <ul class="tiktok-register mbe-4">
+                        ${row(t('settings.youtube.app.redirectUri'), reg.redirectUri)}
+                        ${row(t('settings.tiktok.app.websiteUrl'), reg.homepageUrl)}
+                        ${row(t('settings.tiktok.app.privacyUrl'), reg.privacyUrl)}
+                        ${row(t('settings.tiktok.app.termsUrl'), reg.termsUrl)}
+                        ${row(t('settings.tiktok.app.scopes'), (app.scopes || []).join(' '))}
+                    </ul>
+                ` : ''}
+                <form id="youtube-app-form" data-submit="settings:saveYouTubeApp" data-redirect="${reg ? reg.redirectUri : ''}">
+                    <div class="form-group">
+                        <label class="form-label" for="youtube-json">${t('settings.youtube.app.json')}</label>
+                        <input class="field" id="youtube-json" type="file" accept=".json,application/json" data-change="settings:readYouTubeJson">
+                        <p class="form-hint" id="youtube-json-note" aria-live="polite">${t('settings.youtube.app.jsonHint')}</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="youtube-client-id">${t('settings.youtube.app.clientId')}</label>
+                        <input class="field field-mono" id="youtube-client-id" name="clientId" type="text" dir="ltr"
+                               autocomplete="off" spellcheck="false" placeholder="123456789-abc.apps.googleusercontent.com"
+                               value="${app.clientId.value || ''}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="youtube-client-secret">${t('settings.youtube.app.clientSecret')}</label>
+                        <input class="field field-mono" id="youtube-client-secret" name="clientSecret" type="password" dir="ltr"
+                               autocomplete="new-password" spellcheck="false" placeholder="GOCSPX-…">
+                        ${secretHint ? html`<p class="form-hint">${secretHint}</p>` : ''}
+                    </div>
+                    <div class="form-group">
+                        <label class="check-row" for="youtube-audited">
+                            <input type="checkbox" id="youtube-audited" name="audited" ${app.audited ? html.raw('checked') : ''}>
+                            <span class="check-label">${t('settings.youtube.app.audited')}</span>
+                        </label>
+                        <p class="form-hint">${t('settings.youtube.app.auditedHint')}</p>
+                    </div>
+                    <div class="form-actions">
+                        ${UI.button({
+                            variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
+                            label: t('settings.youtube.app.save'), id: 'youtube-app-submit',
+                        })}
+                    </div>
+                </form>
+            </details>
+        `;
+    },
+
+    /**
+     * The JSON Google Cloud downloads for an OAuth client, read here in the browser: its client ID
+     * and secret fill the two fields, and nothing is sent until Save. Says when the file's
+     * redirect URIs do not include ours, which is the one mistake that fails every connect.
+     */
+    async readYouTubeJson(input) {
+        const note = document.getElementById('youtube-json-note');
+        const file = input && input.files && input.files[0];
+        if (!file || !note) return;
+        try {
+            const parsed = JSON.parse(await file.text());
+            const web = parsed.web || parsed.installed;
+            if (!web || !web.client_id || !web.client_secret) throw new Error('shape');
+            document.getElementById('youtube-client-id').value = web.client_id;
+            document.getElementById('youtube-client-secret').value = web.client_secret;
+            const form = document.getElementById('youtube-app-form');
+            const expected = form ? form.dataset.redirect : '';
+            const uris = Array.isArray(web.redirect_uris) ? web.redirect_uris : [];
+            if (!parsed.web) note.textContent = t('settings.youtube.app.jsonNotWeb');
+            else if (expected && !uris.includes(expected)) note.textContent = t('settings.youtube.app.jsonNoRedirect', { uri: expected });
+            else note.textContent = t('settings.youtube.app.jsonRead');
+        } catch {
+            note.textContent = t('settings.youtube.app.jsonBad');
+        } finally {
+            // The file's contents are in the two fields now; the picker keeps nothing.
+            input.value = '';
+        }
+    },
+
+    async connectYouTube(btn) {
+        if (!btn || btn.disabled) return;
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        try {
+            const { url } = await API.startYouTubeConnect();
+            window.location.href = url;
+        } catch (err) {
+            restore();
+            UI.toast(err.message || t('settings.youtube.return.generic'), 'error');
+        }
+    },
+
+    disconnectYouTube(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.youtube.disconnectTitle'),
+            body: t('settings.youtube.disconnectBody'),
+            hint: t('settings.youtube.disconnectHint'),
+            confirmLabel: t('settings.youtube.disconnect'),
+            confirmIcon: 'unlink',
+            onConfirm: () => SettingsPage.disconnectYouTubeConfirmed(),
+        });
+    },
+
+    async disconnectYouTubeConfirmed() {
+        await API.disconnectYouTube();
+        UI.toast(t('settings.youtube.disconnected'), 'success');
+        await this.render();
+    },
+
+    async saveYouTubeApp(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const payload = {
+            clientId: (data.get('clientId') || '').toString().trim(),
+            audited: data.get('audited') === 'on',
+        };
+        // Blank means "leave it": the saved secret is never sent back to the page.
+        const secret = (data.get('clientSecret') || '').toString().trim();
+        if (secret) payload.clientSecret = secret;
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveYouTubeAppSettings(payload);
+            UI.toast(t('settings.youtube.app.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            UI.toast(err.message, 'error');
+        }
     },
 
     /** Reasons the OAuth callback can send back, each with its own sentence. */
@@ -1205,6 +1475,10 @@ UI.registerActions('settings', {
     connectTikTok: (el) => SettingsPage.connectTikTok(el),
     disconnectTikTok: (el) => SettingsPage.disconnectTikTok(el),
     saveTikTokApp: (el, e) => SettingsPage.saveTikTokApp(el, e),
+    connectYouTube: (el) => SettingsPage.connectYouTube(el),
+    disconnectYouTube: (el) => SettingsPage.disconnectYouTube(el),
+    saveYouTubeApp: (el, e) => SettingsPage.saveYouTubeApp(el, e),
+    readYouTubeJson: (el) => SettingsPage.readYouTubeJson(el),
     saveMediaStorage: (el, e) => SettingsPage.saveMediaStorage(el, e),
     removeMediaStorage: (el) => SettingsPage.removeMediaStorage(el),
     testWebhook: (el) => SettingsPage.testWebhook(el),

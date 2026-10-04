@@ -144,7 +144,7 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.2">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.3">
 
     <style>
         * { box-sizing: border-box; }
@@ -879,8 +879,8 @@
                 </p>
                 <p>
                     تفاصيل ما يُجمَع ومدة الاحتفاظ به في <a href="/privacy">سياسة الخصوصية</a>.
-                    وإن كنت صاحب حساب، فالقسم 6 يشرح إزالة حساب تيك توك ربطته، والقسم 7 يشرح بيانات
-                    «استوديو الكاروسيل».
+                    وإن كنت صاحب حساب، فالقسم 6 يشرح إزالة حساب تيك توك أو قناة يوتيوب ربطتها، والقسم 7
+                    يشرح بيانات «استوديو الكاروسيل».
                 </p>
 
                 <h2>1. ما هو المخزَّن عنك</h2>
@@ -996,7 +996,7 @@
                     </li>
                 </ul>
 
-                <h2>6. إزالة بيانات تيك توك</h2>
+                <h2>6. إزالة بيانات تيك توك أو يوتيوب</h2>
                 <p>
                     هذا القسم لأصحاب الحسابات الذين ربطوا حساباً على تيك توك. وعلى خلاف الطلبات في
                     القسم 2، <strong>الحذف هنا تلقائي</strong>: يكفي أيٌّ من الطريقين أدناه وحده، ولا
@@ -1032,6 +1032,30 @@
                     <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">لسياسة خصوصية تيك توك</a>.
                     ويبقى في سجلّ التدقيق لدى الأداة قيدٌ لكل مرة رُبط فيها تيك توك، فيه الاسم المعروض
                     للحساب والصلاحيات الممنوحة، ولا تحذف الأداة من هذا السجلّ شيئاً.
+                </p>
+
+                <h3 id="youtube-ar">يوتيوب</h3>
+                <ul>
+                    <li>
+                        <strong>افصل يوتيوب من الإعدادات.</strong> افتح <strong>الإعدادات</strong> في لوحة
+                        التحكم وافصل يوتيوب. يطلب التطبيق من جوجل إلغاء رمزه، فيُسحَب الوصول من جهة جوجل
+                        أيضاً، ثم يحذف الاتصال المخزَّن سواء أجابت جوجل أم لا: معرّف القناة واسمها ومعرّفها
+                        المختصر ورابط صورتها، ورمزي الوصول والتحديث المشفّرين.
+                    </li>
+                    <li>
+                        <strong>أو أزِل التطبيق من حساب جوجل.</strong> على
+                        <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">security.google.com/settings/security/permissions</bdi></a>
+                        أزِل هذا التطبيق، فينتهي الوصول فوراً. تكتشف الأداة ذلك في فحصها اليومي التالي،
+                        فتحذف الرمزين المخزّنين واسم القناة وصورتها؛ ويبقى معرّف القناة فقط لتطلب منك لوحة
+                        التحكم إعادة الربط، إلى أن تفصله من الإعدادات.
+                    </li>
+                </ul>
+                <p>
+                    أمّا ما لا يصل إليه الحذف: المقاطع المرفوعة موجودة على قناتك في يوتيوب — احذفها من
+                    <bdi lang="en" dir="ltr">YouTube Studio</bdi> — وما تحتفظ به جوجل من سجلّات يخضع
+                    <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">لسياسة خصوصية جوجل</a>.
+                    ويبقى في سجلّ التدقيق لدى الأداة قيدٌ لكل مرة رُبط فيها يوتيوب، فيه معرّف القناة
+                    والصلاحيات الممنوحة.
                 </p>
 
                 <h2>7. بيانات «استوديو الكاروسيل»</h2>
@@ -1101,8 +1125,8 @@
                 <p>
                     What is collected, and for how long, is set out in the
                     <a href="/privacy">privacy policy</a>. If you are an account owner, section 6
-                    covers removing a TikTok account you connected, and section 7 covers the
-                    Carousel Studio's data.
+                    covers removing a TikTok account or YouTube channel you connected, and section 7
+                    covers the Carousel Studio's data.
                 </p>
 
                 <h2>1. What is stored about you</h2>
@@ -1228,7 +1252,7 @@
                     </li>
                 </ul>
 
-                <h2>6. Removing your TikTok data</h2>
+                <h2>6. Removing your TikTok or YouTube data</h2>
                 <p>
                     This section is for account owners who connected a TikTok account. Unlike the
                     requests in section 2, <strong>this deletion is automatic</strong>: either
@@ -1266,6 +1290,32 @@
                     And the app's audit log keeps an entry for each time TikTok was connected, with
                     the account's display name and the scopes granted; the app never deletes from
                     that log.
+                </p>
+
+                <h3 id="youtube">YouTube</h3>
+                <ul>
+                    <li>
+                        <strong>Disconnect YouTube in Settings.</strong> Open <strong>Settings</strong>
+                        in the dashboard and disconnect YouTube. The app asks Google to revoke its
+                        token, so access is withdrawn at Google's end too, and then deletes the stored
+                        connection whether or not Google answers: the channel ID, name, handle and
+                        picture URL, and the encrypted access and refresh tokens.
+                    </li>
+                    <li>
+                        <strong>Or remove the app in your Google Account.</strong> At
+                        <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">security.google.com/settings/security/permissions</a>,
+                        remove this app. Access ends at once. The app finds out at its next daily
+                        check, and then deletes the stored tokens and the channel's name and picture;
+                        the channel ID stays only so the dashboard can ask you to reconnect, until you
+                        disconnect in Settings.
+                    </li>
+                </ul>
+                <p>
+                    What deletion cannot reach: the Shorts already uploaded are on your YouTube
+                    channel — delete them in YouTube Studio — and Google's own records are governed by
+                    the <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a>.
+                    The app's audit log keeps an entry for each time YouTube was connected, with the
+                    channel ID and the scopes granted.
                 </p>
 
                 <h2>7. Carousel Studio data</h2>

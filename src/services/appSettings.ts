@@ -46,6 +46,14 @@ export const APP_SETTING_KEYS = {
      * direct post to SELF_ONLY and requires the account itself to be private.
      */
     tiktokAudited: 'tiktok.audited',
+    /** The Google OAuth client (type "Web application") the YouTube connection uses. */
+    youtubeClientId: 'youtube.client_id',
+    youtubeClientSecret: 'youtube.client_secret',
+    /**
+     * 'true' once the YouTube API Services audit has passed. Until then YouTube locks every upload
+     * from this project private, so uploads ask for 'private' rather than pretend otherwise.
+     */
+    youtubeAudited: 'youtube.audited',
     /**
      * The Gemini API key the whole platform runs on: every tenant's DM replies, the AI Settings
      * test box and the Studio. Saved by a platform admin on the Operations screen, after Google
@@ -86,6 +94,7 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
 
 const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.tiktokClientSecret,
+    APP_SETTING_KEYS.youtubeClientSecret,
     APP_SETTING_KEYS.geminiApiKey,
     APP_SETTING_KEYS.mediaStorageKey,
 ]);
@@ -201,6 +210,36 @@ export async function getTikTokAppConfig(): Promise<TikTokAppConfig | null> {
         clientSecret,
         source: { clientKey: dbKey ? 'database' : 'env', clientSecret: dbSecret ? 'database' : 'env' },
     };
+}
+
+export interface YouTubeAppConfig {
+    clientId: string;
+    clientSecret: string;
+    source: { clientId: 'database' | 'env'; clientSecret: 'database' | 'env' };
+}
+
+/**
+ * The Google OAuth client for YouTube: database first, then `YOUTUBE_CLIENT_ID` /
+ * `YOUTUBE_CLIENT_SECRET`. Null when either half is missing.
+ */
+export async function getYouTubeAppConfig(): Promise<YouTubeAppConfig | null> {
+    const [dbId, dbSecret] = await Promise.all([
+        getSetting(APP_SETTING_KEYS.youtubeClientId),
+        getSetting(APP_SETTING_KEYS.youtubeClientSecret),
+    ]);
+    const clientId = dbId ?? (process.env.YOUTUBE_CLIENT_ID?.trim() || null);
+    const clientSecret = dbSecret ?? (process.env.YOUTUBE_CLIENT_SECRET?.trim() || null);
+    if (!clientId || !clientSecret) return null;
+    return {
+        clientId,
+        clientSecret,
+        source: { clientId: dbId ? 'database' : 'env', clientSecret: dbSecret ? 'database' : 'env' },
+    };
+}
+
+/** Whether the YouTube API audit has passed: uploads go out public only then. Off by default. */
+export async function isYouTubeAudited(): Promise<boolean> {
+    return (await getSetting(APP_SETTING_KEYS.youtubeAudited)) === 'true';
 }
 
 export interface MediaStorageConfig {

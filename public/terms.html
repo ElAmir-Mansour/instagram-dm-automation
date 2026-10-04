@@ -115,7 +115,7 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.2">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.3">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -992,6 +992,16 @@
                         إعداد «الإفصاح عن محتوى تجاري» في إعدادات منشور تيك توك داخل الأداة، أو إعداد
                         تيك توك نفسه في المسودّة التي تُكملها هناك.
                     </li>
+                    <li id="youtube-ar">
+                        <strong>على يوتيوب تحديداً:</strong> تستخدم «أوتوريبلاي برو» خدمات واجهة برمجة
+                        يوتيوب (<bdi lang="en" dir="ltr">YouTube API Services</bdi>) لرفع فيديوهاتك إلى
+                        قناة يوتيوب التي تربطها. وبربطك قناة على يوتيوب توافق على الالتزام
+                        <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">بشروط خدمة يوتيوب</a>،
+                        ويخضع تعامل جوجل مع بياناتك
+                        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">لسياسة خصوصية جوجل</a>.
+                        وما تخزّنه الخدمة من يوتيوب، وكيف تحذفه، في
+                        <a href="/privacy">سياسة الخصوصية</a>.
+                    </li>
                     <li>
                         <strong>بيانات دخولك إلى لوحة التحكم:</strong> لا تشاركها، وأخبرنا إن ظننت أن
                         غيرك استخدمها.
@@ -1038,8 +1048,8 @@
                     بها كل منصّة؛ راجعها في كل ما يهمّك.
                 </p>
                 <p>
-                    لا ترتبط «أوتوريبلاي برو» بميتا ولا بتيك توك، ولا تحظى بتأييد أيٍّ منهما أو
-                    رعايته. إنستجرام وفيسبوك وتيك توك علامات تجارية مملوكة لأصحابها.
+                    لا ترتبط «أوتوريبلاي برو» بميتا ولا بتيك توك ولا بجوجل أو يوتيوب، ولا تحظى بتأييد أيٍّ منها أو
+                    رعايته. إنستجرام وفيسبوك وتيك توك ويوتيوب علامات تجارية مملوكة لأصحابها.
                 </p>
 
                 <h2 id="disconnecting-ar">7. فصل الحسابات وسحب الإذن</h2>
@@ -1050,6 +1060,14 @@
                         فيطلب التطبيق من تيك توك إلغاء وصوله ويحذف الاتصال المخزَّن؛ أو أزِل التطبيق من
                         «إدارة أذونات التطبيقات» (<bdi lang="en" dir="ltr">Manage app permissions</bdi>)
                         في تطبيق تيك توك نفسه، فيُلغى الوصول ويُطلِق ذلك الحذف نفسه لدينا.
+                    </li>
+                    <li>
+                        <strong>يوتيوب:</strong> افصله من <strong>الإعدادات</strong> في لوحة التحكم،
+                        فيطلب التطبيق من جوجل إلغاء وصوله ويحذف الاتصال المخزَّن؛ أو أزِل التطبيق من
+                        إعدادات الأمان في حساب جوجل على
+                        <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">security.google.com/settings/security/permissions</bdi></a>،
+                        فيُلغى الوصول فوراً، وتُحذف الرموز وبيانات القناة المخزّنة في الفحص اليومي التالي
+                        للخدمة.
                     </li>
                     <li>
                         <strong>إنستجرام وفيسبوك:</strong> أزِل التطبيق من «عمليات تكامل الأعمال»
@@ -1269,6 +1287,16 @@
                         requires, using the "Disclose commercial content" setting in the app's TikTok
                         post settings, or TikTok's own setting for a draft you finish there.
                     </li>
+                    <li id="youtube-en">
+                        <strong>On YouTube specifically:</strong> AutoReply Pro uses YouTube API
+                        Services to upload your videos to the YouTube channel you connect. By
+                        connecting a YouTube channel, you agree to be bound by the
+                        <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">YouTube Terms of Service</a>,
+                        and Google's handling of your data is covered by the
+                        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a>.
+                        What the service stores from YouTube, and how to remove it, is in our
+                        <a href="/privacy">privacy policy</a>.
+                    </li>
                     <li>
                         <strong>Your dashboard login:</strong> keep it to yourself, and tell us if
                         you think someone else has used it.
@@ -1319,9 +1347,9 @@
                     check it for anything that matters to you.
                 </p>
                 <p>
-                    AutoReply Pro is not affiliated with, endorsed by, or sponsored by Meta or
-                    TikTok. Instagram, Facebook and TikTok are trademarks of their respective
-                    owners.
+                    AutoReply Pro is not affiliated with, endorsed by, or sponsored by Meta,
+                    TikTok, Google or YouTube. Instagram, Facebook, TikTok and YouTube are
+                    trademarks of their respective owners.
                 </p>
 
                 <h2 id="disconnecting-en">7. Disconnecting and revoking access</h2>
@@ -1333,6 +1361,14 @@
                         connection; or remove the app under "Manage app permissions" in the TikTok
                         app itself, which revokes access and triggers the same deletion on our
                         side.
+                    </li>
+                    <li>
+                        <strong>YouTube:</strong> disconnect it from <strong>Settings</strong> in the
+                        dashboard, which asks Google to revoke the app's access and deletes the stored
+                        connection; or remove the app in your Google Account's security settings, at
+                        <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">security.google.com/settings/security/permissions</a>,
+                        which revokes access at once; the stored tokens and channel details are then
+                        deleted at the service's next daily check.
                     </li>
                     <li>
                         <strong>Instagram and Facebook:</strong> remove the app from Business

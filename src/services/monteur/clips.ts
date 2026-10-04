@@ -24,6 +24,7 @@ import type {
 import { normalizeArabic } from '../../utils/arabic.js';
 import { log } from '../../utils/log.js';
 import { getTikTokPostingFlags } from '../appSettings.js';
+import type { YouTubePostOptions } from '../youtubePublish.js';
 import { matchCampaign, triggerClashes } from '../matching.js';
 import {
     type Exec, isPlainObject, lockTenantPublishing, problemsError, StudioError, unique, withTransaction,
@@ -306,6 +307,16 @@ async function planCampaign(exec: Exec, creatorId: string, copy: ClipCopy): Prom
     return { create: true, triggers: triggers.join(', '), dm: copy.dm };
 }
 
+/**
+ * A Short's description: the TikTok caption (hook, body, the "link in bio" line, hashtags) and the
+ * course link under it — shown in full on the watch page, where a link in a Short's own
+ * description is not clickable but can be copied.
+ */
+export function youtubeDescription(tiktokCaption: string, url: string | null | undefined): string {
+    const link = (url ?? '').trim();
+    return link && !tiktokCaption.includes(link) ? `${tiktokCaption.trim()}\n\n🔗 ${link}` : tiktokCaption.trim();
+}
+
 /** Instagram and Facebook go out as one post: `both`, or the one of them that is on. */
 export function metaPlatformFor(platforms: readonly string[]): 'both' | 'instagram' | 'facebook' | null {
     const ig = platforms.includes('instagram');
@@ -319,8 +330,8 @@ export function localDay(instant: number, timeZone: string): string {
 }
 
 async function insertVideoPost(exec: Exec, row: {
-    creatorId: string; platform: 'both' | 'instagram' | 'facebook' | 'tiktok'; caption: string; mediaUrl: string;
-    coverUrl: string | null; when: Date; groupId: string; options: TikTokPostOptions | null;
+    creatorId: string; platform: 'both' | 'instagram' | 'facebook' | 'tiktok' | 'youtube'; caption: string; mediaUrl: string;
+    coverUrl: string | null; when: Date; groupId: string; options: TikTokPostOptions | YouTubePostOptions | null;
 }): Promise<ScheduledPostRow> {
     // The column list and order of POST /posts/scheduled's insert, so the two cannot drift.
     const { rows } = await exec.query<ScheduledPostRow>(
@@ -329,8 +340,8 @@ async function insertVideoPost(exec: Exec, row: {
          VALUES ($1, $2, 'video', $3, $4, NULL, $5, 'PENDING', $6, $7, $8::jsonb, NULL) RETURNING *`,
         [
             row.creatorId, row.platform, row.caption, row.mediaUrl, row.when,
-            // A cover image is an Instagram/Facebook concept; TikTok picks its own.
-            row.platform === 'tiktok' ? null : row.coverUrl,
+            // A cover image is an Instagram/Facebook concept; TikTok and YouTube pick their own.
+            row.platform === 'tiktok' || row.platform === 'youtube' ? null : row.coverUrl,
             row.groupId,
             row.options ? JSON.stringify(row.options) : null,
         ]
@@ -427,6 +438,7 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
         const rows: ScheduledPostRow[] = [];
         let metaRow: ScheduledPostRow | null = null;
         let tiktokRow: ScheduledPostRow | null = null;
+        let youtubeRow: ScheduledPostRow | null = null;
         if (meta) {
             metaRow = await insertVideoPost(client, {
                 creatorId, platform: meta, caption: copy.caption, mediaUrl: render.video_url, coverUrl: render.cover_url,
@@ -441,6 +453,17 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
                 mediaUrl: render.tiktok_video_url ?? render.video_url, coverUrl: null, when, groupId, options: tiktokOptions,
             });
             rows.push(tiktokRow);
+        }
+        if (platforms.includes('youtube')) {
+            // Not checked against the connection here: a YouTube that is not connected must not keep
+            // the reel off Instagram and Facebook. Its row fails at publish time, in Posts, saying so.
+            youtubeRow = await insertVideoPost(client, {
+                creatorId, platform: 'youtube', caption: youtubeDescription(copy.tiktok_caption, settings.product.url),
+                // The "link in bio" cut, as TikTok's: YouTube cannot DM a commenter either.
+                mediaUrl: render.tiktok_video_url ?? render.video_url, coverUrl: null, when, groupId,
+                options: { title: locked.title, ...(settings.voice.language ? { language: settings.voice.language } : {}) },
+            });
+            rows.push(youtubeRow);
         }
 
         let campaign: ApproveOutcome['campaign'] = null;
@@ -461,6 +484,8 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
             scheduled_time: when.toISOString(),
             meta_row_id: metaRow?.id ?? null,
             tiktok_row_id: tiktokRow?.id ?? null,
+            // Only when there is one, so a schedule without YouTube keeps the shape it always had.
+            ...(youtubeRow ? { youtube_row_id: youtubeRow.id } : {}),
             campaign_id: campaign?.id ?? null,
             tiktok_privacy: tiktokOptions?.privacy_level ?? null,
         };

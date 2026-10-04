@@ -95,6 +95,32 @@
     · Still true, and still said: no scope reads comments or messages, and no
       TikTok viewer's data reaches the app.
   Grep the function names rather than trusting line numbers.
+
+  YOUTUBE — ADDED 2026-10-04 WITH THE INTEGRATION (PR "feat: YouTube Shorts").
+  Section 1 "When the account owner connects YouTube" and the YouTube lines in
+  sections 2, 4, 5, 6 and 7 claim the following, and the code does it. They
+  are also what the YouTube API Services audit and Google's OAuth review read:
+    · scopes youtube.upload and youtube.readonly, and no others:
+      YOUTUBE_SCOPES, src/services/youtube.ts; requested by buildAuthorizeUrl();
+    · stored: channel id (external_account_id), name + handle (display_name),
+      picture URL (avatar_url), scopes, both tokens enc:v1:
+      completeConnection(), src/services/youtubeConnections.ts;
+    · readonly is used only by getMyChannel() (channels.list?mine=true), at
+      connect and in the daily refreshAllYouTubeConnections(), which re-reads
+      name and picture so they are never more than a day old;
+    · uploads: publishYouTubePost(), src/services/youtubePublish.ts — category
+      Education, selfDeclaredMadeForKids false (videoResource()), the video id
+      kept as published_post_id 'YT:<id>';
+    · private until the operator ticks "audit passed": uploadPrivacy();
+    · Disconnect revokes with Google (best effort) and DELETES the row:
+      disconnect(), youtubeConnections.ts;
+    · access removed at Google: the next refresh gets invalid_grant and
+      markConnectionInvalid() NULLs both tokens, display_name and avatar_url,
+      keeping only the channel id and the reason (daily cron, src/routes/api.ts
+      → refreshAllYouTubeConnections());
+    · the audit_log row Connect writes holds the channel id and scopes only,
+      not the name (src/routes/youtube.ts, the callback);
+    · no third-party content, ads or cookies: the YouTube code has none.
   ═══════════════════════════════════════════════════════════════════════════
 -->
 <html lang="ar" dir="rtl">
@@ -140,7 +166,7 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.2">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.3">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -896,14 +922,16 @@
                     وتقوم مع مَن يعلّق أو يراسل ذلك الحساب بأمرين فقط: الردّ الآلي على التعليقات
                     التي تُطابِق كلمة مفتاحية محدّدة مسبقاً، والردّ على الرسائل الخاصة الواردة إليه.
                     وإن ربط صاحب الحساب حساباً على تيك توك أيضاً، فهي تنشر عليه الفيديوهات وكاروسيلات
-                    الصور التي يجدولها، أو ترسلها إلى مسودّاته فيه، ولا تفعل هناك شيئاً غير ذلك. لا
+                    الصور التي يجدولها، أو ترسلها إلى مسودّاته فيه، ولا تفعل هناك شيئاً غير ذلك. وإن
+                    ربط قناة على يوتيوب، فهي ترفع إليها مقاطعه القصيرة بوصفها
+                    <bdi lang="en" dir="ltr">Shorts</bdi>، ولا تفعل هناك شيئاً غير ذلك. لا
                     تقوم الأداة بأي نشاط إعلاني أو تسويقي موجّه، ولا تبيع البيانات.
                 </p>
                 <p>
                     هذه الصفحة تصف ما يحدث لبياناتك أنت — بوصفك مَن علّق على منشور أو أرسل رسالة
                     خاصة — لا بيانات صاحب الحساب. وهي مكتوبة بحسب ما يفعله الكود فعلاً، لا بحسب
-                    ما ينبغي أن يفعله. والاستثناء الوحيد هو تيك توك: بيانات تيك توك الموصوفة أدناه
-                    تخصّ صاحب الحساب الذي ربطه، لأن الأداة لا تقرأ على تيك توك شيئاً من أي شخص آخر.
+                    ما ينبغي أن يفعله. والاستثناء هو تيك توك ويوتيوب: بيانات كلٍّ منهما الموصوفة أدناه
+                    تخصّ صاحب الحساب الذي ربطه، لأن الأداة لا تقرأ على أيٍّ منهما شيئاً من أي شخص آخر.
                 </p>
                 <p>
                     تعمل الخدمة عبر تطبيق مُسجَّل في «منصّة مطوّري ميتا» باسم
@@ -914,7 +942,12 @@
                     <span class="code" lang="en" dir="ltr">Login Kit</span>
                     و<span class="code" lang="en" dir="ltr">Content Posting API</span>
                     و<span class="code" lang="en" dir="ltr">Webhooks</span>، وكلها من منتجات تيك توك
-                    الرسمية.
+                    الرسمية. ويجري الوصول إلى يوتيوب عبر مشروع على
+                    <bdi lang="en" dir="ltr">Google Cloud</bdi>، باستخدام واجهة
+                    <bdi lang="en" dir="ltr">YouTube Data API</bdi>
+                    (<strong>خدمات واجهة برمجة يوتيوب</strong> —
+                    <bdi lang="en" dir="ltr">YouTube API Services</bdi>) وتسجيل الدخول من جوجل
+                    (<bdi lang="en" dir="ltr">OAuth 2.0</bdi>).
                 </p>
 
                 <div class="callout">
@@ -1042,6 +1075,61 @@
                     يحذفها بنفسه، كما هو الحال مع منشورات إنستجرام وفيسبوك.
                 </p>
 
+                <h3 id="youtube-ar">عندما يربط صاحب الحساب يوتيوب</h3>
+                <p>
+                    وهذا الجزء أيضاً عن بيانات صاحب الحساب نفسه. تستخدم «أوتوريبلاي برو»
+                    <strong>خدمات واجهة برمجة يوتيوب</strong>
+                    (<bdi lang="en" dir="ltr">YouTube API Services</bdi>). وبربط قناة على يوتيوب يوافق
+                    صاحب الحساب على الالتزام
+                    <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">بشروط خدمة يوتيوب</a>،
+                    أمّا تعامل جوجل نفسها مع البيانات فتصفه
+                    <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية جوجل</a>.
+                    تطلب الأداة من جوجل صلاحيتين لا غير:
+                    <span class="code" lang="en" dir="ltr">youtube.upload</span> لرفع الفيديوهات إلى القناة،
+                    و<span class="code" lang="en" dir="ltr">youtube.readonly</span> التي لا تُستخدم إلا
+                    لقراءة اسم القناة وصورتها كي تُظهر لوحة التحكم أيّ قناة مربوطة. ولا تُستخدم أيٌّ منهما
+                    لقراءة التعليقات أو الرسائل أو المشتركين أو قناة أي شخص آخر، فلا تصلنا أي بيانات عن
+                    مشاهدي يوتيوب.
+                </p>
+                <ul>
+                    <li>
+                        <strong>يُخزَّن، من يوتيوب:</strong> معرّف القناة واسمها ومعرّفها المختصر
+                        (<bdi lang="en" dir="ltr">@handle</bdi>) ورابط صورتها. وما دامت القناة مربوطة،
+                        يُعاد قراءة الاسم والصورة من يوتيوب مرة كل يوم، فلا يزيد عمرهما على يوم.
+                    </li>
+                    <li>
+                        <strong>يُخزَّن، مشفّراً:</strong> رمزا الوصول والتحديث
+                        (<bdi lang="en" dir="ltr">OAuth</bdi>) اللذان تُصدرهما جوجل، مشفّرَين أثناء التخزين
+                        بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi> (القسم 7)، وقائمة الصلاحيات
+                        الممنوحة.
+                    </li>
+                    <li>
+                        <strong>الفيديوهات التي يجدولها صاحب الحساب</strong>، بعناوينها وأوصافها، تُخزَّن
+                        لتُرفع في موعدها، عند أول تشغيل لقائمة الانتظار في الأداة بعده. يُرفع كلٌّ منها إلى
+                        قناة صاحب الحساب بوصفه <bdi lang="en" dir="ltr">Short</bdi>، مُعلَناً أنه غير موجّه
+                        للأطفال، ويُحفظ معرّف الفيديو الذي يعيده يوتيوب لتربط لوحة التحكم إليه.
+                    </li>
+                    <li>
+                        <strong>إلى أن تُكمل جوجل مراجعتها للتطبيق</strong>، يُرفع كل فيديو خاصّاً: يوتيوب
+                        يُبقي فيديوهات التطبيقات التي لم يراجعها خاصّة، والأداة تطلب الخصوصية أصلاً. فلا
+                        يُنشَر شيء علناً باسم صاحب الحساب قبل ذلك.
+                    </li>
+                    <li>
+                        <strong>لا شيء عن أي شخص آخر:</strong> لا تقرأ الأداة بيانات عن مشاهدي يوتيوب ولا
+                        تخزّنها ولا تشاركها، ولا تعرض إعلانات، ولا تسمح لأي طرف ثالث بوضع محتوى أو إعلانات
+                        أو ملفات تعريف ارتباط (<bdi lang="en" dir="ltr">cookies</bdi>) عبر ميزات يوتيوب فيها.
+                    </li>
+                </ul>
+                <p>
+                    تُستخدم بيانات يوتيوب لتقديم ميزة الرفع فقط. <strong>لا تُباع أبداً، ولا تُشارَك مع أحد
+                    غير جوجل</strong> التي تتلقّى الفيديوهات. ويستطيع صاحب الحساب سحب وصول الأداة في أي وقت:
+                    من لوحة التحكم (الإعدادات ← يوتيوب ← افصل يوتيوب)، فيُلغى الوصول لدى جوجل ويُحذف
+                    الاتصال المحفوظ فوراً، أو من إعدادات الأمان في حساب جوجل على
+                    <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">security.google.com/settings/security/permissions</bdi></a>.
+                    والوصول المسحوب من هناك تكتشفه الأداة في فحصها اليومي التالي، فتحذف الرمزين المخزّنين
+                    واسم القناة وصورتها.
+                </p>
+
                 <h2 id="purposes-ar">2. لماذا نستخدم هذه البيانات</h2>
                 <ul>
                     <li>معرفة ما إذا كان التعليق يُطابِق كلمة مفتاحية لحملة قائمة.</li>
@@ -1049,6 +1137,7 @@
                     <li>ضمان ألّا يُرَدّ على التعليق نفسه مرتين، وألّا تصلك رسالة آلية أكثر من مرة في اليوم.</li>
                     <li>تمكين صاحب الحساب من قراءة محادثاته والردّ فيها يدوياً من لوحة التحكم.</li>
                     <li>نشر الفيديوهات وكاروسيلات الصور التي يجدولها صاحب الحساب على حسابه في تيك توك، أو إرسالها إلى مسودّاته فيه، وإظهار ما أبلغ به تيك توك عن كل منشور.</li>
+                    <li>رفع المقاطع القصيرة التي يجدولها صاحب الحساب إلى قناته على يوتيوب، والربط إلى كلٍّ منها من لوحة التحكم.</li>
                     <li>تشخيص الأعطال: معرفة سبب فشل ردّ لم يصل.</li>
                 </ul>
 
@@ -1098,6 +1187,15 @@
                         للإجراءات الإدارية لا تحذف الأداة منه شيئاً — يحتفظ بقيد لكل مرة رُبط فيها تيك
                         توك، فيه الاسم المعروض للحساب والصلاحيات الممنوحة.
                     </li>
+                    <li>
+                        <strong>اتصال يوتيوب</strong> — معرّف القناة واسمها ومعرّفها المختصر ورابط صورتها
+                        والرمزان: يبقى ما دام يوتيوب مربوطاً، مع تحديث الاسم والصورة يومياً، ويُحذف عندما
+                        يفصله صاحب الحساب من الإعدادات. وإن سُحب الوصول من إعدادات الأمان في حساب جوجل بدلاً
+                        من ذلك، يُحذف الرمزان والاسم والصورة في الفحص اليومي التالي، ويبقى معرّف القناة فقط
+                        لتطلب لوحة التحكم إعادة الربط، إلى أن يفصله صاحب الحساب. وتبقى معرّفات المقاطع
+                        المرفوعة على منشوراته المجدولة إلى أن يحذفها. ويحتفظ سجلّ التدقيق بقيد لكل مرة رُبط
+                        فيها يوتيوب، فيه معرّف القناة والصلاحيات الممنوحة.
+                    </li>
                 </ul>
 
                 <h2 id="processors-ar">5. مَن يعالج البيانات معنا</h2>
@@ -1114,6 +1212,14 @@
                         صاحب الحساب وأوصافها، أو تُرسَل إلى مسودّاته. لا يُرسَل إلى
                         تيك توك أي شيء عمّن يعلّق أو يراسل على إنستجرام أو فيسبوك.
                         <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">سياسة خصوصية تيك توك</a>.
+                    </li>
+                    <li>
+                        <strong>يوتيوب (جوجل)</strong> — فقط إن ربطه صاحب الحساب، عبر خدمات واجهة برمجة
+                        يوتيوب. منه يأتي اسم القناة وصورتها، وإليه تُرفع الفيديوهات التي يجدولها صاحب الحساب
+                        بعناوينها وأوصافها. لا يُرسَل إلى يوتيوب أي شيء عمّن يعلّق أو يراسل على إنستجرام أو
+                        فيسبوك.
+                        <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">شروط خدمة يوتيوب</a> ·
+                        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">سياسة خصوصية جوجل</a>.
                     </li>
                     <li>
                         <strong>جوجل</strong> — تتلقّى واجهة <bdi lang="en" dir="ltr">Gemini API</bdi> نصوص الرسائل الخاصة كما
@@ -1138,6 +1244,11 @@
                     يمكنك طلب حذف بياناتك في أي وقت. الخطوات، وما يُحذف فعلاً وما لا يُحذف،
                     في <a href="/data-deletion">صفحة حذف البيانات</a>.
                 </p>
+                <p>
+                    ويستطيع صاحب الحساب الذي ربط يوتيوب أن يسحب وصول الأداة من جهة جوجل أيضاً، على
+                    <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">security.google.com/settings/security/permissions</bdi></a>؛
+                    وما يحدث للبيانات المخزّنة بعدها موضّح في القسم 4.
+                </p>
 
                 <h2 id="security-ar">7. كيف تُحفَظ البيانات</h2>
                 <ul>
@@ -1147,7 +1258,7 @@
                         أن يُدخل أحداثاً مزيّفة إلى النظام.
                     </li>
                     <li>
-                        رمز وصول ميتا الخاص بصاحب الحساب، ورمزا الوصول والتحديث الخاصان بتيك توك،
+                        رمز وصول ميتا الخاص بصاحب الحساب، ورموز الوصول والتحديث الخاصة بتيك توك ويوتيوب،
                         <strong>تُشفَّر قبل التخزين</strong> بخوارزمية <bdi lang="en" dir="ltr">AES-256-GCM</bdi>، ومفتاح التشفير
                         محفوظ خارج قاعدة البيانات.
                     </li>
@@ -1219,16 +1330,17 @@
                     owner configured, and it answers direct messages sent to the account. If the
                     owner also connects a TikTok account, it posts the videos and photo carousels
                     the owner schedules to that account, or sends them to its drafts, and does
-                    nothing else there. It runs no advertising or marketing targeting, and it does
-                    not sell data.
+                    nothing else there. If the owner connects a YouTube channel, it uploads the
+                    owner's own short videos to that channel as Shorts, and does nothing else there.
+                    It runs no advertising or marketing targeting, and it does not sell data.
                 </p>
                 <p>
                     This page describes what happens to <em>your</em> data — as someone who
                     commented on a post or sent a direct message — not the account owner's. It
                     is written from what the code actually does, not from what it ought to do.
-                    The one exception is TikTok: the TikTok data described below belongs to the
-                    account owner who connected it, because nothing on TikTok is read from anyone
-                    else.
+                    The exceptions are TikTok and YouTube: the TikTok and YouTube data described
+                    below belongs to the account owner who connected them, because nothing on
+                    either is read from anyone else.
                 </p>
                 <p>
                     The service runs through an app registered on the Meta Developer Platform as
@@ -1237,7 +1349,9 @@
                     access goes through a separate app registered on TikTok for Developers, using
                     TikTok's official <span class="code">Login Kit</span>,
                     <span class="code">Content Posting API</span> and
-                    <span class="code">Webhooks</span>.
+                    <span class="code">Webhooks</span>. YouTube access goes through a Google Cloud
+                    project, using the YouTube Data API (<strong>YouTube API Services</strong>) and
+                    Google's OAuth 2.0 sign-in.
                 </p>
 
                 <div class="callout">
@@ -1372,6 +1486,63 @@
                     Facebook posts do.
                 </p>
 
+                <h3 id="youtube-en">When the account owner connects YouTube</h3>
+                <p>
+                    This part is about the account owner's own data too. AutoReply Pro uses
+                    <strong>YouTube API Services</strong>. By connecting a YouTube channel, the owner
+                    agrees to be bound by the
+                    <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">YouTube Terms of Service</a>,
+                    and Google's own handling of the data is described in the
+                    <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a>.
+                    The app asks Google for two scopes and no others:
+                    <span class="code">youtube.upload</span>, to upload videos to the channel, and
+                    <span class="code">youtube.readonly</span>, used only to read the channel's name
+                    and picture so the dashboard can show which channel is connected. Neither is used
+                    to read comments, messages, subscribers or anyone else's channel, so no YouTube
+                    viewer's data reaches us.
+                </p>
+                <ul>
+                    <li>
+                        <strong>Stored, from YouTube:</strong> the channel's ID, its name and handle,
+                        and the URL of its profile picture. While the channel is connected, the name
+                        and picture are read from YouTube again once a day, so they are never more
+                        than a day old.
+                    </li>
+                    <li>
+                        <strong>Stored, encrypted:</strong> the OAuth access token and refresh token
+                        Google issues, encrypted at rest with AES-256-GCM (section 7), and the list of
+                        scopes granted.
+                    </li>
+                    <li>
+                        <strong>The videos the owner schedules</strong>, with their title and
+                        description, are stored so they can be uploaded at the scheduled time, when
+                        the app's queue next runs. Each is uploaded to the owner's channel as a Short,
+                        declared as not made for kids, and the YouTube video ID that comes back is
+                        kept so the dashboard can link to it.
+                    </li>
+                    <li>
+                        <strong>Until Google completes its audit of the app</strong>, every upload is
+                        private: YouTube keeps videos from apps it has not audited private, and the app
+                        asks for private. Nothing is published publicly on the owner's behalf before
+                        then.
+                    </li>
+                    <li>
+                        <strong>Nothing about anyone else:</strong> the app does not read, store or
+                        share data about YouTube viewers, shows no advertising, and lets no third party
+                        place content, ads or cookies through its YouTube features.
+                    </li>
+                </ul>
+                <p>
+                    YouTube data is used only to provide the uploading feature. <strong>It is never
+                    sold, and it is shared with no one but Google</strong>, which receives the videos.
+                    The owner can remove the app's access at any time: in the dashboard (Settings →
+                    YouTube → Disconnect), which revokes it with Google and deletes the stored
+                    connection at once, or in Google's security settings, at
+                    <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">security.google.com/settings/security/permissions</a>.
+                    Access removed there is found at the app's next daily check, which deletes the
+                    stored tokens and the channel's name and picture.
+                </p>
+
                 <h2 id="purposes-en">2. Why we use it</h2>
                 <ul>
                     <li>To decide whether a comment matches a keyword on an active campaign.</li>
@@ -1379,6 +1550,7 @@
                     <li>To make sure the same comment is never answered twice, and that you do not receive more than one automated DM a day.</li>
                     <li>To let the account owner read and manually answer their own conversations from the dashboard.</li>
                     <li>To post the videos and photo carousels the account owner schedules to their own TikTok account, or send them to its drafts, and to show them what TikTok reported about each one.</li>
+                    <li>To upload the short videos the account owner schedules to their own YouTube channel, and to link to each one from the dashboard.</li>
                     <li>To diagnose faults: to find out why a reply that should have arrived did not.</li>
                 </ul>
 
@@ -1433,6 +1605,17 @@
                         keeps an entry for each time TikTok was connected, with the account's display
                         name and the scopes granted.
                     </li>
+                    <li>
+                        <strong>The YouTube connection</strong> — the channel's ID, name, handle,
+                        picture URL and both tokens: kept while YouTube is connected, with the name
+                        and picture refreshed daily, and deleted when the owner disconnects it in
+                        Settings. If access is removed in Google's security settings instead, the
+                        tokens, name and picture are deleted at the next daily check, and the channel
+                        ID is kept only so the dashboard can ask for a reconnect, until the owner
+                        disconnects. The video IDs of uploaded Shorts stay on the owner's scheduled
+                        posts until the owner deletes them. The audit log keeps an entry for each time
+                        YouTube was connected, with the channel ID and the scopes granted.
+                    </li>
                 </ul>
 
                 <h2 id="processors-en">5. Who else processes it</h2>
@@ -1450,6 +1633,15 @@
                         its drafts. Nothing about people who comment or message on Instagram
                         or Facebook is sent to TikTok.
                         <a href="https://www.tiktok.com/legal/privacy-policy" target="_blank" rel="noopener noreferrer">TikTok's privacy policy</a>.
+                    </li>
+                    <li>
+                        <strong>YouTube (Google)</strong> — only if the account owner connects it,
+                        through YouTube API Services. The channel's name and picture come from
+                        YouTube, and the owner's scheduled videos and their titles and descriptions
+                        are uploaded to it. Nothing about people who comment or message on Instagram
+                        or Facebook is sent to YouTube.
+                        <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer">YouTube Terms of Service</a> ·
+                        <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a>.
                     </li>
                     <li>
                         <strong>Google</strong> — the Gemini API receives direct-message text as
@@ -1475,6 +1667,12 @@
                     and is not actually erased, are on the
                     <a href="/data-deletion">data deletion page</a>.
                 </p>
+                <p>
+                    An account owner who connected YouTube can also remove the app's access from
+                    Google's side, at
+                    <a href="https://security.google.com/settings/security/permissions" target="_blank" rel="noopener noreferrer">security.google.com/settings/security/permissions</a>;
+                    what happens to the stored data then is in section 4.
+                </p>
 
                 <h2 id="security-en">7. How the data is protected</h2>
                 <ul>
@@ -1484,8 +1682,8 @@
                         it is processed, so no one else can inject forged events into the system.
                     </li>
                     <li>
-                        The account owner's Meta access token, and their TikTok access and
-                        refresh tokens, are <strong>encrypted before they are stored</strong>,
+                        The account owner's Meta access token, and their TikTok and YouTube access
+                        and refresh tokens, are <strong>encrypted before they are stored</strong>,
                         with AES-256-GCM, and the encryption key is held outside the database.
                     </li>
                     <li>The dashboard — the only place conversations are read from — is password-protected.</li>

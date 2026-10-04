@@ -210,7 +210,8 @@ export async function releaseOrphanedClips(exec: Exec, creatorId: string, clipId
             AND (c.schedule->>'scheduled_time')::timestamptz > NOW()
             AND NOT EXISTS (
                 SELECT 1 FROM scheduled_posts p
-                 WHERE p.id::text IN (COALESCE(c.schedule->>'meta_row_id', ''), COALESCE(c.schedule->>'tiktok_row_id', ''))
+                 WHERE p.id::text IN (COALESCE(c.schedule->>'meta_row_id', ''), COALESCE(c.schedule->>'tiktok_row_id', ''),
+                                      COALESCE(c.schedule->>'youtube_row_id', ''))
             )`,
         [creatorId, clipId]
     );

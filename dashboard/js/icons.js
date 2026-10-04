@@ -3,7 +3,7 @@
  * run `node scripts/build-icons.mjs` after adding an icon, and CI's `check:icon-subset` fails
  * if this file is stale.
  *
- * The 128 icons the dashboard uses, and a lucide.createIcons() that renders them exactly as
+ * The 129 icons the dashboard uses, and a lucide.createIcons() that renders them exactly as
  * lucide@0.577.0 does (same svg attributes, same classes, data-lucide kept for the CSS). A name
  * that is not here loads the full pinned UMD once, from the same URL and SRI hash index.html
  * used, and draws the rest with it — so a miss costs a download and a console warning, never
@@ -146,6 +146,7 @@
         "wifi-off": [["path",{"d":"M12 20h.01"}],["path",{"d":"M8.5 16.429a5 5 0 0 1 7 0"}],["path",{"d":"M5 12.859a10 10 0 0 1 5.17-2.69"}],["path",{"d":"M19 12.859a10 10 0 0 0-2.007-1.523"}],["path",{"d":"M2 8.82a15 15 0 0 1 4.177-2.643"}],["path",{"d":"M22 8.82a15 15 0 0 0-11.288-3.764"}],["path",{"d":"m2 2 20 20"}]],
         "wrench": [["path",{"d":"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z"}]],
         "x": [["path",{"d":"M18 6 6 18"}],["path",{"d":"m6 6 12 12"}]],
+        "youtube": [["path",{"d":"M2.5 17a24.12 24.12 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49.56 49.56 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24.12 24.12 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49.55 49.55 0 0 1-16.2 0A2 2 0 0 1 2.5 17"}],["path",{"d":"m10 15 5-3-5-3z"}]],
         "zap": [["path",{"d":"M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"}]]
     };
 

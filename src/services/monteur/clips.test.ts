@@ -149,6 +149,33 @@ describe('approveClip — the rows', () => {
         assert.equal(outcome.scheduled_time, '2026-10-01T16:00:00.000Z');
     });
 
+    it('writes a YouTube sibling: the link-in-bio cut, no cover, the hook as its title and the course link under the caption', async () => {
+        monteur = { platforms: ['instagram', 'facebook', 'youtube'], post_at: ['19:00'] };
+        await approveClip(TENANT, CLIP, { scheduled_time: '2026-10-01T16:00:00Z' }, NOW);
+
+        const [meta, youtube] = inserts();
+        assert.equal(inserts().length, 2);
+        assert.equal(meta!.params[1], 'both');
+        const url = 'https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34';
+        assert.deepEqual(youtube!.params.slice(0, 4), [TENANT, 'youtube', `${COPY.tiktok_caption}\n\n🔗 ${url}`, up(TT_VIDEO)]);
+        assert.equal(youtube!.params[5], null, 'YouTube picks its own thumbnail');
+        assert.equal(youtube!.params[6], meta!.params[6], 'one group with the Meta post');
+        assert.deepEqual(JSON.parse(youtube!.params[7]), { title: 'دفترك الذكي', language: 'ar' });
+
+        const [update] = db.ran(/^UPDATE clip_drafts SET status = 'scheduled'/);
+        assert.deepEqual(JSON.parse(update!.params[2]), {
+            scheduled_time: '2026-10-01T16:00:00.000Z', meta_row_id: 'row-both-1', tiktok_row_id: null,
+            youtube_row_id: 'row-youtube-2', campaign_id: 'campaign-1', tiktok_privacy: null,
+        });
+    });
+
+    it('still schedules the Meta post when YouTube is not connected: the Short fails in Posts, saying so', async () => {
+        monteur = { platforms: ['instagram', 'facebook', 'youtube'], post_at: ['19:00'] };
+        connection = null;
+        await approveClip(TENANT, CLIP, { scheduled_time: '2026-10-01T16:00:00Z' }, NOW);
+        assert.deepEqual(inserts().map((r) => r.params[1]), ['both', 'youtube']);
+    });
+
     it('falls back to the main video for TikTok when there is no TikTok cut', async () => {
         directPostReady(true);
         clip = { ...clip, render: { ...RENDER, tiktok_video_url: null } };
@@ -200,7 +227,7 @@ describe('approveClip — the rows', () => {
         assert.deepEqual(release!.params, [TENANT, CLIP]);
         // Any named row still there keeps it scheduled, a FAILED one too: a partial `both` publish
         // is stored FAILED with the live Facebook id, and a failed row can be retried from Posts.
-        assert.match(release!.sql, /NOT EXISTS \( SELECT 1 FROM scheduled_posts p WHERE p\.id::text IN \(COALESCE\(c\.schedule->>'meta_row_id', ''\), COALESCE\(c\.schedule->>'tiktok_row_id', ''\)\) \)/);
+        assert.match(release!.sql, /NOT EXISTS \( SELECT 1 FROM scheduled_posts p WHERE p\.id::text IN \(COALESCE\(c\.schedule->>'meta_row_id', ''\), COALESCE\(c\.schedule->>'tiktok_row_id', ''\), COALESCE\(c\.schedule->>'youtube_row_id', ''\)\) \)/);
         assert.doesNotMatch(release!.sql, /status <> 'FAILED'|p\.status/);
         // A reel whose time has passed may have published before its rows were deleted.
         assert.match(release!.sql, /\(c\.schedule->>'scheduled_time'\)::timestamptz > NOW\(\)/);
@@ -253,7 +280,7 @@ describe('approveClip — the slot', () => {
         const tiktokTimes = posts.filter((r) => r.platform === 'tiktok').map((r) => new Date(r.scheduled_time).toISOString());
         assert.equal(new Set(tiktokTimes).size, tiktokTimes.length, 'never two TikTok posts at one instant');
         const [slotSql] = db.ran(/^SELECT p\.scheduled_time FROM scheduled_posts p/);
-        assert.match(slotSql!.sql, /p\.platform = 'tiktok' AND \(p\.group_id IS NULL OR NOT EXISTS \( SELECT 1 FROM scheduled_posts m WHERE m\.group_id = p\.group_id AND m\.platform <> 'tiktok'\)\)/);
+        assert.match(slotSql!.sql, /p\.platform IN \('tiktok', 'youtube'\) AND \(p\.group_id IS NULL OR NOT EXISTS \( SELECT 1 FROM scheduled_posts m WHERE m\.group_id = p\.group_id AND m\.platform IN \('instagram', 'facebook', 'both'\)\)\)/);
     });
 
     it('never puts two reels of one video on the same day', async () => {

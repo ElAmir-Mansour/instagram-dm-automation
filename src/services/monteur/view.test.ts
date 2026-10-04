@@ -107,7 +107,7 @@ describe('getMonteurView', () => {
             db.statements.length = 0;
             await getMonteurView(TENANT, NOW);
             const [slots] = db.ran(/^SELECT p\.scheduled_time FROM scheduled_posts p/);
-            assert.match(slots!.sql, /p\.platform = 'tiktok' AND \(p\.group_id IS NULL OR NOT EXISTS/);
+            assert.match(slots!.sql, /p\.platform IN \('tiktok', 'youtube'\) AND \(p\.group_id IS NULL OR NOT EXISTS/);
             assert.equal(slots!.params.length, 3, 'no per-caller list of platforms');
         }
     });
