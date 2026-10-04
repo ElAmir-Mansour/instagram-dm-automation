@@ -230,6 +230,15 @@ describe('resolveModel', () => {
         }
     });
 
+    it('answers a model cut from the list on 2026-10-04 with the default, and says so', () => {
+        // Still served by Google, but 404 for this key (2.5 Pro, 2.5 Flash-Lite), looping in
+        // structured replies (the Flash-Lites), free-tier-less (3.1 Pro) or redundant (3.6, 3.7).
+        for (const cut of ['gemini-2.5-pro', 'gemini-2.5-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.1-pro-preview', 'gemini-3.6-flash', 'gemini-3.7-flash']) {
+            const lines = captureLog(() => assert.equal(resolveModel(cut), DEFAULT_MODEL, cut));
+            assert.deepEqual(lines.map((l) => [l.event, l.configured]), [['ai.unknown_model', cut]]);
+        }
+    });
+
     it('falls back without a warning when no model is stored', () => {
         // NULL is what the column holds when nobody chose; a warning on every DM would be noise.
         for (const nothing of [null, undefined, '']) {

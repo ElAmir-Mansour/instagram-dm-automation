@@ -188,15 +188,8 @@ const AiSettingsPage = {
                                      failed every DM. -->
                                 <select class="select" id="model-selector" aria-describedby="model-selector-hint">
                                     <option value="gemini-2.5-flash">Gemini 2.5 Flash ${t('ai.defaultModel')}</option>
-                                    <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
-                                    <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
-                                    <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
                                     <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-                                    <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite</option>
-                                    <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash-Lite</option>
-                                    <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro Preview</option>
-                                    <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
-                                    <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                                    <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
                                 </select>
                                 <span class="field-desc" id="model-selector-hint">${t('ai.modelHint')}</span>
                             </div>
