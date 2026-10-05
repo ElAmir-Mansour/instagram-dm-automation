@@ -451,7 +451,7 @@ const SettingsPage = {
                     <p class="form-hint text-warning mbe-3" dir="auto">${t('settings.youtube.lastError', { message: c.lastError })}</p>
                 ` : ''}
                 ${connected && !c.canUpload ? html`<p class="form-hint text-warning mbe-3">${t('settings.youtube.cannotUpload')}</p>` : ''}
-                <p class="token-info mbe-2">${youtube.audited ? t('settings.youtube.privacyPublic') : t('settings.youtube.privacyPrivate')}</p>
+                <p class="token-info mbe-2">${youtube.publicUploads ? t('settings.youtube.privacyPublic') : t('settings.youtube.privacyPrivate')}</p>
                 ${refreshExpires ? html`
                     <p class="form-hint text-warning mbe-3">${t('settings.youtube.testingExpiry', { date: UI.formatDay(refreshExpires) })}</p>
                 ` : ''}
@@ -547,11 +547,11 @@ const SettingsPage = {
                         ${secretHint ? html`<p class="form-hint">${secretHint}</p>` : ''}
                     </div>
                     <div class="form-group">
-                        <label class="check-row" for="youtube-audited">
-                            <input type="checkbox" id="youtube-audited" name="audited" ${app.audited ? html.raw('checked') : ''}>
-                            <span class="check-label">${t('settings.youtube.app.audited')}</span>
+                        <label class="check-row" for="youtube-public">
+                            <input type="checkbox" id="youtube-public" name="publicUploads" ${app.publicUploads ? html.raw('checked') : ''}>
+                            <span class="check-label">${t('settings.youtube.app.publicUploads')}</span>
                         </label>
-                        <p class="form-hint">${t('settings.youtube.app.auditedHint')}</p>
+                        <p class="form-hint">${t('settings.youtube.app.publicUploadsHint')}</p>
                     </div>
                     <div class="form-actions">
                         ${UI.button({
@@ -629,7 +629,7 @@ const SettingsPage = {
         const data = new FormData(form);
         const payload = {
             clientId: (data.get('clientId') || '').toString().trim(),
-            audited: data.get('audited') === 'on',
+            publicUploads: data.get('publicUploads') === 'on',
         };
         // Blank means "leave it": the saved secret is never sent back to the page.
         const secret = (data.get('clientSecret') || '').toString().trim();

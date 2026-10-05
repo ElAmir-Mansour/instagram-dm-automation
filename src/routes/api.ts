@@ -793,6 +793,7 @@ export async function publishClaimedPost(post: ClaimedPost, creator: PublishCrea
             media_url: post.media_url,
             external_publish_id: post.external_publish_id ?? null,
             platform_options: post.platform_options ?? null,
+            cover_url: post.cover_url ?? null,
         });
     }
     if (post.platform === 'tiktok') {

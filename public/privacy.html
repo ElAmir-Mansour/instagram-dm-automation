@@ -111,7 +111,9 @@
     · uploads: publishYouTubePost(), src/services/youtubePublish.ts — category
       Education, selfDeclaredMadeForKids false (videoResource()), the video id
       kept as published_post_id 'YT:<id>';
-    · private until the operator ticks "audit passed": uploadPrivacy();
+    · public or private as Settings → YouTube → "Upload Shorts as public" says
+      (uploadPrivacy()); the privacy YouTube reports is recorded (privacyNote());
+    · the reel's cover is set as the thumbnail: setThumbnail(), thumbnails.set;
     · Disconnect revokes with Google (best effort) and DELETES the row:
       disconnect(), youtubeConnections.ts;
     · access removed at Google: the next refresh gets invalid_grant and
@@ -166,7 +168,7 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.5">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.6">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1110,9 +1112,10 @@
                         للأطفال، ويُحفظ معرّف الفيديو الذي يعيده يوتيوب لتربط لوحة التحكم إليه.
                     </li>
                     <li>
-                        <strong>إلى أن تُكمل جوجل مراجعتها للتطبيق</strong>، يُرفع كل فيديو خاصّاً: يوتيوب
-                        يُبقي فيديوهات التطبيقات التي لم يراجعها خاصّة، والأداة تطلب الخصوصية أصلاً. فلا
-                        يُنشَر شيء علناً باسم صاحب الحساب قبل ذلك.
+                        <strong>الظهور والصورة المصغّرة:</strong> يُرفع كل مقطع عامّاً أو خاصّاً بحسب ما
+                        اختاره صاحب الحساب في إعدادات الأداة، وتُجعل صورة غلاف الريل صورته المصغّرة. وقد
+                        يُبقي يوتيوب رفعات التطبيق خاصّة إلى أن تراجعه جوجل؛ وعندها تُظهر لوحة التحكم أن
+                        المقطع بقي خاصّاً.
                     </li>
                     <li>
                         <strong>لا شيء عن أي شخص آخر:</strong> لا تقرأ الأداة بيانات عن مشاهدي يوتيوب ولا
@@ -1521,10 +1524,10 @@
                         kept so the dashboard can link to it.
                     </li>
                     <li>
-                        <strong>Until Google completes its audit of the app</strong>, every upload is
-                        private: YouTube keeps videos from apps it has not audited private, and the app
-                        asks for private. Nothing is published publicly on the owner's behalf before
-                        then.
+                        <strong>Visibility and thumbnail:</strong> each Short goes out public or private,
+                        as the owner set in the app's Settings, and the reel's cover image is set as its
+                        thumbnail. YouTube can keep an app's uploads private until Google has audited
+                        it; the dashboard then shows that a Short stayed private.
                     </li>
                     <li>
                         <strong>Nothing about anyone else:</strong> the app does not read, store or

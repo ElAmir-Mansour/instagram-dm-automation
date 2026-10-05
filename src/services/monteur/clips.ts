@@ -340,8 +340,8 @@ async function insertVideoPost(exec: Exec, row: {
          VALUES ($1, $2, 'video', $3, $4, NULL, $5, 'PENDING', $6, $7, $8::jsonb, NULL) RETURNING *`,
         [
             row.creatorId, row.platform, row.caption, row.mediaUrl, row.when,
-            // A cover image is an Instagram/Facebook concept; TikTok and YouTube pick their own.
-            row.platform === 'tiktok' || row.platform === 'youtube' ? null : row.coverUrl,
+            // A cover image is Instagram's and Facebook's, and YouTube's thumbnail; TikTok picks its own.
+            row.platform === 'tiktok' ? null : row.coverUrl,
             row.groupId,
             row.options ? JSON.stringify(row.options) : null,
         ]
@@ -460,7 +460,7 @@ export async function approveClip(creatorId: string, clipId: string, body: unkno
             youtubeRow = await insertVideoPost(client, {
                 creatorId, platform: 'youtube', caption: youtubeDescription(copy.tiktok_caption, settings.product.url),
                 // The "link in bio" cut, as TikTok's: YouTube cannot DM a commenter either.
-                mediaUrl: render.tiktok_video_url ?? render.video_url, coverUrl: null, when, groupId,
+                mediaUrl: render.tiktok_video_url ?? render.video_url, coverUrl: render.cover_url, when, groupId,
                 options: { title: locked.title, ...(settings.voice.language ? { language: settings.voice.language } : {}) },
             });
             rows.push(youtubeRow);

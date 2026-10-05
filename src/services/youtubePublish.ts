@@ -13,17 +13,18 @@
  * invocation died comes back as its video id instead of a second, duplicate Short.
  *
  * `platform_options` on a YouTube row: `{ title?, privacy?, language? }`. `title` is the Short's
- * title (otherwise the caption's first line); `privacy` applies only once the API audit has passed
- * (Settings → YouTube); before it, every upload is private, because YouTube would lock it so anyway.
+ * title (otherwise the caption's first line); `privacy` applies only while Settings → YouTube →
+ * "Upload Shorts as public" is on; with it off, every upload is private. The row's `cover_url`
+ * becomes the video's thumbnail.
  */
 import { queryCount } from '../db/query.js';
 import type { ScheduledPostRow } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
-import { isYouTubeAudited } from './appSettings.js';
+import { youtubeUploadsPublic } from './appSettings.js';
 import { getMediaStore, uploadIdFromUrl } from './storage.js';
 import {
-    queryUpload, SCOPE_UPLOAD, sendBytes, shortDescription, shortTitle, startResumableUpload, tagsFrom,
-    youtubeHttp, type UploadState, type VideoMetadata, type YouTubePrivacy,
+    MAX_THUMBNAIL_BYTES, queryUpload, SCOPE_UPLOAD, sendBytes, setThumbnail, shortDescription, shortTitle, startResumableUpload,
+    tagsFrom, THUMBNAIL_MIME_TYPES, youtubeHttp, type UploadState, type VideoMetadata, type YouTubePrivacy,
 } from './youtube.js';
 import { getAccessToken, noteYouTubeFailure } from './youtubeConnections.js';
 
@@ -54,17 +55,20 @@ export function youtubeOptions(raw: unknown): YouTubePostOptions {
     };
 }
 
-/** The privacy an upload asks for: private until the audit has passed, whatever the row says. */
-export function uploadPrivacy(options: YouTubePostOptions, audited: boolean): YouTubePrivacy {
-    return audited ? (options.privacy ?? 'public') : 'private';
+/** The privacy an upload asks for: the row's choice (public by default) with public uploads on; private with it off. */
+export function uploadPrivacy(options: YouTubePostOptions, publicOn: boolean): YouTubePrivacy {
+    return publicOn ? (options.privacy ?? 'public') : 'private';
 }
 
-/** The note a PUBLISHED row keeps when the Short went up private. Null when it is public. */
-export function privacyNote(privacy: YouTubePrivacy, audited: boolean): string | null {
-    if (privacy === 'public') return null;
-    return audited
-        ? `Uploaded to YouTube as ${privacy}.`
-        : 'Uploaded to YouTube as private: YouTube keeps uploads from this app private until it passes the YouTube API audit (Settings → YouTube).';
+/**
+ * The note a PUBLISHED row keeps about its visibility: null when it went out public. `actual` is
+ * what YouTube reported, which wins over what was asked.
+ */
+export function privacyNote(asked: YouTubePrivacy, actual: string | null | undefined, publicOn: boolean): string | null {
+    const is = actual || asked;
+    if (is === 'public') return null;
+    if (asked === 'public') return `YouTube kept this upload ${is} — make it public in YouTube Studio.`;
+    return publicOn ? `Uploaded to YouTube as ${is}.` : `Uploaded to YouTube as ${is} (Settings → YouTube → "Upload Shorts as public" is off).`;
 }
 
 export function metadataFor(
@@ -81,10 +85,10 @@ export function metadataFor(
 
 export type YouTubePublishTarget = Pick<
     ScheduledPostRow, 'id' | 'creator_id' | 'post_type' | 'caption' | 'media_url' | 'external_publish_id'
-> & { platform_options?: unknown };
+> & { platform_options?: unknown; cover_url?: string | null };
 
 /** Our uploads straight from the media store; anything else downloaded, within a size cap. */
-async function loadVideo(mediaUrl: string): Promise<{ data: Buffer; mimeType: string }> {
+async function loadMedia(mediaUrl: string): Promise<{ data: Buffer; mimeType: string }> {
     const uploadId = uploadIdFromUrl(mediaUrl);
     if (uploadId) {
         const stored = await (await getMediaStore()).get(uploadId);
@@ -96,6 +100,21 @@ async function loadVideo(mediaUrl: string): Promise<{ data: Buffer; mimeType: st
     });
     const mimeType = String(res.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
     return { data: Buffer.from(res.data), mimeType };
+}
+
+/** Set the cover as the thumbnail. Returns a note when it could not be, null when it was (or there is no cover). */
+async function applyThumbnail(accessToken: string, videoId: string, coverUrl: string | null): Promise<string | null> {
+    if (!coverUrl) return null;
+    try {
+        const cover = await loadMedia(coverUrl);
+        if (!THUMBNAIL_MIME_TYPES.has(cover.mimeType)) return `Thumbnail not set: the cover is ${cover.mimeType || 'of unknown type'}, not JPEG or PNG.`;
+        if (cover.data.length > MAX_THUMBNAIL_BYTES) return 'Thumbnail not set: the cover is over YouTube\'s 2 MB limit.';
+        await setThumbnail(accessToken, videoId, cover.data, cover.mimeType);
+        return null;
+    } catch (err) {
+        log('warn', 'youtube.thumbnail_failed', { video_id: videoId, ...describeError(err) });
+        return `Thumbnail not set: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300);
+    }
 }
 
 /**
@@ -115,13 +134,13 @@ export async function publishYouTubePost(post: YouTubePublishTarget): Promise<Sc
             throw new Error('Google did not grant YouTube upload — reconnect YouTube in Settings and tick “Manage your YouTube videos”.');
         }
 
-        const video = await loadVideo(post.media_url);
+        const video = await loadMedia(post.media_url);
         if (!YOUTUBE_VIDEO_MIME_TYPES.has(video.mimeType)) {
             throw new Error(`YouTube takes MP4, MOV or WebM here — this file is ${video.mimeType || 'of unknown type'}.`);
         }
-        const audited = await isYouTubeAudited();
+        const publicOn = await youtubeUploadsPublic();
         const options = youtubeOptions(post.platform_options);
-        const privacy = uploadPrivacy(options, audited);
+        const privacy = uploadPrivacy(options, publicOn);
 
         // A session an earlier attempt opened: ask before sending anything.
         let state: UploadState | null = null;
@@ -150,13 +169,18 @@ export async function publishYouTubePost(post: YouTubePublishTarget): Promise<Sc
         }
 
         const videoId = state!.videoId;
+        const actual = (state as { privacy?: string | null }).privacy ?? null;
+        // The cover as the thumbnail. A refusal (a channel not verified for custom thumbnails, say)
+        // is noted on the row; the Short is up either way.
+        const thumbnail = await applyThumbnail(accessToken, videoId, post.cover_url ?? null);
+        const notes = [privacyNote(privacy, actual, publicOn), thumbnail].filter(Boolean).join(' ');
         await queryCount(
             `UPDATE scheduled_posts
                 SET status = 'PUBLISHED', published_post_id = $2, external_publish_id = NULL, error_log = $3
               WHERE id = $1`,
-            [post.id, VIDEO_ID_PREFIX + videoId, privacyNote(privacy, audited)]
+            [post.id, VIDEO_ID_PREFIX + videoId, notes || null]
         );
-        log('info', 'youtube.published', { post_id: post.id, video_id: videoId, privacy });
+        log('info', 'youtube.published', { post_id: post.id, video_id: videoId, asked: privacy, privacy: actual, thumbnail: thumbnail ?? 'set' });
         return 'PUBLISHED';
     } catch (err: any) {
         await noteYouTubeFailure(connectionId, err);

@@ -158,7 +158,7 @@ describe('approveClip — the rows', () => {
         assert.equal(meta!.params[1], 'both');
         const url = 'https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34';
         assert.deepEqual(youtube!.params.slice(0, 4), [TENANT, 'youtube', `${COPY.tiktok_caption}\n\n🔗 ${url}`, up(TT_VIDEO)]);
-        assert.equal(youtube!.params[5], null, 'YouTube picks its own thumbnail');
+        assert.equal(youtube!.params[5], up(COVER), 'the reel’s cover becomes the thumbnail');
         assert.equal(youtube!.params[6], meta!.params[6], 'one group with the Meta post');
         assert.deepEqual(JSON.parse(youtube!.params[7]), { title: 'دفترك الذكي', language: 'ar' });
 

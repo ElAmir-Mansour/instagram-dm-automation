@@ -5,18 +5,18 @@
  *     GET  /callback       Google's OAuth redirect; trusts only the single-use `state` + its cookie
  *
  *   youtubeRouter — mounted BELOW `resolveTenant`
- *     GET  /connection     the Settings card: the channel, whether the app is set up, audit state
+ *     GET  /connection     the Settings card: the channel, whether the app is set up, public or private uploads
  *     POST /connect        owner: mint a state, return Google's consent URL
  *     POST /disconnect     owner: revoke with Google and delete the tokens
  *     GET  /app-settings   platform admin: the OAuth client's status and the URLs to register
- *     POST /app-settings   platform admin: save the client ID / secret and the audit switch
+ *     POST /app-settings   platform admin: save the client ID / secret and the public-uploads switch
  */
 import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import {
-    APP_SETTING_KEYS, getPublicBaseUrl, getSetting, getYouTubeAppConfig, isYouTubeAudited, maskValue, setSetting,
+    APP_SETTING_KEYS, getPublicBaseUrl, getSetting, getYouTubeAppConfig, maskValue, setSetting, youtubeUploadsPublic,
 } from '../services/appSettings.js';
 import { buildAuthorizeUrl, YOUTUBE_SCOPES, YouTubeApiError } from '../services/youtube.js';
 import {
@@ -134,8 +134,8 @@ function requirePlatformAdmin(req: Request, res: Response, next: NextFunction): 
 
 youtubeRouter.get('/connection', async (req, res) => {
     try {
-        const [row, app, audited] = await Promise.all([getConnection(getTenantId(req)), getYouTubeAppConfig(), isYouTubeAudited()]);
-        res.json({ appConfigured: Boolean(app), audited, connection: summariseConnection(row) });
+        const [row, app, publicUploads] = await Promise.all([getConnection(getTenantId(req)), getYouTubeAppConfig(), youtubeUploadsPublic()]);
+        res.json({ appConfigured: Boolean(app), publicUploads, connection: summariseConnection(row) });
     } catch (err) {
         log('error', 'api.youtube_connection_read_failed', describeError(err));
         res.status(500).json({ error: 'Failed to read the YouTube connection.' });
@@ -186,11 +186,11 @@ youtubeRouter.post('/disconnect', canAdminister, async (req, res) => {
 
 youtubeRouter.get('/app-settings', requirePlatformAdmin, async (req, res) => {
     try {
-        const [dbId, dbSecret, app, audited, base] = await Promise.all([
+        const [dbId, dbSecret, app, publicUploads, base] = await Promise.all([
             getSetting(APP_SETTING_KEYS.youtubeClientId),
             getSetting(APP_SETTING_KEYS.youtubeClientSecret),
             getYouTubeAppConfig(),
-            isYouTubeAudited(),
+            youtubeUploadsPublic(),
             getPublicBaseUrl(requestOrigin(req)),
         ]);
         res.json({
@@ -205,7 +205,7 @@ youtubeRouter.get('/app-settings', requirePlatformAdmin, async (req, res) => {
                 source: app ? app.source.clientSecret : null,
                 preview: dbSecret ? maskValue(dbSecret) : null,
             },
-            audited,
+            publicUploads,
             // What to enter in Google Cloud: the OAuth client and the consent screen.
             register: base ? {
                 redirectUri: `${base}${CALLBACK_PATH}`,
@@ -245,9 +245,9 @@ youtubeRouter.post('/app-settings', requirePlatformAdmin, async (req, res) => {
             await setSetting(APP_SETTING_KEYS.youtubeClientSecret, v || null, updatedBy);
             changed.push('client_credential');
         }
-        if (typeof body.audited === 'boolean') {
-            await setSetting(APP_SETTING_KEYS.youtubeAudited, body.audited ? 'true' : null, updatedBy);
-            changed.push('audited');
+        if (typeof body.publicUploads === 'boolean') {
+            await setSetting(APP_SETTING_KEYS.youtubePublicUploads, body.publicUploads ? 'true' : null, updatedBy);
+            changed.push('public_uploads');
         }
         if (changed.length === 0) {
             res.status(400).json({ error: 'Nothing to save.' });
