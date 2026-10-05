@@ -24,6 +24,7 @@ import {
     summariseConnection, YouTubeChannelInUseError,
 } from '../services/youtubeConnections.js';
 import { readCookie } from './tiktok.js';
+import { visibilitySummary } from '../services/youtubeVisibility.js';
 import { describeError, log } from '../utils/log.js';
 
 export const STATE_COOKIE = 'youtube_oauth_state';
@@ -134,8 +135,11 @@ function requirePlatformAdmin(req: Request, res: Response, next: NextFunction): 
 
 youtubeRouter.get('/connection', async (req, res) => {
     try {
-        const [row, app, publicUploads] = await Promise.all([getConnection(getTenantId(req)), getYouTubeAppConfig(), youtubeUploadsPublic()]);
-        res.json({ appConfigured: Boolean(app), publicUploads, connection: summariseConnection(row) });
+        const creatorId = getTenantId(req);
+        const [row, app, publicUploads, visibility] = await Promise.all([
+            getConnection(creatorId), getYouTubeAppConfig(), youtubeUploadsPublic(), visibilitySummary(creatorId),
+        ]);
+        res.json({ appConfigured: Boolean(app), publicUploads, visibility, connection: summariseConnection(row) });
     } catch (err) {
         log('error', 'api.youtube_connection_read_failed', describeError(err));
         res.status(500).json({ error: 'Failed to read the YouTube connection.' });

@@ -433,5 +433,31 @@ export async function setThumbnail(accessToken: string, videoId: string, data: B
     }
 }
 
+export interface VideoStatus { privacy: string | null; uploadStatus: string | null }
+
+/**
+ * The status of up to 50 videos (videos.list, 1 quota unit). A video YouTube no longer returns
+ * (deleted, or removed) is absent from the map.
+ */
+export async function listVideoStatuses(accessToken: string, ids: readonly string[]): Promise<Map<string, VideoStatus>> {
+    const out = new Map<string, VideoStatus>();
+    if (!ids.length) return out;
+    if (ids.length > 50) throw new Error('listVideoStatuses: at most 50 ids per call.');
+    try {
+        const res = await youtubeHttp.get(`${YOUTUBE_API_BASE}/videos`, {
+            params: { part: 'status', id: ids.join(','), maxResults: 50 },
+            headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        for (const v of Array.isArray(res.data?.items) ? res.data.items : []) {
+            if (typeof v?.id === 'string') {
+                out.set(v.id, { privacy: v.status?.privacyStatus ?? null, uploadStatus: v.status?.uploadStatus ?? null });
+            }
+        }
+        return out;
+    } catch (err) {
+        throw toYouTubeError('YouTube video status', err);
+    }
+}
+
 /** The public link to a Short. */
 export const shortUrl = (videoId: string) => `https://www.youtube.com/shorts/${encodeURIComponent(videoId)}`;

@@ -452,6 +452,7 @@ const SettingsPage = {
                 ` : ''}
                 ${connected && !c.canUpload ? html`<p class="form-hint text-warning mbe-3">${t('settings.youtube.cannotUpload')}</p>` : ''}
                 <p class="token-info mbe-2">${youtube.publicUploads ? t('settings.youtube.privacyPublic') : t('settings.youtube.privacyPrivate')}</p>
+                ${this.youtubeVisibilityLine(youtube.visibility)}
                 ${refreshExpires ? html`
                     <p class="form-hint text-warning mbe-3">${t('settings.youtube.testingExpiry', { date: UI.formatDay(refreshExpires) })}</p>
                 ` : ''}
@@ -488,6 +489,20 @@ const SettingsPage = {
                 </div>
             </section>
         `;
+    },
+
+    /** The daily check's verdict on the published Shorts (src/services/youtubeVisibility.ts). */
+    youtubeVisibilityLine(v) {
+        if (!v || !v.total) return '';
+        if (v.flagged > 0) {
+            return html`<p class="form-hint text-warning mbe-2">
+                <i data-lucide="alert-triangle" aria-hidden="true"></i>
+                ${t('settings.youtube.visibilityFlagged', { flagged: UI.formatNumber(v.flagged), total: UI.formatNumber(v.total) })}
+            </p>`;
+        }
+        return html`<p class="token-info mbe-2">${v.checkedAt
+            ? t('settings.youtube.visibilityOk', { total: UI.formatNumber(v.total), date: UI.formatDay(new Date(v.checkedAt)) })
+            : t('settings.youtube.visibilityPending', { total: UI.formatNumber(v.total) })}</p>`;
     },
 
     /** The Google OAuth client — one for the whole deployment, so platform admins only. */
