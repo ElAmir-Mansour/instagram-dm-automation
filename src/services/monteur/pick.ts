@@ -84,6 +84,21 @@ why: at most 10 words in ${lang}: what the viewer gets.
 Invent nothing: only numbers, tools and results the clip says.`;
 }
 
+/** One reel per this many minutes of video, up to `reels_per_video` (the owner asked on 2026-10-06). */
+export const MINUTES_PER_REEL = 10;
+
+/**
+ * How many reels to cut from a video: one per started 10 minutes of it, at least one, never more
+ * than `reels_per_video`. A 5-minute lesson gives 1, an 11-minute one 2, a 33-minute one 3 (with
+ * the maximum at 3). Unknown length: the maximum. Weak moments are still never kept, so this is a
+ * ceiling, not a quota.
+ */
+export function reelsForLength(durationS: number | null | undefined, max: number): number {
+    const cap = Math.max(1, Math.floor(max));
+    if (typeof durationS !== 'number' || !Number.isFinite(durationS) || durationS <= 0) return cap;
+    return Math.min(cap, Math.max(1, Math.ceil(durationS / (MINUTES_PER_REEL * 60))));
+}
+
 /** §6.1: `reels_per_video + 2` candidates. */
 export function candidatesWanted(reelsPerVideo: number): number {
     return Math.max(1, reelsPerVideo) + EXTRA_CANDIDATES;
@@ -91,14 +106,17 @@ export function candidatesWanted(reelsPerVideo: number): number {
 
 export function pickUserPrompt(args: {
     lines: readonly TranscriptLine[]; settings: StudioSettings; lessons: readonly StudioLesson[]; reels?: ReelEvidenceSet;
+    /** How many reels this video gets (`reelsForLength`); `reels_per_video` when not given. */
+    keep?: number;
 }): string {
     const { lines, settings, lessons } = args;
     const m = settings.monteur;
+    const keep = args.keep ?? m.reels_per_video;
     const avoid = (settings.voice?.avoid ?? []).filter((a) => a.trim());
     const best = args.reels?.best ?? [];
     const worst = args.reels?.worst ?? [];
     return [
-        `Pick up to ${candidatesWanted(m.reels_per_video)} clips, best first, each ${m.min_seconds}–${m.max_seconds} seconds, none overlapping.`,
+        `Pick up to ${candidatesWanted(keep)} clips, best first, each ${m.min_seconds}–${m.max_seconds} seconds, none overlapping.`,
         // Past 90 s only a full walkthrough earns the length: watch time is what Facebook ranks on.
         ...(m.max_seconds > 90 ? [`Most clips should run about ${Math.max(m.min_seconds, 45)}–90 seconds; go up to ${m.max_seconds} only for a complete walkthrough that a shorter cut would leave unfinished.`] : []),
         // The audience's own vote: a moment on a topic that already spread scores higher on send.
@@ -145,12 +163,13 @@ export async function pickClips(
     const m = settings.monteur;
     if (!lines.length || spokenSpan(lines) < m.min_seconds) return { kept: [], topic: null, considered: 0, problems: [], lines, cost };
 
+    const keep = reelsForLength(source.duration, m.reels_per_video);
     const opts = {
-        minSeconds: m.min_seconds, maxSeconds: m.max_seconds, keep: m.reels_per_video, duration: source.duration,
+        minSeconds: m.min_seconds, maxSeconds: m.max_seconds, keep, duration: source.duration,
         existingTexts: context.existingTexts ?? [],
     };
     const system = pickSystemPrompt(settings);
-    const turns: ModelTurn[] = [{ role: 'user', text: pickUserPrompt({ lines, settings, lessons: context.lessons, reels: context.reels }) }];
+    const turns: ModelTurn[] = [{ role: 'user', text: pickUserPrompt({ lines, settings, lessons: context.lessons, reels: context.reels, keep }) }];
     const call = (purpose: string) => ask({
         purpose, system, turns, schema: PICK_SCHEMA, temperature: 0.4, thinkingBudget: PICK_THINKING,
         maxOutputTokens: PICK_MAX_OUTPUT, capMs: PICK_CALL_MS, think: thinkRoute(think, purpose, 'pick'),
@@ -158,7 +177,7 @@ export async function pickClips(
 
     const raw = await call('monteur.pick');
     let choice = chooseClips(raw, lines, source.words, opts);
-    if (choice.problems.length && choice.kept.length < m.reels_per_video) {
+    if (choice.problems.length && choice.kept.length < keep) {
         turns.push({ role: 'model', text: JSON.stringify(raw) }, { role: 'user', text: repairPrompt(choice.problems) });
         try {
             const again = chooseClips(await call('monteur.pick-repair'), lines, source.words, opts);

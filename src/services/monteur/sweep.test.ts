@@ -98,7 +98,9 @@ let previousWaits: readonly number[];
 
 beforeEach(() => {
     db = installFakeDb();
-    source = { id: SOURCE, creator_id: TENANT, name: 'lesson.mp4', path: '/v/lesson.mp4', duration: 100, words: WORDS, pick: null, attempts: 1 };
+    source = { id: SOURCE, creator_id: TENANT, name: 'lesson.mp4', path: '/v/lesson.mp4',
+        // 20 minutes: long enough for two reels (one per 10 minutes, pick.ts reelsForLength), as these tests cut.
+        duration: 1200, words: WORDS, pick: null, attempts: 1 };
     handOffClaimed = true;
     calls = [];
     answers = { 'monteur.pick': PICK, 'monteur.copy': COPY, 'monteur.edit': EDIT };
