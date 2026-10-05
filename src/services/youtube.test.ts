@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import {
-    buildAuthorizeUrl, cutBytes, setThumbnail, isYouTubeReauthError, parseTokenResponse, queryUpload, receivedFromRange, sendBytes,
+    buildAuthorizeUrl, cutBytes, listVideoStatuses, setThumbnail, isYouTubeReauthError, parseTokenResponse, queryUpload, receivedFromRange, sendBytes,
     shortDescription, shortTitle, startResumableUpload, tagsFrom, toYouTubeError, videoResource, YouTubeApiError, youtubeHttp,
     SCOPE_READONLY, SCOPE_UPLOAD,
 } from './youtube.js';
@@ -215,7 +215,16 @@ describe('the resumable upload', () => {
         await assert.rejects(setThumbnail('tok', 'vid9', Buffer.from('jpg'), 'image/jpeg'), (e: unknown) => e instanceof YouTubeApiError && e.reason === 'forbidden');
     });
 
-    it('reads Range headers', () => {
+    it('asks videos.list for up to 50 ids in one call; a video YouTube no longer has is absent', async () => {
+        const seen = stub(() => ({ status: 200, data: { items: [{ id: 'a', status: { privacyStatus: 'public', uploadStatus: 'processed' } }] } }));
+        const out = await listVideoStatuses('tok', ['a', 'b']);
+        assert.deepEqual((seen[0]!.params as any), { part: 'status', id: 'a,b', maxResults: 50 });
+        assert.deepEqual(out.get('a'), { privacy: 'public', uploadStatus: 'processed' });
+        assert.equal(out.has('b'), false);
+        await assert.rejects(listVideoStatuses('tok', Array.from({ length: 51 }, (_, i) => String(i))), /at most 50/);
+    });
+
+        it('reads Range headers', () => {
         assert.equal(receivedFromRange('bytes=0-999'), 1000);
         assert.equal(receivedFromRange(undefined), 0);
     });

@@ -41,6 +41,7 @@ import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import { youtubePublicRouter, youtubeRouter } from './youtube.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
 import { refreshAllYouTubeConnections } from '../services/youtubeConnections.js';
+import { checkYouTubeVisibility } from '../services/youtubeVisibility.js';
 import { studioRouter, studioWorkerRouter } from './studio.js';
 import {
     publishTikTokPost, reconcileTikTokPosts, TikTokInboxFullError, validateTikTokInboxOptions, validateTikTokOptions,
@@ -996,6 +997,9 @@ router.get('/cron/publish', async (req, res) => {
         if (youtubeRefresh.refreshed > 0 || youtubeRefresh.failed > 0) {
             log('info', 'cron.youtube_refresh', { ...youtubeRefresh });
         }
+        // And whether every published Short is still public (youtubeVisibility.ts). Cannot throw.
+        const youtubeVisibility = await checkYouTubeVisibility();
+        if (youtubeVisibility.checked > 0) log('info', 'cron.youtube_visibility', { ...youtubeVisibility });
 
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
         // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
