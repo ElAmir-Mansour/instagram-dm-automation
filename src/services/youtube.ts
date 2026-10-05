@@ -4,11 +4,10 @@
  *
  * ── What the API allows ──
  * A Short is an ordinary `videos.insert` of a vertical video of up to three minutes; there is no
- * Shorts flag. Uploads from an API project YouTube has not audited are locked private, whatever
- * `privacyStatus` asks for, until the project passes the YouTube API Services audit — so the
- * operator switch `youtube.audited` decides the privacy we ask for, and nothing here pretends a
- * private upload is public. One `videos.insert` costs 1,600 of the default 10,000 quota units a
- * day: six uploads.
+ * Shorts flag. YouTube may keep an unaudited project's uploads private whatever `privacyStatus`
+ * asks for; this owner's were not, so Settings → "Upload Shorts as public" decides what is asked,
+ * and the privacy YouTube reports back is what the row records. One `videos.insert` costs 1,600 of
+ * the default 10,000 quota units a day, and a thumbnail 50: six Shorts a day.
  *
  * ── Tokens ──
  * Google access tokens last an hour. The refresh token does not expire for an app in production
@@ -347,7 +346,8 @@ export async function startResumableUpload(
 
 /** Where a session is: finished (with the video id), part-way (bytes Google holds), or gone. */
 export type UploadState =
-    | { state: 'done'; videoId: string }
+    /** `privacy`: what YouTube says the video is, which may not be what was asked. */
+    | { state: 'done'; videoId: string; privacy?: string | null }
     | { state: 'partial'; received: number }
     | { state: 'gone' };
 
@@ -361,7 +361,7 @@ function settle(res: { status: number; data: any; headers: any }, context: strin
     if (res.status === 200 || res.status === 201) {
         const id = res.data?.id;
         if (typeof id !== 'string' || !id) throw new Error(`${context}: Google finished the upload but returned no video id.`);
-        return { state: 'done', videoId: id };
+        return { state: 'done', videoId: id, privacy: typeof res.data?.status?.privacyStatus === 'string' ? res.data.status.privacyStatus : null };
     }
     if (res.status === 308) return { state: 'partial', received: receivedFromRange(res.headers?.range) };
     if (res.status === 404 || res.status === 410) return { state: 'gone' };
@@ -409,6 +409,27 @@ export async function sendBytes(
         return settle(res, 'YouTube upload');
     } catch (err) {
         throw toYouTubeError('YouTube upload', err);
+    }
+}
+
+export const YOUTUBE_THUMBNAIL_URL = 'https://www.googleapis.com/upload/youtube/v3/thumbnails/set';
+/** YouTube's limit for a custom thumbnail. */
+export const MAX_THUMBNAIL_BYTES = 2 * 1024 * 1024;
+export const THUMBNAIL_MIME_TYPES: ReadonlySet<string> = new Set(['image/jpeg', 'image/png']);
+
+/**
+ * Set a video's thumbnail (the reel's cover). Needs a channel YouTube has verified for custom
+ * thumbnails; a refusal is the caller's to note, never a reason to fail the upload it follows.
+ */
+export async function setThumbnail(accessToken: string, videoId: string, data: Buffer, mimeType: string): Promise<void> {
+    try {
+        await youtubeHttp.post(YOUTUBE_THUMBNAIL_URL, data, {
+            params: { videoId, uploadType: 'media' },
+            maxBodyLength: Infinity,
+            headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': mimeType, 'Content-Length': String(data.length) },
+        });
+    } catch (err) {
+        throw toYouTubeError('YouTube thumbnail', err);
     }
 }
 

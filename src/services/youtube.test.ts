@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import {
-    buildAuthorizeUrl, cutBytes, isYouTubeReauthError, parseTokenResponse, queryUpload, receivedFromRange, sendBytes,
+    buildAuthorizeUrl, cutBytes, setThumbnail, isYouTubeReauthError, parseTokenResponse, queryUpload, receivedFromRange, sendBytes,
     shortDescription, shortTitle, startResumableUpload, tagsFrom, toYouTubeError, videoResource, YouTubeApiError, youtubeHttp,
     SCOPE_READONLY, SCOPE_UPLOAD,
 } from './youtube.js';
@@ -134,12 +134,17 @@ describe('youtubePublish rules', () => {
         assert.deepEqual(youtubeOptions({ privacy: 'everyone', language: 'not a tag!' }), {});
         assert.deepEqual(youtubeOptions(null), {});
     });
-    it('private until the audit has passed, whatever the row asks for; then the row’s choice, public by default', () => {
+    it('private with public uploads off, whatever the row asks for; on, the row’s choice, public by default', () => {
         assert.equal(uploadPrivacy({ privacy: 'public' }, false), 'private');
         assert.equal(uploadPrivacy({}, true), 'public');
         assert.equal(uploadPrivacy({ privacy: 'unlisted' }, true), 'unlisted');
-        assert.match(privacyNote('private', false)!, /until it passes the YouTube API audit/);
-        assert.equal(privacyNote('public', true), null);
+    });
+    it('the note follows what YouTube reported, not what was asked', () => {
+        assert.equal(privacyNote('public', 'public', true), null);
+        assert.equal(privacyNote('public', null, true), null, 'no report: what was asked');
+        assert.match(privacyNote('public', 'private', true)!, /YouTube kept this upload private/);
+        assert.match(privacyNote('private', 'private', false)!, /"Upload Shorts as public" is off/);
+        assert.equal(privacyNote('private', 'public', false), null, 'made public on YouTube’s side: nothing to say');
     });
     it('the metadata comes from the row: its title option, its caption', () => {
         const m = metadataFor({ caption: 'سطر\n#ai' }, { title: 'العنوان', language: 'ar' }, 'private');
@@ -170,8 +175,8 @@ describe('the resumable upload', () => {
     });
 
     it('asks a session where it is: done with the id, part-way with the bytes held, or gone', async () => {
-        stub(() => ({ status: 201, data: { id: 'vid1' } }));
-        assert.deepEqual(await queryUpload('tok', 'https://s', 10), { state: 'done', videoId: 'vid1' });
+        stub(() => ({ status: 201, data: { id: 'vid1', status: { privacyStatus: 'public' } } }));
+        assert.deepEqual(await queryUpload('tok', 'https://s', 10), { state: 'done', videoId: 'vid1', privacy: 'public' });
         const seen = stub(() => ({ status: 308, headers: { range: 'bytes=0-4' } }));
         assert.deepEqual(await queryUpload('tok', 'https://s', 10), { state: 'partial', received: 5 });
         assert.equal(seen[0]!.headers['content-range'], 'bytes */10');
@@ -184,7 +189,7 @@ describe('the resumable upload', () => {
     it('sends the rest from an offset with a Content-Range, and the whole file without one', async () => {
         const data = Buffer.from('0123456789');
         let seen = stub(() => ({ status: 200, data: { id: 'vid2' } }));
-        assert.deepEqual(await sendBytes('tok', 'https://s', data, 'video/mp4', 0), { state: 'done', videoId: 'vid2' });
+        assert.deepEqual(await sendBytes('tok', 'https://s', data, 'video/mp4', 0), { state: 'done', videoId: 'vid2', privacy: null });
         assert.equal(seen[0]!.headers['content-range'], undefined);
         assert.equal(seen[0]!.headers['content-length'], '10');
         seen = stub(() => ({ status: 200, data: { id: 'vid3' } }));
@@ -197,6 +202,17 @@ describe('the resumable upload', () => {
     it('a quota refusal surfaces as YouTube’s reason, not a bare status', async () => {
         stub(() => ({ status: 403, data: { error: { code: 403, errors: [{ reason: 'quotaExceeded' }] } } }));
         await assert.rejects(sendBytes('tok', 'https://s', Buffer.from('x'), 'video/mp4'), (e: unknown) => e instanceof YouTubeApiError && e.reason === 'quotaExceeded');
+    });
+
+    it('sets the thumbnail as a media upload to thumbnails/set, and a refusal surfaces with its reason', async () => {
+        const seen = stub(() => ({ status: 200, data: {} }));
+        await setThumbnail('tok', 'vid9', Buffer.from('jpg'), 'image/jpeg');
+        assert.equal(seen[0]!.method, 'POST');
+        assert.match(seen[0]!.url, /\/upload\/youtube\/v3\/thumbnails\/set$/);
+        assert.deepEqual(seen[0]!.params, { videoId: 'vid9', uploadType: 'media' });
+        assert.equal(seen[0]!.headers['content-type'], 'image/jpeg');
+        stub(() => ({ status: 403, data: { error: { code: 403, errors: [{ reason: 'forbidden' }] } } }));
+        await assert.rejects(setThumbnail('tok', 'vid9', Buffer.from('jpg'), 'image/jpeg'), (e: unknown) => e instanceof YouTubeApiError && e.reason === 'forbidden');
     });
 
     it('reads Range headers', () => {

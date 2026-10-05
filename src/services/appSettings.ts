@@ -50,10 +50,11 @@ export const APP_SETTING_KEYS = {
     youtubeClientId: 'youtube.client_id',
     youtubeClientSecret: 'youtube.client_secret',
     /**
-     * 'true' once the YouTube API Services audit has passed. Until then YouTube locks every upload
-     * from this project private, so uploads ask for 'private' rather than pretend otherwise.
+     * 'true': Shorts upload public. Off: private. YouTube may lock an unaudited project's uploads
+     * private whatever is asked; this owner's were not (2026-10-06: a private test Short could be
+     * made public in Studio, and YouTube reported it public), so the owner chose public.
      */
-    youtubeAudited: 'youtube.audited',
+    youtubePublicUploads: 'youtube.public_uploads',
     /**
      * The Gemini API key the whole platform runs on: every tenant's DM replies, the AI Settings
      * test box and the Studio. Saved by a platform admin on the Operations screen, after Google
@@ -244,9 +245,9 @@ export async function getYouTubeAppConfig(): Promise<YouTubeAppConfig | null> {
     };
 }
 
-/** Whether the YouTube API audit has passed: uploads go out public only then. Off by default. */
-export async function isYouTubeAudited(): Promise<boolean> {
-    return (await getSetting(APP_SETTING_KEYS.youtubeAudited)) === 'true';
+/** Whether Shorts upload public (Settings → YouTube → "Upload Shorts as public"). Off by default. */
+export async function youtubeUploadsPublic(): Promise<boolean> {
+    return (await getSetting(APP_SETTING_KEYS.youtubePublicUploads)) === 'true';
 }
 
 export interface MediaStorageConfig {
