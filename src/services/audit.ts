@@ -130,6 +130,8 @@ export const AUDIT_ACTIONS = {
     monteurApprove: 'monteur.approve',
     /** Growth keywords, hashtag sets, competitors or audience changed (GROWTH.md). */
     growthSettingsWrite: 'growth.settings_write',
+    /** An operator added a keyword ask to a Facebook video (post text edited, or a Page comment). */
+    growthFacebookAsk: 'growth.facebook_ask',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

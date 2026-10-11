@@ -14,12 +14,15 @@
  *   GET  /settings · PUT /settings
  *   POST /keywords/suggest       { topic }
  *   GET  /competitors
+ *   POST /facebook-ask/preview   { media_id, keyword?, variant? } — the exact line, nothing sent
+ *   POST /facebook-ask           { media_id, keyword, variant? } — adds it to the Facebook video
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { runCoach } from '../services/growth/coach.js';
 import { GROWTH_MIGRATION_HINT, GrowthError } from '../services/growth/common.js';
+import { applyAsk, askState, loadActiveCampaigns, previewAsk } from '../services/facebookAsk.js';
 import { getCompetitors } from '../services/growth/competitors.js';
 import { suggestKeywords } from '../services/growth/keywords.js';
 import { getOverview, listPostInsights } from '../services/growth/overview.js';
@@ -75,9 +78,37 @@ growthRouter.get('/overview', handle('growth.overview_failed', 'Failed to build 
 }));
 
 growthRouter.get('/posts', handle('growth.posts_failed', 'Failed to list the posts.', async (req, res) => {
-    res.json(await listPostInsights(getTenantId(req), {
+    const creatorId = getTenantId(req);
+    const { posts } = await listPostInsights(creatorId, {
         days: req.query.days, sort: req.query.sort, platform: req.query.platform, type: req.query.type,
-    }));
+    });
+    // `keyword_ask` on Facebook videos only: does the caption ask for a comment, and does a live
+    // campaign answer that word? The dashboard offers "Add keyword ask" unless it is 'live'.
+    const isVideo = (p: { platform: string; media_type: string | null }) =>
+        p.platform === 'facebook' && /^(video|reels?)$/i.test(p.media_type ?? '');
+    let campaigns: Awaited<ReturnType<typeof loadActiveCampaigns>> = [];
+    if (posts.some(isVideo)) {
+        try { campaigns = await loadActiveCampaigns(creatorId); } catch (err) {
+            log('warn', 'growth.keyword_ask_state_unreadable', describeError(err));
+        }
+    }
+    res.json({
+        posts: posts.map((p) => (isVideo(p) ? { ...p, keyword_ask: askState(p.caption ?? '', p.media_id, campaigns) } : p)),
+    });
+}));
+
+growthRouter.post('/facebook-ask/preview', handle('growth.facebook_ask_preview_failed', 'Failed to build the preview.', async (req, res) => {
+    res.json(await previewAsk(getTenantId(req), req.body ?? {}));
+}));
+
+growthRouter.post('/facebook-ask', handle('growth.facebook_ask_failed', 'Failed to add the keyword ask.', async (req, res) => {
+    const creatorId = getTenantId(req);
+    const result = await applyAsk(creatorId, req.body ?? {});
+    await writeAudit(await actorFromSession(req.session), {
+        action: AUDIT_ACTIONS.growthFacebookAsk, targetType: 'creator', targetId: creatorId,
+        detail: { media_id: String(req.body?.media_id), keyword: result.keyword, mechanism: result.mechanism },
+    });
+    res.json(result);
 }));
 
 growthRouter.post('/coach', handle('growth.coach_route_failed', 'Failed to run the coach.', async (req, res) => {

@@ -427,6 +427,10 @@ const API = {
     }),
     /** Instagram Business Discovery for each saved competitor username. */
     getGrowthCompetitors: () => API.request('/growth/competitors'),
+    /** `{ media_id, keyword?, variant? }` → the exact line and the keywords a live campaign answers. Sends nothing. */
+    previewFacebookAsk: (data) => API.request('/growth/facebook-ask/preview', { method: 'POST', body: JSON.stringify(data) }),
+    /** `{ media_id, keyword, variant? }` → `{ mechanism: 'edit' | 'comment', keyword, text }`. Changes the live Facebook post. */
+    applyFacebookAsk: (data) => API.request('/growth/facebook-ask', { method: 'POST', body: JSON.stringify(data) }),
 
     getStudioWorkers: () => API.request('/studio/workers'),
     /** `{ worker, token }` — the token exists in this response and nowhere else, ever. */

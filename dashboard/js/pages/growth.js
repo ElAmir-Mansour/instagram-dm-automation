@@ -1486,6 +1486,151 @@ const GrowthPage = {
             : html`<i data-lucide="${icon}" aria-hidden="true"></i>`}</span>`;
     },
 
+    // ─── "Add keyword ask" (a Facebook video whose caption has no working keyword ask) ───
+    /**
+     * Offered on a Facebook video whose caption asks for no comment, or asks for a word no active
+     * campaign answers (`keyword_ask` from GET /growth/posts: 'none' | 'dead'). Never automatic:
+     * the button opens a preview, and only «Add to the post» sends anything.
+     */
+    askButton(post) {
+        if (this.platformKey(post.platform) !== 'facebook') return '';
+        if (!['video', 'reel'].includes(this.typeKey(post.media_type))) return '';
+        if (!post.media_id || (post.keyword_ask !== 'none' && post.keyword_ask !== 'dead')) return '';
+        if (typeof App !== 'undefined' && typeof App.canOperate === 'function' && !App.canOperate()) return '';
+        return UI.button({
+            variant: 'ghost', size: 'sm', icon: 'message-circle', label: t('growth.ask.add'),
+            action: 'growth:openAsk', data: { id: post.media_id },
+            title: post.keyword_ask === 'dead' ? t('growth.ask.deadHint') : t('growth.ask.noneHint'),
+        });
+    },
+
+    ask: null,
+
+    askBodyMarkup() {
+        const a = this.ask;
+        if (!a) return '';
+        if (a.loading) return html`<p class="text-meta" role="status">${t('growth.ask.loading')}</p>`;
+        if (a.done) {
+            return html`<p class="modal-body-text" role="status" dir="auto">${t(a.done.mechanism === 'comment' ? 'growth.ask.doneComment' : 'growth.ask.doneEdit')}</p>
+                <blockquote class="user-content" dir="auto" lang="${a.preview ? a.preview.language : 'ar'}">${a.done.text}</blockquote>
+                <div class="modal-actions">${UI.button({ variant: 'primary', label: t('common.close'), action: 'ui:closeModal' })}</div>`;
+        }
+        const pv = a.preview;
+        if (!pv) {
+            return html`<p class="form-error" role="alert">${a.error || t('error.unexpected')}</p>
+                <div class="modal-actions">${UI.button({ variant: 'secondary', label: t('common.close'), action: 'ui:closeModal' })}</div>`;
+        }
+        const noCampaign = !pv.keywords.length;
+        return html`
+            <p class="modal-body-text" dir="auto">${t(pv.state === 'dead' ? 'growth.ask.bodyDead' : 'growth.ask.bodyNone')}</p>
+            ${noCampaign ? html`<p class="form-error" role="alert">${t('growth.ask.noCampaign')}</p>` : html`
+                <div class="form-group">
+                    <label class="form-label" for="growth-ask-keyword">${t('growth.ask.keyword')}</label>
+                    <select class="select" id="growth-ask-keyword" data-change="growth:askKeyword" ${a.busy ? html.raw('disabled') : ''}>
+                        ${pv.keywords.map((k) => html`<option value="${k}" ${k === pv.keyword ? html.raw('selected') : ''}>${k}</option>`)}
+                    </select>
+                    <p class="form-hint">${t('growth.ask.keywordHint')}</p>
+                </div>
+                <p class="form-label">${t('growth.ask.preview')}</p>
+                <blockquote class="user-content" id="growth-ask-text" dir="auto" lang="${pv.language}">${pv.text}</blockquote>
+                <p class="form-hint">${t('growth.ask.mechanism')}</p>
+            `}
+            ${a.error ? html`<p class="form-error" role="alert">${a.error}</p>` : ''}
+            <div class="modal-actions">
+                ${UI.button({ variant: 'secondary', label: t('common.cancel'), action: 'ui:closeModal' })}
+                ${noCampaign ? '' : UI.button({ variant: 'secondary', icon: 'refresh-cw', label: t('growth.ask.another'), action: 'growth:askVariant', disabled: a.busy })}
+                ${noCampaign ? '' : UI.button({ variant: 'primary', icon: 'send', label: t('growth.ask.confirm'), action: 'growth:confirmAsk', busy: a.busy, id: 'growth-ask-confirm' })}
+            </div>
+        `;
+    },
+
+    paintAsk() {
+        const host = document.getElementById('growth-ask-body');
+        if (!host) return;
+        host.innerHTML = esc(this.askBodyMarkup());
+        UI.icons(host);
+    },
+
+    async openAsk(el) {
+        const id = String(el && el.dataset ? el.dataset.id || '' : '');
+        if (!id) return;
+        const run = { id, loading: true, busy: false, preview: null, error: null, done: null };
+        this.ask = run;
+        UI.showModal(html`
+            <div class="modal-header">
+                <h2 class="modal-title">${t('growth.ask.title')}</h2>
+                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div id="growth-ask-body">${this.askBodyMarkup()}</div>
+        `);
+        await this.loadAskPreview(run, {});
+    },
+
+    async loadAskPreview(run, params) {
+        try {
+            const pv = await API.previewFacebookAsk({ media_id: run.id, ...params });
+            if (this.ask !== run) return;
+            run.preview = pv;
+            run.error = null;
+        } catch (err) {
+            if (this.ask !== run) return;
+            run.preview = null;
+            run.error = this.askErrorText(err);
+        }
+        run.loading = false;
+        this.paintAsk();
+    },
+
+    askKeyword(el) {
+        const run = this.ask;
+        if (!run || !run.preview || run.busy) return;
+        run.loading = true;
+        this.paintAsk();
+        return this.loadAskPreview(run, { keyword: el && el.value, variant: run.preview.variant });
+    },
+
+    askVariant() {
+        const run = this.ask;
+        if (!run || !run.preview || run.busy) return;
+        const pv = run.preview;
+        run.loading = true;
+        this.paintAsk();
+        return this.loadAskPreview(run, { keyword: pv.keyword, variant: (pv.variant + 1) % Math.max(1, pv.variants) });
+    },
+
+    /** The server's refusal by its code, in the operator's language; its own sentence when the code is new. */
+    askErrorText(err) {
+        const code = err && err.body && err.body.code;
+        const known = ['no_campaign', 'keyword_not_live', 'already_asked', 'not_video', 'not_found', 'permission', 'text_unreadable', 'no_token'];
+        if (known.includes(code)) return t(`growth.ask.err.${code}`);
+        return (err && err.message) || t('error.unexpected');
+    },
+
+    async confirmAsk() {
+        const run = this.ask;
+        if (!run || !run.preview || run.busy || !run.preview.keyword) return;
+        const tenant = this._tenantEpoch;
+        run.busy = true;
+        run.error = null;
+        this.paintAsk();
+        try {
+            const res = await API.applyFacebookAsk({ media_id: run.id, keyword: run.preview.keyword, variant: run.preview.variant });
+            if (tenant !== this._tenantEpoch || this.ask !== run) return;
+            run.done = res;
+            const post = this.posts.find((p) => p.media_id === run.id);
+            if (post) post.keyword_ask = 'live';
+            if (res.mechanism === 'edit' && post) post.caption = `${post.caption || ''}\n\n${res.text}`.trim();
+            this.paintRegion('growth-posts', this.postsMarkup());
+        } catch (err) {
+            if (this.ask !== run) return;
+            run.error = this.askErrorText(err);
+        }
+        run.busy = false;
+        this.paintAsk();
+    },
+
     postIdentity(post) {
         const line = this.captionLine(post.caption);
         const note = this.coachNote(post);
@@ -1502,6 +1647,7 @@ const GrowthPage = {
                         ${link ? html`<a class="growth-permalink" href="${link}" target="_blank" rel="noopener noreferrer">
                             <i data-lucide="external-link" aria-hidden="true"></i><span>${t('growth.posts.open', { where })}</span>
                         </a>` : ''}
+                        ${this.askButton(post)}
                     </span>
                 </span>
             </div>
