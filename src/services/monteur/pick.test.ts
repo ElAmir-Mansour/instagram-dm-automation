@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
-import { candidatesWanted, pickUserPrompt, reelsForLength } from './pick.js';
+import { candidatesWanted, pickSystemPrompt, pickUserPrompt, reelsForLength } from './pick.js';
 
 describe('reelsForLength', () => {
     it('one per started 10 minutes, at least one, capped at the setting', () => {
@@ -34,4 +34,22 @@ describe('pickUserPrompt', () => {
         assert.match(pickUserPrompt({ lines, settings, lessons: [], keep: 2 }), new RegExp(`Pick up to ${candidatesWanted(2)} clips`));
         assert.match(pickUserPrompt({ lines, settings, lessons: [] }), new RegExp(`Pick up to ${candidatesWanted(3)} clips`), 'without a count: the setting');
     });
+    it('puts the held and lost openings, with their skip rates, ahead of the transcript', () => {
+        const ev = (skipRate: number, title: string) => ({ views: 120, skipRate, title, topic: null, opening: 'o' });
+        const out = pickUserPrompt({ lines, settings, lessons: [], reels: { best: [], worst: [], held: [ev(60, 'HELD')], lost: [ev(99, 'LOST')] } });
+        assert.match(out, /opening held viewers[^\n]*\n- 120 views, skipped in 3s 60%: title «HELD»/);
+        assert.match(out, /opening lost viewers[^\n]*\n- 120 views, skipped in 3s 99%: title «LOST»/);
+        assert.ok(out.indexOf('LOST') < out.indexOf('Transcript'));
+        assert.doesNotMatch(pickUserPrompt({ lines, settings, lessons: [] }), /held viewers|lost viewers/);
+    });
 });
+
+describe('pickSystemPrompt', () => {
+    it('tells the model a filler or connector start is not a 3, and why', () => {
+        const p = pickSystemPrompt(settings());
+        assert.match(p, /first 3 seconds/);
+        assert.match(p, /filler or a connector/);
+    });
+});
+
+function settings() { return { ...ELAMIR_SETTINGS }; }

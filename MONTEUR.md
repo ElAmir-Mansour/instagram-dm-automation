@@ -419,6 +419,14 @@ See §6.2. It never holds a reel back.
   across platforms (views added, Instagram's skip rate) and a repost counts once. Each line gives the views, the skip
   rate, and what the reel was about: the clip's `title` and `topic` when the Monteur cut it, else the caption's first
   line. The best are worth more on `send`; the prompt prefers other moments over the worst.
+- **First 3 seconds** (skip rate = share of viewers gone within 3 s; Instagram's median is ~85%):
+  - A clip whose first words are a filler or connector (مثلا، يعني، فـ، برضو، أو، ممكن، طيب، ما) is not hook 3: start at
+    the claim's own first word, or the line before it that states it.
+  - Evidence adds two lists, from settled (3+ days) Instagram reels with at least 30 views, and only once 6 such reels
+    exist: `held` (the 2 lowest skip rates: open like these) and `lost` (the 2 highest: never open like these).
+  - Why a prompt change and not a filter: on 30 published clips (2026-10-11) skip rate did not separate by hook score
+    (3: 77.7% n=9, 2: 80.5% n=21), hook_type, length or start position; every kept clip already has hook >= 2, so
+    requiring hook = 3 would drop 70% of them. Revisit when n is a few hundred.
 
 **Code:**
 - **Rank:** `rank = 3·hook + alone + payoff + send`.

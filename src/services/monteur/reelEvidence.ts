@@ -20,6 +20,11 @@ export const WORST_REELS = 2;
 export const SETTLE_DAYS = 3;
 /** Fewer reels than this and "the fewest views" says nothing yet: no worst list. */
 export const MIN_FOR_WORST = 6;
+/** Skip lists: how many reels each, and the views below which a skip rate is noise (5 views can read 100%). */
+export const SKIP_REELS = 2;
+export const MIN_VIEWS_FOR_SKIP = 30;
+/** Fewer reels with a trustworthy skip rate than this and the held/lost split says nothing yet. */
+export const MIN_FOR_SKIP = 6;
 const OPENING_MAX = 100;
 
 export interface ReelEvidenceRow {
@@ -41,7 +46,14 @@ export interface ReelEvidence {
     opening: string;
 }
 
-export interface ReelEvidenceSet { best: ReelEvidence[]; worst: ReelEvidence[] }
+export interface ReelEvidenceSet {
+    best: ReelEvidence[];
+    worst: ReelEvidence[];
+    /** Settled Instagram reels with the lowest skip rate (viewers stayed past 3 s): what their opening did. */
+    held?: ReelEvidence[];
+    /** The highest skip rate among reels with at least `MIN_VIEWS_FOR_SKIP` views: openings to avoid. */
+    lost?: ReelEvidence[];
+}
 
 export const REEL_EVIDENCE_SQL = `
     SELECT COALESCE(p.scheduled_post_id::text, p.platform || ':' || p.media_id) AS group_key,
@@ -96,7 +108,11 @@ export function rankReels(rows: readonly ReelEvidenceRow[], now: number = Date.n
     const settled = all.filter((r) => now - r.publishedAt >= SETTLE_DAYS * 86_400_000 && !best.includes(r));
     const worst = all.length < MIN_FOR_WORST ? [] : settled.sort((a, b) => a.views - b.views).slice(0, WORST_REELS);
     const strip = ({ views, skipRate, title, topic, opening }: Reel): ReelEvidence => ({ views, skipRate, title, topic, opening });
-    return { best: best.map(strip), worst: worst.map(strip) };
+    const skipped = all.filter((r) => r.skipRate !== null && r.views >= MIN_VIEWS_FOR_SKIP && now - r.publishedAt >= SETTLE_DAYS * 86_400_000);
+    const bySkip = [...skipped].sort((a, b) => (a.skipRate ?? 0) - (b.skipRate ?? 0));
+    const held = skipped.length < MIN_FOR_SKIP ? [] : bySkip.slice(0, SKIP_REELS);
+    const lost = skipped.length < MIN_FOR_SKIP ? [] : bySkip.slice(-SKIP_REELS).reverse().filter((r) => !held.includes(r));
+    return { best: best.map(strip), worst: worst.map(strip), held: held.map(strip), lost: lost.map(strip) };
 }
 
 /** One reel as a prompt line, with only what it has. */
