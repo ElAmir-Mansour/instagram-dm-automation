@@ -229,7 +229,7 @@ function stubAnalytics(s: Loaded, failures: Json = { days: 30, total: 0, reasons
     s.api.getDailyStats = () => Promise.resolve([{ day: '2026-09-27', sent: 3, failed: 1 }]);
     s.api.getCampaignStats = () => Promise.resolve([{ id: 'c1', trigger_keyword: 'price', total_triggers: 4, sent_count: 3, failed_count: 1 }]);
     s.api.getFailureReasons = () => Promise.resolve(failures);
-    for (const id of ['analytics-strip', 'analytics-split', 'analytics-campaigns', 'analytics-failures']) s.host(id);
+    for (const id of ['analytics-strip', 'analytics-campaigns', 'analytics-failures']) s.host(id);
 }
 
 describe('Analytics — the window (A1)', () => {
@@ -250,7 +250,9 @@ describe('Analytics — the window (A1)', () => {
         assert.match(page, /id="analytics-range-all"[^>]*aria-pressed="true"/);
         assert.match(page, /id="analytics-range-7"[^>]*aria-pressed="false"/);
         assert.equal((page.match(/<p class="stat-sub" data-window>All time<\/p>/g) || []).length, 3, 'total, rate, people');
-        assert.equal((page.match(/class="text-meta analytics-window">All time</g) || []).length, 3, 'status split, campaigns, platforms');
+        assert.equal((page.match(/class="text-meta analytics-window">All time</g) || []).length, 2, 'campaigns, platforms');
+        assert.ok(!page.includes('analytics-split'), 'no sent-vs-failed card: the success-rate tile already says it');
+        assert.ok(!page.includes('platform-totals'), 'no totals row repeating the platform legend');
         assert.ok(page.includes('DMs over the last 30 days'), 'the strip says its own window');
     });
 

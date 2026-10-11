@@ -11,7 +11,7 @@
  * it), the 30-day series, the campaign table and the failure reasons each have
  * their own error panel whose Retry re-asks for that panel alone.
  *
- * A1: the tiles, the status split, the platform split and the campaign table
+ * A1: the tiles, the platform split and the campaign table
  * answer for one window — 7 / 28 / 90 days or all time — picked in a
  * segmented control and remembered per browser (`analytics:range`). Each of
  * them names its window. The 30-day strip, "sent today" and the failure
@@ -244,7 +244,7 @@ const AnalyticsPage = {
                 </div>
             </div>
 
-            <div class="chart-grid">
+            <div class="chart-grid chart-grid--one">
                 <!-- Every panel title on this screen was a <span>, so the page
                      had ZERO headings below the page <h1> and a screen-reader
                      user had no way to move between the four panels. Real
@@ -256,10 +256,6 @@ const AnalyticsPage = {
                          not. An empty strip and a failed fetch are not the same
                          claim about the last 30 days. -->
                     <div id="analytics-strip"></div>
-                </div>
-                <div class="chart-card surface">
-                    <div class="chart-card-header"><h2 class="chart-card-title">${t('analytics.chartStatus')}</h2>${this.windowMeta()}</div>
-                    <div id="analytics-split"></div>
                 </div>
             </div>
 
@@ -293,23 +289,12 @@ const AnalyticsPage = {
                     </div>
                     <!-- The bar's aria-label described only Instagram's share
                          while the legend above it states both, so a screen
-                         reader heard half the split twice. The legend and the
-                         totals below carry every number the bar encodes, so
-                         the bar itself is decoration. -->
+                         reader heard half the split twice. The legend carries
+                         every number the bar encodes, so the bar itself is
+                         decoration. -->
                     <div class="platform-bar" aria-hidden="true">
                         <span class="platform-bar-ig" data-share="${split.igPct}"></span>
                         <span class="platform-bar-fb" data-share="${split.fbPct}"></span>
-                    </div>
-                    <div class="platform-totals">
-                        <div>
-                            <p class="platform-total-value">${UI.formatNumber(split.ig)}</p>
-                            <p class="platform-total-label">${t('common.instagram')} · ${t('analytics.hits')}</p>
-                        </div>
-                        <div class="platform-totals-divider" aria-hidden="true"></div>
-                        <div>
-                            <p class="platform-total-value">${UI.formatNumber(split.fb)}</p>
-                            <p class="platform-total-label">${t('common.facebook')} · ${t('analytics.hits')}</p>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -347,19 +332,6 @@ const AnalyticsPage = {
         this.fillStrip(dailyRes);
         this.fillCampaigns(campaignRes);
         this.fillFailures(failuresRes);
-
-        const splitHost = document.getElementById('analytics-split');
-        if (splitHost) {
-            splitHost.innerHTML = esc(html`${Charts.splitBar([
-                { label: t('common.sent'), value: stats.sent || 0, token: '--success', fallback: '#34c759' },
-                { label: t('common.failed'), value: stats.failed || 0, token: '--danger', fallback: '#ff3b30' },
-            ], {
-                label: t('analytics.chartStatus'),
-                emptyMessage: t('analytics.noData'),
-                nameHeader: t('common.status'),
-                valueHeader: t('common.count'),
-            })}`);
-        }
     },
 
     /**

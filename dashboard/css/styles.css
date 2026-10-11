@@ -1423,10 +1423,6 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .platform-bar-fb { background: var(--brand-facebook); }
 .platform-legend { display: flex; flex-direction: column; gap: var(--space-2); margin-block-end: var(--space-4); }
 .platform-legend-row { display: flex; justify-content: space-between; gap: var(--space-3); font-size: var(--fs-200); }
-.platform-totals { display: flex; justify-content: space-around; text-align: center; gap: var(--space-4); }
-.platform-total-value { font-size: var(--fs-500); font-weight: var(--fw-bold); color: var(--text-strong); font-variant-numeric: tabular-nums; }
-.platform-total-label { font-size: var(--fs-100); color: var(--text-muted); }
-.platform-totals-divider { inline-size: 1px; background: var(--border-subtle); }
 
 /* ─── Campaign cards ─────────────────────────────────────────────────────── */
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: var(--space-4); }

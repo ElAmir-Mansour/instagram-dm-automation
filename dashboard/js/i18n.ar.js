@@ -623,7 +623,6 @@
     'analytics.today': 'أُرسل اليوم',
     'analytics.chart30': 'الرسائل خلال آخر 30 يوماً',
     'analytics.noData': 'لا بيانات في هذه الفترة.',
-    'analytics.chartStatus': 'الناجحة مقابل الفاشلة',
     'analytics.topCampaigns': 'أفضل الحملات أداءً',
     'analytics.platformSplit': 'التوزيع بين المنصتين',
     'analytics.matches': 'مرات التشغيل',
