@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
-    BEST_REELS, EVIDENCE_DAYS, evidenceLine, loadReelEvidence, MIN_FOR_WORST, rankReels, REEL_EVIDENCE_SQL,
+    BEST_REELS, EVIDENCE_DAYS, evidenceLine, loadReelEvidence, MIN_FOR_SKIP, MIN_FOR_WORST, MIN_VIEWS_FOR_SKIP, rankReels, REEL_EVIDENCE_SQL,
     type ReelEvidenceRow, WORST_REELS,
 } from './reelEvidence.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
@@ -55,6 +55,28 @@ describe('rankReels', () => {
         const rows = [900, 800, 700, 300, 200, 100].map((views) => row({ views }));
         rows.push(row({ views: 2, published_at: daysAgo(1) }));
         assert.deepEqual(rankReels(rows, NOW).worst.map((r) => r.views), [100, 200]);
+    });
+});
+
+describe('rankReels: held and lost viewers (skip rate)', () => {
+    const ig = (views: number, skip: number, over: Partial<ReelEvidenceRow> = {}) => row({ platform: 'instagram', views, skip, ...over });
+    const six = [60, 70, 80, 90, 95, 99].map((skip, i) => ig(100 + i, skip));
+    it('lists the lowest skip rates as held and the highest as lost, once there are enough reels with a trustworthy rate', () => {
+        const { held, lost } = rankReels(six, NOW);
+        assert.deepEqual(held!.map((r) => r.skipRate), [60, 70]);
+        assert.deepEqual(lost!.map((r) => r.skipRate), [99, 95]);
+        assert.equal(MIN_FOR_SKIP, 6);
+    });
+    it('says nothing below the minimum, ignores reels under the view floor and ones younger than 3 days', () => {
+        assert.deepEqual(rankReels(six.slice(0, MIN_FOR_SKIP - 1), NOW).held, []);
+        const noisy = [...six.slice(0, 5), ig(MIN_VIEWS_FOR_SKIP - 1, 100), ig(500, 10, { published_at: daysAgo(1) })];
+        const out = rankReels(noisy, NOW);
+        assert.deepEqual(out.held, [], '5 settled reels with a usable rate is still too few');
+        assert.deepEqual(out.lost, []);
+    });
+    it('Facebook-only reels have no skip rate and never enter either list', () => {
+        const out = rankReels([...six, ...[1, 2, 3].map((i) => row({ views: 1000 + i }))], NOW);
+        assert.ok(out.held!.every((r) => r.skipRate !== null));
     });
 });
 

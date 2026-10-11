@@ -73,6 +73,7 @@ topic: first, the video's main idea in one line.
 Score each clip 0-3:
 - hook: 3 = its first sentence states the result, number, mistake or contrast; 2 = its first line has it after a lead-in; 1 = it comes in line 2; 0 = later or never.
 An opening that only narrates the screen (هنا جينا، خلينا نفتح، كما نرى) is hook 0: start where the speaker says the point.
+The first 3 seconds decide the reel: most viewers leave in them. A clip whose first words are a filler or a connector (مثلا، يعني، فـ، برضو، أو، ممكن، طيب، ما) is not a 3 even if the claim follows: start at the claim's own first word, or at the line before it that states it.
 - alone: its start needs nothing said before it (no greeting, no intro, no «زي ما قلت / وبعدين / فـ») and its end leaves nothing hanging.
 - payoff: it holds the answer or demonstration that proves the claim. Start on the claim; end_line is where the payoff is complete.
 - send: worth sending to a colleague: a tool, a prompt, a step, a number or a surprise. Motivation alone is 0.
@@ -115,6 +116,8 @@ export function pickUserPrompt(args: {
     const avoid = (settings.voice?.avoid ?? []).filter((a) => a.trim());
     const best = args.reels?.best ?? [];
     const worst = args.reels?.worst ?? [];
+    const held = args.reels?.held ?? [];
+    const lost = args.reels?.lost ?? [];
     return [
         `Pick up to ${candidatesWanted(keep)} clips, best first, each ${m.min_seconds}–${m.max_seconds} seconds, none overlapping.`,
         // Past 90 s only a full walkthrough earns the length: watch time is what Facebook ranks on.
@@ -122,6 +125,9 @@ export function pickUserPrompt(args: {
         // The audience's own vote: a moment on a topic that already spread scores higher on send.
         ...(best.length ? ['This creator\'s reels with the most views (90 days). A moment on a topic like these, or of the same kind, is worth more on send:', ...best.map(evidenceLine)] : []),
         ...(worst.length ? ['Their reels with the fewest views. Prefer other moments over ones like these:', ...worst.map(evidenceLine)] : []),
+        // The hook's own number: the share of viewers gone within 3 s. Openings, not topics, are what to copy or avoid.
+        ...(held.length ? ['Reels whose opening held viewers (lowest share gone within 3 s). Open a clip the way these opened:', ...held.map(evidenceLine)] : []),
+        ...(lost.length ? ['Reels whose opening lost viewers (highest share gone within 3 s). Never open a clip like these:', ...lost.map(evidenceLine)] : []),
         ...(lessons.length ? ['Lessons from this creator\'s past reels:', ...lessons.map((l) => `- ${l.rule}`)] : []),
         ...(avoid.length ? [`Never pick a moment about: ${avoid.join(', ')}.`] : []),
         `Transcript (${languageKit(settings).name}):`,
