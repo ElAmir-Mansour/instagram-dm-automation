@@ -1503,9 +1503,66 @@ const GrowthPage = {
                             <i data-lucide="external-link" aria-hidden="true"></i><span>${t('growth.posts.open', { where })}</span>
                         </a>` : ''}
                     </span>
+                    ${this.mirrorMarkup(post)}
                 </span>
             </div>
         `;
+    },
+
+    /**
+     * Facebook videos only: the one-click way to put a video that worked on Facebook onto
+     * Instagram as a reel. Eligible: a button; otherwise one line saying why. The server decides
+     * (`mirror` on each post from GET /growth/posts) and re-checks on the click.
+     */
+    mirrorMarkup(post) {
+        const m = post && post.mirror;
+        if (!m) return '';
+        if (m.eligible && m.scheduled_post_id) {
+            const busy = this.mirrorBusy === m.scheduled_post_id;
+            return html`<span class="growth-post-mirror">${UI.button({
+                variant: 'secondary', size: 'sm', icon: 'copy', label: t('growth.mirror.action'),
+                action: 'growth:mirror', data: { id: m.scheduled_post_id }, disabled: busy,
+                ariaLabel: t('growth.mirror.actionNamed', { caption: this.captionLine(post.caption) || t('growth.posts.noCaption') }),
+            })}</span>`;
+        }
+        const reason = m.reason && t(`growth.mirror.reason.${m.reason}`);
+        return reason ? html`<span class="growth-post-mirror text-meta">${reason}</span>` : '';
+    },
+
+    mirrorBusy: null,
+
+    mirror(el) {
+        const id = el && el.dataset ? el.dataset.id : '';
+        const post = this.posts.find((p) => p.mirror && p.mirror.scheduled_post_id === id);
+        if (!post || this.mirrorBusy) return;
+        Admin.confirm({
+            title: t('growth.mirror.confirmTitle'),
+            body: t('growth.mirror.confirmBody'),
+            confirmLabel: t('growth.mirror.confirmLabel'),
+            onConfirm: () => this.runMirror(id),
+        });
+    },
+
+    async runMirror(id) {
+        const tenant = this._tenantEpoch;
+        this.mirrorBusy = id;
+        this.paintRegion('growth-posts', this.postsMarkup());
+        try {
+            // No scheduled_time: the server picks now + 1 hour. The Posts screen edits it.
+            await API.mirrorGrowthPostToInstagram(id);
+            if (tenant !== this._tenantEpoch) return;
+            this.posts = this.posts.map((p) => (p.mirror && p.mirror.scheduled_post_id === id
+                ? { ...p, mirror: { eligible: false, reason: 'has_instagram', scheduled_post_id: id } } : p));
+            UI.toast(t('growth.mirror.done'));
+        } catch (err) {
+            if (tenant !== this._tenantEpoch) return;
+            UI.toast(t('growth.mirror.failed', { message: (err && err.message) || t('error.unexpected') }), 'error');
+        } finally {
+            if (tenant === this._tenantEpoch) {
+                this.mirrorBusy = null;
+                this.paintRegion('growth-posts', this.postsMarkup());
+            }
+        }
     },
 
     COLUMNS: Object.freeze(['published_at', 'views', 'reach', 'likes', 'comments', 'saved', 'shares', 'avg_watch', 'skip_rate', 'engagement_rate']),
@@ -3335,6 +3392,7 @@ UI.registerActions('growth', {
     filterPlatform: (el) => GrowthPage.setFilter('platform', el ? el.value : 'all'),
     clearFilters: () => GrowthPage.clearFilters(),
     morePosts: () => GrowthPage.morePosts(),
+    mirror: (el) => GrowthPage.mirror(el),
     generateCoach: () => GrowthPage.generateCoach(),
     showPlan: () => GrowthPage.showPlan(),
     editGoal: (el) => GrowthPage.editGoal(el && el.dataset ? el.dataset.goal : ''),

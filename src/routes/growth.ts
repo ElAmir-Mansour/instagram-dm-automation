@@ -10,6 +10,7 @@
  *   POST /sync                   sync now; once per 10 minutes per tenant, else 429 + Retry-After
  *   GET  /overview?days=28&platform=all
  *   GET  /posts?days=90&sort=views&platform=&type=
+ *   POST /posts/:id/mirror-to-instagram   { scheduled_time? } a Facebook video → a PENDING Instagram reel row
  *   POST /coach
  *   GET  /settings · PUT /settings
  *   POST /keywords/suggest       { topic }
@@ -23,10 +24,12 @@ import { GROWTH_MIGRATION_HINT, GrowthError } from '../services/growth/common.js
 import { getCompetitors } from '../services/growth/competitors.js';
 import { suggestKeywords } from '../services/growth/keywords.js';
 import { getOverview, listPostInsights } from '../services/growth/overview.js';
+import { mirrorToInstagram } from '../services/growth/mirror.js';
 import { getGrowthSettings, updateGrowthSettings } from '../services/growth/settings.js';
 import { getGrowthStatus } from '../services/growth/status.js';
 import { runSync } from '../services/growth/sync.js';
 import { isMissingSchema } from '../services/health.js';
+import { StudioError } from '../services/studio/common.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
 import { describeError, log } from '../utils/log.js';
 
@@ -45,6 +48,10 @@ export function handle(event: string, fallback: string, fn: Handler) {
                 const retryAfter = err.extra?.retryAfter;
                 if (err.status === 429 && typeof retryAfter === 'number') res.setHeader('Retry-After', String(retryAfter));
                 res.status(err.status).json({ error: err.message, ...(err.extra ?? {}) });
+                return;
+            }
+            if (err instanceof StudioError) {
+                res.status(err.status).json({ error: err.message });
                 return;
             }
             if (isMissingSchema(err)) {
@@ -78,6 +85,11 @@ growthRouter.get('/posts', handle('growth.posts_failed', 'Failed to list the pos
     res.json(await listPostInsights(getTenantId(req), {
         days: req.query.days, sort: req.query.sort, platform: req.query.platform, type: req.query.type,
     }));
+}));
+
+growthRouter.post('/posts/:id/mirror-to-instagram', handle('growth.mirror_failed', 'Failed to schedule the Instagram mirror.', async (req, res) => {
+    const { post, group_id } = await mirrorToInstagram(getTenantId(req), req.params.id, req.body?.scheduled_time);
+    res.status(201).json({ post, group_id });
 }));
 
 growthRouter.post('/coach', handle('growth.coach_route_failed', 'Failed to run the coach.', async (req, res) => {

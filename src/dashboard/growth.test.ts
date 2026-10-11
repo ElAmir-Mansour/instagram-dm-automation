@@ -1443,7 +1443,71 @@ describe('Growth — every string in Arabic and English, and the page wired into
         assert.ok(at('data-page="analytics"') < at('data-page="growth"') && at('data-page="growth"') < at('data-page="activity"'));
         assert.match(index, /var PAGES = \[[^\]]*'growth'/);
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.7');
-        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.7']);
+        assert.equal(version, '12.8');
+        assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.8']);
+    });
+});
+
+describe('Growth: mirror a Facebook video to Instagram', () => {
+    const video = (mirror: Json): Json => ({
+        id: 'p1', platform: 'facebook', media_id: 'fb1', media_type: 'VIDEO', caption: 'اكتب برومبت',
+        permalink: 'https://www.facebook.com/p/1', metrics: { views: 900 }, mirror,
+    });
+    const ok = { eligible: true, reason: null, scheduled_post_id: 'sp-1' };
+    const sent = (s: Json): Json[] => s.calls.filter((c: Json) => c.method === 'mirrorGrowthPostToInstagram');
+
+    it('shows the button on an eligible video, and one sentence of why on the rest, in both languages', () => {
+        for (const lang of ['en', 'ar'] as const) {
+            const s = loadGrowth(lang);
+            const yes = String(s.Page.postIdentity(video(ok)));
+            assert.ok(yes.includes('data-action="growth:mirror"') && yes.includes('data-id="sp-1"'), lang);
+            assert.ok(yes.includes(s.t('growth.mirror.action')));
+            for (const reason of ['no_media', 'no_cover', 'has_instagram', 'already_instagram', 'not_published', 'not_video']) {
+                const no = String(s.Page.postIdentity(video({ eligible: false, reason, scheduled_post_id: null })));
+                assert.equal(no.includes('growth:mirror'), false, reason);
+                assert.notEqual(s.t(`growth.mirror.reason.${reason}`), `growth.mirror.reason.${reason}`);
+                assert.ok(no.includes(s.t(`growth.mirror.reason.${reason}`)), `${lang} ${reason} has its sentence`);
+            }
+        }
+    });
+
+    it('shows nothing on a post the server did not mark (Instagram posts, photos)', () => {
+        const s = loadGrowth('en');
+        assert.equal(String(s.Page.postIdentity({ ...video(ok), mirror: undefined })).includes('growth-post-mirror'), false);
+    });
+
+    it('asks first; confirming posts to the endpoint once, then retires the button', async () => {
+        const s = loadGrowth('en');
+        s.host('growth-posts');
+        s.Page.posts = [video(ok)];
+        s.api.mirrorGrowthPostToInstagram = () => Promise.resolve({ post: { id: 'new' }, group_id: 'g' });
+        s.Page.mirror({ dataset: { id: 'sp-1' } });
+        assert.equal(s.confirms.length, 1);
+        assert.equal(sent(s).length, 0, 'nothing is sent before the confirm');
+        s.confirms[0].onConfirm();
+        await settle();
+        assert.deepEqual(sent(s).map((c: Json) => c.args), [['sp-1']]);
+        assert.equal(s.Page.posts[0].mirror.eligible, false);
+        assert.equal(s.Page.posts[0].mirror.reason, 'has_instagram');
+        assert.equal(s.toasts.at(-1)!.message, s.t('growth.mirror.done'));
+        assert.equal(s.Page.mirrorBusy, null);
+    });
+
+    it('keeps the button and says why when the server refuses', async () => {
+        const s = loadGrowth('en');
+        s.host('growth-posts');
+        s.Page.posts = [video(ok)];
+        s.api.mirrorGrowthPostToInstagram = () => Promise.reject(new Error('This video already has an Instagram post.'));
+        s.Page.mirror({ dataset: { id: 'sp-1' } });
+        s.confirms[0].onConfirm();
+        await settle();
+        assert.equal(s.Page.posts[0].mirror.eligible, true);
+        assert.equal(s.toasts.at(-1)!.type, 'error');
+        assert.match(s.toasts.at(-1)!.message, /already has an Instagram post/);
+    });
+
+    it('api.js sends POST /growth/posts/:id/mirror-to-instagram', () => {
+        const api = readFileSync('dashboard/js/api.js', 'utf8');
+        assert.match(api, /\/growth\/posts\/\$\{encodeURIComponent\(scheduledPostId\)\}\/mirror-to-instagram/);
     });
 });

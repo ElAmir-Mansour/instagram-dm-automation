@@ -26,6 +26,7 @@ import { getStudioSettings } from '../studio/settings.js';
 import { clampInt } from './common.js';
 import { addDays, FOLLOWER_METRICS_MIN, UNDER_100_REASON, utcDay } from './mapping.js';
 import { getGrowthSettings } from './settings.js';
+import { type MirrorState, mirrorStates } from './mirror.js';
 
 export const GROWTH_PLATFORMS = ['instagram', 'facebook'] as const;
 export type OverviewPlatform = (typeof GROWTH_PLATFORMS)[number] | 'all';
@@ -42,6 +43,8 @@ export type PostInsight = Omit<PostInsightRow, 'metrics' | 'published_at' | 'fet
     metrics: Record<string, number | null>;
     interactions: number | null;
     engagement_rate: number | null;
+    /** Facebook videos only, on GET /posts: can this one be mirrored to Instagram, and if not why. */
+    mirror?: MirrorState;
 };
 
 const round = (n: number, places = 4): number => Math.round(n * 10 ** places) / 10 ** places;
@@ -506,5 +509,20 @@ export async function listPostInsights(
         const type = query.type.trim().toUpperCase();
         posts = posts.filter((p) => (p.media_type ?? '').toUpperCase() === type);
     }
-    return { posts: sortPosts(posts, typeof query.sort === 'string' ? query.sort : 'published_at').slice(0, 200) };
+    const sorted = sortPosts(posts, typeof query.sort === 'string' ? query.sort : 'published_at').slice(0, 200);
+    return { posts: await withMirrorStates(creatorId, sorted) };
+}
+
+/** Marks each Facebook video with whether it can be mirrored to Instagram (growth/mirror.ts). */
+async function withMirrorStates(creatorId: string, posts: PostInsight[]): Promise<PostInsight[]> {
+    const videos = posts.filter((p) => p.platform === 'facebook' && (p.media_type ?? '').toUpperCase() === 'VIDEO');
+    if (!videos.length) return posts;
+    const states = await mirrorStates(creatorId, videos.map((p) => p.scheduled_post_id).filter((id): id is string => !!id));
+    return posts.map((p) => {
+        if (!videos.includes(p)) return p;
+        // No row of ours: posted by hand, so there is no media we hold to send.
+        const mirror = (p.scheduled_post_id && states.get(p.scheduled_post_id))
+            || { eligible: false, reason: 'no_media' as const, scheduled_post_id: null };
+        return { ...p, mirror };
+    });
 }

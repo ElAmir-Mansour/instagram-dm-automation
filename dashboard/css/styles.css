@@ -4014,6 +4014,7 @@ mark.help-hit {
 .growth-post-note [data-lucide] { flex: none; inline-size: var(--icon-sm); block-size: var(--icon-sm); margin-block-start: 2px; }
 .growth-post-note svg { color: var(--accent-text); }
 .growth-post-meta .platform-tag { margin: 0; }
+.growth-post-mirror { display: flex; margin-block-start: var(--space-1); }
 .growth-permalink {
     display: inline-flex; align-items: center; gap: var(--space-1);
     min-block-size: 32px; font-size: var(--fs-100); color: var(--accent-text);

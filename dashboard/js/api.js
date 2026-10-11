@@ -416,6 +416,11 @@ const API = {
     getGrowthPosts: (days, sort) => API.request(
         `/growth/posts?days=${encodeURIComponent(days)}&sort=${encodeURIComponent(sort || 'views')}`
     ),
+    /** A Facebook video becomes a PENDING Instagram reel row (not published here). `scheduled_time` optional, default now + 1h. */
+    mirrorGrowthPostToInstagram: (scheduledPostId, scheduledTime) => API.request(
+        `/growth/posts/${encodeURIComponent(scheduledPostId)}/mirror-to-instagram`,
+        { method: 'POST', body: JSON.stringify(scheduledTime ? { scheduled_time: scheduledTime } : {}) }
+    ),
     /** Gemini reads the metrics, captions and settings: most of a minute, synchronously. */
     growthCoach: (data) => API.request('/growth/coach', { method: 'POST', body: JSON.stringify(data || {}) }),
     getGrowthSettings: () => API.request('/growth/settings'),
