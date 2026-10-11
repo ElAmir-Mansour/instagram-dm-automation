@@ -540,7 +540,6 @@
     'analytics.today': 'Sent today',
     'analytics.chart30': 'DMs over the last 30 days',
     'analytics.noData': 'No data in this period.',
-    'analytics.chartStatus': 'Sent vs failed',
     'analytics.topCampaigns': 'Top performing campaigns',
     'analytics.platformSplit': 'Platform distribution',
     'analytics.matches': 'Triggers',
