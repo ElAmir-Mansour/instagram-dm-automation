@@ -55,8 +55,12 @@ export const DIAGRAM_ICONS: readonly string[] = [
 /** A diagram as the template takes it (MiniSpec): `name` is the icon's, `badge` the docs', `label` the model box's. */
 export type Mini = { kind: DiagramKind; name?: string; badge?: string; label?: string };
 
+/** A technology's logo, found by the worker in simple-icons from the name Claude gives: its title, colour and 24×24 path. */
+export type InfographicLogo = { title: string; hex: string; path: string };
+
 export type InfographicColumn = {
     name: string;
+    logo?: InfographicLogo;
     hero: Mini;
     kind: string;
     note: string;
@@ -90,6 +94,12 @@ export const BUDGETS = {
     caption: 2200,
 } as const;
 const SLACK = 6;
+
+/** An SVG path's commands and numbers only: it is drawn as a `d` attribute, never as markup. */
+const SVG_PATH = /^[MmLlHhVvCcSsQqTtAaZz0-9.,\s+-]+$/;
+const isLogo = (v: unknown): boolean =>
+    isPlainObject(v) && typeof v.title === 'string' && v.title.length <= 60 && typeof v.hex === 'string' && /^#[0-9a-f]{6}$/i.test(v.hex)
+    && typeof v.path === 'string' && v.path.length > 0 && v.path.length <= 20_000 && SVG_PATH.test(v.path);
 
 /** Everything wrong with a spec, as sentences an operator can act on. Empty means it renders and fits. */
 export function specProblems(spec: unknown): string[] {
@@ -140,6 +150,7 @@ export function specProblems(spec: unknown): string[] {
             return;
         }
         text(col.name, `${where}'s name`, BUDGETS.name);
+        if (col.logo !== undefined && !isLogo(col.logo)) problems.push(`${where}'s logo must be { title, hex, path } from the worker`);
         if (typeof col.name === 'string') names.push(col.name.trim().toLowerCase());
         mini(col.hero, `${where}'s main diagram`);
         text(col.kind, `${where}'s "kind of problem" line`, BUDGETS.kind[n]);
@@ -229,6 +240,10 @@ export const WRITE_SCHEMA = {
                 type: 'object',
                 properties: {
                     name: { type: 'string' },
+                    logo: {
+                        type: 'string',
+                        description: 'Only when the column IS a product, language or tool with a logo (e.g. Go, Node.js, Python, PostgreSQL, Docker): its brand name. Omit for ideas and techniques (RAG, Chatbot, Serverless as a concept).',
+                    },
                     kind: { type: 'string', description: 'The kind of problem it suits, as a short phrase.' },
                     note: { type: 'string' },
                     hero: diagramSchema,
@@ -280,6 +295,12 @@ export function writeSystemPrompt(language: 'ar' | 'en'): string {
         `- steps: exactly ${STEPS_PER_COLUMN}, how it works in order, each a short title, a one-line description and a diagram`,
         '',
         'Columns go from the simplest or oldest to the most capable: the last column is drawn in the accent colour.',
+        'When a column is a real product, language or tool (Go, Node.js, PostgreSQL), give its brand name in `logo`: its logo is drawn beside its name. Never for an idea or a technique.',
+        '',
+        'Make it concrete, so a reader sees it rather than reads it:',
+        '- Pick ONE real example and carry it through every column, e.g. "your API gets 10,000 photo uploads at once" or "a customer asks for a refund". Put it in the subtitle, and let each column\'s steps show what happens to that same example.',
+        '- Name the specific feature that makes the difference (e.g. Go\'s goroutines and channels, Node.js\'s event loop), not general claims like "fast" or "scalable".',
+        '- Numbers that belong to the example are good (10,000 requests, 8 cores); benchmark figures and percentages are not.',
         'The steps of different columns sit side by side, so make them parallel where you can (step 1 of each is the setup, step 3 the result).',
         '',
         'Diagrams (pick the one that matches the step; use "icon" only when none does):',
