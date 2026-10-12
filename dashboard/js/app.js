@@ -52,6 +52,9 @@ const App = {
         // The Studio's second tab (#/monteur): reels cut from the creator's own videos,
         // reviewed and approved into the scheduler. Its own sidebar entry, under Studio.
         monteur: { src: 'monteur', page: () => MonteurPage },
+        // The Studio's third tab (#/infographics): animated comparisons in the creator's own
+        // brand, written by Claude on the Mac, downloaded as a GIF or scheduled as an MP4.
+        infographics: { src: 'infographics', page: () => InfographicsPage },
         inbox: { src: 'inbox', page: () => InboxPage },
         ai_settings: { src: 'ai_settings', page: () => AiSettingsPage },
         analytics: { src: 'analytics', page: () => AnalyticsPage },
@@ -79,7 +82,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.8',
+    ASSET_VERSION: '12.9',
 
     _modules: Object.create(null),
 

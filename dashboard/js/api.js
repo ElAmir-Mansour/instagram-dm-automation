@@ -405,6 +405,28 @@ const API = {
     rerenderMonteurClip: (id) => API.request(`/studio/monteur/clips/${encodeURIComponent(id)}/rerender`, { method: 'POST' }),
     /** Runs the Analyst now: `LessonsView`. */
     refreshMonteurLessons: () => API.request('/studio/monteur/lessons/refresh', { method: 'POST' }),
+    // ─── Infographics (v31, src/services/studio/infographics.ts) ────────────
+    /** `{ infographics: InfographicView[] }`, newest first. */
+    getInfographics: () => API.request('/studio/infographics'),
+    /** `{ topic, notes?, language?, theme? }` (theme dark, light or both) → `InfographicView`, `writing`. */
+    createInfographic: (data) => API.request('/studio/infographics', { method: 'POST', body: JSON.stringify(data) }),
+    /** `{ spec?, caption? }`: a new spec renders again; a caption alone is only saved. */
+    updateInfographic: (id, data) => API.request(`/studio/infographics/${encodeURIComponent(id)}`, {
+        method: 'PATCH', body: JSON.stringify(data),
+    }),
+    /** `{ theme?, rewrite? }`: the same spec again, in a theme, or written again by Claude. */
+    renderInfographic: (id, data) => API.request(`/studio/infographics/${encodeURIComponent(id)}/render`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    /** `{ theme }` → a new `InfographicView`: the same infographic in another theme. */
+    copyInfographic: (id, data) => API.request(`/studio/infographics/${encodeURIComponent(id)}/copy`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    /** `{ scheduled_time? | now? }` → `{ infographic, scheduled_time }`. */
+    scheduleInfographic: (id, data) => API.request(`/studio/infographics/${encodeURIComponent(id)}/schedule`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    deleteInfographic: (id) => API.request(`/studio/infographics/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     // ─── Growth & SEO hub (GROWTH.md §3) ────────────────────────────────────
     // Session + canOperate, tenant-scoped. Anything the API could not measure comes back
     // null, never 0, and the page shows it as missing rather than as a number.
