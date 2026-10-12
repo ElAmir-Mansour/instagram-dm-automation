@@ -255,6 +255,11 @@ const NAMED_BY_POST = `(
  * The files the prune may delete. `$1` is the window in days for a file nothing names; `$2`, when
  * true, lets a file go at once if a PUBLISHED post names it. Either way nothing that may still be
  * needed goes — every guard below is ANDed.
+ *
+ * An infographic (v31) keeps its GIF for as long as it exists: the GIF is posted by hand, to
+ * LinkedIn and the rest, so no post ever names it. Its MP4 and cover are kept until its posting
+ * time, as a reel's are; after that they go like any posted file. The portrait its brand shows is
+ * kept while the settings name it.
  */
 export const MEDIA_CANDIDATES_SQL = `
                     SELECT m.id
@@ -291,6 +296,20 @@ export const MEDIA_CANDIDATES_SQL = `
                               AND (COALESCE(c.render->>'video_url', '') || ' ' || COALESCE(c.render->>'tiktok_video_url', '')
                                    || ' ' || COALESCE(c.render->>'cover_url', ''))
                                   LIKE '%' || m.id::text || '%'
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM infographics i
+                            WHERE (COALESCE(i.render->>'gif_url', '')
+                                   || CASE WHEN i.status <> 'scheduled' OR (i.schedule->>'scheduled_time')::timestamptz > NOW()
+                                           THEN ' ' || COALESCE(i.render->>'mp4_url', '') || ' ' || COALESCE(i.render->>'cover_url', '')
+                                           ELSE '' END)
+                                  LIKE '%' || m.id::text || '%'
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM studio_settings ss
+                            WHERE ss.infographic->>'photo_url' LIKE '%' || m.id::text || '%'
                        )`;
 
 export type MediaPruneOutcome =

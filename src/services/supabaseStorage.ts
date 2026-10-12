@@ -118,6 +118,7 @@ const EXTENSIONS: Readonly<Record<string, string>> = {
     'image/webp': '.webp',
     'video/mp4': '.mp4',
     'video/quicktime': '.mov',
+    'image/gif': '.gif',
 };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

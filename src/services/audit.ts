@@ -128,6 +128,8 @@ export const AUDIT_ACTIONS = {
     studioTikTokBatch: 'studio.tiktok_batch',
     /** A Monteur reel became scheduled posts (and possibly a campaign). */
     monteurApprove: 'monteur.approve',
+    /** An infographic's MP4 became scheduled posts (v31). */
+    infographicSchedule: 'studio.infographic_schedule',
     /** Growth keywords, hashtag sets, competitors or audience changed (GROWTH.md). */
     growthSettingsWrite: 'growth.settings_write',
 } as const;

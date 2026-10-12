@@ -4669,3 +4669,57 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 
 /* G7: the SEO view's cards, as one region that fills when the settings land. */
 .growth-seo-body { display: flex; flex-direction: column; gap: var(--space-5); min-inline-size: 0; }
+
+/* Infographics (v31, pages/infographics.js): the new form, the cards with their GIF, the editor and the brand. */
+.ig-new { margin-block-end: var(--space-5); }
+.ig-new .section-title, .ig-list-section .section-title { display: flex; align-items: center; gap: var(--space-2); }
+.ig-list-section { margin-block-end: var(--space-5); }
+.ig-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0 var(--space-4); }
+.ig-more { margin-block-end: var(--space-4); }
+.ig-more > summary { cursor: pointer; color: var(--text-muted); font-size: var(--fs-200); margin-block-end: var(--space-3); }
+.ig-notice {
+    display: flex; gap: var(--space-3); align-items: center;
+    padding: var(--space-3); margin-block-end: var(--space-4);
+    border-radius: var(--radius-sm); border: 1px solid var(--border-warning);
+    background: var(--warning-soft); color: var(--text-strong); font-size: var(--fs-200);
+}
+.ig-notice svg { color: var(--warning-text); flex-shrink: 0; }
+.ig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: var(--space-4); }
+.ig-card { display: flex; flex-direction: column; overflow: hidden; padding: 0; min-inline-size: 0; }
+.ig-preview { aspect-ratio: 4 / 5; display: flex; align-items: center; justify-content: center; background: #030B11; }
+.ig-preview-light { background: #F7F6F2; }
+.ig-preview img { inline-size: 100%; block-size: 100%; object-fit: cover; display: block; }
+.ig-wait { display: flex; flex-direction: column; align-items: center; gap: var(--space-3); padding: var(--space-5); text-align: center; color: #A3ABB9; font-size: var(--fs-200); }
+.ig-preview-light .ig-wait { color: #556270; }
+.ig-wait-failed svg { color: var(--danger-text); inline-size: 28px; block-size: 28px; }
+.ig-body { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); min-inline-size: 0; }
+.ig-title { margin: 0; font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); line-height: 1.4; overflow-wrap: anywhere; }
+.ig-meta { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ig-error { margin: 0; color: var(--danger-text); font-size: var(--fs-200); overflow-wrap: anywhere; }
+.ig-problems { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--fs-100); color: var(--warning-text); }
+.ig-problems li { display: flex; gap: var(--space-2); align-items: flex-start; }
+.ig-problems [data-lucide] { inline-size: 14px; block-size: 14px; flex-shrink: 0; margin-block-start: 2px; }
+.ig-when { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-muted); }
+.ig-when [data-lucide] { inline-size: 16px; block-size: 16px; }
+.ig-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: auto; }
+.ig-editor { max-block-size: 70vh; overflow-y: auto; padding-inline-end: var(--space-2); }
+.ig-checks { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.ig-check { display: inline-flex; align-items: center; gap: var(--space-1); padding: 2px var(--space-2); border-radius: var(--radius-sm); font-size: var(--fs-100); }
+.ig-check [data-lucide] { inline-size: 14px; block-size: 14px; }
+.ig-check-ok { background: var(--success-soft); color: var(--success-text); }
+.ig-check-missing { background: var(--danger-soft); color: var(--danger-text); }
+.ig-column { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--space-4); margin: 0 0 var(--space-4); }
+.ig-column legend { padding: 0 var(--space-2); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.ig-step { border-block-start: 1px solid var(--border-subtle); padding-block-start: var(--space-3); }
+.ig-step-label { margin: 0 0 var(--space-2); font-size: var(--fs-100); color: var(--text-muted); }
+.ig-when-choice { border: 0; padding: 0; margin: 0 0 var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); }
+.ig-radio { display: flex; align-items: center; gap: var(--space-2); min-block-size: var(--tap-target); font-size: var(--fs-200); }
+.ig-brand { margin-block-end: var(--space-5); }
+.ig-brand-summary { cursor: pointer; display: flex; align-items: center; gap: var(--space-2); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.ig-brand[open] .ig-brand-summary { margin-block-end: var(--space-4); }
+.ig-checkset { border: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.ig-checkset legend { inline-size: 100%; margin-block-end: var(--space-2); }
+.ig-colour { inline-size: 4rem; block-size: 2.5rem; padding: 2px; }
+.ig-portrait-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.ig-portrait-img { inline-size: 64px; block-size: 64px; border-radius: 50%; object-fit: cover; filter: grayscale(1); border: 2px solid var(--border-subtle); }
+.ig-portrait-empty { display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); filter: none; }

@@ -324,11 +324,12 @@ describe('parseMonteurThinkResult — what completeJob stores', () => {
 describe('migration v28', () => {
     const sql = fs.readFileSync(new URL('../../config/migration_v28_monteur_think.sql', import.meta.url), 'utf8');
 
-    it('re-creates the kind CHECK with exactly the kinds the queue knows, monteur_think among them', () => {
+    it('re-creates the kind CHECK with exactly the kinds the queue knew then, monteur_think among them', () => {
         const list = sql.match(/ADD CONSTRAINT studio_jobs_kind_check CHECK \(kind IN \(([^)]*)\)\)/);
         assert.ok(list, 'the constraint is re-added');
         const kinds = [...list![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
-        assert.deepEqual(kinds, [...STUDIO_JOB_KINDS].sort());
+        // v31 re-creates it again with render_infographic (infographics.test.ts holds it to the full list).
+        assert.deepEqual(kinds, STUDIO_JOB_KINDS.filter((k) => k !== 'render_infographic').sort());
         assert.ok(kinds.includes('monteur_think'));
     });
 

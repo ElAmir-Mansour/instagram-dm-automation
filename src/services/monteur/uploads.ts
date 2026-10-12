@@ -18,7 +18,8 @@ import { getMediaStore, SupabaseStorageMediaStore } from '../storage.js';
 import { clipText, isPlainObject, problemsError, StudioError } from '../studio/common.js';
 import { objectPathFor, StorageApiError } from '../supabaseStorage.js';
 
-export const SIGNED_UPLOAD_TYPES: readonly string[] = ['video/mp4', 'image/jpeg'];
+/** A reel and its cover; and an infographic's GIF (v31). */
+export const SIGNED_UPLOAD_TYPES: readonly string[] = ['video/mp4', 'image/jpeg', 'image/gif'];
 export const MAX_SIGNED_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 export interface SignedUploadAnswer {

@@ -1017,28 +1017,32 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.ok(at('data-page="studio"') < at('data-page="monteur"') && at('data-page="monteur"') < at('data-page="inbox"'));
         assert.match(index, /var PAGES = \[[^\]]*'monteur'/);
 
-        // Both tab bars list the same three links in the same order, and each marks its own.
+        // All three tab bars list the same four links in the same order, and each marks its own.
         const hrefs = (markup: string): string[] => [...markup.matchAll(/<a class="btn btn-sm btn-ghost" href="([^"]+)"/g)].map((m) => m[1]!);
         const studio = load(['dashboard/js/pages/studio.js'], 'StudioPage');
         const studioTabs = String(studio.Page.tabsMarkup('home'));
         const monteur = loadMonteur('en');
         const monteurTabs = String(monteur.Page.toolbarMarkup());
-        assert.deepEqual(hrefs(studioTabs), ['#/studio', '#/monteur', '#/studio?tab=settings']);
+        assert.deepEqual(hrefs(studioTabs), ['#/studio', '#/monteur', '#/infographics', '#/studio?tab=settings']);
         assert.deepEqual(hrefs(monteurTabs), hrefs(studioTabs));
         assert.match(monteurTabs, /href="#\/monteur"\s+aria-current="page"/);
         assert.doesNotMatch(studioTabs, /href="#\/monteur"\s+aria-current/);
+        const infographics = load(['dashboard/js/pages/infographics.js'], 'InfographicsPage');
+        const infographicsTabs = String(infographics.Page.toolbarMarkup());
+        assert.deepEqual(hrefs(infographicsTabs), hrefs(studioTabs));
+        assert.match(infographicsTabs, /href="#\/infographics"\s+aria-current="page"/);
     });
 
-    it('ships at cache version 12.8: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 12.9: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.8');
+        assert.equal(version, '12.9');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['12.8']);
+        assert.deepEqual([...new Set(refs)], ['12.9']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.8'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.9'], page);
         }
     });
 });
@@ -1681,6 +1685,105 @@ describe('Monteur — human touches: camera cuts, doodles, highlights, transitio
         for (const key of KEYS) {
             assert.notEqual(s.t(key), key, key);
             assert.match(s.t(key), /[\u0600-\u06FF]/, key);
+        }
+    });
+});
+
+// ─── Infographics (v31): the Studio's third tab, in the same harness ────────────────────────
+
+describe('Infographics page', () => {
+    const UP = 'https://msg-response-auto.vercel.app/api/uploads/';
+    const SPEC = {
+        dir: 'rtl', title: ['RAG', 'CAG'], subtitle: { text: 'كيف يصل الذكاء الاصطناعي إلى المعرفة', accent: 'المعرفة' },
+        columns: ['RAG', 'CAG'].map((name) => ({
+            name, kind: 'k', note: 'n', hero: { kind: 'docs' },
+            steps: [1, 2, 3].map((i) => ({ title: `t${i}`, desc: `d${i}`, mini: { kind: 'icon', name: 'robot' } })),
+        })),
+    };
+    const ready = (over: Json = {}): Json => ({
+        id: 'i1', topic: 'RAG vs CAG', language: 'ar', theme: 'dark', status: 'ready', spec: SPEC, caption: 'RAG و CAG',
+        render: { mp4_url: `${UP}a1`, gif_url: `${UP}a2`, cover_url: `${UP}a3` }, schedule: null, error: null,
+        headline: 'RAG vs CAG: كيف يصل الذكاء الاصطناعي إلى المعرفة', problems: [], job: null, ...over,
+    });
+    const loadPage = (items: Json[], lang: 'ar' | 'en' = 'en'): Loaded => {
+        const s = load(['dashboard/js/pages/infographics.js'], 'InfographicsPage', lang, { currentPage: 'infographics' });
+        s.api.getInfographics = async () => ({ infographics: items });
+        s.api.getStudioSettings = async () => ({ settings: { infographic: { name: { ar: 'الأمير منصور', en: 'ElAmir' }, platforms: ['instagram', 'facebook', 'youtube'] } } });
+        s.api.getStudioStatus = async () => ({ worker: { online: true } });
+        return s;
+    };
+
+    it('a ready one: its GIF, Download GIF and MP4 under their names, Schedule, Edit and the other theme', async () => {
+        const s = loadPage([ready()]);
+        await s.Page.render();
+        await settle();
+        const page = s.dom.get('page-container')!.innerHTML;
+        assert.match(page, new RegExp(`<img src="${UP}a2" alt="RAG vs CAG`));
+        assert.match(page, new RegExp(`href="${UP}a2" download="RAG-vs-CAG-[^"]*-dark\\.gif"`));
+        assert.match(page, new RegExp(`href="${UP}a1" download="[^"]*-dark\\.mp4"`));
+        assert.match(page, /data-action="infographics:openSchedule"/);
+        assert.match(page, /data-action="infographics:edit"/);
+        assert.match(page, /data-action="infographics:copy"[^>]*data-theme="light"|data-theme="light"[^>]*data-action="infographics:copy"/);
+        assert.match(page, /href="#\/infographics"\s+aria-current="page"/);
+        assert.equal(s.timers.length, 0, 'nothing open: no poll');
+    });
+
+    it('one being written: says Claude is writing it, offers no download, and polls', async () => {
+        const s = loadPage([ready({ status: 'writing', render: null, spec: null, job: { status: 'claimed', progress: null } })]);
+        await s.Page.render();
+        await settle();
+        const page = s.dom.get('page-container')!.innerHTML;
+        assert.match(page, /Claude is writing it/);
+        assert.doesNotMatch(page, /download=/);
+        assert.equal(s.timers.length, 1);
+        assert.equal(s.timers[0]!.ms, 5000);
+    });
+
+    it('a job the Mac hasn’t taken while it is offline says so, on the card and above the list', async () => {
+        const s = loadPage([ready({ status: 'rendering', job: { status: 'pending', progress: null } })]);
+        s.api.getStudioStatus = async () => ({ worker: { online: false } });
+        await s.Page.render();
+        await settle();
+        const page = s.dom.get('page-container')!.innerHTML;
+        assert.match(page, /Waiting for your Mac \(offline\)/);
+        assert.match(page, /Studio worker is offline/);
+    });
+
+    it('lists what to fix on a ready one', async () => {
+        const s = loadPage([ready({ problems: ['The caption doesn’t mention «CAG»'] })]);
+        await s.Page.render();
+        await settle();
+        assert.match(s.dom.get('page-container')!.innerHTML, /class="ig-problems"[\s\S]*«CAG»/);
+    });
+
+    it('the caption check matches the server’s: each name, Latin case and Arabic forms ignored', () => {
+        const s = loadPage([]);
+        const found = (caption: string, names: string[]): boolean[] => JSON.parse(JSON.stringify(s.Page.captionCheck(caption, names).map((c: Json) => c.found)));
+        assert.deepEqual(found('rag فقط', ['RAG', 'CAG']), [true, false]);
+        assert.deepEqual(found('الوكيل والمحادثه', ['الوكيل', 'المحادثة']), [true, true]);
+    });
+
+    it('the editor sends only what changed: a caption alone, or the page with a renamed column', () => {
+        const s = loadPage([]);
+        const item = ready();
+        const fields: Record<string, string> = { caption: 'RAG و CAG و KAG', subtitle: SPEC.subtitle.text, accent: SPEC.subtitle.accent };
+        SPEC.columns.forEach((col, c) => {
+            Object.assign(fields, { [`c${c}-name`]: col.name, [`c${c}-kind`]: col.kind, [`c${c}-note`]: col.note, [`c${c}-hero-kind`]: 'docs', [`c${c}-hero-extra`]: '' });
+            col.steps.forEach((st, i) => Object.assign(fields, {
+                [`c${c}-s${i}-title`]: st.title, [`c${c}-s${i}-desc`]: st.desc, [`c${c}-s${i}-mini-kind`]: 'icon', [`c${c}-s${i}-mini-extra`]: 'robot',
+            }));
+        });
+        const form = { querySelector: (sel: string) => { const m = sel.match(/data-field="([^"]+)"/); return m && m[1]! in fields ? { value: fields[m[1]!] } : null; } };
+        assert.deepEqual(Object.keys(s.Page.changes(item, s.Page.readEditor(form, item))), ['caption']);
+        fields['c1-name'] = 'KAG';
+        const changed = s.Page.changes(item, s.Page.readEditor(form, item));
+        assert.deepEqual(JSON.parse(JSON.stringify(changed.spec.columns.map((c: Json) => c.name))), ['RAG', 'KAG']);
+    });
+
+    it('every string it shows is in Arabic too', async () => {
+        const s = loadPage([], 'ar');
+        for (const key of ['nav.infographics', 'studio.tabs.infographics', 'infographics.new.title', 'infographics.lang.ar', 'infographics.schedule.gifHint', 'infographics.brand.title']) {
+            assert.match(s.t(key), /[؀-ۿ]/, key);
         }
     });
 });

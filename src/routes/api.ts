@@ -1040,6 +1040,13 @@ const ALLOWED_MIME_TYPES = new Set([
     'video/quicktime',
 ]);
 
+/**
+ * What /uploads/:id serves as itself: every type /upload stores, plus the infographic's GIF, which
+ * only the Studio worker uploads (v31). /upload itself still refuses a GIF: no platform the
+ * scheduler posts to takes one.
+ */
+const SERVED_MIME_TYPES: ReadonlySet<string> = new Set([...ALLOWED_MIME_TYPES, 'image/gif']);
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -1085,7 +1092,7 @@ router.get('/uploads/:id', async (req, res) => {
         // Rows predating the upload allowlist can hold any string, and this origin also serves
         // the dashboard — an echoed text/html would be same-origin script. Serve anything
         // unrecognised as an opaque download instead.
-        const contentType = ALLOWED_MIME_TYPES.has(media.mimeType) ? media.mimeType : 'application/octet-stream';
+        const contentType = SERVED_MIME_TYPES.has(media.mimeType) ? media.mimeType : 'application/octet-stream';
 
         res.setHeader('Content-Type', contentType);
         res.setHeader('X-Content-Type-Options', 'nosniff');

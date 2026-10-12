@@ -116,6 +116,21 @@ export const STUDIO_SETTINGS = {
         min_seconds: 20,
         max_seconds: 45,
     },
+    // The personal brand on every infographic (v31): elamirmansour.dev's colours and handles,
+    // in Modern Standard Arabic (the owner asked for فصحى, 2026-10-12). The portrait is uploaded
+    // from the Infographics screen, so it starts empty here.
+    infographic: {
+        name: { ar: 'الأمير منصور', en: 'ElAmir Mansour' },
+        site: 'elamirmansour.dev',
+        handle: '@elamir.mansour',
+        socials: ['instagram', 'youtube', 'linkedin', 'x', 'tiktok'],
+        primary: '#0E3B5C',
+        accent: '#F2A33A',
+        photo_url: null,
+        theme: 'dark',
+        language: 'ar',
+        platforms: ['instagram', 'facebook', 'youtube'],
+    },
 };
 
 async function main() {
@@ -158,18 +173,19 @@ async function main() {
         }
         const s = STUDIO_SETTINGS;
         await pool.query(
-            `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, updated_at)
-             VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, NOW())
+            `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, updated_at)
+             VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, NOW())
              ON CONFLICT (creator_id) DO UPDATE
                 SET brand = EXCLUDED.brand, voice = EXCLUDED.voice, product = EXCLUDED.product,
                     cta = EXCLUDED.cta, schedule = EXCLUDED.schedule, library = EXCLUDED.library,
-                    examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, updated_at = NOW()`,
+                    examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, infographic = EXCLUDED.infographic, updated_at = NOW()`,
             [
                 creatorId,
                 JSON.stringify(s.brand), JSON.stringify(s.voice), JSON.stringify(s.product),
                 JSON.stringify(s.cta), JSON.stringify(s.schedule), JSON.stringify(s.library),
                 s.examples === null ? null : JSON.stringify(s.examples),
                 JSON.stringify(s.monteur),
+                JSON.stringify(s.infographic),
             ]
         );
         console.log(`Seeded Studio settings for ${creator.rows[0].name ?? creatorId}.`);

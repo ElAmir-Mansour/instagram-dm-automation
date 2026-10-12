@@ -1,0 +1,372 @@
+/**
+ * Animated infographics (v31): what one is, what Claude is asked to write, and the checks on both.
+ * Pure — no database — so every rule here is testable on its own. infographics.ts is the rows and
+ * the routes' work; jobs.ts applies the worker's result through `parseInfographicResult`.
+ *
+ * An infographic compares two or three things ("RAG vs CAG vs KAG"): one column each, every column
+ * a name, the kind of problem it suits, a one-line note and exactly three steps, each with a small
+ * animated diagram. The worker's template (aicourse-captions src/infographic) draws it in the
+ * tenant's personal brand (`studio_settings.infographic`), in a dark or a light theme, and renders
+ * it as an MP4, a GIF and a cover.
+ *
+ * Claude writes the page and its caption in ONE answer, from the same content, so the caption is
+ * about the GIF it goes with: it must name every column the GIF shows (`captionProblems`), and
+ * nothing is scheduled while it does not.
+ */
+import type { RenderInfographicPayload } from '../../db/rows.js';
+import type { InfographicConfig, InfographicTheme } from './settingsTypes.js';
+import { isPlainObject } from './common.js';
+
+// ─── The spec: what the template draws ──────────────────────────────────────────────────
+
+/** The diagrams the template can draw (minis.tsx), and what each one shows, for the prompt. */
+export const DIAGRAMS = {
+    docs: 'a stack of documents: a large collection. `label`: a short badge, e.g. "10K+ docs"',
+    'chunk-db': 'a document cut into chunks that flow into a vector database',
+    topk: 'a query finding its nearest points: similarity search',
+    augment: 'retrieved context flowing into a model box that writes an answer. `label`: the box, default "LLM"',
+    window: 'documents that all fit inside a context window',
+    preload: 'documents loaded up front into a long context',
+    kv: 'K and V cache cells filling up, then saved',
+    instant: 'a cache plus a question giving an answer at once, with no lookup',
+    graph: 'a knowledge graph around one central node',
+    'graph-build': 'text turned into a graph of entities and links',
+    hops: 'a query hopping through a graph, one step at a time',
+    grounded: 'an answer with its source attached',
+    chat: 'chat bubbles appearing one after another',
+    loop: 'an agent loop: a dot circling a robot',
+    icon: 'one line icon, named in `icon`',
+} as const;
+export type DiagramKind = keyof typeof DIAGRAMS;
+export const DIAGRAM_KINDS = Object.keys(DIAGRAMS) as DiagramKind[];
+
+/** The icons a diagram of kind `icon` may name: the template's set (Tabler), objects and symbols only. */
+export const DIAGRAM_ICONS: readonly string[] = [
+    'brain', 'bulb', 'rocket', 'robot', 'code', 'terminal-2', 'database', 'cloud', 'server', 'cpu', 'device-laptop',
+    'device-mobile', 'world', 'map', 'compass', 'target', 'trophy', 'star', 'flame', 'bolt', 'search', 'question-mark',
+    'check', 'x', 'circle-check', 'circle-x', 'arrow-right', 'trending-up', 'trending-down', 'chart-bar', 'chart-pie',
+    'report-analytics', 'file-text', 'files', 'folder', 'book', 'books', 'notebook', 'pencil', 'writing',
+    'message-circle', 'messages', 'mail', 'phone', 'lock', 'lock-open', 'key', 'shield-check', 'settings', 'tool',
+    'tools', 'puzzle', 'school', 'certificate', 'shopping-cart', 'coin', 'cash', 'camera', 'video', 'microphone',
+    'photo', 'palette', 'wand', 'sparkles', 'link', 'share', 'download', 'upload', 'refresh', 'repeat', 'player-play',
+    'news', 'clock', 'hourglass', 'calendar', 'alarm', 'alert-triangle', 'eye', 'stairs-up', 'language', 'wifi',
+];
+
+/** A diagram as the template takes it (MiniSpec): `name` is the icon's, `badge` the docs', `label` the model box's. */
+export type Mini = { kind: DiagramKind; name?: string; badge?: string; label?: string };
+
+export type InfographicColumn = {
+    name: string;
+    hero: Mini;
+    kind: string;
+    note: string;
+    steps: { mini: Mini; title: string; desc: string }[];
+};
+
+/** The template's input (InfographicSpec in Infographic.tsx). `title` is the columns' names. */
+export type InfographicSpec = {
+    dir: 'rtl' | 'ltr';
+    title: string[];
+    subtitle: { text: string; accent?: string };
+    columns: InfographicColumn[];
+};
+
+export const STEPS_PER_COLUMN = 3;
+
+/**
+ * Text budgets, in characters, by column count: what the 1080×1350 page fits at its font sizes
+ * (two columns get one-line notes and descriptions at a larger size). Claude is asked for these;
+ * the check allows a little over, since a line slightly long still fits.
+ */
+export const BUDGETS = {
+    name: 14,
+    subtitle: 60,
+    accent: 30,
+    kind: { 2: 30, 3: 26 },
+    note: { 2: 40, 3: 46 },
+    stepTitle: { 2: 24, 3: 20 },
+    stepDesc: { 2: 40, 3: 48 },
+    label: 12,
+    caption: 2200,
+} as const;
+const SLACK = 6;
+
+/** Everything wrong with a spec, as sentences an operator can act on. Empty means it renders and fits. */
+export function specProblems(spec: unknown): string[] {
+    const problems: string[] = [];
+    if (!isPlainObject(spec)) return ['The infographic has no content yet.'];
+    if (spec.dir !== 'rtl' && spec.dir !== 'ltr') problems.push('dir must be rtl or ltr');
+    const columns = spec.columns;
+    if (!Array.isArray(columns) || columns.length < 2 || columns.length > 3) {
+        problems.push('An infographic compares 2 or 3 things: it needs 2 or 3 columns.');
+        return problems;
+    }
+    const n = columns.length as 2 | 3;
+    const text = (value: unknown, where: string, max: number, required = true): void => {
+        if (typeof value !== 'string') {
+            if (required || value !== undefined) problems.push(`${where} must be text`);
+            return;
+        }
+        if (required && !value.trim()) problems.push(`${where} is empty`);
+        else if (value.length > max + SLACK) problems.push(`${where} is ${value.length} characters; it fits ${max}`);
+    };
+    const mini = (value: unknown, where: string): void => {
+        if (!isPlainObject(value) || !DIAGRAM_KINDS.includes(value.kind as DiagramKind)) {
+            problems.push(`${where} must be one of the diagrams: ${DIAGRAM_KINDS.join(', ')}`);
+            return;
+        }
+        if (value.kind === 'icon' && !DIAGRAM_ICONS.includes(value.name as string)) {
+            problems.push(`${where} is an icon, so it needs one of the icon names (e.g. robot, database, target)`);
+        }
+        text(value.badge, `${where}'s badge`, BUDGETS.label, false);
+        text(value.label, `${where}'s label`, BUDGETS.label, false);
+    };
+
+    const subtitle = isPlainObject(spec.subtitle) ? spec.subtitle : null;
+    if (!subtitle) problems.push('The subtitle is missing');
+    else {
+        text(subtitle.text, 'The subtitle', BUDGETS.subtitle);
+        text(subtitle.accent, 'The subtitle\'s highlighted words', BUDGETS.accent, false);
+        if (typeof subtitle.accent === 'string' && subtitle.accent && typeof subtitle.text === 'string' && !subtitle.text.includes(subtitle.accent)) {
+            problems.push('The subtitle\'s highlighted words must be part of the subtitle, exactly as written there');
+        }
+    }
+
+    const names: string[] = [];
+    columns.forEach((col: unknown, c: number) => {
+        const where = `Column ${c + 1}`;
+        if (!isPlainObject(col)) {
+            problems.push(`${where} is not a column`);
+            return;
+        }
+        text(col.name, `${where}'s name`, BUDGETS.name);
+        if (typeof col.name === 'string') names.push(col.name.trim().toLowerCase());
+        mini(col.hero, `${where}'s main diagram`);
+        text(col.kind, `${where}'s "kind of problem" line`, BUDGETS.kind[n]);
+        text(col.note, `${where}'s note`, BUDGETS.note[n]);
+        if (!Array.isArray(col.steps) || col.steps.length !== STEPS_PER_COLUMN) {
+            problems.push(`${where} needs exactly ${STEPS_PER_COLUMN} steps`);
+            return;
+        }
+        col.steps.forEach((step: unknown, i: number) => {
+            const at = `${where}, step ${i + 1}`;
+            if (!isPlainObject(step)) {
+                problems.push(`${at} is not a step`);
+                return;
+            }
+            mini(step.mini, `${at}'s diagram`);
+            text(step.title, `${at}'s title`, BUDGETS.stepTitle[n]);
+            text(step.desc, `${at}'s description`, BUDGETS.stepDesc[n]);
+        });
+    });
+    if (new Set(names).size !== names.length) problems.push('Two columns have the same name');
+    const title = spec.title;
+    if (!Array.isArray(title) || title.length !== columns.length || title.some((t, i) => t !== (columns[i] as InfographicColumn)?.name)) {
+        problems.push('title must be the columns\' names, in order');
+    }
+    return problems;
+}
+
+/**
+ * The caption must be about this GIF: it names every column, as the page writes it (Arabic letters
+ * normalised, Latin case ignored). An empty caption or one over Instagram's limit fails too.
+ */
+export function captionProblems(caption: unknown, spec: unknown): string[] {
+    if (typeof caption !== 'string' || !caption.trim()) return ['The caption is empty.'];
+    const problems: string[] = [];
+    if (caption.length > BUDGETS.caption) problems.push(`The caption is ${caption.length} characters; Instagram takes ${BUDGETS.caption}.`);
+    const folded = fold(caption);
+    const missing = columnNames(spec).filter((name) => !folded.includes(fold(name)));
+    if (missing.length) {
+        problems.push(`The caption doesn't mention ${missing.map((m) => `«${m}»`).join(', ')}: it must talk about what the infographic shows.`);
+    }
+    return problems;
+}
+
+const fold = (s: string): string =>
+    s.toLowerCase().normalize('NFKC').replace(/[\u064B-\u0652\u0640]/g, '').replace(/[\u0623\u0625\u0622]/g, '\u0627')
+        .replace(/\u0649/g, '\u064A').replace(/\u0629/g, '\u0647');
+
+export function columnNames(spec: unknown): string[] {
+    if (!isPlainObject(spec) || !Array.isArray(spec.columns)) return [];
+    return spec.columns.flatMap((c: unknown) => (isPlainObject(c) && typeof c.name === 'string' && c.name.trim() ? [c.name.trim()] : []));
+}
+
+/** "RAG vs CAG vs KAG: how AI reaches outside knowledge", for a YouTube title and the dashboard. */
+export function headline(spec: unknown): string {
+    const names = columnNames(spec).join(' vs ');
+    const sub = isPlainObject(spec) && isPlainObject(spec.subtitle) && typeof spec.subtitle.text === 'string' ? spec.subtitle.text.trim() : '';
+    return sub ? `${names}: ${sub}` : names;
+}
+
+// ─── What Claude is asked ───────────────────────────────────────────────────────────────
+
+const diagramSchema = {
+    type: 'object',
+    properties: {
+        kind: { type: 'string', enum: DIAGRAM_KINDS },
+        icon: { type: 'string', description: 'Only for kind "icon": one of the icon names.' },
+        label: { type: 'string', description: 'Only for kind "docs" (a badge) or "augment" (the model box). At most 12 characters.' },
+    },
+    required: ['kind'],
+} as const;
+
+/**
+ * Claude's answer. The worker turns it into the template's spec (`dir` from the language, `title`
+ * from the names, each diagram's `icon`/`label` into `name`/`badge`/`label`) and returns that spec,
+ * which is what the app stores and checks: the one that was rendered.
+ */
+export const WRITE_SCHEMA = {
+    type: 'object',
+    properties: {
+        subtitle: { type: 'string', description: 'One line under the title: what the comparison is about.' },
+        accent: { type: 'string', description: 'The subtitle\'s key words, copied exactly from it: drawn in the accent colour.' },
+        columns: {
+            type: 'array',
+            minItems: 2,
+            maxItems: 3,
+            items: {
+                type: 'object',
+                properties: {
+                    name: { type: 'string' },
+                    kind: { type: 'string', description: 'The kind of problem it suits, as a short phrase.' },
+                    note: { type: 'string' },
+                    hero: diagramSchema,
+                    steps: {
+                        type: 'array',
+                        minItems: STEPS_PER_COLUMN,
+                        maxItems: STEPS_PER_COLUMN,
+                        items: {
+                            type: 'object',
+                            properties: { title: { type: 'string' }, desc: { type: 'string' }, diagram: diagramSchema },
+                            required: ['title', 'desc', 'diagram'],
+                        },
+                    },
+                },
+                required: ['name', 'kind', 'note', 'hero', 'steps'],
+            },
+        },
+        caption: { type: 'string', description: 'The post\'s caption, about this infographic.' },
+    },
+    required: ['subtitle', 'accent', 'columns', 'caption'],
+} as const;
+
+export interface WriteRequest {
+    topic: string;
+    notes: string | null;
+    language: 'ar' | 'en';
+    /** Words the tenant's voice never uses (`voice.avoid`). */
+    avoid: readonly string[];
+}
+
+/** The system prompt: the format, the diagrams, the budgets and the language rule. */
+export function writeSystemPrompt(language: 'ar' | 'en'): string {
+    const diagrams = DIAGRAM_KINDS.map((k) => `- ${k}: ${DIAGRAMS[k]}`).join('\n');
+    const lang = language === 'ar'
+        ? [
+            'Write in Modern Standard Arabic (العربية الفصحى): correct grammar, clear, short and simple, as a good textbook would say it.',
+            'Never use dialect: not يوصل، لين، يسوّي، وش، كذا، زي، علشان، بس (in the sense of "only"). Use يصل، حتى، يُنجز، ماذا، هكذا، مثل، لأن، فقط.',
+            'Keep the technical terms practitioners say in English in Latin letters (RAG, API, KV Cache, LLM), and use them as column names when that is the term.',
+        ].join('\n')
+        : 'Write in clear, plain English. Short words, no hype.';
+    return [
+        'You write one animated comparison infographic for a tech educator\'s Instagram, Facebook, YouTube and LinkedIn: two or three things compared side by side, and the caption that goes with it.',
+        '',
+        'The page: a title made of the column names ("A vs B vs C"), one subtitle line under it, then one column per thing compared. Each column has:',
+        '- name: the thing, as practitioners write it (often an acronym or 1–2 words)',
+        '- kind: the kind of problem it suits, as a short phrase',
+        '- note: one line that explains the kind',
+        '- hero: the diagram that pictures it best',
+        `- steps: exactly ${STEPS_PER_COLUMN}, how it works in order, each a short title, a one-line description and a diagram`,
+        '',
+        'Columns go from the simplest or oldest to the most capable: the last column is drawn in the accent colour.',
+        'The steps of different columns sit side by side, so make them parallel where you can (step 1 of each is the setup, step 3 the result).',
+        '',
+        'Diagrams (pick the one that matches the step; use "icon" only when none does):',
+        diagrams,
+        `Icons for kind "icon": ${DIAGRAM_ICONS.join(', ')}.`,
+        '',
+        'Lengths, in characters, which the page fits exactly (2 columns / 3 columns):',
+        `- name ≤ ${BUDGETS.name}; subtitle ≤ ${BUDGETS.subtitle}; accent ≤ ${BUDGETS.accent}, copied exactly from the subtitle`,
+        `- kind ≤ ${BUDGETS.kind[2]} / ${BUDGETS.kind[3]}; note ≤ ${BUDGETS.note[2]} / ${BUDGETS.note[3]}`,
+        `- step title ≤ ${BUDGETS.stepTitle[2]} / ${BUDGETS.stepTitle[3]}; step description ≤ ${BUDGETS.stepDesc[2]} / ${BUDGETS.stepDesc[3]}`,
+        '',
+        'The caption is about THIS infographic, in the same language. It is what someone reads under the GIF:',
+        '1. A hook line that names the comparison.',
+        '2. One short paragraph per column, in the page\'s order, starting with the column\'s name exactly as on the page: what it suits and how it works, following its three steps.',
+        '3. One line on when to choose which.',
+        '4. A question that invites a comment.',
+        '5. 4–6 hashtags on the last line.',
+        'Every column name must appear in the caption. 600–1,400 characters. No links, no "link in bio".',
+        '',
+        'Be accurate: say only what is true of each technique. If the topic is not something that can be compared, compare the two or three closest ideas it covers.',
+        '',
+        lang,
+    ].join('\n');
+}
+
+export function writeUserPrompt(req: WriteRequest): string {
+    return [
+        `Topic: ${req.topic.trim()}`,
+        req.notes?.trim() ? `\nNotes from the creator (follow them):\n${req.notes.trim()}` : '',
+        req.avoid.length ? `\nNever use these words or topics: ${req.avoid.join(', ')}.` : '',
+        `\nLanguage: ${req.language === 'ar' ? 'Arabic (Modern Standard Arabic, الفصحى)' : 'English'}.`,
+    ].join('');
+}
+
+/** The brand the worker draws with: the tenant's infographic settings, as the template's InfoBrand. */
+export function payloadBrand(cfg: InfographicConfig): RenderInfographicPayload['brand'] {
+    return {
+        name: { ar: cfg.name.ar, en: cfg.name.en },
+        site: cfg.site,
+        handle: cfg.handle,
+        socials: [...cfg.socials],
+        primary: cfg.primary,
+        accent: cfg.accent,
+        photo: cfg.photo_url,
+    };
+}
+
+// ─── The worker's result ────────────────────────────────────────────────────────────────
+
+export interface InfographicResult {
+    mp4_url: string;
+    gif_url: string;
+    cover_url: string;
+    gif_width: number | null;
+    gif_fps: number | null;
+    /** Present when the job wrote the infographic: the spec that was rendered, and the caption. */
+    written: { spec: unknown; caption: string; model: string | null } | null;
+}
+
+/** Our own upload URL: `…/api/uploads/<uuid>`, with an optional extension. */
+const UPLOAD_URL = /^https?:\/\/[^\s/]+\/api\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.[a-z0-9]{2,4})?$/i;
+
+/** The worker's result, or the reasons it is not one (a 400: the job stays claimed and the worker reports it). */
+export function parseInfographicResult(raw: unknown): { ok: true; result: InfographicResult } | { ok: false; problems: string[] } {
+    const problems: string[] = [];
+    if (!isPlainObject(raw)) return { ok: false, problems: ['The result must be an object.'] };
+    const url = (key: 'mp4_url' | 'gif_url' | 'cover_url'): string => {
+        const v = raw[key];
+        if (typeof v !== 'string' || !UPLOAD_URL.test(v)) problems.push(`${key} must be one of the app's upload URLs`);
+        return typeof v === 'string' ? v : '';
+    };
+    const num = (key: 'gif_width' | 'gif_fps'): number | null =>
+        typeof raw[key] === 'number' && Number.isFinite(raw[key]) ? (raw[key] as number) : null;
+    const result: InfographicResult = {
+        mp4_url: url('mp4_url'), gif_url: url('gif_url'), cover_url: url('cover_url'),
+        gif_width: num('gif_width'), gif_fps: num('gif_fps'), written: null,
+    };
+    if (raw.written !== undefined && raw.written !== null) {
+        const w = raw.written;
+        if (!isPlainObject(w) || !isPlainObject(w.spec) || typeof w.caption !== 'string') {
+            problems.push('written must be { spec, caption, model }');
+        } else {
+            result.written = { spec: w.spec, caption: w.caption, model: typeof w.model === 'string' ? w.model.slice(0, 100) : null };
+        }
+    }
+    return problems.length ? { ok: false, problems } : { ok: true, result };
+}
+
+export const THEMES: readonly InfographicTheme[] = ['dark', 'light'];
+export const dirFor = (language: 'ar' | 'en'): 'rtl' | 'ltr' => (language === 'ar' ? 'rtl' : 'ltr');

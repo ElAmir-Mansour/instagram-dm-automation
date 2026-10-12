@@ -685,8 +685,9 @@ const MonteurPage = {
 
     // ─── Toolbar ─────────────────────────────────────────────────────────────
     /**
-     * The Studio's own tab bar, with the Monteur current. StudioPage.tabsMarkup()
-     * lists the same three links in the same order; monteur.test.ts holds them together.
+     * The Studio's own tab bar, with the Monteur current. StudioPage.tabsMarkup() and
+     * InfographicsPage.toolbarMarkup() list the same four links in the same order;
+     * monteur.test.ts holds them together.
      */
     toolbarMarkup() {
         const tab = (key, href, icon, label) => html`
@@ -700,6 +701,7 @@ const MonteurPage = {
                 <nav class="segmented studio-seg studio-tabs" aria-label="${t('studio.tabs.label')}">
                     ${tab('home', '#/studio', 'layers', t('studio.tabs.carousels'))}
                     ${tab('monteur', '#/monteur', 'scissors', t('studio.tabs.monteur'))}
+                    ${tab('infographics', '#/infographics', 'images', t('studio.tabs.infographics'))}
                     ${tab('settings', '#/studio?tab=settings', 'settings', t('studio.tabs.settings'))}
                 </nav>
             </div>

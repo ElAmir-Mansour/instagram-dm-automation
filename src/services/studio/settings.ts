@@ -1,6 +1,6 @@
 /**
  * Per-tenant Studio settings (STUDIO.md §10): brand kit, voice, product, CTAs, posting times,
- * library folder, few-shot examples, and the Monteur (MONTEUR.md §1).
+ * library folder, few-shot examples, the Monteur (MONTEUR.md §1) and the infographics' brand (v31).
  *
  * The Studio is a feature for any tenant, so none of this is in code or prompts. A tenant with
  * no row gets `defaultStudioSettings()`, which is deliberately neutral: English, generic copy,
@@ -9,11 +9,11 @@
  */
 import { pool } from '../../config/db.js';
 import type { MonteurConfig, MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
-import type { MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
+import type { InfographicPlatform, InfographicSocial, InfographicTheme, MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
 import { type Exec, isPlainObject, problemsError, StudioError } from './common.js';
 import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
 
-export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur'] as const;
+export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur', 'infographic'] as const;
 type Section = (typeof STUDIO_SETTINGS_SECTIONS)[number];
 
 export const DISPLAY_FONTS: readonly StudioDisplayFont[] = ['Cairo', 'Tajawal', 'IBM Plex Sans Arabic', 'Inter'];
@@ -24,6 +24,11 @@ export const MONTEUR_SOURCES: readonly MonteurSource[] = ['folder', 'course'];
 export const MONTEUR_MODES: readonly MonteurMode[] = ['review', 'auto'];
 export const MONTEUR_BRAINS: readonly MonteurBrain[] = ['gemini', 'claude_mac'];
 export const MONTEUR_STYLES: readonly MonteurStyle[] = ['classic', 'paper'];
+export const INFOGRAPHIC_SOCIALS: readonly InfographicSocial[] = ['instagram', 'youtube', 'linkedin', 'x', 'tiktok', 'facebook', 'github'];
+export const INFOGRAPHIC_THEMES: readonly InfographicTheme[] = ['dark', 'light'];
+export const INFOGRAPHIC_PLATFORMS: readonly InfographicPlatform[] = ['instagram', 'facebook', 'youtube'];
+/** The portrait is one of our own uploads: the worker fetches it while rendering. */
+const UPLOAD_URL = /^https:\/\/[^\s/]+\/api\/uploads\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.jpg)?$/i;
 /** An absolute folder: `/…` on macOS and Linux, `C:\…` or `\\server\share` on Windows. */
 const ABSOLUTE_FOLDER = /^(\/|[A-Za-z]:[\\/]|\\\\)/;
 /** NUL, newlines and the other control characters: never part of a folder the worker can open. */
@@ -137,7 +142,7 @@ export function settingsProblems(s: StudioSettings): string[] {
         }
     };
 
-    const { brand, voice, product, cta, schedule, library, examples, monteur } = s;
+    const { brand, voice, product, cta, schedule, library, examples, monteur, infographic } = s;
     text(brand?.name, 'brand.name', 80, true);
     text(brand?.signature?.latin, 'brand.signature.latin', 40);
     text(brand?.signature?.local, 'brand.signature.local', 40);
@@ -242,6 +247,32 @@ export function settingsProblems(s: StudioSettings): string[] {
             problems.push('monteur.max_seconds must be more than monteur.min_seconds');
         }
     }
+
+    // The infographic's brand (v31): printed on every page, so each field is short.
+    if (!isPlainObject(infographic)) {
+        problems.push('infographic must be an object');
+    } else {
+        text(infographic.name?.ar, 'infographic.name.ar', 40);
+        text(infographic.name?.en, 'infographic.name.en', 40);
+        text(infographic.site, 'infographic.site', 40);
+        text(infographic.handle, 'infographic.handle', 32);
+        list(infographic.socials, 'infographic.socials', INFOGRAPHIC_SOCIALS.length, (v, p) => oneOf(v, p, INFOGRAPHIC_SOCIALS));
+        if (Array.isArray(infographic.socials) && new Set(infographic.socials).size !== infographic.socials.length) {
+            problems.push('infographic.socials lists a platform twice');
+        }
+        colour(infographic.primary, 'infographic.primary');
+        colour(infographic.accent, 'infographic.accent');
+        if (infographic.photo_url !== null && (typeof infographic.photo_url !== 'string' || !UPLOAD_URL.test(infographic.photo_url))) {
+            problems.push('infographic.photo_url must be one of your uploads (…/api/uploads/<id>), or null');
+        }
+        oneOf(infographic.theme, 'infographic.theme', INFOGRAPHIC_THEMES);
+        oneOf(infographic.language, 'infographic.language', ['ar', 'en']);
+        list(infographic.platforms, 'infographic.platforms', INFOGRAPHIC_PLATFORMS.length, (v, p) => oneOf(v, p, INFOGRAPHIC_PLATFORMS));
+        if (Array.isArray(infographic.platforms)) {
+            if (infographic.platforms.length === 0) problems.push('infographic.platforms needs at least one platform');
+            if (new Set(infographic.platforms).size !== infographic.platforms.length) problems.push('infographic.platforms lists a platform twice');
+        }
+    }
     return problems;
 }
 
@@ -261,7 +292,7 @@ export async function getMonteurSettings(creatorId: string, exec: Exec = pool): 
 /** The tenant's settings, over the defaults. `exec` is a transaction's client, when inside one. */
 export async function getStudioSettings(creatorId: string, exec: Exec = pool): Promise<StudioSettings> {
     const { rows } = await exec.query<Omit<StudioSettingsRow, 'creator_id' | 'updated_at'>>(
-        'SELECT brand, voice, product, cta, schedule, library, examples, monteur FROM studio_settings WHERE creator_id = $1',
+        'SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = $1',
         [creatorId]
     );
     return rows[0] ? overDefaults(rows[0]) : defaultStudioSettings();
@@ -284,12 +315,12 @@ export async function updateStudioSettings(
     if (problems.length) throw problemsError(problems.slice(0, MAX_PROBLEMS), 'these settings');
 
     await exec.query(
-        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, updated_at)
-         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, NOW())
+        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, updated_at)
+         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, NOW())
          ON CONFLICT (creator_id) DO UPDATE
             SET brand = EXCLUDED.brand, voice = EXCLUDED.voice, product = EXCLUDED.product,
                 cta = EXCLUDED.cta, schedule = EXCLUDED.schedule, library = EXCLUDED.library,
-                examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, updated_at = NOW()`,
+                examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, infographic = EXCLUDED.infographic, updated_at = NOW()`,
         [
             creatorId,
             JSON.stringify(next.brand), JSON.stringify(next.voice), JSON.stringify(next.product),
@@ -297,6 +328,7 @@ export async function updateStudioSettings(
             // SQL NULL, not the JSON value `null`: "no examples" is the absence of a list.
             next.examples === null ? null : JSON.stringify(next.examples),
             JSON.stringify(next.monteur),
+            JSON.stringify(next.infographic),
         ]
     );
     await supersedeStaleScans(exec, creatorId, current.monteur, next.monteur);

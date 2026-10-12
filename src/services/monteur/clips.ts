@@ -329,7 +329,8 @@ export function localDay(instant: number, timeZone: string): string {
     return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(instant));
 }
 
-async function insertVideoPost(exec: Exec, row: {
+/** One video row of a group, as POST /posts/scheduled writes it. Also the Studio's infographics' (infographics.ts). */
+export async function insertVideoPost(exec: Exec, row: {
     creatorId: string; platform: 'both' | 'instagram' | 'facebook' | 'tiktok' | 'youtube'; caption: string; mediaUrl: string;
     coverUrl: string | null; when: Date; groupId: string; options: TikTokPostOptions | YouTubePostOptions | null;
 }): Promise<ScheduledPostRow> {

@@ -313,13 +313,24 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         assert.doesNotMatch(clips, /'rejected'|'failed'/, 'a rejected or failed reel keeps nothing');
     });
 
+    it('keeps an infographic\u2019s GIF while it exists, and its MP4 and cover until its posting time', async () => {
+        // The GIF is posted by hand (LinkedIn, X), so no scheduled post ever names it.
+        const clause = await keepClause();
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM infographics i WHERE \(COALESCE\(i\.render->>'gif_url', ''\) \|\| CASE WHEN i\.status <> 'scheduled' OR \(i\.schedule->>'scheduled_time'\)::timestamptz > NOW\(\) THEN ' ' \|\| COALESCE\(i\.render->>'mp4_url', ''\) \|\| ' ' \|\| COALESCE\(i\.render->>'cover_url', ''\) ELSE '' END\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
+    it('keeps the portrait the infographic brand shows', async () => {
+        const clause = await keepClause();
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM studio_settings ss WHERE ss\.infographic->>'photo_url' LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
     it('requires every guard at once: each NOT EXISTS is ANDed, never ORed', async () => {
         // An OR between them would delete anything any single table does not name — a render
         // slide is named by no scheduled post, so it would go.
         await pruneOrphanedMedia();
         const sql = statements[0]!;
-        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 4);
-        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 4);
+        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 6);
+        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 6);
         assert.doesNotMatch(sql, /OR NOT EXISTS/);
     });
 

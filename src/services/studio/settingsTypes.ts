@@ -127,6 +127,34 @@ export type MonteurConfig = {
     max_seconds: number;
 };
 
+export type InfographicSocial = 'instagram' | 'youtube' | 'linkedin' | 'x' | 'tiktok' | 'facebook' | 'github';
+export type InfographicTheme = 'dark' | 'light';
+export type InfographicPlatform = 'instagram' | 'facebook' | 'youtube';
+
+/**
+ * The personal brand an infographic is drawn in (v31). It is not `brand`, the course's carousel
+ * kit: an infographic carries the creator's own name, portrait and handles.
+ */
+export type InfographicConfig = {
+    name: { ar: string; en: string };
+    /** e.g. "example.dev": in the footer, in the accent. */
+    site: string;
+    /** e.g. "@example": beside the social icons. */
+    handle: string;
+    socials: InfographicSocial[];
+    /** `#RRGGBB`. The dark page is this mixed into black; the light page's ink is it deepened. */
+    primary: string;
+    /** `#RRGGBB`. */
+    accent: string;
+    /** An upload of ours (`/api/uploads/<id>`), shown round and in black and white. Null: no portrait. */
+    photo_url: string | null;
+    /** For a new infographic. */
+    theme: InfographicTheme;
+    language: 'ar' | 'en';
+    /** Where Schedule posts the MP4. At least one. */
+    platforms: InfographicPlatform[];
+};
+
 export type StudioSettings = {
     brand: BrandKit;
     voice: VoiceProfile;
@@ -137,6 +165,7 @@ export type StudioSettings = {
     /** Carousels the tenant approved, used as few-shot examples; `null` = the built-in ones. */
     examples: Carousel[] | null;
     monteur: MonteurConfig;
+    infographic: InfographicConfig;
 };
 
 /** The Monteur's defaults: off, no folder, one reel a day from one video, each reviewed. */
@@ -156,6 +185,25 @@ export function defaultMonteurConfig(): MonteurConfig {
         post_at: ['19:00'],
         min_seconds: 20,
         max_seconds: 45,
+    };
+}
+
+/**
+ * Neutral: no name, site, handles or portrait, so a tenant's infographic says nothing about
+ * anyone until its brand is filled in. The colours are only a starting point.
+ */
+export function defaultInfographicConfig(): InfographicConfig {
+    return {
+        name: { ar: '', en: '' },
+        site: '',
+        handle: '',
+        socials: [],
+        primary: '#0E3B5C',
+        accent: '#F2A33A',
+        photo_url: null,
+        theme: 'dark',
+        language: 'en',
+        platforms: ['instagram', 'facebook'],
     };
 }
 
@@ -207,5 +255,6 @@ export function defaultStudioSettings(): StudioSettings {
         library: { root: null },
         examples: null,
         monteur: defaultMonteurConfig(),
+        infographic: defaultInfographicConfig(),
     };
 }
