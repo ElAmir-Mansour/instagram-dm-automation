@@ -17,7 +17,8 @@ import { pool } from '../../config/db.js';
 import { queryCount, queryOne } from '../../db/query.js';
 import type {
     CarouselDraftRow, ClipDraftRow, ClipRender, DraftRender, InfographicRender, InfographicRow, LessonNotes, MomentKind,
-    MonteurRenderPayload, MonteurScanPayload, MonteurSourceRow, RenderCarouselPayload, StudioJobKind, StudioJobRow,
+    MonteurRenderPayload, MonteurScanPayload, MonteurSourceRow, RenderCarouselPayload, RenderInfographicPayload, StudioJobKind,
+    StudioJobRow,
 } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
 import { getPublicBaseUrl } from '../appSettings.js';
@@ -1028,8 +1029,10 @@ async function applyInfographicRender(exec: Exec, job: LockedJob, result: unknow
     const r = parsed.result;
     const id = payloadId(job, 'infographicId');
     const { rows } = id
-        ? await exec.query<Pick<InfographicRow, 'job_id' | 'spec' | 'caption'>>(
-            'SELECT job_id, spec, caption FROM infographics WHERE id = $1 AND creator_id = $2 FOR UPDATE', [id, job.creator_id]
+        ? await exec.query<Pick<InfographicRow, 'job_id' | 'spec' | 'caption' | 'topic' | 'notes' | 'language' | 'pair_theme'>>(
+            `SELECT job_id, spec, caption, topic, notes, language, pair_theme FROM infographics
+              WHERE id = $1 AND creator_id = $2 FOR UPDATE`,
+            [id, job.creator_id]
         )
         : { rows: [] };
     const row = rows[0];
@@ -1050,7 +1053,28 @@ async function applyInfographicRender(exec: Exec, job: LockedJob, result: unknow
           WHERE id = $1 AND creator_id = $2`,
         [id, job.creator_id, JSON.stringify(spec), caption, JSON.stringify(render), problems.length ? problems.join('\n') : null]
     );
+    if (r.written && row.pair_theme) await renderPair(exec, job, row, r.written.spec, r.written.caption);
     return { stored: r, outcome: 'applied' };
+}
+
+/**
+ * "Both themes": the infographic Claude just wrote, copied into the other theme and queued to
+ * render, with the same brand and language as the job that wrote it. Claude is asked once.
+ */
+async function renderPair(
+    exec: Exec, job: LockedJob, row: Pick<InfographicRow, 'topic' | 'notes' | 'language' | 'pair_theme'>, spec: unknown, caption: string
+): Promise<void> {
+    const theme = row.pair_theme!;
+    const { rows } = await exec.query<{ id: string }>(
+        `INSERT INTO infographics (creator_id, topic, notes, language, theme, status, spec, caption)
+         VALUES ($1, $2, $3, $4, $5, 'rendering', $6::jsonb, $7) RETURNING id`,
+        [job.creator_id, row.topic, row.notes, row.language, theme, JSON.stringify(spec), caption]
+    );
+    const copyId = rows[0]!.id;
+    const { write: _write, ...base } = job.payload as RenderInfographicPayload;
+    const queued = await enqueueJob(exec, job.creator_id, 'render_infographic', { ...base, infographicId: copyId, theme, spec });
+    await exec.query('UPDATE infographics SET job_id = $2 WHERE id = $1', [copyId, queued.id]);
+    await exec.query('UPDATE infographics SET pair_theme = NULL WHERE id = $1', [payloadId(job, 'infographicId')]);
 }
 
 /** Counts for the status card. */

@@ -1090,6 +1090,8 @@ export interface InfographicRow {
     notes: string | null;
     language: 'ar' | 'en';
     theme: InfographicTheme;
+    /** "Both themes" was asked: once this one is written, a copy in this theme is rendered (jobs.ts). */
+    pair_theme: InfographicTheme | null;
     status: InfographicStatus;
     /** What the template draws (InfographicSpec in infographics.ts). Null until Claude has written it. */
     spec: unknown;

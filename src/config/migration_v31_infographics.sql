@@ -10,6 +10,8 @@
 --   render   { job_id, mp4_url, gif_url, cover_url, gif_width, gif_fps, model }
 --   schedule { scheduled_time, group_id, row_ids }
 --   job_id   the latest render job: an older job's result is dropped, not applied
+--   pair_theme  "both themes" was asked: once Claude has written this one, a copy in this theme
+--               is made and rendered (jobs.ts), and the column goes back to NULL
 --
 -- `studio_settings.infographic` holds the brand the page is drawn in (name, site, handles,
 -- colours, portrait) and where Schedule posts it.
@@ -25,6 +27,7 @@ CREATE TABLE IF NOT EXISTS infographics (
     notes       TEXT,
     language    TEXT NOT NULL,
     theme       TEXT NOT NULL DEFAULT 'dark',
+    pair_theme  TEXT,
     status      TEXT NOT NULL,
     spec        JSONB,
     caption     TEXT,
@@ -36,7 +39,8 @@ CREATE TABLE IF NOT EXISTS infographics (
     updated_at  TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     CONSTRAINT infographics_status_check CHECK (status IN ('writing', 'rendering', 'ready', 'failed', 'scheduled')),
     CONSTRAINT infographics_language_check CHECK (language IN ('ar', 'en')),
-    CONSTRAINT infographics_theme_check CHECK (theme IN ('dark', 'light'))
+    CONSTRAINT infographics_theme_check CHECK (theme IN ('dark', 'light')),
+    CONSTRAINT infographics_pair_theme_check CHECK (pair_theme IS NULL OR (pair_theme IN ('dark', 'light') AND pair_theme <> theme))
 );
 
 CREATE INDEX IF NOT EXISTS idx_infographics_creator ON infographics (creator_id, created_at DESC);

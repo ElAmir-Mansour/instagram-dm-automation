@@ -5,6 +5,8 @@
  *   create     topic → a `writing` row and a render_infographic job whose payload asks Claude (on
  *              the Mac, the owner's plan) to write it first. The worker renders what Claude wrote
  *              and returns that spec, the caption and the three files; jobs.ts applies them.
+ *              `theme: 'both'` writes once and renders twice: jobs.ts copies it into the other
+ *              theme as soon as Claude's answer lands (`pair_theme`).
  *   edit       a spec edited in the dashboard → `rendering`, a job with the spec in it.
  *              A caption edited alone is only saved: the files don't change.
  *   render     the same spec in the other theme, or `rewrite`: Claude writes it again.
@@ -49,7 +51,7 @@ export type InfographicView = Omit<InfographicRow, 'creator_id'> & {
 };
 
 const VIEW_SQL = `
-    SELECT i.id, i.topic, i.notes, i.language, i.theme, i.status, i.spec, i.caption, i.render, i.schedule, i.job_id,
+    SELECT i.id, i.topic, i.notes, i.language, i.theme, i.pair_theme, i.status, i.spec, i.caption, i.render, i.schedule, i.job_id,
            i.error, i.created_at, i.updated_at, j.status AS job_status, j.progress AS job_progress
       FROM infographics i
       LEFT JOIN studio_jobs j ON j.id = i.job_id
@@ -131,7 +133,7 @@ async function queue(exec: Exec, creatorId: string, id: string, payload: RenderI
     );
 }
 
-/** POST /infographics `{ topic, notes?, language?, theme? }`: Claude writes it, then the Mac renders it. */
+/** POST /infographics `{ topic, notes?, language?, theme? }` (theme dark, light or both): Claude writes it, then the Mac renders it. */
 export async function createInfographic(creatorId: string, body: unknown): Promise<InfographicView> {
     const b = isPlainObject(body) ? body : {};
     const topic = clipText(b.topic, MAX_TOPIC + 1);
@@ -145,16 +147,19 @@ export async function createInfographic(creatorId: string, body: unknown): Promi
 
     const settings = await getStudioSettings(creatorId);
     const language = (b.language as 'ar' | 'en' | undefined) ?? settings.infographic.language;
-    const theme = parseTheme(b.theme, settings.infographic.theme);
+    const both = b.theme === 'both';
+    // Both: the settings' theme first, the other one copied from it once it is written.
+    const theme = both ? settings.infographic.theme : parseTheme(b.theme, settings.infographic.theme);
+    const pair: InfographicTheme | null = both ? (theme === 'dark' ? 'light' : 'dark') : null;
     return withTransaction(async (client) => {
         const { rows } = await client.query<{ id: string }>(
-            `INSERT INTO infographics (creator_id, topic, notes, language, theme, status)
-             VALUES ($1, $2, $3, $4, $5, 'writing') RETURNING id`,
-            [creatorId, topic, notes, language, theme]
+            `INSERT INTO infographics (creator_id, topic, notes, language, theme, pair_theme, status)
+             VALUES ($1, $2, $3, $4, $5, $6, 'writing') RETURNING id`,
+            [creatorId, topic, notes, language, theme, pair]
         );
         const id = rows[0]!.id;
         await queue(client, creatorId, id, renderPayload(id, { topic: topic!, notes, language }, theme, settings, null), 'writing');
-        log('info', 'studio.infographic_created', { infographic_id: id, language, theme });
+        log('info', 'studio.infographic_created', { infographic_id: id, language, theme, pair_theme: pair });
         return loadView(client, creatorId, id);
     });
 }

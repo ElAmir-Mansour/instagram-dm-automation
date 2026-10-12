@@ -204,7 +204,7 @@ beforeEach(() => {
     infographicSettings = { ...BRAND };
     posts = [];
     row = {
-        id: ID, creator_id: TENANT, topic: 'RAG vs CAG vs KAG', notes: null, language: 'ar', theme: 'dark', status: 'ready',
+        id: ID, creator_id: TENANT, topic: 'RAG vs CAG vs KAG', notes: null, language: 'ar', theme: 'dark', pair_theme: null, status: 'ready',
         spec: SPEC, caption: CAPTION, render: { job_id: JOB, mp4_url: up(1), gif_url: up(2), cover_url: up(3), gif_width: 720, gif_fps: 15, model: 'm' },
         schedule: null, job_id: JOB, error: null, created_at: new Date(), updated_at: new Date(),
     };
@@ -229,7 +229,7 @@ describe('createInfographic', () => {
     it('queues one job that asks Claude (the latest Opus) to write it, then render it in the tenant’s brand', async () => {
         await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG', notes: 'Mention cost' });
         const insert = db.ran(/^INSERT INTO infographics/)[0]!;
-        assert.deepEqual(insert.params, [TENANT, 'RAG vs CAG vs KAG', 'Mention cost', 'ar', 'light'], 'the settings’ language and theme by default');
+        assert.deepEqual(insert.params, [TENANT, 'RAG vs CAG vs KAG', 'Mention cost', 'ar', 'light', null], 'the settings’ language and theme by default');
         const payload = jobPayload();
         assert.equal(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[1], 'render_infographic');
         assert.equal(payload.infographicId, ID);
@@ -247,9 +247,17 @@ describe('createInfographic', () => {
 
     it('takes a language and theme of its own, and refuses a topic that says nothing', async () => {
         await createInfographic(TENANT, { topic: 'Chatbot vs Agent', language: 'en', theme: 'dark' });
-        assert.deepEqual(db.ran(/^INSERT INTO infographics/)[0]!.params.slice(3), ['en', 'dark']);
+        assert.deepEqual(db.ran(/^INSERT INTO infographics/)[0]!.params.slice(3), ['en', 'dark', null]);
         await assert.rejects(createInfographic(TENANT, { topic: 'x' }), isStudioError(400));
         await assert.rejects(createInfographic(TENANT, { topic: 'RAG', theme: 'blue' }), isStudioError(400));
+    });
+});
+
+describe('createInfographic — both themes', () => {
+    it('writes once in the settings’ theme and keeps the other to copy into', async () => {
+        await createInfographic(TENANT, { topic: 'RAG vs CAG', theme: 'both' });
+        assert.deepEqual(db.ran(/^INSERT INTO infographics/)[0]!.params.slice(4), ['light', 'dark']);
+        assert.ok(jobPayload().write, 'Claude is asked once');
     });
 });
 
@@ -358,7 +366,7 @@ describe('the job: completeJob and failJob', () => {
         db.routes.unshift([/^SELECT id, creator_id, kind, status, payload FROM studio_jobs/, () => ({
             rows: [{ id: JOB, creator_id: TENANT, kind: 'render_infographic', status: 'claimed', payload: { infographicId: ID } }],
         })]);
-        db.routes.unshift([/^SELECT job_id, spec, caption FROM infographics/, () => ({ rows: [{ job_id: row.job_id, spec: row.spec, caption: row.caption }] })]);
+        db.routes.unshift([/^SELECT job_id, spec, caption, topic, notes, language, pair_theme FROM infographics/, () => ({ rows: [row] })]);
     });
     const applied = () => db.ran(/^UPDATE infographics SET status = 'ready'/)[0]!;
 
@@ -375,6 +383,33 @@ describe('the job: completeJob and failJob', () => {
     it('keeps what to fix on a ready one: here, a caption that misses a column', async () => {
         await completeJob(TENANT, JOB, { ...RESULT, written: { spec: SPEC, caption: 'RAG and CAG', model: 'm' } });
         assert.match(applied().params[5], /doesn't mention «KAG»/);
+    });
+
+    it('both themes: once Claude’s answer lands, the copy in the other theme is queued with the same brand, and Claude isn’t asked again', async () => {
+        row.pair_theme = 'light';
+        db.routes.unshift([/^SELECT id, creator_id, kind, status, payload FROM studio_jobs/, () => ({
+            rows: [{ id: JOB, creator_id: TENANT, kind: 'render_infographic', status: 'claimed', payload: {
+                infographicId: ID, theme: 'dark', language: 'ar', brand: { site: 'elamirmansour.dev' }, write: { system: 's' },
+            } }],
+        })]);
+        db.routes.unshift([/^INSERT INTO infographics/, () => ({ rows: [{ id: 'copy-1' }] })]);
+        await completeJob(TENANT, JOB, { ...RESULT, written: { spec: SPEC, caption: CAPTION, model: 'm' } });
+        const copy = db.ran(/^INSERT INTO infographics/)[0]!;
+        assert.deepEqual(copy.params.slice(3, 5), ['ar', 'light']);
+        assert.deepEqual(JSON.parse(copy.params[5]), SPEC);
+        assert.equal(copy.params[6], CAPTION);
+        const payload = jobPayload();
+        assert.equal(payload.infographicId, 'copy-1');
+        assert.equal(payload.theme, 'light');
+        assert.deepEqual(payload.spec, SPEC);
+        assert.equal(payload.write, undefined);
+        assert.deepEqual(payload.brand, { site: 'elamirmansour.dev' });
+        assert.ok(db.ran(/^UPDATE infographics SET pair_theme = NULL WHERE id = \$1/).length, 'asked once, done once');
+    });
+
+    it('a render without a pair makes no copy', async () => {
+        await completeJob(TENANT, JOB, { ...RESULT, written: { spec: SPEC, caption: CAPTION, model: 'm' } });
+        assert.equal(db.ran(/^INSERT INTO infographics/).length, 0);
     });
 
     it('drops the result of a render that is no longer the latest', async () => {
