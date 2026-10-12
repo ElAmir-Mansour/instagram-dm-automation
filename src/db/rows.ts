@@ -23,7 +23,7 @@
  */
 import type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
 import type { Carousel } from '../services/studio/carouselTypes.js';
-import type { MonteurConfig, MonteurStyle } from '../services/studio/settingsTypes.js';
+import type { InfographicConfig, InfographicSocial, InfographicTheme, MonteurConfig, MonteurStyle } from '../services/studio/settingsTypes.js';
 
 export type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
 
@@ -505,7 +505,9 @@ export type StudioJobKind =
     /** The Monteur (v24, MONTEUR.md §3). */
     | 'pick_folder' | 'monteur_scan' | 'monteur_transcribe' | 'monteur_render'
     /** Claude on the Mac (v28, MONTEUR.md §6.3). */
-    | 'monteur_think';
+    | 'monteur_think'
+    /** v31: an infographic, written by Claude when the payload asks, then rendered. */
+    | 'render_infographic';
 export type StudioJobStatus = 'pending' | 'claimed' | 'done' | 'failed';
 
 export interface ScanLibraryPayload { root: string }
@@ -530,7 +532,8 @@ export interface StudioJobRow {
     kind: StudioJobKind;
     payload:
         | ScanLibraryPayload | IndexLessonPayload | RenderCarouselPayload
-        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload | MonteurThinkPayload;
+        | PickFolderPayload | MonteurScanPayload | MonteurTranscribePayload | MonteurRenderPayload | MonteurThinkPayload
+        | RenderInfographicPayload;
     status: StudioJobStatus;
     progress: string | null;
     claimed_at: Timestamptz | null;
@@ -621,6 +624,8 @@ export interface StudioSettings {
     examples: Carousel[] | null;
     /** v24. The Monteur's folder, daily run and output (MONTEUR.md §1). */
     monteur: MonteurConfig;
+    /** v31. The brand an infographic is drawn in, and where Schedule posts it. */
+    infographic: InfographicConfig;
 }
 
 export interface StudioSettingsRow extends StudioSettings {
@@ -1055,4 +1060,61 @@ export interface GrowthSettingsRow extends GrowthSettings {
     updated_at: Timestamptz | null;
     last_sync_at: Timestamptz | null;
     last_sync: GrowthSyncState | null;
+}
+
+// ── Infographics (v31, src/services/studio/infographics.ts) ──
+
+export type InfographicStatus = 'writing' | 'rendering' | 'ready' | 'failed' | 'scheduled';
+
+export interface InfographicRender {
+    job_id: string;
+    mp4_url: string;
+    gif_url: string;
+    cover_url: string;
+    gif_width: number | null;
+    gif_fps: number | null;
+    /** The model that wrote the spec, when this render's job wrote it. */
+    model: string | null;
+}
+
+export interface InfographicSchedule {
+    scheduled_time: string;
+    group_id: string;
+    row_ids: string[];
+}
+
+export interface InfographicRow {
+    id: string;
+    creator_id: string;
+    topic: string;
+    notes: string | null;
+    language: 'ar' | 'en';
+    theme: InfographicTheme;
+    status: InfographicStatus;
+    /** What the template draws (InfographicSpec in infographics.ts). Null until Claude has written it. */
+    spec: unknown;
+    caption: string | null;
+    render: InfographicRender | null;
+    schedule: InfographicSchedule | null;
+    job_id: string | null;
+    error: string | null;
+    created_at: Timestamptz;
+    updated_at: Timestamptz;
+}
+
+/**
+ * `write` is there when Claude must write the spec first (a new infographic, or Rewrite): the
+ * worker answers it as a `monteur_think`, then renders the answer. Without it, `spec` is rendered.
+ */
+export interface RenderInfographicPayload {
+    infographicId: string;
+    theme: InfographicTheme;
+    /** Sets the page's direction: Arabic is right to left. */
+    language: 'ar' | 'en';
+    brand: {
+        name: { ar: string; en: string }; site: string; handle: string; socials: InfographicSocial[];
+        primary: string; accent: string; photo: string | null;
+    };
+    spec?: unknown;
+    write?: { model: string; purpose: string; system: string; user: string; schema: Record<string, unknown> };
 }

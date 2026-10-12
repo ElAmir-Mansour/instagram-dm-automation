@@ -315,11 +315,11 @@ describe('the monteur section (MONTEUR.md §1)', () => {
             const read = await getStudioSettings(TENANT);
             assert.equal(read.monteur.folder, '/v');
             assert.equal(read.monteur.run_at, '07:00', 'a stored section is merged over the defaults');
-            assert.match(statements[0]!.sql, /SELECT brand, voice, product, cta, schedule, library, examples, monteur FROM studio_settings/);
+            assert.match(statements[0]!.sql, /SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings/);
 
             await updateStudioSettings(TENANT, { monteur: { run_at: '06:30' } });
             const write = statements.find((s) => /INSERT INTO studio_settings/.test(s.sql))!;
-            assert.match(write.sql, /examples, monteur, updated_at\) VALUES/);
+            assert.match(write.sql, /examples, monteur, infographic, updated_at\) VALUES/);
             assert.match(write.sql, /monteur = EXCLUDED\.monteur/);
             assert.deepEqual(JSON.parse(write.params[8] as string), { ...read.monteur, run_at: '06:30' });
         } finally {

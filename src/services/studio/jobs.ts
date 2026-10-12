@@ -16,8 +16,8 @@
 import { pool } from '../../config/db.js';
 import { queryCount, queryOne } from '../../db/query.js';
 import type {
-    CarouselDraftRow, ClipDraftRow, ClipRender, DraftRender, LessonNotes, MomentKind, MonteurRenderPayload,
-    MonteurScanPayload, MonteurSourceRow, RenderCarouselPayload, StudioJobKind, StudioJobRow,
+    CarouselDraftRow, ClipDraftRow, ClipRender, DraftRender, InfographicRender, InfographicRow, LessonNotes, MomentKind,
+    MonteurRenderPayload, MonteurScanPayload, MonteurSourceRow, RenderCarouselPayload, StudioJobKind, StudioJobRow,
 } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
 import { getPublicBaseUrl } from '../appSettings.js';
@@ -31,6 +31,7 @@ import {
     type Exec, clipText, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN,
     withTransaction,
 } from './common.js';
+import { captionProblems, parseInfographicResult, specProblems } from './infographicSpec.js';
 import { getStudioSettings, updateStudioSettings } from './settings.js';
 
 /** A claim whose heartbeat is older than this is presumed dead: the worker crashed or slept. */
@@ -60,7 +61,7 @@ export const MAX_RENDER_FILE_BYTES = 100 * 1024 * 1024;
 /** Every job kind, for a claim that asks for some of them only. */
 export const STUDIO_JOB_KINDS: readonly StudioJobKind[] = [
     'scan_library', 'index_lesson', 'render_carousel', 'pick_folder', 'monteur_scan', 'monteur_transcribe', 'monteur_render',
-    'monteur_think',
+    'monteur_think', 'render_infographic',
 ];
 
 export type StudioJobView = Pick<
@@ -238,7 +239,7 @@ export const CLAIM_SQL = `
                 OR (status = 'claimed'
                     AND COALESCE(heartbeat_at, claimed_at, created_at) < NOW() - make_interval(mins => $2)
                     AND attempts < $3))
-         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'monteur_render' THEN 2
+         ORDER BY CASE kind WHEN 'pick_folder' THEN 0 WHEN 'render_carousel' THEN 1 WHEN 'monteur_think' THEN 1 WHEN 'render_infographic' THEN 1 WHEN 'monteur_render' THEN 2
                             WHEN 'scan_library' THEN 3 WHEN 'monteur_scan' THEN 3 ELSE 4 END,
                   created_at, id
          LIMIT 1
@@ -367,6 +368,10 @@ export async function completeJob(creatorId: string, jobId: string, result: unkn
         } else if (job.kind === 'monteur_think') {
             // Only stored: the sweep reads it by its request id on its next drain (think.ts).
             stored = parseMonteurThinkResult(result);
+        } else if (job.kind === 'render_infographic') {
+            const applied = await applyInfographicRender(client, job, result);
+            stored = applied.stored;
+            outcome = applied.outcome;
         } else {
             throw new StudioError(409, `Unknown job kind "${String(job.kind)}".`);
         }
@@ -393,7 +398,7 @@ async function lockJob(exec: Exec, creatorId: string, jobId: string): Promise<Lo
     return rows[0];
 }
 
-function payloadId(job: LockedJob, key: 'lessonId' | 'draftId' | 'sourceId' | 'clipId'): string | null {
+function payloadId(job: LockedJob, key: 'lessonId' | 'draftId' | 'sourceId' | 'clipId' | 'infographicId'): string | null {
     const value = isPlainObject(job.payload) ? (job.payload as Record<string, unknown>)[key] : undefined;
     return typeof value === 'string' && UUID_PATTERN.test(value) ? value.toLowerCase() : null;
 }
@@ -996,7 +1001,56 @@ async function applyFailure(exec: Exec, job: LockedJob, error: string): Promise<
         );
         // The last clip to leave rendering finishes its source, whether it landed or not.
         if (rows[0]) await markSourceDoneIfRendered(exec, job.creator_id, rows[0].source_id);
+    } else if (job.kind === 'render_infographic') {
+        const id = payloadId(job, 'infographicId');
+        if (!id) return;
+        // Only while this job is the infographic's latest: a newer render is still on its way.
+        await exec.query(
+            `UPDATE infographics SET status = 'failed', error = $3, updated_at = NOW()
+              WHERE id = $1 AND creator_id = $2 AND job_id = $4 AND status IN ('writing', 'rendering')`,
+            [id, job.creator_id, error, job.id]
+        );
     }
+}
+
+/**
+ * An infographic's render: its three files, and — when this job wrote it — the spec Claude wrote
+ * and the worker rendered, and its caption. Applied only while the job is the infographic's latest
+ * (`job_id`); a deleted infographic or an older render is dropped, its files left to the media sweep.
+ *
+ * What the spec or the caption breaks (a line over its budget, a caption that misses a column) is
+ * kept in `error` on a `ready` infographic: it rendered, the operator sees what to fix, and Schedule
+ * refuses a caption that isn't about the GIF.
+ */
+async function applyInfographicRender(exec: Exec, job: LockedJob, result: unknown): Promise<{ stored: unknown; outcome: CompleteOutcome }> {
+    const parsed = parseInfographicResult(result);
+    if (!parsed.ok) throw problemsError(parsed.problems, 'this infographic render');
+    const r = parsed.result;
+    const id = payloadId(job, 'infographicId');
+    const { rows } = id
+        ? await exec.query<Pick<InfographicRow, 'job_id' | 'spec' | 'caption'>>(
+            'SELECT job_id, spec, caption FROM infographics WHERE id = $1 AND creator_id = $2 FOR UPDATE', [id, job.creator_id]
+        )
+        : { rows: [] };
+    const row = rows[0];
+    if (!row || row.job_id !== job.id) {
+        log('info', 'studio.infographic_render_dropped', { job_id: job.id, infographic_id: id, reason: row ? 'superseded' : 'gone' });
+        return { stored: { ...r, dropped: true }, outcome: 'dropped' };
+    }
+    const spec = r.written ? r.written.spec : row.spec;
+    const caption = r.written ? r.written.caption : row.caption;
+    const problems = [...specProblems(spec), ...captionProblems(caption, spec)];
+    const render: InfographicRender = {
+        job_id: job.id, mp4_url: r.mp4_url, gif_url: r.gif_url, cover_url: r.cover_url,
+        gif_width: r.gif_width, gif_fps: r.gif_fps, model: r.written?.model ?? null,
+    };
+    await exec.query(
+        `UPDATE infographics
+            SET status = 'ready', spec = $3::jsonb, caption = $4, render = $5::jsonb, error = $6, updated_at = NOW()
+          WHERE id = $1 AND creator_id = $2`,
+        [id, job.creator_id, JSON.stringify(spec), caption, JSON.stringify(render), problems.length ? problems.join('\n') : null]
+    );
+    return { stored: r, outcome: 'applied' };
 }
 
 /** Counts for the status card. */

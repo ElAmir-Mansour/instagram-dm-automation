@@ -1,6 +1,6 @@
 /**
- * Carousel Studio routes, under `/api/studio` (STUDIO.md §4, §5, §10), and the Monteur's
- * (MONTEUR.md §4, §5).
+ * Carousel Studio routes, under `/api/studio` (STUDIO.md §4, §5, §10), the Monteur's
+ * (MONTEUR.md §4, §5), and the infographics' (v31, src/services/studio/infographics.ts).
  *
  * Two routers, because the worker is not a dashboard user and carries no session:
  *
@@ -38,6 +38,10 @@ import {
 import { claimJob, completeJob, failJob, jobCounts, reportProgress, STUDIO_JOB_KINDS } from '../services/studio/jobs.js';
 import { enqueueIndex, enqueueScan, getLesson, indexMissing, lessonCounts, listLessons } from '../services/studio/lessons.js';
 import { queuedTikTokCount, runTikTokBatch, scheduleDraft, unscheduleDraft } from '../services/studio/schedule.js';
+import {
+    copyInfographic, createInfographic, deleteInfographic, getInfographic, listInfographics, rerenderInfographic,
+    scheduleInfographic, updateInfographic,
+} from '../services/studio/infographics.js';
 import { getStudioSettings, updateStudioSettings } from '../services/studio/settings.js';
 import { nextFreeSlots, parseSlotCount } from '../services/studio/slots.js';
 import {
@@ -423,6 +427,49 @@ studioRouter.post('/monteur/clips/:id/reject', handle('monteur.reject_failed', '
 
 studioRouter.post('/monteur/clips/:id/rerender', handle('monteur.rerender_failed', 'Failed to render the reel again.', async (req, res) => {
     res.json(await rerenderClip(getTenantId(req), requireId(req.params.id, 'clip')));
+}));
+
+// ── Infographics (v31): written by Claude on the Mac, rendered there as MP4 + GIF + cover ──
+
+studioRouter.get('/infographics', handle('studio.infographics_failed', 'Failed to list the infographics.', async (req, res) => {
+    res.json({ infographics: await listInfographics(getTenantId(req)) });
+}));
+
+studioRouter.get('/infographics/:id', handle('studio.infographic_failed', 'Failed to read the infographic.', async (req, res) => {
+    res.json(await getInfographic(getTenantId(req), req.params.id));
+}));
+
+studioRouter.post('/infographics', handle('studio.infographic_create_failed', 'Failed to start the infographic.', async (req, res) => {
+    res.status(201).json(await createInfographic(getTenantId(req), req.body));
+}));
+
+studioRouter.patch('/infographics/:id', handle('studio.infographic_patch_failed', 'Failed to save the infographic.', async (req, res) => {
+    res.json(await updateInfographic(getTenantId(req), req.params.id, req.body));
+}));
+
+studioRouter.post('/infographics/:id/render', handle('studio.infographic_render_failed', 'Failed to queue the infographic.', async (req, res) => {
+    res.json(await rerenderInfographic(getTenantId(req), req.params.id, req.body));
+}));
+
+studioRouter.post('/infographics/:id/copy', handle('studio.infographic_copy_failed', 'Failed to copy the infographic.', async (req, res) => {
+    res.status(201).json(await copyInfographic(getTenantId(req), req.params.id, req.body));
+}));
+
+studioRouter.post('/infographics/:id/schedule', handle('studio.infographic_schedule_failed', 'Failed to schedule the infographic.', async (req, res) => {
+    const creatorId = getTenantId(req);
+    const outcome = await scheduleInfographic(creatorId, req.params.id, req.body);
+    await writeAudit(await actorFromSession(req.session), {
+        action: AUDIT_ACTIONS.infographicSchedule,
+        targetType: 'infographic',
+        targetId: outcome.infographic.id,
+        detail: { scheduled_time: outcome.scheduled_time, post_ids: outcome.rows.map((row) => row.id) },
+    });
+    res.json({ infographic: outcome.infographic, scheduled_time: outcome.scheduled_time });
+}));
+
+studioRouter.delete('/infographics/:id', handle('studio.infographic_delete_failed', 'Failed to delete the infographic.', async (req, res) => {
+    await deleteInfographic(getTenantId(req), req.params.id);
+    res.status(204).end();
 }));
 
 studioRouter.post('/monteur/lessons/refresh', handle('monteur.lessons_failed', 'Failed to run the Analyst.', async (req, res) => {
