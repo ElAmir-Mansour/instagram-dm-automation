@@ -92,6 +92,18 @@ describe('specProblems', () => {
     });
 });
 
+describe('specProblems — logos', () => {
+    const GO = { title: 'Go', hex: '#00ADD8', path: 'M1.811 10.231c-.047 0-.058-.023-.035-.059l.246-.315z' };
+    it('takes a logo the worker found, and refuses one whose path is anything but path data', () => {
+        const withLogo = { ...SPEC, columns: [{ ...column('RAG'), logo: GO }, column('CAG'), column('KAG')] };
+        assert.deepEqual(specProblems(withLogo), []);
+        const evil = { ...SPEC, columns: [{ ...column('RAG'), logo: { ...GO, path: 'M0 0"/><script>alert(1)</script>' } }, column('CAG'), column('KAG')] };
+        assert.match(specProblems(evil).join(), /Column 1's logo must be/);
+        const badHex = { ...SPEC, columns: [{ ...column('RAG'), logo: { ...GO, hex: 'red' } }, column('CAG'), column('KAG')] };
+        assert.match(specProblems(badHex).join(), /Column 1's logo must be/);
+    });
+});
+
 describe('captionProblems — the caption is about the GIF', () => {
     it('passes a caption that names every column, whatever the case', () => {
         assert.deepEqual(captionProblems(CAPTION, SPEC), []);
@@ -130,6 +142,17 @@ describe('what Claude is asked', () => {
         assert.match(system, /The caption is about THIS infographic/);
         assert.match(system, /Every column name must appear in the caption/);
         for (const kind of DIAGRAM_KINDS) assert.ok(system.includes(`- ${kind}: `), kind);
+    });
+
+    it('asks for one real example carried through every column, the specific feature, and a logo only for real products', () => {
+        const system = writeSystemPrompt('en');
+        assert.match(system, /Pick ONE real example and carry it through every column/);
+        assert.match(system, /Name the specific feature that makes the difference/);
+        assert.match(system, /give its brand name in `logo`/);
+        assert.match(system, /Never for an idea or a technique/);
+        const logo = (WRITE_SCHEMA.properties.columns.items.properties as Record<string, { type: string }>).logo;
+        assert.equal(logo?.type, 'string');
+        assert.ok(!(WRITE_SCHEMA.properties.columns.items.required as readonly string[]).includes('logo'), 'optional');
     });
 
     it('gives Claude the topic, the creator’s notes and the words to avoid', () => {
