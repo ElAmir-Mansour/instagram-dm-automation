@@ -9,7 +9,9 @@ import { describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import { defaultGrowthSettings } from '../growth/settingsRow.js';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
+import { contextFor } from './context.js';
 import { goldenPath } from './golden.js';
+import { profileFromLegacy } from './legacy.js';
 import { sha256 } from './parity.js';
 import { ELAMIR_AGENT } from '../studio/testFixtures.js';
 import {
@@ -82,7 +84,7 @@ describe('the entries are what the golden files hold', () => {
         for (const [settings, slug, lang, set] of [
             [ELAMIR_SETTINGS, 'elamir', 'ar', 'elamir'], [ELAMIR_SEED_SETTINGS, 'seed', 'ar', 'elamir'], [ENGLISH_SETTINGS, 'english', 'en', 'control'],
         ] as const) entries.push(...await studioSurface(settings, { lang, slug, set }));
-        entries.push(...infographicSurface(ELAMIR_SEED_SETTINGS, { slug: 'seed' }), ...dmFallbackSurface(ELAMIR_SETTINGS), ...dmInstructionSurface(ELAMIR_AGENT));
+        entries.push(...infographicSurface(ELAMIR_SEED_SETTINGS, { slug: 'seed', ctx: contextFor(profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH), 'infographic', null) }), ...dmFallbackSurface(ELAMIR_SETTINGS), ...dmInstructionSurface(ELAMIR_AGENT));
         entries.push(...await growthSurface({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH }, { slug: 'elamir' }));
 
         assert.ok(entries.length > 60, 'three fixtures of Studio and Monteur builders, and the rest');

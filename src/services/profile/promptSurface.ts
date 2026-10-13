@@ -42,15 +42,18 @@ import { buildRenderPayload } from '../monteur/render.js';
 import type { Carousel } from '../studio/carouselTypes.js';
 import { renderPayload as carouselRenderPayload } from '../studio/drafts.js';
 import { normalizeInstagramCaption, normalizeTiktokCaption, type CallModel, type ModelRequest } from '../studio/generate.js';
-import { payloadBrand } from '../studio/infographicSpec.js';
+import { payloadBrand, type InfographicWriterContext } from '../studio/infographicSpec.js';
 import { renderPayload as infographicRenderPayload } from '../studio/infographics.js';
 import { askLine, buildCatalog, buildDm, buildPlanSystemPrompt, buildSystemPrompt, draftUserPrompt, languageKit, saveLine, tiktokLine } from '../studio/prompts.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
 import {
     ELAMIR_SEO, GOLDEN_CLIPS, GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_LINES, GOLDEN_REEL_EVIDENCE, GOLDEN_SOURCES,
 } from '../studio/testFixtures.js';
+import { contextFor } from './context.js';
 import { describeFailure } from './failure.js';
 import { goldenJsonText, type GoldenSet } from './golden.js';
+import { profileFromLegacy } from './legacy.js';
+import type { CreatorProfile } from './types.js';
 
 /** One builder's output: what a golden file holds, and what the parity script hashes. */
 export interface SurfaceEntry {
@@ -258,12 +261,16 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
  * settings' `infographic` section. The call site itself, not a copy of it: brand, system prompt, user prompt (with the
  * never-use list from `voice.avoid`) and schema. `spec = null` is write mode, which is how a new one starts. The
  * golden names carry the slug in the middle (`infographic.render-payload.seed.ar`).
+ *
+ * `ctx` is what the writer's prompt is built from (P12): the `infographic` context of the profile the caller reads the
+ * tenant through, handed to the builder exactly as `createInfographic` hands it (`infographicContext`). The surface has no
+ * default for it, so a path that forgot to give one fails to compile instead of quietly writing the owner's text.
  */
-export function infographicSurface(settings: StudioSettings, { slug }: { slug?: string } = {}): SurfaceEntry[] {
+export function infographicSurface(settings: StudioSettings, { slug, ctx }: { slug?: string; ctx: InfographicWriterContext }): SurfaceEntry[] {
     const mid = slug ? `.${slug}` : '';
     const job = (language: SurfaceLang, notes: string | null) => () => infographicRenderPayload(
         '00000000-0000-4000-8000-0000000000aa', { topic: 'RAG vs CAG vs KAG', notes, language },
-        settings.infographic.theme, settings, null,
+        settings.infographic.theme, settings, null, ctx,
     );
     return [
         built(`infographic.render-payload${mid}.ar`, 'json', 'elamir', job('ar', 'ركّز على التكلفة وسرعة الاستجابة')),
@@ -436,8 +443,11 @@ export async function growthSurface(rows: GrowthRows, { slug, storedProfile }: {
 
 // ─── The whole surface of a live tenant ─────────────────────────────────────────────────────
 
-/** A tenant's rows, and the DM agent's persona when it has one. */
-export interface TenantRows extends GrowthRows { agent?: AgentPersona | null }
+/**
+ * A tenant's rows, and the DM agent's persona when it has one. `profile` is the profile the rows are read through (path (b)
+ * of the parity script); without one the tenant is described by its rows alone, `profileFromLegacy`, which is today's path.
+ */
+export interface TenantRows extends GrowthRows { agent?: AgentPersona | null; profile?: CreatorProfile }
 
 /**
  * Everything above, for one tenant's rows, with no fixture suffix: what `prompt-parity.mts` hashes. Called twice per
@@ -447,7 +457,7 @@ export interface TenantRows extends GrowthRows { agent?: AgentPersona | null }
 export async function tenantSurface(rows: TenantRows, options: WithRowsOptions = {}): Promise<SurfaceEntry[]> {
     return [
         ...await studioSurface(rows.studio, { lang: rows.studio.voice.language }),
-        ...infographicSurface(rows.studio),
+        ...infographicSurface(rows.studio, { ctx: contextFor(rows.profile ?? profileFromLegacy(rows.studio, rows.growth), 'infographic', null) }),
         ...(rows.agent ? dmInstructionSurface(rows.agent) : []),
         ...dmFallbackSurface(rows.studio),
         ...await growthSurface(rows, options),

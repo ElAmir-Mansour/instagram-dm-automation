@@ -11,6 +11,10 @@
  * profile, and a site's test cannot tell the two statements apart by their SQL. It does know the order, so it says
  * "the first read is the settings' own, the second is the stamp's" with `failAt = 2`, and asserts that the stamp
  * really did read (`reads.creators.length`), so a stamp that never asked cannot pass as one that failed.
+ *
+ * A site that has no read of its own to name (the infographic's stamp is the version of the context its prompt is built
+ * from) says "the connection drops after the settings' read" instead: `failFrom = 2`, every read after the first throws,
+ * whichever code asks and however many do.
  */
 import { defaultProfile } from './defaults.js';
 import { throughJsonb } from './jsonb.js';
@@ -25,13 +29,15 @@ export interface ProfileReads {
     creators: string[];
     /** The read with this number (1 is the first) throws, as a dropped connection would; the others answer. */
     failAt: number | null;
+    /** Every read from this number on throws: the connection dropped after the settings reader's own. */
+    failFrom: number | null;
 }
 
 export function profileReads(versions: Record<string, number>): { reads: ProfileReads; route: ProfileRoute } {
-    const reads: ProfileReads = { creators: [], failAt: null };
+    const reads: ProfileReads = { creators: [], failAt: null, failFrom: null };
     const route: ProfileRoute = [PROFILE_READ, ([creatorId]) => {
         reads.creators.push(creatorId);
-        if (reads.creators.length === reads.failAt) throw new Error('Connection terminated unexpectedly');
+        if (reads.creators.length === reads.failAt || (reads.failFrom !== null && reads.creators.length >= reads.failFrom)) throw new Error('Connection terminated unexpectedly');
         const version = versions[creatorId];
         return { rows: version === undefined ? [] : [{ profile: throughJsonb(defaultProfile()), version, activated_at: null }] };
     }];
