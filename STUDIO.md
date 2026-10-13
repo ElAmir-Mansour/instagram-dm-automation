@@ -269,7 +269,7 @@ studio_settings (
   cta      jsonb NOT NULL,   -- CtaConfig
   schedule jsonb NOT NULL,   -- ScheduleConfig
   library  jsonb NOT NULL,   -- LibraryConfig
-  examples jsonb,            -- Carousel[] the tenant approved, used as few-shot; null = built-in examples
+  examples jsonb,            -- the tenant's few-shot carousels; `reference: true` marks another creator's; null = none (the owner alone gets the built-ins until his are copied here, P9/P14)
   updated_at timestamptz DEFAULT now()
 )
 studio_workers (             -- replaces the global app_settings `studio.worker_*` keys
@@ -322,7 +322,7 @@ type CtaConfig = {
 };
 type ScheduleConfig = { timezone: string; slots: string[] };      // 'Asia/Riyadh', ['13:00','21:00']
 type LibraryConfig = { root: string | null };                     // folder the worker scans; null = not set
-type StudioSettings = { brand; voice; product; cta; schedule; library; examples: Carousel[] | null };
+type StudioSettings = { brand; voice; product; cta; schedule; library; examples: ExampleCarousel[] | null };
 ```
 `defaultStudioSettings()` is neutral (English, generic copy, the dark-grid theme, a default palette, no
 product). ElAmir's tenant gets today's exact values from a seed script run once after deploy.
@@ -333,7 +333,13 @@ product). ElAmir's tenant gets today's exact values from a seed script run once 
   → `{ worker, token }` (token shown once); `DELETE /api/studio/workers/:id` (revoke). These replace
   `/api/studio/worker-token`.
 - **Generation**: `GenContext` gains `settings: StudioSettings`. Prompts are built from `voice.guide`,
-  `voice.language`, `voice.digits`, `product`, `cta`, and examples = `settings.examples ?? builtIn(language)`.
+  `voice.digits`, `product`, `cta`, and the examples = `settings.examples` (the built-ins only for the platform owner,
+  until his three are copied into his row by `scripts/copy-owner-examples.mts` and P14 removes the fallback; a
+  tenant with none gets no "Approved carousels" section). Who the writer writes for is the profile's `carousel`
+  context (`GenContext.wording`, from `studioWording`): the language and register (the time words a TikTok caption must
+  not use, and the DM's fallback question, are that register's, `profile/kits.ts`), the noun for what is sold
+  ("whose program is…"; a pitch fallback exists only for a course) and the kind (the learning hashtags are an
+  educator's or a coach's). Examples are printed by `exampleJson`, keys in a fixed order, because jsonb reorders them.
   Palette = `brand.palette`. The DM = `cta.dmTemplate` filled in. Rules check the IG caption contains
   `cta.instagramAsk` with the keyword filled, and the TikTok caption contains `cta.tiktokLine`
   (not hardcoded «البايو»); Arabic-digit checks apply only when `voice.digits = 'arabic-indic'`.

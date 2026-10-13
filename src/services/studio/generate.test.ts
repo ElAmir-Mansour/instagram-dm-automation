@@ -26,9 +26,12 @@ import {
     type ModelRequest,
     type Moment,
 } from './generate.js';
-import { buildDm } from './prompts.js';
+import { contextFor } from '../profile/context.js';
+import { FITNESS_EN, SHOP_EG } from '../profile/fixtures.js';
+import { profileFromLegacy } from '../profile/legacy.js';
+import { buildDm, type StudioWording } from './prompts.js';
 import { ALT_TEXT_BUDGET, fillKeyword, validateCarousel } from './rules.js';
-import { DEFAULT_PALETTE } from './settingsTypes.js';
+import { DEFAULT_PALETTE, type StudioSettings } from './settingsTypes.js';
 import { ELAMIR_SETTINGS as AR, ENGLISH_SETTINGS as EN, SECTION_8_DM } from './testFixtures.js';
 
 // No test may reach Gemini: the module's own caller fails loudly for the whole file.
@@ -65,8 +68,17 @@ const LESSON: LessonRow = {
 };
 const SOURCES: GenSource[] = [{ lesson: LESSON, moments: MOMENTS }];
 
-const ctx = (over: Partial<GenContext> = {}): GenContext =>
-    ({ recentTopics: [], recentAccents: [], activeKeywords: [], settings: AR, ...over });
+/**
+ * Who the writer writes for, as the legacy rows of `settings` describe them (the tenant's profile before it has a stored one):
+ * the `carousel` context cut from `profileFromLegacy`. The owner alone is shown the built-in carousels (`builtInExamples`).
+ */
+const wordingOf = (settings: StudioSettings, owner = false): StudioWording =>
+    ({ ...contextFor(profileFromLegacy(settings), 'carousel', null), builtInExamples: owner });
+
+const ctx = (over: Partial<GenContext> = {}): GenContext => {
+    const settings = over.settings ?? AR;
+    return { recentTopics: [], recentAccents: [], activeKeywords: [], settings, wording: wordingOf(settings, settings === AR), ...over };
+};
 
 const localAI = ARABIC_EXAMPLES[2]!;
 const LOCAL_MOMENTS: Record<string, string> = { 'local-hero': 'M1', 'local-offline': 'M2', 'local-rag': 'M4' };
@@ -597,7 +609,8 @@ describe('generateDraft: an English tenant', () => {
         const system = m.requests[0]!.system;
         assert.ok(system.includes('Write every slide, caption and DM line in English') && system.includes('Use Latin digits'));
         assert.ok(!system.includes('ElAmir') && !system.includes('بالعربي') && !system.includes('udemy'), 'no other tenant leaks in');
-        assert.ok(system.includes('"GoalNotQuestion"'), 'the English built-in example');
+        // A tenant with no examples of its own is shown none, and the built-in carousels are the owner's: never another tenant's.
+        assert.ok(!system.includes('"GoalNotQuestion"') && !system.includes('Approved carousels'), 'no examples section');
     });
 
     it('prefers the tenant\'s own approved examples', async () => {
@@ -605,6 +618,78 @@ describe('generateDraft: an English tenant', () => {
         const m = fakeModel(toFlat(ENGLISH_EXAMPLES[0]!, { 'example-result': 'M2' }));
         await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx({ settings }), { callModel: m.call });
         assert.ok(m.requests[0]!.system.includes('"LocalAI"') && !m.requests[0]!.system.includes('"GoalNotQuestion"'));
+    });
+});
+
+// ─── A second tenant (P9) ───────────────────────────────────────────────────────────────────
+
+describe('generateDraft: a tenant that is not the owner is written for in its own register, offer and kind', () => {
+    const shop = (over: Partial<StudioWording> = {}): GenContext =>
+        ctx({ wording: { ...contextFor(SHOP_EG, 'carousel', 1), builtInExamples: false, ...over } });
+    const coach = (): GenContext => ctx({ wording: { ...contextFor(FITNESS_EN, 'carousel', 1), builtInExamples: false } });
+    const timeWordIn = (title: string) => ({ ...toFlat(localAI), captions: { ...localAI.captions, tiktokTitle: title } });
+
+    it('rejects an Egyptian time word in an Egyptian shop\'s TikTok title, and still the Gulf ones', async () => {
+        for (const word of ['النهارده', 'دلوقتي', 'الحين']) {
+            const m = fakeModel(timeWordIn(`جرّب ${word} بنفسك`));
+            await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, shop(), { callModel: m.call });
+            assert.ok(m.requests.length > 1, `${word} costs a repair round`);
+            assert.ok(lastTurn(m.requests[1]).includes(`captions.tiktokTitle uses the time word «${word}»`), `${word}: ${lastTurn(m.requests[1])}`);
+        }
+    });
+
+    it('does not reject an Egyptian time word for the owner, whose register is Gulf: that is today\'s validation', async () => {
+        const m = fakeModel(timeWordIn('جرّب النهارده بنفسك'));
+        await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx(), { callModel: m.call });
+        assert.equal(m.requests.length, 1);
+    });
+
+    it('asks the model for a pitch that ties the topic to the product, and says the product in the system prompt', async () => {
+        const m = fakeModel(toFlat(localAI));
+        await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, shop(), { callModel: m.call });
+        const req = m.requests[0]!;
+        assert.equal((req.schema.properties?.dmPitch as { description?: string }).description, 'one sentence tying the topic to the product');
+        assert.match(req.system, /whose product is «Agentic AI: الدليل العملي»/, 'the product is the settings\' (this fixture\'s), the noun is the profile\'s');
+        assert.match(req.system, /No time words \(النهارده, الليلة, دلوقتي, بكره, امبارح\)/);
+        assert.ok(!req.system.includes('Approved carousels'), 'a tenant with no examples is shown none');
+    });
+
+    it('a shop whose model leaves the pitch empty is not asked for one again: the DM drops the line, and the question falls back to its register\'s', async () => {
+        const m = fakeModel({ ...toFlat(localAI), dmQuestion: '', dmPitch: '' });
+        const out = await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, shop(), { callModel: m.call });
+        assert.ok(m.requests.length > 1, 'the question is still required, so it was asked for once more');
+        assert.ok(!lastTurn(m.requests[1]).includes('dmPitch'), lastTurn(m.requests[1]));
+        assert.ok(lastTurn(m.requests[1]).includes('dmQuestion: required'));
+        assert.ok(out.campaign.dm.includes('عايز تطبّقها بنفسك خطوة بخطوة؟ 👀'), out.campaign.dm);
+        assert.ok(!out.campaign.dm.includes('شرحتها') && !out.campaign.dm.includes('في الكورس'), out.campaign.dm);
+        assert.doesNotMatch(out.campaign.dm, /\n\n\n/);
+    });
+
+    it('the owner whose model leaves the pitch empty gets the course\'s fallback pitch, and a Gulf question: as before', async () => {
+        const m = fakeModel({ ...toFlat(localAI), dmQuestion: '', dmPitch: '' });
+        const out = await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx(), { callModel: m.call });
+        assert.ok(out.campaign.dm.includes('تبي تطبّقها بنفسك خطوة بخطوة؟ 👀'), out.campaign.dm);
+        assert.ok(out.campaign.dm.includes('شرحتها خطوة بخطوة في الكورس، مع التطبيق العملي.'), out.campaign.dm);
+    });
+
+    it('takes the learning hashtags for a coach and none for a shop', async () => {
+        const raw = { ...toFlat(localAI), captions: { ...localAI.captions, tiktok: 'هوك\n\nسطر\n\n#ا #ب #ج #د' } };
+        const shopOut = await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, shop(), { callModel: fakeModel(raw).call });
+        assert.doesNotMatch(shopOut.carousel.captions.tiktok, /LearnOnTikTok|تعلم_على_تيك_توك/);
+        const coachOut = await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, coach(), { callModel: fakeModel(raw).call });
+        assert.match(coachOut.carousel.captions.tiktok, /#LearnOnTikTok$/, 'a coach\'s caption ends with the language\'s tag');
+        const ownerOut = await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx(), { callModel: fakeModel(raw).call });
+        assert.match(ownerOut.carousel.captions.tiktok, /#تعلم_على_تيك_توك #LearnOnTikTok$/, 'and the owner\'s, both of them, as before');
+    });
+
+    it('a rewrite and the planner are written under the same wording', async () => {
+        const c = (await generateDraft({ lessonIds: [LESSON_ID] }, SOURCES, ctx(), { callModel: fakeModel(toFlat(localAI)).call })).carousel;
+        const m = fakeModel({ kind: 'stat', sources: ['L1.point1'], value: 'صفر', label: 'ريال', body: 'نماذج.' });
+        await rewriteSlide(c, 3, undefined, SOURCES, shop(), { callModel: m.call });
+        assert.match(m.requests[0]!.system, /whose product is «/);
+        const plan = fakeModel({ proposals: [{ lessons: ['L1'], angle: 'tips', title: 't', idea: 'i', rationale: 'r', slides: 8 }] });
+        await planWeek(1, [LESSON], shop(), { callModel: plan.call });
+        assert.match(plan.requests[0]!.system, /^You plan the next carousel posts for «Agentic AI بالعربي», whose product is «/);
     });
 });
 

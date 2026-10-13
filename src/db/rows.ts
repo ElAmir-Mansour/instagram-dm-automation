@@ -22,7 +22,7 @@
  * type says which columns the query actually asked for.
  */
 import type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
-import type { Carousel } from '../services/studio/carouselTypes.js';
+import type { Carousel, ExampleCarousel } from '../services/studio/carouselTypes.js';
 import type { InfographicConfig, InfographicSocial, InfographicTheme, MonteurConfig, MonteurStyle } from '../services/studio/settingsTypes.js';
 
 export type { ClipDirection, ClipEdit } from '../services/monteur/editor.js';
@@ -620,8 +620,8 @@ export interface StudioSettings {
     cta: CtaConfig;
     schedule: ScheduleConfig;
     library: LibraryConfig;
-    /** Carousels the tenant approved, as few-shot examples; null = the built-in ones. */
-    examples: Carousel[] | null;
+    /** Carousels the tenant approved, as few-shot examples (a `reference` one is another creator's); null = none of its own. */
+    examples: ExampleCarousel[] | null;
     /** v24. The Monteur's folder, daily run and output (MONTEUR.md §1). */
     monteur: MonteurConfig;
     /** v31. The brand an infographic is drawn in, and where Schedule posts it. */

@@ -37,6 +37,11 @@
  * from his stored profile, what the real `profileContext` reads from a stand-in database that holds it, and what
  * `profileContextOrLegacy` answers when that database fails. All four must write the same bytes into the same goldens.
  *
+ * The Studio writer (P9) is written from the `carousel` context of the profile (the language and register it writes in, the kind of
+ * creator and what they sell) and shows the owner his three built-in carousels until they are copied into his row (P14). Its
+ * goldens are pinned the same ways, with `studioWording` itself as the fourth: his bytes are what the new code makes of his
+ * context, and an unreadable profile is his legacy context, not a failure.
+ *
  * Nothing here depends on the clock or on chance: the builders take their dates as parameters
  * (`runCoach`'s `now`) or embed none, and every input is a fixed fixture.
  *
@@ -66,6 +71,9 @@ import {
     GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_REELS, GOLDEN_UNINDEXED_LESSON,
 } from '../studio/testFixtures.js';
 import { videoResource } from '../youtube.js';
+import { studioWording } from '../studio/drafts.js';
+import { draftSchema } from '../studio/generate.js';
+import type { StudioWording } from '../studio/prompts.js';
 import { getStudioSettings } from '../studio/settings.js';
 import { campaignSeeds, legacyCampaignSeeds } from './campaignSeeds.js';
 import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from './golden.js';
@@ -77,7 +85,7 @@ import {
     dmContextSurface, dmFallbackSurface, dmInstructionSurface, growthSurface, infographicSurface, SAY, studioSurface, type GrowthRows, type SurfaceEntry,
 } from './promptSurface.js';
 import { planOwnerOffers } from './ownerOffers.js';
-import { emptyState, installProfileDb, OWNER, setPlatformOwner, studioRow } from './testDb.js';
+import { emptyState, installProfileDb, OTHER, OWNER, setPlatformOwner, studioRow } from './testDb.js';
 import { inside, loadCampaignsPage, scramble, throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
 import { GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
@@ -177,7 +185,10 @@ const OWNER_CONTEXTS = {
 
 type Variant = {
     slug: 'elamir' | 'seed' | 'english'; settings: StudioSettings; set: GoldenSet; lang: 'ar' | 'en';
-    /** How the builder is handed the settings: as they are, as the owner's profile gives them back, or as the real reader returns them. */
+    /**
+     * How the builder is handed the settings: as they are, as the owner's profile gives them back, or as the real reader returns them.
+     * `unreadable` is today's settings with the contexts the owner gets when his profile cannot be read (the owner's fixtures only).
+     */
     via: 'today' | 'profile' | 'readers' | 'unreadable';
     /**
      * The context the Editor's prompt is written from (P10), reached the same way: described from the rows (none given:
@@ -186,6 +197,8 @@ type Variant = {
      * tools) selects, not the text of a profile that cannot be read (`LEGACY_EDITOR_KIT`, which has Arabic labels).
      */
     editor: ProfileContext<'clip_edit'> | undefined;
+    /** What the Studio's writer is told about the creator (P9), by the same route: the `carousel` context and whether the built-ins are shown. */
+    wording: StudioWording;
 };
 const FIXTURES = [
     { slug: 'elamir', settings: ELAMIR_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
@@ -195,6 +208,33 @@ const FIXTURES = [
 /** What the real reader returns for each fixture (path (c)). Read once, before any test: each swaps the one shared pool for a stand-in and puts it back, so one at a time. */
 const READ = {} as Record<(typeof FIXTURES)[number]['slug'], { settings: StudioSettings; editor: ProfileContext<'clip_edit'> }>;
 for (const f of FIXTURES) READ[f.slug] = await throughTheReader(f.settings, f.owner ? ELAMIR_GROWTH : undefined);
+
+/**
+ * The Studio writer's wording for a fixture, the four ways the code can come by it. Only the owner is shown the built-in carousels
+ * (`builtInExamples`): the English control is a tenant that is not him, so its prompt has no examples section.
+ *   today        described from the rows: `profileFromLegacy` cut to the `carousel` context (the legacy assumptions);
+ *   profile      cut from the profile as it comes back from storage;
+ *   readers      what the real `studioWording` returns from a stand-in database holding that profile, and who the owner is;
+ *   unreadable   the same, when the profile cannot be read: for the owner it is his legacy context.
+ */
+const wordingOf = (profile: CreatorProfile, version: number | null, owner: boolean): StudioWording => ({ ...contextFor(profile, 'carousel', version), builtInExamples: owner });
+
+async function wordingThroughTheReader(settings: StudioSettings, growth: GrowthSettings | undefined, owner: boolean, unreadable = false): Promise<StudioWording> {
+    const state = emptyState();
+    state.studio.set(OWNER, studioRow(scramble(settings, STUDIO_PROFILE_PATHS)));
+    if (!unreadable) state.profiles.set(OWNER, { profile: throughJsonb(profileFromLegacy(settings, growth)), version: 1, activated_at: null, updated_by: null });
+    const db = installProfileDb(state);
+    // The platform owner is the lookup's answer: this tenant for the owner's fixtures, somebody else for the control.
+    setPlatformOwner(db, owner ? OWNER : OTHER);
+    if (unreadable) { db.failOn = /FROM creator_profiles/; db.failWith = new Error('connection refused'); }
+    const previousSink = setLogSink(() => {});
+    try {
+        return await studioWording(OWNER);
+    } finally {
+        setLogSink(previousSink);
+        db.restore();
+    }
+}
 /**
  * His context on the infographic surface (tech educator, tech, فصحى), reached the three ways: described from his rows (today, no
  * stored profile), from his stored profile, and from the real `profileContext`. The writer is handed it by `infographicContext`,
@@ -206,21 +246,35 @@ const INFOGRAPHIC_CONTEXT = {
     'through the real readers': await infographicContextThroughTheReader(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH),
 } as const;
 /** Each fixture three times, into the same golden: as it is, through the profile, and through the real reader. */
-const VARIANTS: readonly Variant[] = FIXTURES.flatMap((f): Variant[] => [
-    { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today', editor: undefined },
-    {
-        slug: f.slug, settings: through(f.settings, f.owner), set: f.set, lang: f.lang, via: 'profile',
-        editor: contextFor(storedProfile(f.settings, f.owner ? ELAMIR_GROWTH : undefined), 'clip_edit', 1),
-    },
-    { slug: f.slug, settings: READ[f.slug].settings, set: f.set, lang: f.lang, via: 'readers', editor: READ[f.slug].editor },
-    // The Mac brain keeps the owner's wording when the profile cannot be read (`editorKitFor`): only his fixtures, and only the Editor changes.
-    ...(f.owner ? [{ slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'unreadable' as const, editor: legacyContext('clip_edit') }] : []),
-]);
+const GROWTH_OF = (owner: boolean): GrowthSettings | undefined => (owner ? ELAMIR_GROWTH : undefined);
+const VARIANTS: Variant[] = [];
+// One at a time: each reader swaps the one shared pool for a stand-in, and the platform owner is cached for a moment.
+for (const f of FIXTURES) {
+    VARIANTS.push(
+        { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today', editor: undefined, wording: wordingOf(profileFromLegacy(f.settings, GROWTH_OF(f.owner)), null, f.owner) },
+        {
+            slug: f.slug, settings: through(f.settings, f.owner), set: f.set, lang: f.lang, via: 'profile',
+            editor: contextFor(storedProfile(f.settings, GROWTH_OF(f.owner)), 'clip_edit', 1), wording: wordingOf(storedProfile(f.settings, GROWTH_OF(f.owner)), 1, f.owner),
+        },
+        {
+            slug: f.slug, settings: READ[f.slug].settings, set: f.set, lang: f.lang, via: 'readers',
+            editor: READ[f.slug].editor, wording: await wordingThroughTheReader(f.settings, GROWTH_OF(f.owner), f.owner),
+        },
+    );
+    // A profile that cannot be read is answered by who asks: the owner keeps his wording (`editorKitFor`, `studioWording`: his legacy
+    // contexts), only his fixtures, and only the Editor's and the Studio writer's entries change. (Any other tenant gets an error: studioWriter.test.ts.)
+    if (f.owner) {
+        VARIANTS.push({
+            slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'unreadable',
+            editor: legacyContext('clip_edit'), wording: await wordingThroughTheReader(f.settings, GROWTH_OF(true), true, true),
+        });
+    }
+}
 const describeVariant = (v: Variant): string => `${v.slug} settings${v.via === 'profile' ? ', through the profile' : v.via === 'readers' ? ', through the real readers' : v.via === 'unreadable' ? ', a profile that cannot be read' : ''}`;
 /** The Studio and Monteur builders' output for a variant, built once: the two sections below each check their half. */
 const surfaces = new Map<Variant, Promise<SurfaceEntry[]>>();
 const studioEntries = (v: Variant, prefixes: readonly string[]): Promise<SurfaceEntry[]> => {
-    if (!surfaces.has(v)) surfaces.set(v, studioSurface(v.settings, { lang: v.lang, slug: v.slug, set: v.set, editor: v.editor }));
+    if (!surfaces.has(v)) surfaces.set(v, studioSurface(v.settings, { lang: v.lang, slug: v.slug, set: v.set, editor: v.editor, carousel: v.wording }));
     return surfaces.get(v)!.then((all) => all.filter((e) => prefixes.some((p) => e.name.startsWith(p))));
 };
 /**
@@ -299,6 +353,12 @@ describe('Studio golden prompts', () => {
         matchGoldenJson('studio.draft-schema', DRAFT_SCHEMA);
         matchGoldenJson('studio.plan-schema', PLAN_SCHEMA);
     });
+
+    for (const v of VARIANTS.filter((x) => x.slug !== 'english')) {
+        it(`draftSchema: the schema the writer is handed for the owner is the golden one, from his context (${describeVariant(v)})`, () => {
+            matchGoldenJson('studio.draft-schema', draftSchema(v.wording));
+        });
+    }
 
     it('buildPlanCatalog and planUserPrompt: the week planner\'s turn', () => {
         const catalog = buildPlanCatalog([GOLDEN_LESSON, GOLDEN_UNINDEXED_LESSON]);

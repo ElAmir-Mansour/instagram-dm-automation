@@ -228,3 +228,50 @@ describe('what seed-owner-offers can reach, by its source', () => {
         assert.doesNotMatch(seed.slice(0, env), /^import .* from '\.\.\/src\//m, 'no static import of the app before the environment is loaded');
     });
 });
+
+// ─── The Studio writer's one-off (P9) ───────────────────────────────────────────────────────
+
+const COPY_EXAMPLES = path.join(ROOT, 'scripts', 'copy-owner-examples.mts');
+
+describe('copy-owner-examples.mts refuses what it does not understand, and writes only on --apply', () => {
+    it('--help prints the usage, which says it is a dry run unless --apply, and how to undo it', async () => {
+        const { code, stdout } = await script(COPY_EXAMPLES, ['--help']);
+        assert.equal(code, 0);
+        assert.match(stdout, /Dry run unless --apply/);
+        assert.match(stdout, /UPDATE studio_settings SET examples = NULL WHERE creator_id = '<his id>'/);
+        assert.match(stdout, /refuses a row that already holds examples/);
+    });
+
+    it('a mistyped or stray option is an error (exit 2), never a quiet dry run', async () => {
+        const runs = await Promise.all([
+            script(COPY_EXAMPLES, ['--aply', ...NOWHERE]),
+            script(COPY_EXAMPLES, ['--apply=yes', ...NOWHERE]),
+            script(COPY_EXAMPLES, ['apply', ...NOWHERE]),
+            script(COPY_EXAMPLES, ['--apply', '--dry-run', ...NOWHERE]),
+            script(COPY_EXAMPLES, ['--tenant', 'x', ...NOWHERE]),
+        ]);
+        for (const r of runs) assert.equal(r.code, 2, `${r.stderr}${r.stdout}`);
+        assert.match(runs[0].stderr, /unknown option --aply/);
+        assert.match(runs[1].stderr, /--apply takes no value/);
+        assert.match(runs[2].stderr, /unexpected argument "apply"/);
+        assert.match(runs[3].stderr, /--apply and --dry-run contradict each other/);
+        assert.match(runs[4].stderr, /unknown option --tenant/, 'it is the owner\'s carousels: there is no other tenant to name');
+    });
+
+    it('without a DATABASE_URL it connects to nothing, with or without --apply', async () => {
+        for (const args of [NOWHERE, ['--apply', ...NOWHERE]]) {
+            const r = await script(COPY_EXAMPLES, args);
+            assert.equal(r.code, 2);
+            assert.match(r.stderr, /DATABASE_URL is not set/);
+            assert.equal(r.stdout, '');
+        }
+    });
+});
+
+describe('the parity script tells the Studio writer who the owner is', () => {
+    it('asks the database with the statement getPlatformOwnerId runs, read-only, and hands the answer in', () => {
+        const src = readFileSync(PARITY, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+        assert.match(src, /db\.query\('SELECT id FROM creators ORDER BY created_at, id LIMIT 1'\)/);
+        assert.match(src, /input = \{ studio, growth, profile: loaded\.profile, agent, builtInExamples, stored: /);
+    });
+});

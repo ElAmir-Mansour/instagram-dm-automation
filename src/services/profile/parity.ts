@@ -132,6 +132,11 @@ export interface ParityInput {
     agent?: AgentPersona | null;
     /** What reading the stored profile found; omit for a tenant with none stored. */
     stored?: { repaired: readonly string[]; newerSchema: boolean } | null;
+    /**
+     * Whether the tenant is the platform owner, who is shown the built-in carousels until P14 (`StudioWording.builtInExamples`).
+     * The same on both paths. The script reads who the owner is from the database; left out it is false.
+     */
+    builtInExamples?: boolean;
 }
 
 /**
@@ -139,13 +144,13 @@ export interface ParityInput {
  * against a stand-in for the pool, see `promptSurface.ts`), so a test can hand it fixtures and the script can hand it rows
  * it read read-only. A builder that throws is a row that says so, not an exception: the rest are still compared.
  */
-export async function runParity({ studio, growth, profile, agent, stored }: ParityInput): Promise<ParityReport> {
-    const a = await tenantSurface({ studio, growth, agent });
+export async function runParity({ studio, growth, profile, agent, stored, builtInExamples }: ParityInput): Promise<ParityReport> {
+    const a = await tenantSurface({ studio, growth, agent, builtInExamples });
     // A stored profile is also what the Growth coach reads its language from (its `coach` surface), which the views cannot carry.
     // The profile itself is handed in too: the infographic writer reads its role, domain and register from the profile's context, not
     // from the settings; and so do the DM and comment wording (language, register, the kind of offer: P8). Path (a) describes the
     // rows' own profile, so a stored profile that speaks differently from its rows shows up as a difference in those entries.
-    const b = await tenantSurface({ studio: studioView(studio, profile), growth: growthView(growth, profile), agent, profile }, stored ? { storedProfile: profile } : {});
+    const b = await tenantSurface({ studio: studioView(studio, profile), growth: growthView(growth, profile), agent, profile, builtInExamples }, stored ? { storedProfile: profile } : {});
     return compareSurfaces(a, b, profileProblemsOf(stored));
 }
 

@@ -106,7 +106,10 @@ try {
     const growth = await readGrowthSettings(exec, id!);
     const loaded = await loadProfile(id!, exec);
     const agent = await readAgent(exec, id!);
-    input = { studio, growth, profile: loaded.profile, agent, stored: { repaired: loaded.repaired, newerSchema: loaded.newerSchema } };
+    // The built-in carousels are the owner's, shown to him alone until P14: the creator `getPlatformOwnerId` finds (tenant.ts).
+    const owner = (await db.query('SELECT id FROM creators ORDER BY created_at, id LIMIT 1')).rows[0]?.id;
+    const builtInExamples = typeof owner === 'string' && owner.toLowerCase() === id!.toLowerCase();
+    input = { studio, growth, profile: loaded.profile, agent, builtInExamples, stored: { repaired: loaded.repaired, newerSchema: loaded.newerSchema } };
     header = { tenant: id!, profile: loaded.version === null ? 'legacy (none stored: read from the rows)' : `stored v${loaded.version}`, target };
 } catch (err) {
     stop(`could not read the tenant: ${message(err)}`);

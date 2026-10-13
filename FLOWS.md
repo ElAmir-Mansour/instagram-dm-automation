@@ -436,8 +436,8 @@ Purely best-effort algorithmic boost: a failure is a `warn` (**:382**) and nothi
 not 10900), it posts `dmFallbackReply({ dmText, isFacebook, register })` (**`src/webhook/errors.ts:54`**): the first URL in the
 DM on Facebook, "link in bio" on Instagram. The language is the DM's own (Arabic script or not); the Arabic register is the
 tenant's comment surface, read by `fallbackRegister` (**`comments.ts:201`**, via `profileContextOrLegacy`) **before** the row is
-written FAILED, and the lines are `KITS[register].commentFallback` (**`src/services/profile/kits.ts:104`**,
-`commentFallback` at **`:197`**). A profile that can't be read is the owner's Gulf line for the owner; for any other tenant the
+written FAILED, and the lines are `KITS[register].commentFallback` (**`src/services/profile/kits.ts:149`**,
+`commentFallback` at **`:301`**). A profile that can't be read is the owner's Gulf line for the owner; for any other tenant the
 job is retried with the row still PENDING (a FAILED row would make the retry a duplicate), and on the last attempt the reply goes
 out in the neutral wording with a `comment.fallback_register_unreadable` line. DM code 100 is permanent
 (**`src/webhook/errors.ts`**, `classifyDmError`), so this doesn't wait for the ~10-minute backoff. The campaign's own
@@ -1292,7 +1292,7 @@ until it has one, the virtual profile its legacy settings describe (`version: nu
    (a stored profile is merged over the defaults, so a field a later release adds reads as its
    default), else `loadLegacyProfile` — the tenant's settings rows read directly and described by
    `profileFromLegacy`. A database without v33 reads as "no stored profile" (logged once).
-3. **`src/services/studio/settings.ts:265`**, **`src/services/growth/settings.ts:266`** — the settings
+3. **`src/services/studio/settings.ts:268`**, **`src/services/growth/settings.ts:266`** — the settings
    readers overlay the stored profile on their own row (`studioView` / `growthView`). A tenant with
    no stored profile, or one written by a *newer* release, gets its row unchanged.
 4. **`src/services/profile/context.ts:276`** — `profileContext(creatorId, purpose)` is `loadProfile`
@@ -1825,7 +1825,7 @@ allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409*
    read** after the claim, the job is **released** (`RELEASE_CLAIM_SQL`: `pending`, attempt unspent) before the error
    goes on, so it is neither handed out unchecked nor left `claimed` for 15 minutes.
 5. **The settings:** a tenant the Mac is not for cannot switch `monteur.brain` to `claude_mac`: 400 with the same
-   message and code (`applyStudioPatch`, **`studio/settings.ts:329`**). Only the switch is refused.
+   message and code (`applyStudioPatch`, **`studio/settings.ts:331`**). Only the switch is refused.
 6. **The operator surface:** platform admin `GET` / `PUT /api/admin/mac-brain-tenants` (**`routes/admin.ts:392`**,
    **`:405`**). `GET` reports `platform_tenant` (the owner) and `extra_tenants` (the saved list). `PUT { tenants: [ids] }`
    saves the list (`[]` is allowed; every id must be a creator), `{ tenants: null }` forgets it; each write is one

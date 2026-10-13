@@ -23,7 +23,9 @@ import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
 import { seoForWriter } from '../growth/settings.js';
 import { inFlightTriggers } from '../monteur/keywords.js';
+import { profileContextOrLegacy, ProfileUnreadableError } from '../profile/context.js';
 import { profileVersionFor } from '../profile/stamp.js';
+import { getPlatformOwnerId } from '../tenant.js';
 import type { Carousel, Slide } from './carouselTypes.js';
 import {
     type Exec, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN, withTransaction,
@@ -31,6 +33,7 @@ import {
 import { generateDraft, planWeek, rewriteSlide, type GenContext } from './generate.js';
 import { cancelRenders, deleteUnreferencedUploads, enqueueRender, type StudioJobView } from './jobs.js';
 import { LESSON_COLUMNS, MOMENT_COLUMNS } from './lessons.js';
+import type { StudioWording } from './prompts.js';
 import { validateCarousel } from './rules.js';
 import { getStudioSettings } from './settings.js';
 import { nextFreeSlots } from './slots.js';
@@ -395,6 +398,33 @@ function firstLine(text: string | null): string | null {
     return text?.split('\n').map((line) => line.trim()).find(Boolean) ?? null;
 }
 
+/** What a tenant is told when its profile cannot be read and the writer therefore cannot be built for it (a retry answers it). */
+export const WRITER_PROFILE_UNREADABLE = 'We couldn\'t read your creator profile just now, so nothing was written. Try again in a moment.';
+
+/**
+ * Who the writer writes for (P9): the profile's `carousel` context, read once per request (`profileContext`, and the settings
+ * reader has usually asked for it already), and whether this tenant is shown the owner's built-in carousels.
+ *
+ * A profile that cannot be read is `profileContextOrLegacy`'s decision, the same as for the DM bot and the comment replies: the
+ * platform owner is written for in today's text (his legacy context, logged), so a database hiccup costs him nothing he had
+ * before; any other tenant gets a retryable error (`StudioError` 503), never the owner's Gulf Arabic about courses.
+ *
+ * The built-in carousels are the owner's, copied from his posts: only the platform owner (`getPlatformOwnerId`) is shown them, and
+ * only until they are copied into his own row (`scripts/copy-owner-examples.mts`) and P14 removes the fallback. If the owner
+ * cannot be found, nobody is: another tenant must never be handed his carousels because a lookup failed.
+ */
+export async function studioWording(creatorId: string): Promise<StudioWording> {
+    let context;
+    try {
+        context = await profileContextOrLegacy(creatorId, 'carousel');
+    } catch (err) {
+        if (err instanceof ProfileUnreadableError) throw new StudioError(503, WRITER_PROFILE_UNREADABLE, undefined, 'PROFILE_UNREADABLE');
+        throw err;
+    }
+    const owner = await getPlatformOwnerId().catch(() => null);
+    return { language: context.language, who: context.who, builtInExamples: owner !== null && owner.toLowerCase() === creatorId.toLowerCase() };
+}
+
 /**
  * What the writer should avoid repeating and must not collide with (STUDIO.md §7, §10):
  *   - recentTopics: the last 20 drafts' titles, and the first lines of the last 20 carousel captions
@@ -402,9 +432,10 @@ function firstLine(text: string | null): string | null {
  *   - activeKeywords: every comma-separated trigger of every active campaign
  *   - palette: the tenant's brand palette
  *   - seo: the Growth settings' search keywords and hashtags (GROWTH.md §4); empty when unset
+ *   - wording: who the writer writes for, from the profile (`studioWording`)
  */
 export async function buildGenContext(creatorId: string, settings?: StudioSettings): Promise<GenContext> {
-    const [studio, drafts, captions, accents, campaigns, seo, reels] = await Promise.all([
+    const [studio, drafts, captions, accents, campaigns, seo, reels, wording] = await Promise.all([
         settings ?? getStudioSettings(creatorId),
         queryRows<{ title: string | null; idea: string | null }>(
             `SELECT carousel->'slides'->0->>'title' AS title, input->>'idea' AS idea
@@ -433,6 +464,7 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
         // The Monteur's reels in flight have no campaign yet, but their keywords are taken all the
         // same. Fail-soft: before migration v24 there are none.
         inFlightTriggers(pool, creatorId).catch(() => ({ keywords: [], variants: [] })),
+        studioWording(creatorId),
     ]);
     const topics = [
         ...drafts.map((d) => d.title?.trim() || d.idea?.trim() || null),
@@ -445,6 +477,7 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
             .map((k) => k.trim()).filter(Boolean)),
         palette: [...studio.brand.palette],
         settings: studio,
+        wording,
         seo,
     };
 }

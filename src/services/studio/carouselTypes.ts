@@ -5,7 +5,7 @@
 //     library the comment below mentions;
 //   - structural, and additive: `SlideMeta.altText` (GROWTH.md §4). The templates never render
 //     it, so the renderer's copy of this file does not need it; a carousel carrying it renders
-//     exactly as before.
+//     exactly as before. And `ExampleCarousel` at the end: a stored few-shot example (P9).
 
 /**
  * The contract between the carousel copy (`posts/*.ts`) and the slide templates.
@@ -158,3 +158,11 @@ export type Carousel = {
     tiktok: string;
   };
 };
+
+/**
+ * A carousel kept in `studio_settings.examples` as a few-shot example for the writer (P9). Not part of the design's schema
+ * and never rendered: `reference` says the carousel is another creator's, shown to the model as a reference for density and
+ * structure (the owner's three built-ins, copied into his row), rather than one this creator approved. It is kept out of the
+ * prompt (`exampleJson`), where only its absence or presence changes the wording around the examples.
+ */
+export type ExampleCarousel = Carousel & { reference?: boolean };
