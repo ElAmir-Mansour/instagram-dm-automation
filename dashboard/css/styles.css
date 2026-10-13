@@ -2401,6 +2401,85 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .hazard-main { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; min-width: 0; }
 .hazard-keyword { font-size: var(--fs-300); color: var(--text-strong); font-weight: var(--fw-semibold); }
 
+/* ─── Pattern: AI providers card (Operations; pages/ai_providers.js) ─────────────────────
+   One raised surface holding five blocks (providers, routing, prices, budgets, spend), each divided from the last by a hairline. A
+   provider and a route are inner panels on `--surface-solid` (a card in a grid is solid, never glass). Every grid here is `auto-fit` with
+   a `min(100%, …)` minimum, so it is one column at 375px and widens with its container without a media query; nothing is wider than
+   its box, and the long strings (a model id, a provider's error) wrap at any character. Logical properties only. */
+.aip-lede { margin-block: 0; }
+#aip-warnings:empty { display: none; }
+.aip-warning { margin-block-end: 0; }
+.aip-warning + .aip-warning { margin-block-start: var(--space-3); }
+.aip-block { padding-block-start: var(--space-5); border-block-start: 1px solid var(--border-subtle); min-inline-size: 0; }
+.aip-subtitle { font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); margin-block-end: var(--space-2); }
+.aip-minor { font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-default); margin-block: var(--space-5) var(--space-2); }
+
+.aip-providers, .aip-routes { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
+.aip-provider, .aip-route {
+    display: flex; flex-direction: column; gap: var(--space-4);
+    min-inline-size: 0;
+    padding: var(--space-4);
+    background: var(--surface-solid);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+}
+.aip-provider-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.aip-badges { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.aip-provider-name, .aip-route-name { font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); overflow-wrap: anywhere; min-inline-size: 0; }
+.aip-switch { min-block-size: var(--tap-target); flex-shrink: 0; }
+/* The shared switch's hit area is the track's padding box plus 9px each way, and the track has a 1px border: 42px. One more px each way makes it 44. */
+.aip-switch .switch-track::after { inset-block: -10px; }
+.aip-key .form-group { margin-block-end: 0; }
+/* The status sentence is long: it wraps beside its icon rather than dropping below it. */
+.aip-key .token-info { flex-wrap: nowrap; align-items: flex-start; }
+.aip-key .token-info [data-lucide] { flex-shrink: 0; margin-block-start: 2px; }
+.aip-key .token-info > span { min-inline-size: 0; }
+.aip-none { margin-block-end: 0; padding: var(--space-4); }
+.aip-actions, .aip-actions-flush { margin-block-start: 0; }
+.aip-defaults { padding-block-start: var(--space-4); border-block-start: 1px solid var(--border-subtle); }
+.aip-defaults .form-actions, .aip-route .form-actions, .aip-price-form .form-actions, #aip-budget-form .form-actions { align-items: center; }
+
+/* What a Check or a Test said: a green or red badge, then the provider's own words. */
+.aip-result { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin: 0; font-size: var(--fs-100); }
+.aip-result:empty { display: none; }
+.aip-result code { font-weight: var(--fw-semibold); }
+.aip-route .aip-result { margin-block-start: var(--space-3); }
+.aip-error { color: var(--danger-text); overflow-wrap: anywhere; min-inline-size: 0; }
+/* A database error is one long unbroken path: it wraps at any character instead of widening the page. */
+.aip-load-error > div { min-inline-size: 0; }
+.aip-load-error strong, .aip-load-error .inline-error-hint { overflow-wrap: anywhere; }
+.aip-meta { font-size: var(--fs-100); color: var(--text-muted); overflow-wrap: anywhere; min-inline-size: 0; }
+.aip-now { margin-block: 0; overflow-wrap: anywhere; }
+.aip-now strong { color: var(--text-strong); font-weight: var(--fw-semibold); }
+.aip-unsaved { margin: 0; }
+
+.aip-route-head { display: flex; flex-direction: column; gap: var(--space-1); margin-block-end: var(--space-4); }
+.aip-route-head .form-hint { margin-block-start: 0; }
+.aip-route-fields, .aip-price-fields, .aip-budget-fields { display: grid; gap: var(--space-4); }
+.aip-route-fields { grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr)); }
+.aip-price-fields, .aip-budget-fields { grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); }
+.aip-route-fields .form-group, .aip-price-fields .form-group, .aip-budget-fields .form-group { margin-block-end: 0; }
+.aip-budget-fields .aip-meta { display: block; margin-block-start: var(--space-2); }
+
+/* Prices and spend are lists of rows, not tables: a table is 520px of columns at 375px. */
+.aip-rows { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.aip-row {
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-solid);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    font-size: var(--fs-200);
+}
+.aip-row-main { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); flex: 1 1 12rem; min-inline-size: 0; }
+.aip-row-figures { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); color: var(--text-default); font-variant-numeric: tabular-nums; }
+.aip-row-figures strong { color: var(--text-strong); }
+.aip-row-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.aip-model { color: var(--text-strong); overflow-wrap: anywhere; }
+.aip-row-name { color: var(--text-strong); font-weight: var(--fw-medium); overflow-wrap: anywhere; min-inline-size: 0; }
+.aip-period { inline-size: fit-content; max-inline-size: 100%; margin-block-end: var(--space-2); }
+
 /* ─── Tenant detail ─────────────────────────────────────────────────────── */
 .detail-name {
     font-size: var(--fs-500); color: var(--text-strong);

@@ -184,6 +184,16 @@ const API = {
     getGeminiKey: () => API.request('/admin/gemini-key'),
     saveGeminiKey: (apiKey) => API.request('/admin/gemini-key', { method: 'PUT', body: JSON.stringify({ apiKey }) }),
     removeGeminiKey: () => API.request('/admin/gemini-key', { method: 'DELETE' }),
+    // The AI providers card (Operations; src/routes/adminAi.ts). Keys are only ever sent, never read back: every
+    // answer carries `{set, source, last4}`. Gemini's key is saved through the route above, which checks the DM bot's models.
+    getAdminAi: () => API.request('/admin/ai'),
+    saveAdminAi: (patch) => API.request('/admin/ai', { method: 'PUT', body: JSON.stringify(patch) }),
+    saveAiKey: (provider, apiKey) => API.request(`/admin/ai/keys/${encodeURIComponent(provider)}`, { method: 'PUT', body: JSON.stringify({ apiKey }) }),
+    removeAiKey: (provider) => API.request(`/admin/ai/keys/${encodeURIComponent(provider)}`, { method: 'DELETE' }),
+    /** `{provider}` checks that key now (free); `{purpose}` sends one tiny structured call down that route. */
+    testAi: (body) => API.request('/admin/ai/test', { method: 'POST', body: JSON.stringify(body) }),
+    getAiModels: (provider) => API.request(`/admin/ai/models/${encodeURIComponent(provider)}`),
+    getAiUsage: (period) => API.request(`/admin/ai/usage${period === 'month' ? '?period=month' : ''}`),
     // Where uploads are kept (Supabase Storage). The key is only ever sent, never read back.
     getMediaStorage: () => API.request('/admin/media-storage'),
     getMediaCleanup: () => API.request('/admin/media-storage/cleanup'),
