@@ -21,15 +21,17 @@
 import crypto from 'crypto';
 import { pool } from '../../config/db.js';
 import type { InfographicRow, InfographicSchedule, RenderInfographicPayload, ScheduledPostRow } from '../../db/rows.js';
-import { log } from '../../utils/log.js';
+import { describeError, log } from '../../utils/log.js';
 import { assertMacBrainAllowed } from '../macBrain.js';
 import { insertVideoPost, metaPlatformFor } from '../monteur/clips.js';
 import { THINK_MODEL } from '../monteur/think.js';
-import { profileVersionFor } from '../profile/stamp.js';
+import { contextFor, profileContext, type ProfileContext } from '../profile/context.js';
+import { legacyBase } from '../profile/legacy.js';
+import { getPlatformOwnerId } from '../tenant.js';
 import { clipText, type Exec, isPlainObject, lockTenantPublishing, problemsError, requireId, StudioError, withTransaction } from './common.js';
 import {
     captionProblems, dirFor, headline, payloadBrand, specProblems, THEMES, WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt,
-    type InfographicSpec,
+    type InfographicSpec, type InfographicWriterContext,
 } from './infographicSpec.js';
 import { enqueueJob } from './jobs.js';
 import { getStudioSettings } from './settings.js';
@@ -107,19 +109,57 @@ function parseTheme(raw: unknown, fallback: InfographicTheme): InfographicTheme 
     return raw as InfographicTheme;
 }
 
-/** The job: Claude writes first (`write`), or the spec is rendered as it is. */
+/** What a tenant is told when its profile cannot be read and the writer therefore cannot be built for it: a 503, retryable. */
+export const PROFILE_UNREADABLE_MESSAGE = 'We couldn\'t read your creator profile just now, so nothing was written. Try again in a moment.';
+
+/**
+ * The context the writer's prompt is built from: the tenant's profile (`profileContext`, read once per request, and the
+ * settings reader has usually asked for it already). Its `version` is the stamp a new row carries, so the stamp names the
+ * profile the prompt was built from. Resolve it before a transaction opens: the pool is small.
+ *
+ * A profile that cannot be read is answered by who is asking. The OWNER gets today's text, the legacy assumptions on a
+ * فصحى page (`legacyBase`, which `LEGACY_ASSUMPTIONS` ties to the goldens), with no version: his prompt is the one thing
+ * that must never depend on a database hiccup. Any other tenant gets a 503 (`PROFILE_UNREADABLE`) and nothing is written:
+ * the owner's role and field written into someone else's infographic is worse than asking them to try again. The owner is
+ * the platform owner (`getPlatformOwnerId`, 30 s cached and already warm: the Mac guard asked first); if even that cannot
+ * be read, nobody is the owner.
+ */
+export async function infographicContext(creatorId: string): Promise<ProfileContext<'infographic'>> {
+    try {
+        return await profileContext(creatorId, 'infographic');
+    } catch (err) {
+        const owner = await getPlatformOwnerId().catch(() => null);
+        const isOwner = owner !== null && owner.toLowerCase() === creatorId.toLowerCase();
+        log('warn', 'studio.infographic_context_unreadable', { creator_id: creatorId, owner: isOwner, ...describeError(err) });
+        if (isOwner) return contextFor(legacyBase('ar'), 'infographic', null);
+        throw new StudioError(503, PROFILE_UNREADABLE_MESSAGE, undefined, 'PROFILE_UNREADABLE');
+    }
+}
+
+/** What a spec to render is: anything that is there. `null` is writing it, which is the other signature. */
+type SpecToRender = NonNullable<unknown>;
+type RenderRow = Pick<InfographicRow, 'topic' | 'notes' | 'language'>;
+
+/**
+ * The job: the spec is rendered as it is, or Claude writes it first (`write`). Writing needs the writer's context
+ * (`infographicContext`) and rendering reads none, which the two signatures say: asking Claude to write without a
+ * context does not compile.
+ */
+export function renderPayload(id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, spec: SpecToRender): RenderInfographicPayload;
+export function renderPayload(id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, spec: null, ctx: InfographicWriterContext): RenderInfographicPayload;
 export function renderPayload(
-    id: string, row: Pick<InfographicRow, 'topic' | 'notes' | 'language'>, theme: InfographicTheme, settings: StudioSettings,
-    spec: unknown | null
+    id: string, row: RenderRow, theme: InfographicTheme, settings: StudioSettings, spec: SpecToRender | null, ctx?: InfographicWriterContext
 ): RenderInfographicPayload {
     const base: RenderInfographicPayload = { infographicId: id, theme, language: row.language, brand: payloadBrand(settings.infographic) };
     if (spec) return { ...base, spec };
+    // The signatures keep a typed caller from here; this is for the one that is not (a cast, a plain JS caller).
+    if (!ctx) throw new Error('renderPayload: asking Claude to write an infographic needs the writer\'s context (infographicContext)');
     return {
         ...base,
         write: {
             model: THINK_MODEL,
             purpose: 'the infographic and its caption',
-            system: writeSystemPrompt(row.language),
+            system: writeSystemPrompt(row.language, ctx),
             user: writeUserPrompt({ topic: row.topic, notes: row.notes, language: row.language, avoid: settings.voice.avoid ?? [] }),
             schema: WRITE_SCHEMA as unknown as Record<string, unknown>,
         },
@@ -155,17 +195,19 @@ export async function createInfographic(creatorId: string, body: unknown): Promi
     // Both: the settings' theme first, the other one copied from it once it is written.
     const theme = both ? settings.infographic.theme : parseTheme(b.theme, settings.infographic.theme);
     const pair: InfographicTheme | null = both ? (theme === 'dark' ? 'light' : 'dark') : null;
-    // The profile it is written under (profile/stamp.ts), read through the pool BEFORE the transaction opens: a plain
-    // SELECT takes no row lock, so the lock order is untouched, and a failure in it cannot abort the insert.
-    const profileVersion = await profileVersionFor(creatorId);
+    // What the writer's prompt is built from (the profile's role, domain and register), read through the pool BEFORE the
+    // transaction opens: a plain SELECT takes no row lock, so the lock order is untouched. Its version is the stamp
+    // (profile/stamp.ts): the profile this row's prompt was built from, not a second read of it. A tenant whose profile
+    // cannot be read is refused here (503) before anything is written; the owner's falls back, unstamped.
+    const ctx = await infographicContext(creatorId);
     return withTransaction(async (client) => {
         const { rows } = await client.query<{ id: string }>(
             `INSERT INTO infographics (creator_id, topic, notes, language, theme, pair_theme, status, profile_version)
              VALUES ($1, $2, $3, $4, $5, $6, 'writing', $7) RETURNING id`,
-            [creatorId, topic, notes, language, theme, pair, profileVersion]
+            [creatorId, topic, notes, language, theme, pair, ctx.version]
         );
         const id = rows[0]!.id;
-        await queue(client, creatorId, id, renderPayload(id, { topic: topic!, notes, language }, theme, settings, null), 'writing');
+        await queue(client, creatorId, id, renderPayload(id, { topic: topic!, notes, language }, theme, settings, null, ctx), 'writing');
         log('info', 'studio.infographic_created', { infographic_id: id, language, theme, pair_theme: pair });
         return loadView(client, creatorId, id);
     });
@@ -216,6 +258,9 @@ export async function updateInfographic(creatorId: string, rawId: unknown, body:
     });
 }
 
+/** The row turned out to need Claude's context, which a transaction cannot fetch: stop, read it, run again. */
+class NeedsContext extends Error {}
+
 /** POST /infographics/:id/render `{ theme?, rewrite? }`: this one again, in a theme, or written again by Claude. */
 export async function rerenderInfographic(creatorId: string, rawId: unknown, body: unknown): Promise<InfographicView> {
     const id = requireId(rawId, 'infographic');
@@ -224,19 +269,33 @@ export async function rerenderInfographic(creatorId: string, rawId: unknown, bod
     // spec yet is a rewrite whatever the body says, and `enqueueJob` refuses that one. A render alone needs none.
     if (b.rewrite === true) await assertMacBrainAllowed(creatorId);
     const settings = await getStudioSettings(creatorId);
-    // Read before the transaction opens, as in createInfographic; used only when Claude writes it again.
-    const profileVersion = await profileVersionFor(creatorId);
-    return withTransaction(async (client) => {
+    const attempt = (ctx: ProfileContext<'infographic'> | undefined): Promise<InfographicView> => withTransaction(async (client) => {
         const row = await lockRow(client, creatorId, id);
         assertIdle(row);
         const theme = parseTheme(b.theme, row.theme);
-        const rewrite = b.rewrite === true || !row.spec;
-        await queue(client, creatorId, id, renderPayload(id, row, theme, settings, rewrite ? null : row.spec), rewrite ? 'writing' : 'rendering');
-        // A rewrite is a new generation, so it restamps; a re-render of the same spec keeps the stamp (profile/stamp.ts).
-        // After the queue, which is where `enqueueJob` refuses a tenant the Mac is not for (G1): a refused rewrite writes nothing.
-        if (rewrite) await client.query('UPDATE infographics SET profile_version = $3 WHERE id = $1 AND creator_id = $2', [id, creatorId, profileVersion]);
+        const spec = row.spec;
+        if (b.rewrite !== true && spec) {
+            await queue(client, creatorId, id, renderPayload(id, row, theme, settings, spec), 'rendering');
+            return loadView(client, creatorId, id);
+        }
+        // A rewrite: a new generation. The context is read before a transaction opens (the pool is small), so it is here
+        // already, unless the row is a rewrite by having no spec, which is only known now: stop before writing anything.
+        if (!ctx) throw new NeedsContext();
+        await queue(client, creatorId, id, renderPayload(id, row, theme, settings, null, ctx), 'writing');
+        // It restamps, with the version of the profile its prompt was built from; a re-render of the same spec keeps the
+        // stamp (profile/stamp.ts). After the queue, which is where `enqueueJob` refuses a tenant the Mac is not for (G1): a
+        // refused rewrite writes nothing.
+        await client.query('UPDATE infographics SET profile_version = $3 WHERE id = $1 AND creator_id = $2', [id, creatorId, ctx.version]);
         return loadView(client, creatorId, id);
     });
+    // `rewrite: true` says up front that the context is needed, and a plain re-render never reads it. The one case that does
+    // not know is a row with no spec: its first attempt finds that out, having written nothing, and the second has the context.
+    try {
+        return await attempt(b.rewrite === true ? await infographicContext(creatorId) : undefined);
+    } catch (err) {
+        if (!(err instanceof NeedsContext)) throw err;
+        return attempt(await infographicContext(creatorId));
+    }
 }
 
 /** POST /infographics/:id/copy `{ theme }`: the same infographic in another theme, as a row of its own. */

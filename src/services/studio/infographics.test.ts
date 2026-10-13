@@ -11,6 +11,8 @@ import { withProfileCache } from '../profile/cache.js';
 import { profileReads } from '../profile/stampSupport.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { THINK_MODEL } from '../monteur/think.js';
+import { contextFor } from '../profile/context.js';
+import { legacyBase } from '../profile/legacy.js';
 import { StudioError } from './common.js';
 import {
     BUDGETS, captionProblems, DIAGRAM_KINDS, headline, MAX_OBJECTIONS, parseInfographicResult, parseReview, specProblems, WRITE_SCHEMA, writeSystemPrompt,
@@ -21,6 +23,9 @@ import {
 } from './infographics.js';
 import { completeJob, failJob, STUDIO_JOB_KINDS } from './jobs.js';
 import { ELAMIR_SETTINGS } from './testFixtures.js';
+
+/** The owner's context on the infographic surface (a tech educator, tech, فصحى): what the tenant of these tests is. */
+const OWNER_CTX = contextFor(legacyBase('ar'), 'infographic', null);
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
 const ID = '22222222-2222-4222-8222-222222222222';
@@ -120,7 +125,7 @@ describe('specProblems — real examples', () => {
         assert.match(specProblems(withExamples([{ ...PG, path: '<script>' }])).join(), /Column 1's examples/);
     });
     it('asks Claude for them on every column, true and well known', () => {
-        const system = writeSystemPrompt('en');
+        const system = writeSystemPrompt('en', OWNER_CTX);
         assert.match(system, /Real examples, always: give every column 1–3 `examples`/);
         assert.match(system, /Only ones a practitioner would agree are true examples/);
         assert.ok((WRITE_SCHEMA.properties.columns.items.required as readonly string[]).includes('examples'));
@@ -154,21 +159,21 @@ describe('captionProblems — the caption is about the GIF', () => {
 
 describe('what Claude is asked', () => {
     it('in Arabic: فصحى, with the dialect words named, and English terms kept in Latin letters', () => {
-        const system = writeSystemPrompt('ar');
+        const system = writeSystemPrompt('ar', OWNER_CTX);
         assert.match(system, /Modern Standard Arabic \(العربية الفصحى\)/);
         assert.match(system, /Never use dialect: not يوصل، لين، يسوّي/);
         assert.match(system, /in Latin letters \(RAG, API, KV Cache, LLM\)/);
     });
 
     it('writes the caption from the same content: every column named, in the page’s order', () => {
-        const system = writeSystemPrompt('en');
+        const system = writeSystemPrompt('en', OWNER_CTX);
         assert.match(system, /The caption is about THIS infographic/);
         assert.match(system, /Every column name must appear in the caption/);
         for (const kind of DIAGRAM_KINDS) assert.ok(system.includes(`- ${kind}: `), kind);
     });
 
     it('asks for one real example carried through every column, the specific feature, and a logo only for real products', () => {
-        const system = writeSystemPrompt('en');
+        const system = writeSystemPrompt('en', OWNER_CTX);
         assert.match(system, /Pick ONE real example and carry it through every column/);
         assert.match(system, /Name the specific feature that makes the difference/);
         assert.match(system, /give its brand name in `logo`/);
@@ -198,7 +203,7 @@ describe('what Claude is asked', () => {
 
 describe('the practitioner review', () => {
     it('asks Claude to read it as a senior engineer would: real setups, no absolutes, the cited trade-offs, then the likely comments', () => {
-        const system = writeSystemPrompt('en');
+        const system = writeSystemPrompt('en', OWNER_CTX);
         assert.match(system, /Practitioner review, before you answer/);
         assert.match(system, /resize on upload, or on demand behind a cache/, 'the comment that started this, 2026-10-13');
         assert.match(system, /No absolutes/);
@@ -458,7 +463,9 @@ describe('the Mac is the owner’s: Claude writes an infographic only for him an
         row.spec = null;
         await assert.rejects(rerenderInfographic(NEW_TENANT, ID, {}), refused);
         assert.equal(wrote().length, 0);
-        assert.equal(db.ran(/^ROLLBACK$/).length, 1);
+        // The first attempt finds out the row is a rewrite and stops; the second (with the context) is refused by the queue.
+        assert.ok(db.ran(/^BEGIN$/).length >= 1);
+        assert.equal(db.ran(/^ROLLBACK$/).length, db.ran(/^BEGIN$/).length, 'every transaction it opened was rolled back');
         assert.equal(db.ran(/^COMMIT$/).length, 0);
     });
 
@@ -618,14 +625,22 @@ describe('profile_version — createInfographic', () => {
         assert.equal(stamped(), null);
     });
 
-    it('still creates the row and queues Claude, with null, when the version read fails', async () => {
+    it('still creates the row and queues Claude, with null, when the context\'s read fails (the owner\'s tenant falls back)', async () => {
         const { reads, route } = profileReads({ [TENANT]: 7 });
-        reads.failAt = 2; // the first read is getStudioSettings' own, the second the stamp's
+        reads.failFrom = 2; // the connection drops after getStudioSettings' own read: what the context reads next is what fails
         db.routes.push(route);
         await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
-        assert.ok(reads.creators.length >= 2, 'the stamp did ask');
-        assert.equal(stamped(), null);
+        assert.ok(reads.creators.length >= 2, 'the context did ask');
+        assert.equal(stamped(), null, 'unknown is not the version it was');
         assert.ok(jobPayload().write, 'and Claude was asked to write it');
+    });
+
+    it('takes the stamp from the context its prompt is built from: the settings\' read and that one, and no read of its own', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        db.routes.push(route);
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.deepEqual(reads.creators, [TENANT, TENANT]);
+        assert.equal(stamped(), 7);
     });
 
     it('reads before the transaction opens, and a "both themes" request stamps its one write once', async () => {
@@ -703,14 +718,50 @@ describe('profile_version — a copy takes its source’s stamp, a rewrite resta
         assert.equal(db.ran(/profile_version/).length, 0, 'no statement of theirs names the column');
     });
 
-    it('a rewrite whose version read fails is stamped null: unknown is not the old version', async () => {
+    it('a rewrite whose context read fails is stamped null: unknown is not the old version (the owner\'s tenant falls back)', async () => {
         row.profile_version = 4;
         const { reads, route } = profileReads({ [TENANT]: 9 });
-        reads.failAt = 2;
+        reads.failFrom = 2; // the connection drops after getStudioSettings' own read
         db.routes.push(route);
         await rerenderInfographic(TENANT, ID, { rewrite: true });
+        assert.ok(reads.creators.length >= 2, 'the context did ask');
         assert.deepEqual(restamps().map((s) => s.params), [[ID, TENANT, null]]);
         assert.ok(jobPayload().write, 'and Claude is still asked');
+    });
+
+    it('a rewrite reads the context once, the settings\' read and that one, and restamps with its version', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 9 });
+        db.routes.push(route);
+        await rerenderInfographic(TENANT, ID, { rewrite: true });
+        assert.deepEqual(reads.creators, [TENANT, TENANT]);
+        assert.deepEqual(restamps().map((s) => s.params), [[ID, TENANT, 9]]);
+        assert.equal(db.ran(/^BEGIN$/).length, 1);
+    });
+
+    it('a plain re-render, an edit and a copy read no context: the settings\' own profile read is the only one', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 9 });
+        db.routes.push(route);
+        await rerenderInfographic(TENANT, ID, { theme: 'light' });
+        assert.equal(reads.creators.length, 1, 'a re-render of the same spec');
+        await copyInfographic(TENANT, ID, {});
+        assert.equal(reads.creators.length, 2, 'and a copy adds the settings\' read, nothing more');
+        await updateInfographic(TENANT, ID, { spec: SPEC });
+        assert.equal(reads.creators.length, 3);
+        assert.ok(!jobPayload().write);
+    });
+
+    it('a row with no spec is a rewrite found out in the lock: its first attempt writes nothing, the context is read, the second writes and restamps', async () => {
+        row.spec = null;
+        const { reads, route } = profileReads({ [TENANT]: 9 });
+        db.routes.push(route);
+        await rerenderInfographic(TENANT, ID, {});
+        assert.deepEqual(reads.creators, [TENANT, TENANT], 'the settings\' read, then the context\'s once the row was known to need it');
+        assert.equal(db.ran(/^BEGIN$/).length, 2);
+        assert.equal(db.ran(/^ROLLBACK$/).length, 1, 'the attempt that found out');
+        assert.equal(db.ran(/^COMMIT$/).length, 1);
+        assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 1, 'one job: the first attempt queued nothing');
+        assert.deepEqual(restamps().map((s) => s.params), [[ID, TENANT, 9]]);
+        assert.ok(jobPayload().write);
     });
 });
 

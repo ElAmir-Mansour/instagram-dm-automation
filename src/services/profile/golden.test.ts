@@ -65,6 +65,7 @@ import {
 import { videoResource } from '../youtube.js';
 import { getStudioSettings } from '../studio/settings.js';
 import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from './golden.js';
+import { contextFor, profileContext, type ProfileContext } from './context.js';
 import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import {
@@ -120,6 +121,26 @@ async function throughTheReader(settings: StudioSettings, growth?: GrowthSetting
     }
 }
 
+/**
+ * Path (c) for the infographic writer (P12): the context the real `profileContext` returns for a tenant whose profile is
+ * stored, with the stale settings row beside it. The writer reads its role, domain and register from this, never from the row.
+ */
+async function infographicContextThroughTheReader(settings: StudioSettings, growth?: GrowthSettings): Promise<ProfileContext<'infographic'>> {
+    const state = emptyState();
+    state.studio.set(OWNER, studioRow(scramble(settings, STUDIO_PROFILE_PATHS)));
+    state.profiles.set(OWNER, { profile: throughJsonb(profileFromLegacy(settings, growth)), version: 1, activated_at: null, updated_by: null });
+    const db = installProfileDb(state);
+    const previousSink = setLogSink(() => {});
+    try {
+        const ctx = await profileContext(OWNER, 'infographic');
+        assert.equal(db.ran(/FROM creator_profiles/).length, 1, 'the reader asked for the stored profile');
+        return ctx;
+    } finally {
+        setLogSink(previousSink);
+        db.restore();
+    }
+}
+
 type Variant = {
     slug: 'elamir' | 'seed' | 'english'; settings: StudioSettings; set: GoldenSet; lang: 'ar' | 'en';
     /** How the builder is handed the settings: as they are, as the owner's profile gives them back, or as the real reader returns them. */
@@ -133,6 +154,16 @@ const FIXTURES = [
 /** What the real reader returns for each fixture (path (c)). Read once, before any test: each swaps the one shared pool for a stand-in and puts it back, so one at a time. */
 const READ = {} as Record<(typeof FIXTURES)[number]['slug'], StudioSettings>;
 for (const f of FIXTURES) READ[f.slug] = await throughTheReader(f.settings, f.owner ? ELAMIR_GROWTH : undefined);
+/**
+ * His context on the infographic surface (tech educator, tech, فصحى), reached the three ways: described from his rows (today, no
+ * stored profile), from his stored profile, and from the real `profileContext`. The writer is handed it by `infographicContext`,
+ * so each way must write the same bytes into the same goldens.
+ */
+const INFOGRAPHIC_CONTEXT = {
+    today: contextFor(profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH), 'infographic', null),
+    'through the profile': contextFor(storedProfile(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH), 'infographic', 1),
+    'through the real readers': await infographicContextThroughTheReader(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH),
+} as const;
 /** Each fixture three times, into the same golden: as it is, through the profile, and through the real reader. */
 const VARIANTS: readonly Variant[] = FIXTURES.flatMap((f): Variant[] => [
     { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today' },
@@ -273,14 +304,16 @@ describe('Monteur golden prompts', () => {
 // ─── Infographics ───────────────────────────────────────────────────────────────────────────
 
 describe('Infographic golden prompts', () => {
-    it('writeSystemPrompt: Arabic (فصحى) is his; English is the control\'s', () => {
-        matchGolden('infographic.system.ar', writeSystemPrompt('ar'));
-        matchGolden('infographic.system.en', writeSystemPrompt('en'), 'control');
-    });
+    for (const [via, ctx] of Object.entries(INFOGRAPHIC_CONTEXT)) {
+        it(`writeSystemPrompt: Arabic (فصحى) is his; English is the control's (${via})`, () => {
+            matchGolden('infographic.system.ar', writeSystemPrompt('ar', ctx));
+            matchGolden('infographic.system.en', writeSystemPrompt('en', ctx), 'control');
+        });
+    }
 
     for (const [via, seed] of [['today', ELAMIR_SEED_SETTINGS], ['through the profile', through(ELAMIR_SEED_SETTINGS, true)], ['through the real readers', READ.seed]] as const) {
         it(`renderPayload and payloadBrand: the job the Mac gets in write mode and the brand it draws, from his seed settings (${via})`, async (t) => {
-            await matchEach(t, infographicSurface(seed, { slug: 'seed' }));
+            await matchEach(t, infographicSurface(seed, { slug: 'seed', ctx: INFOGRAPHIC_CONTEXT[via] }));
         });
     }
 

@@ -142,7 +142,8 @@ export interface ParityInput {
 export async function runParity({ studio, growth, profile, agent, stored }: ParityInput): Promise<ParityReport> {
     const a = await tenantSurface({ studio, growth, agent });
     // A stored profile is also what the Growth coach reads its language from (its `coach` surface), which the views cannot carry.
-    const b = await tenantSurface({ studio: studioView(studio, profile), growth: growthView(growth, profile), agent }, stored ? { storedProfile: profile } : {});
+    // The profile itself is handed in too: the infographic writer reads its role, domain and register from the profile's context, not from the settings.
+    const b = await tenantSurface({ studio: studioView(studio, profile), growth: growthView(growth, profile), agent, profile }, stored ? { storedProfile: profile } : {});
     return compareSurfaces(a, b, profileProblemsOf(stored));
 }
 

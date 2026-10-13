@@ -14,6 +14,9 @@
  * nothing is scheduled while it does not.
  */
 import type { RenderInfographicPayload } from '../../db/rows.js';
+import { withArticle } from '../profile/article.js';
+import type { ProfileContext } from '../profile/context.js';
+import type { ArabicRegister, Domain } from '../profile/types.js';
 import type { InfographicConfig, InfographicTheme } from './settingsTypes.js';
 import { isPlainObject } from './common.js';
 
@@ -321,18 +324,129 @@ export interface WriteRequest {
     avoid: readonly string[];
 }
 
-/** The system prompt: the format, the diagrams, the budgets and the language rule. */
-export function writeSystemPrompt(language: 'ar' | 'en'): string {
+/**
+ * What the writer's system prompt reads of the tenant (docs/onboarding/05 §2, P12): who they are (`who.role`,
+ * `who.domain`) and the register an Arabic page is policed against (`language.register`). A `ProfileContext<'infographic'>`
+ * is one; the pick keeps the builder testable with no more of a profile than it reads.
+ */
+export type InfographicWriterContext = Pick<ProfileContext<'infographic'>, 'language' | 'who'>;
+
+/** The role as a prompt names the creator: one line, and "creator" for a profile that has none yet. */
+const roleOf = (ctx: InfographicWriterContext): string => ctx.who.role.replace(/\s+/g, ' ').trim() || 'creator';
+
+// ─── The dialect-ban line (Arabic pages are فصحى whatever the tenant speaks) ───────────────────
+
+type DialectWords = { ban: readonly string[]; use: readonly string[] };
+
+/** The words every Arabic page avoids, each with the فصحى word that replaces it. For `msa` and `gulf` this is the whole line. */
+const DIALECT_BASE: DialectWords = {
+    ban: ['يوصل', 'لين', 'يسوّي', 'وش', 'كذا', 'زي', 'علشان', 'بس (in the sense of "only")'],
+    use: ['يصل', 'حتى', 'يُنجز', 'ماذا', 'هكذا', 'مثل', 'لأن', 'فقط'],
+};
+
+/** What a register adds to the base: the words its speakers reach for, so the writer is told about those too (05 §2, P12). */
+const DIALECT_EXTRA: { readonly [R in ArabicRegister]?: DialectWords } = {
+    egyptian: { ban: ['عايز', 'إزاي', 'دلوقتي', 'كده'], use: ['أريد', 'كيف', 'الآن', 'هكذا'] },
+    levantine: { ban: ['هيك', 'شو', 'بدّك', 'هلق'], use: ['هكذا', 'ماذا', 'تريد', 'الآن'] },
+};
+
+/**
+ * "Never use dialect: not … Use …": the base for every register, plus the register's own words. A replacement the base
+ * already names (هكذا for both كذا and كده) is said once. A null register (an English tenant asked for one Arabic page)
+ * is the base alone.
+ */
+export function dialectLine(register: ArabicRegister | null): string {
+    const extra = (register && DIALECT_EXTRA[register]) || { ban: [], use: [] };
+    const ban = [...DIALECT_BASE.ban, ...extra.ban];
+    const use = [...new Set([...DIALECT_BASE.use, ...extra.use])];
+    return `Never use dialect: not ${ban.join('، ')}. Use ${use.join('، ')}.`;
+}
+
+// ─── The domain kits ───────────────────────────────────────────────────────────────────────────
+
+/** The lines of the prompt that are about what the creator makes: a developer's stack, or any other field. */
+interface DomainKit {
+    /** When a column gets a logo. */
+    logo: string;
+    /** The real examples under a column. */
+    examples: string;
+    /** What makes a page concrete: the three bullets under "Make it concrete". */
+    concrete: readonly [string, string, string];
+    /** The practitioner review: its opening line, and the two bullets the domain words (the other two are shared). */
+    reviewer: string;
+    realWay: string;
+    tradeOff: string;
+    /** Arabic only: the terms kept in Latin letters. */
+    terms: string;
+    /** A line after the diagram list, for a field the diagrams do not picture. Null: the list says it all. */
+    diagramNote: string | null;
+}
+
+const EXAMPLES_HEAD = `Real examples, always: give every column 1–${MAX_EXAMPLES} \`examples\`, the real products, tools or services that do what it describes, by brand name as their makers write it`;
+const EXAMPLES_TAIL = 'They are drawn as logos under the column, so readers recognise them at a glance. Only ones a practitioner would agree are true examples of that column, well known, and the same kind of thing across columns. Leave the list empty only when no real product fits.';
+const NO_ABSOLUTES = '- No absolutes: not "always", "never", "only", "X is dead". Give the condition each claim depends on.';
+
+/** Today's text, word for word: the owner's field, software. Every byte of it is pinned by the owner's goldens. */
+const TECH_KIT: DomainKit = {
+    logo: 'When a column is a real product, language or tool (Go, Node.js, PostgreSQL), give its brand name in `logo`: its logo is drawn beside its name. Never for an idea or a technique.',
+    examples: `${EXAMPLES_HEAD} (PostgreSQL, Veeam, Cloudflare, Kubernetes). ${EXAMPLES_TAIL}`,
+    concrete: [
+        '- Pick ONE real example and carry it through every column, e.g. "your API gets 10,000 photo uploads at once" or "a customer asks for a refund". Put it in the subtitle, and let each column\'s steps show what happens to that same example.',
+        '- Name the specific feature that makes the difference (e.g. Go\'s goroutines and channels, Node.js\'s event loop), not general claims like "fast" or "scalable".',
+        '- Numbers that belong to the example are good (10,000 requests, 8 cores); benchmark figures and percentages are not.',
+    ],
+    reviewer: 'Practitioner review, before you answer. Read your page and caption as a senior engineer who builds this in production today, and who will comment if anything is off:',
+    realWay: '- The example must be how real systems do it now. Where teams do it differently (resize on upload, or on demand behind a cache; inline, or in a job queue), word it so it is true either way, or say which setup you assume ("on a cache miss", "in a background worker").',
+    tradeOff: '- Each trade-off must be the one practitioners actually cite, with its standard fix (e.g. Node.js moves CPU work to worker threads).',
+    terms: 'Keep the technical terms practitioners say in English in Latin letters (RAG, API, KV Cache, LLM), and use them as column names when that is the term.',
+    diagramNote: null,
+};
+
+/**
+ * Any other field: the same instructions with no stack in them, a reviewer who is "a senior expert in this topic" (a role
+ * is a noun phrase and not always a person, so no sentence is built around it but the first), and a note that the
+ * diagrams on offer picture AI systems, so that a page about candles or squats reaches for an icon first.
+ */
+const GENERAL_KIT: DomainKit = {
+    logo: 'When a column is a real product, brand or tool, give its brand name in `logo`: its logo is drawn beside its name. Never for an idea or a technique.',
+    examples: `${EXAMPLES_HEAD}. ${EXAMPLES_TAIL}`,
+    concrete: [
+        '- Pick ONE real example and carry it through every column, e.g. "a customer asks for a refund". Put it in the subtitle, and let each column\'s steps show what happens to that same example.',
+        '- Name the specific feature that makes the difference, not general claims like "better" or "best".',
+        '- Numbers that belong to the example are good; benchmark figures and percentages are not.',
+    ],
+    reviewer: 'Practitioner review, before you answer. Read your page and caption as a senior expert in this topic would: someone who works with it every day, and who will comment if anything is off:',
+    realWay: '- The example must be how it is really done now. Where practitioners do it differently, word it so it is true either way, or say which setup you assume.',
+    tradeOff: '- Each trade-off must be the one practitioners actually cite, with its standard fix.',
+    terms: 'Keep in Latin letters only what practitioners never translate: brand and product names and standard abbreviations, and use them as column names when that is the term. Write every other term in Arabic.',
+    diagramNote: 'The diagrams above picture AI systems (documents, vector stores, caches, graphs, agent loops). For this field, use `icon` unless a diagram truly matches what the step shows.',
+};
+
+/** Every domain has a kit: a domain added to the profile without one does not compile. */
+const DOMAIN_KITS: { readonly [D in Domain]: DomainKit } = {
+    tech: TECH_KIT,
+    general: GENERAL_KIT,
+};
+
+/**
+ * The system prompt: the format, the diagrams, the budgets and the language rule, for the creator the context describes.
+ * For the owner's context (his role, the `tech` domain, a فصحى page) it is the text the goldens pin; for
+ * any other it names their role, drops the stack examples unless the domain is `tech` (and says the diagrams on offer
+ * picture AI systems), and polices the dialect their register speaks. `language` is the page's, which a request may choose differently from the surface's default.
+ */
+export function writeSystemPrompt(language: 'ar' | 'en', ctx: InfographicWriterContext): string {
+    const role = roleOf(ctx);
+    const kit = DOMAIN_KITS[ctx.who.domain];
     const diagrams = DIAGRAM_KINDS.map((k) => `- ${k}: ${DIAGRAMS[k]}`).join('\n');
     const lang = language === 'ar'
         ? [
             'Write in Modern Standard Arabic (العربية الفصحى): correct grammar, clear, short and simple, as a good textbook would say it.',
-            'Never use dialect: not يوصل، لين، يسوّي، وش، كذا، زي، علشان، بس (in the sense of "only"). Use يصل، حتى، يُنجز، ماذا، هكذا، مثل، لأن، فقط.',
-            'Keep the technical terms practitioners say in English in Latin letters (RAG, API, KV Cache, LLM), and use them as column names when that is the term.',
+            dialectLine(ctx.language.register),
+            kit.terms,
         ].join('\n')
         : 'Write in clear, plain English. Short words, no hype.';
     return [
-        'You write one animated comparison infographic for a tech educator\'s Instagram, Facebook, YouTube and LinkedIn: two or three things compared side by side, and the caption that goes with it.',
+        `You write one animated comparison infographic for ${withArticle(role)}'s Instagram, Facebook, YouTube and LinkedIn: two or three things compared side by side, and the caption that goes with it.`,
         '',
         'The page: a title made of the column names ("A vs B vs C"), one subtitle line under it, then one column per thing compared. Each column has:',
         '- name: the thing, as practitioners write it (often an acronym or 1–2 words)',
@@ -342,18 +456,17 @@ export function writeSystemPrompt(language: 'ar' | 'en'): string {
         `- steps: exactly ${STEPS_PER_COLUMN}, how it works in order, each a short title, a one-line description and a diagram`,
         '',
         'Columns go from the simplest or oldest to the most capable: the last column is drawn in the accent colour.',
-        'When a column is a real product, language or tool (Go, Node.js, PostgreSQL), give its brand name in `logo`: its logo is drawn beside its name. Never for an idea or a technique.',
-        `Real examples, always: give every column 1–${MAX_EXAMPLES} \`examples\`, the real products, tools or services that do what it describes, by brand name as their makers write it (PostgreSQL, Veeam, Cloudflare, Kubernetes). They are drawn as logos under the column, so readers recognise them at a glance. Only ones a practitioner would agree are true examples of that column, well known, and the same kind of thing across columns. Leave the list empty only when no real product fits.`,
+        kit.logo,
+        kit.examples,
         '',
         'Make it concrete, so a reader sees it rather than reads it:',
-        '- Pick ONE real example and carry it through every column, e.g. "your API gets 10,000 photo uploads at once" or "a customer asks for a refund". Put it in the subtitle, and let each column\'s steps show what happens to that same example.',
-        '- Name the specific feature that makes the difference (e.g. Go\'s goroutines and channels, Node.js\'s event loop), not general claims like "fast" or "scalable".',
-        '- Numbers that belong to the example are good (10,000 requests, 8 cores); benchmark figures and percentages are not.',
+        ...kit.concrete,
         'The steps of different columns sit side by side, so make them parallel where you can (step 1 of each is the setup, step 3 the result).',
         '',
         'Diagrams (pick the one that matches the step; use "icon" only when none does):',
         diagrams,
         `Icons for kind "icon": ${DIAGRAM_ICONS.join(', ')}.`,
+        ...(kit.diagramNote ? [kit.diagramNote] : []),
         '',
         'Lengths, in characters, which the page fits exactly (2 columns / 3 columns):',
         `- name ≤ ${BUDGETS.name}; subtitle ≤ ${BUDGETS.subtitle}; accent ≤ ${BUDGETS.accent}, copied exactly from the subtitle`,
@@ -370,10 +483,10 @@ export function writeSystemPrompt(language: 'ar' | 'en'): string {
         '',
         'Be accurate: say only what is true of each technique. If the topic is not something that can be compared, compare the two or three closest ideas it covers.',
         '',
-        'Practitioner review, before you answer. Read your page and caption as a senior engineer who builds this in production today, and who will comment if anything is off:',
-        '- The example must be how real systems do it now. Where teams do it differently (resize on upload, or on demand behind a cache; inline, or in a job queue), word it so it is true either way, or say which setup you assume ("on a cache miss", "in a background worker").',
-        '- No absolutes: not "always", "never", "only", "X is dead". Give the condition each claim depends on.',
-        '- Each trade-off must be the one practitioners actually cite, with its standard fix (e.g. Node.js moves CPU work to worker threads).',
+        kit.reviewer,
+        kit.realWay,
+        NO_ABSOLUTES,
+        kit.tradeOff,
         '- If a fair objection is fixable on the page, fix the page. Then fill `review.objections` with the 2–3 comments an expert is still most likely to post (a correction, an "it depends", another setup), each with a short, friendly reply that agrees where they are right and shows why the post still holds.',
         '',
         lang,
