@@ -135,7 +135,7 @@ export interface AiResponse {
 /**
  * Interface to match Google Gemini's REST API payload structures.
  */
-const RESPONSE_SCHEMA = {
+export const RESPONSE_SCHEMA = {
     type: "OBJECT",
     properties: {
         message_type: {
@@ -291,6 +291,13 @@ function enforceMetaConstraints(response: AiResponse): AiResponse {
 }
 
 /**
+ * The persona a tenant's agent starts with: the sandbox's fallback here, the disabled `ai_agents`
+ * row a new tenant is created with (`POST /api/admin/tenants`), and what `GET /api/settings/ai`
+ * shows before any agent is saved.
+ */
+export const STARTER_PERSONA = 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.';
+
+/**
  * Queries Gemini API using the conversation history and configuration details.
  *
  * **Returns `null` when the creator's AI agent exists but is switched off.** That is the
@@ -304,7 +311,7 @@ function enforceMetaConstraints(response: AiResponse): AiResponse {
  */
 /** The persona the sandbox runs against when no agent row exists yet. */
 const SANDBOX_FALLBACK_AGENT = {
-    system_prompt: 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.',
+    system_prompt: STARTER_PERSONA,
     knowledge_base: '',
     model: DEFAULT_MODEL,
     temperature: DEFAULT_TEMPERATURE as number | null,
@@ -354,6 +361,15 @@ export function decideAgent(stored: AgentSettings & { is_active?: boolean } | nu
     if (!stored) return { speak: false, reason: 'unconfigured' };
     if (stored.is_active === false) return { speak: false, reason: 'disabled' };
     return { speak: true, agent: stored };
+}
+
+/**
+ * The DM bot's system instruction: the agent's persona, its knowledge base, and the fixed rules.
+ * Pure, so the golden tests can pin it. `knowledgeBase` may be null because an agent row's is
+ * typed so; it is interpolated as it always was.
+ */
+export function dmSystemInstruction(systemPrompt: string, knowledgeBase: string | null): string {
+    return `${systemPrompt}\n\n=== قاعدة المعرفة المتاحة لديك (Knowledge Base) ===\n${knowledgeBase}\n\n=== تعليمات إضافية مهمة ===\n1. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللغة العربية الفصحى أو بلهجة سهلة ومناسبة.\n2. إذا طلب المستخدم كورسات أو معلومات تواصل، استخدم خيار "quick_reply" أو "carousel" لتقديمها بشكل تفاعلي ومنظم بدلاً من مجرد سرد روابط نصية.\n3. التزم تماماً بحدود الحروف: عناوين الأزرار والـ quick replies لا تتجاوز 20 حرفاً. عناوين الكروت لا تتجاوز 80 حرفاً.`;
 }
 
 export async function generateAiResponse(
@@ -430,7 +446,7 @@ export async function generateAiResponse(
     // 4. Construct System Instruction
     const systemPrompt = overrides?.system_prompt ?? agent.system_prompt;
     const knowledgeBase = overrides?.knowledge_base ?? agent.knowledge_base;
-    const systemInstructionText = `${systemPrompt}\n\n=== قاعدة المعرفة المتاحة لديك (Knowledge Base) ===\n${knowledgeBase}\n\n=== تعليمات إضافية مهمة ===\n1. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللغة العربية الفصحى أو بلهجة سهلة ومناسبة.\n2. إذا طلب المستخدم كورسات أو معلومات تواصل، استخدم خيار "quick_reply" أو "carousel" لتقديمها بشكل تفاعلي ومنظم بدلاً من مجرد سرد روابط نصية.\n3. التزم تماماً بحدود الحروف: عناوين الأزرار والـ quick replies لا تتجاوز 20 حرفاً. عناوين الكروت لا تتجاوز 80 حرفاً.`;
+    const systemInstructionText = dmSystemInstruction(systemPrompt, knowledgeBase);
 
     // The sandbox may name the model and temperature on screen, so the operator tests what
     // they are about to save rather than what was saved last time.

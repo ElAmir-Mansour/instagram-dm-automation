@@ -1,0 +1,18 @@
+{
+  "snippet": {
+    "title": "ملفاتك السرية ما تطلع من جهازك",
+    "description": "نموذج يشتغل بدون نت ويجاوب من ملفاتك\nابعتها لصاحبك اللي يخاف على ملفاته",
+    "tags": [
+      "ذكاء_اصطناعي",
+      "LMStudio"
+    ],
+    "categoryId": "27",
+    "defaultLanguage": "ar",
+    "defaultAudioLanguage": "ar"
+  },
+  "status": {
+    "privacyStatus": "public",
+    "selfDeclaredMadeForKids": false,
+    "embeddable": true
+  }
+}

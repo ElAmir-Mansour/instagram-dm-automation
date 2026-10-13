@@ -1,0 +1,99 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "topic": {
+      "type": "STRING",
+      "description": "the video's main idea, one line"
+    },
+    "clips": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "start_line": {
+            "type": "INTEGER",
+            "description": "the n of the clip's first line, L<n>"
+          },
+          "end_line": {
+            "type": "INTEGER",
+            "description": "the n of the line where the payoff is complete"
+          },
+          "title": {
+            "type": "STRING",
+            "description": "at most 6 words and 60 characters"
+          },
+          "hook_type": {
+            "type": "STRING",
+            "enum": [
+              "promise",
+              "problem",
+              "intent",
+              "question"
+            ]
+          },
+          "why": {
+            "type": "STRING",
+            "description": "at most 10 words"
+          },
+          "scores": {
+            "type": "OBJECT",
+            "properties": {
+              "hook": {
+                "type": "INTEGER",
+                "description": "0–3"
+              },
+              "alone": {
+                "type": "INTEGER",
+                "description": "0–3"
+              },
+              "payoff": {
+                "type": "INTEGER",
+                "description": "0–3"
+              },
+              "send": {
+                "type": "INTEGER",
+                "description": "0–3"
+              }
+            },
+            "required": [
+              "hook",
+              "alone",
+              "payoff",
+              "send"
+            ],
+            "propertyOrdering": [
+              "hook",
+              "alone",
+              "payoff",
+              "send"
+            ]
+          }
+        },
+        "required": [
+          "start_line",
+          "end_line",
+          "title",
+          "hook_type",
+          "why",
+          "scores"
+        ],
+        "propertyOrdering": [
+          "start_line",
+          "end_line",
+          "title",
+          "hook_type",
+          "why",
+          "scores"
+        ]
+      }
+    }
+  },
+  "required": [
+    "topic",
+    "clips"
+  ],
+  "propertyOrdering": [
+    "topic",
+    "clips"
+  ]
+}

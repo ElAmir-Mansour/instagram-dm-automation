@@ -1,0 +1,26 @@
+[
+  {
+    "name": "arabic, instagram",
+    "isFacebook": false,
+    "dmText": "هلا {username} 👋\n\nتبي ذكاء اصطناعي شغّال على جهازك؟ 🔒\n\nفي قسم الذكاء المحلي أشرح لك كيف تشغّله خطوة بخطوة.\n\n🎬 شوف الكورس كامل من هنا:\nhttps://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34\n\nداخل الكورس:\n✅ ٣٤ درس · ٥ ساعات و٤٠ دقيقة\n✅ ١١ قسم — كل قسم تطبيق عملي من الصفر\n✅ شهادة إتمام + وصول مدى الحياة\n✅ ضمان استرجاع ٣٠ يوم من Udemy\n\nعندك سؤال؟ رد على هالرسالة — أنا أرد بنفسي ✌️",
+    "reply": "ما قدرنا نرسل لك على الخاص 🙏 الرابط في البايو 🔗"
+  },
+  {
+    "name": "arabic, facebook, the DM holds a link",
+    "isFacebook": true,
+    "dmText": "هلا {username} 👋\n\nتبي ذكاء اصطناعي شغّال على جهازك؟ 🔒\n\nفي قسم الذكاء المحلي أشرح لك كيف تشغّله خطوة بخطوة.\n\n🎬 شوف الكورس كامل من هنا:\nhttps://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34\n\nداخل الكورس:\n✅ ٣٤ درس · ٥ ساعات و٤٠ دقيقة\n✅ ١١ قسم — كل قسم تطبيق عملي من الصفر\n✅ شهادة إتمام + وصول مدى الحياة\n✅ ضمان استرجاع ٣٠ يوم من Udemy\n\nعندك سؤال؟ رد على هالرسالة — أنا أرد بنفسي ✌️",
+    "reply": "ما قدرنا نرسل لك على الخاص 🙏 هذا الرابط: https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34"
+  },
+  {
+    "name": "arabic, facebook, the link ends in punctuation",
+    "isFacebook": true,
+    "dmText": "هذا الرابط: https://example.com/guide،",
+    "reply": "ما قدرنا نرسل لك على الخاص 🙏 هذا الرابط: https://example.com/guide"
+  },
+  {
+    "name": "arabic, facebook, no link in the DM",
+    "isFacebook": true,
+    "dmText": "هلا {username} 👋 راسلنا ونرسل لك التفاصيل",
+    "reply": "ما قدرنا نرسل لك على الخاص 🙏 راسلنا على الخاص ونرسل لك التفاصيل"
+  }
+]

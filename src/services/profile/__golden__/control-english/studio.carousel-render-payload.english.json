@@ -1,0 +1,77 @@
+{
+  "draftId": "draft",
+  "carousel": {
+    "id": "LocalAI",
+    "accent": "#FFD60A",
+    "keyword": "local",
+    "slides": [
+      {
+        "kind": "cover",
+        "title": "Run a private AI on your own laptop"
+      },
+      {
+        "kind": "point",
+        "title": "Want an AI that runs on your own laptop? 🔒",
+        "body": "The local-AI section shows you how, step by step."
+      },
+      {
+        "kind": "cta",
+        "promise": "The local-AI section shows you how, step by step."
+      }
+    ],
+    "captions": {
+      "instagram": "Your private files never leave your laptop 🔒\n\n🔒 A model that runs offline\n⚡ Answers from your own files\n\nSwipe and grab the prompt 👉\n\n#AI #LMStudio",
+      "tiktokTitle": "Run a private AI on your own laptop",
+      "tiktok": "Comment \"local\" and I'll DM you the link 📩\n\nYour private files never leave your laptop 🔒\n\nA model that runs offline and answers from your files\n\n#AI #LMStudio"
+    }
+  },
+  "shots": {},
+  "brand": {
+    "name": "My Studio",
+    "signature": {
+      "latin": "STUDIO",
+      "local": ""
+    },
+    "palette": [
+      "#FFD60A",
+      "#FF8A3D",
+      "#22D39A",
+      "#5B8CFF",
+      "#FF6B6B",
+      "#5EEAD4",
+      "#F0ABFC",
+      "#22C7F0",
+      "#B06AFF",
+      "#A3E635",
+      "#FF5FA2",
+      "#FFB020",
+      "#FF3B5C"
+    ],
+    "colors": {
+      "ink": "#08080A",
+      "paper": "#FAFAFA",
+      "muted": "#8A8A93"
+    },
+    "fonts": {
+      "display": "Inter",
+      "mono": "JetBrains Mono"
+    },
+    "direction": "ltr",
+    "theme": "dark-grid"
+  },
+  "cta": {
+    "igAsk": "Comment below",
+    "igSub": "and I'll DM you the link 📩",
+    "save": "Save this post",
+    "ttHeadline": "The full course",
+    "ttPill": "Link in bio",
+    "ttSub": "Tap the link on my profile 👆",
+    "follow": "Follow for more",
+    "swipe": "Swipe"
+  },
+  "facts": [
+    "12 lessons",
+    "3 hours of video",
+    "Lifetime access"
+  ]
+}

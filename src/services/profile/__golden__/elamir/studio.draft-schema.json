@@ -1,0 +1,282 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "id": {
+      "type": "STRING",
+      "description": "a short PascalCase English name, e.g. LocalAI"
+    },
+    "keyword": {
+      "type": "STRING",
+      "description": "one word"
+    },
+    "keywordAlternatives": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING"
+      },
+      "maxItems": 3,
+      "description": "more keyword candidates, best first"
+    },
+    "variants": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING"
+      },
+      "maxItems": 3,
+      "description": "other spellings of the keyword"
+    },
+    "slides": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "kind": {
+            "type": "STRING",
+            "enum": [
+              "cover",
+              "point",
+              "list",
+              "compare",
+              "steps",
+              "prompt",
+              "stat",
+              "shot",
+              "cta"
+            ]
+          },
+          "sources": {
+            "type": "ARRAY",
+            "items": {
+              "type": "STRING"
+            },
+            "maxItems": 8,
+            "description": "The source ids this slide rests on, e.g. L1.point2 or M4. Empty only on cover and cta."
+          },
+          "kicker": {
+            "type": "STRING",
+            "description": "cover: ≤ 24"
+          },
+          "title": {
+            "type": "STRING",
+            "description": "cover ≤ 34, point ≤ 40, list/compare/steps/prompt ≤ 36, shot ≤ 40"
+          },
+          "highlight": {
+            "type": "STRING",
+            "description": "cover: words copied verbatim from the title"
+          },
+          "subtitle": {
+            "type": "STRING",
+            "description": "cover: ≤ 70"
+          },
+          "n": {
+            "type": "INTEGER",
+            "description": "point: the numeral badge in a numbered run"
+          },
+          "body": {
+            "type": "STRING",
+            "description": "point ≤ 150, stat ≤ 120"
+          },
+          "tip": {
+            "type": "STRING",
+            "description": "point: ≤ 70"
+          },
+          "momentId": {
+            "type": "STRING",
+            "description": "cover, point or shot: a clean moment id such as M3. Required on shot."
+          },
+          "items": {
+            "type": "ARRAY",
+            "maxItems": 5,
+            "description": "list: 3–5 items",
+            "items": {
+              "type": "OBJECT",
+              "properties": {
+                "icon": {
+                  "type": "STRING",
+                  "description": "one emoji"
+                },
+                "text": {
+                  "type": "STRING",
+                  "description": "≤ 36"
+                },
+                "sub": {
+                  "type": "STRING",
+                  "description": "≤ 60"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "propertyOrdering": [
+                "icon",
+                "text",
+                "sub"
+              ]
+            }
+          },
+          "leftLabel": {
+            "type": "STRING",
+            "description": "compare: the weak side, ≤ 16"
+          },
+          "leftItems": {
+            "type": "ARRAY",
+            "items": {
+              "type": "STRING"
+            },
+            "maxItems": 4,
+            "description": "compare: 2–4, each ≤ 30"
+          },
+          "rightLabel": {
+            "type": "STRING",
+            "description": "compare: the strong side, ≤ 16"
+          },
+          "rightItems": {
+            "type": "ARRAY",
+            "items": {
+              "type": "STRING"
+            },
+            "maxItems": 4,
+            "description": "compare: as many as leftItems"
+          },
+          "steps": {
+            "type": "ARRAY",
+            "maxItems": 4,
+            "description": "steps: 3–4 steps",
+            "items": {
+              "type": "OBJECT",
+              "properties": {
+                "title": {
+                  "type": "STRING",
+                  "description": "≤ 28"
+                },
+                "body": {
+                  "type": "STRING",
+                  "description": "≤ 70"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "propertyOrdering": [
+                "title",
+                "body"
+              ]
+            }
+          },
+          "label": {
+            "type": "STRING",
+            "description": "prompt ≤ 20, stat ≤ 40"
+          },
+          "prompt": {
+            "type": "STRING",
+            "description": "prompt: ≤ 320, [placeholders] in square brackets"
+          },
+          "note": {
+            "type": "STRING",
+            "description": "prompt: ≤ 70"
+          },
+          "value": {
+            "type": "STRING",
+            "description": "stat: ≤ 8"
+          },
+          "caption": {
+            "type": "STRING",
+            "description": "shot: ≤ 90"
+          },
+          "promise": {
+            "type": "STRING",
+            "description": "cta: ≤ 40"
+          },
+          "altText": {
+            "type": "STRING",
+            "description": "every slide: ≤ 200, one plain sentence on what the slide shows and says, for screen readers and Instagram search"
+          }
+        },
+        "required": [
+          "kind",
+          "sources"
+        ],
+        "propertyOrdering": [
+          "kind",
+          "sources",
+          "kicker",
+          "title",
+          "highlight",
+          "subtitle",
+          "n",
+          "body",
+          "tip",
+          "momentId",
+          "items",
+          "leftLabel",
+          "leftItems",
+          "rightLabel",
+          "rightItems",
+          "steps",
+          "label",
+          "prompt",
+          "note",
+          "value",
+          "caption",
+          "promise",
+          "altText"
+        ]
+      },
+      "minItems": 6,
+      "maxItems": 10
+    },
+    "captions": {
+      "type": "OBJECT",
+      "properties": {
+        "instagram": {
+          "type": "STRING"
+        },
+        "tiktokTitle": {
+          "type": "STRING",
+          "description": "≤ 90 UTF-16 units"
+        },
+        "tiktok": {
+          "type": "STRING"
+        }
+      },
+      "required": [
+        "instagram",
+        "tiktokTitle",
+        "tiktok"
+      ],
+      "propertyOrdering": [
+        "instagram",
+        "tiktokTitle",
+        "tiktok"
+      ]
+    },
+    "dmQuestion": {
+      "type": "STRING",
+      "description": "one line"
+    },
+    "dmPitch": {
+      "type": "STRING",
+      "description": "one sentence naming the part of the course"
+    }
+  },
+  "required": [
+    "id",
+    "keyword",
+    "keywordAlternatives",
+    "variants",
+    "slides",
+    "captions",
+    "dmQuestion",
+    "dmPitch"
+  ],
+  "propertyOrdering": [
+    "id",
+    "keyword",
+    "keywordAlternatives",
+    "variants",
+    "slides",
+    "captions",
+    "dmQuestion",
+    "dmPitch"
+  ]
+}

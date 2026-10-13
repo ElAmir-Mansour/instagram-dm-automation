@@ -1,0 +1,188 @@
+{
+  "type": "object",
+  "properties": {
+    "subtitle": {
+      "type": "string",
+      "description": "One line under the title: what the comparison is about."
+    },
+    "accent": {
+      "type": "string",
+      "description": "The subtitle's key words, copied exactly from it: drawn in the accent colour."
+    },
+    "columns": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "examples": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "string"
+            },
+            "description": "1–3 real products, tools or services that do what this column describes, by brand name (e.g. PostgreSQL, Veeam, Cloudflare). Shown as their logos."
+          },
+          "logo": {
+            "type": "string",
+            "description": "Only when the column IS a product, language or tool with a logo (e.g. Go, Node.js, Python, PostgreSQL, Docker): its brand name. Omit for ideas and techniques (RAG, Chatbot, Serverless as a concept)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "The kind of problem it suits, as a short phrase."
+          },
+          "note": {
+            "type": "string"
+          },
+          "hero": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "docs",
+                  "chunk-db",
+                  "topk",
+                  "augment",
+                  "window",
+                  "preload",
+                  "kv",
+                  "instant",
+                  "graph",
+                  "graph-build",
+                  "hops",
+                  "grounded",
+                  "chat",
+                  "loop",
+                  "icon"
+                ]
+              },
+              "icon": {
+                "type": "string",
+                "description": "Only for kind \"icon\": one of the icon names."
+              },
+              "label": {
+                "type": "string",
+                "description": "Only for kind \"docs\" (a badge) or \"augment\" (the model box). At most 12 characters."
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "desc": {
+                  "type": "string"
+                },
+                "diagram": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "docs",
+                        "chunk-db",
+                        "topk",
+                        "augment",
+                        "window",
+                        "preload",
+                        "kv",
+                        "instant",
+                        "graph",
+                        "graph-build",
+                        "hops",
+                        "grounded",
+                        "chat",
+                        "loop",
+                        "icon"
+                      ]
+                    },
+                    "icon": {
+                      "type": "string",
+                      "description": "Only for kind \"icon\": one of the icon names."
+                    },
+                    "label": {
+                      "type": "string",
+                      "description": "Only for kind \"docs\" (a badge) or \"augment\" (the model box). At most 12 characters."
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "title",
+                "desc",
+                "diagram"
+              ]
+            }
+          }
+        },
+        "required": [
+          "name",
+          "kind",
+          "note",
+          "hero",
+          "steps",
+          "examples"
+        ]
+      }
+    },
+    "caption": {
+      "type": "string",
+      "description": "The post's caption, about this infographic."
+    },
+    "review": {
+      "type": "object",
+      "description": "The practitioner review: what experts will most likely comment, and the reply.",
+      "properties": {
+        "objections": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "properties": {
+              "comment": {
+                "type": "string",
+                "description": "The comment, as an expert would write it."
+              },
+              "reply": {
+                "type": "string",
+                "description": "A short, friendly reply in the post's language."
+              }
+            },
+            "required": [
+              "comment",
+              "reply"
+            ]
+          }
+        }
+      },
+      "required": [
+        "objections"
+      ]
+    }
+  },
+  "required": [
+    "subtitle",
+    "accent",
+    "columns",
+    "caption",
+    "review"
+  ]
+}

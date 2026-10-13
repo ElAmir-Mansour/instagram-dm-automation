@@ -1,0 +1,153 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "summary": {
+      "type": "STRING",
+      "description": "3–5 sentences: where the account stands, and the one thing that matters most right now"
+    },
+    "wins": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING",
+        "description": "one line naming the number behind it"
+      },
+      "maxItems": 5,
+      "description": "what is working"
+    },
+    "problems": {
+      "type": "ARRAY",
+      "items": {
+        "type": "STRING",
+        "description": "one line naming the number behind it, or the data that is missing"
+      },
+      "maxItems": 5,
+      "description": "what holds growth back"
+    },
+    "actions": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "title": {
+            "type": "STRING",
+            "description": "an imperative, ≤ 80 characters"
+          },
+          "why": {
+            "type": "STRING",
+            "description": "the number that justifies it"
+          },
+          "how": {
+            "type": "STRING",
+            "description": "concrete steps for this week"
+          },
+          "effort": {
+            "type": "STRING",
+            "enum": [
+              "low",
+              "med",
+              "high"
+            ]
+          },
+          "impact": {
+            "type": "STRING",
+            "enum": [
+              "low",
+              "med",
+              "high"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "why",
+          "how",
+          "effort",
+          "impact"
+        ],
+        "propertyOrdering": [
+          "title",
+          "why",
+          "how",
+          "effort",
+          "impact"
+        ]
+      },
+      "maxItems": 7,
+      "description": "prioritised: highest impact first"
+    },
+    "experiments": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "hypothesis": {
+            "type": "STRING",
+            "description": "if … then …, one variable"
+          },
+          "how": {
+            "type": "STRING",
+            "description": "how to run it, over how many posts"
+          },
+          "measure": {
+            "type": "STRING",
+            "description": "which metric decides it"
+          }
+        },
+        "required": [
+          "hypothesis",
+          "how",
+          "measure"
+        ],
+        "propertyOrdering": [
+          "hypothesis",
+          "how",
+          "measure"
+        ]
+      },
+      "maxItems": 4,
+      "description": "small tests to run next"
+    },
+    "post_notes": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "media_id": {
+            "type": "STRING",
+            "description": "a media id from the post list, exactly"
+          },
+          "note": {
+            "type": "STRING",
+            "description": "why this post did well, one line"
+          }
+        },
+        "required": [
+          "media_id",
+          "note"
+        ],
+        "propertyOrdering": [
+          "media_id",
+          "note"
+        ]
+      },
+      "maxItems": 5,
+      "description": "for the best posts in the list"
+    }
+  },
+  "required": [
+    "summary",
+    "wins",
+    "problems",
+    "actions",
+    "experiments",
+    "post_notes"
+  ],
+  "propertyOrdering": [
+    "summary",
+    "wins",
+    "problems",
+    "actions",
+    "experiments",
+    "post_notes"
+  ]
+}

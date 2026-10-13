@@ -1,0 +1,217 @@
+{
+  "infographicId": "00000000-0000-4000-8000-0000000000aa",
+  "theme": "dark",
+  "language": "ar",
+  "brand": {
+    "name": {
+      "ar": "الأمير منصور",
+      "en": "ElAmir Mansour"
+    },
+    "site": "elamirmansour.dev",
+    "handle": "@elamir.mansour",
+    "socials": [
+      "instagram",
+      "youtube",
+      "linkedin",
+      "x",
+      "tiktok"
+    ],
+    "primary": "#0E3B5C",
+    "accent": "#F2A33A",
+    "photo": null
+  },
+  "write": {
+    "model": "claude-opus-5-5",
+    "purpose": "the infographic and its caption",
+    "system": "You write one animated comparison infographic for a tech educator's Instagram, Facebook, YouTube and LinkedIn: two or three things compared side by side, and the caption that goes with it.\n\nThe page: a title made of the column names (\"A vs B vs C\"), one subtitle line under it, then one column per thing compared. Each column has:\n- name: the thing, as practitioners write it (often an acronym or 1–2 words)\n- kind: the kind of problem it suits, as a short phrase\n- note: one line that explains the kind\n- hero: the diagram that pictures it best\n- steps: exactly 3, how it works in order, each a short title, a one-line description and a diagram\n\nColumns go from the simplest or oldest to the most capable: the last column is drawn in the accent colour.\nWhen a column is a real product, language or tool (Go, Node.js, PostgreSQL), give its brand name in `logo`: its logo is drawn beside its name. Never for an idea or a technique.\nReal examples, always: give every column 1–3 `examples`, the real products, tools or services that do what it describes, by brand name as their makers write it (PostgreSQL, Veeam, Cloudflare, Kubernetes). They are drawn as logos under the column, so readers recognise them at a glance. Only ones a practitioner would agree are true examples of that column, well known, and the same kind of thing across columns. Leave the list empty only when no real product fits.\n\nMake it concrete, so a reader sees it rather than reads it:\n- Pick ONE real example and carry it through every column, e.g. \"your API gets 10,000 photo uploads at once\" or \"a customer asks for a refund\". Put it in the subtitle, and let each column's steps show what happens to that same example.\n- Name the specific feature that makes the difference (e.g. Go's goroutines and channels, Node.js's event loop), not general claims like \"fast\" or \"scalable\".\n- Numbers that belong to the example are good (10,000 requests, 8 cores); benchmark figures and percentages are not.\nThe steps of different columns sit side by side, so make them parallel where you can (step 1 of each is the setup, step 3 the result).\n\nDiagrams (pick the one that matches the step; use \"icon\" only when none does):\n- docs: a stack of documents: a large collection. `label`: a short badge, e.g. \"10K+ docs\"\n- chunk-db: a document cut into chunks that flow into a vector database\n- topk: a query finding its nearest points: similarity search\n- augment: retrieved context flowing into a model box that writes an answer. `label`: the box, default \"LLM\"\n- window: documents that all fit inside a context window\n- preload: documents loaded up front into a long context\n- kv: K and V cache cells filling up, then saved\n- instant: a cache plus a question giving an answer at once, with no lookup\n- graph: a knowledge graph around one central node\n- graph-build: text turned into a graph of entities and links\n- hops: a query hopping through a graph, one step at a time\n- grounded: an answer with its source attached\n- chat: chat bubbles appearing one after another\n- loop: an agent loop: a dot circling a robot\n- icon: one line icon, named in `icon`\nIcons for kind \"icon\": brain, bulb, rocket, robot, code, terminal-2, database, cloud, server, cpu, device-laptop, device-mobile, world, map, compass, target, trophy, star, flame, bolt, search, question-mark, check, x, circle-check, circle-x, arrow-right, trending-up, trending-down, chart-bar, chart-pie, report-analytics, file-text, files, folder, book, books, notebook, pencil, writing, message-circle, messages, mail, phone, lock, lock-open, key, shield-check, settings, tool, tools, puzzle, school, certificate, shopping-cart, coin, cash, camera, video, microphone, photo, palette, wand, sparkles, link, share, download, upload, refresh, repeat, player-play, news, clock, hourglass, calendar, alarm, alert-triangle, eye, stairs-up, language, wifi.\n\nLengths, in characters, which the page fits exactly (2 columns / 3 columns):\n- name ≤ 14; subtitle ≤ 60; accent ≤ 30, copied exactly from the subtitle\n- kind ≤ 30 / 26; note ≤ 40 / 46\n- step title ≤ 24 / 20; step description ≤ 40 / 48\n\nThe caption is about THIS infographic, in the same language. It is what someone reads under the GIF:\n1. A hook line that names the comparison.\n2. One short paragraph per column, in the page's order, starting with the column's name exactly as on the page: what it suits and how it works, following its three steps.\n3. One line on when to choose which.\n4. A question that invites a comment.\n5. 4–6 hashtags on the last line.\nEvery column name must appear in the caption. 600–1,400 characters. No links, no \"link in bio\".\n\nBe accurate: say only what is true of each technique. If the topic is not something that can be compared, compare the two or three closest ideas it covers.\n\nPractitioner review, before you answer. Read your page and caption as a senior engineer who builds this in production today, and who will comment if anything is off:\n- The example must be how real systems do it now. Where teams do it differently (resize on upload, or on demand behind a cache; inline, or in a job queue), word it so it is true either way, or say which setup you assume (\"on a cache miss\", \"in a background worker\").\n- No absolutes: not \"always\", \"never\", \"only\", \"X is dead\". Give the condition each claim depends on.\n- Each trade-off must be the one practitioners actually cite, with its standard fix (e.g. Node.js moves CPU work to worker threads).\n- If a fair objection is fixable on the page, fix the page. Then fill `review.objections` with the 2–3 comments an expert is still most likely to post (a correction, an \"it depends\", another setup), each with a short, friendly reply that agrees where they are right and shows why the post still holds.\n\nWrite in Modern Standard Arabic (العربية الفصحى): correct grammar, clear, short and simple, as a good textbook would say it.\nNever use dialect: not يوصل، لين، يسوّي، وش، كذا، زي، علشان، بس (in the sense of \"only\"). Use يصل، حتى، يُنجز، ماذا، هكذا، مثل، لأن، فقط.\nKeep the technical terms practitioners say in English in Latin letters (RAG, API, KV Cache, LLM), and use them as column names when that is the term.",
+    "user": "Topic: RAG vs CAG vs KAG\nNotes from the creator (follow them):\nركّز على التكلفة وسرعة الاستجابة\nNever use these words or topics: MCP.\nLanguage: Arabic (Modern Standard Arabic, الفصحى).",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "subtitle": {
+          "type": "string",
+          "description": "One line under the title: what the comparison is about."
+        },
+        "accent": {
+          "type": "string",
+          "description": "The subtitle's key words, copied exactly from it: drawn in the accent colour."
+        },
+        "columns": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "examples": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {
+                  "type": "string"
+                },
+                "description": "1–3 real products, tools or services that do what this column describes, by brand name (e.g. PostgreSQL, Veeam, Cloudflare). Shown as their logos."
+              },
+              "logo": {
+                "type": "string",
+                "description": "Only when the column IS a product, language or tool with a logo (e.g. Go, Node.js, Python, PostgreSQL, Docker): its brand name. Omit for ideas and techniques (RAG, Chatbot, Serverless as a concept)."
+              },
+              "kind": {
+                "type": "string",
+                "description": "The kind of problem it suits, as a short phrase."
+              },
+              "note": {
+                "type": "string"
+              },
+              "hero": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "docs",
+                      "chunk-db",
+                      "topk",
+                      "augment",
+                      "window",
+                      "preload",
+                      "kv",
+                      "instant",
+                      "graph",
+                      "graph-build",
+                      "hops",
+                      "grounded",
+                      "chat",
+                      "loop",
+                      "icon"
+                    ]
+                  },
+                  "icon": {
+                    "type": "string",
+                    "description": "Only for kind \"icon\": one of the icon names."
+                  },
+                  "label": {
+                    "type": "string",
+                    "description": "Only for kind \"docs\" (a badge) or \"augment\" (the model box). At most 12 characters."
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              "steps": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "desc": {
+                      "type": "string"
+                    },
+                    "diagram": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "docs",
+                            "chunk-db",
+                            "topk",
+                            "augment",
+                            "window",
+                            "preload",
+                            "kv",
+                            "instant",
+                            "graph",
+                            "graph-build",
+                            "hops",
+                            "grounded",
+                            "chat",
+                            "loop",
+                            "icon"
+                          ]
+                        },
+                        "icon": {
+                          "type": "string",
+                          "description": "Only for kind \"icon\": one of the icon names."
+                        },
+                        "label": {
+                          "type": "string",
+                          "description": "Only for kind \"docs\" (a badge) or \"augment\" (the model box). At most 12 characters."
+                        }
+                      },
+                      "required": [
+                        "kind"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "desc",
+                    "diagram"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "name",
+              "kind",
+              "note",
+              "hero",
+              "steps",
+              "examples"
+            ]
+          }
+        },
+        "caption": {
+          "type": "string",
+          "description": "The post's caption, about this infographic."
+        },
+        "review": {
+          "type": "object",
+          "description": "The practitioner review: what experts will most likely comment, and the reply.",
+          "properties": {
+            "objections": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 3,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "comment": {
+                    "type": "string",
+                    "description": "The comment, as an expert would write it."
+                  },
+                  "reply": {
+                    "type": "string",
+                    "description": "A short, friendly reply in the post's language."
+                  }
+                },
+                "required": [
+                  "comment",
+                  "reply"
+                ]
+              }
+            }
+          },
+          "required": [
+            "objections"
+          ]
+        }
+      },
+      "required": [
+        "subtitle",
+        "accent",
+        "columns",
+        "caption",
+        "review"
+      ]
+    }
+  }
+}
