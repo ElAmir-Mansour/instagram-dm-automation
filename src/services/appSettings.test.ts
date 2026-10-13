@@ -9,7 +9,8 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
-import { describeGeminiKey, getGeminiKey, getMediaStorageConfig } from './appSettings.js';
+import { setLogSink } from '../utils/log.js';
+import { DEFAULT_ONBOARDING_RULES, describeGeminiKey, getGeminiKey, getMediaStorageConfig, getOnboardingDefaultRules, parseOnboardingRules } from './appSettings.js';
 
 const TEST_ENCRYPTION_KEY = 'cd'.repeat(32);
 const SAVED = 'AIza.fake.saved-on-operations.test';
@@ -170,5 +171,49 @@ describe('getMediaStorageConfig', () => {
 
         process.env.SUPABASE_URL = 'http://env5678.supabase.co';
         assert.equal(await getMediaStorageConfig(), null, 'plain http is refused');
+    });
+});
+
+describe('onboarding.default_rules: the content rules a tenant created by the operator starts with (D9)', () => {
+    it('is the no-women rule when nothing is saved, and asks for exactly that key', async () => {
+        const asked = storeHolds(null);
+        assert.deepEqual(await getOnboardingDefaultRules(), ['no_women_imagery']);
+        assert.deepEqual(asked, ['onboarding.default_rules']);
+        assert.deepEqual([...DEFAULT_ONBOARDING_RULES], ['no_women_imagery']);
+    });
+
+    it('takes what is saved: a rule, no repeats, or an empty list that means "none" and not "the default"', async () => {
+        storeHolds({ value: '["no_women_imagery","no_women_imagery"]', is_secret: false });
+        assert.deepEqual(await getOnboardingDefaultRules(), ['no_women_imagery']);
+        storeHolds({ value: '[]', is_secret: false });
+        assert.deepEqual(await getOnboardingDefaultRules(), []);
+    });
+
+    it('falls back to the default, loudly, for a value it cannot read: a typo must not silently drop the pre-ticked rule', async () => {
+        const lines: string[] = [];
+        const previous = setLogSink((_level, line) => lines.push(line));
+        try {
+            for (const bad of ['not json', '"no_women_imagery"', '{"a":1}', '["no_women_imagery","something_else"]', '[1]']) {
+                storeHolds({ value: bad, is_secret: false });
+                assert.deepEqual(await getOnboardingDefaultRules(), ['no_women_imagery'], bad);
+            }
+        } finally {
+            setLogSink(previous);
+        }
+        assert.equal(lines.filter((l) => l.includes('onboarding.default_rules_unreadable')).length, 5);
+    });
+
+    it('hands out a copy: a caller that edits its rules does not edit the default', async () => {
+        storeHolds(null);
+        const rules = await getOnboardingDefaultRules();
+        rules.push('no_women_imagery');
+        assert.deepEqual(await getOnboardingDefaultRules(), ['no_women_imagery']);
+        assert.deepEqual([...DEFAULT_ONBOARDING_RULES], ['no_women_imagery']);
+    });
+
+    it('parseOnboardingRules is null for anything that is not a list of known presets', () => {
+        assert.deepEqual(parseOnboardingRules('[]'), []);
+        assert.deepEqual(parseOnboardingRules('["no_women_imagery"]'), ['no_women_imagery']);
+        for (const raw of ['', 'x', 'null', '7', '{}', '["x"]', '[null]']) assert.equal(parseOnboardingRules(raw), null, raw);
     });
 });

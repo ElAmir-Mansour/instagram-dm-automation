@@ -541,7 +541,9 @@ export async function syncAllTenants(opts: { budgetMs?: number; deps?: Partial<S
     const out: CronGrowthResult = { tenants: 0, synced: 0, skipped: 0, failed: 0 };
     let tenants: { id: string }[];
     try {
-        tenants = await queryRows<{ id: string }>('SELECT id FROM creators WHERE is_active = TRUE ORDER BY created_at');
+        // A tenant with no Meta connection (created by name, v34) has nothing to sync: skipped here, not counted, and no
+        // `not_connected` state is written for it every night. `syncInsights` still answers a manual sync for one.
+        tenants = await queryRows<{ id: string }>('SELECT id FROM creators WHERE is_active = TRUE AND page_access_token IS NOT NULL ORDER BY created_at');
     } catch (err) {
         log('error', 'growth.cron_list_failed', describeError(err));
         return { ...out, skippedReason: 'could not list tenants' };

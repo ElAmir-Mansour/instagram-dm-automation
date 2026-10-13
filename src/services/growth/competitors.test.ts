@@ -75,6 +75,22 @@ describe('mapBusinessDiscovery', () => {
     });
 });
 
+describe('getCompetitors with no Meta connection (v34)', () => {
+    it('is not_connected for a tenant whose token and page id are NULL, and asks neither debug_token nor Meta', async () => {
+        const query = (pool as any).query;
+        (pool as any).query = async (sql: string) => (/FROM creators WHERE id/.test(sql)
+            ? { rows: [{ id: TENANT, instagram_page_id: null, page_access_token: null }] }
+            : query(sql));
+        try {
+            const out = await getCompetitors(TENANT, async () => { throw new Error('debug_token must not be asked about nothing'); });
+            assert.deepEqual(out, { status: 'not_connected', missing: [], competitors: [] });
+            assert.deepEqual(batch, [], 'no batch reached Meta');
+        } finally {
+            (pool as any).query = query;
+        }
+    });
+});
+
 describe('getCompetitors', () => {
     it('reports missing_permission from debug_token without spending a lookup', async () => {
         const out = await getCompetitors(TENANT, async () => ({ isValid: true, scopes: ['instagram_basic', 'pages_read_engagement'] }));

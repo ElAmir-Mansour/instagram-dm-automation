@@ -17,8 +17,10 @@
  * `--apply` runs that same check first and writes only for a tenant that passes. One transaction per tenant on a normal
  * pool connection: a 5 s lock timeout, the tenant's lock, the rows read again under it and assessed again, then
  * `INSERT … ON CONFLICT (creator_id) DO NOTHING` and a version-1 history row (source `backfill`). A tenant that has a
- * stored profile is left alone, and so is one with no `studio_settings` row (it stays virtual). It never overwrites a profile
- * and never touches the settings rows. Re-running it is a no-op. Run the dry run, read it, then `--apply`; then
+ * stored profile is left alone. A tenant with NO settings rows at all gets the neutral `defaultProfile()` (Arabic, the default
+ * content rules, no owner assumptions) instead of staying described as the owner (P16): stored with its two settings rows
+ * mirrored, as a tenant created today is. The platform owner never does, and a tenant with only one of the two rows stays virtual.
+ * It never overwrites a profile, and for a tenant that has settings rows it never touches them. Re-running it is a no-op. Run the dry run, read it, then `--apply`; then
  * `npm run profiles:parity` to prove no prompt moved.
  *
  * Exit: 0 every tenant is clean · 1 a tenant has a problem (or was refused or failed under --apply) · 2 usage, or the
@@ -35,14 +37,16 @@ const USAGE = `AutoReply Pro profile backfill. Dry run unless --apply.
   npm run profiles:backfill -- [options]
 
   --dry-run         check every tenant against the live rows; write nothing (the default)
-  --apply           write version 1 for each tenant that passes the same check
+  --apply           write version 1 for each tenant that passes the same check (and the neutral default for one with no settings)
   --tenant <uuid>   only this tenant
   --env <path>      .env to read DATABASE_URL from (default: the nearest one above this checkout)
   --help
 
 To undo an --apply for a tenant ($1 = its id), in ONE transaction. It is only valid while the profile is still
-version 1 (no save has been made since), and it is all --apply wrote: no settings row is touched.
+version 1 (no save has been made since), and it is all --apply wrote for a tenant that had settings: no settings row is touched.
   DELETE FROM creator_profile_versions WHERE creator_id=$1 AND version=1 AND source='backfill'; DELETE FROM creator_profiles WHERE creator_id=$1 AND version=1
+For a tenant the report says was CREATED as "the neutral default", --apply also inserted its two settings rows (it had none): delete those too.
+  DELETE FROM studio_settings WHERE creator_id=$1; DELETE FROM growth_settings WHERE creator_id=$1
 
 Exit: 0 clean · 1 problems · 2 usage or could not run.`;
 

@@ -32,10 +32,37 @@ export interface Creator {
     id: string;
     instagram_page_id: string | null;
     facebook_page_id: string | null;
-    page_access_token: string;
+    /**
+     * Null: the tenant has no Meta connection (created by name, v34). Every reader checks it and skips the tenant, or
+     * says "not connected"; none sends it to Meta. The database forbids a page id without one.
+     */
+    page_access_token: string | null;
     is_active?: boolean;
     webhook_verify_token?: string | null;
 }
+
+/** What a tenant with no Meta connection is told, wherever it asks for something that needs one. */
+export const NOT_CONNECTED_MESSAGE = 'Instagram and Facebook are not connected for this tenant yet: connect them first.';
+
+/**
+ * Thrown where Meta work is attempted for a tenant that has no token (created by name, v34). It is not a Meta failure:
+ * nothing was sent, so it must never be read as a dead token (`isTokenDeathError` looks for Meta's code 190, which this
+ * has none of), and it is the same sentence everywhere (`NOT_CONNECTED_MESSAGE`).
+ */
+export class MetaNotConnectedError extends Error {
+    readonly code = 'META_NOT_CONNECTED';
+    constructor() {
+        super(NOT_CONNECTED_MESSAGE);
+        this.name = 'MetaNotConnectedError';
+    }
+}
+
+/**
+ * A creator the webhook resolved: it has a Meta connection, so the token is there. `getCreatorByPageId` only returns
+ * these (a tenant with no token is not routable, whatever its page ids say), which is what lets the comment and DM
+ * pipelines hand `page_access_token` straight to Meta.
+ */
+export type ConnectedCreator = Creator & { page_access_token: string };
 
 /** Cache the active-creator lookup for the life of a warm instance. */
 let cachedId: { value: string; at: number } | null = null;
@@ -126,18 +153,21 @@ export async function getTenant(
  * This path was already correct — it routes by `entry.id` rather than assuming a single
  * tenant — so it is lifted here unchanged apart from dropping the implicit ambiguity.
  */
-export async function getCreatorByPageId(...pageIds: (string | undefined)[]): Promise<Creator | null> {
+export async function getCreatorByPageId(...pageIds: (string | undefined)[]): Promise<ConnectedCreator | null> {
     const ids = pageIds.filter((id): id is string => Boolean(id));
     if (ids.length === 0) return null;
 
     // The one query on the webhook's critical path. Typed to exactly the columns selected,
     // so adding a field to `Creator` without adding it here is a compile error rather than
     // an `undefined` that reaches the Meta API as a missing page id.
-    type Row = Pick<CreatorRow, 'id' | 'instagram_page_id' | 'facebook_page_id' | 'page_access_token'>;
+    // `page_access_token IS NOT NULL` below is what makes the token a string here: the database already forbids a page id
+    // without a token (v34), and the clause keeps this true of a database that has not had that constraint yet.
+    type Row = Pick<CreatorRow, 'id' | 'instagram_page_id' | 'facebook_page_id'> & { page_access_token: string };
     const row = await queryOne<Row>(
         `SELECT id, instagram_page_id, facebook_page_id, page_access_token
            FROM creators
           WHERE is_active = true
+            AND page_access_token IS NOT NULL
             AND (instagram_page_id = ANY($1::text[]) OR facebook_page_id = ANY($1::text[]))
           ORDER BY created_at
           LIMIT 1`,
@@ -145,7 +175,7 @@ export async function getCreatorByPageId(...pageIds: (string | undefined)[]): Pr
     );
     // Decrypted here rather than at the two webhook call sites, so the comment and DM
     // pipelines keep working unchanged the moment a token is first written encrypted.
-    return withDecryptedToken<Creator>(row ?? undefined);
+    return withDecryptedToken<ConnectedCreator>(row ?? undefined);
 }
 
 /** Drop the cached id — call after any write that could change which creator is active. */

@@ -44,7 +44,7 @@ import {
 } from '../services/health.js';
 import {
     clampLimit, isPageId, isUserRole, lockoutRefusal, passwordProblem,
-    readPageIdField, readVerifyTokenField, type FieldUpdate,
+    readInstagramUsername, readNamedTenant, readPageIdField, readVerifyTokenField, readWebsiteUrl, type FieldUpdate,
 } from '../services/adminGuards.js';
 import {
     inspectionStatus, inspectToken, recheckTenantToken, type TokenInspection,
@@ -52,13 +52,17 @@ import {
 import {
     commitErasure, executeErasure, previewErasure, rollbackErasure,
 } from '../services/erasure.js';
-import { APP_SETTING_KEYS, describeGeminiKey, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
+import { APP_SETTING_KEYS, describeGeminiKey, getOnboardingDefaultRules, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
 import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
 import { storageKeyKind, storageKeyProblem } from '../services/supabaseStorage.js';
 import { checkGeminiKey } from '../services/geminiKey.js';
 import { dmModelsInUse, starterPersona } from '../services/ai.js';
-import { profileContextOrLegacy } from '../services/profile/context.js';
+import { clearProfileCache } from '../services/profile/cache.js';
+import { contextFor } from '../services/profile/context.js';
+import { defaultProfile } from '../services/profile/defaults.js';
+import { createProfile, ProfileError } from '../services/profile/store.js';
+import { withTransaction } from '../services/studio/common.js';
 
 const router = Router();
 
@@ -81,6 +85,10 @@ const DM_HOURLY_CEILING = DEFAULT_HOURLY_LIMIT;
 const PG_UNIQUE_VIOLATION = '23505';
 /** Postgres foreign-key violation. An unknown user or creator id is a 404. */
 const PG_FK_VIOLATION = '23503';
+/** Postgres not-null violation: a column the code expects to be nullable (v34) is not, so the migration is pending. */
+const PG_NOT_NULL_VIOLATION = '23502';
+/** Postgres check violation. `creators_meta_ids_need_token`: a page id with no token. */
+const PG_CHECK_VIOLATION = '23514';
 
 /**
  * Everything below is platform_admin only.
@@ -597,83 +605,161 @@ function maskToken(value: string | null): { configured: boolean; preview: string
 }
 
 /**
- * Create a creator — the first-run path.
+ * Create a tenant.
  *
- * `instagram_page_id` and `page_access_token` are NOT NULL in the schema, so both are
- * required. The token is checked against Meta and then encrypted here, which means a tenant
- * created through this endpoint never has a plaintext or unverified token in the database at
- * any point.
+ * Two shapes of body, told apart by whether it carries a Meta connection:
+ *
+ *   - **By name** (v34): `{ name, lang?, instagram_username?, website? }`. No Meta ids, no token, no password: the tenant
+ *     connects Meta later and an operator-made tenant is `invited` until its wizard is done (docs/onboarding/02). This is
+ *     what the Tenants screen sends.
+ *   - **With credentials** (the first-run path, and the legacy body): `instagram_page_id` and `page_access_token` are both
+ *     required, the token is checked against Meta and then encrypted here, so a tenant created through this endpoint never
+ *     has a plaintext or unverified token in the database at any point.
+ *
+ * Either way a new tenant gets, in ONE transaction with its `creators` row:
+ *
+ *   - a stored Creator Profile, version 1: `defaultProfile({ lang, rules })`, the neutral one, with `onboarding.default_rules`
+ *     pre-ticked (D9). Without it the tenant is described by its legacy settings, and a tenant with none is described as the
+ *     owner (his role, domain, pronouns: `profileFromLegacy`); it has to exist before anything reads the tenant (P16, plan §4b);
+ *   - for an Arabic tenant, the Studio's text direction `rtl` (not a profile field, so it is seeded into `studio_settings`);
+ *   - an `onboarding` row, `invited`. A tenant with no row reads as completed (D14), which a new tenant is not.
+ *
+ * Nothing is created if any of it fails: a tenant is never left without its profile. The starter DM persona follows, in the
+ * tenant's language, and is best-effort as it always was.
  */
 router.post('/tenants', async (req, res) => {
     try {
-        const { name, instagram_page_id, facebook_page_id, page_access_token, webhook_verify_token } = req.body ?? {};
+        const body = req.body ?? {};
+        const { name, instagram_page_id, facebook_page_id, page_access_token, webhook_verify_token } = body;
 
-        if (typeof instagram_page_id !== 'string' || !instagram_page_id.trim()) {
-            res.status(400).json({ error: 'instagram_page_id is required.' });
-            return;
-        }
-        const igPageId = instagram_page_id.trim();
-        if (!isPageId(igPageId)) {
-            res.status(400).json({ error: `instagram_page_id is not a valid Meta page id.` });
-            return;
-        }
-        if (typeof page_access_token !== 'string' || !page_access_token.trim()) {
-            res.status(400).json({ error: 'page_access_token is required.' });
-            return;
-        }
+        const present = (value: unknown): boolean => value !== undefined && value !== null && value !== '';
+        const withCredentials = present(instagram_page_id) || present(facebook_page_id) || present(page_access_token);
 
-        const fbPageId = typeof facebook_page_id === 'string' && facebook_page_id.trim()
-            ? facebook_page_id.trim() : null;
-        if (fbPageId && !isPageId(fbPageId)) {
-            res.status(400).json({ error: 'facebook_page_id is not a valid Meta page id.' });
-            return;
-        }
-
-        const verify = readVerifyTokenField(webhook_verify_token);
-        if (verify.kind === 'error') {
-            res.status(400).json({ error: verify.error });
-            return;
-        }
-
-        // Checked before anything is written, so a rejected token leaves no half-made tenant.
-        const checked = await validateSuppliedToken(page_access_token.trim());
-        if (!checked.ok) {
-            res.status(400).json({ error: checked.error });
-            return;
-        }
-
-        let encrypted: string;
-        try {
-            encrypted = encryptSecret(page_access_token.trim());
-        } catch (keyErr) {
-            log('error', 'admin.tenant_encryption_failed', describeError(keyErr));
-            res.status(500).json({
-                error: 'TOKEN_ENCRYPTION_KEY is not configured. Generate one with `openssl rand -hex 32` and set it before creating a tenant.'
+        // By name, the body is read whole. With credentials the legacy body is as it always was (its name is optional, and Arabic
+        // is its language), and what is new on it is read the same way: the language, and the handle and site if it carries them.
+        const named = readNamedTenant(body);
+        if (!withCredentials && !named.ok) {
+            res.status(400).json({
+                error: named.error + (present(name)
+                    ? '' : ' (To create a tenant that already has a Meta connection, send instagram_page_id and page_access_token instead.)'),
             });
             return;
         }
+        const rawLang = body.lang;
+        if (withCredentials && present(rawLang) && rawLang !== 'ar' && rawLang !== 'en') {
+            res.status(400).json({ error: 'lang must be "ar" or "en".' });
+            return;
+        }
+        const lang: 'ar' | 'en' = rawLang === 'en' ? 'en' : 'ar';
+        const handle = readInstagramUsername(body.instagram_username);
+        const site = readWebsiteUrl(body.website !== undefined ? body.website : body.website_url);
+        if (!handle.ok || !site.ok) {
+            res.status(400).json({ error: (!handle.ok ? handle : site as { error: string }).error });
+            return;
+        }
 
-        const result = await pool.query(
-            `INSERT INTO creators
-                (name, instagram_page_id, facebook_page_id, page_access_token, webhook_verify_token,
-                 is_active, token_status, token_error, token_last_checked_at,
-                 token_expires_at, token_data_access_expires_at)
-             VALUES ($1, $2, $3, $4, $5, true, $6, $7, NOW(), $8, $9)
-             RETURNING id, name, instagram_page_id, facebook_page_id, is_active, token_status, created_at`,
-            [
-                typeof name === 'string' && name.trim() ? name.trim() : null,
-                igPageId,
-                fbPageId,
-                encrypted,
-                verify.kind === 'set' ? verify.value : null,
-                inspectionStatus(checked.inspection),
-                checked.inspection.error,
-                checked.inspection.expiresAt,
-                checked.inspection.dataAccessExpiresAt,
-            ]
-        );
+        let igPageId: string | null = null;
+        let fbPageId: string | null = null;
+        let encrypted: string | null = null;
+        let verifyValue: string | null = null;
+        let checked: Extract<Awaited<ReturnType<typeof validateSuppliedToken>>, { ok: true }> | null = null;
 
-        const created = result.rows[0];
+        if (withCredentials) {
+            if (typeof instagram_page_id !== 'string' || !instagram_page_id.trim()) {
+                res.status(400).json({ error: 'instagram_page_id is required.' });
+                return;
+            }
+            igPageId = instagram_page_id.trim();
+            if (!isPageId(igPageId)) {
+                res.status(400).json({ error: `instagram_page_id is not a valid Meta page id.` });
+                return;
+            }
+            if (typeof page_access_token !== 'string' || !page_access_token.trim()) {
+                res.status(400).json({ error: 'page_access_token is required.' });
+                return;
+            }
+
+            fbPageId = typeof facebook_page_id === 'string' && facebook_page_id.trim()
+                ? facebook_page_id.trim() : null;
+            if (fbPageId && !isPageId(fbPageId)) {
+                res.status(400).json({ error: 'facebook_page_id is not a valid Meta page id.' });
+                return;
+            }
+
+            const verify = readVerifyTokenField(webhook_verify_token);
+            if (verify.kind === 'error') {
+                res.status(400).json({ error: verify.error });
+                return;
+            }
+            verifyValue = verify.kind === 'set' ? verify.value : null;
+
+            // Checked before anything is written, so a rejected token leaves no half-made tenant.
+            const validated = await validateSuppliedToken(page_access_token.trim());
+            if (!validated.ok) {
+                res.status(400).json({ error: validated.error });
+                return;
+            }
+            checked = validated;
+
+            try {
+                encrypted = encryptSecret(page_access_token.trim());
+            } catch (keyErr) {
+                log('error', 'admin.tenant_encryption_failed', describeError(keyErr));
+                res.status(500).json({
+                    error: 'TOKEN_ENCRYPTION_KEY is not configured. Generate one with `openssl rand -hex 32` and set it before creating a tenant.'
+                });
+                return;
+            }
+        }
+
+        const tenantName = withCredentials
+            ? (typeof name === 'string' && name.trim() ? name.trim() : null)
+            : (named.ok ? named.value.name : null);
+        // The handle and site the operator typed, if any: the draft's inputs (P24), kept whether or not a Meta connection came with them.
+        const instagramUsername = handle.value;
+        const websiteUrl = site.value;
+
+        // Read before the transaction opens: a setting that cannot be read fails the create, rather than a tenant being stored
+        // without the rule it was meant to have.
+        const rules = await getOnboardingDefaultRules();
+        const profile = defaultProfile({ lang, rules });
+
+        const created = await withTransaction(async (tx) => {
+            const result = await tx.query(
+                `INSERT INTO creators
+                    (name, instagram_page_id, facebook_page_id, page_access_token, webhook_verify_token,
+                     is_active, token_status, token_error, token_last_checked_at,
+                     token_expires_at, token_data_access_expires_at, instagram_username, website_url)
+                 VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10, $11, $12)
+                 RETURNING id, name, instagram_page_id, facebook_page_id, instagram_username, website_url, is_active, token_status, created_at`,
+                [
+                    tenantName,
+                    igPageId,
+                    fbPageId,
+                    encrypted,
+                    verifyValue,
+                    // A tenant that has never been connected has nothing to be "valid" or "invalid": it keeps the column's own `unknown`.
+                    checked ? inspectionStatus(checked.inspection) : 'unknown',
+                    checked ? checked.inspection.error : null,
+                    checked ? new Date() : null,
+                    checked ? checked.inspection.expiresAt : null,
+                    checked ? checked.inspection.dataAccessExpiresAt : null,
+                    instagramUsername,
+                    websiteUrl,
+                ]
+            );
+            const row = result.rows[0];
+            // The profile, its history and the mirror into the Studio and Growth settings, then where the tenant is in the wizard.
+            // `rtl` is the Studio's own setting (`brand.direction` is not derived from the language), so Arabic seeds it here.
+            await createProfile(row.id, profile, { source: 'admin', userId: req.session?.userId ?? null, direction: lang === 'ar' ? 'rtl' : undefined }, tx);
+            await tx.query(
+                `INSERT INTO onboarding (creator_id, status) VALUES ($1, 'invited') ON CONFLICT (creator_id) DO NOTHING`,
+                [row.id]
+            );
+            return row;
+        });
+        // `createProfile` cleared it before the commit; a reader that ran in between could have cached the old answer.
+        clearProfileCache(created.id);
 
         // Seed a DISABLED agent row.
         //
@@ -690,9 +776,9 @@ router.post('/tenants', async (req, res) => {
         // prompt. Best-effort — a tenant is still usable without an agent, and failing the
         // whole create over this would strand the token that was just verified.
         try {
-            // In the language the new tenant's DMs will speak. It has no stored profile yet, so this reads what its
-            // (empty) settings describe, which is Arabic until a profile says otherwise (P16 stores one at create).
-            const { language } = await profileContextOrLegacy(created.id, 'dm');
+            // In the language the new tenant's DMs will speak: the one its stored profile says (`dm` surface), which is the
+            // language it was created in. Not read back from the database: the profile above is what was just stored.
+            const { language } = contextFor(profile, 'dm', 1);
             await pool.query(
                 `INSERT INTO ai_agents (creator_id, is_active, system_prompt, knowledge_base)
                  VALUES ($1, false, $2, '')
@@ -714,15 +800,41 @@ router.post('/tenants', async (req, res) => {
             facebook_page_id: fbPageId,
             // Deliberately the *fact*, never the value. `credential_replaced` is spelled
             // without the word "token" so the redaction pattern does not blank a boolean.
-            credential_replaced: true,
-            credential_type: checked.inspection.type,
-            missing_scopes: checked.inspection.missingScopes,
+            credential_replaced: checked !== null,
+            credential_type: checked?.inspection.type ?? null,
+            missing_scopes: checked?.inspection.missingScopes ?? [],
+            // Facts about how it was made. The handle and the site are public; the profile is the default, not what was typed.
+            created_by_name: !withCredentials,
+            language: lang,
+            profile_version: 1,
+            instagram_username: created.instagram_username,
+            website_url: created.website_url,
         });
 
-        res.status(201).json(created);
+        res.status(201).json({
+            ...created,
+            language: lang,
+            // Whether Meta is connected: the Tenants screen says "not connected yet" for a tenant that is not.
+            meta_connected: checked !== null,
+            profile: { version: 1 },
+            onboarding: { status: 'invited' },
+        });
     } catch (err: any) {
         if (err?.code === PG_UNIQUE_VIOLATION) {
             res.status(409).json({ error: 'A creator with that page id already exists.' });
+            return;
+        }
+        // The profile's own refusals (the tables are missing, the default failed validation): its status and sentence.
+        if (err instanceof ProfileError) {
+            res.status(err.status).json({ error: err.message, code: err.code });
+            return;
+        }
+        // A tenant with no Meta ids needs migration v34: before it, those columns are NOT NULL.
+        if (err?.code === PG_NOT_NULL_VIOLATION) {
+            res.status(500).json({
+                error: 'The database is missing migration v34 (src/config/migration_v34_onboarding.sql). Apply it with `npm run migrate`, then try again.',
+                migrationPending: true,
+            });
             return;
         }
         failWith(res, err, 'admin.tenant_create_failed', 'Failed to create tenant.');
@@ -949,6 +1061,14 @@ router.patch('/tenants/:id', async (req, res) => {
             res.status(409).json({
                 code: 'PAGE_ID_IN_USE',
                 error: 'Another creator already holds that page id.',
+            });
+            return;
+        }
+        // A page id on a tenant with no Meta token (created by name, v34): the database keeps the two together, so say what to send.
+        if (err?.code === PG_CHECK_VIOLATION && String(err?.constraint ?? err?.message).includes('creators_meta_ids_need_token')) {
+            res.status(400).json({
+                code: 'TOKEN_REQUIRED',
+                error: 'This tenant has no Meta connection yet: send page_access_token together with the page id, so the two are saved at once.',
             });
             return;
         }

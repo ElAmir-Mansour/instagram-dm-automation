@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
     isPageId, isUserRole, lockoutRefusal, LOCKOUT_CODE, MIN_PASSWORD_LENGTH, passwordProblem,
-    readPageIdField, readVerifyTokenField,
+    readInstagramUsername, readNamedTenant, readPageIdField, readVerifyTokenField, readWebsiteUrl,
 } from './adminGuards.js';
 
 const lastAdmin = { id: 'a', role: 'platform_admin', is_active: true };
@@ -167,5 +167,75 @@ describe('passwordProblem', () => {
         for (const value of [undefined, null, 42, {}]) {
             assert.ok(passwordProblem(value), `input ${JSON.stringify(value)}`);
         }
+    });
+});
+
+// ─── Creating a tenant by name (v34) ────────────────────────────────────────────────────
+
+describe('readNamedTenant', () => {
+    it('takes a name alone: Arabic, no handle, no site', () => {
+        assert.deepEqual(readNamedTenant({ name: '  متجر نور  ' }), { ok: true, value: { name: 'متجر نور', lang: 'ar', instagramUsername: null, websiteUrl: null } });
+    });
+
+    it('takes the language the operator picked, and nothing but ar or en', () => {
+        assert.equal((readNamedTenant({ name: 'x', lang: 'en' }) as { value: { lang: string } }).value.lang, 'en');
+        assert.equal((readNamedTenant({ name: 'x', lang: 'ar' }) as { value: { lang: string } }).value.lang, 'ar');
+        for (const lang of [undefined, null, '']) assert.equal((readNamedTenant({ name: 'x', lang }) as { value: { lang: string } }).value.lang, 'ar', `${lang} is the default`);
+        for (const lang of ['fr', 'EN', 'arabic', 7, {}]) assert.deepEqual(readNamedTenant({ name: 'x', lang }), { ok: false, error: 'lang must be "ar" or "en".' }, String(lang));
+    });
+
+    it('needs a name that is text, not blank, not too long for the column, and without control characters', () => {
+        for (const name of [undefined, null, '', '   ', 42, {}, ['x']]) assert.deepEqual(readNamedTenant({ name }), { ok: false, error: 'name is required.' }, JSON.stringify(name));
+        assert.match((readNamedTenant({ name: 'x'.repeat(256) }) as { error: string }).error, /too long: at most 255/);
+        assert.equal(readNamedTenant({ name: 'x'.repeat(255) }).ok, true);
+        assert.match((readNamedTenant({ name: 'two\nlines' }) as { error: string }).error, /line breaks/);
+    });
+
+    it('reads the handle and the site, accepting website_url for the site and preferring website', () => {
+        const a = readNamedTenant({ name: 'x', instagram_username: '@Sami.Fit', website: 'samifit.example' });
+        assert.deepEqual(a, { ok: true, value: { name: 'x', lang: 'ar', instagramUsername: 'sami.fit', websiteUrl: 'https://samifit.example/' } });
+        const b = readNamedTenant({ name: 'x', website_url: 'https://b.example/shop' });
+        assert.equal((b as { value: { websiteUrl: string } }).value.websiteUrl, 'https://b.example/shop');
+        const both = readNamedTenant({ name: 'x', website: 'https://a.example', website_url: 'https://b.example' });
+        assert.equal((both as { value: { websiteUrl: string } }).value.websiteUrl, 'https://a.example/');
+    });
+
+    it('refuses what it cannot read, saying which field', () => {
+        assert.match((readNamedTenant({ name: 'x', instagram_username: 'not a handle!' }) as { error: string }).error, /^instagram_username/);
+        assert.match((readNamedTenant({ name: 'x', website: 'localhost' }) as { error: string }).error, /^website/);
+    });
+
+    it('ignores everything else in the body: the route decides what a Meta connection means', () => {
+        const out = readNamedTenant({ name: 'x', instagram_page_id: '123', page_access_token: 'tok', is_active: false, creator_id: 'other' });
+        assert.deepEqual(out, { ok: true, value: { name: 'x', lang: 'ar', instagramUsername: null, websiteUrl: null } });
+    });
+});
+
+describe('readInstagramUsername', () => {
+    it('reads a handle with or without the @, in any case, or a profile URL', () => {
+        for (const raw of ['sami.fit', '@sami.fit', '  @Sami.Fit ', 'https://www.instagram.com/sami.fit/', 'instagram.com/sami.fit?hl=en', 'http://instagram.com/Sami.Fit#x']) {
+            assert.deepEqual(readInstagramUsername(raw), { ok: true, value: 'sami.fit' }, raw);
+        }
+    });
+
+    it('is null for nothing, and an error for anything that is not a handle', () => {
+        for (const raw of [undefined, null, '', '   ']) assert.deepEqual(readInstagramUsername(raw), { ok: true, value: null });
+        for (const raw of ['a b', 'x'.repeat(31), 'نور', 'a@b', 'https://evil.example/sami.fit', '@', 12]) assert.equal(readInstagramUsername(raw).ok, false, String(raw));
+    });
+});
+
+describe('readWebsiteUrl', () => {
+    it('takes a domain with or without the scheme, and keeps the scheme it was given', () => {
+        assert.deepEqual(readWebsiteUrl('samifit.example'), { ok: true, value: 'https://samifit.example/' });
+        assert.deepEqual(readWebsiteUrl(' http://samifit.example/shop?a=1 '), { ok: true, value: 'http://samifit.example/shop?a=1' });
+        assert.deepEqual(readWebsiteUrl('https://shop.samifit.example'), { ok: true, value: 'https://shop.samifit.example/' });
+        for (const raw of [undefined, null, '', '  ']) assert.deepEqual(readWebsiteUrl(raw), { ok: true, value: null });
+    });
+
+    it('refuses an address a person could not open from the internet, and anything that is not a web address', () => {
+        for (const raw of [
+            'localhost', 'http://intranet/admin', 'http://127.0.0.1/', 'http://192.168.1.10', 'http://10.0.0.1:8080/x', 'http://[::1]/', 'https://user:pass@example.com/',
+            'ftp://example.com/', 'javascript:alert(1)', 'file:///etc/passwd', 'exa mple.com', `https://example.com/${'a'.repeat(2100)}`, 'https://exa\u0000mple.com', 5,
+        ]) assert.equal(readWebsiteUrl(raw).ok, false, String(raw).slice(0, 40));
     });
 });

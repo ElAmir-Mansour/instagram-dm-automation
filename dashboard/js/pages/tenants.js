@@ -164,8 +164,10 @@ const TenantsPage = {
                         </p>
                     `}
                     <div class="tenant-page-ids">
-                        <span>IG ${UI.ltr(igId || '—')}</span>
-                        <span>FB ${UI.ltr(fbId || '—')}</span>
+                        ${igId || fbId ? html`
+                            <span>IG ${UI.ltr(igId || '—')}</span>
+                            <span>FB ${UI.ltr(fbId || '—')}</span>
+                        ` : html`<span class="chip">${t('tenants.notConnected')}</span>`}
                     </div>
                 </td>
                 <td class="col-health">${this.tokenBadge(this.pick(row, 'token_status', 'tokenStatus'))}</td>
@@ -265,9 +267,51 @@ const TenantsPage = {
     },
 
     /**
+     * The Meta fields of the create form. On the setup screen they ARE the form (a deployment's first tenant is the
+     * owner's, with its Meta connection), and required; on the Tenants screen they sit under "Advanced", all optional
+     * (D7: pasting a token stays under Advanced), because a tenant is created by name and connects Meta later.
+     */
+    credentialFields(required) {
+        return html`
+            <div class="form-group">
+                <label class="form-label" for="tenant-ig">${t('tenants.igId')}</label>
+                <input class="field" id="tenant-ig" name="instagram_page_id" inputmode="numeric" dir="ltr"
+                       autocomplete="off" spellcheck="false" placeholder="17841459652725922" ${required ? html.raw('required') : ''}>
+                <p class="form-hint">${required ? t('tenants.igHint') : t('tenants.igHintTogether')}</p>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="tenant-fb">
+                    ${t('tenants.fbId')} <span class="label-optional">${t('common.optional')}</span>
+                </label>
+                <input class="field" id="tenant-fb" name="facebook_page_id" inputmode="numeric" dir="ltr"
+                       autocomplete="off" spellcheck="false" placeholder="102938475610293">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="tenant-token">${t('tenants.pageToken')}</label>
+                <textarea class="field-textarea field-mono" id="tenant-token" name="page_access_token" dir="ltr"
+                          autocomplete="off" spellcheck="false" data-guard-dirty
+                          placeholder="${t('settings.tokenPlaceholder')}" ${required ? html.raw('required') : ''}></textarea>
+                <p class="form-hint">${required ? t('tenants.pageTokenHint') : t('tenants.pageTokenHintTogether')}</p>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="tenant-verify">
+                    ${t('tenants.verifyToken')} <span class="label-optional">${t('common.optional')}</span>
+                </label>
+                <input class="field field-mono" id="tenant-verify" name="webhook_verify_token" type="text" dir="ltr"
+                       autocomplete="off" spellcheck="false" placeholder="${t('settings.webhookPlaceholder')}">
+                <p class="form-hint">${t('tenants.verifyTokenHint')}</p>
+            </div>
+        `;
+    },
+
+    /**
      * `firstRun` is the setup screen's entry point: there is no session tenant
      * yet, so on success we reload /auth/me and land on the dashboard proper
-     * instead of re-rendering a page the user cannot reach.
+     * instead of re-rendering a page the user cannot reach. It asks for the Meta
+     * connection, as it always has.
+     *
+     * Everywhere else a tenant is created by NAME and LANGUAGE: no Meta ids, no
+     * token, no password. The tenant connects Instagram and Facebook later.
      */
     showCreateModal(firstRun) {
         const isFirstRun = firstRun === true;
@@ -280,34 +324,37 @@ const TenantsPage = {
                            placeholder="${t('tenants.namePlaceholder')}" required>
                     <p class="form-hint">${t('tenants.nameHint')}</p>
                 </div>
-                <div class="form-group">
-                    <label class="form-label" for="tenant-ig">${t('tenants.igId')}</label>
-                    <input class="field" id="tenant-ig" name="instagram_page_id" inputmode="numeric" dir="ltr"
-                           autocomplete="off" spellcheck="false" placeholder="17841459652725922" required>
-                    <p class="form-hint">${t('tenants.igHint')}</p>
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="tenant-fb">
-                        ${t('tenants.fbId')} <span class="label-optional">${t('common.optional')}</span>
-                    </label>
-                    <input class="field" id="tenant-fb" name="facebook_page_id" inputmode="numeric" dir="ltr"
-                           autocomplete="off" spellcheck="false" placeholder="102938475610293">
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="tenant-token">${t('tenants.pageToken')}</label>
-                    <textarea class="field-textarea field-mono" id="tenant-token" name="page_access_token" dir="ltr"
-                              autocomplete="off" spellcheck="false" data-guard-dirty
-                              placeholder="${t('settings.tokenPlaceholder')}" required></textarea>
-                    <p class="form-hint">${t('tenants.pageTokenHint')}</p>
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="tenant-verify">
-                        ${t('tenants.verifyToken')} <span class="label-optional">${t('common.optional')}</span>
-                    </label>
-                    <input class="field field-mono" id="tenant-verify" name="webhook_verify_token" type="text" dir="ltr"
-                           autocomplete="off" spellcheck="false" placeholder="${t('settings.webhookPlaceholder')}">
-                    <p class="form-hint">${t('tenants.verifyTokenHint')}</p>
-                </div>
+                ${isFirstRun ? this.credentialFields(true) : html`
+                    <div class="form-group">
+                        <label class="form-label" for="tenant-lang">${t('tenants.lang')}</label>
+                        <select class="select" id="tenant-lang" name="lang">
+                            <option value="ar" selected>${t('tenants.lang.ar')}</option>
+                            <option value="en">${t('tenants.lang.en')}</option>
+                        </select>
+                        <p class="form-hint">${t('tenants.langHint')}</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="tenant-handle">
+                            ${t('tenants.igHandle')} <span class="label-optional">${t('common.optional')}</span>
+                        </label>
+                        <input class="field" id="tenant-handle" name="instagram_username" dir="ltr"
+                               autocomplete="off" spellcheck="false" placeholder="@username">
+                        <p class="form-hint">${t('tenants.igHandleHint')}</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="tenant-site">
+                            ${t('tenants.website')} <span class="label-optional">${t('common.optional')}</span>
+                        </label>
+                        <input class="field" id="tenant-site" name="website" type="text" inputmode="url" dir="ltr"
+                               autocomplete="off" spellcheck="false" placeholder="example.com">
+                    </div>
+                    <p class="form-hint">${t('tenants.byNameNote')}</p>
+                    <details class="tenant-more">
+                        <summary>${t('tenants.advanced')}</summary>
+                        <p class="form-hint">${t('tenants.advancedHint')}</p>
+                        ${this.credentialFields(false)}
+                    </details>
+                `}
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
                     <button type="submit" class="btn btn-primary"><i data-lucide="plus" aria-hidden="true"></i> ${t('common.create')}</button>
@@ -320,16 +367,32 @@ const TenantsPage = {
         event.preventDefault();
         const data = new FormData(form);
         const firstRun = form.dataset.firstRun === 'true';
-        const payload = {
-            name: (data.get('name') || '').toString().trim(),
-            instagram_page_id: (data.get('instagram_page_id') || '').toString().trim(),
-            page_access_token: (data.get('page_access_token') || '').toString().trim(),
+        const text = (key) => (data.get(key) || '').toString().trim();
+        const payload = { name: text('name') };
+        if (!payload.name) return;
+
+        // The Meta fields: required on the setup screen, optional (under Advanced) everywhere else, where any of them
+        // sends the whole connection and the server then needs the page ID and the token together.
+        const credentials = {
+            instagram_page_id: text('instagram_page_id'),
+            facebook_page_id: text('facebook_page_id'),
+            page_access_token: text('page_access_token'),
+            webhook_verify_token: text('webhook_verify_token'),
         };
-        const facebookPageId = (data.get('facebook_page_id') || '').toString().trim();
-        if (facebookPageId) payload.facebook_page_id = facebookPageId;
-        const verifyToken = (data.get('webhook_verify_token') || '').toString().trim();
-        if (verifyToken) payload.webhook_verify_token = verifyToken;
-        if (!payload.name || !payload.instagram_page_id || !payload.page_access_token) return;
+        const anyId = credentials.instagram_page_id || credentials.facebook_page_id;
+        if (firstRun) {
+            if (!credentials.instagram_page_id || !credentials.page_access_token) return;
+        } else if ((anyId && !credentials.page_access_token) || (credentials.page_access_token && !credentials.instagram_page_id)) {
+            UI.toast(t('tenants.credentialsTogether'), 'error');
+            return;
+        }
+        for (const [key, value] of Object.entries(credentials)) if (value) payload[key] = value;
+
+        if (!firstRun) {
+            payload.lang = text('lang') === 'en' ? 'en' : 'ar';
+            if (text('instagram_username')) payload.instagram_username = text('instagram_username');
+            if (text('website')) payload.website = text('website');
+        }
 
         const restore = UI.formBusy(form, t('common.saving'));
         if (!restore) return; // already in flight

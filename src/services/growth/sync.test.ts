@@ -175,6 +175,17 @@ describe('syncInsights — permission states', () => {
         assert.deepEqual(state.missing, []);
     });
 
+    it('a tenant with no Meta connection at all (a NULL token, v34): both not_connected, no reason to show, and neither Meta nor debug_token is asked', async () => {
+        creator = { id: TENANT, instagram_page_id: null, facebook_page_id: null, page_access_token: null };
+        const asked: string[] = [];
+        const state = await syncInsights(TENANT, { ...deps([], true), inspect: async (token: string) => { asked.push(token); throw new Error('debug_token must not be asked about nothing'); } });
+        assert.deepEqual(asked, []);
+        assert.equal(gets.length + batches.length, 0);
+        assert.deepEqual([state.instagram.status, state.facebook.status], ['not_connected', 'not_connected']);
+        assert.equal(state.instagram.error, null, 'no id, so there is no token problem to report');
+        assert.deepEqual(state.missing, []);
+    });
+
     it('when debug_token can’t be asked, Meta’s own #10 refusals mark the permission missing', async () => {
         answer = (url) => (url.includes('/insights') ? refused(10, '(#10) Application does not have permission for this action') : defaultAnswer(url));
         const state = await syncInsights(TENANT, deps(new Error('timeout')));

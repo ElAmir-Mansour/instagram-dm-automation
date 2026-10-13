@@ -5,6 +5,7 @@
  *   loadStoredProfile   the stored row, read through `upgradeProfile`, or null. Cached for the request.
  *   loadProfile         the stored profile, else the one the tenant's legacy settings describe (`version: null`).
  *   saveProfile         one transaction: validate, bump the version, keep the history, mirror into the settings.
+ *   createProfile       a profile stored as version 1 exactly as given: a tenant's first, at creation (P16). Never over one.
  *
  * The Studio and Growth settings readers overlay the stored profile (`overlayProfile`, `loadScheduleTimezone`) and their
  * writers route a change to a profile-owned field into `saveProfile` (`lockStoredProfile`, `newerSchemaError`): P4.
@@ -370,6 +371,76 @@ export async function saveProfile(creatorId: string, next: unknown, options: Sav
     } finally {
         clearProfileCache(creatorId);
     }
+}
+
+export interface CreateProfileOptions {
+    source: ProfileSource;
+    /** The signed-in user, or null for the system (a script). */
+    userId: string | null;
+    /**
+     * The Studio's text direction for this tenant. Not a profile field (`brand.direction` stays a Studio setting: it is not
+     * derived from the language, P2 review), so it rides with the mirror into `studio_settings`, where it lives. Left out, the
+     * Studio's own default stands.
+     */
+    direction?: 'rtl' | 'ltr';
+}
+
+/**
+ * A tenant's FIRST profile, stored as version 1 exactly as given, in one transaction (a caller already inside one passes its
+ * client as `exec` and commits it itself, then calls `clearProfileCache`): the row, its history row, and the mirror into the
+ * Studio and Growth settings that `saveProfile` keeps, so the settings rows and the profile agree from the first moment.
+ * Null when the tenant already has a profile: nothing is written, and nothing is ever overwritten.
+ *
+ * Not `saveProfile`: with no stored row that inserts the profile the tenant's LEGACY settings describe as version 1, and a
+ * tenant that has no settings is described as the owner (`legacy.ts`). A new tenant's version 1 must be the neutral one the
+ * caller built (`defaultProfile`), with no owner role, domain or pronouns anywhere in its history.
+ *
+ * Lock order is `saveProfile`'s: the tenant's `creators` row, `creator_profiles`, `studio_settings`, `growth_settings`.
+ * `activated_at` stays NULL: finishing the wizard sets it.
+ */
+export async function createProfile(creatorId: string, profile: unknown, options: CreateProfileOptions, exec: Exec = pool): Promise<SavedProfile | null> {
+    try {
+        return isPool(exec) ? await withTransaction((tx) => insertFirst(creatorId, profile, options, tx)) : await insertFirst(creatorId, profile, options, exec);
+    } catch (err) {
+        if (isProfileTableMissing(err)) throw storageMissing();
+        if (isSizeViolation(err)) {
+            const problems = [`the profile is larger than the ${PROFILE_LIMITS.profileBytes} bytes the database stores`];
+            throw new ProfileError('PROFILE_INVALID', 400, problemsMessage(problems), { problems });
+        }
+        throw err;
+    } finally {
+        clearProfileCache(creatorId);
+    }
+}
+
+async function insertFirst(creatorId: string, given: unknown, { source, userId, direction }: CreateProfileOptions, tx: Exec): Promise<SavedProfile | null> {
+    await lockTenantSettings(tx, creatorId);
+
+    const checked = validateProfile(given);
+    if ('problems' in checked) throw invalidProfile(checked.problems);
+    const profile = checked.profile;
+
+    const { rows } = await tx.query<{ version: number }>(
+        `INSERT INTO creator_profiles (creator_id, profile, version, updated_by, updated_at)
+         VALUES ($1, $2::jsonb, 1, $3, NOW())
+         ON CONFLICT (creator_id) DO NOTHING
+         RETURNING version`,
+        [creatorId, json(profile), userId]
+    );
+    if (rows.length === 0) return null;
+    await insertVersion(creatorId, 1, profile, source, userId, tx);
+
+    // The mirror, as `write` step 5 does it, over the settings the tenant has (none: the defaults).
+    const studioBase = await readStudioSettings(tx, creatorId, true);
+    const studio = studioView(direction ? { ...studioBase, brand: { ...studioBase.brand, direction } } : studioBase, profile);
+    await tx.query(MIRROR_STUDIO_SQL, [
+        creatorId, json(studio.brand), json(studio.voice), json(studio.product), json(studio.cta), json(studio.schedule), json(studio.library), json(studio.infographic),
+    ]);
+    const growth = growthView(await readGrowthSettings(tx, creatorId, true), profile);
+    await tx.query(MIRROR_GROWTH_SQL, [creatorId, json(growth.audience), growth.goal_followers, growth.goal_views]);
+
+    log('info', 'profile.created', { creator_id: creatorId, source });
+    return { profile, version: 1 };
 }
 
 async function write(creatorId: string, next: unknown, { expectVersion, source, userId, startFromCaller }: SaveProfileOptions, tx: Exec): Promise<SavedProfile> {

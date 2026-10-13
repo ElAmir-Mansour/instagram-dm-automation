@@ -267,7 +267,7 @@ describe('GET /cron/publish — the growth sweep', () => {
 
     it('syncs every active tenant after the publish sweep', async () => {
         routes.push(
-            [/^SELECT id FROM creators WHERE is_active = TRUE ORDER BY created_at$/, () => ({ rows: [{ id: TENANT }] })],
+            [/^SELECT id FROM creators WHERE is_active = TRUE AND page_access_token IS NOT NULL ORDER BY created_at$/, () => ({ rows: [{ id: TENANT }] })],
             [/^INSERT INTO growth_settings \(creator_id, last_sync_at\)/, () => ({ rows: [{ last_sync_at: new Date() }] })],
             [/FROM creators WHERE id/, () => ({ rows: [{ id: TENANT, instagram_page_id: null, facebook_page_id: null, page_access_token: '' }] })],
         );
@@ -281,7 +281,7 @@ describe('GET /cron/publish — the growth sweep', () => {
     });
 
     it('never fails the cron: a growth sweep that breaks is a log line, and the cron still answers 200', async () => {
-        routes.push([/^SELECT id FROM creators WHERE is_active = TRUE ORDER BY created_at$/, () => { throw new Error('pool exhausted'); }]);
+        routes.push([/^SELECT id FROM creators WHERE is_active = TRUE AND page_access_token IS NOT NULL ORDER BY created_at$/, () => { throw new Error('pool exhausted'); }]);
         const res = await cron();
         assert.equal(res.statusCode, 200);
         assert.ok(logs.some((l) => l.event === 'growth.cron_list_failed'));

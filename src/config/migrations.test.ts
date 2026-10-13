@@ -165,12 +165,15 @@ describe('Row Level Security on every table', () => {
         // A regex that matches nothing makes the test above pass for any set of migrations.
         const files = allMigrationFiles();
         const created = files.flatMap((f) => createdTables(f.sql));
-        for (const known of ['creators', 'campaigns', 'users', 'jobs', 'studio_settings', 'growth_settings', 'infographics', 'creator_profiles', 'creator_profile_versions']) {
+        for (const known of [
+            'creators', 'campaigns', 'users', 'jobs', 'studio_settings', 'growth_settings', 'infographics', 'creator_profiles', 'creator_profile_versions',
+            'onboarding', 'invites', 'profile_drafts', 'voice_examples', 'onboarding_events', 'ai_usage',
+        ]) {
             assert.ok(created.includes(known), `${known} is found`);
         }
-        assert.ok(created.length >= 34, `found ${created.length} tables`);
+        assert.ok(created.length >= 40, `found ${created.length} tables`);
         const enabled = files.flatMap((f) => [...rlsEnabledTables(f.sql)]);
-        for (const known of ['creators', 'studio_settings', 'creator_profiles', 'creator_profile_versions']) {
+        for (const known of ['creators', 'studio_settings', 'creator_profiles', 'creator_profile_versions', 'onboarding', 'invites', 'profile_drafts', 'voice_examples', 'onboarding_events', 'ai_usage']) {
             assert.ok(enabled.includes(known), `${known} has RLS enabled somewhere`);
         }
     });
@@ -294,5 +297,139 @@ describe('migration v33: creator_profiles', () => {
         const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
         for (const m of sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN/g)) assert.ok(existing.has(m[1]!), `${m[1]} is created before v33`);
         for (const m of sql.matchAll(/REFERENCES (\w+)\(/g)) assert.ok(existing.has(m[1]!), `${m[1]} is created before v33`);
+    });
+});
+
+// ─── v34: onboarding ───────────────────────────────────────────────────────────────────────────
+
+describe('migration v34: onboarding', () => {
+    const FILE = 'migration_v34_onboarding.sql';
+    const NEW_TABLES = ['onboarding', 'invites', 'profile_drafts', 'voice_examples', 'onboarding_events', 'ai_usage'];
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered, right after v33, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.equal(i, EXPECTED_MIGRATIONS.indexOf('migration_v33_creator_profiles.sql') + 1);
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, as its first statement (it locks creators, the webhook\'s hot table)', () => {
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('creates the six tables, and no others', () => {
+        assert.deepEqual(createdTables(sql).sort(), [...NEW_TABLES].sort());
+    });
+
+    it('enables RLS on every one of them in this same file, and on nothing else', () => {
+        assert.deepEqual([...rlsEnabledTables(sql)].sort(), [...NEW_TABLES].sort());
+        // The generic scan agrees: with v34 in the list, no table anywhere is exposed.
+        assert.deepEqual(tablesWithoutRls(allMigrationFiles()), []);
+    });
+
+    it('the RLS scan would catch v34 missing one: remove each enable in turn and that table is reported', () => {
+        for (const table of NEW_TABLES) {
+            const without = raw.replace(new RegExp(`ALTER TABLE ${table}\\s+ENABLE ROW LEVEL SECURITY;`), '');
+            assert.notEqual(without, raw, `${table}'s enable was found to remove`);
+            const files = allMigrationFiles().map((f) => (f.name === FILE ? { ...f, sql: without } : f));
+            assert.deepEqual(tablesWithoutRls(files), [`${FILE}: ${table}`], table);
+        }
+    });
+
+    it('every foreign key to creators cascades, so deleting a tenant leaves nothing of it behind (D12)', () => {
+        const toCreators = [...sql.matchAll(/REFERENCES creators\(id\)( ON DELETE (?:CASCADE|SET NULL))?/g)];
+        // onboarding, invites, profile_drafts, voice_examples, onboarding_events and ai_usage each have one.
+        assert.equal(toCreators.length, NEW_TABLES.length);
+        for (const m of toCreators) assert.equal(m[1], ' ON DELETE CASCADE', m[0]);
+    });
+
+    it('a deleted user leaves the rows its tenant still owns: user columns are SET NULL, except the account a reset invite is for', () => {
+        const toUsers = [...sql.matchAll(/(\w+)\s+UUID(?: NOT NULL)? REFERENCES users\(id\) ON DELETE (CASCADE|SET NULL)/g)].map((m) => `${m[1]}:${m[2]}`).sort();
+        assert.deepEqual(toUsers, ['created_by:SET NULL', 'requested_by:SET NULL', 'used_by:SET NULL', 'user_id:CASCADE', 'user_id:SET NULL']);
+    });
+
+    it('makes the Meta connection optional, and keeps the ids and the token together', () => {
+        assert.match(sql, /ALTER TABLE creators ALTER COLUMN instagram_page_id DROP NOT NULL;/);
+        assert.match(sql, /ALTER TABLE creators ALTER COLUMN page_access_token DROP NOT NULL;/);
+        assert.match(sql, /conname = 'creators_meta_ids_need_token' AND conrelid = 'creators'::regclass/);
+        assert.match(sql, /ADD CONSTRAINT creators_meta_ids_need_token CHECK \(page_access_token IS NOT NULL OR \(instagram_page_id IS NULL AND facebook_page_id IS NULL\)\)/);
+        assert.doesNotMatch(sql, /DROP NOT NULL[^;]*facebook_page_id/, 'the Facebook id was already nullable');
+    });
+
+    it('adds the handle and the site to creators, nullable', () => {
+        assert.match(sql, /ALTER TABLE creators ADD COLUMN IF NOT EXISTS instagram_username TEXT;/);
+        assert.match(sql, /ALTER TABLE creators ADD COLUMN IF NOT EXISTS website_url TEXT;/);
+    });
+
+    it('marks every tenant that exists as onboarded, and never changes one onboarding has since touched', () => {
+        const insert = / INSERT INTO onboarding \(creator_id, status, started_at, completed_at\) SELECT id, 'completed', created_at, created_at FROM creators ON CONFLICT \(creator_id\) DO NOTHING;/;
+        assert.match(sql, insert);
+        assert.doesNotMatch(sql, /ON CONFLICT[^;]*DO UPDATE/, 'a re-run may not overwrite a status');
+        assert.doesNotMatch(sql, /UPDATE onboarding/);
+        // The table exists before the insert reads into it.
+        assert.ok(sql.indexOf('CREATE TABLE IF NOT EXISTS onboarding') < sql.search(insert));
+    });
+
+    it('is idempotent: every table, column and index is created only if absent, and the constraint is guarded', () => {
+        assert.equal((sql.match(/CREATE TABLE/g) ?? []).length, (sql.match(/CREATE TABLE IF NOT EXISTS/g) ?? []).length);
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, (sql.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+        assert.equal((sql.match(/CREATE (UNIQUE )?INDEX/g) ?? []).length, (sql.match(/CREATE (UNIQUE )?INDEX IF NOT EXISTS/g) ?? []).length);
+        assert.equal((sql.match(/ADD CONSTRAINT/g) ?? []).length, 1);
+        assert.match(sql, /IF NOT EXISTS \( SELECT 1 FROM pg_constraint WHERE conname = 'creators_meta_ids_need_token'/);
+        assert.doesNotMatch(sql, /DROP TABLE|DROP COLUMN|TRUNCATE|DELETE FROM/, 'it removes nothing');
+    });
+
+    it('creates a UNIQUE index only on a table this file creates: IF NOT EXISTS matches on the NAME (v15), so one on an older table could silently no-op', () => {
+        const unique = [...sql.matchAll(/CREATE UNIQUE INDEX IF NOT EXISTS (\w+) ON (\w+)/g)].map((m) => ({ index: m[1]!, table: m[2]! }));
+        assert.deepEqual(unique, [{ index: 'idx_profile_drafts_one_active', table: 'profile_drafts' }]);
+        for (const { table } of unique) assert.ok(NEW_TABLES.includes(table), `${table} is created by this file`);
+        // And no existing index is re-created: the creators indexes of v10 and v12 are left as they are.
+        assert.doesNotMatch(sql, /idx_creators_/);
+    });
+
+    it('allows one draft in flight per tenant, and the three states that count as in flight are the ones the state machine uses', () => {
+        assert.match(sql, /idx_profile_drafts_one_active ON profile_drafts\(creator_id\) WHERE status IN \('queued', 'fetching', 'drafting'\)/);
+        assert.match(sql, /status TEXT NOT NULL DEFAULT 'queued' CHECK \(status IN \('queued', 'fetching', 'drafting', 'ready', 'failed', 'superseded'\)\)/);
+    });
+
+    it('keeps only the hash of an invite token, unique, and the vocabulary of its purpose and role', () => {
+        assert.match(sql, /token_hash CHAR\(64\) NOT NULL UNIQUE/);
+        assert.doesNotMatch(sql, /\btoken TEXT|raw_token/, 'the raw token is never stored');
+        assert.match(sql, /purpose VARCHAR\(10\) NOT NULL DEFAULT 'join' CHECK \(purpose IN \('join', 'reset'\)\)/);
+        assert.match(sql, /membership_role VARCHAR\(30\) NOT NULL DEFAULT 'owner' CHECK \(membership_role IN \('owner', 'operator', 'viewer'\)\)/);
+    });
+
+    it('onboarding: the three statuses, new tenants start invited, and the filler is the tenant or the admin', () => {
+        assert.match(sql, /status VARCHAR\(20\) NOT NULL DEFAULT 'invited' CHECK \(status IN \('invited', 'in_progress', 'completed'\)\)/);
+        assert.match(sql, /filled_by VARCHAR\(10\) CHECK \(filled_by IN \('tenant', 'admin'\)\)/);
+        assert.match(sql, /onboarding \( creator_id UUID PRIMARY KEY REFERENCES creators\(id\) ON DELETE CASCADE, status/);
+    });
+
+    it('voice_examples: the four kinds, the three verdicts, who judged, and when the tenant confirmed (an admin\'s approval is not yet the tenant\'s)', () => {
+        assert.match(sql, /kind TEXT NOT NULL CHECK \(kind IN \('dm_reply', 'caption', 'comment_dm', 'comment_public'\)\)/);
+        assert.match(sql, /verdict TEXT CHECK \(verdict IN \('approved', 'edited', 'rejected'\)\)/);
+        assert.match(sql, /verdict_by TEXT CHECK \(verdict_by IN \('tenant', 'admin'\)\)/);
+        assert.match(sql, /tenant_confirmed_at TIMESTAMP WITH TIME ZONE/);
+    });
+
+    it('ai_usage: tokens, USD, priced, outcome and time, with a tenant that may be none (an operator\'s key test)', () => {
+        const table = /CREATE TABLE IF NOT EXISTS ai_usage \((.*?)\);/.exec(sql)![1]!;
+        for (const column of [
+            'creator_id UUID REFERENCES creators', 'purpose TEXT NOT NULL', 'provider TEXT NOT NULL', 'model TEXT NOT NULL', 'input_tokens INT NOT NULL',
+            'output_tokens INT NOT NULL', 'usd NUMERIC\\(12, 6\\) NOT NULL', 'priced BOOLEAN NOT NULL', 'outcome TEXT NOT NULL', 'elapsed_ms INT', 'at TIMESTAMP WITH TIME ZONE NOT NULL',
+        ]) {
+            assert.match(table, new RegExp(column), column);
+        }
+        assert.doesNotMatch(table, /creator_id UUID NOT NULL/);
+    });
+
+    it('every table it alters or references exists by the time it runs', () => {
+        const before = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
+        for (const m of sql.matchAll(/ALTER TABLE (\w+) (?:ADD|ALTER)/g)) assert.ok(existing.has(m[1]!), `${m[1]} is created before v34`);
+        for (const m of sql.matchAll(/REFERENCES (\w+)\(/g)) assert.ok(existing.has(m[1]!), `${m[1]} is created before v34`);
     });
 });
