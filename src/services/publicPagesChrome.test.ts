@@ -1,0 +1,108 @@
+/**
+ * The SHARED SITE CHROME — the CSS block, the navbar and the footer — must be the same in all
+ * six public pages.
+ *
+ * There is no build step and no templating: `public/*.html` are standalone files behind
+ * hardcoded Express routes, so the only way to share chrome is to paste it six times. Every page
+ * says so in a comment ("MEANT TO BE BYTE-IDENTICAL"), and for weeks nothing enforced it except
+ * a person re-hashing the blocks by hand after each change. This does it on every `npm test`.
+ *
+ * The one intended difference is `aria-current="page"` on the link that points at the page you
+ * are reading (the wordmark on the landing page, Pricing on pricing, the page's own Legal link on
+ * the legal pages, nothing on the 404). That attribute is removed before comparing; any other
+ * difference is drift.
+ */
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { describe, it } from 'node:test';
+
+const PAGES = ['landing', 'pricing', 'privacy', 'terms', 'data-deletion', '404'] as const;
+
+const read = (p: string) => readFileSync(`public/${p}.html`, 'utf8');
+
+type Chrome = { css: string; nav: string; foot: string };
+
+/** Each block runs from the `═══` comment that opens it to the tag that closes it. */
+function chromeOf(html: string, page: string): Chrome {
+    const at = (marker: string): number => {
+        const first = html.indexOf(marker);
+        assert.ok(first >= 0, `${page}: "${marker}" is missing`);
+        assert.equal(html.indexOf(marker, first + 1), -1, `${page}: "${marker}" appears more than once`);
+        return first;
+    };
+    const css0 = at('SHARED SITE CHROME · CSS');
+    const nav0 = at('SHARED SITE CHROME · NAVBAR');
+    const foot0 = at('SHARED SITE CHROME · FOOTER');
+    const opens = (marker: number, open: string): number => {
+        const i = html.lastIndexOf(open, marker);
+        assert.ok(i >= 0, `${page}: no ${open} before the chrome marker`);
+        return i;
+    };
+    const closes = (marker: number, close: string): number => {
+        const i = html.indexOf(close, marker);
+        assert.ok(i >= 0, `${page}: no ${close} after the chrome marker`);
+        return i + close.length;
+    };
+    const strip = (block: string) => block.replace(/ aria-current="page"/g, '');
+    return {
+        css: strip(html.slice(opens(css0, '/* ═'), html.indexOf('</style>', css0))),
+        nav: strip(html.slice(opens(nav0, '<!-- ═'), closes(nav0, '</header>'))),
+        foot: strip(html.slice(opens(foot0, '<!-- ═'), closes(foot0, '</footer>'))),
+    };
+}
+
+const chrome = new Map(PAGES.map((p) => [p, chromeOf(read(p), p)] as const));
+
+describe('public pages — the shared chrome is identical on all six', () => {
+    for (const block of ['css', 'nav', 'foot'] as const) {
+        it(`${block}: the same text on every page, aria-current aside`, () => {
+            const reference = chrome.get('landing')![block];
+            assert.ok(reference.length > 1000, `the ${block} block was found and is not empty`);
+            for (const p of PAGES) {
+                assert.equal(chrome.get(p)![block], reference, `${p}.html: the ${block} block has drifted from landing.html`);
+            }
+        });
+    }
+
+    it('aria-current is the only difference: each page marks at most one link in its nav and footer', () => {
+        for (const p of PAGES) {
+            const html = read(p);
+            const c = chromeOf(html, p);
+            // On a link, not in the comment that explains the attribute.
+            const marked = (html.match(/<a\b[^>]*aria-current="page"/g) ?? []).length;
+            assert.ok(marked <= 2, `${p}: ${marked} links marked current`);
+            assert.equal(/<a\b[^>]*aria-current/.test(c.nav + c.foot), false, `${p}: a link still carries aria-current after normalising`);
+        }
+    });
+});
+
+describe('public pages — the footer says what the product is now (L4)', () => {
+    const foot = chrome.get('landing')!.foot;
+
+    it('opens with the studio positioning, in both languages', () => {
+        assert.ok(foot.includes('استوديو نموّ مُدار لصنّاع المحتوى العرب: ريلز وكاروسيل وإنفوجرافيك'));
+        assert.ok(foot.includes('A managed growth studio for Arabic creators: reels, carousels and infographics'));
+        assert.ok(foot.includes('and comments into private messages'), 'the comment-to-DM loop is last, not first');
+    });
+
+    it('names no AI reply and no DM bot', () => {
+        assert.equal(/الذكاء الاصطناعي|\bAI\b|🤖/.test(foot), false);
+    });
+
+    it('the Product group links to the Monteur and Infographics, which the landing page can resolve', () => {
+        assert.ok(foot.includes('href="/#monteur"'));
+        assert.ok(foot.includes('href="/#infographics"'));
+        // The landing script resolves a language-neutral fragment to `<name>-<lang>`.
+        const landing = read('landing');
+        for (const name of ['monteur', 'infographics']) {
+            for (const lang of ['ar', 'en']) {
+                assert.ok(landing.includes(`id="${name}-${lang}"`), `#${name}-${lang} exists`);
+            }
+        }
+    });
+
+    it('keeps the GitHub links while the owner decides (CLAUDE.md, Known issues)', () => {
+        assert.ok(foot.includes('https://github.com/ElAmir-Mansour/instagram-dm-automation"'));
+        assert.ok(foot.includes('instagram-dm-automation/issues'));
+    });
+});

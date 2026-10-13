@@ -89,14 +89,12 @@
   reset unless `animation-timeline: auto !important` is also set. It is, below.
   Reveal distance is 14px; the 100px AOS default is the tell.
 
-  THE ONE EMOJI ON THE PAGE IS DELIBERATE, and is not an icon. "Emoji as
-  icons" is the loudest single amateur tell and there are none here — every
-  glyph that acts as an icon is an inline <svg>. The 🤖 in the second beat is
-  inside quotation marks because it is a QUOTATION: it is the first character
-  of src/webhook/meta-payload.ts:87, and the strip above it says "the line the
-  software adds". Dropping it would make the page misquote its own product by
-  one character, which is a worse fault than the one it would avoid. If the
-  emoji should not be there, the fix is in meta-payload.ts.
+  THERE IS NO EMOJI ON THE PAGE. "Emoji as icons" is the loudest single
+  amateur tell and there are none here — every glyph that acts as an icon is
+  an inline <svg>. There used to be one deliberate exception: the robot in the
+  second beat, quoted from src/webhook/meta-payload.ts:87 as "the line the
+  software adds" to an AI reply. It went on 2026-10-13 with the claim it
+  illustrated (see "WHAT CHANGED ON 2026-10-13" below), so the page has none.
 
   BIDI. Every Latin run inside Arabic prose, and every Arabic run inside
   English prose, is wrapped in <bdi> — the semantic element, not
@@ -297,6 +295,52 @@
   their own contrast is the published slides'.
 
   ═══════════════════════════════════════════════════════════════════════════
+  WHAT CHANGED ON 2026-10-13 — truth and positioning
+  ═══════════════════════════════════════════════════════════════════════════
+
+  Three corrections and one repositioning, made for the people who read this
+  page to approve the app — Meta, TikTok and Google — and for prospects. Where
+  an older section of this comment describes something named here, the older
+  section is history and this one is current.
+
+  1. NO CLAIM THAT AI ANSWERS DIRECT MESSAGES. Removed: the meta description,
+     the hero lede, the second beat and its quoted robot line, the AI-reply
+     card, the unified-inbox item, the "8" figure, the AI replies in the
+     Instagram row and the Messenger conversations in the Facebook row, the
+     dialects FAQ's second paragraph, and the "can the AI be wrong" FAQ. The
+     path (webhook, Gemini, send) is parked until the Meta app is verified and
+     has Advanced Access (CLAUDE.md, "AI DM replies are parked"), so it is not
+     described. What stays is true of the comment path: the campaign's own
+     text, one automated message per person per 24 hours, at most 180 an hour
+     per account. The replacement FAQ asks the question the old one should
+     have: does anything go out without me seeing it.
+  2. NO CLAIM THAT ALL THE CODE IS OPEN. The pane and the closing line said the
+     software is MIT-licensed. The server is; the worker and the Monteur and
+     infographic templates are not (they live in the private, unlicensed
+     aicourse-studio). One FAQ now says exactly that, and nothing else on the
+     page says "MIT". The footer's GitHub links stay for now: dropping them is
+     the owner's decision, pending rotation of the secrets still in the public
+     history (CLAUDE.md, "Known issues").
+  3. THE HERO SELLS WHAT THE PRODUCT IS NOW — a managed growth studio: the
+     Monteur's reels, the Studio's carousels, scheduling to Instagram,
+     Facebook and YouTube, TikTok drafts — with the comment-to-message
+     campaign as the last sentence of the lede rather than the first. Two
+     bands follow the Studio's (the Monteur, Infographics), each with a
+     CSS-only artifact built from the slide's own parts, plus two rows in
+     "platforms, and what you need". Infographics say, in their own band and
+     row, that they run on the founder's accounts only.
+  4. THE HERO'S EXAMPLE NO LONGER USES A WOMAN'S NAME (owner rule: no women or
+     girls in content). The mock commenter is Salem, and our own bubble is in
+     formal Arabic; the customer's comment stays colloquial because it is a
+     quotation.
+  5. ONE BUTTON FEWER IN THE HERO. Sign-in left it (the bar keeps it). The
+     primary button is WhatsApp while a number is set, and a link to the
+     contact block while it is not — the page's own data-when / data-unless
+     pattern. The secondary one goes to the real work.
+  No new colour pair: every new text/ground pair is one the Studio's slides
+  already measured (see the 2026-09-25 numbers at the end of this comment).
+
+  ═══════════════════════════════════════════════════════════════════════════
 
   EVERY CLAIM BELOW EXISTS IN THE CODE. The evidence, per claim:
 
@@ -316,17 +360,12 @@
     word-vs-substring matching, chosen per campaign
         src/utils/arabic.ts — KeywordMatchMode, keywordMatches(); the `تم`
         inside `اهتمام` example is that file's own worked example
-    AI DM replies using the operator's prompt and knowledge base, over the
-    last 8 messages of the thread
-        src/services/ai.ts — system_prompt, knowledge_base, HISTORY_WINDOW = 8
-    the automated-service disclosure Meta requires, on the FIRST AI reply in a
-    conversation
-        src/webhook/messaging.ts — needsDisclosure() (:147, true when never
-        disclosed or disclosed more than 7 days ago) / applyDisclosure (:396),
-        and src/webhook/meta-payload.ts:87 for the literal line the page quotes
-    unified inbox, manual reply, per-conversation AI pause
-        src/routes/api.ts — /conversations, /conversations/:id/messages,
-        /conversations/:id/toggle-bot
+    (Three entries stood here until 2026-10-13 and are gone, because the page
+    no longer makes the claims: AI DM replies with the operator's prompt and
+    knowledge base, the automated-service disclosure on the first AI reply, and
+    the unified inbox with manual reply and a per-conversation pause. The code
+    exists; the path does not work in production until Meta verifies the app,
+    so the page does not describe it. Put an entry back only when that changes.)
     scheduling images and video to Instagram, Facebook or both; video becomes
     a REELS container on Instagram and posts to the feed as well
         src/routes/api.ts /posts/scheduled; src/services/instagram.ts
@@ -354,8 +393,13 @@
         "retried" without the bound would have been untrue of the second case.
     Latin digits on purpose
         DESIGN.md §5
-    open source, MIT, self-hostable
-        LICENSE, README.md
+    the server that receives comments, sends messages and publishes is
+    MIT-licensed on GitHub; the worker and the Monteur and infographic
+    templates are not open source
+        LICENSE and README.md for the server; the worker and the templates
+        live in the private, unlicensed aicourse-studio (CLAUDE.md, "Related:
+        the promo video pipeline" and "Infographics"). The older entry here
+        said the whole product was open, which was false.
 
   Added 2026-09-25:
     TikTok publishing through the official Content Posting API, video and
@@ -436,7 +480,52 @@
     the Studio's worker is Mac-only today
         aicourse-captions scripts/install-studio-worker.sh (launchd)
 
+  Added 2026-10-13:
+    the Monteur listens to a video on the owner's computer, picks moments that
+    open with a hook, and cuts them at 9:16 with a title, written captions and
+    a cover; each reel waits for approval one by one by default; an approved
+    reel is scheduled into the owner's posting slots
+        MONTEUR.md §1 (mode defaults to 'review'; post_at; platforms) and the
+        clip statuses rendering → review → scheduled; the worker's
+        monteur_transcribe and monteur_render jobs run on the Mac
+        (whisper.cpp, ffmpeg, Remotion); src/services/studio/monteurJobs.test.ts
+    "by default": the Monteur also has an 'auto' mode, which approves for you
+        MONTEUR.md §1 — which is why every sentence about approval says "by
+        default" and the FAQ answer says "في الوضع الافتراضي"
+    an infographic and its caption are written together, drawn in a dark or a
+    light theme, and rendered as a GIF, an MP4 and a cover; the MP4 and cover
+    go to Instagram, Facebook and YouTube, the GIF is downloaded; it cannot be
+    scheduled until its caption names every column it shows
+        src/services/studio/infographicSpec.ts (captionProblems, THEMES);
+        infographics.ts scheduleInfographic (409 on caption problems);
+        CLAUDE.md "Infographics (v31)"
+    infographics run today on the founder's accounts only, and are not yet
+    open to client accounts
+        CLAUDE.md "Infographics (v31)" (the owner's Mac and plan); the truth
+        table in docs/brand/DESIGN.draft.md §9 ("Owner-only"). The page says
+        "coming to client accounts" because the owner's own copy does.
+    reels reach YouTube and TikTok drafts as well as Instagram and Facebook
+        CLAUDE.md "YouTube (Shorts)" and "TikTok"; the page's own YouTube and
+        TikTok rows, which are unchanged
+    "does anything go out without me seeing it": carousel drafts are reviewed
+    in the Studio before they are scheduled, and a campaign's message is sent
+    on its own but is the text the owner wrote
+        src/services/studio/schedule.ts; src/webhook/comments.ts
+        (sendPrivateReply sends `dm_template` as written)
+
   AND DELIBERATELY NOT CLAIMED, on the same terms as the list further down:
+    · NOTHING THAT SAYS AI ANSWERS DIRECT MESSAGES, and nothing that sells the
+      inbox's send path. entry.messaging → Gemini → send does not work in
+      production: the app lacks the verification and Advanced Access that
+      messaging needs. The only DM the page promises is the campaign's own
+      text. The storage line in "what this does not promise" still says DM
+      text is kept so the inbox can show it; that is a disclosure of what is
+      stored (it matches /privacy), not a claim about replying.
+    · NOTHING THAT SAYS ALL THE CODE IS OPEN. Only the server is MIT.
+    · NOT THAT THE MONTEUR IS OPEN TO CLIENT ACCOUNTS. The Monteur band and
+      row describe what it does; the truth table lists Monteur and Infographics
+      for clients as planned (M8). Infographics carry that limit in words; the
+      Monteur does not yet, which the owner should settle.
     · No time for a Studio draft. The dashboard says up to two minutes each,
       and that depends on Gemini and on the worker being switched on.
     · Not that the preview is deleted. The worker deletes it best-effort and
@@ -446,13 +535,12 @@
       to change once (cec898d); a name here would be a second copy to forget.
     · Nothing about TikTok comments or TikTok messages. There is no such path.
 
-  ONE CLAIM WAS MOVED BECAUSE IT WAS IN THE WRONG PLACE. The previous version
-  attached the automated-service disclosure to step 2, the campaign private
-  reply. It does not carry one: src/webhook/comments.ts sends
-  `matchedCampaign.dm_template` straight through and the string "disclosure"
-  does not appear in that file at all. `applyDisclosure` is called from exactly
-  one site, src/webhook/messaging.ts:396, which is the AI reply path. The claim
-  is now made where it is true, and only there.
+  THE AUTOMATED-SERVICE DISCLOSURE IS NOT CLAIMED AT ALL NOW. An earlier
+  version attached it to step 2, the campaign private reply, which is wrong:
+  src/webhook/comments.ts sends `matchedCampaign.dm_template` straight through
+  and the string "disclosure" does not appear in that file. `applyDisclosure`
+  is called from exactly one site, src/webhook/messaging.ts:396, the AI reply
+  path — which is parked, so the claim is gone from the page entirely.
 
   THINGS DELIBERATELY NOT CLAIMED, and why — do not "improve" the page by
   adding them back. This page holds exactly the line public/pricing.html drew:
@@ -514,7 +602,7 @@
   (composite every translucent layer down to the canvas, then WCAG) and are
   recorded here:
       --accent-text on --accent-soft on --surface-raised on --surface-page
-          5.99:1 dark · 6.44:1 light   (the MIT chip, the normalised keyword)
+          5.99:1 dark · 6.44:1 light   (the normalised keyword)
       --text-on-accent on --accent (the outgoing DM bubble)
           4.70:1 dark · 4.70:1 light
   Added 2026-09-22, all measured AT THE GLOW'S PEAK ALPHA, which is the worst
@@ -522,8 +610,9 @@
       CTA panel = --accent-ring × --lp-glow over --surface-raised over the page
           --text-strong  11.01 dark · 13.60 light
           --text-default  7.88 dark ·  9.17 light
-          --text-muted    5.42 dark ·  4.84 light   (the .cta-foot line)
-          --accent-text   5.34 dark ·  6.11 light   (its GitHub link)
+          (the .cta-foot line, --text-muted at 5.42 dark · 4.84 light, and its
+          GitHub link, --accent-text at 5.34 dark · 6.11 light, went on
+          2026-10-13 with the open-source claim they carried)
       --accent-text on --accent-soft over the .norm glow
           5.01 dark · 5.75 light
       --text-default on --surface-glass over the .norm glow (the variants)
@@ -544,7 +633,9 @@
   4.59, which passes, but by less than the grid is worth. The captions under
   the slides are --text-muted on the card, measured at the corner sheen's
   peak: 5.85 dark · 5.86 light (7.20 dark away from the sheen).
-  The tightest of all of them is 4.84:1, in light, and the floor is 4.5.
+  The tightest text pair of all of them is now the outgoing bubble's 4.70:1;
+  the 4.84:1 light pair that used to be the tightest was the .cta-foot line,
+  which is gone. The floor is 4.5.
   The one non-text colour is the heart glyph, --danger as a fill: 4.47:1 dark
   and 3.45:1 light against the card, both clear of the 3:1 floor for a
   meaningful graphic. The decorative layers — the radial glow and the grain —
@@ -560,8 +651,8 @@
          carry a full light theme as a peer of dark. -->
     <meta name="color-scheme" content="dark light">
     <title>أوتوريبلاي برو — من تعليق إلى محادثة · AutoReply Pro</title>
-    <meta name="description" data-lang-only="ar" content="أوتوريبلاي برو يحوّل تعليقاً بكلمة مفتاحية على إنستجرام وفيسبوك إلى رسالة خاصة وردّ علني، ويجيب بالذكاء الاصطناعي، وينشر المجدول. بالعربية أولاً.">
-    <meta name="description" data-lang-only="en" content="AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, answers the conversation with AI, and publishes to Instagram, Facebook and TikTok.">
+    <meta name="description" data-lang-only="ar" content="ريلز من فيديوهاتك الطويلة، وكاروسيل من دروسك، ونشرٌ على إنستجرام وفيسبوك وتيك توك ويوتيوب، ورسالة خاصة لكل من يعلّق بكلمتك. خدمة مُدارة بالعربية.">
+    <meta name="description" data-lang-only="en" content="Reels from long videos, carousels from lessons, posts to Instagram, Facebook, TikTok and YouTube, and a DM for every keyword comment. Arabic-first.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
@@ -571,8 +662,8 @@
     <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/?lang=en">
     <link rel="alternate" hreflang="x-default" href="https://msg-response-auto.vercel.app/">
     <meta property="og:title" content="أوتوريبلاي برو — من تعليق إلى محادثة · AutoReply Pro">
-    <meta property="og:description" data-lang-only="ar" content="أوتوريبلاي برو يحوّل تعليقاً بكلمة مفتاحية على إنستجرام وفيسبوك إلى رسالة خاصة وردّ علني، ويجيب بالذكاء الاصطناعي، وينشر المجدول. بالعربية أولاً.">
-    <meta property="og:description" data-lang-only="en" content="AutoReply Pro turns a keyword comment into a private DM, a public reply and a like, answers the conversation with AI, and publishes to Instagram, Facebook and TikTok.">
+    <meta property="og:description" data-lang-only="ar" content="ريلز من فيديوهاتك الطويلة، وكاروسيل من دروسك، ونشرٌ على إنستجرام وفيسبوك وتيك توك ويوتيوب، ورسالة خاصة لكل من يعلّق بكلمتك. خدمة مُدارة بالعربية.">
+    <meta property="og:description" data-lang-only="en" content="Reels from long videos, carousels from lessons, posts to Instagram, Facebook, TikTok and YouTube, and a DM for every keyword comment. Arabic-first.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://msg-response-auto.vercel.app/{{LANG_QUERY}}">
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
@@ -1042,6 +1133,11 @@
 
         /* ─── Hero ─────────────────────────────────────────────────────────── */
         .hero { padding-block: clamp(2.5rem, 6vw, 5rem) 0; }
+        /* The headline is two sentences now, where it was one clause. At the
+           full display step it ran to five lines in English and pushed the
+           buttons onto the fold; one step down keeps both languages to four
+           lines or fewer (measured at 1280, 390 and 320). */
+        .hero h1 { font-size: clamp(2.25rem, 1.35rem + 3.2vw, 3.75rem); }
         .hero-grid {
             display: grid;
             gap: clamp(2rem, 5vw, 3.5rem);
@@ -1261,8 +1357,8 @@
         .beat p { margin: 0; max-width: 58ch; }
 
         /* The concrete detail under each beat: the actual keywords, the actual
-           line the software prepends. A hairline strip, not another card — the
-           page already has cards and this is evidence, not a feature. */
+           limits. A hairline strip, not another card — the page already has
+           cards and this is evidence, not a feature. */
         /* Deliberately NOT a flex row. It was one, and a flex container turns
            every element boundary inside a sentence into its own flex item: the
            <bdi>Meta</bdi> in the third beat became a separate line item and the
@@ -1287,11 +1383,6 @@
             border-radius: var(--radius-pill);
             background: var(--surface-raised);
             box-shadow: inset 0 0 0 1px var(--border-subtle);
-            color: var(--text-strong);
-            font-weight: var(--fw-medium);
-        }
-        .detail .quoted {
-            margin-inline-start: var(--space-3);
             color: var(--text-strong);
             font-weight: var(--fw-medium);
         }
@@ -1431,8 +1522,8 @@
             gap: var(--space-3);
         }
         .slide-cell { display: flex; flex-direction: column; gap: var(--space-2); }
-        .slide {
-            aspect-ratio: 4 / 5;
+        .slide,
+        .cmp {
             display: flex;
             flex-direction: column;
             gap: var(--space-2);
@@ -1452,6 +1543,7 @@
             line-height: var(--lp-lh-ui);
             color: var(--text-default);
         }
+        .slide { aspect-ratio: 4 / 5; }
         /* The accent edge is a logical BORDER, not an inset shadow with an x
            offset: a border follows the radius and lands on the reading-start
            edge in both directions from one declaration. */
@@ -1538,6 +1630,106 @@
             color: var(--text-muted);
         }
 
+        /* ─── The Monteur and Infographics ─────────────────────────────────────
+           Two more bands in the Studio's shape — copy at the reading start, the
+           thing the product EMITS at the reading end — and artifacts made of
+           the slide's own parts, so the page gains no new colour pair: every
+           word below is --text-strong, or the signature pill and the keyword,
+           on the slide's grid, and the timestamps are .shot-time's pair
+           (--text-strong on --surface-sunken). No images, no people. The
+           infographics band flips on a wide screen so two grids in a row do
+           not read as one; `order` moves it visually only, and the copy stays
+           first in the source. */
+        @media (min-width: 62rem) {
+            .studio-grid-flip > :first-child { order: 2; }
+        }
+        .band-note {
+            margin: var(--space-4) 0 0;
+            max-inline-size: 46ch;
+            color: var(--text-muted);
+        }
+
+        /* A reel is 9:16. The cell is capped so the frame is about 16rem tall
+           beside its moments, rather than the full height of the card. */
+        .slide-tall { aspect-ratio: 9 / 16; }
+        .cut {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 9rem);
+            gap: var(--space-4);
+            align-items: center;
+        }
+        .cut-src { display: flex; flex-direction: column; gap: var(--space-3); }
+        .cut-moments { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-3); }
+        .cut-moments li { display: flex; align-items: center; gap: var(--space-2); }
+        /* A time on the long video: .shot-time's recipe. Pinned left-to-right
+           and in Latin digits, as the clock in the Studio's screenshot is. */
+        .cut-t {
+            flex: none;
+            direction: ltr;
+            padding: 0 0.3rem;
+            border-radius: var(--radius-xs);
+            background: var(--surface-sunken);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-strong);
+            font-family: var(--font-latin);
+            font-size: var(--lp-micro);
+            line-height: var(--lp-lh-ui);
+            font-variant-numeric: tabular-nums;
+        }
+        /* The moment itself, .shot-hit's accent bar; its length is the clip's. */
+        .cut-hit {
+            flex: 1 1 auto;
+            block-size: 0.65rem;
+            border-radius: var(--radius-xs);
+            background: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-ring);
+        }
+        .cut-moments li:nth-child(2) .cut-hit { max-inline-size: 60%; }
+        .cut-moments li:nth-child(3) .cut-hit { max-inline-size: 80%; }
+        .cut-title {
+            font-size: clamp(0.8125rem, 0.72rem + 0.4vw, 1.0625rem);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-head);
+            color: var(--text-strong);
+            text-wrap: balance;
+        }
+        .cut-words {
+            margin-block-start: auto;
+            color: var(--text-strong);
+            font-weight: var(--fw-semibold);
+        }
+
+        /* A comparison card: a title and three columns. It is a picture of the
+           infographic, and a picture does not mirror, so it is pinned
+           left-to-right: RAG, CAG, KAG read in the order the title says them,
+           in both documents. */
+        .cmp {
+            direction: ltr;
+            flex-direction: column;
+            gap: var(--space-3);
+            padding: var(--space-3);
+            border-radius: var(--radius-md);
+            font-family: var(--font-latin);
+        }
+        .cmp-title {
+            font-size: clamp(0.8125rem, 0.72rem + 0.4vw, 1.0625rem);
+            font-weight: var(--fw-semibold);
+            line-height: var(--lp-lh-head);
+            color: var(--text-strong);
+        }
+        .cmp-cols { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-2); }
+        .cmp-col {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            padding: 0.4rem;
+            border-radius: var(--radius-xs);
+            box-shadow: inset 0 0 0 1px var(--border-strong);
+        }
+        .cmp-row { block-size: 0.3rem; border-radius: var(--radius-pill); background: var(--border-strong); }
+        .cmp-row:nth-child(3) { inline-size: 80%; }
+        .cmp-row:nth-child(4) { inline-size: 55%; background: var(--border-subtle); }
+
         /* The Studio's closing detail list ends its band, and a .more row
            carries its own bottom padding, which is exactly the unaccounted gap
            the 2026-09-22 pass removed from the rest of the page. A closing rule
@@ -1592,6 +1784,12 @@
         @media (min-width: 48rem) { .duo { grid-template-columns: 1fr 1fr; } }
         .duo .card { padding: clamp(var(--space-5), 3vw, var(--space-6)); }
         .duo p { margin: 0; color: var(--text-default); }
+        /* One card is left of the pair: the AI-reply card went with that path,
+           which is parked. Alone in two columns it would sit in half the width
+           with the other half empty, so it takes the row and keeps a reading
+           measure. */
+        .duo > .card:only-child { grid-column: 1 / -1; }
+        .duo > .card:only-child p { max-inline-size: 62ch; }
 
         .more {
             margin: 0;
@@ -1622,18 +1820,13 @@
         }
 
         /* ─── What you pay for ─────────────────────────────────────────────────
-           The MIT statement, which used to be the third block of the hero —
-           so the first thing after the headline was a caveat styled like a
-           warning. It is honest and it belongs on the page; it does not belong
-           in the first screen.
-
-           It also did not belong in TWO UNFRAMED PARAGRAPHS, which is what it
-           was until now: a pair of text blocks floating side by side with 170px
-           of empty page above and below them and no card, no rule and no
-           structure of any kind. The words are unchanged. They now sit in one
-           panel with a rule between the halves, and the four things being sold
-           are four list items instead of one sentence — because the sentence
-           already named four things. */
+           One panel: the four things being sold as four list items (the
+           sentence already named four things), then the plans teaser across
+           the bottom. It used to be two halves with a rule between them, the
+           other half being the MIT statement. That statement said all of the
+           code is open, which it is not: the server is, and the worker and the
+           Monteur and infographic templates are not. It moved to the FAQ, in
+           its true form, on 2026-10-13. */
         .pays {
             display: grid;
             gap: var(--space-5);
@@ -1642,25 +1835,13 @@
         }
         .pays p { margin: 0 0 var(--space-4); }
         .pays > div > :last-child { margin-block-end: 0; }
+        /* The four things sold go two by two where there is room. */
         @media (min-width: 52rem) {
-            .pays { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-7); }
-            /* The rule between the halves is a border on the SECOND pane's
-               inline-start edge, so it lands between them in both directions
-               from one declaration and there is no :dir() rule to keep true. */
-            .pays > div + div {
-                border-inline-start: 1px solid var(--border-subtle);
-                padding-inline-start: var(--space-7);
-            }
+            .pays .sold { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3) var(--space-7); }
         }
-        @media (max-width: 51.999rem) {
-            .pays > div + div {
-                border-block-start: 1px solid var(--border-subtle);
-                padding-block-start: var(--space-5);
-            }
-        }
-        /* A label, not a heading. The section already has its h2 and these two
-           are the halves of one answer, not two new topics — an <h3> here would
-           put them in the document outline as if they were. */
+        /* A label, not a heading. The section already has its h2 and this is
+           part of the same answer, not a new topic — an <h3> here would put it
+           in the document outline as if it were one. */
         .pane-label {
             display: flex;
             align-items: center;
@@ -1670,16 +1851,6 @@
             font-weight: var(--fw-semibold);
             line-height: var(--lp-lh-ui);
             color: var(--text-muted);
-        }
-        .pane-label .lic {
-            padding: 0.1rem var(--space-3);
-            border-radius: var(--radius-pill);
-            background: var(--accent-soft);
-            box-shadow: inset 0 0 0 1px var(--accent-ring);
-            color: var(--accent-text);
-            font-family: var(--font-latin);
-            font-weight: var(--fw-bold);
-            letter-spacing: 0;
         }
         .sold { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-3); }
         /* The list is a grid, so its gap does nothing for the sentence AFTER
@@ -1697,21 +1868,21 @@
             color: var(--accent-text);
         }
 
-        /* ─── The three constants ──────────────────────────────────────────────
-           180, 24 and 8 are read out of the source — rateLimiter.ts
-           DEFAULT_HOURLY_LIMIT and canDmRecipient's 24-hour window, ai.ts
-           HISTORY_WINDOW. They used to sit under the heading "What this does
-           not promise", which made the three boldest numbers on the whole page
-           the punchline of its most negative section. They are not refusals: a
-           cap that holds an account under Meta's own ceiling, one automated
-           message per person per day, and eight messages of context are
-           descriptions of how the thing works, and they now sit with the rest
-           of that description.
+        /* ─── The two constants ────────────────────────────────────────────────
+           180 and 24 are read out of the source — rateLimiter.ts
+           DEFAULT_HOURLY_LIMIT and canDmRecipient's 24-hour window. (A third,
+           8, was ai.ts HISTORY_WINDOW; it went on 2026-10-13 with the AI-reply
+           claim.) They used to sit under the heading "What this does not
+           promise", which made the boldest numbers on the whole page the
+           punchline of its most negative section. They are not refusals: a cap
+           that holds an account under Meta's own ceiling, and one automated
+           message per person per day, are descriptions of how the thing works,
+           and they now sit with the rest of that description.
 
            They were also the one flat block on a page of elevated cards —
-           --surface-glass with no ring, no lift and no shadow, three of them in
-           a row. Now: one card, hairlines between the cells instead of gaps,
-           and a single accent fill along the top edge. */
+           --surface-glass with no ring, no lift and no shadow, in a row. Now:
+           one card, hairlines between the cells instead of gaps, and a single
+           accent fill along the top edge. */
         .figures {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
@@ -1869,15 +2040,6 @@
             }
             .cta-copy { grid-column: 1; }
             .cta .cta-row { grid-column: 2; margin-block-start: 0; }
-            .cta-foot { grid-column: 1 / -1; }
-        }
-        .cta-foot {
-            margin: var(--space-6) 0 0;
-            padding-block-start: var(--space-5);
-            border-block-start: 1px solid var(--border-subtle);
-            font-size: var(--lp-ui);
-            line-height: var(--lp-lh-ui);
-            color: var(--text-muted);
         }
 
         /* The line under a section heading. A bigger bottom margin than an
@@ -2065,9 +2227,8 @@
         /* ─── The plans, as a teaser ───────────────────────────────────────────
            The three NAMES and the one sentence that says what differs, never
            a price: prices live on /pricing, and a second copy here is a second
-           thing to forget. It closes the "what you pay for" card across both
-           halves. `.pays > div + div` would otherwise give it the second pane's
-           inline rule on a wide screen, which is why that is undone here. */
+           thing to forget. It closes the "what you pay for" card, across the
+           full width, under a hairline. */
         .pays > .plans {
             grid-column: 1 / -1;
             display: flex;
@@ -2077,9 +2238,6 @@
             gap: var(--space-4) var(--space-6);
             border-block-start: 1px solid var(--border-subtle);
             padding-block-start: var(--space-5);
-        }
-        @media (min-width: 52rem) {
-            .pays > .plans { border-inline-start: 0; padding-inline-start: 0; }
         }
         .pays > .plans p { margin: 0; max-inline-size: 58ch; }
         .plan-names { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-3); padding: 0; list-style: none; }
@@ -2238,6 +2396,12 @@
                the inner padding come down so the text keeps its 12px floor. */
             .slides { gap: var(--space-2); }
             .slide { padding: var(--space-2); }
+            /* The reel frame and its moments, and the comparison card's three
+               columns, keep their 12px text floor at 320px the same way. */
+            .cut { grid-template-columns: minmax(0, 1fr) minmax(0, 7.5rem); gap: var(--space-3); }
+            .cmp { padding: var(--space-2); }
+            .cmp-cols { gap: var(--space-1); }
+            .cmp-col { padding: 0.3rem; }
             .helper { gap: var(--space-3); padding: var(--space-4); }
             .helper-icon { inline-size: 2.25rem; block-size: 2.25rem; }
             .terms { padding: var(--space-5) var(--space-4); }
@@ -2822,32 +2986,36 @@
                 <section class="hero" aria-labelledby="hero-ar">
                     <div class="hero-grid">
                         <div>
-                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>إنستجرام وفيسبوك وتيك توك · بالعربية أولاً</p>
-                            <h1 id="hero-ar">من تعليق إلى محادثة خاصة</h1>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>استوديو نموّ مُدار لصنّاع المحتوى العرب</p>
+                            <h1 id="hero-ar">فيديوهاتك تصير منشورات، وتعليقاتهم تصير محادثات</h1>
                             <p class="lede">
-                                كلمةٌ مفتاحية في تعليق تُرسل الرسالة الخاصة، وتنشر الردّ العام،
-                                وتسجّل الإعجاب. وما يأتي بعدها يتولّاه الذكاء الاصطناعي بتعليماتك أنت.
-                                و<a href="#carousel-studio-ar">استوديو الكاروسيل</a> يحوّل دروسك
-                                المصوّرة إلى منشورات لإنستجرام وفيسبوك وتيك توك.
+                                <a href="#monteur-ar">المونتير</a> يقصّ من فيديوهاتك الطويلة ريلز،
+                                و<a href="#carousel-studio-ar">الاستوديو</a> يكتب من دروسك كاروسيلاً،
+                                ثم تُجدوَل على إنستجرام وفيسبوك ويوتيوب وتصل إلى مسودّاتك على تيك توك.
+                                ومن يكتب كلمتك المفتاحية في التعليقات، تصله رسالتك على الخاص.
                             </p>
+                            <!-- The page's own WhatsApp pattern (see the contact block): the
+                                 button exists only while there is a number, and the link to
+                                 the contact block stands in for it while there is not. -->
                             <div class="cta-row">
-                                <a class="btn btn-primary" href="/pricing">اطّلع على الباقات</a>
-                                <a class="btn btn-secondary" href="/dashboard">تسجيل الدخول</a>
+                                <a class="btn btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">تحدّث معنا على واتساب</a>
+                                <a class="btn btn-primary" data-unless="whatsapp" href="#contact-ar">راسلنا</a>
+                                <a class="btn btn-secondary" href="#samples-ar">شاهد ما صنعه</a>
                             </div>
                         </div>
 
                         <aside class="card artifact" aria-label="مثال: تعليق وما نتج عنه">
                             <p class="artifact-label">تعليق على منشورك</p>
                             <div class="comment">
-                                <span class="avatar" aria-hidden="true">ن</span>
+                                <span class="avatar" aria-hidden="true">س</span>
                                 <div>
-                                    <p class="who"><span class="sr-only">تعليق من</span>نورة</p>
+                                    <p class="who"><span class="sr-only">تعليق من</span>سالم</p>
                                     <p class="said" dir="auto">كم <span class="kw">السعر</span>؟ وهل فيه توصيل؟</p>
                                 </div>
                             </div>
 
                             <p class="artifact-label"><span class="sr-only">رسالة خاصة صادرة من حسابك:</span>رسالة خاصة</p>
-                            <p class="bubble">أهلاً نورة! هذي تفاصيل الأسعار والتوصيل.</p>
+                            <p class="bubble">أهلاً سالم! هذه تفاصيل الأسعار والتوصيل.</p>
 
                             <ul class="receipts">
                                 <li>
@@ -2874,7 +3042,7 @@
                 <section class="band" id="contact-ar" aria-labelledby="contact-h-ar">
                     <div class="card contact-card">
                         <h2 id="contact-h-ar">تواصل معنا</h2>
-                        <p>اكتب لنا بما تريد أتمتته، ونردّ بالسعر والمدة المتوقعة للربط قبل أي التزام.</p>
+                        <p>قل لنا ماذا تنشر ولمن، ونقترح ما نُشغّله لك أولاً، مع السعر ومدة الإعداد، قبل أي التزام.</p>
                         <div class="cta-row">
                             <a class="btn btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">تواصل عبر واتساب</a>
                             <a class="btn btn-secondary contact-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">البريد: <bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>
@@ -2945,15 +3113,13 @@
                                 <h3>الرسالة الخاصة</h3>
                                 <p>
                                     نصُّ الحملة يصل صاحبَ التعليق على الخاص — لا في التعليقات، حيث
-                                    يقرأها الجميع ولا يردّ عليها أحد. وإن ردّ، تولّى الذكاء
-                                    الاصطناعي بقيّة المحادثة بتعليماتك ومعلومات نشاطك، وتتصدّر أولَ
-                                    ردٍّ آليّ في المحادثة عبارةٌ تُفصح أنها خدمة آلية، كما تشترط
-                                    ميتا.
+                                    يقرأها الجميع ولا يردّ عليها أحد. تكتبه أنت مرة واحدة، بلهجتك إن
+                                    شئت، ومعه الرابط الذي تريد أن يصل إليه.
                                 </p>
                             </div>
                             <p class="detail">
-                                <span>العبارة التي يضيفها البرنامج</span>
-                                <span class="quoted">«🤖 رد آلي من المساعد الذكي»</span>
+                                رسالة آلية واحدة للشخص نفسه كل 24 ساعة، و180 رسالة في الساعة لكل
+                                حساب على الأكثر.
                             </p>
                         </li>
 
@@ -3171,6 +3337,97 @@
                     </div>
                 </section>
 
+                <!-- ─── The Monteur ──────────────────────────────────────── -->
+                <section class="band" aria-labelledby="monteur-h-ar">
+                    <!-- The in-page anchor is the grid, not the h2, as in the Studio band. -->
+                    <div class="studio-grid" id="monteur-ar">
+                        <div>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>المونتير</p>
+                            <h2 id="monteur-h-ar">من فيديو طويل إلى ريلز جاهزة للاعتماد</h2>
+                            <p class="lede">
+                                ضع الفيديو في مجلده، فيستمع إليه المونتير على جهازك، ويختار اللحظات
+                                التي تبدأ بخطّاف في ثوانيها الأولى، ويقصّها بمقاس
+                                <bdi lang="en" dir="ltr">9:16</bdi> بعنوان وترجمة مكتوبة وغلاف. تراجع
+                                كل ريل وتعتمده، فيُجدوَل في أفضل مواعيدك.
+                            </p>
+                        </div>
+
+                        <aside class="card artifact studio-art" aria-label="مثال: ريل قصّه المونتير من فيديو طويل">
+                            <p class="artifact-label">ريل واحد قبل أن تعتمده</p>
+                            <div class="cut" role="img" aria-label="إطار طولي بمقاس 9:16 لريل: عنوانه في أعلاه، وترجمة مكتوبة في أسفله تُضاء فيها الكلمة الجارية. وإلى جانبه ثلاث لحظات اختارها المونتير من الفيديو الطويل، لكلٍّ منها وقتها.">
+                                <div class="cut-src">
+                                    <span class="slide-cap">اللحظات المختارة</span>
+                                    <ul class="cut-moments">
+                                        <li><span class="cut-t"><bdi lang="en" dir="ltr">04:12</bdi></span><span class="cut-hit"></span></li>
+                                        <li><span class="cut-t"><bdi lang="en" dir="ltr">11:40</bdi></span><span class="cut-hit"></span></li>
+                                        <li><span class="cut-t"><bdi lang="en" dir="ltr">23:05</bdi></span><span class="cut-hit"></span></li>
+                                    </ul>
+                                </div>
+                                <div class="slide-cell">
+                                    <div class="slide slide-tall">
+                                        <span class="cut-title">لماذا يغادر المشاهد في أول ثوانٍ؟</span>
+                                        <span class="cut-words">ابدأ <span class="kw">بسؤال</span> لا بمقدّمة</span>
+                                    </div>
+                                    <span class="slide-cap"><bdi lang="en" dir="ltr">9:16</bdi> · بانتظار اعتمادك</span>
+                                </div>
+                            </div>
+                            <ul class="receipts">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    ينتظر كل ريل اعتمادك
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    تُجدوَل في أفضل مواعيدك
+                                </li>
+                            </ul>
+                        </aside>
+                    </div>
+                </section>
+
+                <!-- ─── Infographics ─────────────────────────────────────── -->
+                <section class="band" aria-labelledby="infographics-h-ar">
+                    <div class="studio-grid studio-grid-flip" id="infographics-ar">
+                        <div>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>الإنفوجرافيك</p>
+                            <h2 id="infographics-h-ar">مقارنة واحدة، متحرّكة، بهويّتك</h2>
+                            <p class="lede">
+                                اكتب الموضوع — <bdi lang="en" dir="ltr">RAG vs CAG vs KAG</bdi> مثلاً —
+                                فيُكتب الإنفوجرافيك ونصّه معاً، ويُرسم بثيم داكن أو فاتح:
+                                <bdi lang="en" dir="ltr">GIF</bdi> لأي منصّة، و<bdi lang="en" dir="ltr">MP4</bdi>
+                                مع غلافه لإنستجرام وفيسبوك ويوتيوب.
+                            </p>
+                            <p class="band-note">يعمل اليوم على حسابات المؤسس وحدها، ويُتاح لحسابات العملاء قريباً.</p>
+                        </div>
+
+                        <aside class="card artifact studio-art" aria-label="مثال: إنفوجرافيك مقارنة من ثلاثة أعمدة">
+                            <p class="artifact-label">بطاقة مقارنة، ثلاثة أعمدة</p>
+                            <div class="cmp" role="img" aria-label="بطاقة مقارنة بعنوان RAG vs CAG vs KAG، فيها ثلاثة أعمدة متجاورة، لكل عمود عنوانه وثلاثة أسطر.">
+                                <span class="cmp-title"><bdi lang="en" dir="ltr">RAG vs CAG vs KAG</bdi></span>
+                                <div class="cmp-cols">
+                                    <div class="cmp-col"><span class="slide-sig"><bdi lang="en" dir="ltr">RAG</bdi></span><span class="cmp-row"></span><span class="cmp-row"></span><span class="cmp-row"></span></div>
+                                    <div class="cmp-col"><span class="slide-sig"><bdi lang="en" dir="ltr">CAG</bdi></span><span class="cmp-row"></span><span class="cmp-row"></span><span class="cmp-row"></span></div>
+                                    <div class="cmp-col"><span class="slide-sig"><bdi lang="en" dir="ltr">KAG</bdi></span><span class="cmp-row"></span><span class="cmp-row"></span><span class="cmp-row"></span></div>
+                                </div>
+                            </div>
+                            <ul class="receipts">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    <span><bdi lang="en" dir="ltr">GIF</bdi> و<bdi lang="en" dir="ltr">MP4</bdi> وغلاف</span>
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    ثيم داكن أو فاتح
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    نصّه يذكر كل عمود فيه
+                                </li>
+                            </ul>
+                        </aside>
+                    </div>
+                </section>
+
                 <!-- ─── Made with AutoReply Pro ─────────────────────────── -->
                 <section class="band" aria-labelledby="samples-ar">
                     <h2 id="samples-ar">شغل حقيقي منشور</h2>
@@ -3253,24 +3510,9 @@
                                 اثنتان على تعليق واحد.
                             </p>
                         </section>
-                        <section class="card" aria-labelledby="f2-ar">
-                            <h3 id="f2-ar">ردود الذكاء الاصطناعي</h3>
-                            <p>
-                                الرسائل الواردة يجيب عنها نموذج ذكاء اصطناعي بتعليماتك أنت وبقاعدة
-                                معلومات تكتبها عن نشاطك، قارئاً آخر ثماني رسائل من المحادثة حتى
-                                يفهم السياق. ويستطيع أن يردّ بأزرار سريعة أو ببطاقات متتابعة.
-                            </p>
-                        </section>
                     </div>
 
                     <dl class="more">
-                        <div>
-                            <dt>صندوق وارد موحّد</dt>
-                            <dd>
-                                محادثات إنستجرام وفيسبوك في مكان واحد. تقرأ، وتردّ بنفسك، وتوقف
-                                الردّ الآلي في محادثة واحدة دون أن تُعطّله في غيرها.
-                            </dd>
-                        </div>
                         <div>
                             <dt>جدولة المنشورات والريلز</dt>
                             <dd>
@@ -3330,7 +3572,7 @@
                         <div>
                             <dt>أكثر من حساب، ولفريقك دخوله</dt>
                             <dd>
-                                تتنقّل بين حساباتك من دخول واحد، ولكلٍّ منها حملاته وصندوقه
+                                تتنقّل بين حساباتك من دخول واحد، ولكلٍّ منها حملاته
                                 وإعداداته. ولكل شخص في فريقك دخوله ودوره: مالك أو مشغّل أو مشاهد.
                             </dd>
                         </div>
@@ -3343,12 +3585,14 @@
                         </div>
                     </dl>
 
-                    <!-- The three constants, moved here from "what this does
-                         not promise". They are read out of the source and they
+                    <!-- The two constants, moved here from "what this does not
+                         promise". They are read out of the source and they
                          describe how the thing works; under that heading they
-                         were the three boldest numbers on the page attached to
-                         its most negative framing. -->
-                    <p class="prose lead">وثلاثة أرقام ثابتة في البرنامج نفسه:</p>
+                         were the boldest numbers on the page attached to its
+                         most negative framing. (There were three until
+                         2026-10-13: the third was how much of a thread the AI
+                         reads, and that path is parked.) -->
+                    <p class="prose lead">ورقمان ثابتان في البرنامج نفسه:</p>
                     <dl class="figures">
                         <div>
                             <dt>180</dt>
@@ -3357,10 +3601,6 @@
                         <div>
                             <dt>24</dt>
                             <dd>ساعة بين رسالتين تلقائيتين للشخص نفسه.</dd>
-                        </div>
-                        <div>
-                            <dt>8</dt>
-                            <dd>رسائل من المحادثة يقرأها الذكاء الاصطناعي قبل أن يردّ.</dd>
                         </div>
                     </dl>
                 </section>
@@ -3382,8 +3622,8 @@
                             <div>
                                 <p class="req-k">ما يعمل عليها</p>
                                 <p class="req-v">
-                                    من التعليق إلى الرسالة الخاصة، وردود الذكاء الاصطناعي على
-                                    الرسائل، وجدولة الصور والريلز والكاروسيل.
+                                    من التعليق إلى الرسالة الخاصة، وجدولة الصور والريلز والكاروسيل،
+                                    وقراءة أداء المنشورات.
                                 </p>
                             </div>
                         </li>
@@ -3396,7 +3636,7 @@
                             <div>
                                 <p class="req-k">ما يعمل عليها</p>
                                 <p class="req-v">
-                                    تعليقات الصفحة ومحادثات ماسنجر، وجدولة المنشورات والفيديو
+                                    من تعليقات الصفحة إلى الرسالة الخاصة، وجدولة المنشورات والفيديو
                                     والكاروسيل.
                                 </p>
                             </div>
@@ -3454,6 +3694,31 @@
                                     و<bdi dir="ltr">9:16</bdi>. وحين يكون الجهاز مغلقاً، تنتظر مهامّه
                                     دورها.
                                 </p>
+                            </div>
+                        </li>
+                        <li>
+                            <h3>المونتير</h3>
+                            <div>
+                                <p class="req-k">ما تحتاجه</p>
+                                <p class="req-v">جهاز ماك عليه «العامل»، ومجلد لفيديوهاتك الطويلة.</p>
+                            </div>
+                            <div>
+                                <p class="req-k">ما يعمل عليه</p>
+                                <p class="req-v">
+                                    يقصّ ريلز بمقاس <bdi lang="en" dir="ltr">9:16</bdi> تنتظر اعتمادك
+                                    واحداً واحداً قبل جدولتها، في الوضع الافتراضي.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <h3>الإنفوجرافيك</h3>
+                            <div>
+                                <p class="req-k">ما تحتاجه</p>
+                                <p class="req-v">جهاز ماك عليه «العامل».</p>
+                            </div>
+                            <div>
+                                <p class="req-k">ما يعمل عليه</p>
+                                <p class="req-v">يعمل اليوم على حسابات المؤسس وحدها، ويُتاح لحسابات العملاء قريباً.</p>
                             </div>
                         </li>
                     </ul>
@@ -3514,15 +3779,6 @@
                 <section class="band" aria-labelledby="open-ar">
                     <h2 id="open-ar">ما الذي تدفع مقابله</h2>
                     <div class="card pays">
-                        <div>
-                            <p class="pane-label">مفتوح المصدر<bdi class="lic" lang="en" dir="ltr">MIT</bdi></p>
-                            <p>
-                                <strong>البرنامج نفسه مفتوح المصدر برخصة
-                                <bdi lang="en" dir="ltr">MIT</bdi></strong>، ويمكنك تنزيله
-                                وتشغيله على خادمك مجاناً من
-                                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع العلني</a>.
-                            </p>
-                        </div>
                         <div>
                             <p class="pane-label">ما يُباع هنا ليس الكود</p>
                             <!-- Same sentence as before, split at its own commas:
@@ -3674,9 +3930,8 @@
                                     الصيغ التي يكتبها جمهورك.
                                 </p>
                                 <p>
-                                    أمّا ردود الذكاء الاصطناعي فيكتبها نموذج لغوي عام يقرأ الرسالة
-                                    كما كُتبت، بلهجتها، ويردّ بالأسلوب الذي تحدّده في تعليماتك —
-                                    بلهجتك إن شئت.
+                                    أمّا الرسالة الخاصة فأنت من يكتبها، فاكتبها باللهجة التي يكتب بها
+                                    جمهورك.
                                 </p>
                             </div>
                         </details>
@@ -3718,14 +3973,20 @@
                             </p></div>
                         </details>
                         <details>
-                            <summary>هل يخطئ الذكاء الاصطناعي؟</summary>
+                            <summary>هل يُنشر شيء دون أن أراه؟</summary>
                             <div class="qa-a"><p>
-                                قد يخطئ. الردود يكتبها نموذج لغوي
-                                (<bdi lang="en" dir="ltr">Gemini</bdi> من جوجل) بتعليماتك وبقاعدة
-                                المعلومات التي تكتبها. لذلك تستطيع إيقاف الردّ الآلي في أي محادثة
-                                والردّ بنفسك من صندوق الوارد، وأول ردّ آليّ في المحادثة يُخبر الشخص
-                                أنه يتحدّث إلى خدمة آلية. وما يُرسَل إلى جوجل لكتابة الردّ مكتوب في
-                                <a href="/privacy">سياسة الخصوصية</a>.
+                                في الوضع الافتراضي، لا: ريلز المونتير تنتظر اعتمادك واحداً واحداً،
+                                ومسودّات الكاروسيل تراجعها قبل جدولتها، والإنفوجرافيك لا يُجدوَل حتى
+                                يذكر نصّه كل عمود فيه. أمّا رسالة الحملة فتُرسَل وحدها، لكنها النص
+                                الذي كتبته أنت.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>هل البرنامج مفتوح المصدر؟</summary>
+                            <div class="qa-a"><p>
+                                الخادم الذي يستقبل التعليقات ويرسل الرسائل وينشر مفتوحٌ برخصة
+                                <bdi lang="en" dir="ltr">MIT</bdi> على <bdi lang="en" dir="ltr">GitHub</bdi>؛
+                                أمّا العامل وقوالب المونتير والإنفوجرافيك فليست مفتوحة المصدر.
                             </p></div>
                         </details>
                         <details>
@@ -3753,11 +4014,6 @@
                             <a class="btn btn-primary" href="/pricing">اطّلع على الباقات</a>
                             <a class="btn btn-secondary" href="/dashboard">تسجيل الدخول</a>
                         </div>
-                        <p class="cta-foot">
-                            أو شغّله بنفسك: الكود كلّه مفتوح برخصة
-                            <bdi lang="en" dir="ltr">MIT</bdi> على
-                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer"><bdi lang="en" dir="ltr">GitHub</bdi></a>.
-                        </p>
                     </div>
                 </section>
             </article>
@@ -3771,32 +4027,35 @@
                 <section class="hero" aria-labelledby="hero-en">
                     <div class="hero-grid">
                         <div>
-                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Instagram, Facebook, TikTok · Arabic-first</p>
-                            <h1 id="hero-en">A comment becomes a conversation</h1>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>A managed growth studio for Arabic creators</p>
+                            <h1 id="hero-en">Your videos become posts. Their comments become conversations.</h1>
                             <p class="lede">
-                                A keyword in a comment sends the private message, posts the public
-                                reply, and likes the comment. AI answers whatever they say next.
-                                And <a href="#carousel-studio-en">Carousel Studio</a> turns your video
-                                lessons into posts for Instagram, Facebook and TikTok.
+                                The <a href="#monteur-en">Monteur</a> cuts reels from your long videos
+                                and the <a href="#carousel-studio-en">Studio</a> writes carousels from
+                                your lessons; they're scheduled to Instagram, Facebook and YouTube and
+                                land in your TikTok drafts. Anyone who comments your keyword gets your
+                                message in their DMs.
                             </p>
+                            <!-- See the Arabic hero: WhatsApp while there is a number, the contact block while not. -->
                             <div class="cta-row">
-                                <a class="btn btn-primary" href="/pricing">See the plans</a>
-                                <a class="btn btn-secondary" href="/dashboard">Sign in</a>
+                                <a class="btn btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Talk to us on WhatsApp</a>
+                                <a class="btn btn-primary" data-unless="whatsapp" href="#contact-en">Write to us</a>
+                                <a class="btn btn-secondary" href="#samples-en">See what it made</a>
                             </div>
                         </div>
 
                         <aside class="card artifact" aria-label="Example: one comment and what it produced">
                             <p class="artifact-label">A comment on your post</p>
                             <div class="comment">
-                                <span class="avatar" aria-hidden="true">N</span>
+                                <span class="avatar" aria-hidden="true">S</span>
                                 <div>
-                                    <p class="who"><span class="sr-only">Comment from</span>Noura</p>
+                                    <p class="who"><span class="sr-only">Comment from</span>Salem</p>
                                     <p class="said" dir="auto">How much is the <span class="kw">price</span>? Do you deliver?</p>
                                 </div>
                             </div>
 
                             <p class="artifact-label"><span class="sr-only">Private message sent from your account:</span>Direct message</p>
-                            <p class="bubble">Hi Noura! Here are the prices and the delivery options.</p>
+                            <p class="bubble">Hi Salem! Here are the prices and delivery options.</p>
 
                             <ul class="receipts">
                                 <li>
@@ -3816,7 +4075,7 @@
                 <section class="band" id="contact-en" aria-labelledby="contact-h-en">
                     <div class="card contact-card">
                         <h2 id="contact-h-en">Get in touch</h2>
-                        <p>Tell us what you want automated, and we reply with a price and the expected time to get connected, before you commit to anything.</p>
+                        <p>Tell us what you publish and who for. We suggest what to switch on first, with the price and setup time, before you commit to anything.</p>
                         <div class="cta-row">
                             <a class="btn btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Chat on WhatsApp</a>
                             <a class="btn btn-secondary contact-mail" data-when="email" data-contact-email href="mailto:{{CONTACT_EMAIL}}">Email: {{CONTACT_EMAIL}}</a>
@@ -3890,17 +4149,15 @@
                             <div>
                                 <h3>The private message</h3>
                                 <p>
-                                    The text you wrote on the campaign reaches them privately —
-                                    not in the comments, where everyone reads it and nobody
-                                    replies. If they answer, AI takes the rest of the conversation
-                                    using your own instructions and your own knowledge base, and
-                                    the first automated reply in a conversation is headed by the
-                                    automated-service disclosure Meta requires.
+                                    The text you wrote on the campaign reaches them privately — not
+                                    in the comments, where everyone reads it and nobody replies. You
+                                    write it once, in your own dialect if you like, with the link you
+                                    want them to have.
                                 </p>
                             </div>
                             <p class="detail">
-                                <span>The line the software adds</span>
-                                <span class="quoted"><bdi lang="ar" dir="rtl" class="ar">🤖 رد آلي من المساعد الذكي</bdi></span>
+                                One automated message per person every 24 hours, and at most 180 an
+                                hour per account.
                             </p>
                         </li>
 
@@ -4139,6 +4396,96 @@
                     </div>
                 </section>
 
+                <!-- ─── The Monteur ──────────────────────────────────────── -->
+                <section class="band" aria-labelledby="monteur-h-en">
+                    <!-- The in-page anchor is the grid, not the h2, as in the Studio band. -->
+                    <div class="studio-grid" id="monteur-en">
+                        <div>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>The Monteur</p>
+                            <h2 id="monteur-h-en">From one long video to reels ready for your approval</h2>
+                            <p class="lede">
+                                Drop the video in its folder. The Monteur listens to it on your
+                                computer, picks the moments that open with a hook, and cuts them to
+                                9:16 with a title, word-by-word captions and a cover. You approve
+                                each reel, and it's scheduled into your best slots.
+                            </p>
+                        </div>
+
+                        <aside class="card artifact studio-art" aria-label="Example: a reel the Monteur cut from a long video">
+                            <p class="artifact-label">One reel, before you approve it</p>
+                            <div class="cut" role="img" aria-label="A tall 9:16 frame for a reel: its title at the top and a written caption at the bottom with the current word lit. Beside it, three moments the Monteur picked from the long video, each with its timestamp.">
+                                <div class="cut-src">
+                                    <span class="slide-cap">Moments picked</span>
+                                    <ul class="cut-moments">
+                                        <li><span class="cut-t">04:12</span><span class="cut-hit"></span></li>
+                                        <li><span class="cut-t">11:40</span><span class="cut-hit"></span></li>
+                                        <li><span class="cut-t">23:05</span><span class="cut-hit"></span></li>
+                                    </ul>
+                                </div>
+                                <div class="slide-cell">
+                                    <div class="slide slide-tall">
+                                        <span class="cut-title">Why viewers leave in the first seconds</span>
+                                        <span class="cut-words">Open with a <span class="kw">question</span>, not an intro</span>
+                                    </div>
+                                    <span class="slide-cap">9:16 · waiting for your approval</span>
+                                </div>
+                            </div>
+                            <ul class="receipts">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Every reel waits for your approval
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Scheduled into your best slots
+                                </li>
+                            </ul>
+                        </aside>
+                    </div>
+                </section>
+
+                <!-- ─── Infographics ─────────────────────────────────────── -->
+                <section class="band" aria-labelledby="infographics-h-en">
+                    <div class="studio-grid studio-grid-flip" id="infographics-en">
+                        <div>
+                            <p class="eyebrow"><span class="dot" aria-hidden="true"></span>Infographics</p>
+                            <h2 id="infographics-h-en">One comparison, animated, in your brand</h2>
+                            <p class="lede">
+                                Name the topic — RAG vs CAG vs KAG, say — and the infographic and its
+                                caption are written together, in a dark or light theme: a GIF for
+                                anywhere, an MP4 with its cover for Instagram, Facebook and YouTube.
+                            </p>
+                            <p class="band-note">Running today on the founder's accounts only; coming to client accounts.</p>
+                        </div>
+
+                        <aside class="card artifact studio-art" aria-label="Example: a three-column comparison infographic">
+                            <p class="artifact-label">A comparison card, three columns</p>
+                            <div class="cmp" role="img" aria-label="A comparison card titled RAG vs CAG vs KAG, with three columns side by side, each with its heading and three lines.">
+                                <span class="cmp-title">RAG vs CAG vs KAG</span>
+                                <div class="cmp-cols">
+                                    <div class="cmp-col"><span class="slide-sig">RAG</span><span class="cmp-row"></span><span class="cmp-row"></span><span class="cmp-row"></span></div>
+                                    <div class="cmp-col"><span class="slide-sig">CAG</span><span class="cmp-row"></span><span class="cmp-row"></span><span class="cmp-row"></span></div>
+                                    <div class="cmp-col"><span class="slide-sig">KAG</span><span class="cmp-row"></span><span class="cmp-row"></span><span class="cmp-row"></span></div>
+                                </div>
+                            </div>
+                            <ul class="receipts">
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    GIF, MP4 and a cover
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Dark or light theme
+                                </li>
+                                <li>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                    Its caption names every column
+                                </li>
+                            </ul>
+                        </aside>
+                    </div>
+                </section>
+
                 <!-- ─── Made with AutoReply Pro ─────────────────────────── -->
                 <section class="band" aria-labelledby="samples-en">
                     <h2 id="samples-en">Made with AutoReply Pro</h2>
@@ -4223,26 +4570,9 @@
                                 comment.
                             </p>
                         </section>
-                        <section class="card" aria-labelledby="f2-en">
-                            <h3 id="f2-en">AI replies to messages</h3>
-                            <p>
-                                Incoming messages are answered by an AI model using your own
-                                instructions and a knowledge base you write about your business,
-                                reading the last eight messages of the thread for context. It can
-                                reply with quick-reply buttons or a card carousel.
-                            </p>
-                        </section>
                     </div>
 
                     <dl class="more">
-                        <div>
-                            <dt>One shared inbox</dt>
-                            <dd>
-                                Instagram and Facebook conversations in one place. Read them,
-                                reply yourself, and pause the bot on a single conversation without
-                                turning it off anywhere else.
-                            </dd>
-                        </div>
                         <div>
                             <dt>Scheduled posts and reels</dt>
                             <dd>
@@ -4302,7 +4632,7 @@
                             <dt>Several accounts, and logins for your team</dt>
                             <dd>
                                 Switch between your accounts from one sign-in, each with its own
-                                campaigns, inbox and settings. Everyone on your team gets their own
+                                campaigns and settings. Everyone on your team gets their own
                                 login and a role: owner, operator or viewer.
                             </dd>
                         </div>
@@ -4316,12 +4646,14 @@
                         </div>
                     </dl>
 
-                    <!-- The three constants, moved here from "what this does
-                         not promise". They are read out of the source and they
+                    <!-- The two constants, moved here from "what this does not
+                         promise". They are read out of the source and they
                          describe how the thing works; under that heading they
-                         were the three boldest numbers on the page attached to
-                         its most negative framing. -->
-                    <p class="prose lead">And three numbers fixed in the software itself:</p>
+                         were the boldest numbers on the page attached to its
+                         most negative framing. (There were three until
+                         2026-10-13: the third was how much of a thread the AI
+                         reads, and that path is parked.) -->
+                    <p class="prose lead">And two numbers fixed in the software itself:</p>
                     <dl class="figures">
                         <div>
                             <dt>180</dt>
@@ -4330,10 +4662,6 @@
                         <div>
                             <dt>24</dt>
                             <dd>hours between two automated messages to the same person.</dd>
-                        </div>
-                        <div>
-                            <dt>8</dt>
-                            <dd>messages of the thread the AI reads before it answers.</dd>
                         </div>
                     </dl>
                 </section>
@@ -4356,8 +4684,8 @@
                             <div>
                                 <p class="req-k">What works there</p>
                                 <p class="req-v">
-                                    Comment-to-message campaigns, AI replies to messages, and
-                                    scheduled images, reels and carousels.
+                                    Comment-to-DM campaigns, scheduled photos, reels and carousels,
+                                    and post performance.
                                 </p>
                             </div>
                         </li>
@@ -4370,8 +4698,8 @@
                             <div>
                                 <p class="req-k">What works there</p>
                                 <p class="req-v">
-                                    Page comments and Messenger conversations, and scheduled posts,
-                                    video and carousels.
+                                    Comment-to-DM on Page posts, and scheduled posts, video and
+                                    carousels.
                                 </p>
                             </div>
                         </li>
@@ -4428,6 +4756,31 @@
                                     Writes carousels from your lessons and draws them at 4:5 and
                                     9:16. While the computer is off, its jobs simply wait.
                                 </p>
+                            </div>
+                        </li>
+                        <li>
+                            <h3>Monteur</h3>
+                            <div>
+                                <p class="req-k">What you need</p>
+                                <p class="req-v">A Mac running the worker, and a folder for your long videos.</p>
+                            </div>
+                            <div>
+                                <p class="req-k">What it does</p>
+                                <p class="req-v">
+                                    Cuts reels at 9:16; by default, each one waits for your approval
+                                    before it is scheduled.
+                                </p>
+                            </div>
+                        </li>
+                        <li>
+                            <h3>Infographics</h3>
+                            <div>
+                                <p class="req-k">What you need</p>
+                                <p class="req-v">A Mac running the worker.</p>
+                            </div>
+                            <div>
+                                <p class="req-k">What it does</p>
+                                <p class="req-v">Running today on the founder's accounts only; coming to client accounts.</p>
                             </div>
                         </li>
                     </ul>
@@ -4490,15 +4843,6 @@
                 <section class="band" aria-labelledby="open-en">
                     <h2 id="open-en">What you are paying for</h2>
                     <div class="card pays">
-                        <div>
-                            <p class="pane-label">Open source<bdi class="lic" lang="en" dir="ltr">MIT</bdi></p>
-                            <p>
-                                <strong>The software itself is open source under the MIT
-                                licence</strong>, and you can download it and run it on your own
-                                server for free from
-                                <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">the public repository</a>.
-                            </p>
-                        </div>
                         <div>
                             <p class="pane-label">What is sold here is not the code</p>
                             <!-- Same sentence as before, split at its own commas:
@@ -4661,9 +5005,8 @@
                                     ways your audience writes.
                                 </p>
                                 <p>
-                                    The AI replies come from a general-purpose language model that
-                                    reads the message as written, dialect and all, and answers the
-                                    way your instructions say — in your own dialect, if you want.
+                                    The private message is yours to write, so write it in the dialect
+                                    your audience writes in.
                                 </p>
                             </div>
                         </details>
@@ -4710,14 +5053,21 @@
                             </p></div>
                         </details>
                         <details>
-                            <summary>Can the AI get an answer wrong?</summary>
+                            <summary>Does anything go out without me seeing it?</summary>
                             <div class="qa-a"><p>
-                                It can. Replies are written by a language model — Google's Gemini —
-                                from your instructions and the knowledge base you write, and a model
-                                can be wrong. So you can pause the bot on any conversation and
-                                answer yourself from the inbox, and the first automated reply tells
-                                the person they are talking to an automated service. What is sent to
-                                Google to write a reply is in the <a href="/privacy">privacy policy</a>.
+                                By default, no: the Monteur's reels wait for your approval one by
+                                one, carousel drafts are yours to review before they're scheduled,
+                                and an infographic can't be scheduled until its caption names every
+                                column. A campaign's message does go out on its own — but it is the
+                                text you wrote.
+                            </p></div>
+                        </details>
+                        <details>
+                            <summary>Is it open source?</summary>
+                            <div class="qa-a"><p>
+                                The server that receives comments, sends messages and publishes is
+                                MIT-licensed on GitHub. The worker and the Monteur and infographic
+                                templates are not.
                             </p></div>
                         </details>
                         <details>
@@ -4747,10 +5097,6 @@
                             <a class="btn btn-primary" href="/pricing">See the plans</a>
                             <a class="btn btn-secondary" href="/dashboard">Sign in</a>
                         </div>
-                        <p class="cta-foot">
-                            Or run it yourself: all of it is MIT-licensed on
-                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">GitHub</a>.
-                        </p>
                     </div>
                 </section>
             </article>
@@ -4792,8 +5138,8 @@
                     <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
                 </a>
                 <p class="foot-what">
-                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة على إنستجرام وفيسبوك، ونشرٌ مجدول يصل تيك توك أيضاً، واستوديو للكاروسيل. بالعربية أولاً.</bdi>
-                    <bdi class="t-en" lang="en" dir="ltr">Comments into private conversations on Instagram and Facebook, scheduled posts that reach TikTok too, and a Carousel Studio. Arabic-first.</bdi>
+                    <bdi class="t-ar" lang="ar" dir="rtl">استوديو نموّ مُدار لصنّاع المحتوى العرب: ريلز وكاروسيل وإنفوجرافيك، ونشرٌ على إنستجرام وفيسبوك وتيك توك ويوتيوب، ومن التعليق إلى الرسالة الخاصة.</bdi>
+                    <bdi class="t-en" lang="en" dir="ltr">A managed growth studio for Arabic creators: reels, carousels and infographics, publishing to Instagram, Facebook, TikTok and YouTube, and comments into private messages.</bdi>
                 </p>
             </div>
 
@@ -4802,6 +5148,8 @@
                     <p class="foot-h" id="foot-h-product"><bdi class="t-ar" lang="ar">المنتج</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Product</bdi></p>
                     <a href="/#features"><bdi class="t-ar" lang="ar">الميزات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Features</bdi></a>
                     <a href="/#carousel-studio"><bdi class="t-ar" lang="ar">استوديو الكاروسيل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Carousel Studio</bdi></a>
+                    <a href="/#monteur"><bdi class="t-ar" lang="ar">المونتير</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Monteur</bdi></a>
+                    <a href="/#infographics"><bdi class="t-ar" lang="ar">الإنفوجرافيك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Infographics</bdi></a>
                     <a href="/#tiktok"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></a>
                     <a href="/pricing"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
                     <a href="/dashboard"><bdi class="t-ar" lang="ar">تسجيل الدخول</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Sign in</bdi></a>
