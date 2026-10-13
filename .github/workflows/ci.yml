@@ -57,9 +57,10 @@ jobs:
       - name: Check icon subset
         run: npm run check:icon-subset
 
-      # The landing's 3D hero is a committed, content-hashed bundle (public/brand/hero3d.<sha8>.js) of
-      # scripts/hero3d/scene.mjs + three: there is no build step on Vercel, so nothing else notices a scene edit that was
-      # never rebuilt, a loader pointing at a stale name, a third bundle, or the bundle growing past 145 KB gzipped.
+      # The landing's 3D scenes are committed, content-hashed bundles under public/brand/: the hero (hero3d.<sha8>.js), the
+      # three diagram scenes (monteur|studio|pmap.<sha8>.js) and the chunk they share, built from scripts/hero3d/ + three.
+      # There is no build step on Vercel, so nothing else notices a scene edit that was never rebuilt, a page naming a stale
+      # file, a third release, an orphan chunk, the hero growing past 145 KB gzipped or a scene past 20 KB on top of it.
       - name: Check hero 3D bundle
         run: npm run check:hero3d
 

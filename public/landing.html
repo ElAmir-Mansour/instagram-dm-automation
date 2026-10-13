@@ -1340,8 +1340,8 @@
             .hero-stage { --hs-x: 0px; }
         }
         .hero-stage > .artifact { z-index: 1; }
-        .stage-poster,
-        .stage-canvas {
+        .hero-stage > .stage-poster,
+        .hero-stage > .stage-canvas {
             position: absolute;
             inset-block-start: calc(var(--hs-y) * -1);
             inset-inline-start: calc(var(--hs-x) * -1);
@@ -1352,8 +1352,8 @@
             transition: opacity var(--lp-t-fade) var(--lp-ease-quad);
         }
         .stage-canvas { opacity: 0; }
-        .hero-stage.is-3d .stage-canvas { opacity: 1; }
-        .hero-stage.is-3d .stage-poster { opacity: 0; }
+        .hero-stage.is-3d > .stage-canvas { opacity: 1; }
+        .hero-stage.is-3d > .stage-poster { opacity: 0; }
         /* With the scene running the card is solid, so what it is measured against does not move with whatever
            bubble is behind it. */
         .hero-stage.is-3d > .artifact { background: var(--surface-solid); }
@@ -1372,11 +1372,39 @@
         }
         .hero-stage .bubble.is-delivering { animation: hero-receipt var(--lp-kw-receipt) var(--ease-exit) 1; }
 
+        /* ─── The diagram scenes (L11) ─────────────────────────────────────────
+           A diagram can be a 3D scene (scripts/hero3d/scenes/*.mjs) for a visitor who passes the loader's gates: the Monteur
+           flow, the Studio flow and the platform map. The scene is drawn into the diagram's own box and nothing else moves:
+           the canvas is absolute and as big as the host, so the box is the box it always was, with or without it. The
+           diagram's markup stays where it is (it is the text a screen reader and a view-source reader get, and it is what
+           everyone else sees); under a running scene it stops painting, it does not leave. The caption stays visible above
+           the canvas: it is where the figure states what it may claim (the Monteur's "runs today on the founder's accounts
+           only"), and no scene says more than that. A table keeps its caption and its plate (its card, its shadow) the same
+           way: only its header and rows stop painting, because the scene draws those. */
+        .scene-host { position: relative; isolation: isolate; }
+        .scene-host > .stage-canvas {
+            position: absolute;
+            inset: 0;
+            inline-size: 100%;
+            block-size: 100%;
+            z-index: 0;
+            pointer-events: none;
+            transition: opacity var(--lp-t-fade) var(--lp-ease-quad);
+        }
+        .scene-host.is-3d > .stage-canvas { opacity: 1; }
+        .scene-host > .flow-steps,
+        .scene-host > .pmap > :is(thead, tbody) { transition: opacity var(--lp-t-fade) var(--lp-ease-quad); }
+        .scene-host.is-3d > .flow-steps,
+        .scene-host.is-3d > .pmap > :is(thead, tbody) { opacity: 0; }
+        .scene-host > figcaption { position: relative; z-index: 1; }
+
         /* A canvas and a poster carry nothing a screen reader, a forced palette or a printer needs: the card is
-           the content, and it is solid. */
+           the content, and it is solid; a diagram is its own markup, painted again. */
         @media (forced-colors: active), print {
-            .stage-poster,
+            .hero-stage > .stage-poster,
             .stage-canvas { display: none; }
+            .scene-host.is-3d > .flow-steps,
+            .scene-host.is-3d > .pmap > :is(thead, tbody) { opacity: 1; }
         }
 
         /* ─── The loop ─────────────────────────────────────────────────────────
@@ -3787,7 +3815,7 @@
                     <h2 id="studio-how-ar">كيف يعمل الاستوديو</h2>
                     <p class="prose lead">ثلاث خطوات، الأولى والأخيرة منها لك، والتي بينهما على الذكاء الاصطناعي:</p>
 
-                    <figure class="flow flow-studio flow-long" id="flow-studio-ar" aria-labelledby="flow-studio-cap-ar">
+                    <figure class="flow flow-studio flow-long scene-host" id="flow-studio-ar" aria-labelledby="flow-studio-cap-ar" data-scene3d="/brand/studio.16eb58f2.js">
                         <ol class="flow-steps">
                             <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg><span class="flow-t">درس</span></li>
                             <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/></svg><span class="flow-t">ما يشرحه ولقطاته</span></li>
@@ -3910,7 +3938,7 @@
                         </aside>
                     </div>
 
-                    <figure class="flow flow-monteur flow-long" id="flow-monteur-ar" aria-labelledby="flow-monteur-cap-ar">
+                    <figure class="flow flow-monteur flow-long scene-host" id="flow-monteur-ar" aria-labelledby="flow-monteur-cap-ar" data-scene3d="/brand/monteur.b27339c9.js">
                         <ol class="flow-steps">
                             <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg><span class="flow-t">فيديو طويل في مجلده</span></li>
                             <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></svg><span class="flow-t">يستمع إليه على ماك</span></li>
@@ -4155,6 +4183,7 @@
                 <section class="band" aria-labelledby="platforms-ar">
                     <h2 id="platforms-ar">المنصّات، وما تحتاجه</h2>
                     <p class="prose lead">ما يعمل على كل منصّة، وما يلزمك قبل أن نبدأ:</p>
+                    <div class="scene-host" id="pmap-scene-ar" data-scene3d="/brand/pmap.da80acc8.js">
                     <table class="pmap" id="pmap-ar" role="table">
                         <caption>بنظرة واحدة. التفاصيل والشروط في الصفوف التالية.</caption>
                         <thead>
@@ -4167,6 +4196,7 @@
                             <tr role="row"><th scope="row" role="rowheader"><svg class="plogo plogo-yt" aria-hidden="true" focusable="false"><use href="#plogo-youtube"/></svg>يوتيوب</th><td role="cell" class="x" data-th="من التعليق إلى الرسالة"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td><td role="cell" class="p" data-th="النشر">رفع <bdi lang="en" dir="ltr">Shorts</bdi></td><td role="cell" class="x" data-th="الكاروسيل"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td><td role="cell" class="y" data-th="الفيديو"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span><bdi lang="en" dir="ltr">Shorts</bdi></span></td><td role="cell" class="x" data-th="الأداء"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td></tr>
                         </tbody>
                     </table>
+                    </div>
                     <ul class="card reqs">
                         <li>
                             <h3><span class="ptile ptile-instagram"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg></span>إنستجرام</h3>
@@ -4925,7 +4955,7 @@
                     <h2 id="studio-how-en">How the Studio works</h2>
                     <p class="prose lead">Three steps. The first and the last are yours; the one in between is the AI's:</p>
 
-                    <figure class="flow flow-studio flow-long" id="flow-studio-en" aria-labelledby="flow-studio-cap-en">
+                    <figure class="flow flow-studio flow-long scene-host" id="flow-studio-en" aria-labelledby="flow-studio-cap-en" data-scene3d="/brand/studio.16eb58f2.js">
                         <ol class="flow-steps">
                             <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg><span class="flow-t">Lesson</span></li>
                             <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/></svg><span class="flow-t">What it teaches, and its frames</span></li>
@@ -5052,7 +5082,7 @@
                         </aside>
                     </div>
 
-                    <figure class="flow flow-monteur flow-long" id="flow-monteur-en" aria-labelledby="flow-monteur-cap-en">
+                    <figure class="flow flow-monteur flow-long scene-host" id="flow-monteur-en" aria-labelledby="flow-monteur-cap-en" data-scene3d="/brand/monteur.b27339c9.js">
                         <ol class="flow-steps">
                             <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg><span class="flow-t">A long video in its folder</span></li>
                             <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></svg><span class="flow-t">Listened to on a Mac</span></li>
@@ -5299,6 +5329,7 @@
                 <section class="band" aria-labelledby="platforms-en">
                     <h2 id="platforms-en">Platforms, and what you need</h2>
                     <p class="prose lead">What works on each platform, and what you need before we start:</p>
+                    <div class="scene-host" id="pmap-scene-en" data-scene3d="/brand/pmap.da80acc8.js">
                     <table class="pmap" id="pmap-en" role="table">
                         <caption>At a glance. The details and conditions are in the rows below.</caption>
                         <thead>
@@ -5311,6 +5342,7 @@
                             <tr role="row"><th scope="row" role="rowheader"><svg class="plogo plogo-yt" aria-hidden="true" focusable="false"><use href="#plogo-youtube"/></svg>YouTube</th><td role="cell" class="x" data-th="Comment to DM"><span aria-hidden="true">—</span><span class="sr-only">No</span></td><td role="cell" class="p" data-th="Posting"><bdi lang="en" dir="ltr">Shorts</bdi> upload</td><td role="cell" class="x" data-th="Carousel"><span aria-hidden="true">—</span><span class="sr-only">No</span></td><td role="cell" class="y" data-th="Video"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span><bdi lang="en" dir="ltr">Shorts</bdi></span></td><td role="cell" class="x" data-th="Performance"><span aria-hidden="true">—</span><span class="sr-only">No</span></td></tr>
                         </tbody>
                     </table>
+                    </div>
                     <ul class="card reqs">
                         <li>
                             <h3><span class="ptile ptile-instagram"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg></span>Instagram</h3>
@@ -6051,7 +6083,7 @@
            /brand/hero3d.<sha8>.js (npm run build:hero3d); any no keeps the poster. Its own script: import() can't parse in old
            browsers. There is no control for the animation: the visitor's own setting, prefers-reduced-motion, is the opt-out. */
         (function () {
-            var HERO3D = '/brand/hero3d.9331bb63.js';
+            var HERO3D = '/brand/hero3d.77bb0c5d.js';
             var w = window, d = document, n = navigator;
 
             function ok(q) { return w.matchMedia(q).matches; }

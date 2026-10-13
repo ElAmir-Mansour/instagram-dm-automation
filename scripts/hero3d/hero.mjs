@@ -2,95 +2,51 @@
  * The landing hero's 3D scene (L10): flat comment bubbles drifting in depth behind the hero card, one keyword
  * lit by the cardamom highlighter, and that bubble flying into the card's own message bubble.
  *
- * Bundled with three by scripts/build-hero3d.mjs into public/brand/hero3d.<sha8>.js and loaded by the inline
- * loader in public/landing.html only after the loader's gates pass. The card stays the content and the LCP
- * element; this is an addition behind it, and any failure here leaves the poster.
+ * One instance of the engine (engine.mjs): this file is only what the hero draws. The engine brings the renderer, the loop
+ * and everything about when to stop it; the hero is built once per language, because each language's article has its own
+ * stage. The card stays the content and the LCP element; this is an addition behind it, and any failure leaves the poster.
  *
  * Look: unlit and flat. MeshBasicMaterial only, no lights, fog as the only depth cue, no bloom, no particles,
  * no glow. The mark never appears in the scene, cardamom is the keyword's highlighter and nothing else
  * (IDENTITY.md sections 5 and 6). Everything coloured comes from the page's own tokens, read at run time.
  */
 import {
-    BufferAttribute, BufferGeometry, CanvasTexture, Fog, Group, Mesh, MeshBasicMaterial, PerspectiveCamera, PlaneGeometry,
-    Raycaster, SRGBColorSpace, Scene, Vector2, WebGLRenderer,
+    CanvasTexture, Fog, Group, Mesh, MeshBasicMaterial, PerspectiveCamera, PlaneGeometry, Raycaster, SRGBColorSpace,
+    Scene, Vector2,
 } from 'three';
 import {
-    CAMERA, FLY_SPLIT, FOG, LOOP, MAX_DPR, MAX_TEXTURE, MAX_TEXTURES, RECEIPT_MS, SLOTS, TIMES, bezier3, bubbleCount,
-    clamp01, cssColor, easeDive, easeFly, loopAt, median, mulberry32, parseColor, phase, roundedRectBody, roundedRectRing,
+    CAMERA, FLY_SPLIT, FOG, LOOP, MAX_TEXTURE, MAX_TEXTURES, RECEIPT_MS, SLOTS, TIMES, bezier3, bubbleCount,
+    clamp01, cssColor, easeDive, easeFly, loopAt, mulberry32, phase, roundedRectBody, roundedRectRing,
     splitAtKeyword,
 } from './core.mjs';
+import { flat, glyphPath, loadFonts } from './engine.mjs';
 
 // World units. A bubble is 2.5 wide and 0.7 tall; its label is drawn on a 250 x 70 canvas, 100 px to the unit.
 const BW = 2.5, BH = 0.62, BR = 0.24, RING = 0.028;
 const NOM_W = 250, NOM_H = 62, WPP = BW / NOM_W;
-const SLEEP_MS = 3 * LOOP * 1000;
-const WINDOW = 120, WARMUP = 12;
 
 const rad = (deg) => (deg * Math.PI) / 180;
 const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
 
-/** A flat BufferGeometry from core.mjs's {positions, index}: no UVs, no normals, the material is unlit and untextured. */
-function flat({ positions, index }) {
-    const g = new BufferGeometry();
-    g.setAttribute('position', new BufferAttribute(positions, 3));
-    g.setIndex(new BufferAttribute(index, 1));
-    return g;
-}
-
-/** The theme, read from the page's tokens. Parsed here: Color.setStyle warns on alpha, and these tokens carry it. */
-function readTokens() {
-    const cs = getComputedStyle(document.documentElement);
-    const t = (name, fallback) => parseColor(cs.getPropertyValue(name)) ?? parseColor(fallback);
-    return {
-        page: t('--surface-page', '#111210'),
-        solid: t('--surface-solid', '#1e1f1b'),
-        ring: t('--border-strong', 'rgba(255, 255, 255, 0.2)'),
-        text: t('--text-default', '#d2d4ca'),
-        logo: t('--logo-mono', '#ffffff'),
-        mark: t('--accent-soft', 'rgba(188, 222, 112, 0.16)'),
-        markText: t('--accent-text', '#c9e683'),
-    };
-}
-
-const langOf = () => (document.documentElement.getAttribute('data-lang') === 'en' ? 'en' : 'ar');
 
 /**
- * Mount the scene on the hero stage of the language on screen.
- * @param {HTMLElement[]} stages every .hero-stage (one per language article)
- * @param {{lite?: boolean}} options
- * @returns {Promise<{dispose(): void, stats(): object}>} resolved after the first frame
+ * Build the hero for one stage.
+ * @param {object} ctx the engine's context: { el (the .hero-stage), canvas, fine, tokens, dpr, profile }
  */
-export async function mount(stages, options = {}) {
-    const root = document.documentElement;
-    stages = Array.from(stages);
-    const byLang = { ar: stages.find((s) => s.id === 'hero-stage-ar'), en: stages.find((s) => s.id === 'hero-stage-en') };
-    const debug = /[?&]debug3d=1\b/.test(location.search);
-    const fine = matchMedia('(pointer: fine)').matches;
-
+export async function createHero(ctx) {
+    const stage = ctx.el;
+    const canvas = ctx.canvas;
+    const fine = ctx.fine;
     const S = {
-        lang: langOf(), stage: null, art: null, dm: null, data: null, sign: 1,
-        profile: options.lite ? 'lite' : 'full',
-        dpr: Math.min(window.devicePixelRatio || 1, MAX_DPR),
-        tokens: readTokens(), bubbles: [], cycle: [],
-        T: 0, prev: 0, raf: 0, paused: false, inView: true, asleep: false, dead: false, active: performance.now(),
-        px: 0, py: 0, moved: false, scrollY: window.scrollY, p: 0, heroEnd: 1, cam: [0, 0], hover: -1,
-        card: null, target: [0, 0], dive: [0, 0], grow: 1, sway: 1, ready: false,
-        lastDeliver: -1, ms: [], level: 0, median: 0, frames: 0, fontFamily: '',
+        lang: stage.id.endsWith('-en') ? 'en' : 'ar', stage, art: stage.querySelector('.artifact'),
+        dm: stage.querySelector('.artifact .bubble'), data: null, sign: getComputedStyle(stage).direction === 'rtl' ? -1 : 1,
+        profile: ctx.profile, dpr: ctx.dpr, tokens: ctx.tokens, bubbles: [], cycle: [],
+        p: 0, heroEnd: 1, cam: [0, 0], hover: -1, card: null, target: [0, 0], dive: [0, 0], grow: 1, sway: 1,
+        lastDeliver: -1, fontFamily: '',
     };
-
-    // ── The renderer. A software or otherwise slow context throws here, and the poster stays. ──────────────────
-    const renderer = new WebGLRenderer({
-        alpha: true,
-        antialias: (window.devicePixelRatio || 1) < 2,
-        powerPreference: 'low-power',
-        failIfMajorPerformanceCaveat: true,
-    });
-    renderer.outputColorSpace = SRGBColorSpace;
-    renderer.setClearColor(0x000000, 0);
-    renderer.setPixelRatio(S.dpr);
-    const canvas = renderer.domElement;
-    canvas.className = 'stage-canvas';
-    canvas.setAttribute('aria-hidden', 'true');
+    S.data = JSON.parse(stage.getAttribute('data-hero3d'));
+    S.fontFamily = getComputedStyle(stage.querySelector('.said') || stage).fontFamily;
+    if (!S.art || !S.dm || !Array.isArray(S.data.comments) || !S.data.comments.length) throw new Error('hero stage is incomplete');
 
     const scene = new Scene();
     scene.fog = new Fog(0x000000, FOG.near, FOG.far);
@@ -110,29 +66,6 @@ export async function mount(stages, options = {}) {
         sweepLtr: new PlaneGeometry(1, 1).translate(0.5, 0, 0),
         sweepRtl: new PlaneGeometry(1, 1).translate(-0.5, 0, 0),
     };
-
-    const glyphs = {};
-    const glyphOf = (p) => {
-        if (!(p in glyphs)) {
-            const d = document.querySelector(`#plogo-${p} path`)?.getAttribute('d');
-            glyphs[p] = d ? new Path2D(d) : null;
-        }
-        return glyphs[p];
-    };
-
-    // ── Which stage, and what is on it ───────────────────────────────────────────────────────────────────────
-    function pickStage() {
-        S.lang = langOf();
-        S.stage = byLang[S.lang];
-        if (!S.stage) throw new Error('no hero stage for ' + S.lang);
-        S.art = S.stage.querySelector('.artifact');
-        S.dm = S.stage.querySelector('.artifact .bubble');
-        S.data = JSON.parse(S.stage.getAttribute('data-hero3d'));
-        S.sign = getComputedStyle(S.stage).direction === 'rtl' ? -1 : 1;
-        const said = S.stage.querySelector('.said');
-        S.fontFamily = getComputedStyle(said || S.stage).fontFamily;
-        if (!S.art || !S.dm || !Array.isArray(S.data.comments) || !S.data.comments.length) throw new Error('hero stage is incomplete');
-    }
 
     // ── Bubbles ──────────────────────────────────────────────────────────────────────────────────────────────
     function disposeBubble(b) {
@@ -213,7 +146,7 @@ export async function mount(stages, options = {}) {
 
             // The platform's mark first, at the reading start, then the words.
             const gx = rtl ? NOM_W - PAD - GLYPH : PAD;
-            const g = glyphOf(b.c.p);
+            const g = glyphPath(b.c.p);
             if (g) {
                 ctx.save();
                 ctx.translate(gx, (NOM_H - GLYPH) / 2);
@@ -363,13 +296,6 @@ export async function mount(stages, options = {}) {
         return true;
     }
 
-    function size() {
-        const w = canvas.clientWidth, h = canvas.clientHeight;
-        if (!w || !h) return false;
-        renderer.setSize(w, h, false);
-        return layout();
-    }
-
     // ── One frame ────────────────────────────────────────────────────────────────────────────────────────────
     const tmp = [0, 0, 0];
     const driftAt = (b, T, out) => {
@@ -381,18 +307,18 @@ export async function mount(stages, options = {}) {
     };
     const p0 = [0, 0, 0], p1 = [0, 0, 0], p2 = [0, 0, 0], p3 = [0, 0, 0];
 
-    function update(T, dt) {
+    function update(T, dt, input) {
         const { k, u } = loopAt(T);
         const focus = S.cycle.length ? S.cycle[k % S.cycle.length] : null;
 
         // Camera: a pointer moves it a little, damped, always looking at the card's plane, so the bubbles behind it
         // shift past the card and the card itself does not move. Scroll tilts it.
         const follow = 1 - Math.pow(1 - 0.08, dt * 60);
-        const tx = fine ? clamp((S.px / innerWidth) * 2 - 1, -1, 1) * 0.35 : 0;
-        const ty = fine ? -clamp((S.py / innerHeight) * 2 - 1, -1, 1) * 0.35 : 0;
+        const tx = fine ? clamp((input.px / innerWidth) * 2 - 1, -1, 1) * 0.35 : 0;
+        const ty = fine ? -clamp((input.py / innerHeight) * 2 - 1, -1, 1) * 0.35 : 0;
         S.cam[0] += (tx - S.cam[0]) * follow;
         S.cam[1] += (ty - S.cam[1]) * follow;
-        S.p = clamp(S.scrollY / S.heroEnd, 0, 1);
+        S.p = clamp(input.scrollY / S.heroEnd, 0, 1);
         // Scrolling tilts the scene, and a tilt moves the deep bubbles most. Past the first eighth of the hero they fade, gone
         // by 40 %, so none is ever seen cut off by the canvas's edge, and a hero that is leaving costs nothing to draw.
         const away = 1 - (S.p <= 0.12 ? 0 : S.p >= 0.4 ? 1 : ((t) => t * t * (3 - 2 * t))((S.p - 0.12) / 0.28));
@@ -400,10 +326,10 @@ export async function mount(stages, options = {}) {
         camera.lookAt(0, 0, 0);
         world.rotation.x = 0.12 * S.p;
 
-        if (S.moved && fine) {
-            S.moved = false;
+        if (input.moved && fine) {
+            input.moved = false;
             const cr = canvas.getBoundingClientRect();
-            ndc.set(((S.px - cr.left) / cr.width) * 2 - 1, -(((S.py - cr.top) / cr.height) * 2 - 1));
+            ndc.set(((input.px - cr.left) / cr.width) * 2 - 1, -(((input.py - cr.top) / cr.height) * 2 - 1));
             S.hover = -1;
             if (Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1) {
                 camera.updateMatrixWorld();
@@ -490,76 +416,8 @@ export async function mount(stages, options = {}) {
         if (delivered) S.stage.dispatchEvent(new CustomEvent('hero3d:deliver', { detail: { bubble: S.dm } }));
     }
 
-    function sample(dt) {
-        S.frames++;
-        if (S.frames <= WARMUP) return;
-        S.ms.push(dt * 1000);
-        if (S.ms.length < WINDOW) return;
-        S.median = median(S.ms);
-        S.ms.length = 0;
-        // The downgrade ladder: a median over 20 ms is under 50 fps. Cheaper pixels first, then fewer bubbles, then give up.
-        if (S.median <= 20) return;
-        if (S.level === 0 && S.dpr > 1) {
-            S.level = 1;
-            S.dpr = 1;
-            renderer.setPixelRatio(1);
-            size();
-            rebuild(false);
-        } else if (S.level < 2 && S.profile === 'full') {
-            S.level = 2;
-            S.profile = 'lite';
-            rebuild(true);
-        } else if (S.median > 24) {
-            fallback('slow: median ' + S.median.toFixed(1) + ' ms');
-        }
-    }
 
-    function rebuild(buildToo) {
-        if (buildToo) buildBubbles();
-        paintTextures();
-        layout();
-        S.cycle = S.bubbles.filter((b) => b.shown);
-    }
-
-    // ── The loop ─────────────────────────────────────────────────────────────────────────────────────────────
-    // `paused` is held only by seek(), the debug hook that draws a chosen moment: the visitor has no control over the scene (the
-    // opt-out is prefers-reduced-motion, which keeps it from starting and tears it down if it is switched on).
-    const running = () => !S.paused && S.inView && !document.hidden && !S.asleep && !S.dead;
-
-    function frame(now) {
-        S.raf = 0;
-        if (!running()) return;
-        if (now - S.active > SLEEP_MS) { S.asleep = true; return; }
-        const dt = Math.min((now - S.prev) / 1000, 0.1);
-        S.prev = now;
-        S.T += dt;
-        update(S.T, dt);
-        renderer.render(scene, camera);
-        sample(dt);
-        if (S.dead) return;
-        S.raf = requestAnimationFrame(frame);
-    }
-    function start() {
-        if (S.raf || !running()) return;
-        S.prev = performance.now();
-        S.raf = requestAnimationFrame(frame);
-    }
-    function poke() {
-        S.active = performance.now();
-        if (S.asleep) { S.asleep = false; start(); }
-    }
-
-    // ── Events ───────────────────────────────────────────────────────────────────────────────────────────────
-    const on = [];
-    const listen = (t, type, fn, opts) => { t.addEventListener(type, fn, opts); on.push(() => t.removeEventListener(type, fn, opts)); };
-    listen(window, 'pointermove', (e) => { S.px = e.clientX; S.py = e.clientY; S.moved = true; poke(); }, { passive: true });
-    listen(window, 'scroll', () => { S.scrollY = window.scrollY; poke(); }, { passive: true });
-    listen(window, 'keydown', poke, { passive: true });
-    listen(document, 'visibilitychange', () => { if (!document.hidden) start(); });
-    // A page that is going away for good takes its context with it now, not at garbage collection; one that is only
-    // being put in the back/forward cache (persisted) is left whole.
-    listen(window, 'pagehide', (e) => { if (!e.persisted) dispose(); });
-    listen(canvas, 'webglcontextlost', (e) => { e.preventDefault(); fallback('context lost'); });
+    // ── The card's receipt: the flying bubble arrived, so the card's own message bubble rings once ──────────────
     const deliver = () => {
         const el = S.dm;
         el.classList.remove('is-delivering');
@@ -567,175 +425,32 @@ export async function mount(stages, options = {}) {
         el.classList.add('is-delivering');
         setTimeout(() => el.classList.remove('is-delivering'), RECEIPT_MS);
     };
-    for (const s of stages) listen(s, 'hero3d:deliver', deliver);
+    stage.addEventListener('hero3d:deliver', deliver);
 
-    const ro = new ResizeObserver(() => { if (!S.dead && size()) { if (!S.raf) renderer.render(scene, camera); } });
-    const io = new IntersectionObserver((es) => {
-        S.inView = es[es.length - 1].isIntersecting;
-        if (S.inView) start();
-    });
-    const schemeMq = matchMedia('(prefers-color-scheme: light)');
-    const motionMq = matchMedia('(prefers-reduced-motion: reduce)');
-    const retheme = () => {
-        if (S.dead) return;
-        S.tokens = readTokens();
-        paintTextures();
-        if (!S.raf) renderer.render(scene, camera);
-    };
-    listen(schemeMq, 'change', () => requestAnimationFrame(retheme));
-    listen(motionMq, 'change', () => { if (motionMq.matches) fallback('reduced motion'); });
+    await loadFonts(S.fontFamily, S.data.comments.map((c) => c.t));
+    buildBubbles();
+    paintTextures();
 
-    // The page's language or theme changed. Nothing is done before the scene is up (the mount reads both when it
-    // paints), and a change that arrives while this runs is not lost: it runs again until the page and the scene agree.
-    let busy = false, again = false;
-    const mo = new MutationObserver(async () => {
-        if (S.dead || !S.ready) return;
-        if (busy) { again = true; return; }
-        busy = true;
-        try {
-            do {
-                again = false;
-                if (langOf() !== S.lang) await switchLang();
-                else retheme();
-            } while (again && !S.dead);
-        } catch (err) {
-            fallback('switch failed: ' + (err && err.message));
-        }
-        busy = false;
-    });
-    mo.observe(root, { attributes: true, attributeFilter: ['data-theme', 'data-lang'] });
-
-    async function fontsFor() {
-        await Promise.all(S.data.comments.map((c) => document.fonts.load(`600 22px ${S.fontFamily}`, c.t)));
-    }
-
-    function attach() {
-        const poster = S.stage.querySelector('.stage-poster');
-        S.stage.insertBefore(canvas, poster ? poster.nextSibling : S.stage.firstChild);
-        ro.disconnect();
-        io.disconnect();
-        ro.observe(S.stage);
-        io.observe(S.stage);
-    }
-
-    async function switchLang() {
-        const old = S.stage;
-        pickStage();
-        buildBubbles();
-        await fontsFor();
-        if (S.dead) return;
-        S.tokens = readTokens();
-        old.classList.remove('is-3d');
-        attach();
-        paintTextures();
-        if (size()) {
-            S.cycle = S.bubbles.filter((b) => b.shown);
-            update(S.T, 0.016);
-            renderer.render(scene, camera);
-            S.stage.classList.add('is-3d');
-        }
-        poke();
-        start();
-    }
-
-    // ── The ways out ─────────────────────────────────────────────────────────────────────────────────────────
-    function dispose() {
-        if (S.dead) return;
-        S.dead = true;
-        S.ready = false;
-        cancelAnimationFrame(S.raf);
-        for (const off of on) off();
-        ro.disconnect(); io.disconnect(); mo.disconnect();
-        for (const b of S.bubbles) disposeBubble(b);
-        for (const g of Object.values(geo)) g.dispose();
-        renderer.dispose();
-        renderer.forceContextLoss();
-        canvas.remove();
-        for (const s of stages) s.classList.remove('is-3d');
-        S.dm?.classList.remove('is-delivering');
-    }
-    function fallback(why) {
-        console.info('hero3d: poster, ' + why);
-        if (why !== 'context lost' && why !== 'reduced motion') {
-            try { sessionStorage.setItem('hero3d_off', '1'); } catch (e) { /* private mode */ }
-        }
-        dispose();
-    }
-
-    // ── Go ───────────────────────────────────────────────────────────────────────────────────────────────────
-    // Whatever goes wrong from here (a font that will not load, a stage with no size, a shader that will not compile, the
-    // page changing language or the visitor asking for less motion while this waits) disposes everything this call made,
-    // the canvas, the listeners, the observers and the renderer's context, and rethrows: the loader keeps the poster.
-    const alive = () => {
-        if (S.dead) throw new Error('disposed while mounting');
-    };
-    try {
-        pickStage();
-        buildBubbles();
-        await fontsFor();
-        alive();
-        // The page may have changed language while the fonts loaded: build for the one it is in now.
-        while (langOf() !== S.lang) {
-            pickStage();
+    return {
+        scene, camera, debug: S,
+        resize() { layout(); },
+        update,
+        retheme() { S.tokens = ctx.tokens; paintTextures(); },
+        repaint() { S.dpr = ctx.dpr; S.tokens = ctx.tokens; paintTextures(); layout(); },
+        setProfile(profile) {
+            S.profile = profile;
+            S.dpr = ctx.dpr;
+            S.tokens = ctx.tokens;
             buildBubbles();
-            await fontsFor();
-            alive();
-        }
-        S.tokens = readTokens();
-        attach();
-        paintTextures();
-        if (!size()) throw new Error('the stage has no size');
-        S.cycle = S.bubbles.filter((b) => b.shown);
-        update(0, 0.016);
-        await renderer.compileAsync(scene, camera);
-        alive();
-        if (motionMq.matches) throw new Error('reduced motion');
-        renderer.render(scene, camera);
-        S.stage.classList.add('is-3d');
-        S.ready = true;
-        // ...or while the shaders compiled: switch now, the way a later change would.
-        if (langOf() !== S.lang) await switchLang();
-        alive();
-        start();
-    } catch (err) {
-        dispose();
-        throw err;
-    }
-
-    const api = {
-        dispose,
-        stats() {
-            const i = renderer.info;
-            return {
-                profile: S.profile, dpr: S.dpr, lang: S.lang, bubbles: S.bubbles.filter((b) => b.shown).length,
-                calls: i.render.calls, triangles: i.render.triangles, textures: i.memory.textures,
-                geometries: i.memory.geometries, median: S.median, frames: S.frames, T: S.T,
-                canvas: [canvas.width, canvas.height], running: !!S.raf, paused: S.paused, asleep: S.asleep, dead: S.dead,
-            };
+            paintTextures();
+            layout();
+        },
+        dispose() {
+            stage.removeEventListener('hero3d:deliver', deliver);
+            stage.classList.remove('is-3d');
+            S.dm?.classList.remove('is-delivering');
+            for (const b of S.bubbles) disposeBubble(b);
+            for (const g of Object.values(geo)) g.dispose();
         },
     };
-    if (debug) {
-        window.__hero3d = {
-            ...api,
-            /** Render the scene at an absolute time, paused: for screenshots and the budget check. */
-            seek(T) {
-                S.paused = true;
-                cancelAnimationFrame(S.raf);
-                S.raf = 0;
-                S.T = T;
-                update(T, 0.016);
-                renderer.render(scene, camera);
-                return api.stats();
-            },
-            /** Let a scene held by seek() run again. */
-            resume() {
-                S.paused = false;
-                poke();
-                start();
-            },
-            state: S,
-            camera,
-        };
-    }
-    return api;
 }
