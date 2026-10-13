@@ -10,6 +10,19 @@
  * fixture, the English halves of bilingual builders, and the starter defaults a new tenant gets. It
  * is meant to change as defaults go neutral.
  *
+ * Path (b), "through the profile" (01 §5): every builder that reads the owner's settings is also handed
+ * `studioView(scramble(fixture), profile)`, the stored row with every profile-owned field overwritten by
+ * junk and then read back from the owner's profile, `profileFromLegacy(fixture, growth)` after the trip a
+ * stored profile makes: serialised, its keys reordered the way Postgres does, and read through
+ * `upgradeProfile`. It must write the same bytes into the same goldens: that is what lets P4 return the
+ * view from the readers without a prompt moving. The growth goldens take their audience and goals the same
+ * way. Anything the profile failed to carry would show here as junk in a prompt. Under UPDATE_GOLDEN=1 the
+ * two paths must also agree before a file is written (golden.ts refuses to write one file twice with
+ * different bytes), so regenerating cannot hide a disagreement.
+ *
+ * The DM instruction has no path (b): its knowledge base is an agent setting, not a profile field, and the
+ * DM path reads nothing else from the profile until P8 gives it a profile context.
+ *
  * Nothing here depends on the clock or on chance: the builders take their dates as parameters
  * (`runCoach`'s `now`) or embed none, and every input is a fixed fixture.
  *
@@ -47,21 +60,59 @@ import {
     languageKit, LANGUAGES, planUserPrompt, saveLine, tiktokLine,
 } from '../studio/prompts.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
+import type { GrowthSettings } from '../../db/rows.js';
 import {
     ELAMIR_AGENT, ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SEO, ELAMIR_SETTINGS, ENGLISH_SETTINGS, GOLDEN_CLIPS,
     GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_LINES, GOLDEN_REEL_EVIDENCE, GOLDEN_REELS, GOLDEN_SOURCES, GOLDEN_UNINDEXED_LESSON,
 } from '../studio/testFixtures.js';
 import { videoResource } from '../youtube.js';
 import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from './golden.js';
+import { upgradeProfile } from './defaults.js';
+import { profileFromLegacy } from './legacy.js';
+import { scramble, throughJsonb } from './testSupport.js';
+import type { CreatorProfile } from './types.js';
+import { GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
 
 // ─── The fixtures under test ────────────────────────────────────────────────────────────────
 
-type Variant = { slug: 'elamir' | 'seed' | 'english'; settings: StudioSettings; set: GoldenSet; lang: 'ar' | 'en' };
-const VARIANTS: readonly Variant[] = [
-    { slug: 'elamir', settings: ELAMIR_SETTINGS, set: 'elamir', lang: 'ar' },
-    { slug: 'seed', settings: ELAMIR_SEED_SETTINGS, set: 'elamir', lang: 'ar' },
-    { slug: 'english', settings: ENGLISH_SETTINGS, set: 'control', lang: 'en' },
-];
+/**
+ * A tenant's profile as P4 will read it: described from its rows (`profileFromLegacy`), then stored and read
+ * back. JSONB hands the keys back sorted by length and then bytes, whatever order they were written in, so a
+ * reader that only works on the order a profile was built in works here and fails in production.
+ */
+const storedProfile = (settings: StudioSettings, growth?: GrowthSettings): CreatorProfile => {
+    const { profile, repaired, newerSchema } = upgradeProfile(throughJsonb(profileFromLegacy(settings, growth)));
+    assert.deepStrictEqual(repaired, [], 'a profile this release wrote has nothing to repair');
+    assert.equal(newerSchema, false);
+    return profile;
+};
+
+/**
+ * Path (b): `settings` as the profile gives them back. The row is scrambled first, so nothing survives
+ * from it that the profile does not own. The owner's fixtures also bring his Growth settings, the other
+ * row his profile is read from.
+ */
+const through = (settings: StudioSettings, owner: boolean): StudioSettings => studioView(
+    scramble(settings, STUDIO_PROFILE_PATHS),
+    storedProfile(settings, owner ? ELAMIR_GROWTH : undefined),
+);
+
+type Variant = {
+    slug: 'elamir' | 'seed' | 'english'; settings: StudioSettings; set: GoldenSet; lang: 'ar' | 'en';
+    /** How the builder is handed the settings: as they are, or as the owner's profile gives them back. */
+    via: 'today' | 'profile';
+};
+const FIXTURES = [
+    { slug: 'elamir', settings: ELAMIR_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
+    { slug: 'seed', settings: ELAMIR_SEED_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
+    { slug: 'english', settings: ENGLISH_SETTINGS, set: 'control', lang: 'en', owner: false },
+] as const;
+/** Each fixture twice, into the same golden: once as it is, once through the profile. */
+const VARIANTS: readonly Variant[] = FIXTURES.flatMap((f): Variant[] => [
+    { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today' },
+    { slug: f.slug, settings: through(f.settings, f.owner), set: f.set, lang: f.lang, via: 'profile' },
+]);
+const describeVariant = (v: Variant): string => `${v.slug} settings${v.via === 'profile' ? ', through the profile' : ''}`;
 /** `<name>.<fixture>`: the owner's two fixtures in his set, the English control in its own. */
 const text = (v: Variant, name: string, actual: string): void => matchGolden(`${name}.${v.slug}`, actual, v.set);
 const json = (v: Variant, name: string, value: unknown): void => matchGoldenJson(`${name}.${v.slug}`, value, v.set);
@@ -154,9 +205,9 @@ describe('DM and comment golden prompts', () => {
         matchGolden('dm.starter-persona', STARTER_PERSONA, 'control');
     });
 
-    it('dmFallbackReply: the public reply that replaces an undeliverable DM, every variant', () => {
-        const ownerDm = buildDm(ELAMIR_SETTINGS.cta.dmTemplate, {
-            question: SAY.ar.question, pitch: SAY.ar.pitch, url: ELAMIR_SETTINGS.product.url, bullets: ELAMIR_SETTINGS.product.dmBullets,
+    for (const [via, owner] of [['today', ELAMIR_SETTINGS], ['through the profile', through(ELAMIR_SETTINGS, true)]] as const) it(`dmFallbackReply: the public reply that replaces an undeliverable DM, every variant (${via})`, () => {
+        const ownerDm = buildDm(owner.cta.dmTemplate, {
+            question: SAY.ar.question, pitch: SAY.ar.pitch, url: owner.product.url, bullets: owner.product.dmBullets,
         });
         const englishDm = 'Hi {username} 👋 Here is the full guide: https://example.com/guide?ref=a.';
         const cases = [
@@ -195,7 +246,7 @@ describe('Studio golden prompts', () => {
     });
 
     for (const v of VARIANTS) {
-        describe(`${v.slug} settings`, () => {
+        describe(describeVariant(v), () => {
             const say = SAY[v.lang];
 
             it('buildSystemPrompt: the writer\'s system prompt', () => {
@@ -282,7 +333,7 @@ describe('Monteur golden prompts', () => {
     });
 
     for (const v of VARIANTS) {
-        describe(`${v.slug} settings`, () => {
+        describe(describeVariant(v), () => {
             const say = SAY[v.lang];
 
             it('pickSystemPrompt and pickUserPrompt', () => {
@@ -336,20 +387,22 @@ describe('Infographic golden prompts', () => {
         matchGolden('infographic.system.en', writeSystemPrompt('en'), 'control');
     });
 
-    it('renderPayload: the job the Mac gets in write mode, assembled from his seed settings', () => {
-        // The call site itself, not a copy of it: brand, system prompt, user prompt (with his never-use
-        // list from voice.avoid) and schema. spec = null is write mode, which is how a new one starts.
-        const job = (language: 'ar' | 'en', notes: string | null) => infographicRenderPayload(
-            '00000000-0000-4000-8000-0000000000aa', { topic: 'RAG vs CAG vs KAG', notes, language },
-            ELAMIR_SEED_SETTINGS.infographic.theme, ELAMIR_SEED_SETTINGS, null,
-        );
-        matchGoldenJson('infographic.render-payload.seed.ar', job('ar', 'ركّز على التكلفة وسرعة الاستجابة'));
-        matchGoldenJson('infographic.render-payload.seed.en', job('en', null), 'control');
-    });
+    for (const [via, seed] of [['today', ELAMIR_SEED_SETTINGS], ['through the profile', through(ELAMIR_SEED_SETTINGS, true)]] as const) {
+        it(`renderPayload: the job the Mac gets in write mode, assembled from his seed settings (${via})`, () => {
+            // The call site itself, not a copy of it: brand, system prompt, user prompt (with his never-use
+            // list from voice.avoid) and schema. spec = null is write mode, which is how a new one starts.
+            const job = (language: 'ar' | 'en', notes: string | null) => infographicRenderPayload(
+                '00000000-0000-4000-8000-0000000000aa', { topic: 'RAG vs CAG vs KAG', notes, language },
+                seed.infographic.theme, seed, null,
+            );
+            matchGoldenJson('infographic.render-payload.seed.ar', job('ar', 'ركّز على التكلفة وسرعة الاستجابة'));
+            matchGoldenJson('infographic.render-payload.seed.en', job('en', null), 'control');
+        });
 
-    it('payloadBrand: the personal brand the worker draws, from the seed\'s infographic section', () => {
-        matchGoldenJson('infographic.brand.seed', payloadBrand(ELAMIR_SEED_SETTINGS.infographic));
-    });
+        it(`payloadBrand: the personal brand the worker draws, from the seed's infographic section (${via})`, () => {
+            matchGoldenJson('infographic.brand.seed', payloadBrand(seed.infographic));
+        });
+    }
 
     it('WRITE_SCHEMA: what Claude answers an infographic with', () => {
         matchGoldenJson('infographic.write-schema', WRITE_SCHEMA);
@@ -399,16 +452,28 @@ describe('Growth coach golden prompts', () => {
         { platform: 'instagram', day: '2026-10-12', metrics: { reach_followers: 300, reach_non_followers: 4100, followers: 8412 } },
     ];
 
-    /** His rows, as the database would hand them to the Growth readers and to the Studio settings behind `tenantLanguage`. */
-    const mockDatabase = (): void => {
+    /**
+     * His rows as the Growth readers and the Studio settings behind `tenantLanguage` read them: as they are
+     * (path a), or as the profile gives them back from a scrambled row (path b).
+     */
+    type Rows = { growth: GrowthSettings; studio: StudioSettings };
+    const TODAY: Rows = { growth: ELAMIR_GROWTH, studio: ELAMIR_SEED_SETTINGS };
+    const profile = storedProfile(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+    const THROUGH_THE_PROFILE: Rows = {
+        growth: growthView(scramble(ELAMIR_GROWTH, GROWTH_PROFILE_PATHS), profile),
+        studio: studioView(scramble(ELAMIR_SEED_SETTINGS, STUDIO_PROFILE_PATHS), profile),
+    };
+    const PATHS = [['today', TODAY], ['through the profile', THROUGH_THE_PROFILE]] as const;
+
+    const mockDatabase = (rows: Rows = TODAY): void => {
         (pool as any).query = async (sql: string) => {
             const q = sql.replace(/\s+/g, ' ');
             if (/FROM post_insights/.test(q)) return { rows: POSTS };
             if (/DISTINCT ON \(platform\)/.test(q)) return { rows: [{ platform: 'instagram', followers: 8412 }] };
             if (/FROM account_insights_daily/.test(q)) return { rows: DAYS };
             if (/SELECT last_sync FROM growth_settings/.test(q)) return { rows: [] };
-            if (/FROM growth_settings/.test(q)) return { rows: [{ ...ELAMIR_GROWTH }] };
-            if (/FROM studio_settings/.test(q)) return { rows: [{ ...ELAMIR_SEED_SETTINGS }] };
+            if (/FROM growth_settings/.test(q)) return { rows: [{ ...rows.growth }] };
+            if (/FROM studio_settings/.test(q)) return { rows: [{ ...rows.studio }] };
             return { rows: [] };
         };
     };
@@ -419,8 +484,8 @@ describe('Growth coach golden prompts', () => {
         matchGoldenJson('growth.coach-schema', COACH_SCHEMA);
     });
 
-    it('suggestKeywords: the system prompt and the turn it sends for his Growth settings and language', async () => {
-        mockDatabase();
+    for (const [via, rows] of PATHS) it(`suggestKeywords: the system prompt and the turn it sends for his Growth settings and language (${via})`, async () => {
+        mockDatabase(rows);
         const requests: ModelRequest[] = [];
         const call: CallModel = async (req) => {
             requests.push(req);
@@ -435,8 +500,8 @@ describe('Growth coach golden prompts', () => {
         matchGoldenJson('growth.keywords-schema', KEYWORDS_SCHEMA);
     });
 
-    it('runCoach: the system prompt and the numbers it sends for his Growth settings, timezone and language', async () => {
-        mockDatabase();
+    for (const [via, rows] of PATHS) it(`runCoach: the system prompt and the numbers it sends for his Growth settings, timezone and language (${via})`, async () => {
+        mockDatabase(rows);
         const requests: ModelRequest[] = [];
         const call: CallModel = async (req) => {
             requests.push(req);
@@ -503,6 +568,19 @@ describe('Campaign golden seeds', () => {
 });
 
 // ─── The net itself ─────────────────────────────────────────────────────────────────────────
+
+describe('the owner\'s profile survives storage', () => {
+    it('serialised and reordered like jsonb, it reads back as it was described, with nothing repaired', () => {
+        for (const [settings, growth] of [[ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH], [ELAMIR_SETTINGS, ELAMIR_GROWTH], [ENGLISH_SETTINGS, undefined]] as const) {
+            const described = profileFromLegacy(settings, growth);
+            const stored = throughJsonb(described);
+            assert.notEqual(JSON.stringify(stored), JSON.stringify(described), 'the keys really were reordered');
+            const out = upgradeProfile(stored);
+            assert.deepStrictEqual(out.profile, described);
+            assert.deepStrictEqual(out.repaired, []);
+        }
+    });
+});
 
 describe('the golden files', () => {
     // A name filter skips tests, so their files would look unchecked.
