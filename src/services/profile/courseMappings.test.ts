@@ -1,15 +1,20 @@
 /**
- * The owner's nine `COURSE_MAPPINGS` (dashboard/js/pages/campaigns.js) as the `campaign` of his offers
- * (01 §1, 05 P13): each becomes one offer's campaign and comes back as the same mapping, byte for byte,
- * and the bulk import's rule (the first key in order that the course name contains) picks the same one.
+ * The owner's nine `COURSE_MAPPINGS` as the `campaign` of his offers (01 §1, 05 P13): each becomes one offer's
+ * campaign and comes back as the same mapping, byte for byte, and the bulk import's rule (the first key in order
+ * that the course name contains) picks the same one.
  *
- * The page is the REAL shipped file, run in a bare context (testSupport.ts), so a tenth mapping, a changed
- * separator or a reordered key fails here and not in the owner's next import.
+ * The nine are the table the dashboard carried until P13 (now `legacyCourseMappings.ts`, pinned by the golden). This file builds the
+ * offers its own way (`toCampaign`, an independent reading of the two separators), so that the ones `planOwnerOffers` makes for
+ * the seed script (ownerOffers.test.ts) are held against a second author. The page is the REAL shipped file, run in a bare
+ * context (testSupport.ts), handed the seeds `campaignSeeds` makes from those offers, so a tenth mapping, a changed separator
+ * or a reordered key fails here and not in the owner's next import.
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
+import { campaignSeeds } from './campaignSeeds.js';
 import { profileFromLegacy } from './legacy.js';
+import { LEGACY_COURSE_MAPPINGS } from './legacyCourseMappings.js';
 import { inside, loadCampaignsPage } from './testSupport.js';
 import type { CreatorProfile, Offer, OfferCampaign } from './types.js';
 import { validateProfile } from './validate.js';
@@ -32,7 +37,8 @@ const toMapping = (c: OfferCampaign): [string, Mapping] => [
 ];
 
 const page = loadCampaignsPage();
-const MAPPINGS: Record<string, Mapping> = inside(page, 'CampaignsPage.COURSE_MAPPINGS');
+// A plain, mutable copy: the constant is frozen, and its key order is the point.
+const MAPPINGS: Record<string, Mapping> = JSON.parse(JSON.stringify(LEGACY_COURSE_MAPPINGS));
 const ENTRIES = Object.entries(MAPPINGS);
 
 /** The owner with nine courses: the Agentic AI course is his primary offer, the others follow in the mappings' order. */
@@ -46,7 +52,8 @@ function ownerWithNineCourses(): CreatorProfile {
 }
 
 describe('the owner\'s nine COURSE_MAPPINGS as offers[].campaign', () => {
-    it('are nine, and the shipped page has no more', () => {
+    it('are nine, and the shipped page carries none: it asks the API for them', () => {
+        assert.equal(inside(page, 'typeof CampaignsPage.COURSE_MAPPINGS'), 'undefined');
         assert.equal(ENTRIES.length, 9);
         assert.deepStrictEqual(Object.keys(MAPPINGS), ['agentic ai', 'golang', 'swift', 'css3', 'html5', 'problem solving', 'java', 'python', 'c#']);
     });
@@ -104,7 +111,10 @@ describe('the owner\'s nine COURSE_MAPPINGS as offers[].campaign', () => {
             'Java for Beginners [in Arabic]', 'Python For Beginners [in Arabic]', 'C# For Beginners [in Arabic]', 'Rust Systems Programming [in Arabic] - Part 1',
         ];
         const courses = names.map((name, i) => course(i + 1, name));
-        const shipped = inside(page, `(CampaignsPage.showBulkImportModal(${JSON.stringify(courses)}), CampaignsPage.pendingImport)`) as {
+        // What the API answers for these offers, and what the page does with it.
+        const seeds = campaignSeeds({ offers });
+        assert.equal(seeds.length, 9);
+        const shipped = inside(page, `(CampaignsPage.showBulkImportModal(${JSON.stringify(courses)}, ${JSON.stringify(seeds)}), CampaignsPage.pendingImport)`) as {
             triggerKeywords: string; dmTemplate: string; publicReplies: string; matched: boolean;
         }[];
         assert.equal(shipped.length, 10);

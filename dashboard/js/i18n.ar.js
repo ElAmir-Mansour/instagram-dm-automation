@@ -397,6 +397,7 @@
     'campaigns.bulk.emptyCsv': 'الملف فارغ أو غير صالح.',
     'campaigns.bulk.noCourses': 'لم يُعثر على كورسات صالحة في الملف.',
     'campaigns.bulk.parseError': 'خطأ في قراءة الملف: {message}',
+    'campaigns.bulk.seedsFailed': 'تعذّر تحميل الكلمات والرسائل الجاهزة، فلم يُستورد شيء. حاول مرة أخرى.',
     'campaigns.bulk.selectRow': 'تضمين هذا الكورس',
     // Rows the CSV parser dropped silently before — too few columns, or
     // no course id — now counted and named instead of just vanishing.
@@ -590,10 +591,10 @@
     'ai.enableLabel': 'تشغيل الردّ الآلي',
     'ai.systemPrompt': 'الشخصية والتعليمات',
     'ai.systemPromptDesc': 'من هو الوكيل، وكيف يتحدث، وما الذي يلتزم به مع العملاء.',
-    'ai.systemPromptPlaceholder': 'مثال: أنت مساعد ذكي للأستاذ الأمير منصور…',
+    'ai.systemPromptPlaceholder': 'مثال: أنت مساعد ذكي لصاحب هذا الحساب…',
     'ai.knowledge': 'قاعدة المعرفة والأسئلة الشائعة',
     'ai.knowledgeDesc': 'روابط الكورسات وأسماء المنتجات والأسعار وإجابات الأسئلة المتكررة.',
-    'ai.knowledgePlaceholder': 'مثال: كورسات يوديمي المتاحة…',
+    'ai.knowledgePlaceholder': 'مثال: العروض التي تبيعها مع روابطها وأسعارها…',
     'ai.model': 'النموذج',
     'ai.temperature': 'درجة الإبداع: {value}',
     'ai.sandboxTitle': 'اختبار الوكيل',
