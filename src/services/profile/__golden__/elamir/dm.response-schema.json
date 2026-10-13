@@ -1,0 +1,97 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "message_type": {
+      "type": "STRING",
+      "enum": [
+        "text",
+        "quick_reply",
+        "carousel"
+      ]
+    },
+    "text": {
+      "type": "STRING",
+      "description": "Conversational text response or prompt accompanying the buttons/carousel. Must be written in Arabic if appropriate."
+    },
+    "quick_replies": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "title": {
+            "type": "STRING",
+            "description": "Label of the button. MAX 20 characters."
+          },
+          "payload": {
+            "type": "STRING",
+            "description": "Programmatic payload returned on click, e.g., GO_TO_COURSE_1."
+          }
+        },
+        "required": [
+          "title",
+          "payload"
+        ]
+      },
+      "description": "A list of quick action buttons (maximum 13)."
+    },
+    "carousel_elements": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "title": {
+            "type": "STRING",
+            "description": "Title of the carousel card. MAX 80 characters."
+          },
+          "subtitle": {
+            "type": "STRING",
+            "description": "Subtitle of the carousel card. MAX 80 characters."
+          },
+          "image_url": {
+            "type": "STRING",
+            "description": "Public URL of the image to display."
+          },
+          "buttons": {
+            "type": "ARRAY",
+            "items": {
+              "type": "OBJECT",
+              "properties": {
+                "type": {
+                  "type": "STRING",
+                  "enum": [
+                    "web_url",
+                    "postback"
+                  ]
+                },
+                "title": {
+                  "type": "STRING",
+                  "description": "Button text. MAX 20 characters."
+                },
+                "url": {
+                  "type": "STRING",
+                  "description": "URL for web_url buttons."
+                },
+                "payload": {
+                  "type": "STRING",
+                  "description": "Payload for postback buttons."
+                }
+              },
+              "required": [
+                "type",
+                "title"
+              ]
+            }
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "description": "Swipeable cards. Specify between 2 and 10 cards."
+    }
+  },
+  "required": [
+    "message_type",
+    "text"
+  ]
+}

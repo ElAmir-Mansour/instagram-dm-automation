@@ -1,0 +1,16 @@
+{
+  "ask": "Want the link? Comment «{keyword}» and I'll DM it to you 📩",
+  "copy": {
+    "caption": "Your private files never leave your laptop\n\nA model that runs offline and answers from your own files\nSend this to the friend who worries about their files\n\nWant the link? Comment «local» and I'll DM it to you 📩\n\n#AI #LMStudio",
+    "tiktok_caption": "Your private files never leave your laptop\n\nA step by step guide to running a local model on your laptop.\n\n🔗 The full course is in my bio\n\n#AI #LMStudio #LearnOnTikTok",
+    "hashtags": [
+      "AI",
+      "LMStudio"
+    ],
+    "keyword": "local",
+    "variants": [],
+    "keyword_create": true,
+    "dm": "Hi {username} 👋\n\nWant to try this yourself, step by step? 👀\n\nI walk through it step by step in the course.\n\nhttps://example.com/spreadsheets?ref=studio\n\n✅ 12 lessons · 3 hours of video\n✅ Lifetime access\n\nAny questions? Just reply to this message.",
+    "alt_text": "A speaker explains how an AI model runs without the internet"
+  }
+}

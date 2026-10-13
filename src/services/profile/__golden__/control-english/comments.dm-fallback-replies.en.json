@@ -1,0 +1,20 @@
+[
+  {
+    "name": "english, instagram",
+    "isFacebook": false,
+    "dmText": "Hi {username} 👋 Here is the full guide: https://example.com/guide?ref=a.",
+    "reply": "We couldn't message you privately 🙏 The link is in our bio 🔗"
+  },
+  {
+    "name": "english, facebook, the DM holds a link",
+    "isFacebook": true,
+    "dmText": "Hi {username} 👋 Here is the full guide: https://example.com/guide?ref=a.",
+    "reply": "We couldn't message you privately 🙏 Here's the link: https://example.com/guide?ref=a"
+  },
+  {
+    "name": "english, facebook, no link in the DM",
+    "isFacebook": true,
+    "dmText": "Hi {username} 👋 Reply to this message for the details",
+    "reply": "We couldn't message you privately 🙏 Send us a message and we'll share the details."
+  }
+]

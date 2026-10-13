@@ -1,0 +1,70 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "proposals": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "lessons": {
+            "type": "ARRAY",
+            "items": {
+              "type": "STRING"
+            },
+            "maxItems": 3,
+            "description": "lesson ids from the list, e.g. L2"
+          },
+          "angle": {
+            "type": "STRING",
+            "enum": [
+              "tips",
+              "steps",
+              "mistakes",
+              "compare",
+              "prompt",
+              "overview"
+            ]
+          },
+          "title": {
+            "type": "STRING",
+            "description": "the working hook, ≤ 60 characters"
+          },
+          "idea": {
+            "type": "STRING",
+            "description": "one line: what the post teaches"
+          },
+          "rationale": {
+            "type": "STRING",
+            "description": "one or two English sentences"
+          },
+          "slides": {
+            "type": "INTEGER",
+            "description": "6–10"
+          }
+        },
+        "required": [
+          "lessons",
+          "angle",
+          "title",
+          "idea",
+          "rationale",
+          "slides"
+        ],
+        "propertyOrdering": [
+          "lessons",
+          "angle",
+          "title",
+          "idea",
+          "rationale",
+          "slides"
+        ]
+      }
+    }
+  },
+  "required": [
+    "proposals"
+  ],
+  "propertyOrdering": [
+    "proposals"
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "clips": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "clip": {
+            "type": "INTEGER",
+            "description": "the clip's number, [n]"
+          },
+          "first_line": {
+            "type": "STRING",
+            "description": "at most 60 characters"
+          },
+          "body": {
+            "type": "STRING",
+            "description": "1–3 short lines"
+          },
+          "ask_line": {
+            "type": "STRING",
+            "description": "a question, then «{keyword}»"
+          },
+          "tiktok_body": {
+            "type": "STRING",
+            "description": "one descriptive sentence"
+          },
+          "hashtags": {
+            "type": "ARRAY",
+            "items": {
+              "type": "STRING"
+            },
+            "description": "3–5, without #"
+          },
+          "keyword_candidates": {
+            "type": "ARRAY",
+            "items": {
+              "type": "STRING"
+            },
+            "description": "3 single words of 4+ letters, best first"
+          },
+          "variants": {
+            "type": "ARRAY",
+            "items": {
+              "type": "STRING"
+            },
+            "description": "0–3 other spellings of the first candidate"
+          },
+          "question": {
+            "type": "STRING",
+            "description": "one line opening the DM"
+          },
+          "pitch": {
+            "type": "STRING",
+            "description": "one sentence"
+          },
+          "alt_text": {
+            "type": "STRING",
+            "description": "at most 2 sentences"
+          }
+        },
+        "required": [
+          "clip",
+          "first_line",
+          "body",
+          "ask_line",
+          "tiktok_body",
+          "hashtags",
+          "keyword_candidates",
+          "variants",
+          "question",
+          "pitch",
+          "alt_text"
+        ],
+        "propertyOrdering": [
+          "clip",
+          "first_line",
+          "body",
+          "ask_line",
+          "tiktok_body",
+          "hashtags",
+          "keyword_candidates",
+          "variants",
+          "question",
+          "pitch",
+          "alt_text"
+        ]
+      }
+    }
+  },
+  "required": [
+    "clips"
+  ],
+  "propertyOrdering": [
+    "clips"
+  ]
+}

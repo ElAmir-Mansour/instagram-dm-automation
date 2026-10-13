@@ -12,7 +12,7 @@ import {
     sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
     API_VERSION, MediaProcessingTimeoutError, resumeInstagramContainer,
 } from '../services/instagram.js';
-import { DEFAULT_MODEL, generateAiResponse, resolveModel, SUPPORTED_MODELS } from '../services/ai.js';
+import { DEFAULT_MODEL, generateAiResponse, resolveModel, STARTER_PERSONA, SUPPORTED_MODELS } from '../services/ai.js';
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
     assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache,
@@ -3290,7 +3290,7 @@ router.get('/settings/ai', async (req, res) => {
         const agentRes = await pool.query('SELECT * FROM ai_agents WHERE creator_id = $1', [creatorId]);
         if (agentRes.rows.length === 0) {
             res.json({
-                system_prompt: 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.',
+                system_prompt: STARTER_PERSONA,
                 knowledge_base: '',
                 model: DEFAULT_MODEL,
                 temperature: 0.7,
