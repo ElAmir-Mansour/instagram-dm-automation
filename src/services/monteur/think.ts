@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto';
 import { pool } from '../../config/db.js';
 import type { MonteurThinkPayload, StudioJobStatus } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
+import { toJsonSchema } from '../llm/geminiSchema.js';
 import { isFiniteNumber, isPlainObject } from '../studio/common.js';
 import type { GeminiSchema, ModelTurn } from '../studio/generate.js';
 import type { CallCost } from './model.js';
@@ -100,24 +101,9 @@ export const isThinkSignal = (err: unknown): err is ThinkWaiting | ThinkExhauste
 
 // ─── The payload ────────────────────────────────────────────────────────────────────────
 
-/**
- * Gemini's `responseSchema` as JSON Schema, for `claude --json-schema`: types lower-cased,
- * `propertyOrdering` dropped (Gemini's own), and every object closed with `additionalProperties:
- * false`. The array bounds go too, as they do for Gemini (`withoutArrayBounds`): structured output
- * refuses most of them, and the code that reads the answer enforces them anyway.
- */
-export function toJsonSchema(schema: GeminiSchema): Record<string, unknown> {
-    const out: Record<string, unknown> = { type: schema.type.toLowerCase() };
-    if (schema.description !== undefined) out.description = schema.description;
-    if (schema.enum) out.enum = [...schema.enum];
-    if (schema.items) out.items = toJsonSchema(schema.items);
-    if (schema.properties) {
-        out.properties = Object.fromEntries(Object.entries(schema.properties).map(([k, v]) => [k, toJsonSchema(v)]));
-    }
-    if (schema.required) out.required = [...schema.required];
-    if (schema.type === 'OBJECT') out.additionalProperties = false;
-    return out;
-}
+// `toJsonSchema` lives in `llm/geminiSchema.ts`, which depends on nothing (this module imports the
+// database), and is re-exported so every import path keeps working.
+export { toJsonSchema };
 
 /**
  * The turns as one prompt: `claude -p` reads a single one on stdin. A repair round (the pick's)
