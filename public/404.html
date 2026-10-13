@@ -39,8 +39,8 @@
     <meta name="robots" content="noindex">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111210">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4ee">
     <link rel="canonical" href="https://msg-response-auto.vercel.app/404">
     <meta property="og:title" content="الصفحة غير موجودة · Page not found — AutoReply Pro">
     <meta property="og:description" content="هذا الرابط لا يقود إلى صفحة في «أوتوريبلاي برو» — This address does not lead to a page on AutoReply Pro.">
@@ -57,7 +57,7 @@
          pinned to ASSET_VERSION in dashboard/js/app.js —
          scripts/check-asset-version.mjs enforces it for the pages in its
          SHARED_ASSET_PAGES list; add this one there. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.10">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.11">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -221,12 +221,12 @@
            Both have fallbacks, so the block still renders correctly on a page
            that forgets to declare them.
 
-           NO var() LITERAL FALLBACKS HERE, unlike the rest of privacy.html and
-           data-deletion.html. The literals those two carry are the pre-HIG
-           indigo palette and have already drifted from tokens.css (--accent is
-           #0071e3 now, not #4f46e5). A second palette hiding inside a fallback
-           is worse than an unstyled bar, and four copies of one would be four
-           times worse. */
+           NO var() LITERAL COLOUR FALLBACKS HERE, and none anywhere else on these
+           pages. A colour literal in a fallback is a second palette that keeps
+           painting the old brand after tokens.css moves on (the pre-HIG indigo
+           and then the system blue both did). A second palette hiding inside a
+           fallback is worse than an unstyled bar, and six copies of one would be
+           six times worse. */
         :root {
             --nav-h: 3.5rem;    /* the bar's own height, and the scroll-margin every
                                    in-page anchor now needs to clear it */
@@ -566,7 +566,7 @@
         .pagefoot .foot-mail { overflow-wrap: anywhere; }
 
         /* Follow: three logos, 44px square each, in the default text colour
-           rather than the link colour — a row of three accent-blue logos reads
+           rather than the link colour — a row of three accent-coloured logos reads
            as an advert. They are glyphs and are NEVER mirrored: a logo is not
            a direction. Each link's name is real text (.foot-sr), in the same
            two <bdi>s every other label here uses, so the language filter hides

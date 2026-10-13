@@ -1265,7 +1265,7 @@ const GrowthPage = {
             ${measured < 2
                 ? html`<p class="chart-empty growth-empty-line" id="growth-trend-empty">${this.trendEmptyText(measured, metric)}</p>`
                 : Charts.lineChart(series, {
-                    label, token: '--accent',
+                    label, token: '--chart-accent',
                     dayHeader: t('common.day'), valueHeader: metricName,
                     emptyMessage: this.trendEmptyText(measured, metric),
                 })}
@@ -1316,7 +1316,7 @@ const GrowthPage = {
                 <h2 class="chart-card-title" id="growth-audience-title">${t('growth.audience.title')}</h2>
             </div>
             ${Charts.splitBar([
-                { label: t('growth.audience.new'), value: split.nonFollowers, token: '--accent', fallback: '#0071e3' },
+                { label: t('growth.audience.new'), value: split.nonFollowers, token: '--chart-accent', fallback: 'currentColor' },
                 { label: t('growth.audience.followers'), value: split.followers, token: '--info', fallback: '#5e5ce6' },
             ], {
                 label: t('growth.audience.title'),
