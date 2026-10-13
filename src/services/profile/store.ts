@@ -11,26 +11,31 @@
  * **The mirror.** Until the settings stop being stored at all, every `saveProfile` writes the profile's view back
  * into `studio_settings` and `growth_settings` in the same transaction. A code rollback then finds the settings
  * rows holding what the tenant last saved, instead of a stale copy and a profile it cannot read. Only the sections
- * that hold a profile-owned field are written (`STUDIO_MIRRORED`, `GROWTH_MIRRORED`); every other section, and every
+ * that hold a profile-owned field are written (the SET lists of `MIRROR_STUDIO_SQL` and `MIRROR_GROWTH_SQL`); every other section, and every
  * field of those sections the profile does not own (`brand.direction`, `brand.palette`, `schedule.slots`…), keeps what
  * the row says.
+ *
+ * **The mirror is serialised with the settings writers.** A save takes the tenant's `creators` row (`lockTenantSettings`)
+ * first, as `updateStudioSettings` and `updateGrowthSettings` do, and reads the settings rows `FOR UPDATE` before it
+ * computes what to write; otherwise a settings write that read before the save and wrote after it would put the stale
+ * row back over the mirror. One lock order everywhere: creators, creator_profiles, studio_settings, growth_settings.
  *
  * **No import cycle with the settings readers.** P4 makes `getStudioSettings` and `getGrowthSettings` read this
  * store, so the store must not import them. It reads the stored rows itself, with the pure merge and row readers
  * that moved out of those modules (`studio/settingsMerge.ts`, `growth/settingsRow.ts`).
  */
 import { pool } from '../../config/db.js';
-import type { CreatorProfileRow, GrowthSettings, ProfileSource, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
+import type { CreatorProfileRow, GrowthSettings, ProfileSource, StudioSettings } from '../../db/rows.js';
 import { describeError, log } from '../../utils/log.js';
-import { fromRow as growthFromRow } from '../growth/settingsRow.js';
+import { readGrowthSettings } from '../growth/settingsRow.js';
 import { isMissingTable } from '../health.js';
-import { type Exec, withTransaction } from '../studio/common.js';
-import { overDefaults } from '../studio/settingsMerge.js';
+import { type Exec, lockTenantSettings, withTransaction } from '../studio/common.js';
+import { readStudioSettings } from '../studio/settingsMerge.js';
 import { cachedForRequest, clearProfileCache } from './cache.js';
 import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import type { CreatorProfile } from './types.js';
-import { validateProfile } from './validate.js';
+import { PROFILE_LIMITS, validateProfile } from './validate.js';
 import { growthView, studioView } from './views.js';
 
 // ─── Errors ──────────────────────────────────────────────────────────────────────────────────
@@ -135,31 +140,13 @@ export async function loadStoredProfile(creatorId: string, exec: Exec = pool): P
     return copyOf(await cachedForRequest(creatorId, () => readStored(creatorId, exec)));
 }
 
-/** The stored Studio settings, over the defaults. The statement `getStudioSettings` runs, read here so the store never imports it. */
-async function readStudio(creatorId: string, exec: Exec): Promise<StudioSettings> {
-    const { rows } = await exec.query<Omit<StudioSettingsRow, 'creator_id' | 'updated_at'>>(
-        'SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = $1',
-        [creatorId]
-    );
-    return overDefaults(rows[0] ?? {});
-}
-
-/** The stored Growth settings, over the defaults. The v25 goal columns are assumed: `getGrowthSettings` keeps its fallback for a database without them, and a migration run in order cannot reach v33 without them. */
-async function readGrowth(creatorId: string, exec: Exec): Promise<GrowthSettings> {
-    const { rows } = await exec.query<GrowthSettings>(
-        'SELECT keywords, hashtag_sets, competitors, audience, goal_followers, goal_views FROM growth_settings WHERE creator_id = $1',
-        [creatorId]
-    );
-    return growthFromRow(rows[0] ?? null);
-}
-
 /**
  * The profile the tenant's own settings rows describe (`profileFromLegacy`): what a tenant with no stored profile
  * is, and what the first save stores as version 1. Reads the rows directly, not through the settings readers.
  */
 export async function loadLegacyProfile(creatorId: string, exec: Exec = pool): Promise<CreatorProfile> {
-    const studio = await readStudio(creatorId, exec);
-    const growth = await readGrowth(creatorId, exec);
+    const studio = await readStudioSettings(exec, creatorId);
+    const growth = await readGrowthSettings(exec, creatorId);
     return profileFromLegacy(studio, growth);
 }
 
@@ -196,7 +183,8 @@ const MIRROR_GROWTH_SQL = `INSERT INTO growth_settings (creator_id, audience, go
 export interface SaveProfileOptions {
     /**
      * The version the caller read. `null` means it read the virtual profile (`loadProfile` answered `version: null`):
-     * the save then matches only if no profile has been stored since, and loses to one that has.
+     * the save then matches only if no profile has been stored since, and loses to one that has. A number means it
+     * read a stored profile, so it loses when the tenant had none (this save would have had to create it).
      */
     expectVersion: number | null;
     source: ProfileSource;
@@ -213,17 +201,26 @@ const json = (value: unknown): string => JSON.stringify(value);
 
 const problemsMessage = (problems: string[]): string => (problems.length === 1 ? problems[0]! : `${problems.length} problems with this profile.`);
 
+/** Postgres `check_violation` on the size cap: the profile is bigger than the table allows, however it got past the validator. */
+const isSizeViolation = (err: unknown): boolean => {
+    const e = err as { code?: unknown; constraint?: unknown; message?: unknown } | null;
+    return e?.code === '23514' && (e.constraint === 'creator_profiles_size' || (typeof e.message === 'string' && e.message.includes('creator_profiles_size')));
+};
+
 /**
  * Store `next` as the tenant's profile, in one transaction (a caller already inside one passes its client as `exec`
- * and commits it itself, then calls `clearProfileCache`):
+ * and commits it itself, then calls `clearProfileCache`). Locks are taken in one order, here and in the settings
+ * writers: the tenant's `creators` row (`lockTenantSettings`), then `creator_profiles`, then `studio_settings`, then
+ * `growth_settings`.
  *
  *  0. With no stored row, version 1 is inserted from the legacy settings first (source `backfill`), so a save never
- *     fails on a tenant the backfill has not reached. If the save is then refused, that insert rolls back with it.
+ *     fails on a tenant the backfill has not reached. Those settings must make a valid profile themselves
+ *     (`PROFILE_INVALID` if not). If the save is then refused, the insert rolls back with it.
  *  1. A stored profile from a newer release is refused (`PROFILE_NEWER_SCHEMA`): it would lose what that release stored.
  *  2. `validateProfile(next)`: every problem, or `PROFILE_INVALID`.
  *  3. `UPDATE … WHERE version = expectVersion`: no row is `PROFILE_VERSION_CONFLICT`.
  *  4. The history row.
- *  5. The mirror: the view of `next` over the stored settings rows, written back (see the top of the file).
+ *  5. The mirror: the view of `next` over the settings rows, read `FOR UPDATE` first, and written back (see the top of the file).
  *
  * `activated_at` is not touched: finishing the wizard sets it, not saving.
  */
@@ -234,6 +231,10 @@ export async function saveProfile(creatorId: string, next: unknown, options: Sav
         if (isProfileTableMissing(err)) {
             throw new ProfileError('PROFILE_STORAGE_MISSING', 503, 'The profile tables are missing: apply migration v33 (npm run migrate).');
         }
+        if (isSizeViolation(err)) {
+            const problems = [`the profile is larger than the ${PROFILE_LIMITS.profileBytes} bytes the database stores`];
+            throw new ProfileError('PROFILE_INVALID', 400, problemsMessage(problems), { problems });
+        }
         throw err;
     } finally {
         clearProfileCache(creatorId);
@@ -241,21 +242,42 @@ export async function saveProfile(creatorId: string, next: unknown, options: Sav
 }
 
 async function write(creatorId: string, next: unknown, { expectVersion, source, userId }: SaveProfileOptions, tx: Exec): Promise<SavedProfile> {
+    // The mutex first, before any row: a Studio or Growth settings write holds it while it reads, changes and writes
+    // its row, so it can neither read before this save's mirror and write after it, nor interleave with it.
+    await lockTenantSettings(tx, creatorId);
+
+    // The settings rows are read FOR UPDATE, once, the first time they are needed (step 0 or the mirror), and always
+    // before a view is computed from them. Studio, then Growth: the order the mirror writes them in.
+    let studioRow: StudioSettings | undefined;
+    let growthRow: GrowthSettings | undefined;
+    const studioSettings = async (): Promise<StudioSettings> => (studioRow ??= await readStudioSettings(tx, creatorId, true));
+    const growthSettings = async (): Promise<GrowthSettings> => (growthRow ??= await readGrowthSettings(tx, creatorId, true));
+
     // 0. The row, locked for this transaction; or version 1 from the legacy settings. ON CONFLICT DO NOTHING: when
-    // another save created the row first, the insert waits for it and yields nothing, and the row is read again.
+    // another save created the row first (the concurrent first save), the insert waits for it and yields nothing, and
+    // the row is read again: `created` is then false, and a caller that read the virtual profile has lost.
     let current = await selectForUpdate(creatorId, tx);
     let created = false;
     if (!current) {
-        const legacy = await loadLegacyProfile(creatorId, tx);
+        const legacy = profileFromLegacy(await studioSettings(), await growthSettings());
+        const legacyChecked = validateProfile(legacy);
+        if ('problems' in legacyChecked) {
+            // Not the caller's profile: the tenant's present settings, which cannot be stored as version 1. Say so.
+            throw new ProfileError(
+                'PROFILE_INVALID', 400,
+                `The settings this profile starts from are not a valid profile yet: ${problemsMessage(legacyChecked.problems)}`,
+                { problems: legacyChecked.problems }
+            );
+        }
         const { rows } = await tx.query<{ version: number }>(
             `INSERT INTO creator_profiles (creator_id, profile, version, updated_by, updated_at)
              VALUES ($1, $2::jsonb, 1, NULL, NOW())
              ON CONFLICT (creator_id) DO NOTHING
              RETURNING version`,
-            [creatorId, json(legacy)]
+            [creatorId, json(legacyChecked.profile)]
         );
         created = rows.length > 0;
-        if (created) await insertVersion(creatorId, 1, legacy, 'backfill', null, tx);
+        if (created) await insertVersion(creatorId, 1, legacyChecked.profile, 'backfill', null, tx);
         current = await selectForUpdate(creatorId, tx);
         if (!current) throw new Error(`creator_profiles has no row for ${creatorId} after inserting one`);
     }
@@ -275,14 +297,15 @@ async function write(creatorId: string, next: unknown, { expectVersion, source, 
     const profile = checked.profile;
 
     // 3. The version the caller read must still be the one stored. A caller that read the virtual profile has no
-    // version: it matches only the row this very save just created from the same settings.
-    if (expectVersion === null && !created) throw conflict(current.version);
+    // version, and matches only the row this very save just created from the same settings; a caller that has a
+    // version cannot have read a row that did not exist until now. Either mismatch is a conflict.
+    if ((expectVersion === null) !== created) throw conflict(current.version);
     const { rows } = await tx.query<{ version: number }>(
         `UPDATE creator_profiles
             SET profile = $2::jsonb, version = version + 1, updated_by = $3, updated_at = NOW()
           WHERE creator_id = $1 AND version = $4
       RETURNING version`,
-        [creatorId, json(profile), userId, expectVersion ?? 1]
+        [creatorId, json(profile), userId, expectVersion ?? current.version]
     );
     const saved = rows[0];
     if (!saved) throw conflict(current.version);
@@ -291,11 +314,11 @@ async function write(creatorId: string, next: unknown, { expectVersion, source, 
     await insertVersion(creatorId, saved.version, profile, source, userId, tx);
 
     // 5. The mirror: the same facts, in the rows the settings readers still read.
-    const studio = studioView(await readStudio(creatorId, tx), profile);
+    const studio = studioView(await studioSettings(), profile);
     await tx.query(MIRROR_STUDIO_SQL, [
         creatorId, json(studio.brand), json(studio.voice), json(studio.product), json(studio.cta), json(studio.schedule), json(studio.library), json(studio.infographic),
     ]);
-    const growth = growthView(await readGrowth(creatorId, tx), profile);
+    const growth = growthView(await growthSettings(), profile);
     await tx.query(MIRROR_GROWTH_SQL, [creatorId, json(growth.audience), growth.goal_followers, growth.goal_views]);
 
     log('info', 'profile.saved', { creator_id: creatorId, version: saved.version, source, backfilled: created });

@@ -318,6 +318,11 @@ const MEDIA_CANDIDATES_BASE_SQL = `
  * `studio_settings.infographic.photo_url`, which the guard above already keeps; this is the guard for the day
  * the profile is the only thing that names it, and for the logo, which no setting holds. It is the last guard,
  * so a database without the table can run the rest (`withProfileTable`).
+ *
+ * Only the CURRENT profile is read. Media named solely by an old `creator_profile_versions` row is not protected: a
+ * superseded portrait or logo goes with the rest once nothing current names it, so restoring an old version (there
+ * is no such feature yet) would show a broken image. Keeping every version's files forever would keep every
+ * replaced upload, which is what this sweep exists to stop.
  */
 const KEPT_BY_PROFILE_SQL = `
                        AND NOT EXISTS (

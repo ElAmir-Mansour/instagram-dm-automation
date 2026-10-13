@@ -1,9 +1,8 @@
 /**
- * The profile store (docs/onboarding/01 §3 and §4), against a small in-memory stand-in for the four tables it
- * touches. The stand-in is deliberately a little more than a recorder: it applies the statements the store
- * sends (`INSERT … ON CONFLICT`, the optimistic `UPDATE … WHERE version`, the mirror's upserts with their
- * `SET` lists), and a `BEGIN` takes a snapshot that a `ROLLBACK` restores. So "a refused save leaves nothing
- * behind" and "the mirror never touches a column it does not own" are asserted on the rows, not on the SQL text.
+ * The profile store (docs/onboarding/01 §3 and §4), against the in-memory stand-in for the tables it touches
+ * (`testDb.ts`): it applies the statements the store sends, and a `ROLLBACK` restores the snapshot a `BEGIN` took, so
+ * "a refused save leaves nothing behind" and "the mirror never touches a column it does not own" are asserted on the
+ * rows, not on the SQL text. The locks, and the order they are taken in, are in `locks.test.ts`.
  */
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -11,9 +10,9 @@ import { pool } from '../../config/db.js';
 import type { GrowthSettings, StudioSettings } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { fromRow as growthFromRow, defaultGrowthSettings } from '../growth/settingsRow.js';
-import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
+import type { FakeDb } from '../monteur/testDb.js';
 import { defaultStudioSettings, overDefaults } from '../studio/settingsMerge.js';
-import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
+import { ELAMIR_GROWTH } from '../studio/testFixtures.js';
 import { withProfileCache } from './cache.js';
 import { defaultProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
@@ -21,171 +20,13 @@ import {
     loadLegacyProfile, loadProfile, loadStoredProfile, ProfileError, resetProfileTableWarning, saveProfile, type SaveProfileOptions,
 } from './store.js';
 import { richProfile, throughJsonb } from './testSupport.js';
+import {
+    growthRow, installProfileDb, missingTable, OTHER, OWNER, OWNER_STUDIO, type ProfileDb, seededState, studioRow, USER,
+    type State,
+} from './testDb.js';
 import type { CreatorProfile } from './types.js';
 import { validateProfile } from './validate.js';
 import { GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
-
-const OWNER = '11111111-1111-4111-8111-111111111111';
-const OTHER = '22222222-2222-4222-8222-222222222222';
-const USER = '33333333-3333-4333-8333-333333333333';
-
-// ─── The stand-in ────────────────────────────────────────────────────────────────────────────
-
-type Row = Record<string, unknown>;
-
-interface State {
-    profiles: Map<string, { profile: unknown; version: number; activated_at: Date | null; updated_by: string | null }>;
-    versions: { creator_id: string; version: number; profile: unknown; source: string; updated_by: string | null }[];
-    studio: Map<string, Row>;
-    growth: Map<string, Row>;
-}
-
-const STUDIO_COLUMNS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur', 'infographic'] as const;
-const GROWTH_COLUMNS = ['keywords', 'hashtag_sets', 'competitors', 'audience', 'goal_followers', 'goal_views'] as const;
-
-const missingTable = (name: string): Error => Object.assign(new Error(`relation "${name}" does not exist`), { code: '42P01' });
-
-/**
- * Every statement the store sends, answered from `state`. `v33` false is a database without the migration; `failOn`
- * makes a matching statement throw, as the database would, so a test can break a save halfway through.
- */
-function installProfileDb(state: State, options: { v33?: boolean } = {}): FakeDb & { failOn: RegExp | null; snapshot: State | null; v33: boolean } {
-    const db = installFakeDb() as FakeDb & { failOn: RegExp | null; snapshot: State | null; v33: boolean };
-    db.failOn = null;
-    db.snapshot = null;
-    db.v33 = options.v33 ?? true;
-
-    const copy = (s: State): State => structuredClone(s);
-    const restore = (from: State): void => {
-        state.profiles = from.profiles;
-        state.versions = from.versions;
-        state.studio = from.studio;
-        state.growth = from.growth;
-    };
-    /** What `pg` hands back for a jsonb column: parsed, with its keys in Postgres's order. */
-    const jsonb = <T>(value: T): T => throughJsonb(value);
-
-    const entries = (list: string): string[] => list.split(',').map((s) => s.trim()).filter(Boolean);
-
-    /** `INSERT INTO t (cols) VALUES (…) ON CONFLICT (creator_id) DO UPDATE SET …`, applied to `table`. */
-    const upsert = (table: Map<string, Row>, sql: string, params: unknown[]): Row[] => {
-        const columns = entries(/INSERT INTO \w+ \(([^)]*)\)/.exec(sql)![1]!);
-        const tuple = entries(/VALUES \((.*)\) ON CONFLICT/.exec(sql)![1]!);
-        assert.equal(columns.length, tuple.length, 'a value for every column');
-        const inserted: Row = {};
-        columns.forEach((column, i) => {
-            const slot = tuple[i]!;
-            const param = /^\$(\d+)(?:::(\w+))?$/.exec(slot);
-            if (!param) inserted[column] = slot === 'NOW()' ? new Date() : slot;
-            else if (param[2] === 'jsonb') inserted[column] = JSON.parse(params[Number(param[1]) - 1] as string);
-            else inserted[column] = params[Number(param[1]) - 1];
-        });
-        const id = inserted.creator_id as string;
-        const existing = table.get(id);
-        if (!existing) {
-            table.set(id, inserted);
-            return [];
-        }
-        const set = entries(/DO UPDATE SET (.*)$/.exec(sql)![1]!);
-        for (const assignment of set) {
-            const [column, value] = assignment.split('=').map((s) => s.trim()) as [string, string];
-            existing[column] = value === 'NOW()' ? new Date() : inserted[value.replace('EXCLUDED.', '')];
-        }
-        return [];
-    };
-
-    const route = (pattern: RegExp, answer: (params: any[], sql: string) => { rows: any[]; rowCount?: number }): void => {
-        db.routes.push([pattern, answer]);
-    };
-
-    // Anything that fails on purpose, and anything that needs a table this database lacks, answers before the routes do.
-    const guard = (pool as unknown as { query: (sql: string, params?: any[]) => Promise<unknown> }).query;
-    const guarded = async (sql: string, params: any[] = []): Promise<unknown> => {
-        const flat = sql.replace(/\s+/g, ' ').trim();
-        if (db.failOn?.test(flat)) {
-            db.statements.push({ sql: flat, params });
-            throw new Error(`injected failure on: ${flat.slice(0, 60)}`);
-        }
-        if (!db.v33 && /creator_profile/.test(flat)) {
-            db.statements.push({ sql: flat, params });
-            throw missingTable(/creator_profile_versions/.test(flat) ? 'creator_profile_versions' : 'creator_profiles');
-        }
-        return guard(sql, params);
-    };
-    (pool as unknown as { query: unknown }).query = guarded;
-    (pool as unknown as { connect: unknown }).connect = async () => ({ query: guarded, release() {} });
-
-    route(/^BEGIN$/, () => { db.snapshot = copy(state); return { rows: [] }; });
-    route(/^COMMIT$/, () => { db.snapshot = null; return { rows: [] }; });
-    route(/^ROLLBACK$/, () => { if (db.snapshot) restore(db.snapshot); db.snapshot = null; return { rows: [] }; });
-
-    route(/^SELECT profile, version, activated_at FROM creator_profiles WHERE creator_id = \$1$/, ([id]) => {
-        const row = state.profiles.get(id);
-        return { rows: row ? [{ profile: jsonb(row.profile), version: row.version, activated_at: row.activated_at }] : [] };
-    });
-    route(/^SELECT profile, version FROM creator_profiles WHERE creator_id = \$1 FOR UPDATE$/, ([id]) => {
-        const row = state.profiles.get(id);
-        return { rows: row ? [{ profile: jsonb(row.profile), version: row.version }] : [] };
-    });
-    route(/^INSERT INTO creator_profiles .* ON CONFLICT \(creator_id\) DO NOTHING RETURNING version$/, ([id, profile]) => {
-        if (state.profiles.has(id)) return { rows: [] };
-        state.profiles.set(id, { profile: JSON.parse(profile), version: 1, activated_at: null, updated_by: null });
-        return { rows: [{ version: 1 }] };
-    });
-    route(/^UPDATE creator_profiles SET profile = \$2::jsonb, version = version \+ 1, updated_by = \$3, updated_at = NOW\(\) WHERE creator_id = \$1 AND version = \$4 RETURNING version$/, ([id, profile, by, expect]) => {
-        const row = state.profiles.get(id);
-        if (!row || row.version !== expect) return { rows: [] };
-        row.profile = JSON.parse(profile);
-        row.version += 1;
-        row.updated_by = by;
-        return { rows: [{ version: row.version }] };
-    });
-    route(/^INSERT INTO creator_profile_versions /, ([id, version, profile, source, by]) => {
-        if (state.versions.some((v) => v.creator_id === id && v.version === version)) {
-            throw Object.assign(new Error('duplicate key value violates unique constraint "creator_profile_versions_pkey"'), { code: '23505' });
-        }
-        state.versions.push({ creator_id: id, version, profile: JSON.parse(profile), source, updated_by: by });
-        return { rows: [] };
-    });
-
-    route(/^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = \$1$/, ([id]) => {
-        const row = state.studio.get(id);
-        return { rows: row ? [Object.fromEntries(STUDIO_COLUMNS.map((c) => [c, jsonb(row[c] ?? null)]))] : [] };
-    });
-    route(/^SELECT keywords, hashtag_sets, competitors, audience, goal_followers, goal_views FROM growth_settings WHERE creator_id = \$1$/, ([id]) => {
-        const row = state.growth.get(id);
-        // BIGINT arrives as a string, as `pg` returns it.
-        return { rows: row ? [{ ...Object.fromEntries(GROWTH_COLUMNS.map((c) => [c, jsonb(row[c] ?? null)])), goal_views: String(row.goal_views) }] : [] };
-    });
-    route(/^INSERT INTO studio_settings /, (params, sql) => ({ rows: upsert(state.studio, sql, params) }));
-    route(/^INSERT INTO growth_settings /, (params, sql) => ({ rows: upsert(state.growth, sql, params) }));
-
-    return db;
-}
-
-const emptyState = (): State => ({ profiles: new Map(), versions: [], studio: new Map(), growth: new Map() });
-
-/** A tenant's stored settings rows as Postgres holds them: one JSON column per section. */
-function studioRow(settings: StudioSettings): Row {
-    return Object.fromEntries(STUDIO_COLUMNS.map((c) => [c, structuredClone(settings[c])]));
-}
-function growthRow(settings: GrowthSettings): Row {
-    return Object.fromEntries(GROWTH_COLUMNS.map((c) => [c, structuredClone(settings[c])]));
-}
-
-/** The owner's tenant: an Arabic row set LEFT to right, which the profile must not undo. */
-const OWNER_STUDIO: StudioSettings = {
-    ...ELAMIR_SEED_SETTINGS,
-    brand: { ...ELAMIR_SEED_SETTINGS.brand, direction: 'ltr' },
-    examples: [],
-};
-
-function seededState(): State {
-    const state = emptyState();
-    state.studio.set(OWNER, studioRow(OWNER_STUDIO));
-    state.growth.set(OWNER, growthRow(ELAMIR_GROWTH));
-    return state;
-}
 
 const SAVE: SaveProfileOptions = { expectVersion: null, source: 'wizard', userId: USER };
 const save = (next: unknown, options: Partial<SaveProfileOptions> = {}, id = OWNER) => saveProfile(id, next, { ...SAVE, ...options });
@@ -195,7 +36,7 @@ const at = (db: FakeDb, pattern: RegExp, from = 0): number => db.statements.find
 const writes = (db: FakeDb): string[] => db.statements.map((s) => s.sql).filter((sql) => /^(INSERT|UPDATE|DELETE)/.test(sql));
 
 let state: State;
-let db: ReturnType<typeof installProfileDb>;
+let db: ProfileDb;
 let logs: string[];
 let restoreSink: (() => void) | undefined;
 
@@ -352,6 +193,7 @@ describe('saveProfile: a tenant that has no stored profile yet', () => {
         await save(richProfile());
         const order = [
             at(db, /^BEGIN$/),
+            at(db, /^SELECT id FROM creators WHERE id = \$1 FOR NO KEY UPDATE$/),
             at(db, /FROM creator_profiles WHERE creator_id = \$1 FOR UPDATE/),
             at(db, /^SELECT brand, voice/),
             at(db, /^INSERT INTO creator_profiles .* DO NOTHING/),
@@ -389,6 +231,112 @@ describe('saveProfile: a tenant that has no stored profile yet', () => {
         assert.equal(state.profiles.size, 0, 'the version-1 insert was rolled back');
         assert.deepEqual(state.versions, []);
         assert.ok(at(db, /^ROLLBACK$/) > 0);
+    });
+
+    it('a caller that HAS a version cannot have read a row that did not exist until this save created it: version 1 included', async () => {
+        // expectVersion 1 would otherwise match the version-1 row this very save just inserted, and the save would
+        // go through for a caller that never saw a stored profile.
+        for (const expectVersion of [1, 2, 0]) {
+            const err = await refused(() => save(richProfile(), { expectVersion }), 'PROFILE_VERSION_CONFLICT', 409);
+            assert.equal(err.detail.currentVersion, 1, 'the row this save created');
+            assert.equal(state.profiles.size, 0, `expectVersion ${expectVersion}: the backfill rolled back with the refusal`);
+            assert.deepEqual(state.versions, []);
+            assert.equal(at(db, /^UPDATE creator_profiles/), -1, 'the profile was never written over');
+            db.statements.length = 0;
+        }
+    });
+});
+
+describe('saveProfile: the first save of a tenant, when two arrive together', () => {
+    // Both read "no row", both go to insert version 1. The insert of the one that loses finds the row the winner has
+    // just committed, and yields nothing (ON CONFLICT DO NOTHING).
+    const winner = (): void => {
+        const row = { profile: richProfile(), version: 1, activated_at: null, updated_by: null };
+        state.profiles.set(OWNER, row);
+        // Committed, so it is in the snapshot our own ROLLBACK goes back to: another transaction's commit is not ours to undo.
+        db.snapshot?.profiles.set(OWNER, structuredClone(row));
+    };
+
+    it('the loser re-reads the row, finds it is not the one that created it, and is told it lost', async () => {
+        db.beforeProfileInsert = winner;
+        const err = await refused(() => save({ ...richProfile(), goals: { followers: 1, views: 1 } }, { expectVersion: null }), 'PROFILE_VERSION_CONFLICT', 409);
+        assert.equal(err.detail.currentVersion, 1, 'the winner\'s version, for the caller to reload');
+        assert.deepEqual(storedProfile(), richProfile(), 'the winner\'s profile is untouched');
+        assert.equal(state.profiles.get(OWNER)!.version, 1);
+        assert.deepEqual(state.versions, [], 'the loser wrote no history: the version-1 row is the winner\'s to write');
+
+        const insert = at(db, /^INSERT INTO creator_profiles/);
+        const rereads = db.statements.map((st, i) => (/FROM creator_profiles WHERE creator_id = \$1 FOR UPDATE/.test(st.sql) ? i : -1)).filter((i) => i >= 0);
+        assert.equal(rereads.length, 2, 'once before the insert, once after it');
+        assert.ok(rereads[0]! < insert && insert < rereads[1]!);
+        assert.equal(at(db, /^INSERT INTO creator_profile_versions/), -1);
+        assert.equal(at(db, /^UPDATE creator_profiles/), -1, 'it never got as far as writing over the winner');
+        assert.ok(at(db, /^ROLLBACK$/) > at(db, /^INSERT INTO creator_profiles/));
+        assert.deepEqual(state.studio.get(OWNER), studioRow(OWNER_STUDIO), 'and no mirror was written');
+    });
+
+    it('a caller holding a stored version that matches the winner\'s is a normal save: the check is the UPDATE\'s', async () => {
+        db.beforeProfileInsert = winner;
+        const saved = await save({ ...richProfile(), goals: { followers: 9, views: 9 } }, { expectVersion: 1 });
+        assert.equal(saved.version, 2);
+        assert.deepEqual(state.versions.map((v) => v.version), [2], 'only its own version; version 1 is the winner\'s');
+    });
+});
+
+describe('saveProfile: the legacy profile it inserts as version 1', () => {
+    it('is validated first: settings that are not a valid profile are a 400 with the problems, nothing inserted', async () => {
+        // A stored row can hold anything the validators never saw: here an infographic colour that is no colour.
+        const row = state.studio.get(OWNER)!;
+        row.infographic = { ...(row.infographic as object), primary: 'red' };
+        const err = await refused(() => save(richProfile()), 'PROFILE_INVALID', 400);
+        assert.match(err.message, /^The settings this profile starts from are not a valid profile yet: /);
+        assert.ok(err.detail.problems!.some((p) => p.includes('brand.primary')), `names the field: ${err.detail.problems}`);
+        assert.equal(at(db, /^INSERT INTO creator_profiles/), -1, 'it never reached the insert');
+        assert.equal(state.profiles.size, 0);
+        assert.deepEqual(state.versions, []);
+        assert.ok(at(db, /^ROLLBACK$/) > 0);
+    });
+
+    it('is not the caller\'s fault, so the caller\'s own profile is not looked at: a valid one is refused too', async () => {
+        const row = state.studio.get(OWNER)!;
+        row.infographic = { ...(row.infographic as object), primary: 'red' };
+        await refused(() => save(richProfile(), { expectVersion: null }), 'PROFILE_INVALID', 400);
+    });
+
+    it('is stored exactly as validated', async () => {
+        const legacy = await loadLegacyProfile(OWNER);
+        await save(richProfile());
+        assert.deepEqual(state.versions[0]!.profile, legacy);
+    });
+});
+
+describe('saveProfile: a profile the database finds too large', () => {
+    const tooLarge = (): Error => Object.assign(
+        new Error('new row for relation "creator_profiles" violates check constraint "creator_profiles_size"'),
+        { code: '23514', constraint: 'creator_profiles_size' }
+    );
+
+    it('is a 400 PROFILE_INVALID, not a 500, whether it is the legacy insert or the update that hits the cap', async () => {
+        for (const statement of [/^INSERT INTO creator_profiles/, /^UPDATE creator_profiles/]) {
+            state = seededState();
+            db.restore();
+            db = installProfileDb(state);
+            db.failOn = statement;
+            db.failWith = tooLarge();
+            const err = await refused(() => save(richProfile()), 'PROFILE_INVALID', 400);
+            assert.match(err.detail.problems![0]!, /larger than the 131072 bytes/);
+            assert.equal(err.message, err.detail.problems![0]);
+            assert.equal(state.profiles.size, 0, 'rolled back');
+        }
+    });
+
+    it('recognises it by the constraint\'s name in the message too, and no other check violation', async () => {
+        db.failOn = /^INSERT INTO creator_profiles/;
+        db.failWith = Object.assign(new Error('violates check constraint "creator_profiles_size"'), { code: '23514' });
+        await refused(() => save(richProfile()), 'PROFILE_INVALID', 400);
+
+        db.failWith = Object.assign(new Error('violates check constraint "creator_profile_versions_source_check"'), { code: '23514', constraint: 'creator_profile_versions_source_check' });
+        await assert.rejects(save(richProfile()), (err: unknown) => !(err instanceof ProfileError) && (err as { code?: string }).code === '23514');
     });
 });
 

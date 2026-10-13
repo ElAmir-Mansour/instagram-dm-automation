@@ -15,6 +15,9 @@
 -- surface all read it, it needs a version and a history, and a section would be fetched with the
 -- Studio's few-shot examples (up to ~100 KB).
 
+-- The FKs lock creators/users and the ALTERs take ACCESS EXCLUSIVE on four draft tables: fail in 5 s rather than queue live requests (LOCAL ends with the runner's per-file transaction, so nothing sticks to a pooled connection).
+SET LOCAL lock_timeout = '5s';
+
 CREATE TABLE IF NOT EXISTS creator_profiles (
     creator_id   UUID PRIMARY KEY REFERENCES creators(id) ON DELETE CASCADE,
     profile      JSONB NOT NULL,

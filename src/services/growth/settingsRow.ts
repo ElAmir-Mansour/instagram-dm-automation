@@ -5,6 +5,7 @@
  * re-exports `DEFAULT_GOALS` and `defaultGrowthSettings`, so every existing import keeps working.
  */
 import type { GrowthAudience, GrowthSettings } from '../../db/rows.js';
+import type { Exec } from '../studio/common.js';
 
 /** What a tenant with no row is aiming at (docs/agents/BRIEF.md): 10k followers or 1M views. */
 export const DEFAULT_GOALS = Object.freeze({ goal_followers: 10_000, goal_views: 1_000_000 });
@@ -36,4 +37,18 @@ export function fromRow(row: Partial<GrowthSettings> | null): GrowthSettings {
 function storedGoal(value: unknown, fallback: number): number {
     const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
     return Number.isInteger(n) && n >= 1 ? n : fallback;
+}
+
+/**
+ * The tenant's stored settings (the defaults for a tenant with no row). `lock` reads the row `FOR UPDATE`, for a
+ * writer that is about to change it, inside a transaction that holds `lockTenantSettings`. The v25 goal columns
+ * are assumed: `getGrowthSettings` keeps its fallback for a database without them, and a failed statement inside a
+ * transaction cannot be retried, which is where this is used.
+ */
+export async function readGrowthSettings(exec: Exec, creatorId: string, lock = false): Promise<GrowthSettings> {
+    const { rows } = await exec.query<GrowthSettings>(
+        `SELECT keywords, hashtag_sets, competitors, audience, goal_followers, goal_views FROM growth_settings WHERE creator_id = $1${lock ? ' FOR UPDATE' : ''}`,
+        [creatorId]
+    );
+    return fromRow(rows[0] ?? null);
 }

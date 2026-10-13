@@ -11,12 +11,13 @@
  * is refused with the sentence the dashboard shows.
  */
 import type { GrowthAudience, GrowthSettings, HashtagSet } from '../../db/rows.js';
-import { queryCount, queryOne } from '../../db/query.js';
+import { queryOne } from '../../db/query.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
 import { isMissingSchema } from '../health.js';
 import { GrowthError } from './common.js';
-import { DEFAULT_GOALS, defaultGrowthSettings, fromRow } from './settingsRow.js';
+import { lockTenantSettings, withTransaction } from '../studio/common.js';
+import { DEFAULT_GOALS, defaultGrowthSettings, fromRow, readGrowthSettings } from './settingsRow.js';
 
 // Defined in ./settingsRow.ts, which imports nothing from here: the profile store reads the stored rows with them.
 export { DEFAULT_GOALS, defaultGrowthSettings };
@@ -267,23 +268,31 @@ export async function getGrowthSettings(creatorId: string): Promise<GrowthSettin
     }
 }
 
+/**
+ * Read, change, write whole row: so it runs in a transaction that holds the tenant's settings lock first
+ * (`lockTenantSettings`), the way a profile save does, or a save that landed between its read and its write would be
+ * overwritten by the stale row. A patch the rules refuse rolls back having written nothing, as before.
+ */
 export async function updateGrowthSettings(creatorId: string, patch: unknown): Promise<GrowthSettings> {
-    const { settings, problems } = applyGrowthPatch(await getGrowthSettings(creatorId), patch);
-    if (problems.length) {
-        const list = problems.slice(0, MAX_PROBLEMS);
-        throw new GrowthError(400, list.length === 1 ? list[0]! : `${list.length} problems with these settings.`, { problems: list });
-    }
-    await queryCount(
-        `INSERT INTO growth_settings (creator_id, keywords, hashtag_sets, competitors, audience, goal_followers, goal_views, updated_at)
-         VALUES ($1, $2::text[], $3::jsonb, $4::text[], $5::jsonb, $6::integer, $7::bigint, NOW())
-         ON CONFLICT (creator_id) DO UPDATE
-            SET keywords = EXCLUDED.keywords, hashtag_sets = EXCLUDED.hashtag_sets,
-                competitors = EXCLUDED.competitors, audience = EXCLUDED.audience,
-                goal_followers = EXCLUDED.goal_followers, goal_views = EXCLUDED.goal_views, updated_at = NOW()`,
-        [creatorId, settings.keywords, JSON.stringify(settings.hashtag_sets), settings.competitors, JSON.stringify(settings.audience),
-            settings.goal_followers, settings.goal_views]
-    );
-    return settings;
+    return withTransaction(async (tx) => {
+        await lockTenantSettings(tx, creatorId);
+        const { settings, problems } = applyGrowthPatch(await readGrowthSettings(tx, creatorId, true), patch);
+        if (problems.length) {
+            const list = problems.slice(0, MAX_PROBLEMS);
+            throw new GrowthError(400, list.length === 1 ? list[0]! : `${list.length} problems with these settings.`, { problems: list });
+        }
+        await tx.query(
+            `INSERT INTO growth_settings (creator_id, keywords, hashtag_sets, competitors, audience, goal_followers, goal_views, updated_at)
+             VALUES ($1, $2::text[], $3::jsonb, $4::text[], $5::jsonb, $6::integer, $7::bigint, NOW())
+             ON CONFLICT (creator_id) DO UPDATE
+                SET keywords = EXCLUDED.keywords, hashtag_sets = EXCLUDED.hashtag_sets,
+                    competitors = EXCLUDED.competitors, audience = EXCLUDED.audience,
+                    goal_followers = EXCLUDED.goal_followers, goal_views = EXCLUDED.goal_views, updated_at = NOW()`,
+            [creatorId, settings.keywords, JSON.stringify(settings.hashtag_sets), settings.competitors, JSON.stringify(settings.audience),
+                settings.goal_followers, settings.goal_views]
+        );
+        return settings;
+    });
 }
 
 /**

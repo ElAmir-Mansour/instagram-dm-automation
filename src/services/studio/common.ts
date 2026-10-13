@@ -63,6 +63,24 @@ export async function lockTenantPublishing(exec: Exec, creatorId: string): Promi
     await exec.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`publishing:${creatorId}`]);
 }
 
+/**
+ * The mutex every writer of a tenant's settings takes before it reads a settings row: the profile store's save
+ * (which mirrors into `studio_settings` and `growth_settings`) and the Studio and Growth settings writers (which
+ * read a row, change it, and write the whole row back). Without it a settings write that read before a save and
+ * wrote after it would put the stale row back over the mirror, and a rollback would find the old values.
+ *
+ * It is the tenant's `creators` row, `FOR NO KEY UPDATE`, held until the transaction ends. That conflicts with itself
+ * and with every UPDATE of the row, but not with the `FOR KEY SHARE` that an insert into a table referencing
+ * `creators` takes, so a webhook writing an interaction for the tenant is never held up behind a save. A row that
+ * does not exist locks nothing, which is why this and not the settings row is the mutex: a tenant's first settings
+ * write has no settings row yet.
+ *
+ * Lock order, everywhere: creators, then creator_profiles, then studio_settings, then growth_settings.
+ */
+export async function lockTenantSettings(exec: Exec, creatorId: string): Promise<void> {
+    await exec.query('SELECT id FROM creators WHERE id = $1 FOR NO KEY UPDATE', [creatorId]);
+}
+
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**

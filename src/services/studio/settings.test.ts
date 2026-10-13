@@ -155,6 +155,7 @@ describe('getStudioSettings / updateStudioSettings', () => {
     let statements: { sql: string; params: unknown[] }[] = [];
     let stored: Record<string, unknown> | null = null;
     const originalQuery = pool.query;
+    const originalConnect = pool.connect;
 
     beforeEach(() => {
         statements = [];
@@ -164,9 +165,12 @@ describe('getStudioSettings / updateStudioSettings', () => {
             if (/FROM studio_settings/.test(sql)) return { rows: stored ? [stored] : [], rowCount: stored ? 1 : 0 };
             return { rows: [], rowCount: 1 };
         };
+        // An update is a transaction (BEGIN, the tenant lock, the locked read, the write, COMMIT) on one connection.
+        (pool as unknown as { connect: unknown }).connect = async () => ({ query: (pool as unknown as { query: unknown }).query, release() {} });
     });
     afterEach(() => {
         (pool as unknown as { query: unknown }).query = originalQuery;
+        (pool as unknown as { connect: unknown }).connect = originalConnect;
     });
 
     const writes = () => statements.filter((s) => /INSERT INTO studio_settings/.test(s.sql));
@@ -305,12 +309,14 @@ describe('the monteur section (MONTEUR.md §1)', () => {
 
     it('is read and written with the other sections', async () => {
         const originalQuery = pool.query;
+        const originalConnect = pool.connect;
         const statements: { sql: string; params: unknown[] }[] = [];
         (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
             statements.push({ sql: sql.replace(/\s+/g, ' '), params });
             if (/FROM studio_settings/.test(sql)) return { rows: [{ monteur: { enabled: true, folder: '/v' } }], rowCount: 1 };
             return { rows: [], rowCount: 1 };
         };
+        (pool as unknown as { connect: unknown }).connect = async () => ({ query: (pool as unknown as { query: unknown }).query, release() {} });
         try {
             const read = await getStudioSettings(TENANT);
             assert.equal(read.monteur.folder, '/v');
@@ -324,6 +330,7 @@ describe('the monteur section (MONTEUR.md §1)', () => {
             assert.deepEqual(JSON.parse(write.params[8] as string), { ...read.monteur, run_at: '06:30' });
         } finally {
             (pool as unknown as { query: unknown }).query = originalQuery;
+            (pool as unknown as { connect: unknown }).connect = originalConnect;
         }
     });
 });
@@ -331,16 +338,19 @@ describe('the monteur section (MONTEUR.md §1)', () => {
 describe('the monteur source — a scan still waiting for the old one is superseded', () => {
     async function change(stored: Record<string, unknown>, patch: Record<string, unknown>): Promise<{ sql: string; params: unknown[] }[]> {
         const originalQuery = pool.query;
+        const originalConnect = pool.connect;
         const statements: { sql: string; params: unknown[] }[] = [];
         (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
             statements.push({ sql: sql.replace(/\s+/g, ' ').trim(), params });
             if (/FROM studio_settings/.test(sql)) return { rows: [{ monteur: stored }], rowCount: 1 };
             return { rows: [], rowCount: 1 };
         };
+        (pool as unknown as { connect: unknown }).connect = async () => ({ query: (pool as unknown as { query: unknown }).query, release() {} });
         try {
             await updateStudioSettings(TENANT, { monteur: patch });
         } finally {
             (pool as unknown as { query: unknown }).query = originalQuery;
+            (pool as unknown as { connect: unknown }).connect = originalConnect;
         }
         return statements.filter((s) => /^UPDATE studio_jobs SET status = 'failed'/.test(s.sql));
     }

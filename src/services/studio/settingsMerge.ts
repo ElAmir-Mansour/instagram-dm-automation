@@ -4,8 +4,8 @@
  * stored rows without importing the module that will import the store (P4 makes `getStudioSettings` a view
  * over the profile). `settings.ts` re-exports all of it, so every existing import keeps working.
  */
-import type { StudioSettings } from '../../db/rows.js';
-import { isPlainObject } from './common.js';
+import type { StudioSettings, StudioSettingsRow } from '../../db/rows.js';
+import { type Exec, isPlainObject } from './common.js';
 import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
 
 export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur', 'infographic'] as const;
@@ -61,4 +61,16 @@ export function overDefaults(stored: Partial<Record<Section, unknown>>): StudioS
         if (stored[section] !== undefined && (stored[section] !== null || section === 'examples')) patch[section] = stored[section];
     }
     return mergeSettings(defaultStudioSettings(), patch, []);
+}
+
+/**
+ * The tenant's stored settings over the defaults (the neutral defaults for a tenant with no row). `lock` reads the
+ * row `FOR UPDATE`, for a writer that is about to change it: inside a transaction that holds `lockTenantSettings`.
+ */
+export async function readStudioSettings(exec: Exec, creatorId: string, lock = false): Promise<StudioSettings> {
+    const { rows } = await exec.query<Omit<StudioSettingsRow, 'creator_id' | 'updated_at'>>(
+        `SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = $1${lock ? ' FOR UPDATE' : ''}`,
+        [creatorId]
+    );
+    return rows[0] ? overDefaults(rows[0]) : defaultStudioSettings();
 }

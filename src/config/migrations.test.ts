@@ -242,6 +242,13 @@ describe('migration v33: creator_profiles', () => {
         assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE, 'a database without it reports it as pending');
     });
 
+    it('gives up on a lock after 5 s, in a way that ends with the runner\'s transaction: its first statement', () => {
+        // The FKs lock creators and users, and the ALTERs take ACCESS EXCLUSIVE on four draft tables; behind a long
+        // query that queues live requests. LOCAL, not SESSION: a session setting would stay on a pooled connection.
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
     it('creates the profile table and its history, and nothing else', () => {
         assert.deepEqual(createdTables(sql), ['creator_profiles', 'creator_profile_versions']);
     });
