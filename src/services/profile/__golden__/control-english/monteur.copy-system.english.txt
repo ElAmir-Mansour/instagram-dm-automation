@@ -5,7 +5,7 @@ For each clip:
 - ask_line: a question, then «{keyword}», written so it fits any of the candidates. Not one of the recent asks listed.
 - keyword_candidates: 3 single English words of 4 or more letters, best first, tied to what the DM sends, like context, local, resume.
 - variants: 0-3 other spellings of the first candidate, one word each.
-- hashtags: 3-5 tags without # naming this clip's topic: the tool it shows (Gemini, ChatGPT) and the subject. Never generic tags (#tech #learning) nor #اكسبلور #explore #fyp #foryou.
+- hashtags: 3-5 tags without # naming this clip's topic: the tool it shows (Gemini, ChatGPT) and the subject. Never generic tags (#tech #learning) nor #explore #fyp #foryou.
 - tiktok_body: one descriptive sentence with the topic words. No ask and no link: the link line is added for you.
 - question: one line that opens the DM, about the clip's topic. pitch: one sentence tying the topic to the product.
 - alt_text: at most 2 sentences: "A speaker explains …" plus what the clip says. No hashtags, no ask.

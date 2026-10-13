@@ -18,10 +18,12 @@
  */
 import type { ClipCopy, StudioLesson, StudioSettings } from '../../db/rows.js';
 import { normalizeArabic } from '../../utils/arabic.js';
+import { REEL_REGISTER_KITS, type KitKey } from '../profile/kits.js';
 import {
     chooseKeyword, cleanVariants, normalizeTiktokCaption, toArabicDigits, trimText, type GeminiSchema, type GenContext,
 } from '../studio/generate.js';
-import { buildDm, languageKit, oneLine } from '../studio/prompts.js';
+import { buildDm, LANGUAGES, oneLine } from '../studio/prompts.js';
+import type { CopyKit } from './copyKits.js';
 import { ask, emptyCost, type CallCost } from './model.js';
 import { thinkRoute, type ThinkOn } from './think.js';
 import { formatLines, textOverlap, tokens, type PickedClip, type TranscriptLine } from './transcript.js';
@@ -65,23 +67,18 @@ export function termTags(text: string): string[] {
     return out;
 }
 
-/** Question-style asks for when the model's own can't be used, per language. `{keyword}` is filled. */
-export const ASK_POOL: Record<'ar' | 'en', readonly string[]> = {
-    ar: [
-        'تبي الرابط؟ اكتب «{keyword}» ويوصلك بالخاص 📩',
-        'حاب تطبقها بنفسك؟ علّق «{keyword}» وأرسل لك التفاصيل 📩',
-        'تحتاج الشرح كامل؟ اكتب «{keyword}» ويجيك بالخاص 👇',
-        'ودك بالخطوات؟ علّق «{keyword}» وتوصلك رسالة مني 📩',
-        'تبي تجربها؟ اكتب «{keyword}» بالتعليقات 👇',
-    ],
-    en: [
-        'Want the link? Comment «{keyword}» and I\'ll DM it to you 📩',
-        'Want to try it yourself? Comment «{keyword}» 👇',
-        'Need the full walkthrough? Comment «{keyword}» and check your DMs 📩',
-        'Want the steps? Comment «{keyword}» and I\'ll send them 👇',
-        'Should I send you the details? Comment «{keyword}» 📩',
-    ],
-};
+/**
+ * Question-style asks for when the model's own can't be used, per kit: one for each Arabic register and one for English.
+ * `{keyword}` is filled. `gulf` is the pool this app always had (the owner's, pinned byte for byte); the others are in
+ * `profile/kits.ts` beside the rest of each register's text, and `ASK_POOL` is only the view of them the sweep and the tests use.
+ */
+export const ASK_POOL: Readonly<Record<KitKey, readonly string[]>> = Object.freeze({
+    gulf: REEL_REGISTER_KITS.gulf.asks,
+    msa: REEL_REGISTER_KITS.msa.asks,
+    egyptian: REEL_REGISTER_KITS.egyptian.asks,
+    levantine: REEL_REGISTER_KITS.levantine.asks,
+    en: REEL_REGISTER_KITS.en.asks,
+});
 
 const str = (description: string): GeminiSchema => ({ type: 'STRING', description });
 const strs = (description: string): GeminiSchema => ({ type: 'ARRAY', items: { type: 'STRING' }, description });
@@ -135,22 +132,26 @@ function whoFor(settings: StudioSettings): string {
     return product ? `${who}, whose product is «${product}»` : who;
 }
 
-export function copySystemPrompt(settings: StudioSettings): string {
-    const lang = languageKit(settings);
-    const ar = settings.voice?.language === 'ar';
+/**
+ * The Marketer's system prompt. `kit` is what depends on who the creator is (`copyKit`, from their profile): the language the
+ * copy is written in, the example of who to forward a reel to (the register's), the hashtags the clip is described by and the
+ * examples of a keyword (the field's), and how an alt text opens. The owner's kit writes the text this prompt always had.
+ */
+export function copySystemPrompt(settings: StudioSettings, kit: CopyKit): string {
+    const lang = LANGUAGES[kit.lang];
     const digits = settings.voice?.digits === 'arabic-indic' ? ' Use Arabic-Indic digits (٠-٩) in Arabic text.' : ' Use Latin digits.';
     const guide = (settings.voice?.guide ?? '').trim().slice(0, VOICE_GUIDE_MAX);
     return `You write the post copy for short vertical reels by ${whoFor(settings)}. Answer with JSON only, in ${lang.name}.${digits}
 For each clip:
 - first_line: at most ${MAX_FIRST_LINE} characters: the result or problem, naming the topic once the way people search it. One language. Not the title. No hype, no ask.
-- body: 1-3 short lines: the takeaway worth forwarding, then one line naming who to send it to${ar ? ' («ابعتها لصاحبك اللي …»)' : ' ("Send this to the friend who …")'}. Never a bare "share this".
+- body: 1-3 short lines: the takeaway worth forwarding, then one line naming who to send it to (${kit.forward}). Never a bare "share this".
 - ask_line: a question, then «{keyword}», written so it fits any of the candidates. Not one of the recent asks listed.
-- keyword_candidates: 3 single ${lang.name} words of 4 or more letters, best first, tied to what the DM sends, like ${lang.keywordExamples}.
+- keyword_candidates: 3 single ${lang.name} words of 4 or more letters, best first, tied to what the DM sends, like ${kit.domain.keywordExamples}.
 - variants: 0-3 other spellings of the first candidate, one word each.
-- hashtags: 3-5 tags without # naming this clip's topic: the tool it shows (Gemini, ChatGPT) and the subject${ar ? ' (الذكاء_الاصطناعي), mostly Arabic' : ''}. Never generic tags (${ar ? '#تقنية #تعلم #برمجة' : '#tech #learning'}) nor #اكسبلور #explore #fyp #foryou.
+- hashtags: 3-5 tags without # naming this clip's topic: ${kit.domain.hashtagTopic}${kit.language.hashtagStyle}. Never generic tags (${kit.domain.genericTags}) nor ${kit.language.reachTags}.
 - tiktok_body: one descriptive sentence with the topic words. No ask and no link: the link line is added for you.
 - question: one line that opens the DM, about the clip's topic. pitch: one sentence tying the topic to the product.
-- alt_text: ${ar ? 'neutral MSA, ' : ''}at most 2 sentences: ${ar ? '«متحدث يشرح …»' : '"A speaker explains …"'} plus what the clip says. No hashtags, no ask.
+- alt_text: ${kit.language.altStyle}at most 2 sentences: ${kit.language.altExample} plus what the clip says. No hashtags, no ask.
 Invent nothing: only the numbers, tools and results the clip says, and the product facts.
 The creator's voice guide wins where it differs:
 <voice>
@@ -250,13 +251,12 @@ const askWords = (t: string): string => t.replace(/«\{keyword\}»|\{keyword\}/g
  * the last asks said again; else the first pool ask neither recent nor already used in this batch.
  */
 export function chooseAsk(
-    modelAsk: string, recentAsks: readonly string[], used: readonly string[], language: 'ar' | 'en', turn: number
+    modelAsk: string, recentAsks: readonly string[], used: readonly string[], pool: readonly string[], turn: number
 ): string {
     const recent = [...recentAsks, ...used];
     const own = askTemplate(modelAsk);
     const tooLike = (t: string) => recent.some((r) => textOverlap(askWords(t), askWords(r)) >= ASK_OVERLAP);
     if (own.includes('«{keyword}»') && !tooLike(own)) return own;
-    const pool = ASK_POOL[language];
     for (let k = 0; k < pool.length; k++) {
         const candidate = pool[(turn + k) % pool.length]!;
         if (!recent.includes(candidate)) return candidate;
@@ -267,6 +267,11 @@ export function chooseAsk(
 export type CopyOutcome = { copy: ClipCopy; ask: string } | { error: string };
 
 export interface CopyContext {
+    /**
+     * What the tenant's profile says about how its reels are written (`copyKit`): the register's ask pool is where an ask the model
+     * could not use falls back to. Required: a caller that has none would write the owner's asks to somebody else's followers.
+     */
+    kit: CopyKit;
     /** Keywords live campaigns answer. */
     activeKeywords: readonly string[];
     /** Variants of reels in flight: no keyword may be one of them, nor overlap one. */
@@ -286,8 +291,6 @@ export function toClipCopy(
 ): CopyOutcome {
     const r = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
     const digits = settings.voice?.digits === 'arabic-indic' ? toArabicDigits : (s: string) => s;
-    const lang = languageKit(settings);
-    const language = settings.voice?.language === 'ar' ? 'ar' : 'en';
 
     // Equal to another reel's variant would make two campaigns answer one word: never shared.
     const theirVariants = new Set((ctx.inFlightVariants ?? []).map((v) => normalizeArabic(v)));
@@ -305,7 +308,7 @@ export function toClipCopy(
     const variants = choice.create ? cleanVariants(r.variants, keyword, [...ctx.activeKeywords, ...taken, ...(ctx.inFlightVariants ?? [])]) : [];
     if (choice.create) taken.push(keyword);
 
-    const template = chooseAsk(line(r.ask_line), ctx.recentAsks ?? [], usedAsks, language, turn);
+    const template = chooseAsk(line(r.ask_line), ctx.recentAsks ?? [], usedAsks, ctx.kit.register.asks, turn);
     usedAsks.push(template);
     const ask = digits(template.split('{keyword}').join(keyword));
     // One ask per post: a line naming a quoted keyword anywhere else is another ask.
@@ -321,12 +324,13 @@ export function toClipCopy(
     const tagLine = hashtags.map((t) => `#${t}`).join(' ');
     const first = keepLines(trimText(digits(line(r.first_line)), MAX_FIRST_LINE)) || clip.title;
     const caption = joinParas([first, keepLines(digits(block(r.body))), ask, tagLine]);
+    // The learning-programme tags are the creator's (05 R8): an educator's or a coach's reels carry them, a shop's do not.
     const tiktok = normalizeTiktokCaption(
-        joinParas([first, withoutBioLink(keepLines(digits(block(r.tiktok_body)))), tagLine]), [...candidates, keyword], settings,
+        joinParas([first, withoutBioLink(keepLines(digits(block(r.tiktok_body)))), tagLine]), [...candidates, keyword], settings, ctx.kit.learnTags,
     );
     const dm = buildDm(settings.cta?.dmTemplate ?? '', {
-        question: digits(line(r.question)) || lang.fallbackQuestion,
-        pitch: digits(line(r.pitch)) || lang.fallbackPitch,
+        question: digits(line(r.question)) || ctx.kit.fallbackQuestion,
+        pitch: digits(line(r.pitch)) || ctx.kit.fallbackPitch,
         url: settings.product?.url ?? '',
         bullets: settings.product?.dmBullets ?? [],
     });
@@ -368,7 +372,7 @@ export async function writeCopy(
     const cost = emptyCost();
     const raw = await ask({
         purpose: 'monteur.copy',
-        system: copySystemPrompt(settings),
+        system: copySystemPrompt(settings, ctx.kit),
         turns: [{
             role: 'user',
             text: copyUserPrompt({

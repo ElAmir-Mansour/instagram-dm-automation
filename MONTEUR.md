@@ -476,6 +476,37 @@ alt_text }`.
   - The TikTok sibling uses `render.tiktok_video_url`.
 - **Render payload:** `cta_tiktok` = `slide.ttPill` / `slide.ttSub`, but only when TikTok is on.
 
+### Who the pick and the Marketer are written for
+**Kits** (`copyKits.ts`, from `reelKitsFor(creator)`, which reads the `clip_pick` and `clip_copy` profile contexts before any
+model is asked): the owner's text above is one tenant's. A profile chooses what the two prompts say about it.
+- **Register** (`language.register` of the reels surface; the text is in `profile/kits.ts`, with the other registers'):
+  - the five fallback asks (`ASK_POOL`, one pool per `gulf` / `msa` / `egyptian` / `levantine` / `en`);
+  - the "who to send it to" example in `body`, and the question a DM opens with when the model left it empty. Both are P9's
+    register kit (`KITS[key].studio`), read and not copied.
+- **Offers** (`offerKind`, shared by the offers): the pitch a DM falls back to when the model left it empty is a course's
+  alone, in the register's words (`fallbackPitch`). Any other kind of offer, a mix of kinds, or none has no pitch, and
+  `buildDm` drops the line: a shop's DM never says «في الكورس».
+- **Language** (`language.code`): the examples of a bad opening (narration, fillers, "as I said") in the language of the
+  video, the reach tags the prompt bans, and how an alt text opens. An English tenant's prompts have no Arabic in them.
+- **Field** (`content.domain`):
+  - `tech` is today's text: "Tech terms in Latin script", "worth sending to a colleague: a tool, a prompt", the hashtags
+    described by the tool and `الذكاء_الاصطناعي`, and the keyword examples.
+  - `general` names no tool, no AI tag and no Latin-script rule.
+- **Kind** (`identity.kind`): the TikTok caption keeps `#LearnOnTikTok` only for an educator or a coach (the Studio's own
+  rule, `LEARNING_KINDS`; the copy kit hands the tags to `normalizeTiktokCaption`, which adds the ones it is given).
+- **The owner is unchanged, byte for byte.** His profile (Gulf, `tech`, educator) selects exactly the entries that hold the
+  words the prompts used to hard-code; the goldens pin them four ways, and `prompt-parity` pins his live rows.
+
+**A profile that cannot be read** is logged (`profile.context_unreadable`) and then depends on who is asking. The owner gets
+his own text (`legacyContext`): a database hiccup costs him nothing. Any other tenant's source is handed back untouched
+(`releaseUnreadable`): it returns to `transcribed`, the claim's attempt is given back (as for a call waiting on the Mac) and no
+model was asked, so waiting for the database never spends one of the three attempts that end in a failed source. It is never
+written in the owner's words (Gulf asks, tech hashtags) and never failed. The kits are read first, before the settings.
+
+**YouTube** files a Short under the category of the creator's kind (`youtubeCategoryId`): an educator is Education (27, as
+every upload was), a coach Howto & Style (26), a shop, an agency, a creator and a profile with no kind People & Blogs (22).
+A profile that cannot be read does not fail the upload: the owner is Education, anyone else People & Blogs.
+
 ### Deferred
 A separate Facebook first line, the Facebook no-keyword test, Trial Reels, speech-rate stats, and deduping the
 Analyst's input by media.

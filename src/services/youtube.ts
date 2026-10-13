@@ -16,6 +16,7 @@
  * so Settings can warn. Unlike TikTok's, a Google refresh token is not rotated by a refresh.
  */
 import axios from 'axios';
+import type { CreatorKind } from './profile/types.js';
 
 export const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 export const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -28,8 +29,30 @@ export const SCOPE_UPLOAD = 'https://www.googleapis.com/auth/youtube.upload';
 export const SCOPE_READONLY = 'https://www.googleapis.com/auth/youtube.readonly';
 export const YOUTUBE_SCOPES = [SCOPE_UPLOAD, SCOPE_READONLY] as const;
 
-/** YouTube's "Education" category: every video this app uploads is a lesson clip. */
+/** YouTube's "Education" category: what an educator's lesson clips are. */
 export const EDUCATION_CATEGORY_ID = '27';
+/** "Howto & Style": a coach's tips and demonstrations. */
+export const HOWTO_CATEGORY_ID = '26';
+/** "People & Blogs": YouTube's own default for an upload, and the category of a channel that is no one of the others. */
+export const PEOPLE_BLOGS_CATEGORY_ID = '22';
+
+/**
+ * The category a creator's videos are filed under, from who they are (`identity.kind`, 05 R19). Every upload used to be
+ * Education, which is what the owner's lesson clips are and what a candle shop's are not. The owner is an `educator` and keeps '27';
+ * a coach is Howto & Style, and a shop, an agency, a creator, or a profile that has not said (`null`) is People & Blogs. The three
+ * non-Education values are drafts for the owner to read; the category is metadata YouTube lets anyone change afterwards.
+ */
+const CATEGORY_OF_KIND: Readonly<Record<CreatorKind, string>> = Object.freeze({
+    educator: EDUCATION_CATEGORY_ID,
+    coach: HOWTO_CATEGORY_ID,
+    shop: PEOPLE_BLOGS_CATEGORY_ID,
+    agency: PEOPLE_BLOGS_CATEGORY_ID,
+    creator: PEOPLE_BLOGS_CATEGORY_ID,
+});
+
+export function youtubeCategoryId(kind: CreatorKind | null | undefined): string {
+    return (kind ? CATEGORY_OF_KIND[kind] : undefined) ?? PEOPLE_BLOGS_CATEGORY_ID;
+}
 export const MAX_TITLE_CHARS = 100;
 export const MAX_DESCRIPTION_BYTES = 5000;
 export const MAX_TAGS_CHARS = 500;
@@ -299,6 +322,8 @@ export interface VideoMetadata {
     description: string;
     tags: string[];
     privacy: YouTubePrivacy;
+    /** The video's category id (`youtubeCategoryId`, from the creator's kind). Required: there is no category that suits every creator. */
+    categoryId: string;
     /** BCP-47, e.g. `ar`; sets the video's and its audio's language. */
     language?: string | null;
 }
@@ -309,10 +334,10 @@ export function videoResource(meta: VideoMetadata): Record<string, unknown> {
             title: meta.title,
             description: meta.description,
             ...(meta.tags.length ? { tags: meta.tags } : {}),
-            categoryId: EDUCATION_CATEGORY_ID,
+            categoryId: meta.categoryId,
             ...(meta.language ? { defaultLanguage: meta.language, defaultAudioLanguage: meta.language } : {}),
         },
-        // Made-for-kids must be declared on every upload; these are adult lessons.
+        // Made-for-kids must be declared on every upload; these videos are for adults.
         status: { privacyStatus: meta.privacy, selfDeclaredMadeForKids: false, embeddable: true },
     };
 }

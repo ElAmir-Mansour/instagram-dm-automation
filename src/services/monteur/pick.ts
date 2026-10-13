@@ -11,7 +11,8 @@
 import type { StudioLesson, StudioSettings, TranscriptWord } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
 import type { GeminiSchema, ModelTurn } from '../studio/generate.js';
-import { languageKit } from '../studio/prompts.js';
+import { LANGUAGES } from '../studio/prompts.js';
+import type { PickKit } from './copyKits.js';
 import { ask, emptyCost, type CallCost } from './model.js';
 import { evidenceLine, type ReelEvidenceSet } from './reelEvidence.js';
 import { ThinkWaiting, thinkRoute, type ThinkOn } from './think.js';
@@ -65,21 +66,27 @@ export const PICK_SCHEMA: GeminiSchema = {
     propertyOrdering: ['topic', 'clips'],
 };
 
-export function pickSystemPrompt(settings: StudioSettings): string {
-    const lang = languageKit(settings).name;
+/**
+ * The pick's system prompt. `kit` is what depends on who the creator is (`pickKit`, from their profile): the language the title is
+ * written in, the examples of a bad opening in that language, what a moment worth sending is, and whether tech terms keep their
+ * Latin script. The owner's kit writes the text this prompt always had.
+ */
+export function pickSystemPrompt(settings: StudioSettings, kit: PickKit): string {
+    const lang = LANGUAGES[kit.lang].name;
+    const say = kit.language;
     const digits = settings.voice?.digits === 'arabic-indic' ? ' Arabic-Indic digits.' : '';
     return `You are a short-form video editor. From a long video's transcript you pick the moments most likely to spread as standalone vertical reels. Answer with JSON only.
 topic: first, the video's main idea in one line.
 Score each clip 0-3:
 - hook: 3 = its first sentence states the result, number, mistake or contrast; 2 = its first line has it after a lead-in; 1 = it comes in line 2; 0 = later or never.
-An opening that only narrates the screen (هنا جينا، خلينا نفتح، كما نرى) is hook 0: start where the speaker says the point.
-The first 3 seconds decide the reel: most viewers leave in them. A clip whose first words are a filler or a connector (مثلا، يعني، فـ، برضو، أو، ممكن، طيب، ما) is not a 3 even if the claim follows: start at the claim's own first word, or at the line before it that states it.
-- alone: its start needs nothing said before it (no greeting, no intro, no «زي ما قلت / وبعدين / فـ») and its end leaves nothing hanging.
+An opening that only narrates the screen (${say.narration}) is hook 0: start where the speaker says the point.
+The first 3 seconds decide the reel: most viewers leave in them. A clip whose first words are a filler or a connector (${say.fillers}) is not a 3 even if the claim follows: start at the claim's own first word, or at the line before it that states it.
+- alone: its start needs nothing said before it (no greeting, no intro, no «${say.callback}») and its end leaves nothing hanging.
 - payoff: it holds the answer or demonstration that proves the claim. Start on the claim; end_line is where the payoff is complete.
-- send: worth sending to a colleague: a tool, a prompt, a step, a number or a surprise. Motivation alone is 0.
+- send: ${kit.domain.send} Motivation alone is 0.
 NEVER a clip where the speaker asks for comments, or one that repeats another clip's idea.
 START: of the idea's first 3 lines, the one that states the claim. LENGTH: the shortest span that holds the whole payoff. Never pad.
-title: at most 6 words in ${lang}, on screen from frame 0 and read with the sound off: the concrete topic plus the result, problem or mistake, not the method. Not the first spoken sentence. Tech terms in Latin script, no hype words.${digits}
+title: at most 6 words in ${lang}, on screen from frame 0 and read with the sound off: the concrete topic plus the result, problem or mistake, not the method. Not the first spoken sentence. ${kit.domain.titleEnd}${digits}
 hook_type: how the spoken start line opens: promise, problem, intent or question.
 why: at most 10 words in ${lang}: what the viewer gets.
 Invent nothing: only numbers, tools and results the clip says.`;
@@ -107,6 +114,8 @@ export function candidatesWanted(reelsPerVideo: number): number {
 
 export function pickUserPrompt(args: {
     lines: readonly TranscriptLine[]; settings: StudioSettings; lessons: readonly StudioLesson[]; reels?: ReelEvidenceSet;
+    /** The language the transcript is labelled with: the kit's, the one the system prompt asks the title in. */
+    kit: Pick<PickKit, 'lang'>;
     /** How many reels this video gets (`reelsForLength`); `reels_per_video` when not given. */
     keep?: number;
 }): string {
@@ -130,7 +139,7 @@ export function pickUserPrompt(args: {
         ...(lost.length ? ['Reels whose opening lost viewers (highest share gone within 3 s). Never open a clip like these:', ...lost.map(evidenceLine)] : []),
         ...(lessons.length ? ['Lessons from this creator\'s past reels:', ...lessons.map((l) => `- ${l.rule}`)] : []),
         ...(avoid.length ? [`Never pick a moment about: ${avoid.join(', ')}.`] : []),
-        `Transcript (${languageKit(settings).name}):`,
+        `Transcript (${LANGUAGES[args.kit.lang].name}):`,
         formatLines(lines),
     ].join('\n');
 }
@@ -160,7 +169,7 @@ export interface PickOutcome {
 export async function pickClips(
     source: { words: readonly TranscriptWord[]; duration: number | null },
     settings: StudioSettings,
-    context: { lessons: readonly StudioLesson[]; reels?: ReelEvidenceSet; existingTexts?: readonly string[] },
+    context: { lessons: readonly StudioLesson[]; reels?: ReelEvidenceSet; existingTexts?: readonly string[]; kit: PickKit },
     deadline: number,
     think?: ThinkOn,
 ): Promise<PickOutcome> {
@@ -174,8 +183,8 @@ export async function pickClips(
         minSeconds: m.min_seconds, maxSeconds: m.max_seconds, keep, duration: source.duration,
         existingTexts: context.existingTexts ?? [],
     };
-    const system = pickSystemPrompt(settings);
-    const turns: ModelTurn[] = [{ role: 'user', text: pickUserPrompt({ lines, settings, lessons: context.lessons, reels: context.reels, keep }) }];
+    const system = pickSystemPrompt(settings, context.kit);
+    const turns: ModelTurn[] = [{ role: 'user', text: pickUserPrompt({ lines, settings, lessons: context.lessons, reels: context.reels, keep, kit: context.kit }) }];
     const call = (purpose: string) => ask({
         purpose, system, turns, schema: PICK_SCHEMA, temperature: 0.4, thinkingBudget: PICK_THINKING,
         maxOutputTokens: PICK_MAX_OUTPUT, capMs: PICK_CALL_MS, think: thinkRoute(think, purpose, 'pick'),
