@@ -4,6 +4,7 @@
  * different from every other, so a field that lands in the wrong place cannot hide behind an equal
  * neighbour. Imported by tests only; production code never reads it.
  */
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import type { CreatorProfile } from './types.js';
@@ -102,4 +103,74 @@ export function richProfile(): CreatorProfile {
         },
         goals: { followers: 5000, views: 250_000 },
     };
+}
+
+// ─── The second-tenant checks (docs/onboarding/05 §3) ────────────────────────────────────────
+
+/**
+ * Every string that marks a prompt as the owner's: his course, his name and links, his stack, his reels' lines and the
+ * no-women rule (the one that is his by default and a tenant's by choice). The list is 05 §3's, entry for entry. A builder
+ * that says any of them to another tenant has leaked him. Matched as plain substrings, case as written ("course" and
+ * "Course" are two entries, so is "udemy" and "Udemy"): that is how a leak shows, inside a longer word or a sentence. The one
+ * exception is «بالعربي», a whole word (`WHOLE_WORD_MARKERS`).
+ */
+export const OWNER_MARKERS: readonly string[] = Object.freeze([
+    'Agentic', 'بالعربي', 'Udemy', 'udemy', 'referralCode', '02A626DDDA3FDAB6AB34', 'ElAmir', 'elamir', 'الأمير', 'منصور', 'MCP', 'Clario',
+    'tech educator', 'senior engineer', 'goroutines', 'n8n', 'ChatGPT', 'الذكاء_الاصطناعي', 'Never a woman', 'Asia/Riyadh',
+    'course', 'Course', 'كورس', 'Reference carousels', 'الدردشة ماتت', 'Stop asking AI', 'GO_TO_COURSE',
+]);
+
+/** The Arabic block, as a character class body: what counts as Arabic script (`dmFallbackReply` tests for the same block). */
+const ARABIC_BLOCK = '\u0600-\u06FF';
+
+/**
+ * What a word is made of, as a character class body: the letters, tatweel and the vowel marks (U+0621-0652, U+0670-0671), and
+ * not the Arabic punctuation of the same block («،» «؛» «؟»), which ends a word as a space does.
+ */
+const ARABIC_LETTERS = '\u0621-\u0652\u0670\u0671';
+
+/**
+ * The markers that are matched as whole words, not as substrings. «بالعربي» is the owner's colloquial brand word («Agentic AI
+ * بالعربي»); as a substring it is also the first letters of «بالعربية», the ordinary word for "in Arabic" that the neutral
+ * Arabic kit rightly says («بالعربية الفصحى البسيطة»). A whole word is the owner's, with or without a leading «و».
+ */
+const WHOLE_WORD_MARKERS: ReadonlySet<string> = new Set(['بالعربي']);
+
+function holdsMarker(text: string, marker: string): boolean {
+    if (!WHOLE_WORD_MARKERS.has(marker)) return text.includes(marker);
+    return new RegExp(`(?<![${ARABIC_LETTERS}])و?${marker}(?![${ARABIC_LETTERS}])`, 'u').test(text);
+}
+
+/**
+ * Fails if `text` holds any of the owner's markers (`OWNER_MARKERS`, with «بالعربي» as a whole word). `label` names what was
+ * being checked, so a failure says which builder.
+ */
+export function assertNoOwnerMarkers(text: string, label = 'text'): void {
+    const found = OWNER_MARKERS.filter((marker) => holdsMarker(text, marker));
+    assert.deepEqual(found, [], `${label} holds the owner's ${found.length === 1 ? 'marker' : 'markers'}: ${found.join(', ')}\n${text.slice(0, 300)}`);
+}
+
+/** Arabic script: the block the DM and comment paths themselves test for (`dmFallbackReply`). */
+export const ARABIC_SCRIPT = new RegExp(`[${ARABIC_BLOCK}]`);
+
+/** An English tenant's text has no Arabic script in it at all. */
+export function assertNoArabicScript(text: string, label = 'text'): void {
+    const hit = ARABIC_SCRIPT.exec(text);
+    assert.equal(hit, null, `${label} has Arabic script (${hit?.[0]} at ${hit?.index}): ${text.slice(0, 300)}`);
+}
+
+/**
+ * The Gulf words an Egyptian or MSA tenant must never be told (05 §3). «ما قدرنا» is a phrase, the rest are words. **Not for
+ * the Levantine register**: its public reply is «ما قدرنا نبعتلك عالخاص», the same two words as the Gulf's, and rightly.
+ */
+export const GULF_TOKENS: readonly string[] = Object.freeze(['تبي', 'ودك', 'الحين', 'هالحين', 'ويجيك', 'ما قدرنا']);
+
+/**
+ * An Egyptian or MSA tenant's text has none of the Gulf tokens (`GULF_TOKENS`) as a word: bare, or with the one-letter
+ * prefixes Arabic glues on, «و» «ف» «ب» («والحين», «وتبي», «بالحين»). A longer word that merely contains a token is not a hit
+ * («تبيان», «والحينئذ»). It is for the Egyptian and MSA fixtures only (see `GULF_TOKENS`).
+ */
+export function assertNoGulfInEgyptianOrMsa(text: string, label = 'text'): void {
+    const found = GULF_TOKENS.filter((token) => new RegExp(`(?<![${ARABIC_LETTERS}])[وفب]?${token}(?![${ARABIC_LETTERS}])`, 'u').test(text));
+    assert.deepEqual(found, [], `${label} says ${found.join(', ')} to an Egyptian or MSA tenant: ${text.slice(0, 300)}`);
 }

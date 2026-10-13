@@ -326,8 +326,8 @@ Every call to `generateAiResponse` (`ai.ts:354`) sends:
 |---|---|---|
 | System prompt | **yes** | 200-500 tokens |
 | Knowledge base (`ai_agents.knowledge_base`) | **yes** | 1,000-5,000+ tokens, grows |
-| Fixed Arabic instructions (`ai.ts:428`) | **yes** | ~150 tokens |
-| Response schema (`RESPONSE_SCHEMA`) | **yes** | ~400 tokens |
+| Fixed instructions (`dmSystemInstruction`, `ai.ts:398`; Arabic or English by tenant) | **yes** | ~150 tokens |
+| Response schema (`dmResponseSchema`, `ai.ts:146`) | **yes** | ~400 tokens |
 | Conversation history (`HISTORY_WINDOW = 8`) | partially | 200-800 tokens |
 | Current user message | no | 10-50 tokens |
 
@@ -375,8 +375,8 @@ estimates.
   loops on the carousel schema in most runs (the numbers are on `DEFAULT_MODEL` in `ai.ts`).
   2.5 Flash-Lite was not tested.
 - **Do not send the response schema when it is not needed.** Most replies are
-  `message_type: "text"`; the carousel and quick-reply branches of `RESPONSE_SCHEMA`
-  (`ai.ts:133-184`) are ~400 tokens sent on every call to support a minority of responses. A
+  `message_type: "text"`; the carousel and quick-reply branches of `dmResponseSchema`
+  (`ai.ts:146-201`) are ~400 tokens sent on every call to support a minority of responses. A
   two-tier approach (cheap text-only schema, retry with the full schema when the model asks
   for structure) is possible but adds a round-trip. **Lower priority than caching** — caching
   makes the schema free anyway, since it is part of the static prefix.

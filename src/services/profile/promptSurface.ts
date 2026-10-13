@@ -31,7 +31,8 @@ import { pool } from '../../config/db.js';
 import type { ClipDirection, GrowthSettings } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { dmFallbackReply } from '../../webhook/errors.js';
-import { dmSystemInstruction } from '../ai.js';
+import { disclosureLine } from '../../webhook/meta-payload.js';
+import { dmResponseSchema, dmSystemInstruction, type DmContext, starterPersona } from '../ai.js';
 import { coachSystemPrompt, runCoach } from '../growth/coach.js';
 import { keywordsSystemPrompt, suggestKeywords } from '../growth/keywords.js';
 import { analystSystemPrompt } from '../monteur/analyst.js';
@@ -49,7 +50,7 @@ import type { StudioSettings } from '../studio/settingsTypes.js';
 import {
     ELAMIR_SEO, GOLDEN_CLIPS, GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_LINES, GOLDEN_REEL_EVIDENCE, GOLDEN_SOURCES,
 } from '../studio/testFixtures.js';
-import { contextFor } from './context.js';
+import { contextFor, type ProfileContext } from './context.js';
 import { describeFailure } from './failure.js';
 import { goldenJsonText, type GoldenSet } from './golden.js';
 import { profileFromLegacy } from './legacy.js';
@@ -264,13 +265,14 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
  *
  * `ctx` is what the writer's prompt is built from (P12): the `infographic` context of the profile the caller reads the
  * tenant through, handed to the builder exactly as `createInfographic` hands it (`infographicContext`). The surface has no
- * default for it, so a path that forgot to give one fails to compile instead of quietly writing the owner's text.
+ * default for it, so a path that forgot to give one fails to compile instead of quietly writing the owner's text. It may be a
+ * function that makes it (`Wording`), so a tenant whose profile cannot be made into one fails these entries by name.
  */
-export function infographicSurface(settings: StudioSettings, { slug, ctx }: { slug?: string; ctx: InfographicWriterContext }): SurfaceEntry[] {
+export function infographicSurface(settings: StudioSettings, { slug, ctx }: { slug?: string; ctx: Wording<InfographicWriterContext> }): SurfaceEntry[] {
     const mid = slug ? `.${slug}` : '';
     const job = (language: SurfaceLang, notes: string | null) => () => infographicRenderPayload(
         '00000000-0000-4000-8000-0000000000aa', { topic: 'RAG vs CAG vs KAG', notes, language },
-        settings.infographic.theme, settings, null, ctx,
+        settings.infographic.theme, settings, null, wordingOf(ctx),
     );
     return [
         built(`infographic.render-payload${mid}.ar`, 'json', 'elamir', job('ar', 'ركّز على التكلفة وسرعة الاستجابة')),
@@ -285,19 +287,55 @@ export function infographicSurface(settings: StudioSettings, { slug, ctx }: { sl
 export interface AgentPersona { system_prompt: string; knowledge_base: string | null }
 
 /**
- * The system instruction the DM bot sends Gemini: the tenant's persona and knowledge base inside the fixed rules. It has
- * no path (b): the knowledge base is an agent setting, not a profile field, so both paths get the same row and hash the
- * same bytes. It is here so a release that changes the instruction changes this hash, and the main-against-release diff
- * shows it.
+ * What the DM bot's wording is built from: the context the tenant's `dm` surface reads (`profileContext(creatorId, 'dm')`,
+ * `contextFor(profile, 'dm', version)`): the language and register it speaks and the kind of thing it sells (P8). The
+ * owner's gives today's text, byte for byte, and these entries are what prove it: they are built through `dmSystemInstruction`,
+ * `dmResponseSchema`, `disclosureLine`, `starterPersona` and `dmFallbackReply` as the DM and comment paths call them.
  */
-export function dmInstructionSurface(agent: AgentPersona): SurfaceEntry[] {
-    return [built('dm.system-instruction', 'text', 'elamir', () => dmSystemInstruction(agent.system_prompt, agent.knowledge_base))];
+export type DmWording = DmContext;
+
+/** The register the tenant's comment replies speak: the `comment_reply` context's, as `comments.ts` reads it. */
+export type CommentWording = Pick<ProfileContext<'comment_reply'>, 'language'>;
+
+/**
+ * A context, or a function that makes one. A tenant whose profile cannot be read into a context fails the entries that need
+ * it (each builder runs inside `built`), instead of the whole surface: the rest are still built and compared.
+ */
+type Wording<T extends object> = T | (() => T);
+const wordingOf = <T extends object>(w: Wording<T>): T => (typeof w === 'function' ? w() : w);
+
+/**
+ * The system instruction the DM bot sends Gemini: the tenant's persona and knowledge base inside the fixed rules, which the
+ * language kit writes from `ctx` (`dmSystemInstruction`). The knowledge base is an agent setting, not a profile field, so both
+ * parity paths get the same row: it is here so a release that changes the instruction changes this hash, and the
+ * main-against-release diff shows it.
+ */
+export function dmInstructionSurface(agent: AgentPersona, ctx: Wording<DmWording>): SurfaceEntry[] {
+    return [built('dm.system-instruction', 'text', 'elamir', () => dmSystemInstruction(agent.system_prompt, agent.knowledge_base, wordingOf(ctx)))];
 }
 
-/** The public reply that replaces an undeliverable DM, for the tenant's own DM template, in every variant. */
-export function dmFallbackSurface(settings: StudioSettings): SurfaceEntry[] {
+/**
+ * The rest of what the DM path says that depends on who the creator is and not on the agent row: the schema Gemini answers
+ * with (the language it asks for, the button id it shows), the first line of an automated DM, and the persona a new agent
+ * starts with. All three are in the language the `dm` surface speaks. Where each is called: `generateAiResponse`,
+ * `handleMessagingEvent`, and the three starter-persona sites (`ai.ts`, `admin.ts`, `api.ts`).
+ */
+export function dmContextSurface(ctx: Wording<DmWording>): SurfaceEntry[] {
+    return [
+        built('dm.response-schema', 'json', 'elamir', () => dmResponseSchema(wordingOf(ctx))),
+        built('dm.disclosure-line', 'text', 'elamir', () => disclosureLine(wordingOf(ctx).language.code)),
+        built('dm.starter-persona', 'text', 'control', () => starterPersona(wordingOf(ctx).language.code)),
+    ];
+}
+
+/**
+ * The public reply that replaces an undeliverable DM, for the tenant's own DM template, in every variant, in the register
+ * its comment surface speaks (`ctx`, `comment_reply`).
+ */
+export function dmFallbackSurface(settings: StudioSettings, ctx: Wording<CommentWording>): SurfaceEntry[] {
     // His DMs are Arabic, so the Arabic replies are his; the English ones go to English-language DMs, and do not read his settings.
     const arabic = lazy(() => {
+        const register = wordingOf(ctx).language.register;
         const ownerDm = buildDm(settings.cta.dmTemplate, {
             question: SAY.ar.question, pitch: SAY.ar.pitch, url: settings.product.url, bullets: settings.product.dmBullets,
         });
@@ -306,15 +344,16 @@ export function dmFallbackSurface(settings: StudioSettings): SurfaceEntry[] {
             { name: 'arabic, facebook, the DM holds a link', isFacebook: true, dmText: ownerDm },
             { name: 'arabic, facebook, the link ends in punctuation', isFacebook: true, dmText: 'هذا الرابط: https://example.com/guide،' },
             { name: 'arabic, facebook, no link in the DM', isFacebook: true, dmText: 'هلا {username} 👋 راسلنا ونرسل لك التفاصيل' },
-        ].map((c) => ({ ...c, reply: dmFallbackReply(c) }));
+        ].map((c) => ({ ...c, reply: dmFallbackReply({ ...c, register }) }));
     });
     const english = lazy(() => {
+        const register = wordingOf(ctx).language.register;
         const englishDm = 'Hi {username} 👋 Here is the full guide: https://example.com/guide?ref=a.';
         return [
             { name: 'english, instagram', isFacebook: false, dmText: englishDm },
             { name: 'english, facebook, the DM holds a link', isFacebook: true, dmText: englishDm },
             { name: 'english, facebook, no link in the DM', isFacebook: true, dmText: 'Hi {username} 👋 Reply to this message for the details' },
-        ].map((c) => ({ ...c, reply: dmFallbackReply(c) }));
+        ].map((c) => ({ ...c, reply: dmFallbackReply({ ...c, register }) }));
     });
     return [
         built('comments.dm-fallback-replies.ar', 'json', 'elamir', arabic),
@@ -445,7 +484,10 @@ export async function growthSurface(rows: GrowthRows, { slug, storedProfile }: {
 
 /**
  * A tenant's rows, and the DM agent's persona when it has one. `profile` is the profile the rows are read through (path (b)
- * of the parity script); without one the tenant is described by its rows alone, `profileFromLegacy`, which is today's path.
+ * of the parity script: the stored one): the infographic writer reads its role, domain and register from its context (P12),
+ * and the DM and comment wording reads its language, register and kind of offer (P8). Without one the tenant is described by
+ * its rows alone, `profileFromLegacy`, which is today's path (and what those paths said before them): so a stored profile that
+ * says something else is a difference between the two paths, as it should be.
  */
 export interface TenantRows extends GrowthRows { agent?: AgentPersona | null; profile?: CreatorProfile }
 
@@ -455,11 +497,16 @@ export interface TenantRows extends GrowthRows { agent?: AgentPersona | null; pr
  * has no DM instruction to hash.
  */
 export async function tenantSurface(rows: TenantRows, options: WithRowsOptions = {}): Promise<SurfaceEntry[]> {
+    // Made on first use, and by the entries that use them, so a tenant whose rows cannot be described fails those builders by name.
+    const profile = lazy(() => rows.profile ?? profileFromLegacy(rows.studio, rows.growth));
+    const dm = () => contextFor(profile(), 'dm', null);
+    const comments = () => contextFor(profile(), 'comment_reply', null);
     return [
         ...await studioSurface(rows.studio, { lang: rows.studio.voice.language }),
-        ...infographicSurface(rows.studio, { ctx: contextFor(rows.profile ?? profileFromLegacy(rows.studio, rows.growth), 'infographic', null) }),
-        ...(rows.agent ? dmInstructionSurface(rows.agent) : []),
-        ...dmFallbackSurface(rows.studio),
+        ...infographicSurface(rows.studio, { ctx: () => contextFor(profile(), 'infographic', null) }),
+        ...(rows.agent ? dmInstructionSurface(rows.agent, dm) : []),
+        ...dmContextSurface(dm),
+        ...dmFallbackSurface(rows.studio, comments),
         ...await growthSurface(rows, options),
     ];
 }

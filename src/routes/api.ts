@@ -12,7 +12,8 @@ import {
     sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
     API_VERSION, MediaProcessingTimeoutError, resumeInstagramContainer,
 } from '../services/instagram.js';
-import { DEFAULT_MODEL, generateAiResponse, resolveModel, STARTER_PERSONA, SUPPORTED_MODELS } from '../services/ai.js';
+import { DEFAULT_MODEL, generateAiResponse, resolveModel, starterPersona, SUPPORTED_MODELS } from '../services/ai.js';
+import { profileContextOrLegacy } from '../services/profile/context.js';
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
     assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache,
@@ -3293,8 +3294,10 @@ router.get('/settings/ai', async (req, res) => {
 
         const agentRes = await pool.query('SELECT * FROM ai_agents WHERE creator_id = $1', [creatorId]);
         if (agentRes.rows.length === 0) {
+            // In the language this tenant's DMs speak (its profile's `dm` surface), not the owner's by default.
+            const { language } = await profileContextOrLegacy(creatorId, 'dm');
             res.json({
-                system_prompt: STARTER_PERSONA,
+                system_prompt: starterPersona(language.code),
                 knowledge_base: '',
                 model: DEFAULT_MODEL,
                 temperature: 0.7,

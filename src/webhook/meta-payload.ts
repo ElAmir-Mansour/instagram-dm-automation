@@ -5,6 +5,8 @@
  * check a carousel was built correctly was to send one to a real person.
  */
 import type { AiResponse } from '../services/ai.js';
+import { kitForLang } from '../services/profile/kits.js';
+import type { Lang } from '../services/profile/types.js';
 
 export interface MetaQuickReply {
     content_type: string;
@@ -83,8 +85,16 @@ export function toMetaMessage(aiRes: AiResponse): MetaMessagePayload {
  * Meta's Messenger Platform policy requires telling people they are talking to an automated
  * service "at the beginning of any conversation or message thread". Kept short because it
  * prefixes a real reply rather than replacing it.
+ *
+ * In the language the tenant's DM surface speaks (`disclosureLine(context.language.code)`), so an English-speaking
+ * creator's followers are not greeted in Arabic. The line is the language kit's (`profile/kits.ts`).
  */
-export const AI_DISCLOSURE_LINE = '🤖 رد آلي من المساعد الذكي';
+export function disclosureLine(lang: Lang): string {
+    return kitForLang(lang).disclosure;
+}
+
+/** The Arabic line, which is what `applyDisclosure` says when it is handed none: the owner's, and the default of the DM path. */
+export const AI_DISCLOSURE_LINE = disclosureLine('ar');
 
 export interface DisclosureResult {
     payload: MetaMessagePayload;

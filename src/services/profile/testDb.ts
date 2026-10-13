@@ -13,6 +13,7 @@ import { pool } from '../../config/db.js';
 import type { GrowthSettings, StudioSettings } from '../../db/rows.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
+import { invalidateTenantCache } from '../tenant.js';
 import { throughJsonb } from './testSupport.js';
 
 export const OWNER = '11111111-1111-4111-8111-111111111111';
@@ -50,6 +51,24 @@ export interface ProfileDb extends FakeDb {
     beforeProfileInsert: (() => void) | null;
     /** Runs before each statement, with its whitespace-collapsed SQL: a write from another connection, landing between two of ours. */
     onStatement: ((sql: string) => void | Promise<void>) | null;
+}
+
+/** The statement `getPlatformOwnerId` runs: the owner, the first creator ever made (tenant.ts). */
+export const PLATFORM_OWNER_SQL = /^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/;
+
+/**
+ * Tells the stand-in who the platform owner is: an id, `null` (no creators at all) or an error (the lookup itself fails).
+ * The lookup is cached in the process for 30 s, so the cache is cleared on the way in, and again when the stand-in is put back.
+ */
+export function setPlatformOwner(db: ProfileDb, owner: string | null | Error): void {
+    invalidateTenantCache();
+    db.routes = db.routes.filter(([pattern]) => pattern !== PLATFORM_OWNER_SQL);
+    db.routes.unshift([PLATFORM_OWNER_SQL, () => {
+        if (owner instanceof Error) throw owner;
+        return { rows: owner === null ? [] : [{ id: owner }] };
+    }]);
+    const restore = db.restore;
+    db.restore = () => { restore(); invalidateTenantCache(); };
 }
 
 export function installProfileDb(state: State, options: { v33?: boolean } = {}): ProfileDb {

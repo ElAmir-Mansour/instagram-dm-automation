@@ -19,6 +19,10 @@ import type { GrowthSettings, StudioSettings } from '../../db/rows.js';
 import { growthRouter } from '../../routes/growth.js';
 import { studioRouter } from '../../routes/studio.js';
 import { setLogSink } from '../../utils/log.js';
+import { dmFallbackReply } from '../../webhook/errors.js';
+import { disclosureLine } from '../../webhook/meta-payload.js';
+import { dmResponseSchema, dmSystemInstruction, starterPersona } from '../ai.js';
+import { profileContext } from './context.js';
 import { GrowthError } from '../growth/common.js';
 import { getGrowthSettings, updateGrowthSettings } from '../growth/settings.js';
 import { StudioError } from '../studio/common.js';
@@ -179,6 +183,82 @@ describe('updateStudioSettings with a stored profile: what the profile owns', ()
         assert.equal(versionNow(), 1);
         assert.equal(count(PROFILE_WRITES), 0);
         assert.equal(state.versions.length, 0);
+    });
+});
+
+/**
+ * P8: the DM bot and the comment replies read their language from the profile, and the Studio's `voice.language` is the
+ * profile's primary language. On main the bot has never followed the Studio (it is Arabic, Gulf, whatever the Studio speaks),
+ * so a write that switches the Studio to English must leave what the bot says exactly as it was: the same instruction, the
+ * same schema, the same disclosure line and the same public fallback.
+ */
+describe('updateStudioSettings: switching the Studio language does not switch the DM bot (P8)', () => {
+    /** Everything the DM and comment paths say, for the owner, as the real `profileContext` reads it from the stand-in database. */
+    async function whatTheBotSays(): Promise<Record<string, string>> {
+        const dm = await profileContext(OWNER, 'dm');
+        const comments = await profileContext(OWNER, 'comment_reply');
+        const arabicDm = 'هلا {username} 👋 اللينك هنا: https://example.com/c';
+        return {
+            language: JSON.stringify([dm.language, comments.language.register, dm.who.offerKind]),
+            instruction: dmSystemInstruction('PERSONA', 'KB', dm),
+            schema: JSON.stringify(dmResponseSchema(dm)),
+            disclosure: disclosureLine(dm.language.code),
+            persona: starterPersona(dm.language.code),
+            instagram: dmFallbackReply({ dmText: arabicDm, isFacebook: false, register: comments.language.register }),
+            facebook: dmFallbackReply({ dmText: arabicDm, isFacebook: true, register: comments.language.register }),
+        };
+    }
+
+    it('the Studio goes English: the DM stays Arabic in the Gulf register, in every line, and the comment fallback stays Gulf', async () => {
+        storeProfile();
+        const before = await whatTheBotSays();
+        assert.match(before.instruction!, /1\. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللغة العربية الفصحى أو بلهجة سهلة ومناسبة\./);
+
+        await updateStudioSettings(OWNER, { voice: { language: 'en' } });
+
+        const stored = storedProfile();
+        assert.equal(stored.language.primary, 'en', 'the Studio did switch');
+        assert.deepStrictEqual(stored.language.surfaces.dm, { language: 'ar', register: 'gulf' }, 'and the write pinned the DM surface');
+        assert.equal(stored.language.register, 'gulf', 'the profile keeps its register');
+        assert.deepStrictEqual(await whatTheBotSays(), before, 'nothing the bot says moved');
+        const after = await whatTheBotSays();
+        assert.equal(after.facebook, 'ما قدرنا نرسل لك على الخاص 🙏 هذا الرابط: https://example.com/c');
+        assert.equal(after.instagram, 'ما قدرنا نرسل لك على الخاص 🙏 الرابط في البايو 🔗');
+    });
+
+    it('and back to Arabic: still the same', async () => {
+        storeProfile();
+        const before = await whatTheBotSays();
+        await updateStudioSettings(OWNER, { voice: { language: 'en' } });
+        await updateStudioSettings(OWNER, { voice: { language: 'ar' } });
+        assert.equal(storedProfile().language.primary, 'ar');
+        assert.deepStrictEqual(await whatTheBotSays(), before);
+    });
+
+    it('a tenant whose profile is not stored: no profile is created, and the legacy profile its rows describe keeps the DM Arabic and Gulf', async () => {
+        assert.equal(state.profiles.has(OWNER), false, 'nothing is stored: the profile is the one his rows describe');
+        const { language: _was, instagram: _ig, facebook: _fb, ...before } = await whatTheBotSays();
+        await updateStudioSettings(OWNER, { voice: { language: 'en' } });
+        assert.equal(state.profiles.has(OWNER), false, 'a write to a tenant with no profile creates none');
+        assert.equal((state.studio.get(OWNER)!.voice as { language: string }).language, 'en', 'the Studio did switch');
+        const { language, instagram, facebook, ...after } = await whatTheBotSays();
+        assert.deepStrictEqual(after, before, 'the instruction, schema, disclosure and starter persona are the same');
+        // The one line that moves for a tenant that has no stored profile (the owner has one, from the backfill): the legacy
+        // profile of an English Studio names no register for comments, so an Arabic DM's public fallback reads as the neutral
+        // one. A stored profile keeps its register (the test above). Pinned so that it cannot change unseen.
+        assert.deepStrictEqual(JSON.parse(language!)[0], { code: 'ar', register: 'gulf', digits: 'arabic-indic', dir: 'rtl' });
+        assert.equal(JSON.parse(language!)[1], null);
+        assert.equal(facebook, 'لم نتمكن من مراسلتك في الخاص 🙏 هذا هو الرابط: https://example.com/c');
+        assert.equal(instagram, 'لم نتمكن من مراسلتك في الخاص 🙏 الرابط في البايو 🔗');
+    });
+
+    it('an English-speaking Studio on a stored profile that names its own DM language keeps it', async () => {
+        const p = ownerProfile();
+        p.language.surfaces = { ...p.language.surfaces, dm: { language: 'ar', register: 'levantine' } };
+        storeProfile(p);
+        await updateStudioSettings(OWNER, { voice: { language: 'en' } });
+        assert.deepStrictEqual(storedProfile().language.surfaces.dm, { language: 'ar', register: 'levantine' });
+        assert.match((await whatTheBotSays()).instruction!, /باللهجة الشامية البسيطة/);
     });
 });
 

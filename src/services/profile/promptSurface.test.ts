@@ -10,13 +10,19 @@ import { pool } from '../../config/db.js';
 import { defaultGrowthSettings } from '../growth/settingsRow.js';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
 import { contextFor } from './context.js';
+import { FITNESS_EN, SHOP_EG } from './fixtures.js';
 import { goldenPath } from './golden.js';
 import { profileFromLegacy } from './legacy.js';
 import { sha256 } from './parity.js';
 import { ELAMIR_AGENT } from '../studio/testFixtures.js';
 import {
-    dmFallbackSurface, dmInstructionSurface, entryText, growthSurface, infographicSurface, studioSurface, tenantSurface, type SurfaceEntry, withRows,
+    dmContextSurface, dmFallbackSurface, dmInstructionSurface, entryText, growthSurface, infographicSurface, studioSurface, tenantSurface, type SurfaceEntry, withRows,
 } from './promptSurface.js';
+
+/** The owner's DM and comment contexts: what the surface is handed for him. */
+const OWNER_PROFILE = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+const OWNER_DM = contextFor(OWNER_PROFILE, 'dm', 1);
+const OWNER_COMMENTS = contextFor(OWNER_PROFILE, 'comment_reply', 1);
 
 /** Every builder the parity script hashes for a live tenant, in order. A builder added to the goldens is added here and to this list. */
 const TENANT_SURFACE = [
@@ -25,6 +31,7 @@ const TENANT_SURFACE = [
     'monteur.pick-system', 'monteur.pick-user', 'monteur.copy-system', 'monteur.copy-user', 'monteur.copy-clip-fallbacks',
     'monteur.editor-system.human-on', 'monteur.editor-system.human-off', 'monteur.analyst-system', 'monteur.render-payload',
     'infographic.render-payload.ar', 'infographic.render-payload.en', 'infographic.brand',
+    'dm.response-schema', 'dm.disclosure-line', 'dm.starter-persona',
     'comments.dm-fallback-replies.ar', 'comments.dm-fallback-replies.en',
     'growth.keywords-system.ar', 'growth.keywords-user', 'growth.coach-system.ar', 'growth.coach-user',
 ];
@@ -84,11 +91,15 @@ describe('the entries are what the golden files hold', () => {
         for (const [settings, slug, lang, set] of [
             [ELAMIR_SETTINGS, 'elamir', 'ar', 'elamir'], [ELAMIR_SEED_SETTINGS, 'seed', 'ar', 'elamir'], [ENGLISH_SETTINGS, 'english', 'en', 'control'],
         ] as const) entries.push(...await studioSurface(settings, { lang, slug, set }));
-        entries.push(...infographicSurface(ELAMIR_SEED_SETTINGS, { slug: 'seed', ctx: contextFor(profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH), 'infographic', null) }), ...dmFallbackSurface(ELAMIR_SETTINGS), ...dmInstructionSurface(ELAMIR_AGENT));
+        entries.push(
+            ...infographicSurface(ELAMIR_SEED_SETTINGS, { slug: 'seed', ctx: contextFor(OWNER_PROFILE, 'infographic', null) }), ...dmFallbackSurface(ELAMIR_SETTINGS, OWNER_COMMENTS),
+            ...dmInstructionSurface(ELAMIR_AGENT, OWNER_DM), ...dmContextSurface(OWNER_DM),
+        );
         entries.push(...await growthSurface({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH }, { slug: 'elamir' }));
 
         assert.ok(entries.length > 60, 'three fixtures of Studio and Monteur builders, and the rest');
         assert.ok(entries.some((e) => e.name === 'dm.system-instruction'));
+        for (const name of ['dm.response-schema', 'dm.disclosure-line', 'dm.starter-persona']) assert.ok(entries.some((e) => e.name === name), name);
         assert.deepEqual(entries.filter((e) => e.error), [], 'every builder built');
         for (const e of entries) {
             const golden = readFileSync(fileOf(e));
@@ -116,10 +127,50 @@ describe('the DM instruction', () => {
     });
 
     it('is built from the agent row alone: the persona and knowledge base inside the fixed rules', () => {
-        const [entry] = dmInstructionSurface({ system_prompt: 'PERSONA', knowledge_base: 'KB TEXT' });
+        const [entry] = dmInstructionSurface({ system_prompt: 'PERSONA', knowledge_base: 'KB TEXT' }, OWNER_DM);
         assert.equal(entry!.name, 'dm.system-instruction');
         assert.equal(entry!.kind, 'text');
         assert.match(entry!.value as string, /^PERSONA\n\n=== .*\nKB TEXT\n\n=== /s);
+    });
+});
+
+describe('the DM and comment wording is the profile\'s', () => {
+    const rows = { studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH };
+    const byName = (entries: SurfaceEntry[]): Map<string, string> => new Map(entries.map((e) => [e.name, entryText(e)]));
+
+    it('without a profile it is the one the rows describe, which is the owner\'s wording; the same profile handed in changes nothing', async () => {
+        const described = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT }));
+        const handedIn = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile: OWNER_PROFILE }));
+        assert.deepEqual([...handedIn], [...described]);
+    });
+
+    it('a profile that speaks Egyptian about products moves the infographic (P12), DM and comment entries, and nothing the Studio or the Monteur writes', async () => {
+        const before = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT }));
+        const after = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile: SHOP_EG }));
+        const moved = [...before.keys()].filter((name) => before.get(name) !== after.get(name));
+        assert.deepEqual(moved, ['infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'comments.dm-fallback-replies.ar']);
+        assert.match(after.get('dm.system-instruction')!, /باللهجة المصرية البسيطة/);
+        assert.match(after.get('dm.system-instruction')!, /إذا طلب المستخدم منتجات/);
+        assert.match(after.get('dm.response-schema')!, /GO_TO_OFFER_1/);
+        assert.match(after.get('comments.dm-fallback-replies.ar')!, /معرفناش نبعتلك على الخاص/);
+    });
+
+    it('an English profile gets the English disclosure and starter persona, and no Arabic in the schema', async () => {
+        const after = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile: FITNESS_EN }));
+        assert.equal(after.get('dm.disclosure-line'), '🤖 Automated reply from the AI assistant');
+        assert.equal(after.get('dm.starter-persona'), 'You are a smart assistant who answers followers\' questions in English.');
+        assert.match(after.get('dm.response-schema')!, /Must be written in English if appropriate/);
+    });
+
+    it('a profile that cannot be made into a context fails the entries that need it (the infographic\'s too), by name, and the rest are still built', async () => {
+        const profile = new Proxy({}, { get() { throw new Error('profile unreadable'); } }) as never;
+        const entries = await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile });
+        const failed = entries.filter((e) => e.error !== undefined).map((e) => e.name);
+        assert.deepEqual(failed, [
+            'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'dm.disclosure-line', 'dm.starter-persona',
+            'comments.dm-fallback-replies.ar', 'comments.dm-fallback-replies.en',
+        ]);
+        assert.ok(entries.some((e) => e.name === 'studio.system' && e.error === undefined), 'the Studio\'s builders were built');
     });
 });
 
@@ -145,7 +196,7 @@ describe('a builder that throws is an entry that says so', () => {
     });
 
     it('the Arabic fallback replies read his DM template and the English ones do not: only the former fail', () => {
-        const [ar, en] = dmFallbackSurface(broken);
+        const [ar, en] = dmFallbackSurface(broken, OWNER_COMMENTS);
         assert.match(ar!.error!, /^TypeError: /);
         assert.equal(en!.error, undefined);
         assert.ok(Array.isArray(en!.value));

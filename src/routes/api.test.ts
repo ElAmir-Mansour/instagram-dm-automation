@@ -16,11 +16,13 @@ import type { Request, Response } from 'express';
 import {
     consumeDownloadToken, createDownloadToken, createLegacySession, requireAuth,
 } from '../middleware/auth.js';
-import { requireLiveSession, resolveTenant } from '../services/tenant.js';
+import { invalidateTenantCache, requireLiveSession, resolveTenant } from '../services/tenant.js';
 import { pool } from '../config/db.js';
 import adminRouter from './admin.js';
 import { setLogSink } from '../utils/log.js';
 import { DEFAULT_MODEL } from '../services/ai.js';
+import { FITNESS_EN, SHOP_EG } from '../services/profile/fixtures.js';
+import { throughJsonb } from '../services/profile/testSupport.js';
 import apiRouter, {
     conversationSearchPattern, exportScopeFor, formatPublishedIds, parseExportDownload, publishDuePosts, publishedPlatforms,
     splitDueByTenantActivity, unsupportedAfterEdit, unsupportedPlatformCombination,
@@ -497,7 +499,7 @@ describe('/settings/ai — the model shown and saved', () => {
     });
     afterEach(() => restoreSink?.());
 
-    async function call(method: 'get' | 'post', stored: Record<string, unknown> | null, body: Record<string, unknown> = {}) {
+    async function call(method: 'get' | 'post', stored: Record<string, unknown> | null, body: Record<string, unknown> = {}, profile?: unknown, owner?: string | null) {
         const res = {
             statusCode: 200,
             body: null as any,
@@ -506,10 +508,15 @@ describe('/settings/ai — the model shown and saved', () => {
         };
         const statements: Array<{ sql: string; params: unknown[] }> = [];
         const original = pool.query;
+        invalidateTenantCache();
         (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
             statements.push({ sql, params });
             if (/SELECT \* FROM ai_agents/.test(sql)) return { rows: stored ? [stored] : [], rowCount: stored ? 1 : 0 };
             if (/INSERT INTO ai_agents/.test(sql)) return { rows: [{ creator_id: params[0], model: params[3] }], rowCount: 1 };
+            // The profile the starter persona's language is read from (P8). Not arranged = unreadable, which is the owner's Arabic.
+            if (profile !== undefined && /FROM creator_profiles/.test(sql)) return { rows: [{ profile: throughJsonb(profile), version: 1, activated_at: null }], rowCount: 1 };
+            // Who the platform owner is, when the test says (it only matters when the profile cannot be read).
+            if (owner !== undefined && /SELECT id FROM creators ORDER BY created_at, id LIMIT 1/.test(sql)) return { rows: owner === null ? [] : [{ id: owner }], rowCount: owner === null ? 0 : 1 };
             throw new Error(`no result arranged for SQL: ${sql}`);
         };
         try {
@@ -520,6 +527,7 @@ describe('/settings/ai — the model shown and saved', () => {
             );
         } finally {
             (pool as unknown as { query: unknown }).query = original;
+            invalidateTenantCache();
         }
         return { res, statements };
     }
@@ -543,6 +551,30 @@ describe('/settings/ai — the model shown and saved', () => {
     it('shows the default for a tenant with no agent row yet', async () => {
         const { res } = await call('get', null);
         assert.equal(res.body.model, DEFAULT_MODEL);
+    });
+
+    it('shows a tenant with no agent row yet the starter persona in the language its DMs speak (P8): English, Egyptian\'s Arabic, and the owner\'s Arabic when its profile cannot be read', async () => {
+        const english = await call('get', null, {}, FITNESS_EN);
+        assert.equal(english.res.body.system_prompt, 'You are a smart assistant who answers followers\' questions in English.');
+        const egyptian = await call('get', null, {}, SHOP_EG);
+        assert.equal(egyptian.res.body.system_prompt, 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.');
+        const unreadable = await call('get', null);
+        assert.equal(unreadable.res.body.system_prompt, 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.');
+    });
+
+    it('a tenant that is not the owner, whose profile cannot be read, gets an error and not the owner\'s Arabic persona; the owner still gets his', async () => {
+        const stranger = await call('get', null, {}, undefined, 'someone-else');
+        assert.equal(stranger.res.statusCode, 500);
+        assert.equal(stranger.res.body.system_prompt, undefined);
+        const owner = await call('get', null, {}, undefined, TENANT_A);
+        assert.equal(owner.res.statusCode, 200);
+        assert.equal(owner.res.body.system_prompt, 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.');
+    });
+
+    it('does not read the profile for a tenant that has an agent row: its own persona is shown as it is', async () => {
+        const { res, statements } = await call('get', { ...row, model: DEFAULT_MODEL }, {}, FITNESS_EN);
+        assert.equal(res.body.system_prompt, 'p');
+        assert.equal(statements.filter((st) => /FROM creator_profiles/.test(st.sql)).length, 0);
     });
 
     it('saves a retired or mistyped model as the default it would run on', async () => {

@@ -4,6 +4,9 @@
  *
  *   contextFor(profile, purpose, version)    pure: the context a profile gives one purpose
  *   profileContext(creatorId, purpose)       the same, for a tenant: its stored profile, else the virtual one (`loadProfile`)
+ *   profileContextOrLegacy(creatorId, p)     the same for the DM bot and the comment replies (P8), which speak to customers: a profile that
+ *                                            cannot be read is, for the platform owner, `legacyContext(p)` (his wording, and a warning);
+ *                                            for any other tenant a `ProfileUnreadableError`, which the job queue retries
  *
  * A context is a *base* every purpose shares plus a *slice* only that purpose reads, flattened into one object:
  *
@@ -31,7 +34,10 @@
  * context from the legacy rows instead (`loadLegacyProfile`), with `version: null`, and `overlayProfile` logs it once.
  */
 import { pool } from '../../config/db.js';
+import { describeError, log } from '../../utils/log.js';
 import type { Exec } from '../studio/common.js';
+import { getPlatformOwnerId } from '../tenant.js';
+import { legacyBase } from './legacy.js';
 import { loadLegacyProfile, loadProfile, overlayProfile } from './store.js';
 import type {
     Address, ArabicRegister, AudienceLevel, ContentRulePreset, CreatorKind, CreatorProfile, Digits, Domain, EmojiLevel, FaqItem, Lang,
@@ -275,4 +281,71 @@ export async function profileContext<P extends Purpose>(creatorId: string, purpo
         return contextFor(await loadLegacyProfile(creatorId, exec), purpose, null);
     }
     return contextFor(loaded.profile, purpose, loaded.version);
+}
+
+// ─── A context for the paths that speak to customers ─────────────────────────────────────────
+
+/**
+ * The context the owner's legacy assumptions give `purpose` (`legacyBase('ar')`, no stored version): Gulf Arabic, courses.
+ * It is what the owner gets when his profile cannot be read, so that a database hiccup costs him nothing he did not have
+ * before P8 (the DM and comment text he always got) rather than a crash or an empty reply.
+ */
+export function legacyContext<P extends Purpose>(purpose: P): ProfileContext<P> {
+    assertPurpose(purpose);
+    return contextFor(legacyBase('ar'), purpose, null);
+}
+
+/**
+ * A profile that could not be read for a tenant that is not the owner. It is transient by nature (a database that failed once
+ * answers the next try), so it is thrown, not answered: the queued DM or comment job that asked is retried by the runner
+ * (`src/jobs/runner.ts`: any thrown error is retried with a backoff, and is logged `job.failed` when the attempts run out).
+ * The owner's Gulf wording is never a stand-in for another tenant's: it would speak Gulf Arabic about courses to followers
+ * of an English shop. A caller that has no retry left decides for itself what to say (`comments.ts`).
+ */
+export class ProfileUnreadableError extends Error {
+    constructor(readonly creatorId: string, readonly purpose: Purpose, readonly cause: unknown) {
+        super(`the profile of tenant ${creatorId} could not be read for ${purpose}: ${cause instanceof Error ? cause.message : String(cause)}`);
+        this.name = 'ProfileUnreadableError';
+    }
+}
+
+/**
+ * Whether `creatorId` may be answered in the owner's legacy wording when its profile cannot be read: the platform owner, and
+ * anyone while the owner cannot be found. A lookup that fails or finds no creator answers yes, so the owner is never blocked
+ * on a database that is struggling, and a deployment with one tenant behaves exactly as it did before P8.
+ */
+async function mayUseLegacyWording(creatorId: string): Promise<boolean> {
+    try {
+        const owner = await getPlatformOwnerId();
+        return owner === null || owner.toLowerCase() === creatorId.toLowerCase();
+    } catch {
+        return true;
+    }
+}
+
+/**
+ * `profileContext`, for the DM bot and the comment replies, which speak to real customers: the text they choose from the
+ * profile is wording, not a gate, so a read that fails must not become a failed reply for the owner. A profile that cannot be
+ * read (a database error, a read that threw) is logged as `profile.context_unreadable` and then:
+ *
+ *   - for the platform owner (`getPlatformOwnerId`, or anyone when that lookup fails or finds nobody), it is answered with
+ *     the owner-identical legacy context: today's text, and the caller's own work goes on;
+ *   - for any other tenant, it throws `ProfileUnreadableError`, so the queued job retries instead of answering a stranger's
+ *     followers in the owner's language.
+ *
+ * An unknown purpose is a programming error and always throws.
+ */
+export async function profileContextOrLegacy<P extends Purpose>(creatorId: string, purpose: P, exec: Exec = pool): Promise<ProfileContext<P>> {
+    assertPurpose(purpose);
+    try {
+        return await profileContext(creatorId, purpose, exec);
+    } catch (err) {
+        const legacy = await mayUseLegacyWording(creatorId);
+        log('warn', 'profile.context_unreadable', {
+            creator_id: creatorId, purpose, ...describeError(err),
+            effect: legacy ? 'the owner-identical legacy wording is used for this request' : 'not the owner: the job is retried, nothing is answered in his wording',
+        });
+        if (legacy) return legacyContext(purpose);
+        throw new ProfileUnreadableError(creatorId, purpose, err);
+    }
 }
