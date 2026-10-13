@@ -5,7 +5,7 @@
  * schedule, folder) is written into code or prompts: it all lives here, per tenant. A tenant
  * without a `studio_settings` row gets `defaultStudioSettings()`, which is deliberately neutral.
  */
-import type { Carousel } from './carouselTypes.js';
+import type { ExampleCarousel } from './carouselTypes.js';
 
 export type BrandKit = {
     /** Shown in the UI. */
@@ -162,8 +162,11 @@ export type StudioSettings = {
     cta: CtaConfig;
     schedule: ScheduleConfig;
     library: LibraryConfig;
-    /** Carousels the tenant approved, used as few-shot examples; `null` = the built-in ones. */
-    examples: Carousel[] | null;
+    /**
+     * Carousels the tenant approved, used as few-shot examples (a `reference` one is another creator's, shown as a reference);
+     * `null` = none of its own. Until P14 the owner alone is then given the built-in ones, `examplesFor`.
+     */
+    examples: ExampleCarousel[] | null;
     monteur: MonteurConfig;
     infographic: InfographicConfig;
 };

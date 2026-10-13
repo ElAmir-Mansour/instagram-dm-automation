@@ -15,6 +15,7 @@ import { goldenPath } from './golden.js';
 import { profileFromLegacy } from './legacy.js';
 import { sha256 } from './parity.js';
 import { ELAMIR_AGENT } from '../studio/testFixtures.js';
+import type { StudioWording } from '../studio/prompts.js';
 import {
     dmContextSurface, dmFallbackSurface, dmInstructionSurface, entryText, growthSurface, infographicSurface, studioSurface, tenantSurface, type SurfaceEntry, withRows,
 } from './promptSurface.js';
@@ -23,6 +24,8 @@ import {
 const OWNER_PROFILE = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
 const OWNER_DM = contextFor(OWNER_PROFILE, 'dm', 1);
 const OWNER_COMMENTS = contextFor(OWNER_PROFILE, 'comment_reply', 1);
+/** What the Studio's writer is told about the owner: his carousel context, and the built-in carousels (his alone until P14). */
+const OWNER_CAROUSEL: StudioWording = { ...contextFor(OWNER_PROFILE, 'carousel', 1), builtInExamples: true };
 
 /** Every builder the parity script hashes for a live tenant, in order. A builder added to the goldens is added here and to this list. */
 const TENANT_SURFACE = [
@@ -88,9 +91,11 @@ describe('tenantSurface', () => {
 describe('the entries are what the golden files hold', () => {
     it('every entry of every fixture is a golden file, and the parity script\'s hash of it is that file\'s sha256', async () => {
         const entries: SurfaceEntry[] = [];
-        for (const [settings, slug, lang, set] of [
-            [ELAMIR_SETTINGS, 'elamir', 'ar', 'elamir'], [ELAMIR_SEED_SETTINGS, 'seed', 'ar', 'elamir'], [ENGLISH_SETTINGS, 'english', 'en', 'control'],
-        ] as const) entries.push(...await studioSurface(settings, { lang, slug, set }));
+        for (const [settings, slug, lang, set, wording] of [
+            [ELAMIR_SETTINGS, 'elamir', 'ar', 'elamir', OWNER_CAROUSEL], [ELAMIR_SEED_SETTINGS, 'seed', 'ar', 'elamir', OWNER_CAROUSEL],
+            // The control is a tenant that is not the owner: it is shown no examples.
+            [ENGLISH_SETTINGS, 'english', 'en', 'control', { ...contextFor(profileFromLegacy(ENGLISH_SETTINGS), 'carousel', null), builtInExamples: false }],
+        ] as const) entries.push(...await studioSurface(settings, { lang, slug, set, carousel: wording }));
         entries.push(
             ...infographicSurface(ELAMIR_SEED_SETTINGS, { slug: 'seed', ctx: contextFor(OWNER_PROFILE, 'infographic', null) }), ...dmFallbackSurface(ELAMIR_SETTINGS, OWNER_COMMENTS),
             ...dmInstructionSurface(ELAMIR_AGENT, OWNER_DM), ...dmContextSurface(OWNER_DM),
@@ -110,8 +115,8 @@ describe('the entries are what the golden files hold', () => {
 
     it('a name with no fixture suffix is the golden\'s name without it', async () => {
         const [named, bare] = [
-            await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar', slug: 'seed' }),
-            await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar' }),
+            await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar', slug: 'seed', carousel: OWNER_CAROUSEL }),
+            await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar', carousel: OWNER_CAROUSEL }),
         ];
         assert.deepEqual(bare.map((e) => `${e.name}.seed`), named.map((e) => e.name));
         assert.deepEqual(bare.map(entryText), named.map(entryText), 'the suffix is a name, not an input');
@@ -144,15 +149,22 @@ describe('the DM and comment wording is the profile\'s', () => {
         assert.deepEqual([...handedIn], [...described]);
     });
 
-    it('a profile that speaks Egyptian about products moves the Editor (P10), infographic (P12), DM and comment entries, and nothing else the Studio or the Monteur writes', async () => {
+    it('a profile that speaks Egyptian about products moves the Studio writer\'s (P9), the Editor\'s (P10), the infographic\'s (P12), the DM and the comment entries, and nothing else the Studio or the Monteur writes', async () => {
         const before = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT }));
         const after = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile: SHOP_EG }));
         const moved = [...before.keys()].filter((name) => before.get(name) !== after.get(name));
         // The Editor moves because the shop has no one on camera and speaks of no tech (P10); its two prompts come with the Monteur's entries.
         assert.deepEqual(moved, [
+            'studio.system', 'studio.plan-system', 'studio.dm-fallback', 'captions.tiktok',
             'monteur.editor-system.human-on', 'monteur.editor-system.human-off',
             'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'comments.dm-fallback-replies.ar',
         ]);
+        // The Studio's writer: what they sell, the Egyptian question, no pitch for a product, no learning hashtags, and no examples of another creator.
+        assert.match(after.get('studio.system')!, /whose product is «/);
+        assert.doesNotMatch(after.get('studio.system')!, /## Approved carousels/);
+        assert.match(after.get('studio.dm-fallback')!, /عايز تطبّقها بنفسك خطوة بخطوة/);
+        assert.doesNotMatch(after.get('captions.tiktok')!, /LearnOnTikTok/);
+        assert.match(before.get('captions.tiktok')!, /LearnOnTikTok/);
         assert.match(after.get('dm.system-instruction')!, /باللهجة المصرية البسيطة/);
         assert.match(after.get('dm.system-instruction')!, /إذا طلب المستخدم منتجات/);
         assert.match(after.get('dm.response-schema')!, /GO_TO_OFFER_1/);
@@ -166,16 +178,17 @@ describe('the DM and comment wording is the profile\'s', () => {
         assert.match(after.get('dm.response-schema')!, /Must be written in English if appropriate/);
     });
 
-    it('a profile that cannot be made into a context fails the entries that need it (the Editor\'s and the infographic\'s too), by name, and the rest are still built', async () => {
+    it('a profile that cannot be made into a context fails the entries that need it (the Studio writer\'s, the Editor\'s and the infographic\'s too), by name, and the rest are still built', async () => {
         const profile = new Proxy({}, { get() { throw new Error('profile unreadable'); } }) as never;
         const entries = await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile });
         const failed = entries.filter((e) => e.error !== undefined).map((e) => e.name);
         assert.deepEqual(failed, [
+            'studio.system', 'studio.plan-system', 'studio.dm-fallback', 'captions.tiktok',
             'monteur.editor-system.human-on', 'monteur.editor-system.human-off',
             'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'dm.disclosure-line', 'dm.starter-persona',
             'comments.dm-fallback-replies.ar', 'comments.dm-fallback-replies.en',
         ]);
-        assert.ok(entries.some((e) => e.name === 'studio.system' && e.error === undefined), 'the Studio\'s builders were built');
+        assert.ok(entries.some((e) => e.name === 'studio.catalog' && e.error === undefined), 'the Studio\'s builders that read no profile were built');
     });
 });
 
@@ -183,8 +196,8 @@ describe('a builder that throws is an entry that says so', () => {
     const broken = { ...ELAMIR_SEED_SETTINGS, cta: null } as unknown as typeof ELAMIR_SEED_SETTINGS;
 
     it('studioSurface: the builders that read what is missing carry the error, every other builder is built, and the order is kept', async () => {
-        const whole = await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar' });
-        const entries = await studioSurface(broken, { lang: 'ar' });
+        const whole = await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar', carousel: OWNER_CAROUSEL });
+        const entries = await studioSurface(broken, { lang: 'ar', carousel: OWNER_CAROUSEL });
         assert.deepEqual(entries.map((e) => e.name), whole.map((e) => e.name), 'the same entries in the same order');
         const failed = entries.filter((e) => e.error !== undefined);
         assert.ok(failed.some((e) => e.name === 'studio.dm'));
@@ -244,7 +257,7 @@ describe('the pool stand-in answers what the Growth builders ask and nothing els
         }
         const parity = readFileSync(new URL('./parity.ts', import.meta.url), 'utf8');
         assert.equal(parity.match(/storedProfile/g)?.length, 1, 'one use');
-        assert.match(parity, /const a = await tenantSurface\(\{ studio, growth, agent \}\);/, 'path (a), today\'s rows, is handed none');
+        assert.match(parity, /const a = await tenantSurface\(\{ studio, growth, agent, builtInExamples \}\);/, 'path (a), today\'s rows, is handed none');
         assert.match(parity, /const b = await tenantSurface\(\{[^\n]*\}, stored \? \{ storedProfile: profile \} : \{\}\);/, 'path (b) is handed the stored profile, when there is one');
     });
 

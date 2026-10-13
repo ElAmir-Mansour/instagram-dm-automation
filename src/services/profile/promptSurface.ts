@@ -46,7 +46,9 @@ import { renderPayload as carouselRenderPayload } from '../studio/drafts.js';
 import { normalizeInstagramCaption, normalizeTiktokCaption, type CallModel, type ModelRequest } from '../studio/generate.js';
 import { payloadBrand, type InfographicWriterContext } from '../studio/infographicSpec.js';
 import { renderPayload as infographicRenderPayload } from '../studio/infographics.js';
-import { askLine, buildCatalog, buildDm, buildPlanSystemPrompt, buildSystemPrompt, draftUserPrompt, languageKit, saveLine, tiktokLine } from '../studio/prompts.js';
+import {
+    askLine, buildCatalog, buildDm, buildPlanSystemPrompt, buildSystemPrompt, draftUserPrompt, type StudioWording, saveLine, tiktokLine, writerKit,
+} from '../studio/prompts.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
 import {
     ELAMIR_SEO, GOLDEN_CLIPS, GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_LINES, GOLDEN_REEL_EVIDENCE, GOLDEN_SOURCES,
@@ -180,6 +182,13 @@ const PLAN: ClipDirection = {
 export interface StudioSurfaceOptions {
     /** The language the story the builders are fed is told in: the tenant's own (`settings.voice.language`). */
     lang: SurfaceLang;
+    /**
+     * What the Studio's writer is told about the creator (P9): the `carousel` context of the profile the caller reads the tenant
+     * through (`studioWording`), and whether the owner's built-in carousels are shown. Handed to the builders exactly as
+     * `generateDraft` hands it. No default: a path that forgot to give one fails to compile instead of quietly writing the owner's text.
+     * It may be a function that makes it (`Wording`), so a tenant whose profile cannot be made into one fails those entries by name.
+     */
+    carousel: Wording<StudioWording>;
     /** The fixture's suffix in the golden names (`elamir`, `seed`, `english`). None for a live tenant. */
     slug?: string;
     /** The golden set these belong to. */
@@ -197,20 +206,20 @@ export interface StudioSurfaceOptions {
  * Every builder that reads the Studio settings and nothing else of the tenant: the writer's prompts, the CTA lines,
  * the DM, the caption normalisers, the carousel payload, and the Monteur's pick, copy, Editor, Analyst and render.
  */
-export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
+export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor, carousel: wording }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
     const say = SAY[lang];
     const out: SurfaceEntry[] = [];
     const t = (base: string, build: () => string): void => { out.push(built(named(base, slug), 'text', set, build)); };
     const j = (base: string, build: () => unknown): void => { out.push(built(named(base, slug), 'json', set, build)); };
 
     // The Studio writer.
-    t('studio.system', () => buildSystemPrompt(settings));
-    t('studio.plan-system', () => buildPlanSystemPrompt(settings));
+    t('studio.system', () => buildSystemPrompt(settings, wordingOf(wording)));
+    t('studio.plan-system', () => buildPlanSystemPrompt(settings, wordingOf(wording)));
     j('studio.cta-lines', () => ({ ask: askLine(settings, 'KEYWORD'), save: saveLine(settings), tiktok: tiktokLine(settings) }));
 
     const fill = lazy(() => ({ url: settings.product.url, bullets: settings.product.dmBullets }));
     t('studio.dm', () => buildDm(settings.cta.dmTemplate, { question: say.question, pitch: say.pitch, ...fill() }));
-    const kit = lazy(() => languageKit(settings));
+    const kit = lazy(() => writerKit(wordingOf(wording)));
     t('studio.dm-fallback', () => buildDm(settings.cta.dmTemplate, { question: kit().fallbackQuestion, pitch: kit().fallbackPitch, ...fill() }));
 
     const catalog = lazy(() => buildCatalog(GOLDEN_SOURCES, settings, say.idea));
@@ -221,7 +230,7 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
     }));
 
     t('captions.instagram', () => normalizeInstagramCaption(say.igCaption, say.keyword, say.candidates, settings));
-    t('captions.tiktok', () => normalizeTiktokCaption(say.ttCaption, say.candidates, settings));
+    t('captions.tiktok', () => normalizeTiktokCaption(say.ttCaption, say.candidates, settings, kit().learnTags));
 
     const carousel: Carousel = {
         id: 'LocalAI', accent: '#FFD60A', keyword: say.keyword,
@@ -499,7 +508,16 @@ export async function growthSurface(rows: GrowthRows, { slug, storedProfile }: {
  * its rows alone, `profileFromLegacy`, which is today's path (and what those paths said before them): so a stored profile that
  * says something else is a difference between the two paths, as it should be.
  */
-export interface TenantRows extends GrowthRows { agent?: AgentPersona | null; profile?: CreatorProfile }
+export interface TenantRows extends GrowthRows {
+    agent?: AgentPersona | null;
+    profile?: CreatorProfile;
+    /**
+     * Whether the tenant is shown the owner's built-in carousels (`StudioWording.builtInExamples`): the platform owner, until P14.
+     * The parity script asks the database who the owner is and hands the answer in. Left out it is false: a tenant is never shown
+     * another's carousels unless it is told it is the owner.
+     */
+    builtInExamples?: boolean;
+}
 
 /**
  * Everything above, for one tenant's rows, with no fixture suffix: what `prompt-parity.mts` hashes. Called twice per
@@ -511,8 +529,9 @@ export async function tenantSurface(rows: TenantRows, options: WithRowsOptions =
     const profile = lazy(() => rows.profile ?? profileFromLegacy(rows.studio, rows.growth));
     const dm = () => contextFor(profile(), 'dm', null);
     const comments = () => contextFor(profile(), 'comment_reply', null);
+    const carousel = (): StudioWording => ({ ...contextFor(profile(), 'carousel', null), builtInExamples: rows.builtInExamples === true });
     return [
-        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null) }),
+        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null), carousel }),
         ...infographicSurface(rows.studio, { ctx: () => contextFor(profile(), 'infographic', null) }),
         ...(rows.agent ? dmInstructionSurface(rows.agent, dm) : []),
         ...dmContextSurface(dm),

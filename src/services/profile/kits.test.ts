@@ -32,7 +32,9 @@ describe('the kits', () => {
                 kit.dm.knowledgeHeader, kit.dm.rulesHeader, kit.dm.friendly, kit.dm.offers('X'), kit.dm.limits,
                 kit.disclosure, kit.starterPersona, ...Object.values(kit.offerNouns),
                 kit.commentFallback.lead, kit.commentFallback.bio, kit.commentFallback.link('https://x.test'), kit.commentFallback.none,
+                kit.studio.forwardExample, kit.studio.fallbackQuestion, kit.studio.coursePitch, ...kit.studio.timeWords.head, ...kit.studio.timeWords.all,
             ];
+            assert.equal(kit.studio.timeWords.head.length, 5, `${key}: the prompt names five time words`);
             for (const line of lines) assert.ok(line.trim().length > 0, `${key} has a blank line`);
             assert.ok(kit.dm.offers('NOUN').includes('NOUN'), `${key}: rule 2 says the noun it is given`);
             assert.ok(kit.commentFallback.link('https://x.test/y').endsWith('https://x.test/y'), `${key}: the link comes last`);
@@ -51,6 +53,28 @@ describe('the kits', () => {
         assert.equal(commentFallback(g, { isFacebook: false, link: undefined }), 'ما قدرنا نرسل لك على الخاص 🙏 الرابط في البايو 🔗');
         assert.equal(commentFallback(g, { isFacebook: true, link: 'https://x.test/y' }), 'ما قدرنا نرسل لك على الخاص 🙏 هذا الرابط: https://x.test/y');
         assert.equal(commentFallback(g, { isFacebook: true, link: undefined }), 'ما قدرنا نرسل لك على الخاص 🙏 راسلنا على الخاص ونرسل لك التفاصيل');
+    });
+
+    it('the Gulf kit is the Studio writer\'s text of today too: the time words, the example, the question and the course pitch (P9)', () => {
+        const s = KITS.gulf.studio;
+        assert.deepEqual([...s.timeWords.all], [
+            'اليوم', 'الليلة', 'الليله', 'الحين', 'هالحين', 'الآن', 'الان', 'بكرة', 'بكره', 'غداً', 'غدا',
+            'أمس', 'امس', 'البارحة', 'البارحه', 'هالأسبوع', 'هالاسبوع', 'هذا الأسبوع', 'هذا الاسبوع',
+            'الأسبوع الجاي', 'الاسبوع الجاي', 'هالشهر', 'قريباً', 'قريبا',
+        ]);
+        assert.deepEqual([...s.timeWords.head], ['اليوم', 'الليلة', 'الليله', 'الحين', 'هالحين'], 'the first five: what the prompt has always named');
+        assert.equal(s.forwardExample, '«ابعتها لصاحبك اللي …»');
+        assert.equal(s.fallbackQuestion, 'تبي تطبّقها بنفسك خطوة بخطوة؟ 👀');
+        assert.equal(s.coursePitch, 'شرحتها خطوة بخطوة في الكورس، مع التطبيق العملي.');
+    });
+
+    it('English is the neutral Studio text of today: its time words, and the question and pitch it falls back on', () => {
+        const s = KITS.en.studio;
+        assert.deepEqual([...s.timeWords.all], ['today', 'tonight', 'tomorrow', 'yesterday', 'this week', 'next week', 'this month', 'right now']);
+        assert.deepEqual([...s.timeWords.head], ['today', 'tonight', 'tomorrow', 'yesterday', 'this week']);
+        assert.equal(s.fallbackQuestion, 'Want to try this yourself, step by step? 👀');
+        assert.equal(s.coursePitch, 'I walk through it step by step in the course.');
+        assert.equal(s.forwardExample, '"Send this to the friend who …"');
     });
 
     it('the four Arabic registers share what is an instruction to the model, and differ in what is dialect: rule 1 and the public reply', () => {
@@ -148,6 +172,51 @@ const REVIEW: Record<'msa' | 'egyptian' | 'levantine', { friendly: string; bio: 
         none: 'ما قدرنا نبعتلك عالخاص 🙏 راسلنا ومنبعتلك التفاصيل',
     },
 };
+
+/**
+ * The Studio writer's lines of the same table (05 §2, "Arabic text per register"), as the kits write them: the five time words the
+ * prompt names ("head"), the question a DM falls back to, the pitch it falls back to for a COURSE (no other kind has one), and the example
+ * a reel's "who to send it to" line gives. The validator also rejects Gulf's whole list in every register and a few spellings of its own
+ * words (`kits.ts`); only these four lines are the table's. Drafts until a native speaker has read them.
+ */
+const REVIEW_STUDIO: Record<'msa' | 'egyptian' | 'levantine', { head: string[]; question: string; pitch: string; forward: string }> = {
+    msa: {
+        head: ['اليوم', 'الليلة', 'الآن', 'غداً', 'أمس'],
+        question: 'هل تريد تطبيقها بنفسك خطوة بخطوة؟ 👀',
+        pitch: 'شرحتُها خطوة بخطوة في الدورة، مع التطبيق العملي.',
+        forward: '«أرسلها لصديقك الذي …»',
+    },
+    egyptian: {
+        head: ['النهارده', 'الليلة', 'دلوقتي', 'بكره', 'امبارح'],
+        question: 'عايز تطبّقها بنفسك خطوة بخطوة؟ 👀',
+        pitch: 'شرحتها خطوة بخطوة في الكورس، مع التطبيق العملي.',
+        forward: '«ابعتها لصاحبك اللي …»',
+    },
+    levantine: {
+        head: ['اليوم', 'الليلة', 'هلق', 'بكرا', 'مبارح'],
+        question: 'بدّك تطبّقها بحالك خطوة بخطوة؟ 👀',
+        pitch: 'شرحتها خطوة بخطوة بالكورس، مع التطبيق العملي.',
+        forward: '«ابعتها لرفيقك اللي …»',
+    },
+};
+
+describe('the non-Gulf Arabic Studio lines, as 05 §2 drafts them (for a native speaker to read)', () => {
+    for (const key of ['msa', 'egyptian', 'levantine'] as const) {
+        it(`${key}: the time words, the fallback question and pitch, and the forward example`, () => {
+            const s = KITS[key].studio;
+            const want = REVIEW_STUDIO[key];
+            assert.deepEqual([...s.timeWords.head], want.head);
+            assert.equal(s.fallbackQuestion, want.question);
+            assert.equal(s.coursePitch, want.pitch);
+            assert.equal(s.forwardExample, want.forward);
+        });
+    }
+
+    it('the Egyptian pitch and forward example are today\'s line, as the table says', () => {
+        assert.equal(KITS.egyptian.studio.coursePitch, KITS.gulf.studio.coursePitch);
+        assert.equal(KITS.egyptian.studio.forwardExample, KITS.gulf.studio.forwardExample);
+    });
+});
 
 describe('the non-Gulf Arabic lines, as 05 §2 drafts them (for a native speaker to read)', () => {
     for (const key of ['msa', 'egyptian', 'levantine'] as const) {

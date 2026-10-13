@@ -165,6 +165,8 @@ export function settingsProblems(s: StudioSettings): string[] {
         list(examples, 'examples', 5, (v, p) => {
             if (!isPlainObject(v) || !Array.isArray(v.slides) || !isPlainObject(v.captions)) {
                 problems.push(`${p} must be a carousel, with slides and captions`);
+            } else if (v.reference !== undefined && typeof v.reference !== 'boolean') {
+                problems.push(`${p}.reference must be true or false: it says the example is another creator's`);
             }
         });
         if (Array.isArray(examples) && JSON.stringify(examples).length > 100_000) {

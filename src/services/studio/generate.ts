@@ -33,13 +33,17 @@ import {
     draftUserPrompt,
     languageKit,
     oneLine,
+    pitchCore,
     planUserPrompt,
     repairPrompt,
     rewriteUserPrompt,
     saveLine,
     tiktokLine,
+    writerKit,
     type Catalog,
     type PlanCatalog,
+    type StudioWording,
+    type WriterKit,
 } from './prompts.js';
 import {
     ALT_TEXT_BUDGET,
@@ -127,6 +131,11 @@ export type GenContext = {
     /** Superseded by `settings.brand.palette` (v1.1); used only when that is empty. */
     palette?: string[];
     settings: StudioSettings;
+    /**
+     * Who the writer writes for (P9): the language and register of the carousel, the kind of creator and what they sell, from the
+     * profile's `carousel` context (`studioWording`). Required, so a caller that has none cannot compile into writing the owner's text.
+     */
+    wording: StudioWording;
     /**
      * The tenant's Growth settings (GROWTH.md §4): search keywords to work into the caption's first
      * line and the slides where they fit, and the hashtags to choose the caption's from.
@@ -406,7 +415,11 @@ export const SLIDE_SCHEMA: GeminiSchema = obj({
     altText: str(`every slide: ≤ ${ALT_TEXT_BUDGET}, one plain sentence on what the slide shows and says, for screen readers and Instagram search`),
 }, ['kind', 'sources']);
 
-export const DRAFT_SCHEMA: GeminiSchema = obj({
+/**
+ * What the writer answers a carousel with. Only `dmPitch`'s description depends on the tenant: it names what they sell
+ * ("the part of the program", "the topic to the product"), the same words the prompt's line for it uses.
+ */
+export const draftSchema = (wording: Pick<StudioWording, 'who'>): GeminiSchema => obj({
     id: str('a short PascalCase English name, e.g. LocalAI'),
     keyword: str('one word'),
     keywordAlternatives: strs(3, 'more keyword candidates, best first'),
@@ -418,8 +431,11 @@ export const DRAFT_SCHEMA: GeminiSchema = obj({
         tiktok: str(),
     }, ['instagram', 'tiktokTitle', 'tiktok']),
     dmQuestion: str('one line'),
-    dmPitch: str('one sentence naming the part of the course'),
+    dmPitch: str(`one sentence ${pitchCore(wording)}`),
 }, ['id', 'keyword', 'keywordAlternatives', 'variants', 'slides', 'captions', 'dmQuestion', 'dmPitch']);
+
+/** The schema for a creator who sells a course: the owner's, and the one `golden.test.ts` and the schema checks pin. */
+export const DRAFT_SCHEMA: GeminiSchema = draftSchema({ who: { kind: 'educator', role: '', niche: '', domain: 'tech', offerKind: 'course' } });
 
 const PLAN_ANGLES = ['tips', 'steps', 'mistakes', 'compare', 'prompt', 'overview'] as const;
 
@@ -855,9 +871,14 @@ export function normalizeInstagramCaption(raw: unknown, keyword: string | null, 
 
 /**
  * The TikTok caption with no keyword ask (TikTok can't auto-reply), this tenant's exact link line,
- * and the language's learning hashtags.
+ * and the learning hashtags the tenant takes (`WriterKit.learnTags`: an educator's or a coach's, none for a shop).
+ *
+ * `learnTags` defaults to the language's, all of them: that is every caller that has not been handed a profile context yet
+ * (the Monteur's copy, P11), which wrote them to every caption before P9 and still does. The Studio's writer always passes its own.
  */
-export function normalizeTiktokCaption(raw: unknown, candidates: readonly string[], settings: StudioSettings): string {
+export function normalizeTiktokCaption(
+    raw: unknown, candidates: readonly string[], settings: StudioSettings, learnTags: readonly string[] = languageKit(settings).learnTags,
+): string {
     let ps = paragraphs(raw);
     const template = settings?.cta?.instagramAsk?.trim() ?? '';
     if (template) {
@@ -883,7 +904,7 @@ export function normalizeTiktokCaption(raw: unknown, candidates: readonly string
     }
     const kept = ps.filter((p) => p.length);
     const present = new Set((joinParas(kept).match(/#[^\s#]+/g) ?? []).map((t) => t.toLowerCase()));
-    const missing = languageKit(settings).learnTags.filter((t) => !present.has(t.toLowerCase()));
+    const missing = learnTags.filter((t) => !present.has(t.toLowerCase()));
     if (missing.length) {
         const last = kept.at(-1);
         if (last && last.every(isHashtagLine)) last[last.length - 1] = `${last[last.length - 1]} ${missing.join(' ')}`;
@@ -910,6 +931,8 @@ type Candidate = {
 
 type DraftEnv = {
     settings: StudioSettings;
+    /** The kit the carousel is written under: its register's words, its offer's pitch, its kind's hashtags. */
+    kit: WriterKit;
     catalog: Catalog;
     accent: string;
     fixed: KeywordChoice | null;
@@ -946,8 +969,8 @@ function avoidProblems(copy: [string, string][], settings: StudioSettings): stri
     });
 }
 
-function timeWordIn(s: string, settings: StudioSettings): string | null {
-    const ws = languageKit(settings).timeWords.map(escapeRegExp);
+function timeWordIn(s: string, kit: WriterKit): string | null {
+    const ws = kit.timeWords.map(escapeRegExp);
     if (!ws.length) return null;
     const m = new RegExp(`(?<![\\p{L}\\p{N}])[وفبل]?(?:${ws.join('|')})(?![\\p{L}\\p{N}])`, 'iu').exec(s);
     return m ? m[0] : null;
@@ -976,7 +999,8 @@ function draftProblems(cand: Candidate, env: DraftEnv): Problems {
         hard.push(`keyword: no usable candidate (${why}). Pick one word that doesn't overlap an active keyword, or reuse an active one that fits the topic`);
     }
     if (!cand.dmQuestion) hard.push('dmQuestion: required');
-    if (!cand.dmPitch) hard.push('dmPitch: required');
+    // A pitch is required where there is one to fall back on (a course's): for what a shop sells the line is dropped, not demanded.
+    if (!cand.dmPitch && env.kit.fallbackPitch) hard.push('dmPitch: required');
     hard.push(...avoidProblems(copyOf(c.slides, 0, {
         'captions.instagram': c.captions.instagram, 'captions.tiktokTitle': c.captions.tiktokTitle,
         'captions.tiktok': c.captions.tiktok, dmQuestion: cand.dmQuestion, dmPitch: cand.dmPitch,
@@ -1000,7 +1024,7 @@ function draftProblems(cand: Candidate, env: DraftEnv): Problems {
     const ttTags = hashtagCount(c.captions.tiktok);
     if (ttTags < 4 || ttTags > 6) soft.push(`captions.tiktok has ${ttTags} hashtags: use 4–6`);
     for (const [k, v] of [['tiktokTitle', c.captions.tiktokTitle], ['tiktok', c.captions.tiktok]] as const) {
-        const w = timeWordIn(v, env.settings);
+        const w = timeWordIn(v, env.kit);
         if (w) soft.push(`captions.${k} uses the time word «${w}»: TikTok posts go out later, so drop it`);
     }
     return { hard, soft };
@@ -1036,7 +1060,7 @@ function assemble(raw: unknown, env: DraftEnv): Candidate {
         captions: {
             instagram: normalizeInstagramCaption(caps.instagram, keyword?.keyword ?? null, candidates, env.settings),
             tiktokTitle: line(caps.tiktokTitle) ?? '',
-            tiktok: normalizeTiktokCaption(caps.tiktok, [...candidates, ...(keyword ? [keyword.keyword] : [])], env.settings),
+            tiktok: normalizeTiktokCaption(caps.tiktok, [...candidates, ...(keyword ? [keyword.keyword] : [])], env.settings, env.kit.learnTags),
         },
     };
     return {
@@ -1147,11 +1171,10 @@ function finalize(cand: Candidate, env: DraftEnv): Candidate {
 
     const used = new Set(usedShotNames(c));
     const shots = Object.fromEntries(Object.entries(cand.shots).filter(([name]) => used.has(name)));
-    const lang = languageKit(env.settings);
     return {
         ...cand, carousel: c, sources, shots,
-        dmQuestion: cand.dmQuestion || lang.fallbackQuestion,
-        dmPitch: cand.dmPitch || lang.fallbackPitch,
+        dmQuestion: cand.dmQuestion || env.kit.fallbackQuestion,
+        dmPitch: cand.dmPitch || env.kit.fallbackPitch,
     };
 }
 
@@ -1186,13 +1209,15 @@ export async function generateDraft(input: DraftInput, sources: GenSource[], ctx
 
     const env: DraftEnv = {
         settings,
+        kit: writerKit(ctx.wording),
         catalog: buildCatalog(list, settings, input.idea),
         accent: pickAccent(input.accent, paletteOf(ctx), ctx.recentAccents ?? []),
         fixed,
         active: ctx.activeKeywords ?? [],
         target: slideTarget(input.slides),
     };
-    const system = buildSystemPrompt(settings);
+    const system = buildSystemPrompt(settings, ctx.wording);
+    const schema = draftSchema(ctx.wording);
     const turns: ModelTurn[] = [{
         role: 'user',
         text: draftUserPrompt({
@@ -1202,7 +1227,7 @@ export async function generateDraft(input: DraftInput, sources: GenSource[], ctx
         }),
     }];
 
-    let raw = await callWithin(call, { purpose: 'draft', system, turns, schema: DRAFT_SCHEMA, temperature: 0.8, thinkingBudget: THINKING.draft }, deadline, 1);
+    let raw = await callWithin(call, { purpose: 'draft', system, turns, schema, temperature: 0.8, thinkingBudget: THINKING.draft }, deadline, 1);
     let cand = assemble(raw, env);
     let probs = draftProblems(cand, env);
     let best = { cand, rank: rank(cand, env) };
@@ -1216,7 +1241,7 @@ export async function generateDraft(input: DraftInput, sources: GenSource[], ctx
         rounds++;
         turns.push({ role: 'model', text: JSON.stringify(raw) }, { role: 'user', text: repairPrompt([...probs.hard, ...probs.soft]) });
         try {
-            raw = await callWithin(call, { purpose: 'repair', system, turns, schema: DRAFT_SCHEMA, temperature: 0.4, thinkingBudget: THINKING.repair }, deadline, 0);
+            raw = await callWithin(call, { purpose: 'repair', system, turns, schema, temperature: 0.4, thinkingBudget: THINKING.repair }, deadline, 0);
         } catch (err) {
             log('warn', 'studio.repair_failed', { round: rounds, message: errorMessage(err) });
             break;
@@ -1295,7 +1320,7 @@ export async function rewriteSlide(
         return problems;
     };
 
-    const system = buildSystemPrompt(settings);
+    const system = buildSystemPrompt(settings, ctx.wording);
     const turns: ModelTurn[] = [{
         role: 'user',
         text: rewriteUserPrompt({ carousel, index, instruction, allowedKinds, allowedMoments, catalog }),
@@ -1371,7 +1396,7 @@ export async function planWeek(count: number, lessons: LessonRow[], ctx: GenCont
     const deadline = Date.now() + (opts.timeoutMs ?? GENERATION_TIMEOUT_MS);
     const call = opts.callModel ?? modelCaller;
     const catalog = buildPlanCatalog(pool);
-    const system = buildPlanSystemPrompt(settings);
+    const system = buildPlanSystemPrompt(settings, ctx.wording);
     const turns: ModelTurn[] = [{ role: 'user', text: planUserPrompt(want, catalog, ctx.recentTopics ?? []) }];
     const raw = await callWithin(call, { purpose: 'plan', system, turns, schema: PLAN_SCHEMA, temperature: 0.9, thinkingBudget: THINKING.plan }, deadline, 1);
     let proposals = toProposals(raw, catalog, settings);
