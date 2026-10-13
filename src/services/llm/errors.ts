@@ -210,8 +210,19 @@ function explanation(bodyText: string): { message: string; tag: string; error: a
     return { message: text.startsWith('<') ? '' : text, tag: '', error: undefined };
 }
 
-/** Billing and spend trouble, as the words providers use for it. */
-const QUOTA_WORDS = /insufficient_quota|quota|billing|credit balance|spend(?:ing)? limit|usage limits?/i;
+/**
+ * Billing and spend trouble, as the words providers use for it. A space or an underscore: the
+ * sentence says "credit balance" and the code is `credit_balance_exhausted`.
+ */
+const QUOTA_WORDS = /insufficient_quota|quota|billing|credit[ _]balance|prepaid credits|spend(?:ing)?[ _]limit|usage[ _]limits?/i;
+/**
+ * OpenAI's 429 codes for an empty balance or a spend cap (error-codes guide). The guide says only
+ * that `error.type` "can still be" `insufficient_quota` for them, and a `rate_limit_error` type is
+ * what its `slow_down` carries, so the code is what decides, before the type is looked at.
+ */
+const QUOTA_CODES = new Set([
+    'insufficient_quota', 'credit_balance_exhausted', 'organization_spend_limit_exceeded', 'project_spend_limit_exceeded', 'organization_usage_limit_exceeded',
+]);
 /** Gemini answers a bad key with 400, not 401: "API key not valid", "API key expired". */
 const BAD_KEY_WORDS = /api[ _-]?key[^.]{0,40}(?:not valid|invalid|expired|not found|missing)|(?:invalid|expired|missing)[^.]{0,20}api[ _-]?key/i;
 /** A quota that comes back with the day or the month, not in a minute. */
@@ -231,7 +242,8 @@ const WORDS_ONLY = new Set(['openai', 'openrouter', 'custom']);
  *   - Anthropic: `rate_limit_error` is `rate`, except `error.details.error_code ===
  *     'enforced_spend_limit_reached'` (the monthly cap, which sends no `retry-after`), which is
  *     `quota`.
- *   - OpenAI: `code`/`type` `insufficient_quota` is `quota`, `rate_limit_exceeded` is `rate`.
+ *   - OpenAI: `insufficient_quota` and the codes for an empty balance or a spend cap (`QUOTA_CODES`)
+ *     are `quota`, `rate_limit_exceeded` is `rate`.
  *   - Anything else is `rate`, the retryable guess; only OpenAI-compatible endpoints, whose words
  *     are unambiguous, are also read by them.
  */
@@ -248,9 +260,32 @@ function classify429(provider: string, error: any, heard: string): 'quota' | 'ra
         return 'quota';
     }
     const codes = [error?.type, error?.code];
-    if (codes.includes('insufficient_quota')) return 'quota';
+    if (codes.some((c) => typeof c === 'string' && QUOTA_CODES.has(c))) return 'quota';
     if (codes.includes('rate_limit_error') || codes.includes('rate_limit_exceeded')) return 'rate';
     return WORDS_ONLY.has(provider) && QUOTA_WORDS.test(heard) ? 'quota' : 'rate';
+}
+
+/**
+ * What a 403 is. For every provider but OpenRouter it is a key that may not do this: `auth`. For
+ * OpenRouter (errors guide: "insufficient permissions, a guardrail block, or a moderation flag")
+ * the body says which, in `error.metadata`:
+ *
+ *   - `limit_source` (`openrouter_key_limit`, `openrouter_in_flight_budget`, ...) is a budget the
+ *     key or the account has used up: `quota`, whatever the status.
+ *   - `reasons` and `flagged_input` are a moderation flag on the *input*, and a guardrail block
+ *     says so in its words or keys: the request was declined, which is `refusal`, not a bad key.
+ *     Saying `auth` would send an operator to rotate a key that is fine.
+ *   - Anything else is `auth`.
+ */
+function classify403(provider: string, error: any, heard: string): AiErrorKind {
+    if (provider !== 'openrouter') return 'auth';
+    const meta = error?.metadata;
+    if (meta && typeof meta === 'object') {
+        if (typeof meta.limit_source === 'string') return 'quota';
+        if (Array.isArray(meta.reasons) || typeof meta.flagged_input === 'string') return 'refusal';
+        if (Object.keys(meta).some((k) => /guardrail/i.test(k))) return 'refusal';
+    }
+    return /guardrail/i.test(heard) ? 'refusal' : 'auth';
 }
 
 export interface HttpErrorOptions {
@@ -265,6 +300,7 @@ export interface HttpErrorOptions {
  * pure and every row of the table is testable without a fetch.
  *
  *   401, 403, Gemini's 400 "API key not valid"            → auth      (final)
+ *   (an OpenRouter 403 is read by its body: see `classify403`)
  *   402, a 429 that does not lift by itself, a 400 that
  *   speaks of credit or a spend limit                      → quota     (final)
  *   any other 429 (see `classify429`)                      → rate      (retryable)
@@ -281,7 +317,8 @@ export function errorFromHttp(provider: string, model: string, status: number, b
     const heard = `${tag} ${said}`;
 
     let kind: AiErrorKind;
-    if (status === 401 || status === 403) kind = 'auth';
+    if (status === 403) kind = classify403(provider, error, heard);
+    else if (status === 401) kind = 'auth';
     else if (status === 402) kind = 'quota';
     else if (status === 429) kind = classify429(provider, error, heard);
     else if (status === 400 && BAD_KEY_WORDS.test(said)) kind = 'auth';

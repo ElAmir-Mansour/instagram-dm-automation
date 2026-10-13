@@ -6,6 +6,11 @@
  * what every lookup falls back to: the operator's table is laid over it, never used instead of
  * it, so an empty or half-filled `ai.prices` cannot make a call free.
  *
+ * A provider that reports what it charged overrides the table: OpenRouter's `usage.cost` arrives
+ * as `Billed.usd` with `source: 'provider'` (adapters/chatCompletions.ts), and `costOf` takes it as
+ * it is, `priced: true`. Everything `costOf` computes itself comes back `source: 'table'`, which it
+ * will not trust if it is handed the result again.
+ *
  * A model neither table knows is charged at the highest rate in the merged table and marked
  * `priced: false`. Over-charging an unknown model is the safe side of a daily budget: the
  * alternative, charging nothing, lets an unpriced expensive model spend without limit, and the
@@ -96,13 +101,24 @@ export function totalUsage(billed: readonly Billed[]): Usage {
 
 /**
  * What a whole call cost: each model it was billed on at its own price, the entries returned with
- * their `usd`, and `priced: false` if any of them had to be charged at the ceiling.
+ * their `usd` and where it came from (`source`), and `priced: false` if any of them had to be
+ * charged at the ceiling. An entry the provider priced (`source: 'provider'` and a valid `usd`:
+ * finite, not negative) keeps its figure, so the provider's number wins over the table's guess. A
+ * figure that is not valid is ignored, not trusted as a free call, and a `usd` that is not marked
+ * as the provider's is recomputed, so `costOf(costOf(x).billed)` is `costOf(x)`: an unpriced
+ * ceiling estimate stays unpriced.
  */
 export function costOf(billed: readonly Billed[], prices: PriceTable): { usd: number; priced: boolean; billed: Billed[] } {
-    const entries = billed.map((b) => ({ b, cost: usdFor(b, b.model, prices) }));
+    const entries = billed.map((b) => ({
+        b,
+        cost:
+            b.source === 'provider' && typeof b.usd === 'number' && Number.isFinite(b.usd) && b.usd >= 0
+                ? { usd: round(b.usd), priced: true, source: 'provider' as const }
+                : { ...usdFor(b, b.model, prices), source: 'table' as const },
+    }));
     return {
         usd: round(entries.reduce((sum, e) => sum + e.cost.usd, 0)),
         priced: entries.every((e) => e.cost.priced),
-        billed: entries.map((e) => ({ ...e.b, usd: e.cost.usd })),
+        billed: entries.map((e) => ({ ...e.b, usd: e.cost.usd, source: e.cost.source })),
     };
 }

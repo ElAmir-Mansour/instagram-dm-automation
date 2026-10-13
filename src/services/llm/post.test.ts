@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
-import { postJson } from './adapters/post.js';
+import { getJson, postJson } from './adapters/post.js';
 import { isAiError } from './errors.js';
 import { jsonResponse, stubFetch } from './testFetch.js';
 
@@ -125,5 +125,61 @@ describe('postJson retry-after', () => {
         const err = await failure(post({ fetchImpl: stubFetch(jsonResponse(529, { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }, { 'retry-after': '3' })).fetchImpl }));
         assert.equal(err.kind, 'server');
         assert.equal(err.retryAfterMs, 3000);
+    });
+});
+
+describe('getJson', () => {
+    const get = (over: Partial<Parameters<typeof getJson>[0]> = {}) =>
+        getJson({ provider: 'openai', model: '', url: 'https://api.openai.com/v1/models', headers: { authorization: `Bearer ${KEY}` }, key: KEY, ...over });
+
+    it('is a GET with no body and no content type, the key in the header it was given and not in the URL', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, { data: [] }));
+        assert.deepEqual(await get({ fetchImpl }), { data: [] });
+        const call = calls[0]!;
+        assert.equal(call.method, 'GET');
+        assert.equal(call.raw, '');
+        assert.ok(!('content-type' in call.headers));
+        assert.equal(call.headers['accept'], 'application/json');
+        assert.equal(call.headers['authorization'], `Bearer ${KEY}`);
+        assert.ok(!call.url.includes(KEY));
+        assert.equal(call.redirect, 'error');
+    });
+
+    it('fails like postJson does: a status is its error kind, a redirect and a body that is not JSON are refused, and the key is scrubbed', async () => {
+        const unauthorized = await failure(get({ fetchImpl: stubFetch(jsonResponse(401, { error: { message: `Incorrect API key provided: ${KEY}.`, type: 'invalid_request_error', code: 'invalid_api_key' } })).fetchImpl }));
+        assert.equal(unauthorized.kind, 'auth');
+        assert.equal(unauthorized.status, 401);
+        assert.ok(!JSON.stringify(unauthorized).includes(KEY));
+
+        const redirected = await failure(get({ fetchImpl: stubFetch(new Response('', { status: 302, headers: { location: 'https://evil.example.com/' } })).fetchImpl }));
+        assert.equal(redirected.kind, 'bad_request');
+        assert.match(redirected.message, /redirect/);
+
+        const html = await failure(get({ fetchImpl: stubFetch(new Response('<html>hi</html>', { status: 200 })).fetchImpl }));
+        assert.equal(html.kind, 'bad_output');
+
+        const refused = Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') });
+        assert.match((await failure(get({ fetchImpl: stubFetch(refused).fetchImpl }))).message, /redirect/);
+    });
+
+    it('does not follow a 307 to another origin against the real fetch either', async () => {
+        const landed: string[] = [];
+        const elsewhere = http.createServer((req, res) => { req.resume(); landed.push(req.url ?? ''); res.writeHead(200).end('{}'); });
+        await new Promise<void>((resolve) => elsewhere.listen(0, '127.0.0.1', resolve));
+        const provider = http.createServer((req, res) => {
+            req.resume();
+            res.writeHead(307, { location: `http://127.0.0.1:${(elsewhere.address() as AddressInfo).port}/stolen` }).end();
+        });
+        await new Promise<void>((resolve) => provider.listen(0, '127.0.0.1', resolve));
+        try {
+            const err = await failure(get({ url: `http://127.0.0.1:${(provider.address() as AddressInfo).port}/v1/models` }));
+            assert.equal(err.kind, 'bad_request');
+            assert.equal(landed.length, 0);
+        } finally {
+            for (const server of [provider, elsewhere]) {
+                server.closeAllConnections();
+                server.close();
+            }
+        }
     });
 });

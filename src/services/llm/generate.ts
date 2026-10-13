@@ -13,18 +13,22 @@
  *     thing to tell anyone.
  *   - It sends the platform's key only where the registry says: a base URL is honoured for a
  *     provider whose entry has an editable one (Custom), and then only if it is a public https
- *     address. For every other provider it is ignored.
+ *     address. For every other provider it is ignored (as is `jsonMode`, which only Custom has).
  *   - It leaves nothing of the key behind: not in an error message, not in a thrown object.
  *
  * `callLlm` is the call itself. `generateJson` is what callers use, so that a test (or, in P20c,
  * the router that resolves a purpose to a provider, key and model) can stand in front of it with
  * `setLlmCaller`.
  */
+import { log } from '../../utils/log.js';
 import { ADAPTERS, adapterFor, type FamilyAdapters } from './adapters/index.js';
 import { AiError, isAiError } from './errors.js';
+import { minOutputTokens } from './limits.js';
 import { checkBaseUrl, providerById, providerName, type ProviderId } from './registry.js';
-import { matchesRoot, rootKind, type LlmSchema } from './schema.js';
-import { DEFAULT_EFFORT, type AdapterResult, type Billed, type Effort, type FetchLike, type LlmTurn, type StopReason, type Usage } from './types.js';
+import { matchesRoot, missingRequired, rootKind, type LlmSchema } from './schema.js';
+import {
+    DEFAULT_EFFORT, isJsonMode, type AdapterResult, type Billed, type Effort, type FetchLike, type JsonMode, type LlmTurn, type StopReason, type Usage,
+} from './types.js';
 
 /** No call may take longer than this, whatever a caller asks for: a serverless function has its own ceiling. */
 export const MAX_TIMEOUT_MS = 150_000;
@@ -35,6 +39,8 @@ export interface GenerateJsonArgs {
     model: string;
     /** Only Custom takes one; for every other provider it is ignored. */
     baseUrl?: string;
+    /** Only Custom takes one: how the endpoint is asked for JSON, `schema` unless told `object`. Ignored for every other provider. */
+    jsonMode?: JsonMode;
     system: string;
     user: string | LlmTurn[];
     schema: LlmSchema;
@@ -131,14 +137,28 @@ export async function callLlm(args: GenerateJsonArgs, adapters: FamilyAdapters =
         if (!checked.ok) throw fail('bad_request', `${name}'s base URL ${checked.reason}.`);
         baseUrl = checked.url;
     }
+    // The same: only Custom has the choice, and a value that is not one of the two is a settings bug.
+    let jsonMode: JsonMode | undefined;
+    if (def.editableBaseUrl && args.jsonMode !== undefined) {
+        if (!isJsonMode(args.jsonMode)) throw fail('bad_request', `${name}'s JSON mode must be "schema" or "object", not "${String(args.jsonMode).slice(0, 20)}".`);
+        jsonMode = args.jsonMode;
+    }
     const family = adapterFor(def.family, args, adapters);
+
+    // A limit below what a model of this kind needs to think and answer is the caller's to decide,
+    // but not to be surprised by: such a call is likely to end as `max_tokens` after being billed.
+    const effort = args.effort ?? DEFAULT_EFFORT;
+    const recommended = minOutputTokens(args.provider, args.model, effort);
+    if (args.maxTokens < recommended) {
+        log('warn', 'llm.max_tokens_low', { provider: args.provider, model: args.model, effort, limit: args.maxTokens, recommended });
+    }
 
     const started = Date.now();
     let answer: AdapterResult;
     try {
         answer = await family.generate({
-            provider: args.provider, apiKey: key, baseUrl, model: args.model, system: args.system, user: args.user,
-            schema: args.schema, maxTokens: args.maxTokens, effort: args.effort ?? DEFAULT_EFFORT,
+            provider: args.provider, apiKey: key, baseUrl, jsonMode, model: args.model, system: args.system, user: args.user,
+            schema: args.schema, maxTokens: args.maxTokens, effort,
             // One deadline for the call, however many awaits the adapter makes.
             signal: AbortSignal.timeout(timeoutMs), fetchImpl: args.fetchImpl,
         });
@@ -168,6 +188,13 @@ export async function callLlm(args: GenerateJsonArgs, adapters: FamilyAdapters =
     }
     const kind = rootKind(args.schema);
     if (!matchesRoot(json, kind)) throw fail('bad_output', `${name}'s answer is not a JSON ${kind}.`, answer);
+    // Structured output is a request, not a guarantee: some endpoints behind OpenRouter treat
+    // `strict` as a hint. The top-level keys the schema requires are cheap to check here, so a
+    // missing one is bad_output (retryable once) instead of a surprise in the caller's code.
+    const missing = missingRequired(json, args.schema);
+    if (missing.length) {
+        throw fail('bad_output', `${name}'s answer is missing ${missing.length === 1 ? 'a required field' : 'required fields'}: ${missing.slice(0, 6).join(', ')}.`, answer);
+    }
 
     return {
         json,

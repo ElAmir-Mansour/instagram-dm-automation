@@ -4,7 +4,9 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { OPENROUTER_BASE_URL } from './adapters/chatCompletions.js';
 import { ADAPTERS, adapterFor } from './adapters/index.js';
+import { OPENAI_BASE_URL } from './adapters/openai.js';
 import { isAiError } from './errors.js';
 import { checkBaseUrl, isProviderId, PROVIDER_IDS, PROVIDERS, providerById, providerName } from './registry.js';
 
@@ -78,33 +80,42 @@ describe('providerById, isProviderId and providerName', () => {
 });
 
 describe('adapterFor', () => {
-    it('has an adapter for the Anthropic and Gemini families, each shaped {generate, normalize?, listModels?, checkKey?}', () => {
-        for (const [family, provider] of [['anthropic', 'anthropic'], ['gemini', 'gemini']] as const) {
-            const adapter = adapterFor(family, { provider, model: 'm' });
-            assert.equal(typeof adapter.generate, 'function');
-            assert.equal(adapter, ADAPTERS[family]);
-            // P20b fills these in; until then there is nothing to call and nothing pretends there is.
-            assert.equal(adapter.normalize, undefined);
-            assert.equal(adapter.listModels, undefined);
-            assert.equal(adapter.checkKey, undefined);
+    it('has an adapter for every wire family, shaped {generate, normalize?, listModels?, checkKey?}', () => {
+        assert.deepEqual(Object.keys(ADAPTERS).sort(), ['anthropic', 'chat_completions', 'gemini', 'openai_responses']);
+        for (const [family, adapter] of Object.entries(ADAPTERS)) {
+            assert.equal(typeof adapter.generate, 'function', family);
+            assert.equal(typeof adapter.listModels, 'function', family);
+            assert.equal(typeof adapter.checkKey, 'function', family);
         }
-        assert.deepEqual(Object.keys(ADAPTERS).sort(), ['anthropic', 'gemini']);
+        // Only the two families that reshape the schema for strict mode have something to undo.
+        assert.deepEqual(Object.entries(ADAPTERS).filter(([, a]) => a.normalize).map(([f]) => f).sort(), ['chat_completions', 'openai_responses']);
     });
 
-    it('says a family\'s adapter is not implemented yet, as a bad_request, until P20b brings it', () => {
-        for (const [family, provider] of [['openai_responses', 'openai'], ['chat_completions', 'openrouter'], ['chat_completions', 'custom']] as const) {
-            assert.throws(
-                () => adapterFor(family, { provider, model: 'some-model' }),
-                (err: unknown) => {
-                    assert.ok(isAiError(err));
-                    assert.equal(err.kind, 'bad_request');
-                    assert.equal(err.retryable, false);
-                    assert.equal(err.provider, provider);
-                    assert.match(err.message, /not implemented/);
-                    return true;
-                },
-            );
+    it('has an adapter for the family of every provider in the registry: none is left "not available yet"', () => {
+        for (const p of PROVIDERS) {
+            const adapter = adapterFor(p.family, { provider: p.id, model: 'm' });
+            assert.equal(adapter, ADAPTERS[p.family], p.id);
+            assert.equal(typeof adapter.generate, 'function', p.id);
         }
+    });
+
+    it('answers a family that is missing from the map it was given with a bad_request, not a crash', () => {
+        assert.throws(
+            () => adapterFor('openai_responses', { provider: 'openai', model: 'some-model' }, { anthropic: ADAPTERS.anthropic! }),
+            (err: unknown) => {
+                assert.ok(isAiError(err));
+                assert.equal(err.kind, 'bad_request');
+                assert.equal(err.retryable, false);
+                assert.equal(err.provider, 'openai');
+                assert.match(err.message, /no adapter for the openai_responses family/);
+                return true;
+            },
+        );
+    });
+
+    it('agrees with the registry about where OpenAI and OpenRouter live', () => {
+        assert.equal(OPENAI_BASE_URL, providerById('openai')!.baseUrl);
+        assert.equal(OPENROUTER_BASE_URL, providerById('openrouter')!.baseUrl);
     });
 });
 
