@@ -324,6 +324,12 @@ describe('nothing old is left behind in the pages', () => {
         }
     });
 
+    it('the landing glow is the one DESIGN.md §6 names (.55 dark / .35 light)', () => {
+        const glows = [...read('public/landing.html').matchAll(/--lp-glow:\s*([\d.]+);/g)].map((m) => m[1]);
+        assert.deepEqual(glows, ['0.55', '0.35'], 'dark first, then the light peer');
+        assert.ok(design.includes('`--lp-glow` .55 dark / .35 light'), 'DESIGN.md §6 states the glow');
+    });
+
     it('the charts take their series colour from --chart-accent, not the (near-black, in light) --accent', () => {
         const charts = read('dashboard/js/charts.js');
         assert.equal((charts.match(/opts\.token \|\| '--chart-accent'/g) ?? []).length, 2, 'the sparkline and the line chart');
