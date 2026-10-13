@@ -1322,13 +1322,13 @@ until it has one, the virtual profile its legacy settings describe (`version: nu
    language) and `tenantTimezone` (**`src/services/growth/overview.ts:416`**: the heatmap, after the
    audience's own override). The DM's knowledge base is *not* in a context: it stays on `ai_agents`.
 
-**`GET /api/profile`** — **`src/routes/profile.ts:63`**, mounted below `resolveTenant`
+**`GET /api/profile`** — **`src/routes/profile.ts:72`**, mounted below `resolveTenant`
 (**`src/routes/api.ts:1509`**), operator or owner (**:60**), like every read of the Studio's and Growth's
 settings: a `viewer` sees the account's numbers, not how it is run (403 otherwise). Answers
 `{ profile, version, stored, activationMissing }` — `stored: false` and `version: null` for the
 virtual profile, `activationMissing` the fields the wizard still needs.
 
-**`GET /api/profile/campaign-seeds`** — **`src/routes/profile.ts:72`**, operator or owner (**:60**). What the
+**`GET /api/profile/campaign-seeds`** — **`src/routes/profile.ts:81`**, operator or owner (**:69**). What the
 Campaigns screen's "Import from CSV" starts each imported course from; it replaced a table of nine
 mappings that the dashboard carried for the owner. Answers `{ seeds, source, fallback }`: `fallback` is what a row
 no seed names starts from (P15), the owner's own wording for the platform owner and the neutral text of the language
@@ -1351,34 +1351,40 @@ its comment replies speak for everyone else (`ImportFallbackLines`, `kits.ts`).
    that matches none starts from the server's `fallback`, its `{name}` and `{url}` filled in (`fillFallback`): the page
    carries no wording of its own.
 
-**`PATCH /api/profile { version, patch }`** — **`src/routes/profile.ts:76`**, owner only (**:61**).
+**`PATCH /api/profile { version, patch }`** — **`src/routes/profile.ts:85`**, owner only (**:70**).
 
-1. **`src/services/profile/patch.ts:169`** — `patchProfile` refuses a body that is not
+1. **`src/services/profile/patch.ts:215`** — `patchProfile` refuses a body that is not
    `{ version, patch }` (400, one problem), and a patch nested deeper than any profile (400).
-2. **Without the lock** (**`patch.ts:184`**): it reads the profile and `plan`s the patch (**:146**):
+2. **Without the lock** (**`patch.ts:233`**): it reads the profile and `plan`s the patch (**:178**):
    a newer-schema profile (409 `PROFILE_NEWER_SCHEMA`), a `version` that is not the stored one
    (409 `PROFILE_VERSION_CONFLICT`, `currentVersion` in the body) — both *before* merging, because the
-   patch was written against a profile that has moved on — then `mergePatch` (**:83**: objects merge
+   patch was written against a profile that has moved on — then `mergePatch` (**:115**: objects merge
    key by key; lists, scalars and `null` replace; in `language.surfaces`, `socials.links` and
    `audience.timezone` a `null` removes the entry), then the *merged* result is validated (400
    `PROFILE_INVALID`, every problem listed). A refusal here never takes the tenant's mutex.
-3. **A patch that changes nothing writes nothing** (**`patch.ts:152`**) — no version, no history row,
+   **The owner's rule is locked here too** (**`patch.ts:236-238`**, P19): a patch that takes `no_women_imagery` out of
+   the PLATFORM OWNER's profile (`getPlatformOwnerId`) is 409 `OWNER_RULE_LOCKED` unless the body says
+   `confirm_remove_owner_rule: true` (anything else but a boolean is a 400, **:229**). It is asked before the transaction
+   opens, because the lookup is a second pool connection and a transaction already holds one of three; only a patch that
+   removes the rule asks, and a failed lookup refuses (500) rather than letting the removal through. Another tenant's profile,
+   adding the rule and every other change are never locked. His editor prompt's "never a woman" line comes from this rule.
+3. **A patch that changes nothing writes nothing** (**`patch.ts:184`**) — no version, no history row,
    no audit entry.
-4. **With the lock** (**`patch.ts:191-196`**): one transaction. `lockTenantSettings` first
+4. **With the lock** (**`patch.ts:244-257`**): one transaction. `lockTenantSettings` first
    (creators → creator_profiles → studio_settings → growth_settings, the order every settings writer
    takes), then the profile row `FOR UPDATE` — or, for a tenant with none, the legacy rows, read
    *after* the lock — and step 2 is made again on *that*. This is what makes the merge sound: a Studio
    or Growth settings write that committed between the first read and the lock is in what the patch is
    merged onto; one that comes later waits for the mutex. (Merged onto the first read, the stale rows
    would have been saved over it as the next version and mirrored back.)
-5. **`src/services/profile/store.ts:360`** — `saveProfile(…, { expectVersion, startFromCaller })` on that
+5. **`src/services/profile/store.ts:362`** — `saveProfile(…, { expectVersion, startFromCaller })` on that
    transaction: validates again, bumps the version, keeps the history row and mirrors the view back into
    `studio_settings` / `growth_settings`. Under the mutex the `WHERE version =` cannot lose to a writer
    that takes it; it is the backstop for one that does not. A tenant whose legacy rows are not a valid
    profile on their own (a colour that is no colour) is repaired by a valid merged result, which is
    stored as version 1 (`startFromCaller`); otherwise version 1 is the legacy baseline (source
    `backfill`) and the patch is version 2. The profile cache is cleared after the commit.
-6. **`src/routes/profile.ts:81`** — the audit row `profile.write`: `detail.paths` names the
+6. **`src/routes/profile.ts:90`** — the audit row `profile.write`: `detail.paths` names the
    top-level sections that changed and `detail.version` the new version. **Never a value.**
 
 > **Why the version check comes before the merge.** A patch is a *diff against what its author saw*.
@@ -1400,6 +1406,30 @@ profile described from nothing would be the owner's (`legacy.ts`). `rules` is `o
 `['no_women_imagery']`). The body is a name and a language; the legacy body (a page id and a token) still works and gets
 the same profile. `scripts/backfill-creator-profiles.mts` gives the same neutral default to an EXISTING tenant with no settings
 rows (never the platform owner).
+
+**An admin fills the profile in on a tenant's behalf (P19).** `GET` and `PATCH /api/admin/tenants/:id/profile`
+(**`src/routes/admin.ts:1420`** and **:1452**), platform admin only: **`requirePlatformAdmin`** (**:109**) answers everyone else 404
+and runs no query. The Profile section of the tenant screen (**`dashboard/js/pages/tenant_detail.js`**, `renderProfile`) is a
+button; pressing it loads **`dashboard/js/pages/tenant_profile.js`** and fetches the profile.
+
+1. **`GET`** — `knownTenantId` (**:1409**) 404s a non-uuid and an unknown tenant before any profile read; `profileAnswer` (**:1399**)
+   answers `readProfileState` (the profile, its `version`, `stored`, `activationMissing`) plus `isPlatformOwner` and the
+   tenant's `onboarding` `{ status, filledBy }` (`readOnboardingState`, **:1386**: no row, or no v34, reads as completed, D14).
+2. **`PATCH { version, patch, confirm_remove_owner_rule? }`** is `patchProfile` — the very function `PATCH /api/profile` is, not
+   a copy — so the merge, the validation, the optimistic **version lock** (409 `PROFILE_VERSION_CONFLICT` with `currentVersion`,
+   decided on the first read, before the mutex, and again by the `WHERE version =` of `saveProfile`) and the **owner's rule**
+   (409 `OWNER_RULE_LOCKED`) are the tenant route's, step for step. What the admin's call adds is *who it says wrote it*:
+   - the history row's source is `admin` (`PatchActor.source`, **`patch.ts:254`**);
+   - **`onboarding.filled_by = 'admin'`**, `WHERE status <> 'completed'`, runs inside the save's own transaction
+     (`PatchActor.onSaved`, **`admin.ts:1463`**; **`patch.ts:255`**), after the history row and the mirror and before the
+     commit: if it fails the profile write rolls back with it (a profile never changes without the wizard being told), and
+     a tenant whose onboarding is completed keeps whatever `filled_by` it had;
+   - the audit row (**`admin.ts:1469`**) is `profile.write` on the creator with `{ paths, version, on_behalf: true }`: section
+     names, **never a value**. A patch that changes nothing writes none of the three.
+3. **The dashboard sends only what changed** (`TenantProfile.changedPaths` → `buildPatch`), with the version it read. A 409 keeps
+   the forms as typed, shows "changed elsewhere", and blocks Save until a reload (`reloadKeep` puts the admin's still-changed
+   fields back on top of the latest). `OWNER_RULE_LOCKED` opens a confirmation, and only a yes sends
+   `confirm_remove_owner_rule: true`.
 
 ### 4.8 — Invite links: a person gets in without anyone typing their password (P17)
 
@@ -1965,7 +1995,7 @@ error, and several write **no row at all**.
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
 | 3 | a Meta post of a tenant with no token — `attemptPublish` | `cron.publish_failed` (`META_NOT_CONNECTED`) | yes, `FAILED` + the "not connected" sentence |
-| 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:152`** | *(none)* | no (200, version unchanged, no audit entry) |
+| 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:184`** | *(none)* | no (200, version unchanged, no audit entry) |
 | 5 | budget spent — **`runner.ts:145`** | `job.drain_complete` (`budgetExhausted: true`) | jobs stay `pending` |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |

@@ -42,7 +42,7 @@ import { changedPaths, growthView, scheduleTimezone, studioView } from './views.
 
 // ─── Errors ──────────────────────────────────────────────────────────────────────────────────
 
-export type ProfileErrorCode = 'PROFILE_NEWER_SCHEMA' | 'PROFILE_INVALID' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_STORAGE_MISSING';
+export type ProfileErrorCode = 'PROFILE_NEWER_SCHEMA' | 'PROFILE_INVALID' | 'PROFILE_VERSION_CONFLICT' | 'PROFILE_STORAGE_MISSING' | 'OWNER_RULE_LOCKED';
 
 /**
  * A refusal a route answers as-is: `status`, `code` and the message. Thrown rather than returned, so a check made
@@ -52,6 +52,7 @@ export type ProfileErrorCode = 'PROFILE_NEWER_SCHEMA' | 'PROFILE_INVALID' | 'PRO
  *   PROFILE_INVALID           400  `problems` says what is wrong
  *   PROFILE_VERSION_CONFLICT  409  another write got there first; `currentVersion` is the one to reload
  *   PROFILE_STORAGE_MISSING   503  migration v33 has not been applied
+ *   OWNER_RULE_LOCKED         409  the change removes the platform owner's `no_women_imagery` rule and was not confirmed (`patch.ts`)
  */
 export class ProfileError extends Error {
     constructor(

@@ -171,6 +171,13 @@ const API = {
     /** One tenant's full record, including the connection fields. */
     getAdminTenant: (id) => API.request(`/admin/tenants/${encodeURIComponent(id)}`),
 
+    /** A tenant's Creator Profile and the version a save must send back (the admin fills it in on their behalf). */
+    getAdminTenantProfile: (id) => API.request(`/admin/tenants/${encodeURIComponent(id)}/profile`),
+    /** `{ version, patch, confirm_remove_owner_rule? }`: only the changed paths. A 409 carries `body.code` and, for a stale version, `body.currentVersion`. */
+    updateAdminTenantProfile: (id, data) => API.request(`/admin/tenants/${encodeURIComponent(id)}/profile`, {
+        method: 'PATCH', body: JSON.stringify(data),
+    }),
+
     /** Platform-wide health: per-tenant rows, queue, schema, storage, hazards. */
     getAdminOps: () => API.request('/admin/ops'),
     // The platform's Gemini key. The key itself is only ever sent, never read back.

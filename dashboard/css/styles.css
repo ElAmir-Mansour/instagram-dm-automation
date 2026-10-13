@@ -4796,3 +4796,21 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .ig-review li { display: flex; flex-direction: column; gap: var(--space-1); align-items: flex-start; }
 .ig-review-comment { margin: 0; font-size: var(--fs-200); color: var(--text-muted); font-style: italic; }
 .ig-review-reply { margin: 0; font-size: var(--fs-200); color: var(--text-strong); }
+
+/* Tenant profile (P19): the platform admin fills a tenant's Creator Profile in on their behalf, on the tenant detail screen.
+   One form per section. The grid reflows from several columns to one at phone width without a breakpoint (the track minimum is
+   capped at the container's width), and everything uses logical properties so it mirrors in Arabic. */
+.tp-section { margin-block-start: var(--space-6); padding-block-start: var(--space-5); border-block-start: 1px solid var(--border-subtle); }
+.tp-section-title { font-size: var(--fs-400); margin-block-end: var(--space-4); }
+.tp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); column-gap: var(--space-4); }
+.tp-checks { display: flex; flex-wrap: wrap; gap: var(--space-3) var(--space-5); }
+.tp-surfaces { display: flex; flex-direction: column; gap: var(--space-3); }
+.tp-surface { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--space-2) var(--space-3); align-items: center; }
+.tp-surface-name { grid-column: 1 / -1; font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.tp-surface-label { display: block; margin-block-end: var(--space-1); font-size: var(--fs-100); color: var(--text-muted); }
+.tp-offer { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--space-4); margin: 0 0 var(--space-4); min-inline-size: 0; }
+.tp-offer-legend { padding: 0 var(--space-2); font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.tp-problems:empty { display: none; }
+.tp-problems { margin-block-start: var(--space-4); }
+.tp-problem-list { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5); font-size: var(--fs-100); }
+.tp-missing { font-family: var(--font-mono); font-size: var(--fs-100); padding: 1px var(--space-2); border-radius: var(--radius-xs); background: var(--surface-sunken); }

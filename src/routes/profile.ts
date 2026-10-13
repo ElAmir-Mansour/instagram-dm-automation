@@ -12,7 +12,8 @@
  * still the virtual one its settings describe (`version` is then null, and a PATCH sends null back).
  *
  * The answers to a refusal are `{ error, code, … }`: `PROFILE_INVALID` 400 with `problems`, `PROFILE_VERSION_CONFLICT`
- * and `PROFILE_NEWER_SCHEMA` 409 with `currentVersion`, `PROFILE_STORAGE_MISSING` 503. A change is audited as
+ * and `PROFILE_NEWER_SCHEMA` 409 with `currentVersion`, `OWNER_RULE_LOCKED` 409 (a change that removes the platform owner's
+ * `no_women_imagery` rule, unless the body says `confirm_remove_owner_rule: true`), `PROFILE_STORAGE_MISSING` 503. A change is audited as
  * `profile.write` with the names of the sections it changed and never their values; a request that changed nothing
  * writes nothing and is not audited.
  */
@@ -27,6 +28,21 @@ import { describeError, log } from '../utils/log.js';
 
 type Handler = (req: Request, res: Response) => Promise<void>;
 
+/**
+ * What a `ProfileError` answers: `{ error, code }`, plus `problems` for a 400 and `currentVersion` for a conflict. One place, so
+ * the tenant's `PATCH /api/profile` and the admin's `PATCH /api/admin/tenants/:id/profile` refuse in the same words.
+ */
+export function profileErrorBody(err: ProfileError): Record<string, unknown> {
+    const { problems, currentVersion } = err.detail;
+    return {
+        error: err.message,
+        code: err.code,
+        ...(problems ? { problems } : {}),
+        // A conflict always says which version to reload: null when the tenant has no stored profile.
+        ...(currentVersion !== undefined || err.code === 'PROFILE_VERSION_CONFLICT' ? { currentVersion: currentVersion ?? null } : {}),
+    };
+}
+
 /** Every route's error handling, once: a `ProfileError` is the answer as it is, anything else a logged 500. */
 function handle(event: string, fallback: string, fn: Handler) {
     return async (req: Request, res: Response): Promise<void> => {
@@ -34,14 +50,7 @@ function handle(event: string, fallback: string, fn: Handler) {
             await fn(req, res);
         } catch (err) {
             if (err instanceof ProfileError) {
-                const { problems, currentVersion } = err.detail;
-                res.status(err.status).json({
-                    error: err.message,
-                    code: err.code,
-                    ...(problems ? { problems } : {}),
-                    // A conflict always says which version to reload: null when the tenant has no stored profile.
-                    ...(currentVersion !== undefined || err.code === 'PROFILE_VERSION_CONFLICT' ? { currentVersion: currentVersion ?? null } : {}),
-                });
+                res.status(err.status).json(profileErrorBody(err));
                 return;
             }
             log('error', event, describeError(err));

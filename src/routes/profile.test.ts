@@ -232,6 +232,39 @@ describe('PATCH /api/profile', () => {
         assert.equal(res.body.currentVersion, null);
     });
 
+    describe('the platform owner\'s no_women_imagery rule (P19: the same guard as an admin\'s fill on his behalf)', () => {
+        beforeEach(() => {
+            setPlatformOwner(db, OWNER);
+            store(richProfile(), 3);
+        });
+
+        it('removing it from the owner\'s own profile is 409 OWNER_RULE_LOCKED: nothing written, nothing audited', async () => {
+            const res = await call('patch', { version: 3, patch: { content: { rules: [] } } });
+            assert.equal(res.statusCode, 409);
+            assert.equal(res.body.code, 'OWNER_RULE_LOCKED');
+            assert.match(res.body.error, /confirm_remove_owner_rule/);
+            assert.ok(!('currentVersion' in res.body), 'it is not a version conflict');
+            assert.deepEqual(writes(), []);
+            assert.equal(audits().length, 0);
+            assert.deepEqual((state.profiles.get(OWNER)!.profile as { content: { rules: string[] } }).content.rules, ['no_women_imagery']);
+        });
+
+        it('goes through when the body confirms it, and is audited as any change is: the section, never the value', async () => {
+            const res = await call('patch', { version: 3, patch: { content: { rules: [] } }, confirm_remove_owner_rule: true });
+            assert.equal(res.statusCode, 200);
+            assert.equal(res.body.version, 4);
+            assert.deepEqual(res.body.profile.content.rules, []);
+            assert.deepEqual(audits().map((a) => JSON.parse(a.params[5])), [{ paths: ['content'], version: 4 }]);
+        });
+
+        it('is nobody else\'s lock: a tenant that is not the owner removes it freely', async () => {
+            state.profiles.set(OTHER, { profile: throughJsonb(richProfile()), version: 3, activated_at: null, updated_by: null });
+            const res = await call('patch', { version: 3, patch: { content: { rules: [] } } }, { tenantId: OTHER });
+            assert.equal(res.statusCode, 200);
+            assert.deepEqual(res.body.profile.content.rules, []);
+        });
+    });
+
     it('an invalid result is a 400 with every problem: nothing written, nothing audited', async () => {
         store(richProfile(), 3);
         const res = await call('patch', { version: 3, patch: { identity: { role: 'x'.repeat(41), timezone: 'Mars/Olympus' }, voice: { emoji: 'confetti' } } });

@@ -122,6 +122,7 @@ const ALLOWED: readonly Allowed[] = [
     { file: 'dashboard/js/i18n.en.js', markers: ['course', 'Course'], reason: REASON.ui },
     { file: 'dashboard/js/pages/campaigns.js', markers: ['course', 'Course', 'كورس'], reason: 'the coupon-CSV import\'s own vocabulary (a row of the CSV is a course), and «كورس» among the fifty common Arabic comment words the keyword-risk check demonstrates a false positive with' },
     { file: 'dashboard/js/pages/monteur.js', markers: ['course', 'Course'], reason: REASON.vocabulary },
+    { file: 'dashboard/js/pages/tenant_profile.js', markers: ['course'], reason: 'the admin\'s profile editor: `course` is one of the eight offer kinds a creator can choose (OFFER_KINDS); it is a choice in a list, and never the default of a new offer (that is `product`)' },
     { file: 'dashboard/js/pages/studio.js', markers: ['Asia/Riyadh', 'course'], reason: 'Asia/Riyadh is one of nineteen zones offered when the browser cannot list its own; the Studio turns course lessons into carousels' },
 
     // ── Tests ──
