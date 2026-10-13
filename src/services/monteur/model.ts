@@ -58,6 +58,7 @@ export interface AskRequest {
 /** One call, timed to fit before `deadline`, with its tokens added to `cost`. */
 export async function ask(req: AskRequest, deadline: number, cost: CallCost): Promise<unknown> {
     // No deadline to fit: a think only reads and writes the queue, and the Mac answers in its own time.
+    // `think` refuses a tenant that is not on `studio.mac_brain_tenants` (macBrain.ts) before it queues.
     if (req.think) return think(req.think, req, cost);
     const left = deadline - Date.now();
     if (left < MIN_CALL_MS) throw new MonteurModelError(`Out of time before the ${req.purpose} call.`);

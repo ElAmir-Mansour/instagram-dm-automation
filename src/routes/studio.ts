@@ -62,7 +62,11 @@ function handle(event: string, fallback: string, fn: Handler) {
             await fn(req, res);
         } catch (err) {
             if (err instanceof StudioError) {
-                res.status(err.status).json(err.problems ? { error: err.message, problems: err.problems } : { error: err.message });
+                res.status(err.status).json({
+                    error: err.message,
+                    ...(err.problems ? { problems: err.problems } : {}),
+                    ...(err.code ? { code: err.code } : {}),
+                });
                 return;
             }
             if (isMissingSchema(err)) {

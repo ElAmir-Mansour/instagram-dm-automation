@@ -132,6 +132,8 @@ export const AUDIT_ACTIONS = {
     infographicSchedule: 'studio.infographic_schedule',
     /** Growth keywords, hashtag sets, competitors or audience changed (GROWTH.md). */
     growthSettingsWrite: 'growth.settings_write',
+    /** The tenants allowed to use the operator's Mac besides the owner were set, or reset to none (G1). */
+    settingsMacBrainWrite: 'settings.mac_brain_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

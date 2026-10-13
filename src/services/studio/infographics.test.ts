@@ -266,7 +266,7 @@ let posts: { platform: string; scheduled_time: Date }[];
 let infographicSettings: Record<string, unknown>;
 
 beforeEach(() => {
-    db = installFakeDb();
+    db = installFakeDb({ platformTenant: TENANT });
     infographicSettings = { ...BRAND };
     posts = [];
     row = {
@@ -411,6 +411,84 @@ describe('scheduleInfographic', () => {
         infographicSettings = { ...BRAND, platforms: ['instagram'] };
         await scheduleInfographic(TENANT, ID, {}, NOW);
         assert.deepEqual(posts.map((p) => p.platform), ['instagram']);
+    });
+});
+
+// ─── The Mac is the owner's (G1) ────────────────────────────────────────────────────────
+
+describe('the Mac is the owner’s: Claude writes an infographic only for him and the tenants added in studio.mac_brain_tenants', () => {
+    const NEW_TENANT = '44444444-4444-4444-8444-444444444444';
+    let saved: string | null;
+    beforeEach(() => {
+        saved = null;
+        db.routes.push([/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({
+            rows: p[0] === 'studio.mac_brain_tenants' && saved !== null ? [{ value: saved, is_secret: false }] : [],
+        })]);
+    });
+
+    /** The 409 the route sends, with its code. */
+    const refused = (err: unknown) => err instanceof StudioError && err.status === 409 && err.code === 'NEEDS_API_BRAIN'
+        && err.message === 'This tenant\'s AI work can\'t run on the operator\'s Mac; it needs the AI providers layer (coming).';
+    const wrote = () => db.statements.filter((s) => /^(INSERT INTO infographics|INSERT INTO studio_jobs|UPDATE infographics)/.test(s.sql));
+
+    it('createInfographic refuses a new tenant before anything is written: no transaction, no row, no job', async () => {
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), refused);
+        assert.equal(wrote().length, 0);
+        assert.equal(db.ran(/^BEGIN$/).length, 0, 'it never got as far as a transaction');
+    });
+
+    it('and for both themes, which asks Claude the same once', async () => {
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG', theme: 'both' }), refused);
+        assert.equal(wrote().length, 0);
+    });
+
+    it('a bad request is still a 400, whoever asks: the refusal does not hide what is wrong', async () => {
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'x' }), isStudioError(400));
+    });
+
+    it('rerenderInfographic with rewrite is refused before the row is locked: no transaction, the row does not go "writing"', async () => {
+        await assert.rejects(rerenderInfographic(NEW_TENANT, ID, { rewrite: true }), refused);
+        assert.equal(wrote().length, 0);
+        assert.equal(db.ran(/^BEGIN$/).length, 0);
+    });
+
+    it('a row Claude has not written yet is a rewrite whatever the body says: refused too, and rolled back', async () => {
+        row.spec = null;
+        await assert.rejects(rerenderInfographic(NEW_TENANT, ID, {}), refused);
+        assert.equal(wrote().length, 0);
+        assert.equal(db.ran(/^ROLLBACK$/).length, 1);
+        assert.equal(db.ran(/^COMMIT$/).length, 0);
+    });
+
+    it('a render alone is no Claude work: it queues for a tenant that is not on the list', async () => {
+        await rerenderInfographic(NEW_TENANT, ID, { theme: 'dark' });
+        assert.equal(jobPayload().write, undefined);
+        assert.ok(jobPayload().spec);
+
+        await updateInfographic(NEW_TENANT, ID, { spec: SPEC });
+        await copyInfographic(NEW_TENANT, ID, { theme: 'light' });
+        assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 3, 'a render, an edit and a copy');
+        for (const insert of db.ran(/^INSERT INTO studio_jobs/)) assert.equal(JSON.parse(insert.params[2]).write, undefined);
+    });
+
+    it('the owner, with nothing configured, writes and rewrites as before', async () => {
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.ok(jobPayload().write);
+        await rerenderInfographic(TENANT, ID, { rewrite: true });
+        assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 2);
+        assert.ok(JSON.parse(db.ran(/^INSERT INTO studio_jobs/)[1]!.params[2]).write);
+    });
+
+    it('a saved list adds a tenant, who is refused again the moment it is taken off; the owner is never refused', async () => {
+        saved = JSON.stringify([NEW_TENANT]);
+        await createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' });
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 2, 'the listed tenant and the owner');
+
+        saved = '[]';
+        await assert.rejects(createInfographic(NEW_TENANT, { topic: 'RAG vs CAG vs KAG' }), refused);
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 3);
     });
 });
 

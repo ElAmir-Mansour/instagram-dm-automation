@@ -5,6 +5,7 @@
  * recorded in order with everything else.
  */
 import { pool } from '../../config/db.js';
+import { invalidateTenantCache } from '../tenant.js';
 
 export type Rows = { rows: any[]; rowCount?: number };
 export interface Statement { sql: string; params: any[] }
@@ -17,15 +18,27 @@ export interface FakeDb {
     restore(): void;
 }
 
-export function installFakeDb(): FakeDb {
+/** The statement `getPlatformOwnerId` runs: the owner, the first creator ever made (tenant.ts). */
+const PLATFORM_OWNER_SQL = /^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/;
+
+/**
+ * `platformTenant`: the owner, the creator `getPlatformOwnerId` finds. The Mac works for the owner with nothing
+ * configured (macBrain.ts), so a test that queues Claude's work on the Mac names its tenant here, exactly as the
+ * owner's deployment does. The lookup's 30 s cache is cleared on the way in and out, so one test's tenant never
+ * answers for the next.
+ */
+export function installFakeDb(opts: { platformTenant?: string } = {}): FakeDb {
     const original = { query: pool.query, connect: pool.connect };
+    const platformTenant = opts.platformTenant;
+    if (platformTenant) invalidateTenantCache();
     const db: FakeDb = {
         statements: [],
-        routes: [],
+        routes: platformTenant ? [[PLATFORM_OWNER_SQL, () => ({ rows: [{ id: platformTenant }] })]] : [],
         ran: (pattern) => db.statements.filter((s) => pattern.test(s.sql)),
         restore: () => {
             (pool as unknown as { query: unknown }).query = original.query;
             (pool as unknown as { connect: unknown }).connect = original.connect;
+            if (platformTenant) invalidateTenantCache();
         },
     };
     const run = async (sql: string, params: any[] = []) => {

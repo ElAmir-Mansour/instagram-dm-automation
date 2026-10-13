@@ -48,7 +48,7 @@ describe('analystDue — the sweep’s three conditions', () => {
 
 describe('what it reads', () => {
     let db: FakeDb;
-    beforeEach(() => { db = installFakeDb(); });
+    beforeEach(() => { db = installFakeDb({ platformTenant: TENANT }); });
     afterEach(() => db.restore());
 
     it('the latest 20 reels (Instagram) and videos (Facebook) from post_insights, by their real columns', async () => {
@@ -96,7 +96,7 @@ describe('runAnalyst', () => {
     after(() => restoreSink?.());
 
     beforeEach(() => {
-        db = installFakeDb();
+        db = installFakeDb({ platformTenant: TENANT });
         calls = [];
         answer = { lessons: [{ rule: 'Open on the result', evidence: 'skip 40% vs 70%' }], summary: 'Hooks work.' };
         previousCaller = setModelCaller(async (req) => {
@@ -202,7 +202,7 @@ describe('the Analyst on Claude on the Mac (monteur.brain = claude_mac, MONTEUR.
     after(() => restoreSink?.());
 
     beforeEach(() => {
-        db = installFakeDb();
+        db = installFakeDb({ platformTenant: TENANT });
         gemini = [];
         tries = [];
         previousCaller = setModelCaller(async (req) => {
@@ -246,6 +246,15 @@ describe('the Analyst on Claude on the Mac (monteur.brain = claude_mac, MONTEUR.
         assert.equal(row.model, 'claude-opus-5-5');
         assert.equal(db.ran(/^INSERT INTO studio_lessons/).length, 0, 'the waiting run, resumed: no second row');
         assert.equal(gemini.length, 0);
+    });
+
+    it('a tenant the Mac does not work for (G1): the run fails with the reason, nothing is queued, Gemini is never reached', async () => {
+        const NEW_TENANT = '22222222-2222-4222-8222-222222222222';
+        const row = await runAnalyst(NEW_TENANT, Date.now() + 100_000);
+        assert.equal(row.status, 'failed');
+        assert.equal(row.error, 'This tenant\'s AI work can\'t run on the operator\'s Mac; it needs the AI providers layer (coming).');
+        assert.equal(queued().length, 0);
+        assert.equal(gemini.length, 0, 'no fallback to Gemini: the owner’s rule is that videos never go there');
     });
 
     it('fails the run once every try failed, saying Claude on the Mac didn’t answer', async () => {

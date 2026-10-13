@@ -31,7 +31,9 @@ import type { Request, Response, NextFunction } from 'express';
 import { pool } from '../config/db.js';
 import { encryptSecret, hashPassword, isEncrypted } from '../config/crypto.js';
 import { describeError, log } from '../utils/log.js';
-import { invalidateTenantCache, isTenantRole, TENANT_ROLES } from '../services/tenant.js';
+import { getPlatformOwnerId, invalidateTenantCache, isTenantRole, TENANT_ROLES } from '../services/tenant.js';
+import { getMacBrainTenants, MAX_MAC_BRAIN_TENANTS, saveMacBrainTenants } from '../services/macBrain.js';
+import { queryRows } from '../db/query.js';
 import { DEFAULT_HOURLY_LIMIT } from '../utils/rateLimiter.js';
 import {
     actorFromSession, AUDIT_ACTIONS, clampAuditLimit, isAuditAction, listAudit, writeAudit,
@@ -359,6 +361,76 @@ router.post('/media-storage/cleanup', async (req, res) => {
         res.json({ ...out, preview: await previewMediaCleanup() });
     } catch (err) {
         failWith(res, err, 'admin.media_cleanup_failed', 'The clean-up failed.');
+    }
+});
+
+// ─── The Mac brain ──────────────────────────────────────────────────────────
+
+/**
+ * Who may use the operator's Mac (G1, src/services/macBrain.ts): the creators whose `monteur_think` and
+ * infographic-`write` work runs there, on his personal Claude plan. Anthropic's terms forbid routing anyone
+ * else's work through it, so the server refuses everyone else with a 409 `NEEDS_API_BRAIN`.
+ *
+ * The owner (`platform_tenant`: the first creator ever made, active or not) is always allowed and cannot be
+ * removed; the saved list (`extra_tenants`) adds tenants. Nothing saved, `null` and `[]` all mean the owner only.
+ */
+async function describeMacBrain() {
+    const [{ extra, source }, owner] = await Promise.all([getMacBrainTenants(), getPlatformOwnerId()]);
+    const ownerId = owner ? owner.toLowerCase() : null;
+    const ids = [...new Set([...extra, ...(ownerId ? [ownerId] : [])])];
+    const rows = ids.length
+        ? await queryRows<{ id: string; name: string | null }>('SELECT id, name FROM creators WHERE id = ANY($1::uuid[])', [ids])
+        : [];
+    const nameOf = (id: string): string | null => rows.find((r) => r.id.toLowerCase() === id)?.name ?? null;
+    return {
+        source,
+        platform_tenant: ownerId ? { id: ownerId, name: nameOf(ownerId) } : null,
+        extra_tenants: extra.map((id) => ({ id, name: nameOf(id) })),
+    };
+}
+
+router.get('/mac-brain-tenants', async (_req, res) => {
+    try {
+        res.json(await describeMacBrain());
+    } catch (err) {
+        failWith(res, err, 'admin.mac_brain_read_failed', 'Failed to read the Mac brain tenants.');
+    }
+});
+
+/**
+ * `{ tenants: ["<creator id>", …] }` saves the tenants allowed besides the owner (`[]` is none: the owner
+ * only); `{ tenants: null }` forgets the saved list, with the same effect. Every id must be a creator that
+ * exists: a typo would otherwise add nobody, silently.
+ */
+router.put('/mac-brain-tenants', async (req, res) => {
+    const raw = (req.body ?? {}).tenants;
+    if (raw !== null && (!Array.isArray(raw) || raw.length > MAX_MAC_BRAIN_TENANTS || !raw.every(isUuid))) {
+        res.status(400).json({
+            error: `Send { "tenants": ["<creator id>", …] } (at most ${MAX_MAC_BRAIN_TENANTS}), or { "tenants": null } to go back to the owner alone.`,
+        });
+        return;
+    }
+    try {
+        const ids = raw === null ? null : [...new Set((raw as string[]).map((id) => id.toLowerCase()))];
+        if (ids && ids.length) {
+            const known = await queryRows<{ id: string }>('SELECT id FROM creators WHERE id = ANY($1::uuid[])', [ids]);
+            const missing = ids.filter((id) => !known.some((k) => k.id.toLowerCase() === id));
+            if (missing.length) {
+                res.status(404).json({ error: `No such tenant: ${missing.join(', ')}.` });
+                return;
+            }
+        }
+        const before = await getMacBrainTenants();
+        const after = await saveMacBrainTenants(ids, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.settingsMacBrainWrite, 'app', null, {
+            change: ids === null ? 'reset' : 'saved',
+            extra_tenants: after.extra,
+            previous_extra_tenants: before.extra,
+            previous_source: before.source,
+        });
+        res.json(await describeMacBrain());
+    } catch (err) {
+        failWith(res, err, 'admin.mac_brain_save_failed', 'Failed to save the Mac brain tenants.');
     }
 });
 

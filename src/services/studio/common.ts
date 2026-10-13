@@ -6,7 +6,7 @@ import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { pool } from '../../config/db.js';
 
 /**
- * A refusal the route answers as-is: `status` and `{ error, problems? }` (STUDIO.md §4).
+ * A refusal the route answers as-is: `status` and `{ error, problems?, code? }` (STUDIO.md §4).
  *
  * Thrown from the services rather than returned, so a check deep inside a transaction rolls
  * everything back on its way out instead of each caller remembering to.
@@ -15,7 +15,9 @@ export class StudioError extends Error {
     constructor(
         readonly status: number,
         message: string,
-        readonly problems?: string[]
+        readonly problems?: string[],
+        /** A machine-readable reason the route sends beside `error`, e.g. `NEEDS_API_BRAIN`. */
+        readonly code?: string
     ) {
         super(message);
         this.name = 'StudioError';

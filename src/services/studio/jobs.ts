@@ -20,9 +20,10 @@ import type {
     MonteurRenderPayload, MonteurScanPayload, MonteurSourceRow, RenderCarouselPayload, RenderInfographicPayload, StudioJobKind,
     StudioJobRow,
 } from '../../db/rows.js';
-import { log } from '../../utils/log.js';
+import { describeError, log } from '../../utils/log.js';
 import { getPublicBaseUrl } from '../appSettings.js';
 import { AUDIT_ACTIONS, writeAudit } from '../audit.js';
+import { assertMacBrainAllowed, isMacBrainAllowed, isMacBrainJob, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
 import {
     MAX_SKIPPED_KEPT, parseMonteurRenderResult, parseMonteurScanResult, parseMonteurThinkResult, parsePickFolderResult,
     parseTranscribeResult,
@@ -76,9 +77,15 @@ type LockedJob = Pick<StudioJobRow, 'id' | 'creator_id' | 'kind' | 'status' | 'p
 
 // ─── Enqueue ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Every job is queued here but a `monteur_think` (think.ts has its own idempotent insert). Claude's work on
+ * the Mac (macBrain.ts: a think, an infographic with `write`) is refused for any tenant but the owner and those
+ * the operator added, whoever is asking: the callers check first and fail fast, this is the net under all of them.
+ */
 export async function enqueueJob(
     exec: Exec, creatorId: string, kind: StudioJobKind, payload: object
 ): Promise<StudioJobView> {
+    if (isMacBrainJob(kind, payload)) await assertMacBrainAllowed(creatorId);
     const { rows } = await exec.query<StudioJobView>(
         `INSERT INTO studio_jobs (creator_id, kind, payload)
          VALUES ($1, $2, $3::jsonb)
@@ -257,20 +264,59 @@ export const CLAIM_SQL = `
      WHERE j.id = picked.id
  RETURNING j.id, j.kind, j.payload, j.attempts`;
 
+/** Refused jobs one claim fails before it stops looking: the next poll takes up the rest. */
+export const MAX_MAC_BRAIN_REFUSALS_PER_CLAIM = 50;
+
+/**
+ * A job this claim took and then could not decide about (the allow-list could not be read) goes back as it was:
+ * `pending`, the claim's attempt unspent. Left `claimed` it would sit for 15 minutes with the worker never told.
+ */
+export const RELEASE_CLAIM_SQL = `
+    UPDATE studio_jobs
+       SET status = 'pending', attempts = attempts - 1, claimed_at = NULL, heartbeat_at = NULL, updated_at = NOW()
+     WHERE id = $1 AND creator_id = $2 AND status = 'claimed'`;
+
 /**
  * `kinds` narrows the claim: a worker busy rendering can poll a fast lane for `pick_folder` alone,
  * so the folder dialog does not wait behind a ten-minute render.
+ *
+ * Claude's work on the Mac (a `monteur_think`, an infographic with `write`) is handed only to a worker of the
+ * owner or of a tenant on `studio.mac_brain_tenants` (macBrain.ts, G1). For any other tenant such a job (queued
+ * before the guard, or before the tenant left the list) is failed with the same reason, in the claim that found
+ * it, and the claim goes on to the next job: the worker never sees it, and its infographic goes `failed` with the
+ * message. If the allow-list cannot be read, the job is released (`RELEASE_CLAIM_SQL`) and the error goes on to
+ * the route: it is never handed out unchecked.
  */
 export async function claimJob(
     creatorId: string, kinds: readonly StudioJobKind[] | null = null
 ): Promise<{ id: string; kind: StudioJobKind; payload: StudioJobRow['payload'] } | null> {
     await failExhaustedClaims(creatorId);
-    const row = await queryOne<Pick<StudioJobRow, 'id' | 'kind' | 'payload' | 'attempts'>>(
-        CLAIM_SQL, [creatorId, STALE_CLAIM_MINUTES, MAX_ATTEMPTS, kinds && kinds.length ? [...kinds] : null]
-    );
-    if (!row) return null;
-    log('info', 'studio.job_claimed', { job_id: row.id, kind: row.kind, attempt: row.attempts });
-    return { id: row.id, kind: row.kind, payload: row.payload };
+    let macBrain: boolean | undefined;
+    for (let refused = 0; refused < MAX_MAC_BRAIN_REFUSALS_PER_CLAIM; refused++) {
+        const row = await queryOne<Pick<StudioJobRow, 'id' | 'kind' | 'payload' | 'attempts'>>(
+            CLAIM_SQL, [creatorId, STALE_CLAIM_MINUTES, MAX_ATTEMPTS, kinds && kinds.length ? [...kinds] : null]
+        );
+        if (!row) return null;
+        if (isMacBrainJob(row.kind, row.payload)) {
+            try {
+                macBrain ??= await isMacBrainAllowed(creatorId);
+                if (!macBrain) {
+                    log('warn', 'studio.mac_brain_job_refused', { job_id: row.id, kind: row.kind, creator_id: creatorId });
+                    await failJob(creatorId, row.id, NEEDS_API_BRAIN_MESSAGE);
+                    continue;
+                }
+            } catch (err) {
+                // The job is claimed and not decided: give it back, then let the original error through.
+                await queryCount(RELEASE_CLAIM_SQL, [row.id, creatorId]).catch((releaseErr: unknown) => {
+                    log('error', 'studio.mac_brain_release_failed', { job_id: row.id, ...describeError(releaseErr) });
+                });
+                throw err;
+            }
+        }
+        log('info', 'studio.job_claimed', { job_id: row.id, kind: row.kind, attempt: row.attempts });
+        return { id: row.id, kind: row.kind, payload: row.payload };
+    }
+    return null;
 }
 
 /**

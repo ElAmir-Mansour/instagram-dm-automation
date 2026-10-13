@@ -10,10 +10,12 @@ import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import { setLogSink } from '../../utils/log.js';
+import { MacBrainRefused, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
+import { invalidateTenantCache } from '../tenant.js';
 import { StudioError } from './common.js';
 import {
-    CLAIM_SQL, claimJob, completeJob, enqueueRender, EXHAUSTED_ERROR, failJob, MAX_ATTEMPTS, parseScanResult,
-    reportProgress, STALE_CLAIM_MINUTES,
+    CLAIM_SQL, claimJob, completeJob, enqueueJob, enqueueRender, EXHAUSTED_ERROR, failJob, MAX_ATTEMPTS, MAX_MAC_BRAIN_REFUSALS_PER_CLAIM,
+    parseScanResult, reportProgress, STALE_CLAIM_MINUTES,
 } from './jobs.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -125,6 +127,190 @@ describe('claimJob', () => {
         // The reaping happens before the claim, so the claim cannot pick the row up again.
         const order = statements.map((s) => s.sql);
         assert.ok(order.findIndex((s) => /attempts >= \$3/.test(s)) < order.findIndex((s) => /^WITH picked AS/.test(s)));
+    });
+});
+
+// ─── The Mac is the owner's (G1) ────────────────────────────────────────────────────────
+
+describe('the Mac is the owner’s: Claude’s work reaches a worker only for the tenants on studio.mac_brain_tenants', () => {
+    const NEW_TENANT = '88888888-8888-4888-8888-888888888888';
+    const INFOGRAPHIC = '99999999-9999-4999-8999-999999999999';
+    let saved: string | null;
+    /** What the claim hands out next, in order; empty means nothing is pending. */
+    let pending: { id: string; kind: string; payload: unknown }[];
+    /** The jobs the claim has taken, by id: what `failJob` finds when it locks one. */
+    let claimed: Map<string, { id: string; kind: string; payload: unknown }>;
+
+    beforeEach(() => {
+        invalidateTenantCache();
+        saved = null;
+        pending = [];
+        claimed = new Map();
+        routes.push(
+            [/^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/, () => ({ rows: [{ id: TENANT }] })],
+            [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({
+                rows: p[0] === 'studio.mac_brain_tenants' && saved !== null ? [{ value: saved, is_secret: false }] : [],
+            })],
+            [/^WITH picked AS/, () => {
+                const next = pending.shift();
+                if (!next) return { rows: [] };
+                claimed.set(next.id, next);
+                return { rows: [{ ...next, attempts: 1 }] };
+            }],
+            [LOCK, (p) => {
+                const job = claimed.get(p[0]);
+                return { rows: job ? [{ ...job, creator_id: p[1], status: 'claimed' }] : [] };
+            }],
+        );
+    });
+    afterEach(() => invalidateTenantCache());
+
+    const think = (id: string) => ({ id, kind: 'monteur_think', payload: { request: `source/x/a1/${id}`, try: 1, step: 'pick' } });
+    const infographic = (id: string, write: boolean) => ({
+        id, kind: 'render_infographic', payload: { infographicId: INFOGRAPHIC, theme: 'dark', ...(write ? { write: { model: 'm' } } : { spec: {} }) },
+    });
+    /** `failJob`'s statement: the reaper's (`error = $4`) and the folder dialog's are not it. */
+    const failures = () => ran(/^UPDATE studio_jobs SET status = 'failed', error = \$2, progress = NULL/);
+
+    it('fails a think for a tenant that is not on the list, with the reason, instead of handing it out', async () => {
+        pending = [think(JOB)];
+        assert.equal(await claimJob(NEW_TENANT), null, 'the worker is told there is nothing');
+        assert.deepEqual(failures().map((f) => f.params), [[JOB, NEEDS_API_BRAIN_MESSAGE]]);
+    });
+
+    it('fails an infographic Claude would write, and the infographic goes failed with the reason', async () => {
+        pending = [infographic(JOB, true)];
+        assert.equal(await claimJob(NEW_TENANT), null);
+        assert.deepEqual(failures().map((f) => f.params), [[JOB, NEEDS_API_BRAIN_MESSAGE]]);
+        const [row] = ran(/^UPDATE infographics SET status = 'failed'/);
+        assert.deepEqual(row!.params, [INFOGRAPHIC, NEW_TENANT, NEEDS_API_BRAIN_MESSAGE, JOB]);
+    });
+
+    it('goes on to the next job in the same claim: a refused think never holds up a scan', async () => {
+        pending = [think(JOB), think(NEWER_JOB), { id: LESSON, kind: 'scan_library', payload: { root: '/r' } }];
+        assert.deepEqual(await claimJob(NEW_TENANT), { id: LESSON, kind: 'scan_library', payload: { root: '/r' } });
+        assert.deepEqual(failures().map((f) => f.params[0]), [JOB, NEWER_JOB]);
+    });
+
+    it('hands out a render alone, and every other kind, to a tenant that is not on the list', async () => {
+        for (const job of [infographic(JOB, false), { id: NEWER_JOB, kind: 'monteur_render', payload: { clipId: 'c' } }, { id: LESSON, kind: 'pick_folder', payload: {} }]) {
+            pending = [job];
+            assert.equal((await claimJob(NEW_TENANT))?.id, job.id, job.kind);
+        }
+        assert.equal(failures().length, 0);
+    });
+
+    it('hands the owner his think and his infographic, with nothing configured', async () => {
+        pending = [think(JOB)];
+        assert.equal((await claimJob(TENANT))?.id, JOB);
+        pending = [infographic(NEWER_JOB, true)];
+        assert.equal((await claimJob(TENANT))?.id, NEWER_JOB);
+        assert.equal(failures().length, 0);
+    });
+
+    it('a saved list adds a tenant: it is handed its think, the owner his own, and a third is failed', async () => {
+        saved = JSON.stringify([NEW_TENANT]);
+        pending = [think(JOB)];
+        assert.equal((await claimJob(NEW_TENANT))?.id, JOB);
+        pending = [think(NEWER_JOB)];
+        assert.equal((await claimJob(TENANT))?.id, NEWER_JOB, 'the owner is never taken off the Mac by the list');
+        pending = [think(LESSON)];
+        assert.equal(await claimJob('77777777-7777-4777-8777-777777777777'), null);
+        assert.deepEqual(failures().map((f) => f.params), [[LESSON, NEEDS_API_BRAIN_MESSAGE]]);
+    });
+
+    it('asks who the Mac is for only when it meets Claude’s work: an ordinary claim reads no setting', async () => {
+        pending = [{ id: JOB, kind: 'scan_library', payload: {} }];
+        await claimJob(NEW_TENANT);
+        assert.equal(ran(/FROM app_settings/).length, 0);
+        pending = [think(NEWER_JOB), think(LESSON)];
+        await claimJob(NEW_TENANT);
+        assert.equal(ran(/FROM app_settings/).length, 1, 'once per claim, however many it refuses');
+    });
+
+    it('stops after exactly the bounded number of refusals; the next poll takes up the rest', async () => {
+        pending = Array.from({ length: MAX_MAC_BRAIN_REFUSALS_PER_CLAIM + 20 }, (_, i) => think(`think-${i}`));
+        assert.equal(await claimJob(NEW_TENANT), null);
+        assert.equal(failures().length, MAX_MAC_BRAIN_REFUSALS_PER_CLAIM, 'not one more');
+        assert.equal(ran(/^WITH picked AS/).length, MAX_MAC_BRAIN_REFUSALS_PER_CLAIM);
+        assert.equal(pending.length, 20);
+    });
+
+    it('is never a hand-out when the list cannot be read: the claim is released, and the error reaches the route', async () => {
+        routes.unshift([/FROM app_settings/, () => { throw new Error('connection reset'); }]);
+        pending = [think(JOB)];
+        await assert.rejects(claimJob(NEW_TENANT), /connection reset/);
+        assert.equal(failures().length, 0, 'nothing is failed on a guess');
+        const [release] = ran(/^UPDATE studio_jobs SET status = 'pending', attempts = attempts - 1/);
+        assert.ok(release, 'the job is given back, not left claimed');
+        assert.deepEqual(release!.params, [JOB, NEW_TENANT]);
+        assert.match(release!.sql, /claimed_at = NULL, heartbeat_at = NULL/);
+        assert.match(release!.sql, /WHERE id = \$1 AND creator_id = \$2 AND status = 'claimed'$/, 'only a claim still held');
+    });
+
+    it('releases the claim the same way when the owner lookup is what failed', async () => {
+        routes.unshift([/^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/, () => { throw new Error('connection reset'); }]);
+        pending = [think(JOB)];
+        await assert.rejects(claimJob(TENANT), /connection reset/);
+        assert.equal(ran(/^UPDATE studio_jobs SET status = 'pending', attempts = attempts - 1/).length, 1);
+        assert.equal(failures().length, 0);
+    });
+
+    it('a failed release does not hide the error that caused it', async () => {
+        routes.unshift(
+            [/FROM app_settings/, () => { throw new Error('connection reset'); }],
+            [/^UPDATE studio_jobs SET status = 'pending'/, () => { throw new Error('release failed too'); }],
+        );
+        pending = [think(JOB)];
+        await assert.rejects(claimJob(NEW_TENANT), /connection reset/);
+    });
+
+    it('releases nothing on the way to a hand-out or a refusal', async () => {
+        pending = [think(JOB), { id: LESSON, kind: 'scan_library', payload: {} }];
+        await claimJob(NEW_TENANT);
+        assert.equal(ran(/^UPDATE studio_jobs SET status = 'pending'/).length, 0);
+    });
+});
+
+describe('enqueueJob — the net under every caller of Claude’s work', () => {
+    const NEW_TENANT = '88888888-8888-4888-8888-888888888888';
+    let saved: string | null;
+    beforeEach(() => {
+        invalidateTenantCache();
+        saved = null;
+        routes.push(
+            [/^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/, () => ({ rows: [{ id: TENANT }] })],
+            [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({
+                rows: p[0] === 'studio.mac_brain_tenants' && saved !== null ? [{ value: saved, is_secret: false }] : [],
+            })],
+            [/^INSERT INTO studio_jobs/, (p) => ({ rows: [{ id: JOB, kind: p[1], status: 'pending', payload: JSON.parse(p[2]) }] })],
+        );
+    });
+    afterEach(() => invalidateTenantCache());
+
+    const inserted = () => ran(/^INSERT INTO studio_jobs/);
+    const refused = (err: unknown) => err instanceof MacBrainRefused && err.status === 409 && err.code === 'NEEDS_API_BRAIN';
+
+    it('refuses an infographic with `write` and a think for a tenant that is not on the list: nothing is inserted', async () => {
+        await assert.rejects(enqueueJob(pool, NEW_TENANT, 'render_infographic', { infographicId: 'i', write: { model: 'm' } }), refused);
+        await assert.rejects(enqueueJob(pool, NEW_TENANT, 'monteur_think', { request: 'r', try: 1 }), refused);
+        assert.equal(inserted().length, 0);
+    });
+
+    it('queues a render alone, and every other kind, for that tenant', async () => {
+        await enqueueJob(pool, NEW_TENANT, 'render_infographic', { infographicId: 'i', spec: {} });
+        await enqueueJob(pool, NEW_TENANT, 'monteur_render', { clipId: 'c' });
+        await enqueueJob(pool, NEW_TENANT, 'scan_library', {});
+        assert.equal(inserted().length, 3);
+    });
+
+    it('queues the owner’s, and a listed tenant’s: the list adds to the owner, never replaces him', async () => {
+        await enqueueJob(pool, TENANT, 'render_infographic', { infographicId: 'i', write: { model: 'm' } });
+        saved = JSON.stringify([NEW_TENANT]);
+        await enqueueJob(pool, NEW_TENANT, 'render_infographic', { infographicId: 'i', write: { model: 'm' } });
+        await enqueueJob(pool, TENANT, 'render_infographic', { infographicId: 'i', write: { model: 'm' } });
+        assert.equal(inserted().length, 3);
+        await assert.rejects(enqueueJob(pool, '77777777-7777-4777-8777-777777777777', 'render_infographic', { infographicId: 'i', write: { model: 'm' } }), refused);
     });
 });
 
