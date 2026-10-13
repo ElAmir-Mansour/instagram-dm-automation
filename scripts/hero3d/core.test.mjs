@@ -1,9 +1,11 @@
 /**
- * The hero scene's decisions, pinned without a GPU (L10).
+ * The 3D scenes' decisions, pinned without a GPU (L10, L11).
  *
- * scene.mjs draws what core.mjs decides, so these tests are the scene's contract: the loop is the identity's
- * highlight -> deliver motion at four times its tempo, the colours come out of the real tokens, a comment that has no
- * keyword is never lit, and the plan fits the draw-call and triangle budgets the PR is accepted against.
+ * hero.mjs and the diagram scenes draw what core.mjs and the scenes' plan files decide, so these tests are their contract: the
+ * loop is the identity's highlight -> deliver motion at four times its tempo, the colours come out of the real tokens, a comment
+ * that has no keyword is never lit, a platform that cannot do something is never sent it, and the plans fit the draw-call and
+ * triangle budgets the PRs are accepted against. The engine's rules (one context, lazy chunks, a failed mount leaves nothing)
+ * are read from its source, because they are what a browser test cannot see being broken until it is.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -13,6 +15,14 @@ import {
     cubicBezier, easeDive, easeFly, easeStandard, loopAt, median, mulberry32, parseColor, phase, roundedRectBody,
     roundedRectContour, roundedRectRing, span, splitAtKeyword,
 } from './core.mjs';
+import * as monteur from './scenes/monteur.plan.mjs';
+import * as pmap from './scenes/pmap.plan.mjs';
+import * as studio from './scenes/studio.plan.mjs';
+
+const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const RAW = Object.fromEntries(['engine', 'hero', 'kit', 'entry', 'scenes/monteur', 'scenes/studio', 'scenes/pmap'].map((f) => [f, readFileSync(`scripts/hero3d/${f}.mjs`, 'utf8')]));
+/** Every source the browser runs, comments removed: the rules below are about what is written, not what is said. */
+const SRC = Object.fromEntries(Object.entries(RAW).map(([f, text]) => [f, strip(text)]));
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, `${a} is not within ${eps} of ${b}`);
 
@@ -152,28 +162,28 @@ describe('hero3d: colours come out of the real tokens, alpha included', () => {
         }
     });
 
-    it('reads every token the scene uses, in both themes, from tokens.css and the landing', () => {
+    it('reads every token the engine uses, in both themes, from tokens.css and the landing, and each fallback parses', () => {
         const tokens = readFileSync('dashboard/css/tokens.css', 'utf8');
         const landing = readFileSync('public/landing.html', 'utf8');
         const blocks = {
-            dark: /:root,\s*:root\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/.exec(tokens)[1],
-            light: /:root\[data-theme='light'\]\s*\{([\s\S]*?)\n\}/.exec(tokens)[1],
+            dark: /:root,\s*:root\[data-theme='dark'\]\s*\{([\s\S]*?)\n\}/.exec(tokens)[1] + (/:root,\s*:root\[data-theme='dark'\]\s*\{([^}]*)\}/.exec(landing)?.[1] ?? ''),
+            light: /:root\[data-theme='light'\]\s*\{([\s\S]*?)\n\}/.exec(tokens)[1] + (/:root\[data-theme='light'\]\s*\{([^}]*)\}/.exec(landing)?.[1] ?? ''),
         };
-        const logo = {
-            dark: /:root,\s*:root\[data-theme='dark'\]\s*\{\s*--logo-mono:\s*([^;]+);/.exec(landing)[1],
-            light: /:root\[data-theme='light'\]\s*\{\s*--logo-mono:\s*([^;]+);/.exec(landing)[1],
-        };
-        for (const theme of ['dark', 'light']) {
-            for (const name of ['--surface-page', '--surface-solid', '--border-strong', '--text-default', '--accent-soft', '--accent-text']) {
+        const read = RAW.engine.slice(RAW.engine.indexOf('export function readTokens()'));
+        const wanted = [...read.slice(0, read.indexOf('\n}\n')).matchAll(/t\('(--[a-z-]+)', '([^']+)'\)/g)].map((m) => [m[1], m[2]]);
+        assert.ok(wanted.length >= 14, 'the engine reads the hero\'s six and the diagrams\' eight more');
+        for (const [name, fallback] of wanted) {
+            assert.ok(parseColor(fallback), `${name}: the fallback ${fallback} parses`);
+            for (const theme of ['dark', 'light']) {
                 const m = new RegExp(`${name}:\\s*([^;]+);`).exec(blocks[theme]);
-                assert.ok(m, `${name} (${theme})`);
+                assert.ok(m, `${name} (${theme}) is defined`);
                 assert.ok(parseColor(m[1]), `${name} (${theme}) = ${m[1]} parses`);
             }
-            assert.ok(parseColor(logo[theme]), `--logo-mono (${theme})`);
         }
         // The two tokens that carry alpha keep it.
         near(parseColor(/--accent-soft:\s*([^;]+);/.exec(blocks.dark)[1]).a, 0.16);
         near(parseColor(/--border-strong:\s*([^;]+);/.exec(blocks.dark)[1]).a, 0.2);
+        near(parseColor(/--surface-glass:\s*([^;]+);/.exec(blocks.dark)[1]).a, 0.08);
     });
 
     it('cssColor writes Canvas 2D colours and scales alpha', () => {
@@ -233,30 +243,42 @@ describe('hero3d: the plan fits the budgets', () => {
     });
 });
 
-describe('hero3d: what scene.mjs is allowed to be (IDENTITY.md section 5: flat, unlit, no mark)', () => {
-    const src = readFileSync('scripts/hero3d/scene.mjs', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+describe('hero3d: what the sources are allowed to be (IDENTITY.md section 5: flat, unlit, no mark)', () => {
+    const HERO = SRC.hero, ENGINE = SRC.engine, KIT = SRC.kit;
+    const LOCAL = new Set(['./core.mjs', './engine.mjs', './kit.mjs', './hero.mjs', '../core.mjs', '../kit.mjs', '../engine.mjs', './monteur.plan.mjs', './studio.plan.mjs', './pmap.plan.mjs']);
 
-    it('imports only three and its own core, and only unlit things from three', () => {
-        const imports = [...src.matchAll(/from '([^']+)'/g)].map((m) => m[1]);
-        assert.deepEqual([...new Set(imports)].sort(), ['./core.mjs', 'three']);
-        const named = /import\s*\{([^}]*)\}\s*from 'three'/.exec(src)[1].split(',').map((x) => x.trim()).filter(Boolean);
-        assert.ok(named.includes('MeshBasicMaterial') && named.includes('Fog'));
-        assert.deepEqual(named.filter((n) => /Light|Standard|Phong|Lambert|Physical|Toon|Matcap|Shader|Points|Sprite|Bloom|Effect/.test(n)), []);
+    it('imports only three and its own modules, and only unlit things from three', () => {
+        for (const [name, src] of Object.entries(SRC)) {
+            for (const m of src.matchAll(/from '([^']+)'/g)) assert.ok(m[1] === 'three' || LOCAL.has(m[1]), `${name} imports ${m[1]}`);
+            for (const from of src.matchAll(/import\s*\{([^}]*)\}\s*from 'three'/g)) {
+                const named = from[1].split(',').map((x) => x.trim()).filter(Boolean);
+                assert.deepEqual(named.filter((n) => /Light|Standard|Phong|Lambert|Physical|Toon|Matcap|Shader|Points|Sprite|Bloom|Effect/.test(n)), [], name);
+            }
+        }
+        for (const src of [HERO, KIT]) {
+            const named = /import\s*\{([^}]*)\}\s*from 'three'/.exec(src)[1].split(',').map((x) => x.trim());
+            assert.ok(named.includes('MeshBasicMaterial') && named.includes('Fog'));
+        }
     });
 
-    it('has no lights, no other material, no particles and no post-processing', () => {
-        assert.equal(/new \w*Light\b/.test(src), false);
-        assert.equal([...src.matchAll(/new (\w*Material)\b/g)].every((m) => m[1] === 'MeshBasicMaterial'), true);
-        assert.equal(/Points|Sprite|EffectComposer|bloom|shadowMap|castShadow/i.test(src), false);
+    it('has no lights, no other material, no particles and no post-processing, anywhere', () => {
+        for (const [name, src] of Object.entries(SRC)) {
+            assert.equal(/new \w*Light\b/.test(src), false, name);
+            assert.equal([...src.matchAll(/new (\w*Material)\b/g)].every((m) => m[1] === 'MeshBasicMaterial'), true, name);
+            assert.equal(/new (?:Sprite|Points)\b|SpriteMaterial|PointsMaterial|EffectComposer|bloom|shadowMap|castShadow/i.test(src), false, name);
+        }
     });
 
     it('is configured as the spec says: low-power, no major performance caveat, DPR capped, 28 degrees, fog', () => {
-        assert.match(src, /powerPreference:\s*'low-power'/);
-        assert.match(src, /failIfMajorPerformanceCaveat:\s*true/);
-        assert.match(src, /alpha:\s*true/);
-        assert.match(src, /antialias:\s*\(window\.devicePixelRatio \|\| 1\) < 2/);
-        assert.match(src, /new PerspectiveCamera\(CAMERA\.fov/);
-        assert.match(src, /scene\.fog = new Fog\(/);
+        assert.match(ENGINE, /powerPreference:\s*'low-power'/);
+        assert.match(ENGINE, /failIfMajorPerformanceCaveat:\s*true/);
+        assert.match(ENGINE, /alpha:\s*true/);
+        assert.match(ENGINE, /antialias:\s*\(window\.devicePixelRatio \|\| 1\) < 2/);
+        assert.match(HERO, /new PerspectiveCamera\(CAMERA\.fov/);
+        assert.match(HERO, /scene\.fog = new Fog\(/);
+        assert.match(KIT, /const FOV = 28;/);
+        assert.match(KIT, /new PerspectiveCamera\(FOV/);
+        assert.match(KIT, /this\.scene\.fog = new Fog\(/);
         const core = readFileSync('scripts/hero3d/core.mjs', 'utf8');
         assert.match(core, /CAMERA = \{ fov: 28, z: 14, near: 0\.1, far: 40 \}/);
         assert.match(core, /MAX_DPR = 1\.5/);
@@ -264,31 +286,97 @@ describe('hero3d: what scene.mjs is allowed to be (IDENTITY.md section 5: flat, 
     });
 
     it('never draws the mark, and takes every colour from a token (the only literals are the fallbacks readTokens carries)', () => {
-        assert.equal(/plogo-zap|favicon|site\.webmanifest|mark-tile|wordmark/.test(src), false, 'the mark is not in the scene');
-        const literals = [...src.matchAll(/'(#[0-9a-fA-F]{3,8}|rgba?\([^']*\))'/g)].map((m) => m[1]);
-        const inTokens = /function readTokens\(\)[\s\S]*?\n\}/.exec(src)[0];
-        for (const lit of literals) assert.ok(inTokens.includes(`'${lit}'`), `${lit} is outside readTokens`);
-        assert.equal(/setStyle|new Color\(\s*['"]/.test(src), false, 'Color.setStyle warns on alpha: tokens are parsed by parseColor');
+        const inTokens = /export function readTokens\(\) \{[\s\S]*?\n\}/.exec(ENGINE)[0];
+        for (const [name, src] of Object.entries(SRC)) {
+            assert.equal(/plogo-zap|favicon|site\.webmanifest|mark-tile|wordmark/.test(src), false, `${name}: the mark is not in a scene`);
+            const literals = [...src.matchAll(/'(#[0-9a-fA-F]{3,8}|rgba?\([^']*\))'/g)].map((m) => m[1]);
+            for (const lit of literals) assert.ok(name === 'engine' && inTokens.includes(`'${lit}'`), `${name}: ${lit} is outside readTokens`);
+            assert.equal(/setStyle|new Color\(\s*['"]/.test(src), false, `${name}: Color.setStyle warns on alpha: tokens are parsed by parseColor`);
+        }
     });
 
     it('draws Arabic through the browser shaper: direction, start alignment, no letter spacing, fonts loaded first', () => {
-        assert.match(src, /direction: rtl \? 'rtl' : 'ltr'/);
-        assert.match(src, /textAlign: 'start'/);
-        assert.match(src, /letterSpacing: '0px'/);
-        assert.match(src, /document\.fonts\.load\(/);
-        assert.match(src, /fontBoundingBoxAscent/);
-        assert.match(src, /new Path2D\(d\)/);
+        assert.match(HERO, /direction: rtl \? 'rtl' : 'ltr'/);
+        assert.match(KIT, /direction: this\.sign < 0 \? 'rtl' : 'ltr'/);
+        for (const src of [HERO, KIT]) {
+            assert.match(src, /textAlign: 'start'/);
+            assert.match(src, /letterSpacing: '0px'/);
+        }
+        assert.match(ENGINE, /document\.fonts\.load\(/);
+        assert.match(KIT, /await loadFonts\(kit\.family, texts\(ctx\.el\)\)/, 'a diagram scene loads the faces of its own words before it draws them');
+        assert.match(HERO, /fontBoundingBoxAscent/);
+        assert.match(ENGINE, /new Path2D\(d\)/);
     });
 
-    it('is the only thing that listens for the deliver event, and it pulses the card through a class, not styles', () => {
-        assert.match(src, /'hero3d:deliver'/);
-        assert.match(src, /classList\.add\('is-delivering'\)/);
-        assert.equal(/\.style\./.test(src), false, 'the scene sets no inline style on the page');
+    it('the hero is the only thing that listens for the deliver event, and it pulses the card through a class, not styles', () => {
+        assert.match(HERO, /'hero3d:deliver'/);
+        assert.match(HERO, /classList\.add\('is-delivering'\)/);
+        for (const [name, src] of Object.entries(SRC)) {
+            if (name !== 'hero') assert.equal(src.includes('hero3d:deliver'), false, name);
+            assert.equal(/\.style\./.test(src), false, `${name} sets no inline style on the page`);
+        }
+    });
+
+    it('uses nothing Safari 15 lacks that a build target cannot supply: no roundRect (16), no .at() / hasOwn / structuredClone (15.4)', () => {
+        assert.match(build(), /target: \['es2020', 'safari15'\]/);
+        for (const [name, src] of Object.entries(SRC)) {
+            if (name === 'kit') assert.equal((src.match(/\.roundRect\(/g) ?? []).length, 0, 'kit draws through rrect()');
+            else assert.equal(/\.roundRect\(/.test(src), false, `${name}: use rrect() from the kit`);
+            assert.equal(/\.at\(|Object\.hasOwn|structuredClone|\.findLast\(|\.replaceAll\(/.test(src), false, name);
+        }
+        assert.match(SRC.kit, /export function rrect\(c, x, y, w, h, r\) \{[\s\S]*?c\.arcTo\(/, 'a path of arcs, which every browser has');
+    });
+});
+
+function build() { return readFileSync('scripts/build-hero3d.mjs', 'utf8'); }
+
+describe('hero3d: one renderer, one canvas, and a chunk only when its figure is near (L11)', () => {
+    const ENGINE = SRC.engine;
+
+    it('makes exactly one WebGL renderer in all of the scene sources, and nothing else makes a context', () => {
+        let renderers = 0;
+        for (const [name, src] of Object.entries(SRC)) {
+            renderers += (src.match(/new WebGLRenderer\(/g) ?? []).length;
+            if (name !== 'engine') assert.equal(/WebGLRenderer|getContext\('webgl/.test(src), false, `${name} does not make a context`);
+        }
+        assert.equal(renderers, 1);
+        assert.equal((ENGINE.match(/renderer\.domElement/g) ?? []).length, 1, 'one canvas, moved between hosts');
+        assert.match(ENGINE, /e\.el\.insertBefore\(canvas,/);
+    });
+
+    it("fetches a scene's chunk from a second observer whose margin is NEAR (200 px), once, and never from anything else", () => {
+        assert.match(ENGINE, /export const NEAR = '200px 0px';/);
+        assert.match(ENGINE, /const lazy = new IntersectionObserver\(\(records\) => \{[\s\S]*?\}, \{ rootMargin: NEAR \}\);/);
+        assert.match(ENGINE, /if \(!r\.isIntersecting\) continue;\s*lazy\.unobserve\(r\.target\);/, 'once: the host is dropped from the observer as it is asked for');
+        assert.match(ENGINE, /if \(e && e\.state === 'idle'\) void load\(e\);/);
+        assert.match(ENGINE, /if \(e\.state === 'idle'\) lazy\.observe\(e\.el\);/, 'only a host that has no scene yet is observed for it');
+        assert.equal((ENGINE.match(/\bimport\(/g) ?? []).length, 1, 'one dynamic import in the engine');
+        assert.match(ENGINE, /const m = await import\(e\.url\);/);
+        for (const [name, src] of Object.entries(SRC)) if (name !== 'engine') assert.equal(/\bimport\(/.test(src), false, `${name} fetches nothing`);
+        assert.equal((ENGINE.match(/\bload\(e\)/g) ?? []).length, 2, 'load() is defined, and called from the lazy observer only');
+    });
+
+    it("the entry builds the hero's hosts and the diagram hosts from the page, and hands them all to one engine", () => {
+        const entry = SRC.entry;
+        assert.match(entry, /querySelectorAll\('\[data-scene3d\]'\)/);
+        assert.equal((entry.match(/\bstart\(/g) ?? []).length, 1, 'one engine');
+        assert.equal(/createHero/.test(entry), true);
+        assert.equal(/WebGLRenderer|import\(/.test(entry), false);
+    });
+
+    it('a scene host that fails stays as its DOM diagram: it is told apart in one place and logged as an info line', () => {
+        assert.match(ENGINE, /console\.info\('hero3d: scene ' \+ e\.id \+ ' stays as its poster,', err\);/);
+        assert.equal((ENGINE.match(/console\.(?:error|warn)/g) ?? []).length, 0);
+        assert.match(ENGINE, /e\.state = 'failed';\s*if \(E\.active === e\) \{ E\.active = null; e\.el\.classList\.remove\('is-3d'\); \}/);
+    });
+
+    it('draws nothing while its host is off screen: the loop runs only for an active host with something visible', () => {
+        assert.match(ENGINE, /const running = \(\) => !!E\.active && !E\.paused && E\.active\.vis > 0 && !document\.hidden && !E\.asleep && !E\.dead;/);
     });
 });
 
 describe('hero3d: the bubble geometry is hand-built, flat and faces the camera', () => {
-    const sceneSrc = readFileSync('scripts/hero3d/scene.mjs', 'utf8');
+    const sceneSrc = RAW.hero;
     const [, BW, BH, BR, RING] = /const BW = ([\d.]+), BH = ([\d.]+), BR = ([\d.]+), RING = ([\d.]+);/.exec(sceneSrc).map(Number);
     const body = roundedRectBody(BW, BH, BR);
     const ring = roundedRectRing(BW, BH, BR, RING);
@@ -375,47 +463,204 @@ describe('hero3d: the bubble geometry is hand-built, flat and faces the camera',
         assert.ok(PROFILES.lite.bubbles * perBubble + PROFILES.lite.bubbles * keyword <= PROFILES.lite.triangles);
     });
 
-    it('scene.mjs builds the bubbles from these, not from three\'s Shape and ShapeGeometry (about 7 KB of gzip for a rectangle)', () => {
+    it('hero.mjs and the kit build their shapes from these, not from three\'s Shape and ShapeGeometry (about 7 KB of gzip for a rectangle)', () => {
         assert.match(sceneSrc, /flat\(roundedRectBody\(BW, BH, BR\)\)/);
         assert.match(sceneSrc, /flat\(roundedRectRing\(BW, BH, BR, RING\)\)/);
-        const named = /import\s*\{([^}]*)\}\s*from 'three'/.exec(sceneSrc)[1].split(',').map((x) => x.trim()).filter(Boolean);
-        assert.ok(named.includes('BufferGeometry') && named.includes('BufferAttribute'));
-        assert.deepEqual(named.filter((x) => /^Shape/.test(x)), []);
-        assert.equal(/new Shape\b|ShapeGeometry|ExtrudeGeometry/.test(sceneSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')), false);
+        assert.match(RAW.kit, /flat\(ring \? roundedRectRing\(w, h, r, ring\) : roundedRectBody\(w, h, r\)\)/);
+        const named = /import\s*\{([^}]*)\}\s*from 'three'/.exec(SRC.engine)[1].split(',').map((x) => x.trim()).filter(Boolean);
+        assert.ok(named.includes('BufferGeometry') && named.includes('BufferAttribute'), 'the one place a geometry is built from arrays: flat() in the engine');
+        for (const [name, src] of Object.entries(SRC)) {
+            for (const from of src.matchAll(/import\s*\{([^}]*)\}\s*from 'three'/g)) assert.deepEqual(from[1].split(',').map((x) => x.trim()).filter((x) => /^Shape/.test(x)), [], name);
+            assert.equal(/new Shape\b|ShapeGeometry|ExtrudeGeometry/.test(src), false, name);
+        }
     });
 });
 
 describe('hero3d: a failed mount leaves nothing behind, and a finished page lets go', () => {
-    const src = readFileSync('scripts/hero3d/scene.mjs', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const src = SRC.engine;
 
     it('wraps everything after the renderer in a try/catch that disposes and rethrows', () => {
-        assert.match(src, /try \{\s*pickStage\(\);/);
+        assert.match(src, /try \{\s*if \(motionMq\.matches\) throw new Error\('reduced motion'\);/);
         assert.match(src, /\} catch \(err\) \{\s*dispose\(\);\s*throw err;\s*\}/);
         // the one thing that can fail before it: the renderer itself, which has made nothing yet
-        assert.ok(src.indexOf('new WebGLRenderer(') < src.indexOf('try {\n        pickStage();'));
+        assert.ok(src.indexOf('new WebGLRenderer(') < src.indexOf('try {\n        if (motionMq.matches)'));
     });
 
-    it('checks, after every wait, that the scene was not disposed meanwhile, and that the page did not change language', () => {
-        assert.ok((src.match(/alive\(\);/g) ?? []).length >= 4);
-        assert.match(src, /throw new Error\('disposed while mounting'\)/);
-        assert.match(src, /while \(langOf\(\) !== S\.lang\) \{\s*pickStage\(\);\s*buildBubbles\(\);\s*await fontsFor\(\);\s*alive\(\);/);
-        assert.match(src, /if \(langOf\(\) !== S\.lang\) await switchLang\(\);/);
+    it('checks, after every wait, that the engine was not disposed meanwhile, and a scene that fails while it comes up fails the mount', () => {
+        assert.ok((src.match(/E\.dead/g) ?? []).length >= 10);
+        for (const why of ['disposed while building', 'disposed while compiling', 'disposed while mounting']) assert.ok(src.includes(`throw new Error('${why}')`), why);
+        assert.match(src, /if \(E\.settle\) \{ settle\(err\); return; \}/, "while the engine comes up, its first scene failing is the engine failing");
+        assert.match(src, /dispose\(\);\s*throw err;/);
     });
 
     it('re-checks reduced motion at mount, and lets go of the context when the page is unloaded for good', () => {
         assert.match(src, /if \(motionMq\.matches\) throw new Error\('reduced motion'\)/);
-        assert.match(src, /listen\(window, 'pagehide', \(e\) => \{ if \(!e\.persisted\) dispose\(\); \}\)/);
+        assert.match(src, /listen\(motionMq, 'change', \(\) => \{ if \(motionMq\.matches\) fallback\('reduced motion'\); \}\)/);
+        assert.match(src, /listen\(window, 'pagehide', \(ev\) => \{ if \(!ev\.persisted\) dispose\(\); \}\)/);
     });
 
-    it('dispose removes the listeners, all three observers, the renderer and its context, and the canvas', () => {
+    it('dispose removes the listeners, all four observers, the renderer and its context, every instance and the canvas', () => {
         const dispose = /function dispose\(\) \{[\s\S]*?\n    \}\n/.exec(src)[0];
-        for (const part of ['for (const off of on) off();', 'ro.disconnect(); io.disconnect(); mo.disconnect();', 'renderer.dispose();', 'renderer.forceContextLoss();', 'canvas.remove();', "classList.remove('is-3d')", 'cancelAnimationFrame(S.raf)']) {
+        for (const part of ['for (const off of on) off();', 'io.disconnect(); lazy.disconnect(); ro.disconnect(); mo.disconnect();', 'e.inst?.dispose()', 'renderer.dispose();', 'renderer.forceContextLoss();', 'canvas.remove();', "classList.remove('is-3d')", 'cancelAnimationFrame(E.raf)']) {
             assert.ok(dispose.includes(part), part);
         }
     });
 
-    it('a change of language or theme that arrives mid-switch is not dropped', () => {
-        assert.match(src, /if \(busy\) \{ again = true; return; \}/);
-        assert.match(src, /\} while \(again && !S\.dead\);/);
+    it('a change of language or theme re-picks the host on screen, and the context-loss and slow-frame ladders end in the DOM diagram', () => {
+        assert.match(src, /mo\.observe\(root, \{ attributes: true, attributeFilter: \['data-theme', 'data-lang'\] \}\);/);
+        assert.match(src, /listen\(canvas, 'webglcontextlost', \(ev\) => \{ ev\.preventDefault\(\); fallback\('context lost'\); \}\)/);
+        assert.match(src, /if \(E\.median <= 20\) return;/);
+        assert.match(src, /\} else if \(E\.median > 24\) \{\s*fallback\('slow: median '/);
+    });
+});
+
+// ─── The diagram scenes' timelines (L11) ───────────────────────────────────────────────────────────────────────────────
+
+/** Sample a plan function over a whole loop, a frame at a time. */
+const frames = Array.from({ length: 601 }, (_, i) => i / 60);
+
+describe('hero3d: the diagram scenes are the same motion as the hero, highlight -> deliver at four times its tempo', () => {
+    it('each loops in ten seconds, with the sweep at 3.0-4.3 s, the delivery at 4.8-6.4 s and a ring of 0.8 s', () => {
+        for (const plan of [monteur, studio, pmap]) {
+            assert.equal(plan.LOOP, 10);
+            assert.deepEqual(plan.TIMES.sweep, [3.0, 4.3]);
+            assert.deepEqual(plan.TIMES.fly, [4.8, 6.4]);
+            assert.equal(plan.TIMES.ring, 0.8);
+            assert.equal(plan.TIMES.ring * 1000, RECEIPT_MS, 'the same receipt as the hero and the CSS: --kw-receipt times four');
+            assert.ok(plan.TIMES.away[0] > plan.TIMES.fly[1] + plan.TIMES.ring, 'the ring is over before everything lets go');
+            assert.ok(plan.TIMES.away[1] <= plan.LOOP);
+        }
+        near(monteur.TIMES.sweep[1] - monteur.TIMES.sweep[0], 4 * 0.32, 0.03);
+        near(monteur.TIMES.fly[0] - monteur.TIMES.sweep[1], 4 * 0.12, 0.03);
+    });
+
+    it('every value a plan returns is a finite number from 0 to 1, at every frame of the loop', () => {
+        const all = [
+            ...['cellIn', 'litAlpha'].flatMap((n) => monteur.HOOKS.map((_, j) => [`monteur.${n}`, (u) => monteur[n](n === 'cellIn' ? monteur.HOOKS[j] : j, u)])),
+            ...['fly', 'becomes', 'approved', 'reelAlpha', 'ring', 'lit'].flatMap((n) => monteur.HOOKS.map((_, j) => [`monteur.${n}`, (u) => monteur[n](j, u)])),
+            ['monteur.listening', monteur.listening], ['monteur.sweep', monteur.sweep],
+            ['studio.lesson', studio.lesson], ['studio.fanned', studio.fanned], ['studio.flipped', studio.flipped], ['studio.sweep', studio.sweep],
+            ...studio.SENT.flatMap((_, j) => ['fly', 'reviewed', 'tall', 'sentAlpha', 'ring'].map((n) => [`studio.${n}`, (u) => studio[n](j, u)])),
+            ...Array.from({ length: studio.SLIDES }, (_, s) => ['dealtOut', 'stackAlpha'].map((n) => [`studio.${n}`, (u) => studio[n](s, u)])).flat(),
+            ['pmap.lit', pmap.lit], ['pmap.litAlpha', pmap.litAlpha],
+            ...[0, 1].flatMap((k) => ['fly', 'messageAlpha', 'ring'].map((n) => [`pmap.${n}`, (u) => pmap[n](k, u)])),
+            ...[0, 1, 2, 3].map((r) => ['pmap.rowIn', (u) => pmap.rowIn(r, u)]),
+        ];
+        for (const [name, f] of all) {
+            for (const u of frames) {
+                const v = f(u);
+                assert.ok(Number.isFinite(v) && v >= -1e-9 && v <= 1 + 1e-9, `${name}(${u}) = ${v}`);
+            }
+        }
+    });
+
+    it('nothing jumps: no plan value moves by more than 0.35 between two frames (60 fps), except the hard cut a hold ends with', () => {
+        const smooth = [
+            ['monteur.fly', (u) => monteur.fly(0, u)], ['monteur.sweep', monteur.sweep], ['monteur.listening', monteur.listening],
+            ['studio.fly', (u) => studio.fly(1, u)], ['studio.flipped', studio.flipped], ['studio.fanned', studio.fanned], ['studio.sweep', studio.sweep],
+            ['studio.lesson', studio.lesson], ['pmap.fly', (u) => pmap.fly(0, u)], ['pmap.lit', pmap.lit], ['pmap.ring', (u) => pmap.ring(0, u)],
+        ];
+        for (const [name, f] of smooth) {
+            for (let i = 1; i < frames.length; i++) assert.ok(Math.abs(f(frames[i]) - f(frames[i - 1])) < 0.35, `${name} jumps at ${frames[i]}`);
+        }
+    });
+
+    it('a ring is one swell: it starts at 0, reaches 1, and ends at 0, once per loop, from the moment its thing arrives', () => {
+        const rings = [
+            ...monteur.HOOKS.map((_, j) => ['monteur', j, (u) => monteur.ring(j, u), monteur.arrival(j), monteur.SCHEDULED[j]]),
+            ...studio.SENT.map((o, j) => ['studio', j, (u) => studio.ring(j, u), studio.arrival(j), o.ring]),
+            ...[0, 1].map((k) => ['pmap', k, (u) => pmap.ring(k, u), pmap.arrival(k), true]),
+        ];
+        for (const [name, j, f, at, rings1] of rings) {
+            const values = frames.map(f);
+            if (!rings1) { assert.ok(values.every((v) => v === 0), `${name} ${j} never rings`); continue; }
+            assert.equal(f(at - 1e-3), 0, `${name} ${j} is quiet before it arrives`);
+            assert.equal(f(at + 0.8 + 1e-3), 0, `${name} ${j} is quiet after`);
+            near(Math.max(...frames.map((u) => f(u))), 1, 0.01);
+            const rises = values.filter((v, i) => i && v > 0 && values[i - 1] === 0).length;
+            assert.equal(rises, 1, `${name} ${j} rings once`);
+        }
+    });
+
+    it('delivery is staggered inside its window, and the last thing to land lands before the window closes', () => {
+        assert.ok(monteur.arrival(monteur.HOOKS.length - 1) <= monteur.TIMES.fly[1] + 1e-9);
+        assert.ok(studio.arrival(studio.SENT.length - 1) <= studio.TIMES.fly[1] + 1e-9);
+        assert.ok(pmap.arrival(1) <= pmap.TIMES.fly[1] + 1e-9);
+        for (const [plan, n] of [[monteur, 4], [studio, 3], [pmap, 2]]) {
+            const gap = plan.FLY_GAP;
+            assert.ok(gap > 0 && gap <= 0.3, 'one after another, not all at once and not a queue');
+            for (let j = 1; j < n; j++) assert.ok(plan.arrival(j) > plan.arrival(j - 1), 'in order');
+        }
+        near(pmap.arrival(0) - pmap.TIMES.fly[0], pmap.FLY_LEN, 1e-9);
+    });
+});
+
+describe('hero3d: what each diagram scene shows is what its figure says, and nothing it does not (slot plans)', () => {
+    it('Monteur: four hooks inside the strip, one reel for each place the figure names, TikTok as a draft that never rings', () => {
+        assert.equal(monteur.HOOKS.length, 4);
+        assert.equal(new Set(monteur.HOOKS).size, 4, 'distinct cells');
+        assert.ok(monteur.HOOKS.every((c) => c >= 0 && c < monteur.CELLS));
+        assert.deepEqual(monteur.TARGETS, ['instagram', 'facebook', 'youtube', 'tiktok']);
+        assert.deepEqual(monteur.SCHEDULED, [true, true, true, false], 'TikTok is "Draft / Only me": placed, never received');
+        for (let j = 0; j < 4; j++) {
+            const settled = monteur.reelAlpha(j, monteur.TIMES.fly[1] + 1.2);
+            if (monteur.SCHEDULED[j]) assert.equal(settled, 0, 'a received reel goes into its slot');
+            else assert.ok(settled > 0.5 && settled < 1, 'a draft stays, quieter');
+        }
+    });
+
+    it('Studio: a lesson becomes five slides; the keyword is on the last; two are received and one 9:16 is held for TikTok', () => {
+        assert.equal(studio.SLIDES, 5);
+        assert.equal(studio.KEYWORD_SLIDE, studio.SLIDES - 1);
+        assert.deepEqual(studio.SENT.map((o) => o.to), ['instagram', 'facebook', 'tiktok']);
+        assert.deepEqual(studio.SENT.map((o) => o.ring), [true, true, false]);
+        assert.equal(new Set(studio.SENT.map((o) => o.slide)).size, 3, 'three different slides');
+        assert.ok(studio.SENT.every((o) => o.slide !== studio.KEYWORD_SLIDE && o.slide >= 0 && o.slide < studio.SLIDES), 'the keyword slide stays: it is shown, not sent');
+        // the 9:16 version is TikTok's alone
+        assert.deepEqual(studio.SENT.map((_, j) => studio.tall(j, studio.TIMES.fly[1])), [0, 0, 1]);
+        // slides come off the lesson one after another, then the last one turns over, and only then is its keyword lit
+        for (let s = 1; s < studio.SLIDES; s++) assert.ok(studio.dealtOut(s, 1.2) <= studio.dealtOut(s - 1, 1.2), 'dealt in order');
+        assert.ok(studio.TIMES.flip[1] <= studio.TIMES.sweep[0] + 0.5);
+        assert.equal(studio.sweep(studio.TIMES.flip[0]), 0, 'nothing is lit before the slide turns');
+        near(studio.flipped(studio.TIMES.sweep[1]), 1, 1e-9);   // and it stays turned over while it is lit
+        // a held TikTok slide stays; a received one is gone before everything lets go
+        assert.ok(studio.sentAlpha(2, studio.TIMES.fly[1] + 1) > 0.5);
+        assert.equal(studio.sentAlpha(0, studio.TIMES.fly[1] + 1), 0);
+        // a slide that is sent leaves the stack when its copy takes off
+        for (const [j, o] of studio.SENT.entries()) {
+            assert.equal(studio.stackAlpha(o.slide, studio.TIMES.fly[0] - 0.01), studio.dealtOut(o.slide, studio.TIMES.fly[0] - 0.01));
+            assert.equal(studio.stackAlpha(o.slide, studio.TIMES.fly[0] + j * studio.FLY_GAP + 0.1), 0);
+        }
+    });
+
+    it('Platform map: a message is only ever sent where the table says yes, and the rows settle once and never again', () => {
+        // The scene derives its messages from the table (a row whose "Comment to DM" cell holds a check); the plan only times them.
+        const html = readFileSync('public/landing.html', 'utf8');
+        const rows = [...html.slice(html.indexOf('<table class="pmap" id="pmap-en"')).matchAll(/<tr role="row"><th scope="row"[^>]*>(?:<svg[^>]*><use href="#plogo-([a-z]+)"\/><\/svg>)[^<]*<\/th><td role="cell" class="([a-z]+)" data-th="Comment to DM">/g)].slice(0, 4);
+        assert.deepEqual(rows.map((m) => [m[1], m[2]]), [['instagram', 'y'], ['facebook', 'y'], ['tiktok', 'x'], ['youtube', 'x']]);
+        assert.equal(rows.filter((m) => m[2] === 'y').length, 2, 'two messages, as many as the plan times');
+        // Settling happens once, from the scene's own first frame: a later loop does not replay it.
+        for (let r = 0; r < 4; r++) {
+            near(pmap.rowIn(r, 0), 0, 1e-9);
+            near(pmap.rowIn(r, pmap.ROW_GAP * r + pmap.ROW_LEN), 1, 1e-9);
+            near(pmap.rowIn(r, 10 * 3 + 0.5), 1, 1e-9);   // still settled in the fourth loop
+        }
+        for (let r = 1; r < 4; r++) assert.ok(pmap.rowIn(r, 0.5) <= pmap.rowIn(r - 1, 0.5), 'one after another');
+        // The drift is a hair: it must never move a row enough to blur what it says.
+        for (let r = 0; r < 4; r++) for (const T of frames) {
+            const sw = pmap.sway(r, T);
+            assert.ok(Math.abs(sw.x) <= pmap.SWAY.x + 1e-9 && Math.abs(sw.y) <= pmap.SWAY.y + 1e-9 && Math.abs(sw.z) <= pmap.SWAY.z + 1e-9);
+        }
+        assert.ok(pmap.SWAY.x < 0.03 && pmap.SWAY.y < 0.03 && pmap.SWAY.z < 3);
+    });
+});
+
+describe('hero3d: the diagram scenes fit the budgets of a full hero frame', () => {
+    it('a scene is at most 40 draw calls and 3,000 triangles on the full profile (the hero\'s own ceilings),', () => {
+        // The headless suite measures calls and triangles on a real context; this pins the plan they are measured against.
+        assert.equal(PROFILES.full.triangles, 3000);
+        assert.ok(monteur.CELLS * 2 + monteur.HOOKS.length * 6 + 6 * 8 + 14 * 2 < 3000, 'strip, marks, reels, rings, tiles and the waveform fit by construction');
+        assert.ok(studio.SLIDES * 4 + studio.SENT.length * 8 + 5 * 8 + 40 < 3000);
+        assert.ok(4 * 52 * 2 + 2 * 4 + 40 < 3000, 'four rows of body + ring, and two messages');
     });
 });

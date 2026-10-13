@@ -708,8 +708,8 @@ describe('landing — the diagrams and the real infographic (L9)', () => {
 
         it('flow-long is on the two long flows and only there: the short one turns into a row earlier', () => {
             for (const [s, doc] of SECTIONS) {
-                assert.ok(element(doc, `flow-studio-${s}`).startsWith('<figure class="flow flow-studio flow-long"'));
-                assert.ok(element(doc, `flow-monteur-${s}`).startsWith('<figure class="flow flow-monteur flow-long"'));
+                assert.ok(element(doc, `flow-studio-${s}`).startsWith('<figure class="flow flow-studio flow-long scene-host"'));
+                assert.ok(element(doc, `flow-monteur-${s}`).startsWith('<figure class="flow flow-monteur flow-long scene-host"'));
                 assert.ok(element(doc, `flow-dm-${s}`).startsWith('<figure class="flow flow-dm"'));
             }
         });
@@ -1146,8 +1146,10 @@ describe('landing — the hero 3D stage (L10)', () => {
                 assert.deepEqual([...tag.matchAll(/ (data-[a-z0-9-]+|id|class)=/g)].map((m) => m[1]), ['class', 'id', 'data-hero3d'], `${s2}: the stage carries its id, class and cast, nothing else`);
             }
             assert.equal(/<template/.test(live), false, 'no template: the loader inserts no markup');
-            const scene = readFileSync('scripts/hero3d/scene.mjs', 'utf8');
-            assert.equal(/stage-toggle|\.pause\(|pause\(p\)/.test(scene), false, 'the scene has no pause API and knows no toggle');
+            for (const f of ['hero', 'engine', 'kit', 'entry']) {
+                const src = readFileSync(`scripts/hero3d/${f}.mjs`, 'utf8');
+                assert.equal(/stage-toggle|\.pause\(|pause\(p\)|hero3d_paused/.test(src), false, `${f}.mjs has no pause API and knows no toggle`);
+            }
         });
     });
 
@@ -1273,7 +1275,7 @@ describe('landing — the hero 3D stage (L10)', () => {
             assert.match(body(exact('.hero-stage')), /position:\s*relative/);
             assert.match(body(exact('.hero-stage')), /isolation:\s*isolate/);
             assert.match(body(exact('.hero-stage > .artifact')), /z-index:\s*1/);
-            const layer = body(exact('.stage-poster, .stage-canvas'));
+            const layer = body(exact('.hero-stage > .stage-poster, .hero-stage > .stage-canvas'));
             assert.match(layer, /position:\s*absolute/);
             assert.match(layer, /z-index:\s*0/);
             assert.match(layer, /pointer-events:\s*none/);
@@ -1291,9 +1293,9 @@ describe('landing — the hero 3D stage (L10)', () => {
 
         it('cross-fades over 320 ms, and takes no space: nothing in the stage is in flow but the card', () => {
             assert.match(css, /--lp-t-fade:\s*320ms/);
-            assert.match(rulesNaming(exact('.stage-poster, .stage-canvas'))[0]!.body, /transition:\s*opacity var\(--lp-t-fade\)/);
-            assert.match(rulesNaming(exact('.hero-stage.is-3d .stage-canvas'))[0]!.body, /opacity:\s*1/);
-            assert.match(rulesNaming(exact('.hero-stage.is-3d .stage-poster'))[0]!.body, /opacity:\s*0/);
+            assert.match(rulesNaming(exact('.hero-stage > .stage-poster, .hero-stage > .stage-canvas'))[0]!.body, /transition:\s*opacity var\(--lp-t-fade\)/);
+            assert.match(rulesNaming(exact('.hero-stage.is-3d > .stage-canvas'))[0]!.body, /opacity:\s*1/);
+            assert.match(rulesNaming(exact('.hero-stage.is-3d > .stage-poster'))[0]!.body, /opacity:\s*0/);
         });
 
         it('gives Safari 15 (no overflow: clip) no reach into the gutters', () => {
@@ -1303,7 +1305,7 @@ describe('landing — the hero 3D stage (L10)', () => {
         });
 
         it('is hidden under forced colours and in print, and the receipt is one ring, once', () => {
-            assert.match(css, /@media \(forced-colors: active\), print \{\s*\.stage-poster,\s*\.stage-canvas \{ display: none; \}/);
+            assert.match(css, /@media \(forced-colors: active\), print \{\s*\.hero-stage > \.stage-poster,\s*\.stage-canvas \{ display: none; \}/);
             assert.match(css, /\.hero-stage \.bubble\.is-delivering \{ animation: hero-receipt var\(--lp-kw-receipt\) var\(--ease-exit\) 1; \}/);
             assert.match(css, /--lp-kw-receipt:\s*800ms/);
             assert.match(css, /@keyframes hero-receipt \{\s*0%, 100% \{[^}]*0 0 0 0 var\(--accent-ring\)[^}]*\}\s*40% \{[^}]*0 0 0 var\(--ring\) var\(--accent-ring\)/);
@@ -1393,6 +1395,180 @@ describe('landing — the hero 3D stage (L10)', () => {
             const index = readFileSync('src/index.ts', 'utf8');
             assert.match(index, /if \(!process\.env\.VERCEL\) \{\s*app\.use\('\/samples', express\.static\('public\/samples'/);
             assert.match(index, /app\.use\('\/brand', express\.static\('public\/brand', \{ maxAge: '365d', immutable: true \}\)\);/);
+        });
+    });
+});
+
+describe('landing — the 3D diagram scenes (L11)', () => {
+    const SECTIONS = [['ar', L.ar], ['en', L.en]] as const;
+    const SCENES = { monteur: 'flow-monteur', studio: 'flow-studio', pmap: 'pmap-scene' } as const;
+    const rawCss = /<style>[\s\S]*?<\/style>/.exec(landing)![0];
+    const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    const norm = (x: string) => x.trim().replace(/\s+/g, ' ');
+    /** The flat rules (media blocks included) whose normalised selector is exactly `selector`, as their bodies. */
+    const bodies = (selector: string) => [...css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)].filter((m) => norm(m[1]!) === norm(selector)).map((m) => norm(m[2]!));
+    /** One element by id, from its opening tag to its closing one (no nesting of the same tag in what is read here). */
+    function element(doc: string, id: string, tag: string): string {
+        const at = doc.indexOf(`id="${id}"`);
+        assert.ok(at > 0, `#${id} is in the document`);
+        const start = doc.lastIndexOf(`<${tag}`, at);
+        return doc.slice(start, doc.indexOf(`</${tag}>`, at) + tag.length + 3);
+    }
+    const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const sources = ['engine', 'hero', 'kit', 'entry', 'scenes/monteur', 'scenes/studio', 'scenes/pmap'].map((f) => [f, strip(readFileSync(`scripts/hero3d/${f}.mjs`, 'utf8'))] as const);
+
+    describe('the hosts', () => {
+        it('each scene has one host in each language, naming the same built file, which is there', () => {
+            const named = [...landing.matchAll(/data-scene3d="([^"]*)"/g)].map((m) => m[1]!);
+            assert.equal(named.length, 6, 'three scenes, two languages');
+            for (const [scene, id] of Object.entries(SCENES)) {
+                const files = new Set<string>();
+                for (const [s, doc] of SECTIONS) {
+                    const tag = scene === 'pmap' ? 'div' : 'figure';
+                    const host = element(doc, `${id}-${s}`, tag);
+                    const open = host.slice(0, host.indexOf('>') + 1);
+                    assert.match(open, /^<(?:figure|div) class="[^"]*\bscene-host\b[^"]*"/, `${id}-${s} is a scene host`);
+                    const file = /data-scene3d="([^"]+)"/.exec(open)?.[1];
+                    assert.match(file ?? '', new RegExp(`^/brand/${scene}\\.[0-9a-f]{8}\\.js$`), `${id}-${s} names a hashed ${scene} bundle`);
+                    files.add(file!);
+                }
+                assert.equal(files.size, 1, `both languages of ${scene} name the same file`);
+                assert.ok(statSync(`public${[...files][0]}`).isFile(), `${[...files][0]} exists`);
+            }
+        });
+
+        it('the platform map host holds the table and nothing else, and the table keeps its id, caption and rows', () => {
+            for (const [s, doc] of SECTIONS) {
+                const host = element(doc, `pmap-scene-${s}`, 'div');
+                assert.ok(host.startsWith(`<div class="scene-host" id="pmap-scene-${s}" data-scene3d="/brand/pmap.`), s);
+                const inner = host.slice(host.indexOf('>') + 1, host.lastIndexOf('</div>')).trim();
+                assert.ok(inner.startsWith(`<table class="pmap" id="pmap-${s}"`) && inner.endsWith('</table>'), `${s}: the wrapper adds no markup beside the table`);
+                assert.equal((inner.match(/<table\b/g) ?? []).length, 1);
+                assert.match(inner, /<caption>[^<]+<\/caption>\s*<thead>/, `${s}: its caption is the table's own`);
+                assert.equal((inner.match(/<tr role="row">/g) ?? []).length, 5, `${s}: a header row and four platforms`);
+            }
+        });
+
+        it("the diagram under a scene is its own markup, untouched: every node, arrow and caption, and the figure's name", () => {
+            for (const [s, doc] of SECTIONS) {
+                for (const [id, nodes] of [['flow-studio', 5], ['flow-monteur', 6]] as const) {
+                    const fig = element(doc, `${id}-${s}`, 'figure');
+                    assert.equal((fig.match(/<li class="flow-node">/g) ?? []).length, nodes, `${id}-${s} nodes`);
+                    assert.equal((fig.match(/class="flow-arrow"/g) ?? []).length, nodes - 1, `${id}-${s} arrows`);
+                    assert.ok(fig.indexOf('</ol>') < fig.indexOf('<figcaption'), `${id}-${s}: the caption is outside the list the scene hides`);
+                    assert.ok(fig.includes(`aria-labelledby="${id}-cap-${s}"`) && fig.includes(`<figcaption id="${id}-cap-${s}">`));
+                    assert.equal((fig.match(/<canvas/g) ?? []).length, 0, 'no canvas in the markup: the engine adds the one canvas, at run time');
+                    for (const glyph of fig.matchAll(/<svg class="plogo[^"]*"([^>]*)>/g)) assert.match(glyph[1]!, /aria-hidden="true"/, 'a platform glyph is decorative: its name is beside it');
+                }
+            }
+            for (const [s, doc] of SECTIONS) {
+                const t = element(doc, `pmap-${s}`, 'table');
+                for (const glyph of t.matchAll(/<svg class="plogo[^"]*"([^>]*)>/g)) assert.match(glyph[1]!, /aria-hidden="true"/);
+            }
+        });
+
+        it("the Monteur's founder-only line is in its caption, which the scene never covers", () => {
+            for (const [s, doc] of SECTIONS) {
+                const fig = element(doc, `flow-monteur-${s}`, 'figure');
+                assert.ok(/founder's accounts only|حسابات المؤسس وحدها/.test(words(fig.slice(fig.indexOf('<figcaption')))), `${s}: said in the figcaption, not only in a node`);
+            }
+        });
+    });
+
+    describe('the CSS: the box is the box it was', () => {
+        it('a host is positioned and isolated and nothing else: no margin, padding, border, size or display of its own', () => {
+            assert.deepEqual(bodies('.scene-host'), ['position: relative; isolation: isolate;']);
+        });
+
+        it("the canvas fills the host from inside it, behind the caption, never takes a click, and fades in over the page's 320 ms", () => {
+            const [canvas] = bodies('.scene-host > .stage-canvas');
+            assert.ok(canvas);
+            for (const decl of ['position: absolute;', 'inset: 0;', 'inline-size: 100%;', 'block-size: 100%;', 'z-index: 0;', 'pointer-events: none;', 'transition: opacity var(--lp-t-fade) var(--lp-ease-quad);']) assert.ok(canvas.includes(decl), decl);
+            assert.deepEqual(bodies('.scene-host.is-3d > .stage-canvas'), ['opacity: 1;']);
+            assert.deepEqual(bodies('.stage-canvas'), ['opacity: 0;'], 'invisible until a scene says it is up');
+            assert.deepEqual(bodies('.scene-host > figcaption'), ['position: relative; z-index: 1;']);
+        });
+
+        it('under a running scene the diagram only stops painting: opacity, and not display, visibility or size, so nothing moves', () => {
+            // the same selector twice: hidden under a scene, and (in the forced-colours and print block) painted again
+            assert.deepEqual(bodies('.scene-host.is-3d > .flow-steps, .scene-host.is-3d > .pmap > :is(thead, tbody)'), ['opacity: 0;', 'opacity: 1;']);
+            assert.deepEqual(bodies('.scene-host > .flow-steps, .scene-host > .pmap > :is(thead, tbody)'), ['transition: opacity var(--lp-t-fade) var(--lp-ease-quad);']);
+        });
+
+        it('under forced colours and in print there is no canvas and the diagram paints again', () => {
+            assert.match(css, /@media \(forced-colors: active\), print \{[^@]*?\.stage-canvas \{ display: none; \}\s*\.scene-host\.is-3d > \.flow-steps,\s*\.scene-host\.is-3d > \.pmap > :is\(thead, tbody\) \{ opacity: 1; \}/);
+        });
+
+        it("its block is in logical properties and tokens, in the page's own words", () => {
+            const at = css.indexOf('.scene-host { position');
+            const mine = css.slice(at, css.indexOf('.loop {', at));
+            assert.ok(mine.includes('.scene-host'));
+            for (const re of [/\b(?:margin|padding)-(?:left|right)\b/, /(?<![-\w])(?:left|right)\s*:/, /text-align\s*:\s*(?:left|right)\b/, /#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/]) assert.equal(re.test(mine), false, String(re));
+        });
+    });
+
+    describe('what the scenes may draw', () => {
+        it('draws no word of its own: every string is read from the diagram, so a scene cannot say more than its figure does', () => {
+            for (const [name, src] of sources) {
+                assert.equal(/fillText\(\s*['"`]/.test(src), false, `${name}: fillText is only given text read from the page`);
+            }
+        });
+
+        it('has no people, no emoji and no picture: bars, blocks and platform marks', () => {
+            for (const [name, src] of sources) {
+                assert.equal(/\p{Extended_Pictographic}/u.test(src), false, `${name}: no emoji`);
+                assert.equal(/\b(?:woman|women|girl|person|people|avatar|portrait|human|face|photo)\b/i.test(src), false, `${name}: no people`);
+                assert.equal(/new Image\(|TextureLoader|createImageBitmap|\.src\s*=/.test(src), false, `${name}: no bitmap is loaded`);
+            }
+        });
+
+        it("only the platforms the figures name are drawn, each by the page's own sprite glyph", () => {
+            for (const [name, src] of sources) {
+                for (const m of src.matchAll(/'(instagram|facebook|youtube|tiktok|linkedin|snapchat|pinterest|threads|whatsapp)'/g)) {
+                    assert.ok(['instagram', 'facebook', 'youtube', 'tiktok'].includes(m[1]!), `${name}: ${m[1]}`);
+                }
+            }
+        });
+    });
+
+    describe('the build', () => {
+        const build = readFileSync('scripts/build-hero3d.mjs', 'utf8');
+        const brand = (f: string) => readFileSync(`public/brand/${f}`, 'utf8');
+        const imports = (text: string) => [...text.matchAll(/(?:from|import)\s*"\.\/([^"]+\.js)"/g)].map((m) => m[1]!);
+        const closure = (f: string, seen = new Set<string>()): Set<string> => {
+            if (!seen.has(f)) { seen.add(f); for (const d of imports(brand(f))) closure(d, seen); }
+            return seen;
+        };
+        const gz = (names: Iterable<string>) => [...names].reduce((n, f) => n + gzipSync(brand(f)).length, 0);
+        const hero = /var HERO3D = '\/brand\/([^']+)';/.exec(landing)![1]!;
+        const sceneFile = (scene: string) => new RegExp(`data-scene3d="/brand/(${scene}\\.[0-9a-f]{8}\\.js)"`).exec(landing)![1]!;
+
+        it('has one entry for the hero and one for each scene, a 145 KB ceiling for the hero and 20 KB for what a scene adds', () => {
+            assert.match(build, /hero3d: 'scripts\/hero3d\/entry\.mjs',\s*monteur: 'scripts\/hero3d\/scenes\/monteur\.mjs',\s*studio: 'scripts\/hero3d\/scenes\/studio\.mjs',\s*pmap: 'scripts\/hero3d\/scenes\/pmap\.mjs',/);
+            assert.match(build, /MAX_HERO_GZIP = 145 \* 1024;/);
+            assert.match(build, /MAX_SCENE_GZIP = 20 \* 1024;/);
+            assert.match(build, /splitting: true,/);
+        });
+
+        it('the committed files stay under those ceilings: the hero with everything it imports, and each scene on top of it', () => {
+            const heroSet = closure(hero);
+            assert.ok(gz(heroSet) <= 145 * 1024, `hero ${gz(heroSet)} bytes gzipped`);
+            for (const scene of Object.keys(SCENES)) {
+                const file = sceneFile(scene);
+                const own = [...closure(file)].filter((f) => !heroSet.has(f));
+                assert.ok(own.includes(file));
+                assert.ok(gz(own) <= 20 * 1024, `${scene} adds ${gz(own)} bytes gzipped`);
+            }
+        });
+
+        it("shares one copy of three: a scene imports the hero's chunk, it does not carry its own", () => {
+            const three = [...closure(hero)].find((f) => f.startsWith('chunk.') && brand(f).length > 200_000);
+            assert.ok(three, 'the hero imports a big shared chunk: three');
+            for (const scene of Object.keys(SCENES)) {
+                const file = sceneFile(scene);
+                assert.ok([...closure(file)].includes(three), `${scene} imports the chunk three is in`);
+                assert.ok(brand(file).length < 20_000, `${scene} is its own code only`);
+            }
         });
     });
 });
