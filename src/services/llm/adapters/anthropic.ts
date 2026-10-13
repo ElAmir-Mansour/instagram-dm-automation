@@ -2,7 +2,7 @@
  * Anthropic's Messages API, asked for JSON.
  *
  * Shapes verified against platform.claude.com on 2026-10-13 (structured-outputs, effort,
- * refusals-and-fallback, api/errors):
+ * refusals-and-fallback, api/errors, api/rate-limits):
  *
  *   - The schema goes in `output_config.format` as `{type: 'json_schema', schema}`. The older
  *     top-level `output_format` is deprecated and needs a beta header; this needs none.
@@ -15,21 +15,32 @@
  *   - `stop_reason: 'refusal'` is a 200, not an error, with the category in `stop_details`.
  *     `max_tokens` is the cut-off. Thinking counts against `max_tokens`.
  *   - Objects must be closed (`additionalProperties: false`), which `toJsonSchema` already does.
+ *     A schema may have at most 24 optional properties and 16 union-typed ones, or it is a 400
+ *     that only says it is too complex; `buildAnthropicRequest` counts first.
  *
  * Server-side fallback (`fallbacks: "default"` with `anthropic-beta: server-side-fallback-2026-07-01`)
  * re-runs a request the safety classifier declined on the model Anthropic recommends for that
  * category, inside the same call. It is the one fallback this library allows, because it is
- * Anthropic's, billed once at the fallback model's rate and visible: the response's `model` names
- * who answered, and that is what is returned. It is sent only to the models the docs say have it:
- * Haiku 5.5 has none, and an older model may reject the parameter outright.
+ * Anthropic's, visible, and billed: the response's `model` names who answered, and
+ * `usage.iterations` lists every model that ran. Those iterations are what was billed, so they
+ * are what `billed` is made of; the top-level `usage` is the last attempt only. It is sent only to
+ * the models the docs say have it: Haiku 5.5 has none, and an older model may reject the parameter.
+ *
+ * The base URL is Anthropic's, always. An operator's URL would be somewhere to send the key.
  */
+import { AiError } from '../errors.js';
+import { totalUsage } from '../cost.js';
+import { jsonSchemaFor, schemaComplexity } from '../schema.js';
+import type { Adapter, AdapterArgs, AdapterResult, Billed, Effort, FamilyAdapter, LlmTurn, StopReason } from '../types.js';
 import { postJson } from './post.js';
-import { jsonSchemaFor } from '../schema.js';
-import type { Adapter, AdapterArgs, AdapterResult, Effort, LlmTurn, StopReason } from '../types.js';
 
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 export const ANTHROPIC_VERSION = '2023-06-01';
 export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+
+/** The documented limits on structured-output schemas (structured-outputs, "Schema complexity limits"). */
+export const MAX_OPTIONAL_PROPERTIES = 24;
+export const MAX_UNION_PROPERTIES = 16;
 
 /** `claude-opus-5-5` → opus, 5, 5; `claude-sonnet-4-20250514` → sonnet, 4, 0. Names that do not fit are a model this code has not met. */
 function generation(model: string): { family: string; major: number; minor: number } | undefined {
@@ -51,12 +62,19 @@ export function supportsEffort(model: string): boolean {
     return (g.family === 'opus' && g.minor >= 5) || (g.family === 'sonnet' && g.minor >= 6);
 }
 
-/** What to send for `effort` on this model, or nothing. `xhigh` exists on Opus 4.7+ and 5.x only; elsewhere it is `high`. */
+/**
+ * What to send for `effort` on this model, or nothing. The effort page's level table is not the
+ * same for every model that has effort: `max` is on all of them except Opus 4.5, and `xhigh`
+ * only on the 5.x models and Opus 4.7 and 4.8. Where the level asked for does not exist, `high`
+ * is what is sent.
+ */
 export function effortFor(model: string, effort: Effort): Effort | undefined {
     if (!supportsEffort(model)) return undefined;
     const g = generation(model);
+    const hasMax = !(g && g.family === 'opus' && g.major === 4 && g.minor === 5);
     const hasXhigh = !g || g.major >= 5 || (g.family === 'opus' && g.minor >= 7);
-    return effort === 'xhigh' && !hasXhigh ? 'high' : effort;
+    if ((effort === 'max' && !hasMax) || (effort === 'xhigh' && !hasXhigh)) return 'high';
+    return effort;
 }
 
 /**
@@ -76,8 +94,26 @@ function messagesFor(user: string | LlmTurn[]): Array<{ role: 'user' | 'assistan
 export function buildAnthropicRequest(a: AdapterArgs): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
     const fallback = supportsServerFallback(a.model);
     const effort = effortFor(a.model, a.effort);
+
+    // A schema Anthropic would refuse is refused here, saying which limit and by how much.
+    const schema = jsonSchemaFor(a.schema);
+    const { optional, unions } = schemaComplexity(schema);
+    const tooComplex = (message: string) => new AiError({ kind: 'bad_request', provider: a.provider, model: a.model, message, key: a.apiKey });
+    if (optional > MAX_OPTIONAL_PROPERTIES) {
+        throw tooComplex(
+            `The answer schema has ${optional} optional properties (not listed in "required") and Anthropic accepts at most ${MAX_OPTIONAL_PROPERTIES}. ` +
+                'Make some of them required, or split the request.',
+        );
+    }
+    if (unions > MAX_UNION_PROPERTIES) {
+        throw tooComplex(
+            `The answer schema has ${unions} union-typed properties (anyOf or type arrays) and Anthropic accepts at most ${MAX_UNION_PROPERTIES}. ` +
+                'Give some of them a single type, or split the request.',
+        );
+    }
+
     return {
-        url: `${(a.baseUrl || ANTHROPIC_BASE_URL).replace(/\/+$/, '')}/v1/messages`,
+        url: `${ANTHROPIC_BASE_URL}/v1/messages`,
         // The key is here and nowhere else: not in the URL, not in the body.
         headers: {
             'x-api-key': a.apiKey,
@@ -91,7 +127,7 @@ export function buildAnthropicRequest(a: AdapterArgs): { url: string; headers: R
             ...(a.system.trim() ? { system: a.system } : {}),
             messages: messagesFor(a.user),
             output_config: {
-                format: { type: 'json_schema', schema: jsonSchemaFor(a.schema) },
+                format: { type: 'json_schema', schema },
                 ...(effort ? { effort } : {}),
             },
             ...(fallback ? { fallbacks: 'default' } : {}),
@@ -108,6 +144,28 @@ function stopReasonOf(reason: unknown): StopReason {
     return 'end_turn';
 }
 
+/**
+ * What the call was billed for, per model. `usage.iterations` has one entry per model that ran: a
+ * model that declined appears as a `message` entry, the one that answered as `fallback_message`.
+ * Without a fallback there is one entry, or none, and the top-level `usage` is the whole bill. We
+ * send no `cache_control`, so cache tokens are zero and `input_tokens` is all of the input.
+ *
+ * This is a ceiling, not an invoice: a refusal that arrives before any output is billed only in
+ * three categories (bio, frontier_llm, reasoning_extraction), and its entry is counted here
+ * whatever the category. A budget that over-counts a few input tokens is the safe side.
+ */
+function billedOf(data: any, served: string): Billed[] {
+    const iterations: unknown[] = Array.isArray(data?.usage?.iterations) ? data.usage.iterations : [];
+    const entries = iterations
+        .filter((it: any) => it && typeof it === 'object' && (Number.isFinite(it.input_tokens) || Number.isFinite(it.output_tokens)))
+        .map((it: any) => ({
+            model: typeof it.model === 'string' && it.model ? it.model : served,
+            in: count(it.input_tokens),
+            out: count(it.output_tokens),
+        }));
+    return entries.length ? entries : [{ model: served, in: count(data?.usage?.input_tokens), out: count(data?.usage?.output_tokens) }];
+}
+
 export function parseAnthropicResponse(data: any, asked: string): AdapterResult {
     const blocks: unknown[] = Array.isArray(data?.content) ? data.content : [];
     const text = blocks
@@ -120,14 +178,10 @@ export function parseAnthropicResponse(data: any, asked: string): AdapterResult 
         stopReason === 'refusal'
             ? [refusal?.category, refusal?.explanation].filter((v) => typeof v === 'string' && v).join(': ') || undefined
             : undefined;
-    return {
-        text,
-        usage: { input_tokens: count(data?.usage?.input_tokens), output_tokens: count(data?.usage?.output_tokens) },
-        // After a server-side fallback this is the model that answered, which is what was billed.
-        model: typeof data?.model === 'string' && data.model ? data.model : asked,
-        stopReason,
-        ...(detail ? { detail } : {}),
-    };
+    // After a server-side fallback this is the model that answered.
+    const model = typeof data?.model === 'string' && data.model ? data.model : asked;
+    const billed = billedOf(data, model);
+    return { text, usage: totalUsage(billed), billed, model, stopReason, ...(detail ? { detail } : {}) };
 }
 
 export const anthropicAdapter: Adapter = async (a) => {
@@ -137,3 +191,5 @@ export const anthropicAdapter: Adapter = async (a) => {
     });
     return parseAnthropicResponse(data, a.model);
 };
+
+export const anthropicFamily: FamilyAdapter = { generate: anthropicAdapter };

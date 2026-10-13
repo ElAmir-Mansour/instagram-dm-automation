@@ -11,26 +11,36 @@
  *   - It looks at *why the model stopped* before it looks at what it said. A refusal or an answer
  *     cut off by `maxTokens` is text that does not parse, and "not valid JSON" would be the wrong
  *     thing to tell anyone.
+ *   - It sends the platform's key only where the registry says: a base URL is honoured for a
+ *     provider whose entry has an editable one (Custom), and then only if it is a public https
+ *     address. For every other provider it is ignored.
  *   - It leaves nothing of the key behind: not in an error message, not in a thrown object.
+ *
+ * `callLlm` is the call itself. `generateJson` is what callers use, so that a test (or, in P20c,
+ * the router that resolves a purpose to a provider, key and model) can stand in front of it with
+ * `setLlmCaller`.
  */
-import { adapterFor } from './adapters/index.js';
+import { ADAPTERS, adapterFor, type FamilyAdapters } from './adapters/index.js';
 import { AiError, isAiError } from './errors.js';
-import { providerById, providerName, type ProviderId } from './registry.js';
+import { checkBaseUrl, providerById, providerName, type ProviderId } from './registry.js';
 import { matchesRoot, rootKind, type LlmSchema } from './schema.js';
-import { DEFAULT_EFFORT, type Effort, type FetchLike, type LlmTurn, type StopReason, type Usage } from './types.js';
+import { DEFAULT_EFFORT, type AdapterResult, type Billed, type Effort, type FetchLike, type LlmTurn, type StopReason, type Usage } from './types.js';
+
+/** No call may take longer than this, whatever a caller asks for: a serverless function has its own ceiling. */
+export const MAX_TIMEOUT_MS = 150_000;
 
 export interface GenerateJsonArgs {
     provider: ProviderId;
     apiKey: string;
     model: string;
-    /** Only Custom needs one; the others have a base URL in the registry. */
+    /** Only Custom takes one; for every other provider it is ignored. */
     baseUrl?: string;
     system: string;
     user: string | LlmTurn[];
     schema: LlmSchema;
-    /** Caps the whole answer, thinking included. Size it for the reasoning as well as the JSON. */
+    /** Caps the whole answer, thinking included. Size it for the reasoning as well as the JSON. A positive integer. */
     maxTokens: number;
-    /** One deadline for the whole call, connection and body. */
+    /** One deadline for the whole call, connection and body. A positive integer of milliseconds, capped at 150 000. */
     timeoutMs: number;
     /** Default medium. */
     effort?: Effort;
@@ -40,7 +50,10 @@ export interface GenerateJsonArgs {
 
 export interface GenerateJsonResult {
     json: unknown;
+    /** Everything the call was billed for. */
     usage: Usage;
+    /** The same per model, for pricing (`costOf`). More than one entry only after a server-side fallback. */
+    billed: Billed[];
     /** The model that answered. Anthropic's server-side fallback can make it differ from `args.model`. */
     model: string;
     provider: ProviderId;
@@ -72,13 +85,17 @@ export function parseModelJson(text: string): { value: unknown } | undefined {
     return undefined;
 }
 
-/** Whatever an adapter threw, as an `AiError`: its own, or a deadline, or something unforeseen. */
+/**
+ * Whatever an adapter threw, as an `AiError`: its own, or a deadline, or something unforeseen.
+ * Something unforeseen is a bug in what was asked or in this code, and asking again will not fix
+ * it, so it is `bad_request` (final), not `server`: a retry loop would run it to its limit.
+ */
 function asAiError(err: unknown, args: GenerateJsonArgs, key: string): AiError {
     if (isAiError(err)) return err;
     const name = (err as { name?: string } | null)?.name;
     const aborted = name === 'AbortError' || name === 'TimeoutError';
     return new AiError({
-        kind: aborted ? 'timeout' : 'server',
+        kind: aborted ? 'timeout' : 'bad_request',
         provider: args.provider,
         model: args.model,
         message: aborted ? `${providerName(args.provider)} did not answer in time.` : `Unexpected failure: ${err instanceof Error ? err.message : String(err)}`,
@@ -86,28 +103,44 @@ function asAiError(err: unknown, args: GenerateJsonArgs, key: string): AiError {
     });
 }
 
-/** The real call: the provider named in `args`. */
-export async function callProvider(args: GenerateJsonArgs): Promise<GenerateJsonResult> {
+const isPositiveInteger = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0;
+
+/** The real call: the provider named in `args`. `adapters` is for tests; production uses the registry's. */
+export async function callLlm(args: GenerateJsonArgs, adapters: FamilyAdapters = ADAPTERS): Promise<GenerateJsonResult> {
     const key = (args.apiKey ?? '').trim();
     const name = providerName(args.provider);
-    const fail = (kind: AiError['kind'], message: string, usage?: Usage) =>
-        new AiError({ kind, provider: args.provider, model: args.model, message, key, usage });
+    const fail = (kind: AiError['kind'], message: string, answer?: AdapterResult) =>
+        new AiError({ kind, provider: args.provider, model: args.model, message, key, usage: answer?.usage, billed: answer?.billed });
+
+    // Before anything else, and before a request exists: a limit of 0, NaN or "5000" would otherwise
+    // reach a provider (or `AbortSignal.timeout`) as something it does not mean.
+    if (!isPositiveInteger(args.timeoutMs)) throw fail('bad_request', `timeoutMs must be a positive whole number of milliseconds, not ${String(args.timeoutMs).slice(0, 20)}.`);
+    if (!isPositiveInteger(args.maxTokens)) throw fail('bad_request', `maxTokens must be a positive whole number, not ${String(args.maxTokens).slice(0, 20)}.`);
+    const timeoutMs = Math.min(args.timeoutMs, MAX_TIMEOUT_MS);
 
     const def = providerById(args.provider);
     if (!def) throw fail('bad_request', `Unknown AI provider "${String(args.provider).slice(0, 40)}".`);
     if (def.keyRequired && !key) throw fail('no_provider', `No API key is saved for ${name}.`);
-    const baseUrl = args.baseUrl?.trim() || undefined;
-    if (!baseUrl && !def.baseUrl) throw fail('bad_request', `${name} has no base URL.`);
-    const adapter = adapterFor(def.family, args);
+
+    // The one place an address typed by someone reaches a request, so the one place it is checked.
+    let baseUrl: string | undefined;
+    if (def.editableBaseUrl) {
+        const raw = args.baseUrl?.trim();
+        if (!raw) throw fail('bad_request', `${name} has no base URL.`);
+        const checked = checkBaseUrl(raw);
+        if (!checked.ok) throw fail('bad_request', `${name}'s base URL ${checked.reason}.`);
+        baseUrl = checked.url;
+    }
+    const family = adapterFor(def.family, args, adapters);
 
     const started = Date.now();
-    let answer;
+    let answer: AdapterResult;
     try {
-        answer = await adapter({
+        answer = await family.generate({
             provider: args.provider, apiKey: key, baseUrl, model: args.model, system: args.system, user: args.user,
             schema: args.schema, maxTokens: args.maxTokens, effort: args.effort ?? DEFAULT_EFFORT,
             // One deadline for the call, however many awaits the adapter makes.
-            signal: AbortSignal.timeout(args.timeoutMs), fetchImpl: args.fetchImpl,
+            signal: AbortSignal.timeout(timeoutMs), fetchImpl: args.fetchImpl,
         });
     } catch (err) {
         throw asAiError(err, args, key);
@@ -115,20 +148,31 @@ export async function callProvider(args: GenerateJsonArgs): Promise<GenerateJson
 
     // Why it stopped, before what it said. Both cases were billed, so the tokens go with the error.
     const detail = answer.detail ? ` (${answer.detail})` : '';
-    if (answer.stopReason === 'refusal') throw fail('refusal', `${name} declined to answer${detail}.`, answer.usage);
+    if (answer.stopReason === 'refusal') throw fail('refusal', `${name} declined to answer${detail}.`, answer);
     if (answer.stopReason === 'max_tokens') {
-        throw fail('max_tokens', `The answer was cut off at the ${args.maxTokens}-token limit, which covers the model's thinking too.`, answer.usage);
+        throw fail('max_tokens', `The answer was cut off at the ${args.maxTokens}-token limit, which covers the model's thinking too.`, answer);
     }
 
-    if (!answer.text.trim()) throw fail('bad_output', `${name} answered with no text${detail}.`, answer.usage);
+    if (!answer.text.trim()) throw fail('bad_output', `${name} answered with no text${detail}.`, answer);
     const parsed = parseModelJson(answer.text);
-    if (!parsed) throw fail('bad_output', `${name}'s answer is not valid JSON.`, answer.usage);
+    if (!parsed) throw fail('bad_output', `${name}'s answer is not valid JSON.`, answer);
+
+    // The family's own undoing of what it did to the schema, before the shape is judged.
+    let json = parsed.value;
+    if (family.normalize) {
+        try {
+            json = family.normalize(json, args.schema);
+        } catch (err) {
+            throw fail('bad_output', `${name}'s answer could not be read back into the schema: ${err instanceof Error ? err.message : String(err)}`, answer);
+        }
+    }
     const kind = rootKind(args.schema);
-    if (!matchesRoot(parsed.value, kind)) throw fail('bad_output', `${name}'s answer is not a JSON ${kind}.`, answer.usage);
+    if (!matchesRoot(json, kind)) throw fail('bad_output', `${name}'s answer is not a JSON ${kind}.`, answer);
 
     return {
-        json: parsed.value,
+        json,
         usage: answer.usage,
+        billed: answer.billed,
         model: answer.model,
         provider: args.provider,
         stopReason: answer.stopReason,
@@ -138,7 +182,7 @@ export async function callProvider(args: GenerateJsonArgs): Promise<GenerateJson
 
 export type LlmCaller = (args: GenerateJsonArgs) => Promise<GenerateJsonResult>;
 
-let llmCaller: LlmCaller = callProvider;
+let llmCaller: LlmCaller = callLlm;
 
 /**
  * Swaps the module's model call (tests, and the later PRs that route through here). Returns the
@@ -150,7 +194,7 @@ export function setLlmCaller(next: LlmCaller): LlmCaller {
     return previous;
 }
 
-/** One structured answer, from `callProvider` or whatever `setLlmCaller` put in its place. */
+/** One structured answer, from `callLlm` or whatever `setLlmCaller` put in its place. */
 export function generateJson(args: GenerateJsonArgs): Promise<GenerateJsonResult> {
     return llmCaller(args);
 }

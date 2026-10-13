@@ -108,6 +108,34 @@ export function isProviderId(value: unknown): value is ProviderId {
     return typeof value === 'string' && PROVIDERS.some((p) => p.id === value);
 }
 
+/**
+ * Whether an operator's base URL may receive an API key. Only `custom` has one, and it is the one
+ * place a request can be pointed at an address someone typed, so it has to be a public https
+ * origin: no plain http (the key would cross the network readable), no credentials or query in
+ * the URL, and no address that only exists on a private network: IP literals, `localhost`,
+ * `.local`, `.internal`, or a single-label name. The URL parser has already turned decimal and
+ * hex spellings of an IP (`2130706433`) into dotted form by the time it is checked.
+ *
+ * This looks only at what was typed. A public name that *resolves* to a private address is a DNS
+ * question, and P21's guard answers it where the connection is made.
+ */
+export function checkBaseUrl(raw: string): { ok: true; url: string } | { ok: false; reason: string } {
+    let u: URL;
+    try {
+        u = new URL(raw.trim());
+    } catch {
+        return { ok: false, reason: 'is not a valid URL' };
+    }
+    if (u.protocol !== 'https:') return { ok: false, reason: 'must start with https://' };
+    if (u.username || u.password) return { ok: false, reason: 'must not contain a username or password' };
+    if (u.search || u.hash) return { ok: false, reason: 'must not contain a query or a fragment' };
+    const host = u.hostname.toLowerCase().replace(/\.$/, '');
+    const isIp = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(':');
+    const isPrivateName = host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || !host.includes('.');
+    if (isIp || isPrivateName) return { ok: false, reason: 'must be a public address, not an IP, localhost or a private network name' };
+    return { ok: true, url: `${u.origin}${u.pathname}`.replace(/\/+$/, '') };
+}
+
 /** How an error names a provider: "Anthropic", "OpenAI"; a custom endpoint is "The custom endpoint". */
 export function providerName(id: string): string {
     if (id === 'custom') return 'The custom endpoint';

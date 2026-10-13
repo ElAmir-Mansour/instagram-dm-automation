@@ -3,9 +3,19 @@
  * reshaping, and the undoing of it when the answer is read.
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { describe, it } from 'node:test';
-import { DRAFT_SCHEMA, PLAN_SCHEMA, type GeminiSchema } from '../studio/generate.js';
-import { dropNulls, jsonSchemaFor, matchesRoot, rootKind, strictify, type JsonSchema } from './schema.js';
+import { COACH_SCHEMA } from '../growth/coach.js';
+import { KEYWORDS_SCHEMA } from '../growth/keywords.js';
+import { LESSONS_SCHEMA } from '../monteur/analyst.js';
+import { COPY_SCHEMA } from '../monteur/copy.js';
+import { editorSchema } from '../monteur/editor.js';
+import { PICK_SCHEMA } from '../monteur/pick.js';
+import { toJsonSchema as thinkToJsonSchema } from '../monteur/think.js';
+import { DRAFT_SCHEMA, PLAN_SCHEMA, SLIDE_SCHEMA, withoutArrayBounds as generateWithoutArrayBounds } from '../studio/generate.js';
+import { MAX_OPTIONAL_PROPERTIES, MAX_UNION_PROPERTIES } from './adapters/anthropic.js';
+import { toJsonSchema, withoutArrayBounds, type GeminiSchema } from './geminiSchema.js';
+import { dropNulls, jsonSchemaFor, matchesRoot, rootKind, schemaComplexity, strictify, type JsonSchema } from './schema.js';
 
 /** A schema with every shape strict mode has to deal with. */
 const original: JsonSchema = {
@@ -86,6 +96,29 @@ describe('jsonSchemaFor', () => {
             assert.equal(json.type, 'object');
             assert.deepEqual(Object.keys(json.properties), Object.keys(schema.properties!));
             for (const o of objectsIn(json)) assert.equal(o.additionalProperties, false);
+        }
+    });
+});
+
+describe('geminiSchema.ts', () => {
+    it('is what monteur/think.ts and studio/generate.ts export, not a second copy of it', () => {
+        assert.equal(thinkToJsonSchema, toJsonSchema);
+        assert.equal(generateWithoutArrayBounds, withoutArrayBounds);
+    });
+
+    it('imports nothing, so loading a schema never loads the database pool', () => {
+        const source = fs.readFileSync(new URL('./geminiSchema.ts', import.meta.url), 'utf8');
+        assert.deepEqual(source.match(/^\s*(?:import|export)\b[^\n]*\bfrom\b[^\n]*$/gm) ?? [], []);
+    });
+
+    it('keeps every file of the library clear of the database, axios and the features built on it', () => {
+        const dir = new URL('./', import.meta.url);
+        const files = [...fs.readdirSync(dir), ...fs.readdirSync(new URL('./adapters/', import.meta.url)).map((f) => `adapters/${f}`)]
+            .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'testFetch.ts');
+        assert.ok(files.length >= 10, files.join(', '));
+        for (const file of files) {
+            const imports = fs.readFileSync(new URL(file, dir), 'utf8').match(/^\s*(?:import|export)\b[^\n]*\bfrom\b\s*['"][^'"]+['"]/gm) ?? [];
+            for (const line of imports) assert.doesNotMatch(line, /config\/db|['"]pg['"]|axios|studio\/|monteur\/|growth\/|appSettings/, `${file}: ${line}`);
         }
     });
 });
@@ -180,6 +213,21 @@ describe('strictify', () => {
         assert.deepEqual(out.$defs.Pin.properties.y, { type: ['number', 'null'] });
     });
 
+    it('refuses a map, an object whose additionalProperties is a schema, instead of quietly closing it into an empty object', () => {
+        const map = { type: 'object', properties: { labels: { type: 'object', additionalProperties: { type: 'string' } } }, required: ['labels'] };
+        assert.throws(() => strictify(map), /free-form keys[^]*\/properties\/labels/);
+        assert.throws(() => strictify({ type: 'object', additionalProperties: { type: 'number' } }), /free-form keys/);
+        // Nested in an array of objects, and in a definition, it is found there too.
+        assert.throws(() => strictify({ type: 'array', items: { type: 'object', additionalProperties: { type: 'string' } } }), /items/);
+        assert.throws(() => strictify({ type: 'object', properties: { a: { $ref: '#/$defs/M' } }, $defs: { M: { type: 'object', additionalProperties: { type: 'string' } } } }), /\$defs\/M/);
+    });
+
+    it('closes additionalProperties: true or absent, which is what strict mode asks, and the input is not touched', () => {
+        const open = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], additionalProperties: true };
+        assert.equal((strictify(open) as any).additionalProperties, false);
+        assert.equal(open.additionalProperties, true);
+    });
+
     it('is applied to the app\'s real schemas: every object closed, every property required', () => {
         for (const schema of [DRAFT_SCHEMA, PLAN_SCHEMA]) {
             for (const o of objectsIn(strictify(jsonSchemaFor(schema)))) {
@@ -263,5 +311,83 @@ describe('dropNulls', () => {
         const answer = { title: 'T', subtitle: null };
         dropNulls(answer, original);
         assert.deepEqual(answer, { title: 'T', subtitle: null });
+    });
+});
+
+describe('schemaComplexity', () => {
+    it('counts properties that are not required, wherever they are', () => {
+        assert.deepEqual(schemaComplexity({ type: 'object', properties: { a: {}, b: {} }, required: ['a'] }), { optional: 1, unions: 0 });
+        // Of `original`: subtitle, mood, count, author, slides at the top; handle in author; note in each slide's items.
+        assert.deepEqual(schemaComplexity(original), { optional: 7, unions: 0 });
+    });
+
+    it('counts across arrays, definitions and unions', () => {
+        const schema = {
+            type: 'object',
+            properties: {
+                list: { type: 'array', items: { type: 'object', properties: { x: {}, y: {} } } },
+                pin: { $ref: '#/$defs/Pin' },
+            },
+            required: ['list', 'pin'],
+            $defs: { Pin: { type: 'object', properties: { a: {}, b: {}, c: {} }, required: ['a'] } },
+        };
+        assert.deepEqual(schemaComplexity(schema), { optional: 4, unions: 0 });
+    });
+
+    it('counts union-typed properties: anyOf, and type arrays such as ["string", "null"]', () => {
+        const schema = {
+            type: 'object',
+            properties: {
+                a: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
+                b: { type: ['string', 'null'] },
+                c: { type: 'string' },
+                d: { type: ['string'] },
+            },
+            required: ['a', 'b', 'c', 'd'],
+        };
+        assert.deepEqual(schemaComplexity(schema), { optional: 0, unions: 2 });
+    });
+
+    it('sees what strictify adds: every optional property becomes a nullable one', () => {
+        const before = schemaComplexity(original);
+        const after = schemaComplexity(strictify(original));
+        assert.equal(after.optional, 0);
+        assert.equal(after.unions, before.optional);
+    });
+});
+
+describe('the app\'s own schemas against Anthropic\'s limits', () => {
+    // Anthropic refuses more than 24 optional properties or 16 union-typed ones in a request's
+    // schema ("Schema is too complex for compilation"). These are every schema the app asks a
+    // model to fill; the Studio's and the Monteur's will go to Anthropic for tenants.
+    const schemas: Record<string, GeminiSchema> = {
+        SLIDE_SCHEMA, DRAFT_SCHEMA, PLAN_SCHEMA, KEYWORDS_SCHEMA, COACH_SCHEMA, PICK_SCHEMA,
+        EDITOR_SCHEMA_human: editorSchema(true), EDITOR_SCHEMA_machine: editorSchema(false), LESSONS_SCHEMA, COPY_SCHEMA,
+    };
+
+    it('has the limits the docs state', () => {
+        assert.equal(MAX_OPTIONAL_PROPERTIES, 24);
+        assert.equal(MAX_UNION_PROPERTIES, 16);
+    });
+
+    it('keeps every one at or under both limits', () => {
+        for (const [name, schema] of Object.entries(schemas)) {
+            const { optional, unions } = schemaComplexity(jsonSchemaFor(schema));
+            assert.ok(optional <= MAX_OPTIONAL_PROPERTIES, `${name} has ${optional} optional properties`);
+            assert.ok(unions <= MAX_UNION_PROPERTIES, `${name} has ${unions} union-typed properties`);
+        }
+    });
+
+    it('pins the carousel schemas AT the limit: one more optional field on a slide breaks every Anthropic draft', () => {
+        // 24 of 24, zero headroom. Adding an optional property to SLIDE_SCHEMA fails this test
+        // first, which is the point: make the new field required, or raise it with Anthropic's limit.
+        assert.equal(schemaComplexity(jsonSchemaFor(SLIDE_SCHEMA)).optional, 24);
+        assert.equal(schemaComplexity(jsonSchemaFor(DRAFT_SCHEMA)).optional, 24);
+        const largest = Math.max(...Object.values(schemas).map((s) => schemaComplexity(jsonSchemaFor(s)).optional));
+        assert.equal(largest, MAX_OPTIONAL_PROPERTIES);
+    });
+
+    it('has no union types: the converter never produces one', () => {
+        for (const [name, schema] of Object.entries(schemas)) assert.equal(schemaComplexity(jsonSchemaFor(schema)).unions, 0, name);
     });
 });

@@ -97,8 +97,14 @@ describe('buildGeminiRequest', () => {
         );
     });
 
-    it('takes a base URL override', () => {
-        assert.equal(buildGeminiRequest(args({ baseUrl: 'https://proxy.example.com/v1beta/' })).url, 'https://proxy.example.com/v1beta/models/gemini-3.8-flash:generateContent');
+    it('ignores a base URL: the key goes to Google and nowhere else', () => {
+        for (const baseUrl of ['https://proxy.example.com/v1beta/', 'https://evil.example.com', 'http://localhost:9999', '']) {
+            assert.equal(
+                buildGeminiRequest(args({ baseUrl })).url,
+                'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent',
+                baseUrl,
+            );
+        }
     });
 });
 
@@ -141,6 +147,28 @@ describe('thinkingConfigFor', () => {
         }
     });
 
+    it('gives gemini-3-pro-preview only the levels it has, low and high: medium becomes high, which is its default', () => {
+        for (const model of ['gemini-3-pro-preview', 'models/gemini-3-pro-preview']) {
+            assert.deepEqual(thinkingConfigFor(model, 'low', 4000), { thinkingLevel: 'low' }, model);
+            assert.deepEqual(thinkingConfigFor(model, 'medium', 4000), { thinkingLevel: 'high' }, model);
+            assert.deepEqual(thinkingConfigFor(model, 'high', 4000), { thinkingLevel: 'high' }, model);
+            assert.deepEqual(thinkingConfigFor(model, 'max', 4000), { thinkingLevel: 'high' }, model);
+        }
+        // The later Pro, and every Flash, have medium.
+        assert.deepEqual(thinkingConfigFor('gemini-3.1-pro-preview', 'medium', 4000), { thinkingLevel: 'medium' });
+        assert.deepEqual(thinkingConfigFor('gemini-3.8-flash', 'medium', 4000), { thinkingLevel: 'medium' });
+        assert.deepEqual(thinkingConfigFor('gemini-3-flash-preview', 'medium', 4000), { thinkingLevel: 'medium' });
+    });
+
+    it('never sends a level some Gemini 3 model refuses: no minimal, whatever the effort', () => {
+        for (const model of ['gemini-3.8-flash', 'gemini-3.1-pro-preview', 'gemini-3-pro-preview', 'gemini-3.6-flash', 'gemini-3.5-flash-lite']) {
+            for (const effort of EFFORTS) {
+                const level = (thinkingConfigFor(model, effort, 4000) as { thinkingLevel: string }).thinkingLevel;
+                assert.ok(['low', 'medium', 'high'].includes(level), `${model} ${effort}: ${level}`);
+            }
+        }
+    });
+
     it('lands in the request\'s generationConfig', () => {
         assert.deepEqual((buildGeminiRequest(args()).body.generationConfig as any).thinkingConfig, { thinkingLevel: 'medium' });
         assert.deepEqual((buildGeminiRequest(args({ model: 'gemini-2.5-flash', effort: 'low' })).body.generationConfig as any).thinkingConfig, { thinkingBudget: 1024 });
@@ -152,7 +180,8 @@ describe('parseGeminiResponse', () => {
     it('returns the text, counts thinking as output, and ends normally', () => {
         assert.deepEqual(parseGeminiResponse(answer(), 'gemini-3.8-flash'), {
             text: '{"reply":"hi"}',
-            usage: { input_tokens: 90, output_tokens: 75 },
+            usage: { in: 90, out: 75 },
+            billed: [{ model: 'gemini-3.8-flash', in: 90, out: 75 }],
             model: 'gemini-3.8-flash',
             stopReason: 'end_turn',
         });
@@ -174,7 +203,7 @@ describe('parseGeminiResponse', () => {
         assert.equal(parsed.stopReason, 'refusal');
         assert.equal(parsed.detail, 'blocked: PROHIBITED_CONTENT');
         assert.equal(parsed.text, '');
-        assert.deepEqual(parsed.usage, { input_tokens: 30, output_tokens: 0 });
+        assert.deepEqual(parsed.usage, { in: 30, out: 0 });
     });
 
     it('does not take an unspecified blockReason for a block', () => {
@@ -203,7 +232,9 @@ describe('parseGeminiResponse', () => {
     });
 
     it('copes with a body that is missing pieces', () => {
-        assert.deepEqual(parseGeminiResponse({}, 'm'), { text: '', usage: { input_tokens: 0, output_tokens: 0 }, model: 'm', stopReason: 'end_turn' });
+        assert.deepEqual(parseGeminiResponse({}, 'm'), {
+            text: '', usage: { in: 0, out: 0 }, billed: [{ model: 'm', in: 0, out: 0 }], model: 'm', stopReason: 'end_turn',
+        });
         assert.equal(parseGeminiResponse(null, 'm').text, '');
     });
 });
@@ -215,6 +246,19 @@ describe('geminiAdapter', () => {
         assert.equal(calls.length, 1);
         assert.equal(calls[0]!.method, 'POST');
         assert.equal(out.text, '{"reply":"hi"}');
-        assert.deepEqual(out.usage, { input_tokens: 90, output_tokens: 75 });
+        assert.deepEqual(out.usage, { in: 90, out: 75 });
+    });
+
+    it('refuses to follow a redirect, which would carry the key\'s header to another address', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, answer()));
+        await geminiAdapter(args({ fetchImpl }));
+        assert.equal(calls[0]!.redirect, 'error');
+    });
+
+    it('sends the request to Google whatever base URL it is given', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, answer()));
+        await geminiAdapter(args({ fetchImpl, baseUrl: 'https://evil.example.com' }));
+        assert.ok(calls[0]!.url.startsWith('https://generativelanguage.googleapis.com/v1beta/models/'));
+        assert.ok(!calls[0]!.url.includes('evil'));
     });
 });

@@ -4,15 +4,14 @@
  * The app writes its schemas once, as Gemini's `responseSchema` subset (`GeminiSchema`: upper-case
  * types, no `additionalProperties`), because Gemini was the first model it spoke to. Everyone else
  * speaks JSON Schema, so a `GeminiSchema` is converted on the way out with the helpers the Monteur
- * already uses for `claude --json-schema`. A caller whose schema needs more than Gemini's subset
+ * already uses for `claude --json-schema` (`geminiSchema.ts`, which depend on nothing). A caller whose schema needs more than Gemini's subset
  * (unions, nullable fields) passes `{json}` instead and it goes to every provider as written.
  *
  * OpenAI's strict mode is the one provider that wants the schema reshaped further, and the
  * reshaping loses information: an optional field becomes a required one that may be `null`. So
  * `strictify` goes out and `dropNulls` comes back, and the caller sees the shape it asked for.
  */
-import { toJsonSchema } from '../monteur/think.js';
-import { withoutArrayBounds, type GeminiSchema } from '../studio/generate.js';
+import { toJsonSchema, withoutArrayBounds, type GeminiSchema } from './geminiSchema.js';
 
 export type JsonSchema = Record<string, unknown>;
 
@@ -69,22 +68,30 @@ function nullable(schema: Node): Node {
     return out;
 }
 
-function strictifyNode(node: unknown): void {
+function strictifyNode(node: unknown, path: string): void {
     if (!isNode(node)) return;
-    for (const defs of [node.$defs, node.definitions]) {
-        if (isNode(defs)) Object.values(defs).forEach(strictifyNode);
+    for (const [group, defs] of [['$defs', node.$defs], ['definitions', node.definitions]] as const) {
+        if (isNode(defs)) for (const [name, def] of Object.entries(defs)) strictifyNode(def, `${path}/${group}/${name}`);
     }
-    if (Array.isArray(node.items)) node.items.forEach(strictifyNode);
-    else strictifyNode(node.items);
-    for (const union of [node.anyOf, node.oneOf, node.allOf]) {
-        if (Array.isArray(union)) union.forEach(strictifyNode);
+    if (Array.isArray(node.items)) node.items.forEach((item, i) => strictifyNode(item, `${path}/items/${i}`));
+    else strictifyNode(node.items, `${path}/items`);
+    for (const [group, union] of [['anyOf', node.anyOf], ['oneOf', node.oneOf], ['allOf', node.allOf]] as const) {
+        if (Array.isArray(union)) union.forEach((branch, i) => strictifyNode(branch, `${path}/${group}/${i}`));
     }
     const isObject = node.type === 'object' || (Array.isArray(node.type) && node.type.includes('object')) || isNode(node.properties);
     if (!isObject) return;
+    // `additionalProperties: {schema}` is a map: any keys, one value type. Strict mode has no way
+    // to say that, and closing the object would quietly turn the map into an empty object.
+    if (isNode(node.additionalProperties)) {
+        throw new Error(
+            `Strict mode cannot express an object with free-form keys (additionalProperties is a schema) at ${path || '/'}: ` +
+                'list its keys, or ask for an array of {key, value} instead.',
+        );
+    }
     if (isNode(node.properties)) {
         const required = new Set<string>(Array.isArray(node.required) ? node.required : []);
         for (const [key, sub] of Object.entries(node.properties)) {
-            strictifyNode(sub);
+            strictifyNode(sub, `${path}/properties/${key}`);
             if (!required.has(key) && isNode(sub)) node.properties[key] = nullable(sub);
         }
         node.required = Object.keys(node.properties);
@@ -96,11 +103,13 @@ function strictifyNode(node: unknown): void {
  * JSON Schema as OpenAI's `strict: true` accepts it: every property of every object is listed in
  * `required`, a property that was optional is made nullable instead, and every object is closed
  * with `additionalProperties: false`. Returns a copy; the schema it was given is not touched.
- * `dropNulls` undoes the optional-to-nullable half when the answer is read.
+ * `dropNulls` undoes the optional-to-nullable half when the answer is read. Throws, saying where,
+ * for a schema strict mode cannot represent (an object whose `additionalProperties` is a schema,
+ * i.e. a map): the adapter that called it turns that into a `bad_request` before anything is sent.
  */
 export function strictify(schema: JsonSchema): JsonSchema {
     const copy = structuredClone(schema);
-    strictifyNode(copy);
+    strictifyNode(copy, '');
     return copy;
 }
 
@@ -164,4 +173,32 @@ export function dropNulls(value: unknown, schema: JsonSchema, root: JsonSchema =
         out[key] = known ? dropNulls(v, properties[key], root) : v;
     }
     return out;
+}
+
+// ─── What a provider will refuse ─────────────────────────────────────────────────────────────
+
+/**
+ * How much of what structured-output compilers count a schema uses. Anthropic refuses a schema
+ * with more than 24 optional properties (a property not in `required`) or 16 union-typed
+ * properties (`anyOf`, or a type array such as `["string", "null"]`), with a 400 that only says
+ * "Schema is too complex for compilation"; counting first lets the error say which and how many.
+ */
+export function schemaComplexity(schema: JsonSchema): { optional: number; unions: number } {
+    const count = { optional: 0, unions: 0 };
+    const visit = (node: unknown): void => {
+        if (Array.isArray(node)) return node.forEach(visit);
+        if (!isNode(node)) return;
+        if (Array.isArray(node.anyOf) || (Array.isArray(node.type) && node.type.length > 1)) count.unions += 1;
+        if (isNode(node.properties)) {
+            const required = new Set<string>(Array.isArray(node.required) ? node.required : []);
+            count.optional += Object.keys(node.properties).filter((key) => !required.has(key)).length;
+        }
+        // Every place a sub-schema can sit.
+        for (const place of [node.properties, node.$defs, node.definitions]) {
+            if (isNode(place)) Object.values(place).forEach(visit);
+        }
+        for (const place of [node.items, node.anyOf, node.oneOf, node.allOf, node.additionalProperties]) visit(place);
+    };
+    visit(schema);
+    return count;
 }

@@ -4,20 +4,28 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { DEFAULT_PRICES, priceFor, usdFor, type PriceTable } from './cost.js';
+import { costOf, DEFAULT_PRICES, priceFor, totalUsage, usdFor, type PriceTable } from './cost.js';
+import { PROVIDERS } from './registry.js';
 
 describe('DEFAULT_PRICES', () => {
-    it('seeds Opus 5.5 at $4 / $20, Sonnet 5.5 at $2 / $10 and Haiku 5.5 at $0.10 / $0.50 per million tokens', () => {
+    it('seeds the Claude and Gemini models the registry offers, at the rates on the providers\' pricing pages', () => {
         assert.deepEqual(DEFAULT_PRICES, {
             'claude-opus-5-5': { in: 4, out: 20 },
+            'claude-opus-5': { in: 5, out: 25 },
+            'claude-opus-4-8': { in: 5, out: 25 },
             'claude-sonnet-5-5': { in: 2, out: 10 },
+            'claude-sonnet-5': { in: 2, out: 10 },
             'claude-haiku-5-5': { in: 0.1, out: 0.5 },
+            'gemini-3.8-flash': { in: 1.5, out: 7.5 },
+            'gemini-3.1-pro-preview': { in: 2, out: 12 },
         });
     });
 
-    it('prices every Anthropic model the registry suggests', () => {
-        for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5']) {
-            assert.equal(priceFor(model, DEFAULT_PRICES).priced, true, model);
+    it('prices every Anthropic and Gemini model the registry suggests or defaults to', () => {
+        for (const p of PROVIDERS.filter((p) => p.id === 'anthropic' || p.id === 'gemini')) {
+            for (const model of [p.defaultModel, ...p.suggestedModels]) {
+                assert.equal(priceFor(model, {}).priced, true, `${p.id}: ${model}`);
+            }
         }
     });
 });
@@ -37,66 +45,125 @@ describe('priceFor', () => {
     });
 
     it('does not price a different model as one whose name it merely starts with', () => {
-        const table: PriceTable = { 'claude-opus-5': { in: 1, out: 2 } };
-        assert.equal(priceFor('claude-opus-5-5', table).priced, false);
-        assert.equal(priceFor('claude-opus-50', table).priced, false);
-        assert.equal(priceFor('claude-opus-5', table).priced, true);
+        // `claude-opus-5` is in the defaults; Opus 5.5 is a different price, found by its own key.
+        assert.deepEqual(priceFor('claude-opus-5-5', {}), { in: 4, out: 20, priced: true });
+        assert.equal(priceFor('claude-opus-5-6', {}).priced, false);
+        assert.equal(priceFor('claude-opus-50', {}).priced, false);
     });
 
     it('lets the longest matching entry win', () => {
-        const table: PriceTable = { 'claude-opus-5-5': { in: 4, out: 20 }, 'claude-opus-5-5-20261001': { in: 9, out: 90 } };
+        const table: PriceTable = { 'claude-opus-5-5-20261001': { in: 9, out: 90 } };
         assert.deepEqual(priceFor('claude-opus-5-5-20261001', table), { in: 9, out: 90, priced: true });
         assert.deepEqual(priceFor('claude-opus-5-5', table), { in: 4, out: 20, priced: true });
     });
 
     it('charges an unknown model the highest rate in the table and says it is not priced', () => {
-        assert.deepEqual(priceFor('some-new-model', DEFAULT_PRICES), { in: 4, out: 20, priced: false });
+        assert.deepEqual(priceFor('some-new-model', DEFAULT_PRICES), { in: 5, out: 25, priced: false });
     });
 
     it('takes the highest input rate and the highest output rate separately, the more cautious reading', () => {
-        const table: PriceTable = { cheapIn: { in: 1, out: 50 }, cheapOut: { in: 9, out: 2 } };
-        assert.deepEqual(priceFor('mystery', table), { in: 9, out: 50, priced: false });
+        const table: PriceTable = { cheapIn: { in: 1, out: 500 }, cheapOut: { in: 90, out: 2 } };
+        assert.deepEqual(priceFor('mystery', table), { in: 90, out: 500, priced: false });
     });
 
-    it('ignores table entries that are not prices, rather than charging NaN', () => {
-        const table = { good: { in: 3, out: 6 }, broken: { in: 'a lot', out: null }, negative: { in: -1, out: 5 } } as unknown as PriceTable;
-        assert.deepEqual(priceFor('good', table), { in: 3, out: 6, priced: true });
-        assert.deepEqual(priceFor('broken', table), { in: 3, out: 6, priced: false });
+    it('lays the operator\'s prices over the defaults and never uses them instead: an empty table cannot make a call free', () => {
+        assert.deepEqual(priceFor('claude-opus-5-5', {}), { in: 4, out: 20, priced: true });
+        // The ceiling an unknown model gets is still the defaults' highest rate.
+        assert.deepEqual(priceFor('anything', {}), { in: 5, out: 25, priced: false });
+        assert.deepEqual(priceFor('anything', undefined as unknown as PriceTable), { in: 5, out: 25, priced: false });
+        assert.ok(usdFor({ in: 1_000_000, out: 1_000_000 }, 'anything', {}).usd > 0);
     });
 
-    it('charges nothing, marked unpriced, when there is no table at all', () => {
-        assert.deepEqual(priceFor('anything', {}), { in: 0, out: 0, priced: false });
+    it('lets an operator\'s entry win over the default of the same model, in either direction', () => {
+        assert.deepEqual(priceFor('claude-opus-5-5', { 'claude-opus-5-5': { in: 6, out: 30 } }), { in: 6, out: 30, priced: true });
+        assert.deepEqual(priceFor('claude-opus-5-5', { 'Claude-Opus-5-5': { in: 1, out: 2 } }), { in: 1, out: 2, priced: true });
+    });
+
+    it('raises the ceiling when the operator prices something dearer than anything seeded', () => {
+        assert.deepEqual(priceFor('mystery', { 'gpt-6-astra': { in: 10, out: 50 } }), { in: 10, out: 50, priced: false });
+        assert.deepEqual(priceFor('gpt-6-astra', { 'gpt-6-astra': { in: 10, out: 50 } }), { in: 10, out: 50, priced: true });
+    });
+
+    it('ignores table entries that are not prices, so a broken one cannot blank out a default or charge NaN', () => {
+        const table = {
+            'claude-opus-5-5': { in: 'a lot', out: null },
+            negative: { in: -1, out: 5 },
+            nan: { in: Number.NaN, out: 1 },
+            'my-model': { in: 3, out: 6 },
+        } as unknown as PriceTable;
+        assert.deepEqual(priceFor('claude-opus-5-5', table), { in: 4, out: 20, priced: true });
+        assert.deepEqual(priceFor('my-model', table), { in: 3, out: 6, priced: true });
+        assert.deepEqual(priceFor('negative', table), { in: 5, out: 25, priced: false });
+        assert.deepEqual(priceFor('nan', table), { in: 5, out: 25, priced: false });
     });
 });
 
 describe('usdFor', () => {
     it('multiplies tokens by the per-million rate', () => {
-        assert.deepEqual(usdFor({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 24, priced: true });
-        assert.deepEqual(usdFor({ input_tokens: 1_000_000, output_tokens: 0 }, 'claude-sonnet-5-5', DEFAULT_PRICES), { usd: 2, priced: true });
-        assert.deepEqual(usdFor({ input_tokens: 0, output_tokens: 1_000_000 }, 'claude-haiku-5-5', DEFAULT_PRICES), { usd: 0.5, priced: true });
+        assert.deepEqual(usdFor({ in: 1_000_000, out: 1_000_000 }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 24, priced: true });
+        assert.deepEqual(usdFor({ in: 1_000_000, out: 0 }, 'claude-sonnet-5-5', DEFAULT_PRICES), { usd: 2, priced: true });
+        assert.deepEqual(usdFor({ in: 0, out: 1_000_000 }, 'claude-haiku-5-5', DEFAULT_PRICES), { usd: 0.5, priced: true });
     });
 
     it('prices a realistic call: 2,000 tokens in and 800 out on Opus 5.5 is 2.4 cents', () => {
-        assert.deepEqual(usdFor({ input_tokens: 2000, output_tokens: 800 }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 0.024, priced: true });
+        assert.deepEqual(usdFor({ in: 2000, out: 800 }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 0.024, priced: true });
     });
 
     it('keeps the cost of a single Haiku token, and rounds away only floating-point noise', () => {
-        assert.equal(usdFor({ input_tokens: 1, output_tokens: 1 }, 'claude-haiku-5-5', DEFAULT_PRICES).usd, 0.0000006);
-        assert.equal(usdFor({ input_tokens: 3, output_tokens: 0 }, 'claude-haiku-5-5', DEFAULT_PRICES).usd, 0.0000003);
+        assert.equal(usdFor({ in: 1, out: 1 }, 'claude-haiku-5-5', DEFAULT_PRICES).usd, 0.0000006);
+        assert.equal(usdFor({ in: 3, out: 0 }, 'claude-haiku-5-5', DEFAULT_PRICES).usd, 0.0000003);
         // 2000 * 4 + 800 * 20 is 24000 / 1e6, which in floating point is not quite 0.024.
-        assert.equal(usdFor({ input_tokens: 2000, output_tokens: 800 }, 'claude-opus-5-5', DEFAULT_PRICES).usd, 0.024);
+        assert.equal(usdFor({ in: 2000, out: 800 }, 'claude-opus-5-5', DEFAULT_PRICES).usd, 0.024);
     });
 
     it('charges an unpriced model at the top rate and flags it', () => {
-        assert.deepEqual(usdFor({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, 'gemini-3.8-flash', DEFAULT_PRICES), { usd: 24, priced: false });
+        assert.deepEqual(usdFor({ in: 1_000_000, out: 1_000_000 }, 'gpt-9-unknown', DEFAULT_PRICES), { usd: 30, priced: false });
     });
 
     it('uses a price the operator added, and so reports the model as priced', () => {
-        const prices: PriceTable = { ...DEFAULT_PRICES, 'gemini-3.8-flash': { in: 0.3, out: 2.5 } };
-        assert.deepEqual(usdFor({ input_tokens: 1_000_000, output_tokens: 1_000_000 }, 'gemini-3.8-flash', prices), { usd: 2.8, priced: true });
+        const prices: PriceTable = { 'gemini-4-flash': { in: 0.3, out: 2.5 } };
+        assert.deepEqual(usdFor({ in: 1_000_000, out: 1_000_000 }, 'gemini-4-flash', prices), { usd: 2.8, priced: true });
     });
 
     it('treats tokens that are not positive numbers as none', () => {
-        assert.deepEqual(usdFor({ input_tokens: -5, output_tokens: Number.NaN }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 0, priced: true });
+        assert.deepEqual(usdFor({ in: -5, out: Number.NaN }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 0, priced: true });
+    });
+});
+
+describe('totalUsage and costOf', () => {
+    // The shape of a server-side fallback: Opus 5.5 declined, Opus 4.8 answered.
+    const fallback = [
+        { model: 'claude-opus-5-5', in: 535, out: 0 },
+        { model: 'claude-opus-4-8', in: 412, out: 264 },
+    ];
+
+    it('adds up every model\'s tokens', () => {
+        assert.deepEqual(totalUsage(fallback), { in: 947, out: 264 });
+        assert.deepEqual(totalUsage([]), { in: 0, out: 0 });
+    });
+
+    it('prices each model it was billed on at its own rate', () => {
+        const cost = costOf(fallback, DEFAULT_PRICES);
+        // 535 * $4 / 1e6, and 412 * $5 + 264 * $25 / 1e6.
+        assert.deepEqual(cost.billed.map((b) => b.usd), [0.00214, 0.00866]);
+        assert.equal(cost.usd, 0.0108);
+        assert.equal(cost.priced, true);
+        assert.deepEqual(cost.billed.map((b) => b.model), ['claude-opus-5-5', 'claude-opus-4-8']);
+    });
+
+    it('is unpriced if any one model had to be charged at the ceiling', () => {
+        const cost = costOf([{ model: 'claude-opus-5-5', in: 1000, out: 0 }, { model: 'mystery-1', in: 1000, out: 0 }], DEFAULT_PRICES);
+        assert.equal(cost.priced, false);
+        assert.deepEqual(cost.billed.map((b) => b.usd), [0.004, 0.005]);
+    });
+
+    it('is nothing for a call that billed nothing', () => {
+        assert.deepEqual(costOf([], DEFAULT_PRICES), { usd: 0, priced: true, billed: [] });
+    });
+
+    it('does not modify the entries it was given', () => {
+        const entries = [{ model: 'claude-opus-5-5', in: 10, out: 10 }];
+        costOf(entries, DEFAULT_PRICES);
+        assert.deepEqual(entries, [{ model: 'claude-opus-5-5', in: 10, out: 10 }]);
     });
 });

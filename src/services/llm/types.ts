@@ -19,8 +19,19 @@ export type StopReason = 'end_turn' | 'max_tokens' | 'refusal';
 /** One turn of a conversation. A repair round is the first prompt, the answer it got, and what to fix. */
 export type LlmTurn = { role: 'user' | 'model'; text: string };
 
-/** What a call cost in tokens. Thinking counts as output: every provider bills it at the output rate. */
-export type Usage = { input_tokens: number; output_tokens: number };
+/**
+ * Tokens, as `{in, out}` (the spec's names). Not `input_tokens`/`output_tokens`: the logger
+ * (`utils/log.ts`) redacts any field whose name contains "token", so those arrived in every log
+ * line as `[redacted]`. Thinking counts as output: every provider bills it at the output rate.
+ */
+export type Usage = { in: number; out: number };
+
+/**
+ * One model's share of what a call was billed. Normally a call has one entry; Anthropic's
+ * server-side fallback can have several (the model that declined, then the one that answered),
+ * each at its own price. `usd` is filled by whoever knows the prices (`costOf`, cost.ts).
+ */
+export type Billed = { model: string; in: number; out: number; usd?: number };
 
 /** `fetch`, as far as this library needs it: tests hand in a stub, production uses the global. */
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
@@ -30,7 +41,12 @@ export interface AdapterArgs {
     /** Which provider, for errors: two providers can share a family (OpenRouter and Custom). */
     provider: ProviderId;
     apiKey: string;
-    /** Overrides the registry's base URL (only Custom has none of its own). */
+    /**
+     * An operator's base URL. Only a provider whose registry entry has `editableBaseUrl` (Custom)
+     * ever has one: `callLlm` withholds it from every other, and the Anthropic and Gemini
+     * adapters ignore it regardless. A URL a tenant could point elsewhere would be a way to send
+     * the platform's key to a server of their choosing.
+     */
     baseUrl?: string;
     model: string;
     system: string;
@@ -47,14 +63,17 @@ export interface AdapterArgs {
 }
 
 /**
- * What an adapter returns. `text`, not parsed JSON: `generateJson` looks at `stopReason` first,
+ * What an adapter returns. `text`, not parsed JSON: `callLlm` looks at `stopReason` first,
  * because a refusal or a cut-off answer is text that does not parse and the right error is the
  * refusal, not "bad output".
  */
 export interface AdapterResult {
     /** The model's answer, as text. Thinking is not in it. */
     text: string;
+    /** Everything the call was billed for, summed over `billed`. */
     usage: Usage;
+    /** The same, per model, so each can be priced at its own rate. */
+    billed: Billed[];
     /** The model that answered. Anthropic's server-side fallback can make it differ from the one asked for. */
     model: string;
     stopReason: StopReason;
@@ -63,3 +82,24 @@ export interface AdapterResult {
 }
 
 export type Adapter = (args: AdapterArgs) => Promise<AdapterResult>;
+
+/** What listing a provider's models and checking its key need (P20b implements both). */
+export type ProviderQuery = Pick<AdapterArgs, 'provider' | 'apiKey' | 'baseUrl' | 'signal' | 'fetchImpl'>;
+/** A key that passed. One that did not throws an `AiError`; `warning` is for a key that works but should be looked at. */
+export type KeyCheck = { ok: true; warning?: string };
+
+/**
+ * What a wire family provides. Only `generate` exists in P20a; the rest are the seams P20b fills
+ * so that nothing in `callLlm` has to be reordered to make room:
+ *
+ *   - `normalize` runs on the parsed answer, before its shape is checked: undoing what the
+ *     family did to the schema (OpenAI strict mode's `null`s are `dropNulls`'s to remove).
+ *   - `listModels` is the provider's model list, for "Load models".
+ *   - `checkKey` is the free call a key must pass before it is saved.
+ */
+export interface FamilyAdapter {
+    generate: Adapter;
+    normalize?: (json: unknown, schema: LlmSchema) => unknown;
+    listModels?: (query: ProviderQuery) => Promise<string[]>;
+    checkKey?: (query: ProviderQuery) => Promise<KeyCheck>;
+}

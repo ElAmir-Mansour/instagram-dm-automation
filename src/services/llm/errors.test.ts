@@ -4,13 +4,32 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { AI_ERROR_KINDS, AiError, errorFromHttp, MAX_MESSAGE_CHARS, RETRYABLE, scrub, type AiErrorKind } from './errors.js';
+import { describeError } from '../../utils/log.js';
+import {
+    AI_ERROR_KINDS, aiErrorLogFields, AiError, errorFromHttp, MAX_MESSAGE_CHARS, parseRetryAfter, RETRYABLE, scrub, type AiErrorKind,
+} from './errors.js';
 
 const KEY = 'sk-ant-api03-Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq';
 
-const anthropicBody = (type: string, message: string) => JSON.stringify({ type: 'error', error: { type, message }, request_id: 'req_011CSHoEeqs5C35K2UUqR7Fy' });
-const geminiBody = (code: number, status: string, message: string) => JSON.stringify({ error: { code, message, status } });
+const anthropicBody = (type: string, message: string, details?: unknown) =>
+    JSON.stringify({ type: 'error', error: { type, message, ...(details ? { details } : {}) }, request_id: 'req_011CSHoEeqs5C35K2UUqR7Fy' });
+const geminiBody = (code: number, status: string, message: string, details?: unknown[]) =>
+    JSON.stringify({ error: { code, message, status, ...(details ? { details } : {}) } });
 const openAiBody = (code: string, message: string) => JSON.stringify({ error: { message, type: 'insufficient_quota', code } });
+
+// Google's structured 429 detail: which quota was hit, and how long to wait.
+const quotaFailure = (...quotaIds: string[]) => ({
+    '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+    violations: quotaIds.map((quotaId) => ({
+        quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId,
+        quotaDimensions: { location: 'global', model: 'gemini-3.8-flash' }, quotaValue: '20',
+    })),
+});
+const retryInfo = (retryDelay: string) => ({ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay });
+// The sentence is the same for a per-minute and a per-day limit, which is the whole problem.
+const GEMINI_QUOTA_WORDS = 'You exceeded your current quota, please check your plan and billing details.';
+const PER_DAY = 'GenerateRequestsPerDayPerProjectPerModel-FreeTier';
+const PER_MINUTE = 'GenerateContentInputTokensPerModelPerMinute-FreeTier';
 
 describe('errorFromHttp', () => {
     // [what the provider sent, what it is]. Every row of the spec's table, with the wording each
@@ -24,18 +43,15 @@ describe('errorFromHttp', () => {
         ['Anthropic 402', 'anthropic', 402, anthropicBody('billing_error', 'There is an issue with your billing.'), 'quota'],
         ['402 with no body', 'openrouter', 402, '', 'quota'],
         ['OpenAI 429 insufficient_quota', 'openai', 429, openAiBody('insufficient_quota', 'You exceeded your current quota, please check your plan.'), 'quota'],
-        ['Gemini 429 quota', 'gemini', 429, geminiBody(429, 'RESOURCE_EXHAUSTED', 'You exceeded your current quota, please check your plan and billing details.'), 'quota'],
-        ['429 mentioning billing', 'custom', 429, JSON.stringify({ error: 'Billing hard limit reached' }), 'quota'],
         ['Anthropic 400 empty credit balance', 'anthropic', 400, anthropicBody('invalid_request_error', 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing.'), 'quota'],
         ['Anthropic 400 workspace spend limit', 'anthropic', 400, anthropicBody('invalid_request_error', 'You have reached your specified workspace API usage limits.'), 'quota'],
-        ['Anthropic 429 rate limit', 'anthropic', 429, anthropicBody('rate_limit_error', "This request would exceed your organization's rate limit of 30,000 input tokens per minute."), 'rate'],
-        ['429 with no body', 'openai', 429, '', 'rate'],
         ['Anthropic 400', 'anthropic', 400, anthropicBody('invalid_request_error', 'output_config.format: schema is not supported'), 'bad_request'],
         ['Gemini 400', 'gemini', 400, geminiBody(400, 'INVALID_ARGUMENT', 'Request contains an invalid argument.'), 'bad_request'],
         ['Anthropic 404', 'anthropic', 404, anthropicBody('not_found_error', 'model: claude-nope'), 'bad_request'],
         ['Gemini 404', 'gemini', 404, geminiBody(404, 'NOT_FOUND', 'models/gemini-9 is not found for API version v1beta'), 'bad_request'],
         ['Anthropic 413', 'anthropic', 413, anthropicBody('request_too_large', 'Request exceeds the maximum allowed number of bytes.'), 'bad_request'],
         ['422', 'custom', 422, JSON.stringify({ error: { message: 'bad json_schema' } }), 'bad_request'],
+        ['a redirect', 'custom', 307, '', 'bad_request'],
         ['408', 'custom', 408, '', 'timeout'],
         ['Anthropic 500', 'anthropic', 500, anthropicBody('api_error', 'Internal server error'), 'server'],
         ['Anthropic 529', 'anthropic', 529, anthropicBody('overloaded_error', 'Overloaded'), 'server'],
@@ -54,6 +70,77 @@ describe('errorFromHttp', () => {
             assert.equal(err.retryable, RETRYABLE[kind]);
         });
     }
+
+    describe('a 429, which means two different things', () => {
+        // The words say "quota" for a limit that lifts in a minute and for one that lifts at
+        // midnight, so the structure is read first. [name, provider, body, what it is].
+        const rows: Array<[string, string, string, AiErrorKind]> = [
+            ['Gemini, a per-day quota', 'gemini', geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS, [quotaFailure(PER_DAY), retryInfo('1s')]), 'quota'],
+            ['Gemini, a per-minute quota with the very same words', 'gemini', geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS, [quotaFailure(PER_MINUTE), retryInfo('33s')]), 'rate'],
+            ['Gemini, a per-day quota listed second', 'gemini', geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS, [quotaFailure(PER_MINUTE, PER_DAY)]), 'quota'],
+            ['Gemini, a per-month quota', 'gemini', geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS, [quotaFailure('GenerateRequestsPerMonthPerProject')]), 'quota'],
+            ['Gemini, no details at all, whatever the words say', 'gemini', geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS), 'rate'],
+            ['Gemini, details that are not a QuotaFailure', 'gemini', geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS, [retryInfo('5s')]), 'rate'],
+            ['Anthropic, a rate limit', 'anthropic', anthropicBody('rate_limit_error', "This request would exceed your organization's rate limit of 30,000 input tokens per minute."), 'rate'],
+            ['Anthropic, a rate limit whose sentence says quota', 'anthropic', anthropicBody('rate_limit_error', 'You have exceeded your quota of requests.'), 'rate'],
+            ['Anthropic, the monthly spend cap, a rate_limit_error too', 'anthropic', anthropicBody('rate_limit_error', 'You have reached your API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.', { error_code: 'enforced_spend_limit_reached' }), 'quota'],
+            ['OpenAI, insufficient_quota', 'openai', openAiBody('insufficient_quota', 'You exceeded your current quota.'), 'quota'],
+            ['OpenAI, a rate limit', 'openai', JSON.stringify({ error: { message: 'Rate limit reached for gpt-6 on tokens per min.', type: 'tokens', code: 'rate_limit_exceeded' } }), 'rate'],
+            ['a custom endpoint that only has words for billing', 'custom', JSON.stringify({ error: 'Billing hard limit reached' }), 'quota'],
+            ['a custom endpoint that only has words for a limit', 'custom', JSON.stringify({ error: 'Too many requests, slow down' }), 'rate'],
+            ['a 429 with nothing to read', 'openai', '', 'rate'],
+            ['a 429 with an HTML body', 'custom', '<html>429</html>', 'rate'],
+        ];
+        for (const [name, provider, body, kind] of rows) {
+            it(`${name} is ${kind}`, () => {
+                const err = errorFromHttp(provider, 'm', 429, body);
+                assert.equal(err.kind, kind);
+                assert.equal(err.retryable, kind === 'rate');
+            });
+        }
+    });
+
+    describe('how long to wait', () => {
+        it('reads retry-after, in seconds, off a rate limit', () => {
+            const err = errorFromHttp('anthropic', 'm', 429, anthropicBody('rate_limit_error', 'slow down'), { retryAfter: '30' });
+            assert.equal(err.kind, 'rate');
+            assert.equal(err.retryAfterMs, 30_000);
+        });
+
+        it('reads retry-after off a 529 and a 503 too', () => {
+            assert.equal(errorFromHttp('anthropic', 'm', 529, anthropicBody('overloaded_error', 'Overloaded'), { retryAfter: '2' }).retryAfterMs, 2000);
+            assert.equal(errorFromHttp('gemini', 'm', 503, geminiBody(503, 'UNAVAILABLE', 'busy'), { retryAfter: '1.5' }).retryAfterMs, 1500);
+        });
+
+        it('takes Google\'s RetryInfo for a rate limit that has no header, as Google sends none', () => {
+            const err = errorFromHttp('gemini', 'm', 429, geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS, [quotaFailure(PER_MINUTE), retryInfo('33s')]));
+            assert.equal(err.kind, 'rate');
+            assert.equal(err.retryAfterMs, 33_000);
+            // A header wins when there is one.
+            assert.equal(errorFromHttp('gemini', 'm', 429, geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS, [quotaFailure(PER_MINUTE), retryInfo('33s')]), { retryAfter: '5' }).retryAfterMs, 5000);
+        });
+
+        it('says nothing about waiting for an error that waiting cannot fix', () => {
+            // A daily quota's RetryInfo is a few seconds that mean nothing; the spend cap sends no header.
+            const daily = errorFromHttp('gemini', 'm', 429, geminiBody(429, 'RESOURCE_EXHAUSTED', GEMINI_QUOTA_WORDS, [quotaFailure(PER_DAY), retryInfo('1s')]), { retryAfter: '1' });
+            assert.equal(daily.kind, 'quota');
+            assert.equal(daily.retryAfterMs, undefined);
+            assert.equal(errorFromHttp('anthropic', 'm', 401, anthropicBody('authentication_error', 'bad'), { retryAfter: '10' }).retryAfterMs, undefined);
+            assert.equal(errorFromHttp('anthropic', 'm', 400, anthropicBody('invalid_request_error', 'bad'), { retryAfter: '10' }).retryAfterMs, undefined);
+        });
+
+        it('parses seconds, HTTP dates and nonsense, within a day', () => {
+            const now = Date.parse('2026-10-13T12:00:00Z');
+            assert.equal(parseRetryAfter('120', now), 120_000);
+            assert.equal(parseRetryAfter('0', now), 0);
+            assert.equal(parseRetryAfter(' 7 ', now), 7000);
+            assert.equal(parseRetryAfter('Tue, 13 Oct 2026 12:01:00 GMT', now), 60_000);
+            assert.equal(parseRetryAfter('Tue, 13 Oct 2026 11:00:00 GMT', now), 0);
+            assert.equal(parseRetryAfter('99999999', now), 24 * 60 * 60 * 1000);
+            // "-5" and "2026-10-13" are dates to Date.parse, and must not be read as ones.
+            for (const junk of ['', '  ', 'soon', '-5', '1e9', '2026-10-13', undefined, null]) assert.equal(parseRetryAfter(junk as string | null | undefined, now), undefined, String(junk));
+        });
+    });
 
     it('keeps the provider\'s own explanation as the message', () => {
         assert.equal(errorFromHttp('gemini', 'm', 400, geminiBody(400, 'INVALID_ARGUMENT', 'API key not valid. Please pass a valid API key.')).message,
@@ -82,7 +169,7 @@ describe('errorFromHttp', () => {
     });
 
     it('scrubs the key out of what the provider says back', () => {
-        const err = errorFromHttp('anthropic', 'm', 401, anthropicBody('authentication_error', `invalid x-api-key: ${KEY}`), KEY);
+        const err = errorFromHttp('anthropic', 'm', 401, anthropicBody('authentication_error', `invalid x-api-key: ${KEY}`), { key: KEY });
         assert.equal(err.kind, 'auth');
         assert.ok(!err.message.includes(KEY));
         assert.ok(!JSON.stringify(err).includes(KEY));
@@ -133,17 +220,58 @@ describe('AiError', () => {
     });
 
     it('serialises its message, which an Error otherwise hides from JSON.stringify', () => {
-        const err = new AiError({ kind: 'server', provider: 'gemini', model: 'm', status: 503, message: 'overloaded' });
+        const err = new AiError({ kind: 'server', provider: 'gemini', model: 'm', status: 503, message: 'overloaded', retryAfterMs: 2000 });
         assert.deepEqual(JSON.parse(JSON.stringify(err)), {
-            name: 'AiError', kind: 'server', provider: 'gemini', model: 'm', status: 503, retryable: true, message: 'overloaded',
+            name: 'AiError', kind: 'server', provider: 'gemini', model: 'm', status: 503, retryable: true, retryAfterMs: 2000, message: 'overloaded',
         });
     });
 
-    it('carries the tokens of an answer that was billed but unusable', () => {
-        const err = new AiError({ kind: 'refusal', provider: 'anthropic', model: 'm', message: 'declined', usage: { input_tokens: 412, output_tokens: 0 } });
-        assert.deepEqual(err.usage, { input_tokens: 412, output_tokens: 0 });
-        assert.deepEqual(JSON.parse(JSON.stringify(err)).usage, { input_tokens: 412, output_tokens: 0 });
-        assert.equal(new AiError({ kind: 'auth', provider: 'p', model: 'm', message: 'x' }).usage, undefined);
+    it('carries the tokens of an answer that was billed but unusable, in total and per model', () => {
+        const billed = [{ model: 'claude-opus-5-5', in: 412, out: 0 }];
+        const err = new AiError({ kind: 'refusal', provider: 'anthropic', model: 'm', message: 'declined', usage: { in: 412, out: 0 }, billed });
+        assert.deepEqual(err.usage, { in: 412, out: 0 });
+        assert.deepEqual(err.billed, billed);
+        const json = JSON.parse(JSON.stringify(err));
+        assert.deepEqual(json.usage, { in: 412, out: 0 });
+        assert.deepEqual(json.billed, billed);
+        const plain = new AiError({ kind: 'auth', provider: 'p', model: 'm', message: 'x' });
+        assert.equal(plain.usage, undefined);
+        assert.equal(plain.billed, undefined);
+        assert.equal(plain.retryAfterMs, undefined);
+    });
+
+    it('has `code` equal to its kind: the one field of an Error the logger keeps', () => {
+        for (const kind of AI_ERROR_KINDS) assert.equal(new AiError({ kind, provider: 'p', model: 'm', message: 'x' }).code, kind);
+        const described = describeError(new AiError({ kind: 'quota', provider: 'gemini', model: 'm', status: 429, message: 'spent' }));
+        assert.equal(described['code'], 'quota');
+        assert.equal(described['message'], 'spent');
+    });
+});
+
+describe('aiErrorLogFields', () => {
+    const err = new AiError({
+        kind: 'rate', provider: 'gemini', model: 'gemini-3.8-flash', status: 429, message: 'slow down', retryAfterMs: 33_000, usage: { in: 90, out: 20 },
+    });
+
+    it('names everything worth searching a log for, with names the logger does not redact', () => {
+        const fields = aiErrorLogFields(err);
+        assert.equal(fields['kind'], 'rate');
+        assert.equal(fields['provider'], 'gemini');
+        assert.equal(fields['model'], 'gemini-3.8-flash');
+        assert.equal(fields['status'], 429);
+        assert.equal(fields['retryable'], true);
+        assert.equal(fields['retry_after_ms'], 33_000);
+        assert.equal(fields['in'], 90);
+        assert.equal(fields['out'], 20);
+        // The logger redacts a field by the words in its name; none of these has one.
+        for (const name of Object.keys(fields)) assert.doesNotMatch(name, /token|secret|password|passwd|api[-_]?key|authorization|signature|cookie/i, name);
+    });
+
+    it('leaves out what an error does not have', () => {
+        const bare = aiErrorLogFields(new AiError({ kind: 'auth', provider: 'anthropic', model: 'm', message: 'x' }));
+        assert.equal(bare['status'], undefined);
+        assert.equal(bare['in'], undefined);
+        assert.equal(bare['retry_after_ms'], undefined);
     });
 });
 

@@ -13,6 +13,8 @@ export type Recorded = {
     raw: string;
     body: any;
     signal: AbortSignal | null | undefined;
+    /** What the request said about redirects: the adapters must say `'error'`, or a 307 carries the key's header elsewhere. */
+    redirect: RequestInit['redirect'];
 };
 
 export type Scripted = Response | Error | (() => Response | Promise<Response>);
@@ -30,6 +32,7 @@ export function stubFetch(...script: Scripted[]): { fetchImpl: FetchLike; calls:
             raw,
             body: raw ? JSON.parse(raw) : undefined,
             signal: init.signal,
+            redirect: init.redirect,
         });
         const next = queue.shift();
         if (!next) throw new Error('unexpected extra fetch');
@@ -39,8 +42,8 @@ export function stubFetch(...script: Scripted[]): { fetchImpl: FetchLike; calls:
     return { fetchImpl, calls };
 }
 
-export const jsonResponse = (status: number, body: unknown): Response =>
-    new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+export const jsonResponse = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
+    new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
 
 /**
  * A server that never answers: settles only when the request's own signal aborts, as a real fetch

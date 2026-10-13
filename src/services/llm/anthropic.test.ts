@@ -7,8 +7,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { GeminiSchema } from '../studio/generate.js';
 import {
-    anthropicAdapter, buildAnthropicRequest, effortFor, FALLBACK_BETA, parseAnthropicResponse, supportsEffort, supportsServerFallback,
+    anthropicAdapter, buildAnthropicRequest, effortFor, FALLBACK_BETA, MAX_OPTIONAL_PROPERTIES, MAX_UNION_PROPERTIES,
+    parseAnthropicResponse, supportsEffort, supportsServerFallback,
 } from './adapters/anthropic.js';
+import { costOf, DEFAULT_PRICES } from './cost.js';
+import { isAiError } from './errors.js';
 import { jsonResponse, stubFetch } from './testFetch.js';
 import type { AdapterArgs } from './types.js';
 
@@ -31,6 +34,32 @@ const message = (over: Record<string, unknown> = {}) => ({
     stop_reason: 'end_turn', stop_details: null,
     usage: { input_tokens: 120, output_tokens: 34, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     ...over,
+});
+
+/** The shape the docs give a request that fell back: Opus 5.5 declined, Opus 4.8 answered. */
+const fellBack = (over: Record<string, unknown> = {}) =>
+    message({
+        model: 'claude-opus-4-8',
+        content: [
+            { type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' } },
+            { type: 'text', text: '{"reply":"hi"}' },
+        ],
+        usage: {
+            // The top level is the last attempt only.
+            input_tokens: 412, output_tokens: 264, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+            iterations: [
+                { type: 'message', model: 'claude-opus-5-5', input_tokens: 535, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+                { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 412, output_tokens: 264, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            ],
+        },
+        ...over,
+    });
+
+/** An object schema with this many optional properties and this many required ones. */
+const withOptional = (optional: number, required = 1): GeminiSchema => ({
+    type: 'OBJECT',
+    properties: Object.fromEntries([...Array(required + optional).keys()].map((i) => [`f${i}`, { type: 'STRING' as const }])),
+    required: [...Array(required).keys()].map((i) => `f${i}`),
 });
 
 describe('buildAnthropicRequest', () => {
@@ -68,8 +97,14 @@ describe('buildAnthropicRequest', () => {
         }
     });
 
-    it('needs no beta header for structured output or effort', () => {
-        assert.ok(!('anthropic-beta' in buildAnthropicRequest(args({ model: 'claude-sonnet-4-5' })).headers));
+    it('needs no beta header for structured output or effort: Haiku 5.5 sends both and no header', () => {
+        // Haiku 5.5 takes effort and has no server-side fallback, so this request is exactly
+        // structured output plus effort, and nothing that is in beta.
+        const r = buildAnthropicRequest(args({ model: 'claude-haiku-5-5', effort: 'low' }));
+        assert.equal((r.body.output_config as any).effort, 'low');
+        assert.equal((r.body.output_config as any).format.type, 'json_schema');
+        assert.ok(!('anthropic-beta' in r.headers));
+        assert.ok(!('fallbacks' in r.body));
     });
 
     it('never puts the key in the URL or the body', () => {
@@ -96,11 +131,13 @@ describe('buildAnthropicRequest', () => {
         }
     });
 
-    it('leaves effort out for models that answer 400 to it, and clamps xhigh where only high exists', () => {
+    it('leaves effort out for models that answer 400 to it, and clamps a level the model does not have to high', () => {
+        const effortOf = (model: string, effort: AdapterArgs['effort']) => (buildAnthropicRequest(args({ model, effort })).body.output_config as any).effort;
         assert.ok(!('effort' in (buildAnthropicRequest(args({ model: 'claude-haiku-4-5-20251001' })).body.output_config as object)));
-        assert.equal((buildAnthropicRequest(args({ model: 'claude-opus-4-6', effort: 'xhigh' })).body.output_config as any).effort, 'high');
-        assert.equal((buildAnthropicRequest(args({ model: 'claude-opus-5-5', effort: 'xhigh' })).body.output_config as any).effort, 'xhigh');
-        assert.equal((buildAnthropicRequest(args({ model: 'claude-opus-4-6', effort: 'max' })).body.output_config as any).effort, 'max');
+        assert.equal(effortOf('claude-opus-4-6', 'xhigh'), 'high');
+        assert.equal(effortOf('claude-opus-5-5', 'xhigh'), 'xhigh');
+        assert.equal(effortOf('claude-opus-4-6', 'max'), 'max');
+        assert.equal(effortOf('claude-opus-4-5-20251101', 'max'), 'high');
     });
 
     it('maps a conversation onto user and assistant turns, ending on the user\'s', () => {
@@ -127,8 +164,65 @@ describe('buildAnthropicRequest', () => {
         assert.deepEqual((buildAnthropicRequest(args({ schema: { json: raw } })).body.output_config as any).format.schema, raw);
     });
 
-    it('takes a base URL override, with or without a trailing slash', () => {
-        assert.equal(buildAnthropicRequest(args({ baseUrl: 'https://proxy.example.com/' })).url, 'https://proxy.example.com/v1/messages');
+    it('ignores a base URL: the key goes to Anthropic and nowhere else', () => {
+        for (const baseUrl of ['https://proxy.example.com/', 'https://evil.example.com/v1', 'http://localhost:9999', '']) {
+            const r = buildAnthropicRequest(args({ baseUrl }));
+            assert.equal(r.url, 'https://api.anthropic.com/v1/messages', baseUrl);
+        }
+    });
+});
+
+describe('the schema limits', () => {
+    it('sends a schema with exactly 24 optional properties: the limit is "at most"', () => {
+        const r = buildAnthropicRequest(args({ schema: withOptional(MAX_OPTIONAL_PROPERTIES) }));
+        assert.equal((r.body.output_config as any).format.schema.required.length, 1);
+    });
+
+    it('refuses one with 25 before anything is sent, saying which limit and by how much', () => {
+        assert.throws(
+            () => buildAnthropicRequest(args({ schema: withOptional(MAX_OPTIONAL_PROPERTIES + 1) })),
+            (err: unknown) => {
+                assert.ok(isAiError(err));
+                assert.equal(err.kind, 'bad_request');
+                assert.equal(err.retryable, false);
+                assert.equal(err.provider, 'anthropic');
+                assert.match(err.message, /25 optional properties/);
+                assert.match(err.message, /at most 24/);
+                assert.match(err.message, /required/);
+                return true;
+            },
+        );
+    });
+
+    it('counts the optional properties of nested objects too', () => {
+        const nested: GeminiSchema = {
+            type: 'OBJECT',
+            properties: { items: { type: 'ARRAY', items: withOptional(13, 0) }, other: withOptional(13, 0) },
+            required: ['items', 'other'],
+        };
+        assert.throws(() => buildAnthropicRequest(args({ schema: nested })), /26 optional properties/);
+    });
+
+    it('refuses more than 16 union-typed properties, which a {json} schema can have', () => {
+        const unions = (n: number) => ({
+            json: {
+                type: 'object',
+                properties: Object.fromEntries([...Array(n).keys()].map((i) => [`f${i}`, { type: ['string', 'null'] }])),
+                required: [...Array(n).keys()].map((i) => `f${i}`),
+                additionalProperties: false,
+            },
+        });
+        assert.doesNotThrow(() => buildAnthropicRequest(args({ schema: unions(MAX_UNION_PROPERTIES) })));
+        assert.throws(
+            () => buildAnthropicRequest(args({ schema: unions(MAX_UNION_PROPERTIES + 1) })),
+            (err: unknown) => isAiError(err) && err.kind === 'bad_request' && /17 union-typed properties/.test(err.message) && /at most 16/.test(err.message) && /single type/.test(err.message),
+        );
+    });
+
+    it('makes the refusal through the adapter without a request', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, message()));
+        await assert.rejects(anthropicAdapter(args({ schema: withOptional(30), fetchImpl })), (err: unknown) => isAiError(err) && err.kind === 'bad_request');
+        assert.equal(calls.length, 0);
     });
 });
 
@@ -145,11 +239,20 @@ describe('model capability checks', () => {
         for (const [model, expected] of Object.entries(table)) assert.equal(supportsEffort(model), expected, model);
     });
 
-    it('keeps xhigh only where it exists', () => {
+    it('keeps xhigh and max only where the effort page lists them', () => {
         assert.equal(effortFor('claude-opus-5-5', 'xhigh'), 'xhigh');
+        assert.equal(effortFor('claude-opus-5-5', 'max'), 'max');
         assert.equal(effortFor('claude-opus-4-7', 'xhigh'), 'xhigh');
+        assert.equal(effortFor('claude-opus-4-8', 'max'), 'max');
         assert.equal(effortFor('claude-sonnet-4-6', 'xhigh'), 'high');
+        assert.equal(effortFor('claude-sonnet-4-6', 'max'), 'max');
+        assert.equal(effortFor('claude-opus-4-6', 'xhigh'), 'high');
+        assert.equal(effortFor('claude-opus-4-6', 'max'), 'max');
+        // Opus 4.5 has neither of the top two levels.
         assert.equal(effortFor('claude-opus-4-5-20251101', 'xhigh'), 'high');
+        assert.equal(effortFor('claude-opus-4-5-20251101', 'max'), 'high');
+        assert.equal(effortFor('claude-opus-4-5', 'high'), 'high');
+        assert.equal(effortFor('claude-haiku-5-5', 'max'), 'max');
         assert.equal(effortFor('claude-haiku-4-5', 'xhigh'), undefined);
     });
 
@@ -163,10 +266,11 @@ describe('model capability checks', () => {
 });
 
 describe('parseAnthropicResponse', () => {
-    it('returns the text of the answer, its usage, the model and a normal stop', () => {
+    it('returns the text of the answer, its usage, what it was billed, the model and a normal stop', () => {
         assert.deepEqual(parseAnthropicResponse(message(), 'claude-opus-5-5'), {
             text: '{"reply":"hi"}',
-            usage: { input_tokens: 120, output_tokens: 34 },
+            usage: { in: 120, out: 34 },
+            billed: [{ model: 'claude-opus-5-5', in: 120, out: 34 }],
             model: 'claude-opus-5-5',
             stopReason: 'end_turn',
         });
@@ -202,7 +306,8 @@ describe('parseAnthropicResponse', () => {
         assert.equal(parsed.stopReason, 'refusal');
         assert.equal(parsed.text, '');
         assert.equal(parsed.detail, 'cyber: This request was declined because it could enable cyber harm.');
-        assert.deepEqual(parsed.usage, { input_tokens: 412, output_tokens: 0 });
+        assert.deepEqual(parsed.usage, { in: 412, out: 0 });
+        assert.deepEqual(parsed.billed, [{ model: 'claude-opus-5-5', in: 412, out: 0 }]);
     });
 
     it('reads a refusal with no category as a refusal all the same', () => {
@@ -223,9 +328,63 @@ describe('parseAnthropicResponse', () => {
     });
 
     it('copes with a body that is missing pieces', () => {
-        assert.deepEqual(parseAnthropicResponse({}, 'm'), { text: '', usage: { input_tokens: 0, output_tokens: 0 }, model: 'm', stopReason: 'end_turn' });
-        assert.deepEqual(parseAnthropicResponse(null, 'm').usage, { input_tokens: 0, output_tokens: 0 });
-        assert.deepEqual(parseAnthropicResponse(message({ usage: { input_tokens: 'many', output_tokens: -3 } }), 'm').usage, { input_tokens: 0, output_tokens: 0 });
+        assert.deepEqual(parseAnthropicResponse({}, 'm'), {
+            text: '', usage: { in: 0, out: 0 }, billed: [{ model: 'm', in: 0, out: 0 }], model: 'm', stopReason: 'end_turn',
+        });
+        assert.deepEqual(parseAnthropicResponse(null, 'm').usage, { in: 0, out: 0 });
+        assert.deepEqual(parseAnthropicResponse(message({ usage: { input_tokens: 'many', output_tokens: -3 } }), 'm').usage, { in: 0, out: 0 });
+    });
+});
+
+describe('what a server-side fallback bills', () => {
+    // The top-level usage of a fallen-back answer is the last attempt only (412 in, 264 out).
+    // The model that declined was billed too, at its own rate, and only `usage.iterations` says so.
+    it('is every iteration, each at its own model', () => {
+        const parsed = parseAnthropicResponse(fellBack(), 'claude-opus-5-5');
+        assert.deepEqual(parsed.billed, [
+            { model: 'claude-opus-5-5', in: 535, out: 0 },
+            { model: 'claude-opus-4-8', in: 412, out: 264 },
+        ]);
+    });
+
+    it('has a usage that is the sum, not the last attempt', () => {
+        assert.deepEqual(parseAnthropicResponse(fellBack(), 'claude-opus-5-5').usage, { in: 947, out: 264 });
+    });
+
+    it('answers with the model that served it', () => {
+        const parsed = parseAnthropicResponse(fellBack(), 'claude-opus-5-5');
+        assert.equal(parsed.model, 'claude-opus-4-8');
+        assert.equal(parsed.stopReason, 'end_turn');
+        assert.equal(parsed.text, '{"reply":"hi"}');
+    });
+
+    it('prices each model at its own rate: the declined attempt at Opus 5.5\'s, the answer at Opus 4.8\'s', () => {
+        const cost = costOf(parseAnthropicResponse(fellBack(), 'claude-opus-5-5').billed, DEFAULT_PRICES);
+        // 535 in at $4, then 412 in at $5 and 264 out at $25, per million.
+        assert.deepEqual(cost.billed.map((b) => b.usd), [0.00214, 0.00866]);
+        assert.equal(cost.usd, 0.0108);
+        assert.equal(cost.priced, true);
+    });
+
+    it('bills a refusal that no model could serve, one entry per model that declined', () => {
+        const parsed = parseAnthropicResponse(fellBack({
+            content: [], stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'bio', explanation: null },
+        }), 'claude-opus-5-5');
+        assert.equal(parsed.stopReason, 'refusal');
+        assert.equal(parsed.billed.length, 2);
+        assert.deepEqual(parsed.usage, { in: 947, out: 264 });
+    });
+
+    it('is the top-level usage as one entry when there are no iterations, or none that make sense', () => {
+        for (const iterations of [undefined, [], [null, 'x', {}, { model: 'a' }]]) {
+            const parsed = parseAnthropicResponse(message({ usage: { input_tokens: 120, output_tokens: 34, iterations } }), 'claude-opus-5-5');
+            assert.deepEqual(parsed.billed, [{ model: 'claude-opus-5-5', in: 120, out: 34 }]);
+        }
+    });
+
+    it('names an iteration that does not say which model by the one that answered', () => {
+        const parsed = parseAnthropicResponse(message({ usage: { input_tokens: 1, output_tokens: 1, iterations: [{ type: 'message', input_tokens: 7, output_tokens: 3 }] } }), 'claude-opus-5-5');
+        assert.deepEqual(parsed.billed, [{ model: 'claude-opus-5-5', in: 7, out: 3 }]);
     });
 });
 
@@ -237,6 +396,26 @@ describe('anthropicAdapter', () => {
         assert.equal(calls[0]!.method, 'POST');
         assert.equal(calls[0]!.headers['content-type'], 'application/json');
         assert.equal(out.text, '{"reply":"hi"}');
-        assert.deepEqual(out.usage, { input_tokens: 120, output_tokens: 34 });
+        assert.deepEqual(out.usage, { in: 120, out: 34 });
+    });
+
+    it('refuses to follow a redirect, which would carry the key\'s header to another address', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, message()));
+        await anthropicAdapter(args({ fetchImpl }));
+        assert.equal(calls[0]!.redirect, 'error');
+    });
+
+    it('sends the request to Anthropic whatever base URL it is given', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, message()));
+        await anthropicAdapter(args({ fetchImpl, baseUrl: 'https://evil.example.com' }));
+        assert.equal(calls[0]!.url, 'https://api.anthropic.com/v1/messages');
+        assert.ok(!calls[0]!.url.includes('evil'));
+    });
+
+    it('returns what a fallen-back call was billed, as the answer', async () => {
+        const { fetchImpl } = stubFetch(jsonResponse(200, fellBack()));
+        const out = await anthropicAdapter(args({ fetchImpl }));
+        assert.equal(out.model, 'claude-opus-4-8');
+        assert.equal(out.billed.length, 2);
     });
 });

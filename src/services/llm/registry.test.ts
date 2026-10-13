@@ -4,9 +4,9 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { adapterFor } from './adapters/index.js';
+import { ADAPTERS, adapterFor } from './adapters/index.js';
 import { isAiError } from './errors.js';
-import { isProviderId, PROVIDER_IDS, PROVIDERS, providerById, providerName } from './registry.js';
+import { checkBaseUrl, isProviderId, PROVIDER_IDS, PROVIDERS, providerById, providerName } from './registry.js';
 
 describe('PROVIDERS', () => {
     it('lists the five launch providers in the order resolveRoute falls back through them', () => {
@@ -78,9 +78,17 @@ describe('providerById, isProviderId and providerName', () => {
 });
 
 describe('adapterFor', () => {
-    it('has adapters for the Anthropic and Gemini families', () => {
-        assert.equal(typeof adapterFor('anthropic', { provider: 'anthropic', model: 'm' }), 'function');
-        assert.equal(typeof adapterFor('gemini', { provider: 'gemini', model: 'm' }), 'function');
+    it('has an adapter for the Anthropic and Gemini families, each shaped {generate, normalize?, listModels?, checkKey?}', () => {
+        for (const [family, provider] of [['anthropic', 'anthropic'], ['gemini', 'gemini']] as const) {
+            const adapter = adapterFor(family, { provider, model: 'm' });
+            assert.equal(typeof adapter.generate, 'function');
+            assert.equal(adapter, ADAPTERS[family]);
+            // P20b fills these in; until then there is nothing to call and nothing pretends there is.
+            assert.equal(adapter.normalize, undefined);
+            assert.equal(adapter.listModels, undefined);
+            assert.equal(adapter.checkKey, undefined);
+        }
+        assert.deepEqual(Object.keys(ADAPTERS).sort(), ['anthropic', 'gemini']);
     });
 
     it('says a family\'s adapter is not implemented yet, as a bad_request, until P20b brings it', () => {
@@ -97,5 +105,44 @@ describe('adapterFor', () => {
                 },
             );
         }
+    });
+});
+
+describe('checkBaseUrl', () => {
+    it('accepts a public https origin and returns it without a trailing slash', () => {
+        assert.deepEqual(checkBaseUrl('https://llm.example.com'), { ok: true, url: 'https://llm.example.com' });
+        assert.deepEqual(checkBaseUrl('  https://llm.example.com/v1/  '), { ok: true, url: 'https://llm.example.com/v1' });
+        assert.deepEqual(checkBaseUrl('https://gateway.example.co.uk:8443/openai/v1'), { ok: true, url: 'https://gateway.example.co.uk:8443/openai/v1' });
+    });
+
+    it('requires https, because the key would cross the network readable over anything else', () => {
+        for (const url of ['http://llm.example.com/v1', 'ftp://llm.example.com', 'file:///etc/passwd', 'javascript:alert(1)', 'llm.example.com/v1']) {
+            const checked = checkBaseUrl(url);
+            assert.equal(checked.ok, false, url);
+        }
+        assert.match((checkBaseUrl('http://llm.example.com') as { reason: string }).reason, /https/);
+    });
+
+    it('refuses addresses that only exist on a private network', () => {
+        const refused = [
+            'https://127.0.0.1/v1', 'https://10.0.0.5', 'https://192.168.1.1:8080', 'https://169.254.169.254/latest/meta-data',
+            'https://[::1]/v1', 'https://[fd00::1]/v1', 'https://localhost/v1', 'https://api.localhost', 'https://printer.local',
+            'https://db.internal/v1', 'https://intranet', 'https://LOCALHOST./v1',
+            // The URL parser spells these as the dotted address before they are checked.
+            'https://2130706433/v1', 'https://0x7f.0.0.1/v1', 'https://0177.0.0.1/v1',
+        ];
+        for (const url of refused) assert.equal(checkBaseUrl(url).ok, false, url);
+    });
+
+    it('refuses credentials, a query and a fragment in the URL', () => {
+        for (const url of ['https://user:pass@llm.example.com', 'https://token@llm.example.com', 'https://llm.example.com/v1?key=abc', 'https://llm.example.com/v1#frag']) {
+            assert.equal(checkBaseUrl(url).ok, false, url);
+        }
+    });
+
+    it('says what is wrong, so the settings card can show it', () => {
+        assert.deepEqual(checkBaseUrl('not a url'), { ok: false, reason: 'is not a valid URL' });
+        assert.match((checkBaseUrl('https://10.0.0.5') as { reason: string }).reason, /public address/);
+        assert.match((checkBaseUrl('https://u:p@llm.example.com') as { reason: string }).reason, /username or password/);
     });
 });

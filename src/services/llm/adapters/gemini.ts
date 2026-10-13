@@ -4,10 +4,11 @@
  * The request mirrors `callGemini` (studio/generate.ts), which has been answering in production:
  * `systemInstruction`, `contents`, and `generationConfig` with `responseMimeType:
  * 'application/json'` plus `responseSchema`. The key travels in `x-goog-api-key`, never the query
- * string, which lands in logs.
+ * string, which lands in logs. The base URL is Google's, always: an operator's URL would be
+ * somewhere to send the key.
  *
- * Checked against ai.google.dev and Google's SDK references on 2026-10-13, with three findings
- * that shape the code:
+ * Checked against ai.google.dev and Google's SDK references on 2026-10-13, with findings that
+ * shape the code:
  *
  *   - `responseJsonSchema` takes plain JSON Schema (unions, `additionalProperties`, nullable type
  *     arrays) where `responseSchema` takes only Gemini's OpenAPI-style subset. So a `GeminiSchema`
@@ -15,17 +16,24 @@
  *     `responseJsonSchema`. Google now labels `responseSchema` and `responseMimeType` deprecated
  *     in favour of a `responseFormat` block, but they still work and `callGemini` depends on them;
  *     moving both callers together is a change for a day when they stop.
- *   - Gemini 3 takes `thinkingConfig.thinkingLevel`; `thinkingBudget` is accepted there only for
- *     compatibility, and sending both is a 400. Gemini 2.5 takes `thinkingBudget` and rejects a
- *     level. Older models and names this code does not recognise get no `thinkingConfig` at all,
- *     which is always safe: the model thinks as it does by default.
+ *   - Thinking (generate-content/thinking): "Gemini 2.5 series models don't support
+ *     `thinkingLevel`; use `thinkingBudget` instead", and for Gemini 3 `thinkingLevel` is the
+ *     parameter while `thinkingBudget` is "accepted for backwards compatibility" and may perform
+ *     unexpectedly. The Gemini 3 guide adds that sending both in one request is a 400. So Gemini 3
+ *     gets a level, 2.5 gets a budget, and older models and names this code does not recognise get
+ *     no `thinkingConfig` at all, which is always safe: the model thinks as it does by default.
+ *   - Which levels a Gemini 3 model takes differs: 3.8 Flash refuses `minimal`, 3.1 Pro has no
+ *     `minimal`, and the first Pro preview (`gemini-3-pro-preview`) takes only `low` and `high`
+ *     (its row in the thinking-levels table of the Interactions API page; the generateContent
+ *     page omits that model). `minimal` is never sent, and `medium` is raised to `high` there.
  *   - `maxOutputTokens` includes thinking, and `usageMetadata` counts thinking apart from the
  *     answer (`thoughtsTokenCount`), billed as output, so the two are added.
  */
-import { postJson } from './post.js';
+import { totalUsage } from '../cost.js';
+import { withoutArrayBounds } from '../geminiSchema.js';
 import { isRawJsonSchema } from '../schema.js';
-import { withoutArrayBounds } from '../../studio/generate.js';
-import type { Adapter, AdapterArgs, AdapterResult, Effort, StopReason } from '../types.js';
+import type { Adapter, AdapterArgs, AdapterResult, Billed, Effort, FamilyAdapter, StopReason } from '../types.js';
+import { postJson } from './post.js';
 
 export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -36,7 +44,7 @@ export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta
  */
 export const THINKING_BUDGETS: Readonly<Record<Effort, number>> = { low: 1024, medium: 4096, high: 8192, xhigh: 16384, max: 24576 };
 
-/** Effort as a Gemini 3 level. `minimal` is never sent (3.8 Flash and 3.1 Pro refuse it), nor is anything above `high`. */
+/** Effort as a Gemini 3 level. `minimal` is never sent (3.8 Flash refuses it), nor is anything above `high`. */
 export const THINKING_LEVELS: Readonly<Record<Effort, 'low' | 'medium' | 'high'>> = {
     low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high',
 };
@@ -44,12 +52,18 @@ export const THINKING_LEVELS: Readonly<Record<Effort, 'low' | 'medium' | 'high'>
 /** A budget leaves at least half of `maxOutputTokens` for the answer: a call is never retried, and one that thinks itself out of room is wasted. */
 const MIN_BUDGET = 512;
 
+/** The level for this Gemini 3 model: `gemini-3-pro-preview` has no `medium`, so it gets `high`, which is also its default. */
+function levelFor(model: string, effort: Effort): 'low' | 'medium' | 'high' {
+    const level = THINKING_LEVELS[effort];
+    return level === 'medium' && /^(?:models\/)?gemini-3-pro(?:-|$)/i.test(model) ? 'high' : level;
+}
+
 /** `thinkingConfig` for this model and effort, or undefined where there is nothing safe to send. */
 export function thinkingConfigFor(model: string, effort: Effort, maxTokens: number): Record<string, unknown> | undefined {
     const m = model.toLowerCase().match(/^(?:models\/)?gemini-(\d+)(?:\.(\d+))?/);
     if (!m) return undefined;
     const major = Number(m[1]);
-    if (major >= 3) return { thinkingLevel: THINKING_LEVELS[effort] };
+    if (major >= 3) return { thinkingLevel: levelFor(model, effort) };
     if (major === 2 && m[2] === '5') {
         return { thinkingBudget: Math.max(MIN_BUDGET, Math.min(THINKING_BUDGETS[effort], Math.floor(maxTokens / 2))) };
     }
@@ -61,7 +75,7 @@ export function buildGeminiRequest(a: AdapterArgs): { url: string; headers: Reco
     const thinking = thinkingConfigFor(a.model, a.effort, a.maxTokens);
     const model = a.model.replace(/^models\//, '');
     return {
-        url: `${(a.baseUrl || GEMINI_BASE_URL).replace(/\/+$/, '')}/models/${encodeURIComponent(model)}:generateContent`,
+        url: `${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:generateContent`,
         // The key is here and nowhere else: not in the URL, not in the body.
         headers: { 'x-goog-api-key': a.apiKey },
         body: {
@@ -103,18 +117,10 @@ export function parseGeminiResponse(data: any, asked: string): AdapterResult {
     const detail = blockReason ? `blocked: ${blockReason}` : finish && finish !== 'STOP' ? `finishReason: ${finish}` : undefined;
 
     const usage = data?.usageMetadata;
-    return {
-        text,
-        usage: {
-            input_tokens: count(usage?.promptTokenCount),
-            // Thinking is billed as output and counted apart from the candidates.
-            output_tokens: count(usage?.candidatesTokenCount) + count(usage?.thoughtsTokenCount),
-        },
-        // The model asked for: `modelVersion` can carry a build suffix that no price table has.
-        model: asked,
-        stopReason,
-        ...(detail ? { detail } : {}),
-    };
+    // The model asked for: `modelVersion` can carry a build suffix that no price table has.
+    // Thinking is billed as output and counted apart from the candidates.
+    const billed: Billed[] = [{ model: asked, in: count(usage?.promptTokenCount), out: count(usage?.candidatesTokenCount) + count(usage?.thoughtsTokenCount) }];
+    return { text, usage: totalUsage(billed), billed, model: asked, stopReason, ...(detail ? { detail } : {}) };
 }
 
 export const geminiAdapter: Adapter = async (a) => {
@@ -124,3 +130,5 @@ export const geminiAdapter: Adapter = async (a) => {
     });
     return parseGeminiResponse(data, a.model);
 };
+
+export const geminiFamily: FamilyAdapter = { generate: geminiAdapter };

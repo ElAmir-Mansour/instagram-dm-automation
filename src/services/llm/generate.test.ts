@@ -5,12 +5,17 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
-import type { GeminiSchema } from '../studio/generate.js';
-import { AiError, isAiError, type AiErrorKind } from './errors.js';
-import { callProvider, generateJson, parseModelJson, setLlmCaller, type GenerateJsonArgs, type GenerateJsonResult } from './generate.js';
+import { log, setLogSink } from '../../utils/log.js';
+import type { GeminiSchema } from './geminiSchema.js';
+import type { FamilyAdapters } from './adapters/index.js';
+import { costOf, DEFAULT_PRICES } from './cost.js';
+import { aiErrorLogFields, AiError, isAiError, type AiErrorKind } from './errors.js';
+import {
+    callLlm, generateJson, MAX_TIMEOUT_MS, parseModelJson, setLlmCaller, type GenerateJsonArgs, type GenerateJsonResult,
+} from './generate.js';
 import type { ProviderId } from './registry.js';
 import { hangingFetch, jsonResponse, stubFetch } from './testFetch.js';
-import type { FetchLike } from './types.js';
+import type { AdapterResult, FamilyAdapter, FetchLike } from './types.js';
 
 const SCHEMA: GeminiSchema = {
     type: 'OBJECT',
@@ -26,10 +31,18 @@ interface Fixture {
     key: string;
     /** The one header the key may travel in. */
     keyHeader: string;
+    /** The origin every request must go to, whatever base URL the caller offers. */
+    origin: string;
     text(text: string, usage?: { input: number; output: number }): Response;
     refusal(): Response;
     cutOff(): Response;
     error(status: number, message: string): Response;
+    /** A 429 for a limit that lifts by itself. `retryAfter` is the header, where the provider has one. */
+    rateLimited(retryAfter?: string): Response;
+    /** How long a caller is told to wait after `rateLimited()` with the header `retryAfterHeader`, or without one. */
+    waitMs: { withHeader: number; withoutHeader: number | undefined };
+    /** A 429 for a limit that does not: a daily quota, the monthly spend cap. */
+    quotaSpent(): Response;
 }
 
 const ANTHROPIC_ERROR_TYPES: Record<number, string> = {
@@ -39,12 +52,19 @@ const ANTHROPIC_ERROR_TYPES: Record<number, string> = {
 const GEMINI_STATUSES: Record<number, string> = {
     400: 'INVALID_ARGUMENT', 403: 'PERMISSION_DENIED', 404: 'NOT_FOUND', 429: 'RESOURCE_EXHAUSTED', 500: 'INTERNAL', 503: 'UNAVAILABLE',
 };
+// The sentence is the same for Google's per-minute limit and its daily one; only `details` differs.
+const GEMINI_QUOTA_WORDS = 'You exceeded your current quota, please check your plan and billing details.';
+const geminiQuota = (quotaId: string, retryDelay: string) => [
+    { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId, quotaValue: '20' }] },
+    { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay },
+];
 
 const anthropic: Fixture = {
     provider: 'anthropic',
     model: 'claude-opus-5-5',
     key: 'sk-ant-api03-Zk3x9QvR7mT2pL8wNd5yHc1bVf4gJa6sUe0oIiXtKrMq',
     keyHeader: 'x-api-key',
+    origin: 'https://api.anthropic.com/',
     text: (text, usage = { input: 120, output: 34 }) => jsonResponse(200, {
         id: 'msg_01', type: 'message', role: 'assistant', model: 'claude-opus-5-5', stop_reason: 'end_turn', stop_details: null,
         content: [{ type: 'text', text }], usage: { input_tokens: usage.input, output_tokens: usage.output },
@@ -58,6 +78,20 @@ const anthropic: Fixture = {
         content: [{ type: 'text', text: '{"reply":"cut o' }], usage: { input_tokens: 100, output_tokens: 1000 },
     }),
     error: (status, message) => jsonResponse(status, { type: 'error', error: { type: ANTHROPIC_ERROR_TYPES[status] ?? 'api_error', message }, request_id: 'req_011CSHoEeqs5C35K2UUqR7Fy' }),
+    rateLimited: (retryAfter) => jsonResponse(
+        429,
+        { type: 'error', error: { type: 'rate_limit_error', message: "This request would exceed your organization's rate limit of 30,000 input tokens per minute." } },
+        retryAfter ? { 'retry-after': retryAfter } : {},
+    ),
+    waitMs: { withHeader: 30_000, withoutHeader: undefined },
+    quotaSpent: () => jsonResponse(429, {
+        type: 'error',
+        error: {
+            type: 'rate_limit_error',
+            message: 'You have reached your API usage limits. You will regain access on 2026-11-01 at 00:00 UTC.',
+            details: { error_code: 'enforced_spend_limit_reached' },
+        },
+    }),
 };
 
 const gemini: Fixture = {
@@ -65,6 +99,7 @@ const gemini: Fixture = {
     model: 'gemini-3.8-flash',
     key: 'AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY',
     keyHeader: 'x-goog-api-key',
+    origin: 'https://generativelanguage.googleapis.com/',
     text: (text, usage = { input: 90, output: 20 }) => jsonResponse(200, {
         candidates: [{ content: { role: 'model', parts: [{ text }] }, finishReason: 'STOP' }],
         usageMetadata: { promptTokenCount: usage.input, candidatesTokenCount: usage.output, thoughtsTokenCount: 0 },
@@ -75,6 +110,16 @@ const gemini: Fixture = {
         usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 600, thoughtsTokenCount: 400 },
     }),
     error: (status, message) => jsonResponse(status, { error: { code: status, message, status: GEMINI_STATUSES[status] ?? 'UNKNOWN' } }),
+    rateLimited: (retryAfter) => jsonResponse(
+        429,
+        { error: { code: 429, message: GEMINI_QUOTA_WORDS, status: 'RESOURCE_EXHAUSTED', details: geminiQuota('GenerateContentInputTokensPerModelPerMinute-FreeTier', '33s') } },
+        retryAfter ? { 'retry-after': retryAfter } : {},
+    ),
+    // Google sends no header; the wait is in RetryInfo.
+    waitMs: { withHeader: 30_000, withoutHeader: 33_000 },
+    quotaSpent: () => jsonResponse(429, {
+        error: { code: 429, message: GEMINI_QUOTA_WORDS, status: 'RESOURCE_EXHAUSTED', details: geminiQuota('GenerateRequestsPerDayPerProjectPerModel-FreeTier', '1s') },
+    }),
 };
 
 const call = (fx: Fixture, fetchImpl: FetchLike, over: Partial<GenerateJsonArgs> = {}) =>
@@ -97,14 +142,18 @@ async function rejection(promise: Promise<unknown>): Promise<AiError> {
 const printed = (err: AiError): string =>
     [JSON.stringify(err), String(err), err.message, err.stack ?? '', JSON.stringify(Object.getOwnPropertyNames(err).map((k) => (err as any)[k]))].join('\n');
 
+/** What Node's fetch throws for `redirect: 'error'`. */
+const redirectRefusal = () => Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') });
+
 for (const fx of [anthropic, gemini]) {
     describe(`generateJson (${fx.provider})`, () => {
         describe('a structured answer', () => {
-            it('returns the parsed JSON with usage, model, provider, stop reason and timing', async () => {
+            it('returns the parsed JSON with usage, billing, model, provider, stop reason and timing', async () => {
                 const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER), { input: 150, output: 40 }));
                 const out = await call(fx, fetchImpl);
                 assert.deepEqual(out.json, ANSWER);
-                assert.deepEqual(out.usage, { input_tokens: 150, output_tokens: 40 });
+                assert.deepEqual(out.usage, { in: 150, out: 40 });
+                assert.deepEqual(out.billed, [{ model: fx.model, in: 150, out: 40 }]);
                 assert.equal(out.model, fx.model);
                 assert.equal(out.provider, fx.provider);
                 assert.equal(out.stopReason, 'end_turn');
@@ -126,7 +175,7 @@ for (const fx of [anthropic, gemini]) {
             });
         });
 
-        describe('the key', () => {
+        describe('the key and where it goes', () => {
             it('travels in exactly one request header, and in no URL or body', async () => {
                 const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER)));
                 await call(fx, fetchImpl);
@@ -142,6 +191,21 @@ for (const fx of [anthropic, gemini]) {
                 const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER)));
                 await call(fx, fetchImpl, { apiKey: `  ${fx.key}\n` });
                 assert.equal(calls[0]!.headers[fx.keyHeader], fx.key);
+            });
+
+            it('goes to the provider\'s own address, whatever base URL the caller offers', async () => {
+                for (const baseUrl of ['https://evil.example.com', 'https://evil.example.com/v1/', 'http://127.0.0.1:9', 'not a url']) {
+                    const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER)));
+                    await call(fx, fetchImpl, { baseUrl });
+                    assert.ok(calls[0]!.url.startsWith(fx.origin), `${baseUrl}: ${calls[0]!.url}`);
+                    assert.ok(!calls[0]!.url.includes('evil'), baseUrl);
+                }
+            });
+
+            it('is sent with a request that refuses redirects, which would carry the header to wherever it pointed', async () => {
+                const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER)));
+                await call(fx, fetchImpl);
+                assert.equal(calls[0]!.redirect, 'error');
             });
 
             it('is nowhere in an error, even when the provider echoes it back', async () => {
@@ -167,14 +231,31 @@ for (const fx of [anthropic, gemini]) {
             });
         });
 
+        describe('a redirect', () => {
+            it('is bad_request, final, and not retried, when fetch refuses to follow it', async () => {
+                const { fetchImpl, calls } = stubFetch(redirectRefusal(), fx.text(JSON.stringify(ANSWER)));
+                const err = await rejection(call(fx, fetchImpl));
+                assert.equal(err.kind, 'bad_request');
+                assert.equal(err.retryable, false);
+                assert.match(err.message, /redirect/);
+                assert.equal(calls.length, 1);
+            });
+
+            it('is bad_request too when a stand-in for fetch hands back a 307', async () => {
+                const { fetchImpl, calls } = stubFetch(new Response('', { status: 307, headers: { location: 'https://evil.example.com/' } }), fx.text(JSON.stringify(ANSWER)));
+                const err = await rejection(call(fx, fetchImpl));
+                assert.equal(err.kind, 'bad_request');
+                assert.equal(err.status, 307);
+                assert.equal(calls.length, 1);
+            });
+        });
+
         describe('why a call fails', () => {
             // [what the provider sent, what it is]. Each is one request: the library never retries.
             const statuses: Array<[number, string, AiErrorKind]> = [
                 [401, 'bad credentials', 'auth'],
                 [403, 'permission denied', 'auth'],
                 [404, 'model not found', 'bad_request'],
-                [429, 'Too many requests, slow down. Rate limit reached.', 'rate'],
-                [429, 'You exceeded your current quota, please check your plan and billing details.', 'quota'],
                 [500, 'internal error', 'server'],
                 [503, 'the model is overloaded', 'server'],
                 [529, 'overloaded', 'server'],
@@ -194,12 +275,40 @@ for (const fx of [anthropic, gemini]) {
                 });
             }
 
+            it('a 429 for a limit that lifts by itself is rate: retryable, and says how long to wait', async () => {
+                const { fetchImpl, calls } = stubFetch(fx.rateLimited(), fx.text(JSON.stringify(ANSWER)));
+                const err = await rejection(call(fx, fetchImpl));
+                assert.equal(err.kind, 'rate');
+                assert.equal(err.status, 429);
+                assert.equal(err.retryable, true);
+                assert.equal(err.retryAfterMs, fx.waitMs.withoutHeader);
+                assert.equal(calls.length, 1);
+            });
+
+            it('takes the wait from retry-after when the provider sends one', async () => {
+                const { fetchImpl } = stubFetch(fx.rateLimited('30'));
+                const err = await rejection(call(fx, fetchImpl));
+                assert.equal(err.kind, 'rate');
+                assert.equal(err.retryAfterMs, fx.waitMs.withHeader);
+            });
+
+            it('a 429 for a limit that does not lift by itself is quota: final, with no wait', async () => {
+                const { fetchImpl, calls } = stubFetch(fx.quotaSpent(), fx.text(JSON.stringify(ANSWER)));
+                const err = await rejection(call(fx, fetchImpl));
+                assert.equal(err.kind, 'quota');
+                assert.equal(err.status, 429);
+                assert.equal(err.retryable, false);
+                assert.equal(err.retryAfterMs, undefined);
+                assert.equal(calls.length, 1);
+            });
+
             it('a refusal is refusal: final, from a 200, with the tokens it was billed', async () => {
                 const { fetchImpl, calls } = stubFetch(fx.refusal());
                 const err = await rejection(call(fx, fetchImpl));
                 assert.equal(err.kind, 'refusal');
                 assert.equal(err.retryable, false);
-                assert.equal(err.usage?.input_tokens, 412);
+                assert.equal(err.usage?.in, 412);
+                assert.deepEqual(err.billed, [{ model: fx.model, in: 412, out: 0 }]);
                 assert.match(err.message, /declined/);
                 assert.equal(calls.length, 1);
             });
@@ -210,7 +319,8 @@ for (const fx of [anthropic, gemini]) {
                 assert.equal(err.kind, 'max_tokens');
                 assert.equal(err.retryable, false);
                 assert.match(err.message, /1000/);
-                assert.ok((err.usage?.output_tokens ?? 0) >= 600, 'the billed tokens travel with the error');
+                assert.ok((err.usage?.out ?? 0) >= 600, 'the billed tokens travel with the error');
+                assert.equal(err.billed?.length, 1);
                 assert.equal(calls.length, 1);
             });
 
@@ -331,18 +441,51 @@ describe('generateJson (anthropic specifics)', () => {
         assert.equal(second.calls[0]!.body.output_config.effort, 'low');
     });
 
-    it('reports the model that answered when the server-side fallback moved the request', async () => {
-        const { fetchImpl } = stubFetch(jsonResponse(200, {
-            id: 'msg_04', type: 'message', role: 'assistant', model: 'claude-opus-4-8', stop_reason: 'end_turn', stop_details: null,
-            content: [
-                { type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' } },
-                { type: 'text', text: JSON.stringify(ANSWER) },
+    // Opus 5.5 declined and Opus 4.8 answered. The top-level usage is the last attempt only.
+    const fellBack = (over: Record<string, unknown> = {}) => jsonResponse(200, {
+        id: 'msg_04', type: 'message', role: 'assistant', model: 'claude-opus-4-8', stop_reason: 'end_turn', stop_details: null,
+        content: [
+            { type: 'fallback', from: { model: 'claude-opus-5-5' }, to: { model: 'claude-opus-4-8' } },
+            { type: 'text', text: JSON.stringify(ANSWER) },
+        ],
+        usage: {
+            input_tokens: 412, output_tokens: 264,
+            iterations: [
+                { type: 'message', model: 'claude-opus-5-5', input_tokens: 535, output_tokens: 0 },
+                { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 412, output_tokens: 264 },
             ],
-            usage: { input_tokens: 412, output_tokens: 264 },
-        }));
+        },
+        ...over,
+    });
+
+    it('reports the model that answered when the server-side fallback moved the request', async () => {
+        const { fetchImpl } = stubFetch(fellBack());
         const out = await call(anthropic, fetchImpl);
         assert.equal(out.model, 'claude-opus-4-8');
         assert.deepEqual(out.json, ANSWER);
+    });
+
+    it('bills a fallen-back call for every model that ran, so the declined attempt is not free', async () => {
+        const { fetchImpl } = stubFetch(fellBack());
+        const out = await call(anthropic, fetchImpl);
+        assert.deepEqual(out.billed, [
+            { model: 'claude-opus-5-5', in: 535, out: 0 },
+            { model: 'claude-opus-4-8', in: 412, out: 264 },
+        ]);
+        assert.deepEqual(out.usage, { in: 947, out: 264 });
+        const cost = costOf(out.billed, DEFAULT_PRICES);
+        assert.equal(cost.usd, 0.0108);
+        assert.equal(cost.priced, true);
+    });
+
+    it('bills a fallen-back call that then fails too: the error carries every entry', async () => {
+        const { fetchImpl } = stubFetch(fellBack({
+            content: [], stop_reason: 'refusal', stop_details: { type: 'refusal', category: 'bio', explanation: null },
+        }));
+        const err = await rejection(call(anthropic, fetchImpl));
+        assert.equal(err.kind, 'refusal');
+        assert.equal(err.billed?.length, 2);
+        assert.deepEqual(err.usage, { in: 947, out: 264 });
     });
 
     it('maps the errors only Anthropic sends: 402 billing, a 400 for an empty balance, and an overload', async () => {
@@ -356,6 +499,18 @@ describe('generateJson (anthropic specifics)', () => {
             const { fetchImpl } = stubFetch(anthropic.error(status, message));
             assert.equal((await rejection(call(anthropic, fetchImpl))).kind, kind, `${status} ${message}`);
         }
+    });
+
+    it('refuses a schema Anthropic would call too complex, before any request', async () => {
+        const tooMany: GeminiSchema = {
+            type: 'OBJECT',
+            properties: Object.fromEntries([...Array(30).keys()].map((i) => [`f${i}`, { type: 'STRING' as const }])),
+        };
+        const { fetchImpl, calls } = stubFetch(anthropic.text(JSON.stringify(ANSWER)));
+        const err = await rejection(call(anthropic, fetchImpl, { schema: tooMany }));
+        assert.equal(err.kind, 'bad_request');
+        assert.match(err.message, /30 optional properties/);
+        assert.equal(calls.length, 0);
     });
 });
 
@@ -373,6 +528,16 @@ describe('generateJson (gemini specifics)', () => {
         assert.equal((await rejection(call(gemini, fetchImpl))).kind, 'bad_request');
     });
 
+    it('tells a per-minute 429 from a per-day one although both say "You exceeded your current quota"', async () => {
+        const perMinute = await rejection(call(gemini, stubFetch(gemini.rateLimited()).fetchImpl));
+        const perDay = await rejection(call(gemini, stubFetch(gemini.quotaSpent()).fetchImpl));
+        assert.equal(perMinute.message, perDay.message);
+        assert.equal(perMinute.kind, 'rate');
+        assert.equal(perMinute.retryable, true);
+        assert.equal(perDay.kind, 'quota');
+        assert.equal(perDay.retryable, false);
+    });
+
     it('reads a blocked prompt as a refusal', async () => {
         const { fetchImpl } = stubFetch(jsonResponse(200, { promptFeedback: { blockReason: 'SAFETY' }, usageMetadata: { promptTokenCount: 30 } }));
         const err = await rejection(call(gemini, fetchImpl));
@@ -385,7 +550,9 @@ describe('generateJson (gemini specifics)', () => {
             candidates: [{ content: { parts: [{ text: JSON.stringify(ANSWER) }] }, finishReason: 'STOP' }],
             usageMetadata: { promptTokenCount: 90, candidatesTokenCount: 20, thoughtsTokenCount: 300 },
         }));
-        assert.deepEqual((await call(gemini, fetchImpl)).usage, { input_tokens: 90, output_tokens: 320 });
+        const out = await call(gemini, fetchImpl);
+        assert.deepEqual(out.usage, { in: 90, out: 320 });
+        assert.deepEqual(out.billed, [{ model: 'gemini-3.8-flash', in: 90, out: 320 }]);
     });
 });
 
@@ -420,11 +587,300 @@ describe('generateJson before any request is made', () => {
         }
     });
 
-    it('is bad_request for Custom without a base URL, which has none of its own', async () => {
-        const { fetchImpl } = stubFetch();
-        const err = await rejection(call(anthropic, fetchImpl, { provider: 'custom', apiKey: '', model: 'm' }));
-        assert.equal(err.kind, 'bad_request');
-        assert.match(err.message, /no base URL/);
+    describe('Custom\'s base URL, the one address someone types', () => {
+        const custom = (baseUrl: string | undefined) => {
+            const { fetchImpl, calls } = stubFetch();
+            return { calls, result: rejection(call(anthropic, fetchImpl, { provider: 'custom', apiKey: '', model: 'm', baseUrl })) };
+        };
+
+        it('is required: Custom has none of its own', async () => {
+            for (const baseUrl of [undefined, '', '   ']) {
+                const { calls, result } = custom(baseUrl);
+                const err = await result;
+                assert.equal(err.kind, 'bad_request');
+                assert.match(err.message, /no base URL/);
+                assert.equal(calls.length, 0);
+            }
+        });
+
+        it('must be https', async () => {
+            const { calls, result } = custom('http://llm.example.com/v1');
+            const err = await result;
+            assert.equal(err.kind, 'bad_request');
+            assert.equal(err.retryable, false);
+            assert.match(err.message, /base URL must start with https/);
+            assert.equal(calls.length, 0);
+        });
+
+        it('must be a public address: no IP literal, localhost, .local or .internal, however spelled', async () => {
+            for (const url of ['https://127.0.0.1/v1', 'https://169.254.169.254/', 'https://[::1]/v1', 'https://localhost:8080', 'https://box.local', 'https://db.internal', 'https://2130706433/']) {
+                const { calls, result } = custom(url);
+                const err = await result;
+                assert.equal(err.kind, 'bad_request', url);
+                assert.match(err.message, /public address/, url);
+                assert.equal(calls.length, 0);
+            }
+        });
+
+        it('may not carry credentials or a query', async () => {
+            for (const url of ['https://user:secret@llm.example.com', 'https://llm.example.com/v1?key=abc']) {
+                const err = await custom(url).result;
+                assert.equal(err.kind, 'bad_request', url);
+                assert.ok(!printed(err).includes('secret'), url);
+            }
+        });
+
+        it('is ignored, however bad, for a provider that has its own address', async () => {
+            for (const fx of [anthropic, gemini]) {
+                const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER)));
+                const out = await call(fx, fetchImpl, { baseUrl: 'http://10.0.0.5/not-a-url-we-would-allow' });
+                assert.deepEqual(out.json, ANSWER);
+                assert.ok(calls[0]!.url.startsWith(fx.origin));
+            }
+        });
+    });
+
+    describe('the limits it is given', () => {
+        const rejects = async (over: Partial<GenerateJsonArgs>, pattern: RegExp) => {
+            const { fetchImpl, calls } = stubFetch(anthropic.text(JSON.stringify(ANSWER)));
+            const err = await rejection(call(anthropic, fetchImpl, over));
+            assert.equal(err.kind, 'bad_request', JSON.stringify(over));
+            assert.equal(err.retryable, false);
+            assert.match(err.message, pattern);
+            assert.equal(calls.length, 0, 'nothing is sent for a limit that means nothing');
+        };
+
+        it('needs timeoutMs to be a positive whole number', async () => {
+            for (const timeoutMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, '5000', null, undefined]) {
+                await rejects({ timeoutMs: timeoutMs as number }, /timeoutMs must be a positive whole number/);
+            }
+        });
+
+        it('needs maxTokens to be a positive whole number', async () => {
+            for (const maxTokens of [0, -5, 100.5, Number.NaN, Number.POSITIVE_INFINITY, '1000', null, undefined]) {
+                await rejects({ maxTokens: maxTokens as number }, /maxTokens must be a positive whole number/);
+            }
+        });
+
+        it('checks them before it looks for a key or a provider', async () => {
+            const { fetchImpl } = stubFetch();
+            assert.match((await rejection(call(anthropic, fetchImpl, { apiKey: '', timeoutMs: 0 }))).message, /timeoutMs/);
+            assert.match((await rejection(call(anthropic, fetchImpl, { provider: 'groq' as ProviderId, maxTokens: 0 }))).message, /maxTokens/);
+        });
+
+        describe('and caps the deadline', () => {
+            const originalTimeout = AbortSignal.timeout;
+            afterEach(() => {
+                AbortSignal.timeout = originalTimeout;
+            });
+            const deadlineFor = async (timeoutMs: number) => {
+                const seen: number[] = [];
+                AbortSignal.timeout = (ms: number) => {
+                    seen.push(ms);
+                    return originalTimeout.call(AbortSignal, ms);
+                };
+                await call(anthropic, stubFetch(anthropic.text(JSON.stringify(ANSWER))).fetchImpl, { timeoutMs });
+                return seen;
+            };
+
+            it('at 150 seconds, however long a caller asks for', async () => {
+                assert.equal(MAX_TIMEOUT_MS, 150_000);
+                assert.deepEqual(await deadlineFor(10_000_000), [150_000]);
+                assert.deepEqual(await deadlineFor(150_001), [150_000]);
+            });
+
+            it('and leaves a shorter one alone', async () => {
+                assert.deepEqual(await deadlineFor(150_000), [150_000]);
+                assert.deepEqual(await deadlineFor(8000), [8000]);
+                assert.deepEqual(await deadlineFor(1), [1]);
+            });
+        });
+    });
+});
+
+describe('callLlm with an adapter of its own', () => {
+    const args: GenerateJsonArgs = {
+        provider: 'anthropic', apiKey: 'sk-ant-test-0123456789abcdef', model: 'claude-opus-5-5', system: 's', user: 'u',
+        schema: SCHEMA, maxTokens: 100, timeoutMs: 1000,
+    };
+    const answering = (text: string): AdapterResult => ({
+        text, usage: { in: 1, out: 1 }, billed: [{ model: 'claude-opus-5-5', in: 1, out: 1 }], model: 'claude-opus-5-5', stopReason: 'end_turn',
+    });
+    const family = (generate: FamilyAdapter['generate'], normalize?: FamilyAdapter['normalize']): FamilyAdapters => ({ anthropic: { generate, ...(normalize ? { normalize } : {}) } });
+
+    describe('the base URL it hands the adapter', () => {
+        /** An adapter that records what it was given. */
+        const recording = () => {
+            const seen: Array<string | undefined> = [];
+            const generate: FamilyAdapter['generate'] = async (a) => {
+                seen.push(a.baseUrl);
+                return answering('{"reply":"hi"}');
+            };
+            return { seen, generate };
+        };
+
+        it('is none, for a provider whose registry entry has an address of its own', async () => {
+            const { seen, generate } = recording();
+            await callLlm({ ...args, baseUrl: 'https://evil.example.com/v1' }, { anthropic: { generate } });
+            await callLlm({ ...args, provider: 'gemini', model: 'gemini-3.8-flash', baseUrl: 'https://evil.example.com/v1' }, { gemini: { generate } });
+            assert.deepEqual(seen, [undefined, undefined]);
+        });
+
+        it('is Custom\'s own, checked and tidied: https, public, without the trailing slash', async () => {
+            const { seen, generate } = recording();
+            const custom = { ...args, provider: 'custom' as const, apiKey: '', model: 'llama-4' };
+            await callLlm({ ...custom, baseUrl: '  https://llm.example.com/v1/  ' }, { chat_completions: { generate } });
+            assert.deepEqual(seen, ['https://llm.example.com/v1']);
+            // And an address that fails the check never reaches the adapter.
+            await rejection(callLlm({ ...custom, baseUrl: 'http://llm.example.com/v1' }, { chat_completions: { generate } }));
+            await rejection(callLlm({ ...custom, baseUrl: 'https://10.0.0.5/v1' }, { chat_completions: { generate } }));
+            assert.equal(seen.length, 1);
+        });
+    });
+
+    describe('an unforeseen failure', () => {
+        it('is bad_request, not retryable: asking again would hit the same bug', async () => {
+            const err = await rejection(callLlm(args, family(async () => { throw new TypeError('x.map is not a function'); })));
+            assert.equal(err.kind, 'bad_request');
+            assert.equal(err.retryable, false);
+            assert.match(err.message, /Unexpected failure: x\.map is not a function/);
+        });
+
+        it('is scrubbed of the key like every other message', async () => {
+            const err = await rejection(callLlm(args, family(async () => { throw new Error(`boom with ${args.apiKey} inside`); })));
+            assert.ok(!printed(err).includes(args.apiKey));
+        });
+
+        it('is still timeout when it is a deadline', async () => {
+            const aborted = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+            const err = await rejection(callLlm(args, family(async () => { throw aborted; })));
+            assert.equal(err.kind, 'timeout');
+            assert.equal(err.retryable, true);
+        });
+
+        it('leaves an AiError the adapter threw exactly as it was', async () => {
+            const own = new AiError({ kind: 'quota', provider: 'anthropic', model: 'm', status: 429, message: 'spent' });
+            assert.equal(await rejection(callLlm(args, family(async () => { throw own; }))), own);
+        });
+    });
+
+    describe('normalize, the family\'s hook after the answer is parsed', () => {
+        it('is applied to the parsed answer, and its result is what is returned', async () => {
+            const seen: unknown[] = [];
+            const out = await callLlm(args, family(
+                async () => answering('{"reply":"hi","score":null}'),
+                (json, schema) => {
+                    seen.push(schema);
+                    const { score, ...rest } = json as Record<string, unknown>;
+                    return score === null ? rest : json;
+                },
+            ));
+            assert.deepEqual(out.json, { reply: 'hi' });
+            assert.deepEqual(seen, [SCHEMA]);
+        });
+
+        it('runs before the shape is judged, so it can repair the top level', async () => {
+            // The family hands back a bare list; its hook wraps it the way the schema asks.
+            const out = await callLlm(args, family(async () => answering('[{"reply":"hi"}]'), (json) => ({ reply: (json as Array<{ reply: string }>)[0]!.reply })));
+            assert.deepEqual(out.json, { reply: 'hi' });
+            // Without the hook, the same answer is the wrong shape.
+            const err = await rejection(callLlm(args, family(async () => answering('[{"reply":"hi"}]'))));
+            assert.equal(err.kind, 'bad_output');
+        });
+
+        it('is not run on a refusal or a cut-off answer, which have nothing to normalise', async () => {
+            let ran = 0;
+            const normalize = (json: unknown) => { ran += 1; return json; };
+            await rejection(callLlm(args, family(async () => ({ ...answering(''), stopReason: 'refusal' as const }), normalize)));
+            await rejection(callLlm(args, family(async () => ({ ...answering('{"reply":"cu'), stopReason: 'max_tokens' as const }), normalize)));
+            await rejection(callLlm(args, family(async () => answering('not json'), normalize)));
+            assert.equal(ran, 0);
+        });
+
+        it('failing is bad_output, retryable once, with the tokens that were billed', async () => {
+            const err = await rejection(callLlm(args, family(async () => answering('{"reply":"hi"}'), () => { throw new Error('a null in a required place'); })));
+            assert.equal(err.kind, 'bad_output');
+            assert.equal(err.retryable, true);
+            assert.match(err.message, /a null in a required place/);
+            assert.deepEqual(err.usage, { in: 1, out: 1 });
+        });
+
+        it('is optional: the Anthropic and Gemini families have none and the answer is returned as parsed', async () => {
+            const out = await callLlm(args, family(async () => answering('{"reply":"hi","score":null}')));
+            assert.deepEqual(out.json, { reply: 'hi', score: null });
+        });
+    });
+});
+
+describe('logging a failed call', () => {
+    // The logger redacts a field by the words in its *name*. The first version of this library
+    // named its token counts `input_tokens` and `output_tokens`, and every log line carried
+    // "[redacted]" where the counts should have been; and an Error's own fields are dropped by
+    // `describeError` except `code`.
+    const lines: Array<Record<string, any>> = [];
+    let restore: (() => void) | undefined;
+    afterEach(() => restore?.());
+    const capture = () => {
+        lines.length = 0;
+        const previous = setLogSink((_level, line) => void lines.push(JSON.parse(line)));
+        restore = () => void setLogSink(previous);
+    };
+
+    it('keeps kind, status, retryable, model and the tokens that were billed, and not the key', async () => {
+        capture();
+        // A refusal that echoes the key in its explanation, after a call that was billed.
+        const { fetchImpl } = stubFetch(jsonResponse(200, {
+            id: 'msg_05', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [], stop_reason: 'refusal',
+            stop_details: { type: 'refusal', category: 'cyber', explanation: `Declined for ${anthropic.key}.` },
+            usage: { input_tokens: 412, output_tokens: 7 },
+        }));
+        const err = await rejection(call(anthropic, fetchImpl));
+        log('warn', 'llm.call_failed', aiErrorLogFields(err));
+
+        assert.equal(lines.length, 1);
+        const line = lines[0]!;
+        assert.equal(line['event'], 'llm.call_failed');
+        assert.equal(line['kind'], 'refusal');
+        assert.equal(line['provider'], 'anthropic');
+        assert.equal(line['model'], 'claude-opus-5-5');
+        assert.equal(line['retryable'], false);
+        assert.equal(line['in'], 412);
+        assert.equal(line['out'], 7);
+        // The error itself, through `describeError`: its code is its kind.
+        assert.equal(line['err'].code, 'refusal');
+        assert.match(line['err'].message, /declined/);
+        assert.ok(!JSON.stringify(line).includes(anthropic.key), JSON.stringify(line));
+        assert.ok(!JSON.stringify(line).includes(anthropic.key.slice(5, 30)));
+        assert.ok(!JSON.stringify(line).includes('redacted'), 'no field was redacted by name');
+    });
+
+    it('keeps the status and the wait of an HTTP failure', async () => {
+        capture();
+        const err = await rejection(call(gemini, stubFetch(gemini.rateLimited()).fetchImpl));
+        log('warn', 'llm.call_failed', aiErrorLogFields(err));
+        const line = lines[0]!;
+        assert.equal(line['kind'], 'rate');
+        assert.equal(line['status'], 429);
+        assert.equal(line['retryable'], true);
+        assert.equal(line['retry_after_ms'], 33_000);
+        assert.equal(line['err'].code, 'rate');
+    });
+
+    it('keeps the tokens of a call that succeeded, as {in, out}, where input_tokens would have been redacted', async () => {
+        capture();
+        const out = await call(anthropic, stubFetch(anthropic.text(JSON.stringify(ANSWER), { input: 150, output: 40 })).fetchImpl);
+        log('info', 'llm.call_ok', { usage: out.usage, billed: out.billed, model: out.model });
+        assert.deepEqual(lines[0]!['usage'], { in: 150, out: 40 });
+        assert.deepEqual(lines[0]!['billed'], [{ model: 'claude-opus-5-5', in: 150, out: 40 }]);
+        // The reason for the rename, as the logger behaves today.
+        log('info', 'llm.old_names', { usage: { input_tokens: 150, output_tokens: 40 } });
+        assert.deepEqual(lines[1]!['usage'], { input_tokens: '[redacted]', output_tokens: '[redacted]' });
+    });
+
+    it('keeps the code of an error logged as a plain error field, with no helper', () => {
+        capture();
+        log('error', 'llm.call_failed', { err: new AiError({ kind: 'quota', provider: 'gemini', model: 'm', status: 429, message: 'spent' }) });
+        assert.equal(lines[0]!['err'].code, 'quota');
     });
 });
 
@@ -459,11 +915,11 @@ describe('setLlmCaller', () => {
         const seen: GenerateJsonArgs[] = [];
         const fake = async (a: GenerateJsonArgs): Promise<GenerateJsonResult> => {
             seen.push(a);
-            return { json: { reply: 'stubbed' }, usage: { input_tokens: 1, output_tokens: 2 }, model: a.model, provider: a.provider, stopReason: 'end_turn', elapsed_ms: 0 };
+            return { json: { reply: 'stubbed' }, usage: { in: 1, out: 2 }, billed: [{ model: a.model, in: 1, out: 2 }], model: a.model, provider: a.provider, stopReason: 'end_turn', elapsed_ms: 0 };
         };
         const previous = setLlmCaller(fake);
         restore = () => void setLlmCaller(previous);
-        assert.equal(previous, callProvider);
+        assert.equal(previous, callLlm);
 
         assert.deepEqual((await generateJson(args)).json, { reply: 'stubbed' });
         assert.deepEqual(seen, [args]);

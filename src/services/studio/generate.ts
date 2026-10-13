@@ -21,6 +21,7 @@
  * network.
  */
 import axios from 'axios';
+import { withoutArrayBounds, type GeminiSchema } from '../llm/geminiSchema.js';
 import { getGeminiKey, MISSING_GEMINI_KEY } from '../appSettings.js';
 import type { Carousel, ShotRef, Slide } from './carouselTypes.js';
 import {
@@ -181,18 +182,12 @@ const MAX_PLAN = 14;
 
 // ─── The model call ─────────────────────────────────────────────────────────────────────────
 
-/** Gemini's `responseSchema` subset (OpenAPI 3.0-ish, upper-case types). */
-export type GeminiSchema = {
-    type: 'OBJECT' | 'ARRAY' | 'STRING' | 'INTEGER' | 'NUMBER' | 'BOOLEAN';
-    description?: string;
-    enum?: string[];
-    properties?: Record<string, GeminiSchema>;
-    required?: string[];
-    propertyOrdering?: string[];
-    items?: GeminiSchema;
-    minItems?: number;
-    maxItems?: number;
-};
+/**
+ * `GeminiSchema` and `withoutArrayBounds` live in `llm/geminiSchema.ts`, which depends on nothing
+ * (this module imports the database), and are re-exported here so every import path keeps working.
+ */
+export type { GeminiSchema };
+export { withoutArrayBounds };
 
 export type ModelTurn = { role: 'user' | 'model'; text: string };
 
@@ -243,22 +238,6 @@ class ModelError extends Error {
  * string, which lands in logs), narrow error logging (never the request config, which holds the
  * key), and the same failure modes surfaced as errors that say what happened.
  */
-/**
- * The schema as sent. Gemini 3 answers a schema carrying `minItems`/`maxItems` with a bare 400
- * "Request contains an invalid argument", so the bounds stay in our own schema — the
- * descriptions still state them to the model — and are enforced where they always really were:
- * `validateCarousel` and the repair rounds.
- */
-export function withoutArrayBounds<T>(schema: T): T {
-    if (Array.isArray(schema)) return schema.map((s) => withoutArrayBounds(s)) as T;
-    if (!schema || typeof schema !== 'object') return schema;
-    return Object.fromEntries(
-        Object.entries(schema as Record<string, unknown>)
-            .filter(([key]) => key !== 'minItems' && key !== 'maxItems')
-            .map(([key, value]) => [key, withoutArrayBounds(value)]),
-    ) as T;
-}
-
 export async function callGemini(req: ModelRequest): Promise<unknown> {
     // The platform's key, the same one the DM bot answers with: the one saved on the Operations
     // screen, else GEMINI_API_KEY (src/services/appSettings.ts).
