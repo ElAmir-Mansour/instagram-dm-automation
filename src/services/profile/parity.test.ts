@@ -7,12 +7,18 @@ import { describe, it } from 'node:test';
 import { defaultGrowthSettings } from '../growth/settingsRow.js';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
 import { profileFromLegacy } from './legacy.js';
-import { compareSurfaces, formatParity, parityJson, runParity, sha256, type ParityHeader } from './parity.js';
+import type { Exec } from '../studio/common.js';
+import { ELAMIR_AGENT } from '../studio/testFixtures.js';
+import {
+    compareSurfaces, formatParity, parityExitCode, parityJson, profileProblemsOf, readAgent, runParity, sha256, type ParityHeader,
+} from './parity.js';
 import { entryText, type SurfaceEntry } from './promptSurface.js';
 import { throughJsonb } from './testSupport.js';
 
 const t = (name: string, value: string): SurfaceEntry => ({ name, kind: 'text', set: 'elamir', value });
 const j = (name: string, value: unknown): SurfaceEntry => ({ name, kind: 'json', set: 'elamir', value });
+/** A builder that threw: no value, and what it threw. */
+const failed = (name: string, error: string): SurfaceEntry => ({ name, kind: 'text', set: 'elamir', value: undefined, error });
 const HEADER: ParityHeader = { tenant: '00000000-0000-4000-8000-000000000001', profile: 'legacy (none stored: read from the rows)', target: 'db.example/postgres' };
 
 describe('sha256', () => {
@@ -98,7 +104,7 @@ describe('the output', () => {
         assert.match(row, /^studio\.system {11}ba7816bf8f01cfea {2}ba7816bf8f01cfea {2}ok$/);
         const diff = lines.find((l) => l.startsWith('monteur.render-payload'))!;
         assert.match(diff, / {2}DIFF$/);
-        assert.match(lines.at(-1)!, /^2 builders · 1 differ · surface [0-9a-f]{16} \(b [0-9a-f]{16}\) · NO PARITY$/);
+        assert.match(lines.at(-1)!, /^2 builders · 1 differ · 0 threw · surface [0-9a-f]{16} \(b [0-9a-f]{16}\) · NO PARITY$/);
     });
 
     it('says where a mismatch begins, and prints nothing of the prompts', () => {
@@ -110,7 +116,7 @@ describe('the output', () => {
 
     it('says PARITY when every row matches', () => {
         const ok = compareSurfaces([t('x', '1')], [t('x', '1')]);
-        assert.match(formatParity(ok, HEADER), /1 builders · 0 differ · surface [0-9a-f]{16} \(b [0-9a-f]{16}\) · PARITY$/);
+        assert.match(formatParity(ok, HEADER), /1 builders · 0 differ · 0 threw · surface [0-9a-f]{16} \(b [0-9a-f]{16}\) · PARITY$/);
     });
 
     it('depends on nothing but its input: the same report prints the same bytes', () => {
@@ -133,8 +139,19 @@ describe('the output', () => {
 describe('runParity, on the rows of a tenant', () => {
     it('the owner\'s seed settings, read into the profile their rows describe: every builder matches', async () => {
         const report = await runParity({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH, profile: profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH) });
-        assert.equal(report.builders, 28);
+        assert.equal(report.builders, 28, 'no agent row: no DM instruction');
         assert.deepEqual(report.rows.filter((r) => !r.match), []);
+        assert.equal(report.ok, true);
+        assert.equal(parityExitCode(report), 0);
+    });
+
+    it('with the DM agent\'s persona the surface also holds the DM instruction, the same on both paths', async () => {
+        const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+        const report = await runParity({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH, profile, agent: ELAMIR_AGENT });
+        assert.equal(report.builders, 29);
+        const dm = report.rows.find((r) => r.name === 'dm.system-instruction')!;
+        assert.equal(dm.match, true);
+        assert.ok(dm.a && dm.a === dm.b);
         assert.equal(report.ok, true);
     });
 
@@ -184,5 +201,123 @@ describe('the entries are text', () => {
     it('entryText is what is hashed', () => {
         const report = compareSurfaces([j('p', { a: [1] })], [j('p', { a: [1] })]);
         assert.equal(report.rows[0]!.a, sha256(entryText(j('p', { a: [1] }))));
+    });
+});
+
+describe('a stored profile this release does not read cleanly is not parity, even when every prompt matches', () => {
+    const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+    const rows = { studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH, profile };
+
+    it('profileProblemsOf: a path it needed repaired at, a newer release, nothing', () => {
+        assert.deepEqual(profileProblemsOf(null), []);
+        assert.deepEqual(profileProblemsOf(undefined), []);
+        assert.deepEqual(profileProblemsOf({ repaired: [], newerSchema: false }), []);
+        assert.deepEqual(profileProblemsOf({ repaired: ['voice.emoji', 'brand.primary'], newerSchema: true }), [
+            'the stored profile needed repair at voice.emoji', 'the stored profile needed repair at brand.primary', 'the stored profile was written by a newer release',
+        ]);
+    });
+
+    it('repaired paths: every prompt matches, and the run still exits 1 and says why', async () => {
+        const report = await runParity({ ...rows, stored: { repaired: ['voice.emoji'], newerSchema: false } });
+        assert.equal(report.mismatches, 0);
+        assert.equal(report.ok, false);
+        assert.equal(parityExitCode(report), 1);
+        assert.deepEqual(report.profileProblems, ['the stored profile needed repair at voice.emoji']);
+        const text = formatParity(report, HEADER);
+        assert.match(text, /^profile problem: the stored profile needed repair at voice\.emoji$/m);
+        assert.match(text, /0 differ · 0 threw · .* · NO PARITY$/, 'not PARITY');
+        assert.deepEqual(JSON.parse(parityJson(report, HEADER)).profileProblems, ['the stored profile needed repair at voice.emoji']);
+    });
+
+    it('a newer schema: the same', async () => {
+        const report = await runParity({ ...rows, stored: { repaired: [], newerSchema: true } });
+        assert.equal(report.ok, false);
+        assert.equal(parityExitCode(report), 1);
+        assert.deepEqual(report.profileProblems, ['the stored profile was written by a newer release']);
+    });
+
+    it('a stored profile that reads cleanly changes nothing', async () => {
+        const report = await runParity({ ...rows, stored: { repaired: [], newerSchema: false } });
+        assert.equal(report.ok, true);
+        assert.deepEqual(report.profileProblems, []);
+    });
+});
+
+describe('a builder that throws is reported, not fatal, and exits 2 (a difference exits 1)', () => {
+    it('is a row that says which path threw, never a match, with every other builder still compared', () => {
+        const report = compareSurfaces(
+            [t('fine', 'x'), failed('studio.dm', 'TypeError: Cannot read properties of null'), t('differs', 'a')],
+            [t('fine', 'x'), t('studio.dm', 'text'), t('differs', 'b')],
+        );
+        assert.equal(report.builders, 3);
+        assert.equal(report.threw, 1);
+        assert.equal(report.mismatches, 2);
+        const row = report.rows[1]!;
+        assert.deepEqual(row.error, { a: 'TypeError: Cannot read properties of null' });
+        assert.equal(row.a, null);
+        assert.equal(row.b, sha256('text'));
+        assert.equal(row.match, false);
+        assert.equal(row.firstDifference, undefined);
+        assert.ok(report.rows[2]!.firstDifference, 'the other differing builder is still compared');
+        assert.equal(parityExitCode(report), 2, 'a builder threw: 2, even though another prompt also differs');
+    });
+
+    it('both paths throwing is one row, with both reasons', () => {
+        const report = compareSurfaces([failed('p', 'Error: a')], [failed('p', 'Error: b')]);
+        assert.deepEqual(report.rows[0]!.error, { a: 'Error: a', b: 'Error: b' });
+        assert.equal(report.threw, 1);
+    });
+
+    it('the output names the builder, the path and what it threw, and the verdict is INCOMPLETE', () => {
+        const report = compareSurfaces([t('fine', 'x'), t('p', 'x')], [t('fine', 'x'), failed('p', 'RangeError: bad')]);
+        const lines = formatParity(report, HEADER).split('\n');
+        assert.match(lines.find((l) => l.startsWith('p '))!, / {2}ERROR$/);
+        assert.ok(lines.some((l) => l.trim() === 'threw on path (b), through the profile: RangeError: bad'));
+        assert.match(lines.at(-1)!, /^2 builders · 1 differ · 1 threw · .* · INCOMPLETE$/);
+        assert.equal(JSON.parse(parityJson(report, HEADER)).exitCode, 2);
+        assert.equal(JSON.parse(parityJson(report, HEADER)).threw, 1);
+    });
+
+    it('parityExitCode: 0 parity, 1 a difference or a profile problem, 2 a throw or nothing compared', () => {
+        assert.equal(parityExitCode(compareSurfaces([t('x', '1')], [t('x', '1')])), 0);
+        assert.equal(parityExitCode(compareSurfaces([t('x', '1')], [t('x', '2')])), 1);
+        assert.equal(parityExitCode(compareSurfaces([t('x', '1')], [t('x', '1')], ['the stored profile was written by a newer release'])), 1);
+        assert.equal(parityExitCode(compareSurfaces([failed('x', 'Error: e')], [t('x', '1')])), 2);
+        assert.equal(parityExitCode(compareSurfaces([], [])), 2);
+    });
+
+    it('runParity on settings a builder cannot read: those builders are rows that threw, and the rest are compared', async () => {
+        const studio = { ...ELAMIR_SEED_SETTINGS, cta: null } as unknown as typeof ELAMIR_SEED_SETTINGS;
+        const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+        const report = await runParity({ studio, growth: ELAMIR_GROWTH, profile });
+        const threw = report.rows.filter((r) => r.error).map((r) => r.name);
+        assert.ok(threw.includes('studio.dm'), threw.join(', '));
+        assert.ok(report.threw > 0 && report.threw < report.builders, 'some threw; the rest were built');
+        assert.ok(report.rows.some((r) => r.match && !r.error), 'and the rest matched');
+        assert.equal(parityExitCode(report), 2);
+        const text = formatParity(report, HEADER);
+        assert.match(text, /threw on path \(a\), today: TypeError/);
+        assert.doesNotMatch(text, /elamirmansour|referralCode/, 'what a builder threw holds no tenant text');
+    });
+});
+
+describe('readAgent', () => {
+    const exec = (rows: unknown[]): Exec & { sent: { sql: string; params: unknown[] }[] } => {
+        const sent: { sql: string; params: unknown[] }[] = [];
+        return { sent, query: async (sql: string, params: unknown[] = []) => { sent.push({ sql, params }); return { rows }; } } as never;
+    };
+
+    it('reads the persona and knowledge base the way the DM path does, with one SELECT', async () => {
+        const e = exec([{ system_prompt: 'persona', knowledge_base: 'kb', is_active: true, model: 'm' }]);
+        assert.deepEqual(await readAgent(e, 'tenant-1'), { system_prompt: 'persona', knowledge_base: 'kb' }, 'only what the instruction is built from');
+        assert.deepEqual(e.sent, [{ sql: 'SELECT system_prompt, knowledge_base FROM ai_agents WHERE creator_id = $1', params: ['tenant-1'] }]);
+    });
+
+    it('is null for a tenant with no agent row', async () => {
+        assert.equal(await readAgent(exec([]), 'tenant-1'), null);
+    });
+
+    it('a null knowledge base is kept as the row has it, as the DM path interpolates it', async () => {
+        assert.deepEqual(await readAgent(exec([{ system_prompt: 'p', knowledge_base: null }]), 't'), { system_prompt: 'p', knowledge_base: null });
     });
 });

@@ -13,7 +13,7 @@ import type { Exec } from '../studio/common.js';
 import { defaultStudioSettings } from '../studio/settingsMerge.js';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
 import {
-    type AppliedOutcome, assessTenant, backfillTenant, decideApply, diffPaths, differences, formatBackfillReport, hasProblems, readTenants,
+    type AppliedOutcome, applyBackfill, assessTenant, backfillTenant, decideApply, diffPaths, differences, formatBackfillReport, hasProblems, readTenants,
     type TenantInput,
 } from './backfill.js';
 import { profileFromLegacy } from './legacy.js';
@@ -121,6 +121,35 @@ describe('assessTenant', () => {
         assert.ok(a.problems.some((p) => p.startsWith('audience.timezone')), a.problems.join('\n'));
     });
 
+    it('holds both view laws against the profile as it will be READ BACK from storage, so a passing dry run predicts parity after --apply', () => {
+        // A theme the validator refuses: the profile as built carries it, and reading it back from storage repairs it away.
+        // The view over the profile as built gives the row back; the view over the stored form does not.
+        const studio: StudioSettings = { ...ELAMIR_SEED_SETTINGS, infographic: { ...ELAMIR_SEED_SETTINGS.infographic, theme: 'sepia' as never } };
+        const a = assessTenant(tenant(studio, ELAMIR_GROWTH));
+        const finding = a.lens.find((f) => f.law === 'studio view');
+        assert.ok(finding, a.lens.map((f) => f.law).join(', '));
+        assert.deepEqual(finding.diffs, ['as stored: infographic.theme: text of 4 characters, expected 5']);
+        assert.ok(a.lens.some((f) => f.law === 'storage'), 'and the storage law says it was repaired on the way back');
+        assert.equal(a.ok, false);
+    });
+
+    it('does the same for the Growth settings: an audience timezone the stored form drops', () => {
+        const growth: GrowthSettings = { ...ELAMIR_GROWTH, audience: { ...ELAMIR_GROWTH.audience, timezone: 7 as unknown as string } };
+        const a = assessTenant(tenant(ELAMIR_SEED_SETTINGS, growth));
+        const finding = a.lens.find((f) => f.law === 'growth view');
+        assert.ok(finding, `${a.lens.map((f) => f.law).join(', ')} / ${a.problems.join('; ')}`);
+        assert.deepEqual(finding.diffs, ['as stored: audience.timezone: missing']);
+        assert.equal(a.ok, false);
+    });
+
+    it('the stored-form check does not repeat what the direct one already found, and finds nothing wrong with a clean tenant', () => {
+        const direct = assessTenant(tenant(brokenStudio(), ELAMIR_GROWTH));
+        assert.deepEqual(direct.lens[0]!.diffs, ['schedule.timezone: text of 3 characters, expected 0'], 'one finding, not one per form');
+        for (const [studio, growth] of [[OWNER_STUDIO, ELAMIR_GROWTH], [ENGLISH_SETTINGS, defaultGrowthSettings()]] as const) {
+            assert.deepEqual(assessTenant(tenant(studio, growth)).lens, []);
+        }
+    });
+
     it('a row of a shape the code never saw is a finding, not a crash that hides the other tenants', () => {
         const a = assessTenant(tenant({ ...ELAMIR_SEED_SETTINGS, voice: null } as unknown as StudioSettings, ELAMIR_GROWTH));
         assert.equal(a.ok, false);
@@ -178,6 +207,92 @@ describe('decideApply', () => {
         assert.deepEqual(decideApply(none), { action: 'skip', reason: 'no studio_settings row: left virtual' });
         const growthOnly = assessTenant(tenant(defaultStudioSettings(), ELAMIR_GROWTH, { rows: { studio: false, growth: true } }));
         assert.equal(decideApply(growthOnly).action, 'skip');
+    });
+});
+
+// ─── The write loop's gate ──────────────────────────────────────────────────────────────────
+
+describe('applyBackfill: only a tenant that passed this run\'s dry run is written', () => {
+    const passing = assessTenant(tenant(OWNER_STUDIO, ELAMIR_GROWTH, { id: 'tenant-pass' }));
+    const broken = assessTenant(tenant(brokenStudio(), ELAMIR_GROWTH, { id: 'tenant-broken' }));
+    const invalid = assessTenant(tenant({ ...OWNER_STUDIO, infographic: { ...OWNER_STUDIO.infographic, primary: 'red' } }, ELAMIR_GROWTH, { id: 'tenant-invalid' }));
+    const stored = assessTenant(tenant(OWNER_STUDIO, ELAMIR_GROWTH, { id: 'tenant-stored', stored: { version: 2, repaired: [], newerSchema: false } }));
+    const noRow = assessTenant(tenant(defaultStudioSettings(), defaultGrowthSettings(), { id: 'tenant-norow', rows: { studio: false, growth: false } }));
+
+    /** A writer that records who it was asked to write. */
+    const recorder = () => {
+        const asked: string[] = [];
+        return { asked, write: async (id: string): Promise<{ id: string; status: 'created'; version: 1 }> => { asked.push(id); return { id, status: 'created', version: 1 }; } };
+    };
+
+    it('calls the writer for the passing tenant and for no other', async () => {
+        const { asked, write } = recorder();
+        const outcomes = await applyBackfill([broken, passing, invalid, stored, noRow], write);
+        assert.deepEqual(asked, ['tenant-pass']);
+        assert.deepEqual(outcomes.map((o) => [o.id, o.status]), [
+            ['tenant-broken', 'refused'], ['tenant-pass', 'created'], ['tenant-invalid', 'refused'], ['tenant-stored', 'skipped'], ['tenant-norow', 'skipped'],
+        ]);
+    });
+
+    it('says why each was not written, with the assessment that decided it', async () => {
+        const outcomes = await applyBackfill([broken, stored, noRow], recorder().write);
+        const [b, s, n] = outcomes as Extract<AppliedOutcome, { reason: string; assessment: unknown }>[];
+        assert.match(b!.reason, /the dry run does not pass/);
+        assert.equal(b!.assessment, broken);
+        assert.equal(s!.reason, 'a profile is already stored (version 2)');
+        assert.equal(n!.reason, 'no studio_settings row: left virtual');
+    });
+
+    it('can write nothing for a tenant it was not given an assessment of: the writer is only ever asked for assessed ids', async () => {
+        const { asked, write } = recorder();
+        await applyBackfill([], write);
+        assert.deepEqual(asked, []);
+    });
+
+    it('a writer that throws is that tenant\'s error, the loop goes on to the next, and the run exits 1', async () => {
+        const second = assessTenant(tenant(OWNER_STUDIO, ELAMIR_GROWTH, { id: 'tenant-second' }));
+        const asked: string[] = [];
+        const write = async (id: string) => {
+            asked.push(id);
+            if (id === 'tenant-pass') throw Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' });
+            return { id, status: 'created' as const, version: 1 as const };
+        };
+        const assessments = [passing, second];
+        const outcomes = await applyBackfill(assessments, write);
+        assert.deepEqual(asked, ['tenant-pass', 'tenant-second']);
+        assert.deepEqual(outcomes, [
+            { id: 'tenant-pass', status: 'error', reason: 'Error: canceling statement due to lock timeout' },
+            { id: 'tenant-second', status: 'created', version: 1 },
+        ]);
+        assert.equal(hasProblems(assessments, outcomes), true, 'the exit code is 1');
+        assert.match(formatBackfillReport(assessments, { mode: 'apply', target: 't', outcomes }), /result {5}ok · ERROR: Error: canceling statement due to lock timeout/);
+    });
+
+    it('a clean run exits 0, and one that left a tenant refused exits 1', async () => {
+        const a = [passing];
+        assert.equal(hasProblems(a, await applyBackfill(a, recorder().write)), false);
+        const b = [passing, broken];
+        assert.equal(hasProblems(b, await applyBackfill(b, recorder().write)), true);
+    });
+
+    it('tells the caller each outcome as it happens, in order', async () => {
+        const seen: string[] = [];
+        await applyBackfill([passing, broken, stored], recorder().write, (o) => seen.push(`${o.id}:${o.status}`));
+        assert.deepEqual(seen, ['tenant-pass:created', 'tenant-broken:refused', 'tenant-stored:skipped']);
+    });
+
+    it('with no writer given, it is backfillTenant: a refused tenant is stopped before the database as well as inside it', async () => {
+        const state = seededState();
+        state.studio.set(OWNER, studioRow(brokenStudio()));
+        const fake = installProfileDb(state);
+        try {
+            const dry = assessTenant(tenant(brokenStudio(), ELAMIR_GROWTH, { id: OWNER }));
+            const outcomes = await applyBackfill([dry]);
+            assert.equal(outcomes[0]!.status, 'refused');
+            assert.equal(fake.statements.length, 0, 'it never reached the database: the gate was the assessment');
+        } finally {
+            fake.restore();
+        }
     });
 });
 
@@ -272,6 +387,9 @@ let restoreSink: (() => void) | undefined;
 
 const TENANT_LIST = /^SELECT c\.id, c\.name, c\.is_active, \(s\.creator_id IS NOT NULL\) AS has_studio, \(g\.creator_id IS NOT NULL\) AS has_growth FROM creators c LEFT JOIN studio_settings s ON s\.creator_id = c\.id LEFT JOIN growth_settings g ON g\.creator_id = c\.id (WHERE c\.id = \$1 )?ORDER BY c\.created_at, c\.id$/;
 const ROWS_PRESENT = /^SELECT EXISTS \(SELECT 1 FROM studio_settings WHERE creator_id = \$1\) AS studio, EXISTS \(SELECT 1 FROM growth_settings WHERE creator_id = \$1\) AS growth$/;
+const LOCK_TIMEOUT = /^SET LOCAL lock_timeout = '5s'$/;
+/** The statement that waits on the lock, which is where a timeout surfaces. */
+const LOCK_TIMEOUT_TRIGGER = /^SELECT id FROM creators WHERE id = \$1 FOR NO KEY UPDATE$/;
 const MUTEX = /^SELECT id FROM creators WHERE id = \$1 FOR NO KEY UPDATE$/;
 const PROFILE_ROW = /^SELECT profile, version FROM creator_profiles WHERE creator_id = \$1 FOR UPDATE$/;
 const STUDIO_READ = /^SELECT brand, voice, product, cta, schedule, library, examples, monteur, infographic FROM studio_settings WHERE creator_id = \$1 FOR UPDATE$/;
@@ -365,11 +483,30 @@ describe('backfillTenant', () => {
         assert.deepStrictEqual(state.versions[0]!.profile, viaBackfill.profile!.profile);
     });
 
-    it('takes the tenant\'s lock first, reads the rows under it, and writes last, in one transaction', async () => {
+    it('bounds its wait for a lock first, takes the tenant\'s lock, reads the rows under it, and writes last, in one transaction', async () => {
         await backfillTenant(OWNER);
-        const order = [/^BEGIN$/, MUTEX, PROFILE_ROW, STUDIO_READ, GROWTH_READ, ROWS_PRESENT, /^INSERT INTO creator_profiles /, /^INSERT INTO creator_profile_versions /, /^COMMIT$/].map(at);
+        const order = [LOCK_TIMEOUT, MUTEX, PROFILE_ROW, STUDIO_READ, GROWTH_READ, ROWS_PRESENT, /^INSERT INTO creator_profiles /, /^INSERT INTO creator_profile_versions /, /^COMMIT$/].map(at);
         assert.ok(order.every((i) => i >= 0), `every step ran: ${order.join(',')}\n${sql().join('\n')}`);
         assert.deepEqual([...order].sort((a, b) => a - b), order, 'in this order');
+        assert.deepEqual(sql().slice(0, 3), ['BEGIN', "SET LOCAL lock_timeout = '5s'", 'SELECT id FROM creators WHERE id = $1 FOR NO KEY UPDATE'], 'the bound is the first statement of the transaction, before any lock');
+        assert.equal(sql().filter((s) => /lock_timeout/.test(s)).length, 1);
+    });
+
+    it('sets the timeout for the transaction only (SET LOCAL), never the session: the pooler would hand the setting to the next request', async () => {
+        await backfillTenant(OWNER);
+        await backfillTenant(OWNER);
+        const sets = sql().filter((s) => /^SET /.test(s));
+        assert.deepEqual(sets, ["SET LOCAL lock_timeout = '5s'", "SET LOCAL lock_timeout = '5s'"], 'once per transaction, and always LOCAL');
+        assert.doesNotMatch(sql().join('\n'), /SET (SESSION )?lock_timeout|SET lock_timeout/);
+    });
+
+    it('a lock that cannot be had in time is an error for that tenant, and rolls everything back', async () => {
+        db.failOn = LOCK_TIMEOUT_TRIGGER;
+        db.failWith = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' });
+        await assert.rejects(backfillTenant(OWNER), /lock timeout/);
+        assert.equal(state.profiles.size, 0);
+        assert.deepEqual(writes(), []);
+        assert.equal(sql().at(-1), 'ROLLBACK');
     });
 
     it('is idempotent: a second run, and a run on a tenant that has a profile, write nothing', async () => {

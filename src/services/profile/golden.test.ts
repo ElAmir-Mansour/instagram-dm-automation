@@ -39,7 +39,7 @@ import { describe, it, type TestContext } from 'node:test';
 import vm from 'node:vm';
 import type { GrowthSettings } from '../../db/rows.js';
 import { AI_DISCLOSURE_LINE } from '../../webhook/meta-payload.js';
-import { dmSystemInstruction, RESPONSE_SCHEMA, STARTER_PERSONA } from '../ai.js';
+import { RESPONSE_SCHEMA, STARTER_PERSONA } from '../ai.js';
 import { COACH_SCHEMA, coachSystemPrompt } from '../growth/coach.js';
 import { KEYWORDS_SCHEMA } from '../growth/keywords.js';
 import { analystUserPrompt, LESSONS_SCHEMA } from '../monteur/analyst.js';
@@ -59,7 +59,7 @@ import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from '
 import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import {
-    dmFallbackSurface, growthSurface, infographicSurface, SAY, studioSurface, type GrowthRows, type SurfaceEntry,
+    dmFallbackSurface, dmInstructionSurface, growthSurface, infographicSurface, SAY, studioSurface, type GrowthRows, type SurfaceEntry,
 } from './promptSurface.js';
 import { scramble, throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
@@ -118,6 +118,7 @@ const studioEntries = (v: Variant, prefixes: readonly string[]): Promise<Surface
  * (in its own).
  */
 const matchEntry = (e: SurfaceEntry): void => {
+    if (e.error !== undefined) throw new Error(`${e.name}: the builder threw: ${e.error}`);
     if (e.kind === 'text') matchGolden(e.name, e.value as string, e.set);
     else matchGoldenJson(e.name, e.value, e.set);
 };
@@ -154,8 +155,8 @@ describe('the fixtures hold the owner\'s real values', () => {
 // ─── The DM bot and the comment replies ─────────────────────────────────────────────────────
 
 describe('DM and comment golden prompts', () => {
-    it('dmSystemInstruction: his persona and knowledge base inside the fixed rules', () => {
-        matchGolden('dm.system-instruction', dmSystemInstruction(ELAMIR_AGENT.system_prompt, ELAMIR_AGENT.knowledge_base));
+    it('dmSystemInstruction: his persona and knowledge base inside the fixed rules', async (t) => {
+        await matchEach(t, dmInstructionSurface(ELAMIR_AGENT));
     });
 
     it('RESPONSE_SCHEMA: what Gemini is asked to answer a DM with', () => {

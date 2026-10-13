@@ -21,6 +21,9 @@
  * Nothing here touches the database. The two Growth builders read it, so they run against a stand-in for the pool
  * (`withRows`) that answers from the rows they are handed and gives every other query nothing, then puts the pool back.
  *
+ * A builder that throws does not end the surface: its entry carries `error` instead of a value, so the golden test fails
+ * that one entry by name and the parity script reports it (and exits 2) while every other builder is still compared.
+ *
  * Test fixtures are imported (the writer's lessons, transcript lines, reels): they are the *turn* both paths are
  * fed, the same on each, and not tenant data. Production code never imports this file.
  */
@@ -28,6 +31,7 @@ import { pool } from '../../config/db.js';
 import type { ClipDirection, GrowthSettings } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { dmFallbackReply } from '../../webhook/errors.js';
+import { dmSystemInstruction } from '../ai.js';
 import { coachSystemPrompt, runCoach } from '../growth/coach.js';
 import { keywordsSystemPrompt, suggestKeywords } from '../growth/keywords.js';
 import { analystSystemPrompt } from '../monteur/analyst.js';
@@ -45,6 +49,7 @@ import type { StudioSettings } from '../studio/settingsTypes.js';
 import {
     ELAMIR_SEO, GOLDEN_CLIPS, GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_LINES, GOLDEN_REEL_EVIDENCE, GOLDEN_SOURCES,
 } from '../studio/testFixtures.js';
+import { describeFailure } from './failure.js';
 import { goldenJsonText, type GoldenSet } from './golden.js';
 
 /** One builder's output: what a golden file holds, and what the parity script hashes. */
@@ -55,14 +60,17 @@ export interface SurfaceEntry {
     kind: 'text' | 'json';
     /** Where the golden lives. The parity script ignores it. */
     set: GoldenSet;
-    /** The text, or the value to serialise. */
+    /** The text, or the value to serialise. `undefined` when the builder threw. */
     value: unknown;
+    /** Set when the builder threw: what it threw, as `describeFailure` prints it. */
+    error?: string;
 }
 
 export type SurfaceLang = 'ar' | 'en';
 
 /** The bytes a golden file holds for this entry: the thing that is compared, and that the parity script hashes. */
-export function entryText(entry: Pick<SurfaceEntry, 'kind' | 'value'>): string {
+export function entryText(entry: Pick<SurfaceEntry, 'kind' | 'value'> & Partial<Pick<SurfaceEntry, 'name' | 'error'>>): string {
+    if (entry.error !== undefined) throw new Error(`${entry.name ?? 'an entry'} was not built: ${entry.error}`);
     if (entry.kind === 'text') {
         if (typeof entry.value !== 'string') throw new Error('a text entry must hold a string');
         return entry.value;
@@ -74,7 +82,39 @@ export function entryText(entry: Pick<SurfaceEntry, 'kind' | 'value'>): string {
 const named = (base: string, slug: string | undefined): string => (slug ? `${base}.${slug}` : base);
 
 const text = (name: string, set: GoldenSet, value: string): SurfaceEntry => ({ name, kind: 'text', set, value });
-const json = (name: string, set: GoldenSet, value: unknown): SurfaceEntry => ({ name, kind: 'json', set, value });
+
+/** One builder, called: its output, or what it threw. One builder that fails must not hide the rest of the surface. */
+function built(name: string, kind: 'text' | 'json', set: GoldenSet, build: () => unknown): SurfaceEntry {
+    try {
+        return { name, kind, set, value: build() };
+    } catch (err) {
+        return { name, kind, set, value: undefined, error: describeFailure(err) };
+    }
+}
+
+async function builtAsync(name: string, kind: 'text' | 'json', set: GoldenSet, build: () => Promise<unknown>): Promise<SurfaceEntry> {
+    try {
+        return { name, kind, set, value: await build() };
+    } catch (err) {
+        return { name, kind, set, value: undefined, error: describeFailure(err) };
+    }
+}
+
+/** A value several entries share, made on first use. If making it throws, each entry that needs it reports that failure. */
+function lazy<T>(make: () => T): () => T {
+    let state: { value: T } | { error: unknown } | undefined;
+    return () => {
+        if (!state) {
+            try {
+                state = { value: make() };
+            } catch (error) {
+                state = { error };
+            }
+        }
+        if ('error' in state) throw state.error;
+        return state.value;
+    };
+}
 
 /** The same story in each language, so the English control is fed English. */
 export const SAY = {
@@ -148,28 +188,28 @@ export interface StudioSurfaceOptions {
 export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir' }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
     const say = SAY[lang];
     const out: SurfaceEntry[] = [];
-    const t = (base: string, value: string): void => { out.push(text(named(base, slug), set, value)); };
-    const j = (base: string, value: unknown): void => { out.push(json(named(base, slug), set, value)); };
+    const t = (base: string, build: () => string): void => { out.push(built(named(base, slug), 'text', set, build)); };
+    const j = (base: string, build: () => unknown): void => { out.push(built(named(base, slug), 'json', set, build)); };
 
     // The Studio writer.
-    t('studio.system', buildSystemPrompt(settings));
-    t('studio.plan-system', buildPlanSystemPrompt(settings));
-    j('studio.cta-lines', { ask: askLine(settings, 'KEYWORD'), save: saveLine(settings), tiktok: tiktokLine(settings) });
+    t('studio.system', () => buildSystemPrompt(settings));
+    t('studio.plan-system', () => buildPlanSystemPrompt(settings));
+    j('studio.cta-lines', () => ({ ask: askLine(settings, 'KEYWORD'), save: saveLine(settings), tiktok: tiktokLine(settings) }));
 
-    const fill = { url: settings.product.url, bullets: settings.product.dmBullets };
-    t('studio.dm', buildDm(settings.cta.dmTemplate, { question: say.question, pitch: say.pitch, ...fill }));
-    const kit = languageKit(settings);
-    t('studio.dm-fallback', buildDm(settings.cta.dmTemplate, { question: kit.fallbackQuestion, pitch: kit.fallbackPitch, ...fill }));
+    const fill = lazy(() => ({ url: settings.product.url, bullets: settings.product.dmBullets }));
+    t('studio.dm', () => buildDm(settings.cta.dmTemplate, { question: say.question, pitch: say.pitch, ...fill() }));
+    const kit = lazy(() => languageKit(settings));
+    t('studio.dm-fallback', () => buildDm(settings.cta.dmTemplate, { question: kit().fallbackQuestion, pitch: kit().fallbackPitch, ...fill() }));
 
-    const catalog = buildCatalog(GOLDEN_SOURCES, settings, say.idea);
-    t('studio.catalog', catalog.text);
-    t('studio.draft-user', draftUserPrompt({
+    const catalog = lazy(() => buildCatalog(GOLDEN_SOURCES, settings, say.idea));
+    t('studio.catalog', () => catalog().text);
+    t('studio.draft-user', () => draftUserPrompt({
         input: { lessonIds: [GOLDEN_LESSON.id], idea: say.idea, angle: 'tips', slides: 8 },
-        catalog, slides: 8, keyword: null, activeKeywords: ['وكيل', 'سياق'], recentTopics: say.recent, seo: ELAMIR_SEO,
+        catalog: catalog(), slides: 8, keyword: null, activeKeywords: ['وكيل', 'سياق'], recentTopics: say.recent, seo: ELAMIR_SEO,
     }));
 
-    t('captions.instagram', normalizeInstagramCaption(say.igCaption, say.keyword, say.candidates, settings));
-    t('captions.tiktok', normalizeTiktokCaption(say.ttCaption, say.candidates, settings));
+    t('captions.instagram', () => normalizeInstagramCaption(say.igCaption, say.keyword, say.candidates, settings));
+    t('captions.tiktok', () => normalizeTiktokCaption(say.ttCaption, say.candidates, settings));
 
     const carousel: Carousel = {
         id: 'LocalAI', accent: '#FFD60A', keyword: say.keyword,
@@ -180,32 +220,30 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
         ],
         captions: { instagram: say.igCaption, tiktokTitle: say.idea, tiktok: say.ttCaption },
     };
-    j('studio.carousel-render-payload', await carouselRenderPayload('creator', 'draft', carousel, {}, settings));
+    out.push(await builtAsync(named('studio.carousel-render-payload', slug), 'json', set, () => carouselRenderPayload('creator', 'draft', carousel, {}, settings)));
 
     // The Monteur.
-    t('monteur.pick-system', pickSystemPrompt(settings));
-    t('monteur.pick-user', pickUserPrompt({
+    t('monteur.pick-system', () => pickSystemPrompt(settings));
+    t('monteur.pick-user', () => pickUserPrompt({
         lines: GOLDEN_LINES, settings, lessons: GOLDEN_LESSONS, reels: GOLDEN_REEL_EVIDENCE, keep: 2,
     }));
 
-    t('monteur.copy-system', copySystemPrompt(settings));
-    t('monteur.copy-user', copyUserPrompt({
+    t('monteur.copy-system', () => copySystemPrompt(settings));
+    t('monteur.copy-user', () => copyUserPrompt({
         clips: GOLDEN_CLIPS, lines: GOLDEN_LINES, settings, lessons: GOLDEN_LESSONS,
         activeKeywords: ['وكيل', 'سياق'], recentAsks: [say.recentAsk], seo: ELAMIR_SEO,
     }));
 
     const ctx: CopyContext = { activeKeywords: [], seo: ELAMIR_SEO, recentAsks: [] };
     const item = { clip: 1, ask_line: 'no keyword here', question: '', pitch: '', ...say.copy };
-    j('monteur.copy-clip-fallbacks', toClipCopy(item, GOLDEN_CLIPS[0]!, settings, ctx, [], [], 0));
+    j('monteur.copy-clip-fallbacks', () => toClipCopy(item, GOLDEN_CLIPS[0]!, settings, ctx, [], [], 0));
 
-    const on = { ...settings, monteur: { ...settings.monteur, human: true } };
-    const off = { ...settings, monteur: { ...settings.monteur, human: false } };
-    t('monteur.editor-system.human-on', editorSystemPrompt(on));
-    t('monteur.editor-system.human-off', editorSystemPrompt(off));
+    t('monteur.editor-system.human-on', () => editorSystemPrompt({ ...settings, monteur: { ...settings.monteur, human: true } }));
+    t('monteur.editor-system.human-off', () => editorSystemPrompt({ ...settings, monteur: { ...settings.monteur, human: false } }));
 
-    t('monteur.analyst-system', analystSystemPrompt(settings));
+    t('monteur.analyst-system', () => analystSystemPrompt(settings));
 
-    j('monteur.render-payload', buildRenderPayload({
+    j('monteur.render-payload', () => buildRenderPayload({
         clipId: 'clip', source: { id: 'src', path: '/v/a.mp4', words: [[10, 10.4, 'كلمة'], [10.5, 11, 'ثانية']] },
         start: 9.85, end: 34.8, title: say.copy.first_line, keyword: say.keyword, accent: '#FFD60A', edits: [],
         settings, direction: PLAN,
@@ -223,39 +261,57 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
  */
 export function infographicSurface(settings: StudioSettings, { slug }: { slug?: string } = {}): SurfaceEntry[] {
     const mid = slug ? `.${slug}` : '';
-    const job = (language: SurfaceLang, notes: string | null) => infographicRenderPayload(
+    const job = (language: SurfaceLang, notes: string | null) => () => infographicRenderPayload(
         '00000000-0000-4000-8000-0000000000aa', { topic: 'RAG vs CAG vs KAG', notes, language },
         settings.infographic.theme, settings, null,
     );
     return [
-        json(`infographic.render-payload${mid}.ar`, 'elamir', job('ar', 'ركّز على التكلفة وسرعة الاستجابة')),
-        json(`infographic.render-payload${mid}.en`, 'control', job('en', null)),
-        json(named('infographic.brand', slug), 'elamir', payloadBrand(settings.infographic)),
+        built(`infographic.render-payload${mid}.ar`, 'json', 'elamir', job('ar', 'ركّز على التكلفة وسرعة الاستجابة')),
+        built(`infographic.render-payload${mid}.en`, 'json', 'control', job('en', null)),
+        built(named('infographic.brand', slug), 'json', 'elamir', () => payloadBrand(settings.infographic)),
     ];
 }
 
-// ─── The comment replies ────────────────────────────────────────────────────────────────────
+// ─── The DM bot and the comment replies ─────────────────────────────────────────────────────
+
+/** The DM agent's row, as the DM path reads it: `SELECT … FROM ai_agents WHERE creator_id = $1` (`generateAiResponse`). */
+export interface AgentPersona { system_prompt: string; knowledge_base: string | null }
+
+/**
+ * The system instruction the DM bot sends Gemini: the tenant's persona and knowledge base inside the fixed rules. It has
+ * no path (b): the knowledge base is an agent setting, not a profile field, so both paths get the same row and hash the
+ * same bytes. It is here so a release that changes the instruction changes this hash, and the main-against-release diff
+ * shows it.
+ */
+export function dmInstructionSurface(agent: AgentPersona): SurfaceEntry[] {
+    return [built('dm.system-instruction', 'text', 'elamir', () => dmSystemInstruction(agent.system_prompt, agent.knowledge_base))];
+}
 
 /** The public reply that replaces an undeliverable DM, for the tenant's own DM template, in every variant. */
 export function dmFallbackSurface(settings: StudioSettings): SurfaceEntry[] {
-    const ownerDm = buildDm(settings.cta.dmTemplate, {
-        question: SAY.ar.question, pitch: SAY.ar.pitch, url: settings.product.url, bullets: settings.product.dmBullets,
+    // His DMs are Arabic, so the Arabic replies are his; the English ones go to English-language DMs, and do not read his settings.
+    const arabic = lazy(() => {
+        const ownerDm = buildDm(settings.cta.dmTemplate, {
+            question: SAY.ar.question, pitch: SAY.ar.pitch, url: settings.product.url, bullets: settings.product.dmBullets,
+        });
+        return [
+            { name: 'arabic, instagram', isFacebook: false, dmText: ownerDm },
+            { name: 'arabic, facebook, the DM holds a link', isFacebook: true, dmText: ownerDm },
+            { name: 'arabic, facebook, the link ends in punctuation', isFacebook: true, dmText: 'هذا الرابط: https://example.com/guide،' },
+            { name: 'arabic, facebook, no link in the DM', isFacebook: true, dmText: 'هلا {username} 👋 راسلنا ونرسل لك التفاصيل' },
+        ].map((c) => ({ ...c, reply: dmFallbackReply(c) }));
     });
-    const englishDm = 'Hi {username} 👋 Here is the full guide: https://example.com/guide?ref=a.';
-    const cases = [
-        { name: 'arabic, instagram', isFacebook: false, dmText: ownerDm },
-        { name: 'arabic, facebook, the DM holds a link', isFacebook: true, dmText: ownerDm },
-        { name: 'arabic, facebook, the link ends in punctuation', isFacebook: true, dmText: 'هذا الرابط: https://example.com/guide،' },
-        { name: 'arabic, facebook, no link in the DM', isFacebook: true, dmText: 'هلا {username} 👋 راسلنا ونرسل لك التفاصيل' },
-        { name: 'english, instagram', isFacebook: false, dmText: englishDm },
-        { name: 'english, facebook, the DM holds a link', isFacebook: true, dmText: englishDm },
-        { name: 'english, facebook, no link in the DM', isFacebook: true, dmText: 'Hi {username} 👋 Reply to this message for the details' },
-    ];
-    const replies = cases.map((c) => ({ ...c, reply: dmFallbackReply(c) }));
-    // His DMs are Arabic, so the Arabic replies are his; the English ones go to English-language DMs.
+    const english = lazy(() => {
+        const englishDm = 'Hi {username} 👋 Here is the full guide: https://example.com/guide?ref=a.';
+        return [
+            { name: 'english, instagram', isFacebook: false, dmText: englishDm },
+            { name: 'english, facebook, the DM holds a link', isFacebook: true, dmText: englishDm },
+            { name: 'english, facebook, no link in the DM', isFacebook: true, dmText: 'Hi {username} 👋 Reply to this message for the details' },
+        ].map((c) => ({ ...c, reply: dmFallbackReply(c) }));
+    });
     return [
-        json('comments.dm-fallback-replies.ar', 'elamir', replies.filter((r) => r.name.startsWith('arabic'))),
-        json('comments.dm-fallback-replies.en', 'control', replies.filter((r) => r.name.startsWith('english'))),
+        built('comments.dm-fallback-replies.ar', 'json', 'elamir', arabic),
+        built('comments.dm-fallback-replies.en', 'json', 'control', english),
     ];
 }
 
@@ -287,8 +343,10 @@ export interface GrowthRows { growth: GrowthSettings; studio: StudioSettings }
 
 /**
  * `body` run with the pool answering from `rows`: the Growth readers and the language lookup get the tenant's
- * rows, the insight queries get fixed evidence, anything else gets nothing, and nothing reaches a database. The pool is
- * put back, and the log sink too, whatever `body` does. Exported for its test; the surfaces below are the callers.
+ * rows, the insight queries get fixed evidence, the stored-profile lookup is answered "none", and a query it has no answer
+ * for is refused by name (so a reader that starts asking something new fails here, loudly, instead of being handed an empty
+ * result it may quietly work around). Nothing reaches a database. The pool is put back, and the log sink too, whatever
+ * `body` does. Exported for its test; the surfaces below are the callers.
  */
 export async function withRows<T>(rows: GrowthRows, body: () => Promise<T>): Promise<T> {
     const original = { query: pool.query, connect: pool.connect };
@@ -299,9 +357,12 @@ export async function withRows<T>(rows: GrowthRows, body: () => Promise<T>): Pro
         if (/DISTINCT ON \(platform\)/.test(q)) return { rows: [{ platform: 'instagram', followers: 8412 }] };
         if (/FROM account_insights_daily/.test(q)) return { rows: DAYS };
         if (/SELECT last_sync FROM growth_settings/.test(q)) return { rows: [] };
+        // The rows handed in ARE the answer: path (b)'s are already the profile's view. A reader that lays a stored profile
+        // over them (P4's `getStudioSettings`) must find none, or (b) would be a view of a view.
+        if (/FROM creator_profiles/.test(q)) return { rows: [] };
         if (/FROM growth_settings/.test(q)) return { rows: [{ ...rows.growth }] };
         if (/FROM studio_settings/.test(q)) return { rows: [{ ...rows.studio }] };
-        return { rows: [] };
+        throw new Error(`the prompt surface has no answer for: ${q.slice(0, 80)}`);
     };
     // A builder that opens a transaction here is reaching for a database: refuse, rather than hand it a real client.
     (pool as any).connect = async () => { throw new Error('the prompt surface never opens a database connection'); };
@@ -324,42 +385,56 @@ export async function growthSurface(rows: GrowthRows, { slug }: { slug?: string 
     return withRows(rows, async () => {
         const out: SurfaceEntry[] = [];
         const setOf = (code: string): GoldenSet => (code === 'ar' ? 'elamir' : 'control');
+        const failed = (base: string, err: unknown): SurfaceEntry => ({ name: named(base, slug), kind: 'text', set: 'elamir', value: undefined, error: describeFailure(err) });
 
-        const keywordRequests: ModelRequest[] = [];
-        const keywordsCall: CallModel = async (req) => {
-            keywordRequests.push(req);
-            return { keywords: [{ term: 'هندسة البرومبت', why: 'يبحث عنها المبتدئون' }], hashtags: ['#برومبت'] };
-        };
-        const keywords = await suggestKeywords('creator', { topic: 'هندسة البرومبت للمبتدئين' }, { callModel: keywordsCall });
-        if (keywordRequests.length !== 1) throw new Error(`the keyword finder made ${keywordRequests.length} model calls, not one`);
-        if (keywordRequests[0]!.system !== keywordsSystemPrompt(keywords.language)) throw new Error('the keyword finder\'s system prompt is not the one for its language');
-        out.push(text(`growth.keywords-system.${keywords.language}`, setOf(keywords.language), keywordRequests[0]!.system));
-        out.push(text(named('growth.keywords-user', slug), 'elamir', keywordRequests[0]!.turns[0]!.text));
+        try {
+            const keywordRequests: ModelRequest[] = [];
+            const keywordsCall: CallModel = async (req) => {
+                keywordRequests.push(req);
+                return { keywords: [{ term: 'هندسة البرومبت', why: 'يبحث عنها المبتدئون' }], hashtags: ['#برومبت'] };
+            };
+            const keywords = await suggestKeywords('creator', { topic: 'هندسة البرومبت للمبتدئين' }, { callModel: keywordsCall });
+            if (keywordRequests.length !== 1) throw new Error(`the keyword finder made ${keywordRequests.length} model calls, not one`);
+            if (keywordRequests[0]!.system !== keywordsSystemPrompt(keywords.language)) throw new Error('the keyword finder\'s system prompt is not the one for its language');
+            out.push(text(`growth.keywords-system.${keywords.language}`, setOf(keywords.language), keywordRequests[0]!.system));
+            out.push(text(named('growth.keywords-user', slug), 'elamir', keywordRequests[0]!.turns[0]!.text));
+        } catch (err) {
+            out.push(failed('growth.keywords', err));
+        }
 
-        const coachRequests: ModelRequest[] = [];
-        const coachCall: CallModel = async (req) => {
-            coachRequests.push(req);
-            return { summary: 'ملخص', actions: [{ title: 'اقطع المقدمة', why: '٣ ثوانٍ', how: 'ابدأ بالنتيجة', effort: 'low', impact: 'high' }] };
-        };
-        const coach = await runCoach('creator', { callModel: coachCall, now: COACH_NOW });
-        if (coachRequests.length !== 1) throw new Error(`the coach made ${coachRequests.length} model calls, not one`);
-        if (coachRequests[0]!.system !== coachSystemPrompt(coach.language)) throw new Error('the coach\'s system prompt is not the one for its language');
-        out.push(text(`growth.coach-system.${coach.language}`, setOf(coach.language), coachRequests[0]!.system));
-        out.push(text(named('growth.coach-user', slug), 'elamir', coachRequests[0]!.turns[0]!.text));
+        try {
+            const coachRequests: ModelRequest[] = [];
+            const coachCall: CallModel = async (req) => {
+                coachRequests.push(req);
+                return { summary: 'ملخص', actions: [{ title: 'اقطع المقدمة', why: '٣ ثوانٍ', how: 'ابدأ بالنتيجة', effort: 'low', impact: 'high' }] };
+            };
+            const coach = await runCoach('creator', { callModel: coachCall, now: COACH_NOW });
+            if (coachRequests.length !== 1) throw new Error(`the coach made ${coachRequests.length} model calls, not one`);
+            if (coachRequests[0]!.system !== coachSystemPrompt(coach.language)) throw new Error('the coach\'s system prompt is not the one for its language');
+            out.push(text(`growth.coach-system.${coach.language}`, setOf(coach.language), coachRequests[0]!.system));
+            out.push(text(named('growth.coach-user', slug), 'elamir', coachRequests[0]!.turns[0]!.text));
+        } catch (err) {
+            out.push(failed('growth.coach', err));
+        }
         return out;
     });
 }
 
 // ─── The whole surface of a live tenant ─────────────────────────────────────────────────────
 
+/** A tenant's rows, and the DM agent's persona when it has one. */
+export interface TenantRows extends GrowthRows { agent?: AgentPersona | null }
+
 /**
  * Everything above, for one tenant's rows, with no fixture suffix: what `prompt-parity.mts` hashes. Called twice per
- * tenant, once with the rows as stored and once with the same rows read through the profile.
+ * tenant, once with the rows as stored and once with the same rows read through the profile. A tenant with no agent row
+ * has no DM instruction to hash.
  */
-export async function tenantSurface(rows: GrowthRows): Promise<SurfaceEntry[]> {
+export async function tenantSurface(rows: TenantRows): Promise<SurfaceEntry[]> {
     return [
         ...await studioSurface(rows.studio, { lang: rows.studio.voice.language }),
         ...infographicSurface(rows.studio),
+        ...(rows.agent ? dmInstructionSurface(rows.agent) : []),
         ...dmFallbackSurface(rows.studio),
         ...await growthSurface(rows),
     ];

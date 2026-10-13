@@ -82,29 +82,46 @@ describe('the profile scripts refuse what they do not understand', () => {
 describe('what the scripts can reach, by their source', () => {
     const backfill = readFileSync(BACKFILL, 'utf8');
     const parity = readFileSync(PARITY, 'utf8');
-    const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    /** The code alone: no comments, and not the usage text (which prints the rollback SQL, and is not a statement the script runs). */
+    const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/const USAGE = `[\s\S]*?`;/, '');
+    const count = (src, pattern) => (src.match(pattern) ?? []).length;
 
-    it('the parity script has no write path: no pool, no pg, no statement that changes anything', () => {
+    // What the parity script cannot do is not "it never imports the pool": importing the profile code builds the real pool from
+    // DATABASE_URL anyway. It is that the pool is closed for the whole run (noDatabase.test.ts proves what that does), before
+    // anything is read, and never reopened. That is what is pinned here.
+    it('the parity script closes the application pool before it connects, reads or compares, and never reopens it', () => {
         const src = code(parity);
+        const forbid = src.indexOf('forbidPool(');
+        const connect = src.indexOf('connectReadOnly(');
+        const loads = src.indexOf('loadProfile(');
+        const run = src.indexOf('runParity(');
+        assert.ok(forbid > 0, 'it calls forbidPool');
+        assert.ok(forbid < connect && connect < loads && loads < run, 'forbidPool, then connect, then read, then compare');
+        assert.equal(count(src, /forbidPool\(/g), 1);
+        assert.match(src, /^forbidPool\(\);$/m, 'called as a statement: the function that would reopen the pool is thrown away');
+        assert.doesNotMatch(src, /config\/db|reopen/, 'the script neither imports the pool nor reopens it');
         assert.match(src, /connectReadOnly\(/);
-        assert.doesNotMatch(src, /config\/db/, 'it never imports the pool');
-        assert.doesNotMatch(src, /from 'pg'|require\('pg'\)|new pg\.|Pool\(/);
+        assert.doesNotMatch(src, /from 'pg'|require\('pg'\)|new pg\.|new Pool\(/);
         assert.doesNotMatch(src, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT)\b/);
-        assert.doesNotMatch(src, /backfillTenant|saveProfile/);
+        assert.doesNotMatch(src, /backfillTenant|applyBackfill|saveProfile/);
     });
 
-    it('the backfill script reaches the pool and the write only inside `if (apply)`; everything before it is read-only', () => {
+    it('the backfill script closes the pool for the dry run and reaches the pool and the write only inside `if (apply)`', () => {
         const src = code(backfill);
         const gate = src.indexOf('if (apply) {');
         assert.ok(gate > 0, 'the write is behind --apply');
         const before = src.slice(0, gate);
         const after = src.slice(gate);
-        assert.match(before, /connectReadOnly\(/);
-        assert.doesNotMatch(before, /config\/db|backfillTenant\(|new pg\.|from 'pg'|Pool\(/, 'nothing before the gate can write');
+        assert.ok(before.indexOf('forbidPool(') > 0 && before.indexOf('forbidPool(') < before.indexOf('connectReadOnly('), 'the pool is closed before the dry run connects');
+        assert.match(before, /const reopenPool = forbidPool\(\);/);
+        assert.doesNotMatch(before, /reopenPool\(\)/, 'and not reopened before the gate');
+        assert.doesNotMatch(before, /config\/db|backfillTenant\(|applyBackfill\(|new pg\.|from 'pg'|new Pool\(/, 'nothing before the gate can write');
+        assert.match(after, /reopenPool\(\)/);
         assert.match(after, /import\('\.\.\/src\/config\/db\.js'\)/);
-        assert.match(after, /backfillTenant\(/);
-        // The same check that gates the dry run gates the write: a tenant is written only when the decision says apply.
-        assert.match(after, /decision\.action === 'apply'/);
+        // The write loop's gate is backfill.ts's applyBackfill, unit-tested there: the script only calls it, and only here.
+        assert.equal(count(src, /applyBackfill\(/g), 1);
+        assert.match(after, /applyBackfill\(/);
+        assert.doesNotMatch(src, /backfillTenant\(/, 'the script cannot write a tenant except through the gate');
         assert.doesNotMatch(src, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|GRANT)\b/, 'its own statements only read');
     });
 
@@ -115,5 +132,17 @@ describe('what the scripts can reach, by their source', () => {
             assert.ok(env > 0 && firstImport > env, 'config/db.ts reads DATABASE_URL when it is imported');
             assert.doesNotMatch(src.slice(0, env), /^import .* from '\.\.\/src\//m, 'no static import of the app before the environment is loaded');
         }
+    });
+});
+
+describe('--apply says how to undo it', () => {
+    it('the help prints the rollback SQL, for one tenant, in one transaction, and says when it is valid', async () => {
+        const { stdout } = await script(BACKFILL, ['--help']);
+        assert.ok(
+            stdout.includes("DELETE FROM creator_profile_versions WHERE creator_id=$1 AND version=1 AND source='backfill'; DELETE FROM creator_profiles WHERE creator_id=$1 AND version=1"),
+            stdout
+        );
+        assert.match(stdout, /ONE transaction/);
+        assert.match(stdout, /only valid while the profile is still\s+version 1/);
     });
 });

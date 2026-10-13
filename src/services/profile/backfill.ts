@@ -3,13 +3,16 @@
  * with every decision in a pure function so a test can run it with no database.
  *
  *   assessTenant   one tenant's LIVE rows: is `profileFromLegacy` of them a valid profile, do both lens laws hold
- *                  against them, and does the profile survive being stored? Nothing is written, nothing is printed
- *                  but paths, lengths and counts.
+ *                  against them (and against the profile as it will be READ BACK from storage), and does the profile
+ *                  survive being stored? Nothing is written, nothing is printed but paths, lengths and counts.
  *   decideApply    apply, skip or refuse, from an assessment. A tenant that did not pass is refused.
+ *   applyBackfill  the write loop's gate: a tenant is written only if its assessment, made in this run, says apply.
  *   backfillTenant the write: one transaction, `INSERT … ON CONFLICT (creator_id) DO NOTHING` and a version-1 history
- *                  row (source `backfill`), the statements `saveProfile`'s step 0 sends. It reads the rows again under the
- *                  tenant's lock and assesses them again, so the guard is on the data it writes and not on what a dry run
- *                  saw a minute ago.
+ *                  row (source `backfill`), the statements `saveProfile`'s step 0 sends. It waits at most 5 s for the
+ *                  tenant's lock (`SET LOCAL lock_timeout`, as migration v33 does: a script that queued behind a slow
+ *                  settings write would hold the tenant's mutex and everything behind it). It reads the rows again under
+ *                  the lock and assesses them again, so the guard is on the data it writes and not on what a dry run saw
+ *                  a minute ago.
  *
  * It never mirrors into `studio_settings` / `growth_settings`: the profile it stores is the view those rows already
  * describe (that is what the lens laws checked), so there is nothing to write back. `activated_at` stays NULL.
@@ -23,9 +26,10 @@ import { readGrowthSettings } from '../growth/settingsRow.js';
 import { type Exec, lockTenantSettings, withTransaction } from '../studio/common.js';
 import { readStudioSettings } from '../studio/settingsMerge.js';
 import { upgradeProfile } from './defaults.js';
+import { describeFailure } from './failure.js';
+import { scramble, throughJsonb } from './jsonb.js';
 import { profileFromLegacy } from './legacy.js';
 import { loadStoredProfile } from './store.js';
-import { scramble, throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
 import { profileBytes, validateProfile } from './validate.js';
 import { GROWTH_PROFILE_PATHS, growthView, intoProfile, STUDIO_PROFILE_PATHS, studioView } from './views.js';
@@ -132,14 +136,6 @@ export interface TenantAssessment {
     profile: CreatorProfile | null;
 }
 
-/** A thrown error as a line: its kind and the start of what it says, which for our own code holds no row. */
-const describeFailure = (err: unknown): string => {
-    const e = err as { name?: unknown; message?: unknown } | null;
-    const name = typeof e?.name === 'string' ? e.name : 'Error';
-    const message = typeof e?.message === 'string' ? e.message.replace(/\s+/g, ' ').slice(0, 160) : '';
-    return `${name}: ${message}`;
-};
-
 /**
  * One tenant's live rows against the two lens laws (views.test.ts holds them on the fixtures; this holds them on
  * what is actually in the database) and the validator. The profile is `profileFromLegacy` of the rows, the one a
@@ -147,6 +143,9 @@ const describeFailure = (err: unknown): string => {
  *
  *   studio view          studioView(scramble(studio), p) ≡ studio    every owned field comes from the profile, none from the row
  *   growth view          growthView(scramble(growth), p) ≡ growth
+ *                        Both are held a second time against `upgradeProfile(throughJsonb(p))`, the profile as it is READ BACK
+ *                        once stored (keys reordered as jsonb does, read through the upgrade): that is the profile P4's readers
+ *                        will lay over the rows, so a dry run that passes predicts parity after `--apply`. Reported as `as stored:`.
  *   profile round trip   intoProfile(p, studioView(studio, p), growthView(growth, p)) ≡ p
  *   storage              p survives the trip a stored profile makes (serialised, its keys reordered as jsonb does, read
  *                        through upgradeProfile) with nothing repaired
@@ -181,8 +180,15 @@ export function assessTenant(input: TenantInput): TenantAssessment {
                 lens.push({ law, diffs: [`threw ${describeFailure(err)}`] });
             }
         };
-        check('studio view', () => differences(studio, studioView(scramble(studio, STUDIO_PROFILE_PATHS), p)));
-        check('growth view', () => differences(growth, growthView(scramble(growth, GROWTH_PROFILE_PATHS), p)));
+        /** The view law for one row: against the profile as built, and then, if that holds, against the profile as read back from storage. */
+        const viewLaw = <T extends object>(row: T, paths: readonly string[], view: (stale: T, profile: CreatorProfile) => T): string[] => {
+            const stale = scramble(row, paths);
+            const direct = differences(row, view(stale, p));
+            if (direct.length > 0) return direct;
+            return differences(row, view(stale, upgradeProfile(throughJsonb(p)).profile)).map((d) => `as stored: ${d}`);
+        };
+        check('studio view', () => viewLaw(studio, STUDIO_PROFILE_PATHS, studioView));
+        check('growth view', () => viewLaw(growth, GROWTH_PROFILE_PATHS, growthView));
         check('profile round trip', () => differences(p, intoProfile(p, studioView(studio, p), growthView(growth, p))));
         check('storage', () => {
             const back = upgradeProfile(throughJsonb(p));
@@ -291,6 +297,10 @@ export async function backfillTenant(creatorId: string): Promise<BackfillOutcome
 }
 
 async function backfillIn(creatorId: string, tx: Exec): Promise<BackfillOutcome> {
+    // First, before any lock: `SET LOCAL` ends with the transaction, so nothing outlives it on a pooled connection. Without
+    // a bound, a settings write that is slow to finish would leave this transaction holding the tenant's mutex while it waits
+    // on the next lock, and every other writer for the tenant queues behind both. A timeout is an error for this tenant, not a hang.
+    await tx.query("SET LOCAL lock_timeout = '5s'");
     await lockTenantSettings(tx, creatorId);
 
     const existing = await tx.query<{ version: number }>('SELECT profile, version FROM creator_profiles WHERE creator_id = $1 FOR UPDATE', [creatorId]);
@@ -329,6 +339,39 @@ async function backfillIn(creatorId: string, tx: Exec): Promise<BackfillOutcome>
         [creatorId, 1, json(assessment.profile), 'backfill', null]
     );
     return { id: creatorId, status: 'created', version: 1 };
+}
+
+/**
+ * The write loop. The gate is here and not in the script: a tenant is written only when `decideApply` says so of the
+ * assessment made for it in THIS run (so one that did not pass the dry run is refused, one with a profile or no settings row
+ * is skipped, and a tenant that was never assessed cannot be written at all), and `write` is called for no other. A write that
+ * throws (a lock timeout, a dropped connection) is that tenant's `error`, and the loop goes on: the report says which,
+ * and `hasProblems` makes the run exit 1. `onOutcome` is told each as it happens, for progress.
+ *
+ * `write` is `backfillTenant`, which assesses the rows again under the tenant's lock; the tests hand in their own.
+ */
+export async function applyBackfill(
+    assessments: readonly TenantAssessment[],
+    write: (creatorId: string) => Promise<BackfillOutcome> = backfillTenant,
+    onOutcome: (outcome: AppliedOutcome) => void = () => {}
+): Promise<AppliedOutcome[]> {
+    const outcomes: AppliedOutcome[] = [];
+    for (const a of assessments) {
+        const decision = decideApply(a);
+        let outcome: AppliedOutcome;
+        if (decision.action === 'apply') {
+            try {
+                outcome = await write(a.id);
+            } catch (err) {
+                outcome = { id: a.id, status: 'error', reason: describeFailure(err) };
+            }
+        } else {
+            outcome = { id: a.id, status: decision.action === 'skip' ? 'skipped' : 'refused', reason: decision.reason, assessment: a };
+        }
+        outcomes.push(outcome);
+        onOutcome(outcome);
+    }
+    return outcomes;
 }
 
 // ─── The report ─────────────────────────────────────────────────────────────────────────────
