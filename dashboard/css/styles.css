@@ -127,11 +127,11 @@ bdi { unicode-bidi: isolate; }
 }
 
 :focus-visible {
-    /* HIG focus is a soft ring that glows, not a hard rule. `--accent-ring` is the
-       accent at ~30% alpha, so the halo reads as light around the control rather
-       than a border drawn on it. The solid 2px outline stays underneath at a
-       narrow width so the affordance survives forced-colors and high-contrast
-       modes, where box-shadow is dropped entirely. */
+    /* Focus is a soft ring that glows, not a hard rule. `--accent-ring` is a
+       translucent accent (40% in dark, 45% in light), so the halo reads as light
+       around the control rather than a border drawn on it. The solid 2px outline
+       stays underneath at a narrow width so the affordance survives forced-colors
+       and high-contrast modes, where box-shadow is dropped entirely. */
     outline: 2px solid var(--accent);
     outline-offset: 2px;
     box-shadow: 0 0 0 var(--ring) var(--accent-ring);
@@ -273,13 +273,16 @@ bdi { unicode-bidi: isolate; }
 .sidebar-logo { display: flex; align-items: center; gap: var(--space-3); }
 .logo-mark {
     width: 38px; height: 38px;
-    background: var(--gradient-brand);
+    /* The mark is frozen (tokens.css, "The logo mark"): it paints its own pinned tokens and
+       never --accent or --gradient-brand, so a palette change cannot recolour the logo. */
+    background-color: var(--mark-tile);
+    background-image: var(--mark-tile-lit);
     border-radius: var(--radius-sm);
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
 }
 .logo-mark [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
-.logo-mark svg { color: var(--text-on-accent); }
+.logo-mark svg { color: var(--mark-glyph); }
 .sidebar-brand { font-weight: var(--fw-bold); font-size: var(--fs-300); color: var(--text-strong); }
 
 .sidebar-nav {
@@ -648,18 +651,16 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
    mouse user watching for feedback sees a button that never acknowledged them.
    Colour is the state; the lift is the flourish on top of it.
 
-   `--accent-hover` and `--accent-active` have been in tokens.css since the HIG
-   pass with exactly one consumer between them (`.username-link:hover`). They
-   are the primary button's hover and press, which is what they were named for. */
+   `--accent-hover` and `--accent-active` are the primary button's hover and press
+   (and `.username-link:hover`), which is what they are named for. */
 .btn-primary {
     background: var(--gradient-brand);
     color: var(--text-on-accent);
     box-shadow: var(--elev-glow);
 }
-/* Deeper at every stop than the resting gradient (#0a7cf0 -> #0077ed at the lit
-   edge, #0064cc -> #005bb5 at the foot), so white-on-blue can only GAIN contrast
-   on hover. --accent-hover as a FLAT fill would have taken the whole face to
-   4.32:1, under the 4.5:1 floor the rest of this palette is held to. */
+/* The same lit top as the resting gradient and a deeper foot (--accent-active), so the
+   label keeps its contrast on hover: scripts/check-contrast.mjs measures --text-on-accent
+   on --accent-hover and --accent-active as well as on every stop of the resting gradient. */
 .btn-primary:hover:not(:disabled) {
     background: linear-gradient(180deg, var(--accent-hover), var(--accent) 70%, var(--accent-active));
     transform: translateY(-1px);
@@ -702,10 +703,10 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
 }
 .btn-danger:active:not(:disabled) { background: color-mix(in srgb, var(--danger) 30%, transparent); }
 /* The one variant that must NOT take the global accent ring. Every other button
-   in the product falls through to a blue halo, and a blue halo around "delete
+   in the product falls through to the accent halo, and a cardamom halo around "delete
    permanently" is the interface contradicting itself at the single moment the
-   operator most needs it to be consistent. 32% matches --accent-ring's alpha,
-   so the two rings have the same weight and only differ in hue. */
+   operator most needs it to be consistent. The hue is what matters here: the
+   danger halo is the tone at 32%, a little lighter than --accent-ring. */
 .btn-danger:focus-visible,
 .icon-btn-danger:focus-visible {
     outline-color: var(--danger);
@@ -772,7 +773,7 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
 .btn[aria-busy='true']:active,
 .btn.is-loading:active { transform: none; }
 /* `.spinner`'s own colours are --border-subtle on --accent, which is invisible
-   on a blue primary button and nearly so on a red danger one. Inside a button it
+   on the primary button and nearly so on a red danger one. Inside a button it
    borrows the label's colour instead, so one spinner reads on every variant. */
 .btn .spinner,
 .icon-btn .spinner,
@@ -866,7 +867,7 @@ i[data-lucide] { display: inline-block; flex-shrink: 0; }
     box-shadow: 0 0 0 var(--ring) var(--accent-ring);
 }
 /* Invalid: a red ring in place of the accent one. Same specificity as `:focus` above and
-   written after it, so a focused invalid field stays red instead of turning blue. */
+   written after it, so a focused invalid field stays red instead of turning to the accent. */
 .field[aria-invalid='true'], .field-textarea[aria-invalid='true'], .select[aria-invalid='true'] {
     border-color: var(--danger);
     box-shadow: 0 0 0 var(--ring) color-mix(in srgb, var(--danger) 32%, transparent);
@@ -904,7 +905,7 @@ input[type='checkbox'] { accent-color: var(--accent); inline-size: 24px; block-s
 .switch-track {
     position: absolute; inset: 0;
     cursor: pointer;
-    /* HIG "secondary fill" rather than a surface: an off switch is a tinted well,
+    /* A tinted fill rather than a surface: an off switch is a tinted well,
        not a floating panel, and it must not blur what is behind it. */
     background: var(--surface-glass);
     border: 1px solid var(--border-strong);
@@ -1271,14 +1272,16 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .login-logo { margin-block-end: var(--space-6); }
 .login-mark {
     width: 62px; height: 62px;
-    background: var(--gradient-brand);
+    /* Frozen, like .logo-mark: pinned mark tokens, not the accent. */
+    background-color: var(--mark-tile);
+    background-image: var(--mark-tile-lit);
     border-radius: var(--radius-lg);
     display: inline-flex; align-items: center; justify-content: center;
     margin-block-end: var(--space-4);
     box-shadow: var(--elev-glow);
 }
 .login-mark [data-lucide] { inline-size: 30px; block-size: 30px; }
-.login-mark svg { color: var(--text-on-accent); }
+.login-mark svg { color: var(--mark-glyph); }
 .login-title { font-size: var(--fs-600); color: var(--text-strong); }
 .login-subtitle { color: var(--text-muted); font-size: var(--fs-200); margin-block-start: var(--space-2); }
 .login-form { display: flex; flex-direction: column; gap: var(--space-4); text-align: start; }

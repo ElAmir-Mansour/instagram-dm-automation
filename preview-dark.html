@@ -1,0 +1,578 @@
+<!doctype html>
+<!--
+  AutoReply Pro · أوتوريبلاي برو — design preview, DARK
+
+  The catalog DESIGN.md points at (the awesome-design-md convention): open this file, and preview-dark.html, from the
+  repo root. Plain static files, no build, no server. Both load dashboard/css/tokens.css by relative path and read every
+  value they show live (getComputedStyle), so a token edit shows up here on reload and the page cannot drift from the
+  system. preview.html forces the light theme and preview-dark.html forces dark; the two are the same file apart from
+  six spots (the theme attribute, the colour-scheme meta, the title, the theme label, the link to the other file and
+  the word LIGHT/DARK above), and src/dashboard/design-md.test.ts checks that.
+
+  Every colour on this page is a token; the one exception is the "next" mark in section 12, whose planned values are
+  DESIGN.md §4's and are local to the page. The components below follow DESIGN.md §4, in the order of its states
+  (rest, hover, active, focus-visible, selected, disabled, busy, invalid). Hover, active and focus are drawn with
+  forced-state classes, because a static page cannot hold :hover. The real rules live in dashboard/css/styles.css.
+-->
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="robots" content="noindex">
+    <title>AutoReply Pro · preview · dark</title>
+    <link rel="stylesheet" href="dashboard/css/tokens.css">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html { font-size: 100%; -webkit-text-size-adjust: 100%; }
+        body {
+            font-family: var(--font-ui);
+            font-size: var(--fs-300);
+            line-height: var(--lh-normal);
+            color: var(--text-default);
+            background: var(--surface-page);
+            min-block-size: 100dvh;
+        }
+        /* The ambient field, as the app paints it: one radial, nothing else. */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            z-index: -1;
+            background: var(--surface-ambient);
+        }
+        bdi { unicode-bidi: isolate; }
+        :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-xs); }
+
+        .wrap { max-inline-size: 72rem; margin-inline: auto; padding: var(--space-5) clamp(var(--space-4), 2.5vw, var(--space-6)) var(--space-8); }
+
+        /* ─── Header: what this is, the theme, the direction ─────────────────────────────── */
+        .bar {
+            z-index: var(--z-header);
+            background: var(--surface-chrome);
+            -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+            backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+            border-block-end: 1px solid var(--border-subtle);
+        }
+        .bar-inner {
+            max-inline-size: 72rem; margin-inline: auto;
+            padding: var(--space-3) clamp(var(--space-4), 2.5vw, var(--space-6));
+            display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-5);
+        }
+        @media (min-width: 40rem) { .bar { position: sticky; inset-block-start: 0; } }
+        section { scroll-margin-block-start: 9rem; }
+        .bar-sections { max-inline-size: 72rem; margin-inline: auto; padding: 0 clamp(var(--space-4), 2.5vw, var(--space-6)) var(--space-3); display: flex; gap: var(--space-1); overflow-x: auto; }
+        .bar-sections a { white-space: nowrap; flex: none; }
+        .bar h1 { font-size: var(--fs-400); font-weight: var(--fw-bold); line-height: var(--lh-tight); color: var(--text-strong); margin-inline-end: auto; }
+        .bar h1 small { font-size: var(--fs-100); font-weight: var(--fw-regular); color: var(--text-muted); display: block; }
+        .bar nav { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+        .bar .bar-sections { flex-wrap: nowrap; }
+        .bar a, .bar button {
+            font: inherit; font-size: var(--fs-100); font-weight: var(--fw-medium); line-height: var(--lh-normal);
+            color: var(--text-default); background: var(--surface-glass); border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3); min-block-size: var(--tap-target);
+            display: inline-flex; align-items: center; text-decoration: none; cursor: pointer;
+        }
+        .bar a:hover, .bar button:hover { background: var(--surface-glass-hover); color: var(--text-strong); }
+        .bar [aria-pressed='true'], .bar [aria-current='page'] { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-ring); }
+
+        /* ─── Sections ─────────────────────────────────────────────────────────────────── */
+        section { margin-block-start: var(--space-8); }
+        section > h2 { font-size: var(--fs-500); line-height: var(--lh-tight); font-weight: var(--fw-bold); color: var(--text-strong); }
+        section > p.lede { color: var(--text-muted); font-size: var(--fs-200); max-inline-size: 62ch; margin-block: var(--space-1) var(--space-5); }
+        h3.sub { font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); margin-block: var(--space-5) var(--space-2); }
+        .grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr)); }
+        .row { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; }
+        .label { font-size: var(--fs-100); color: var(--text-muted); line-height: var(--lh-normal); }
+        code, .mono { font-family: var(--font-mono); font-size: var(--fs-100); direction: ltr; unicode-bidi: isolate; }
+
+        /* ─── 1. Palette ──────────────────────────────────────────────────────────────── */
+        .sw { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; background: var(--surface-solid); }
+        /* A checker under the swatch, so a translucent token reads as translucent. */
+        .sw-chip {
+            block-size: 3.25rem;
+            background-image: linear-gradient(45deg, var(--border-strong) 25%, transparent 25% 75%, var(--border-strong) 75%),
+                              linear-gradient(45deg, var(--border-strong) 25%, transparent 25% 75%, var(--border-strong) 75%);
+            background-size: 12px 12px; background-position: 0 0, 6px 6px;
+            position: relative;
+        }
+        .sw-chip::after { content: ''; position: absolute; inset: 0; background: var(--swatch); }
+        .sw-meta { padding: var(--space-2) var(--space-3); display: grid; gap: 2px; }
+        .sw-name { font-family: var(--font-mono); font-size: var(--fs-100); color: var(--text-strong); direction: ltr; text-align: start; unicode-bidi: isolate; }
+        .sw-val { font-family: var(--font-mono); font-size: var(--fs-100); color: var(--text-muted); overflow-wrap: anywhere; direction: ltr; text-align: start; unicode-bidi: isolate; }
+
+        /* ─── 2. Contrast ─────────────────────────────────────────────────────────────── */
+        .table-wrap { overflow-x: auto; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-solid); }
+        table { border-collapse: collapse; inline-size: 100%; font-size: var(--fs-100); }
+        th, td { padding: var(--space-2) var(--space-3); text-align: start; border-block-end: 1px solid var(--border-subtle); vertical-align: middle; }
+        th { color: var(--text-muted); font-weight: var(--fw-semibold); }
+        tr:last-child td { border-block-end: 0; }
+        td.num { font-variant-numeric: tabular-nums; font-family: var(--font-mono); direction: ltr; text-align: start; }
+        .pass, .fail { display: inline-block; padding: 2px var(--space-2); border-radius: var(--radius-pill); font-weight: var(--fw-semibold); font-size: var(--fs-100); }
+        .pass { background: var(--success-soft); color: var(--success-text); }
+        .fail { background: var(--danger-soft); color: var(--danger-text); }
+        .sample { padding: 2px var(--space-2); border-radius: var(--radius-xs); font-weight: var(--fw-semibold); }
+
+        /* ─── 3. Type ─────────────────────────────────────────────────────────────────── */
+        .type-row { display: grid; grid-template-columns: 7rem 1fr 1fr; gap: var(--space-4); align-items: baseline; padding-block: var(--space-3); border-block-end: 1px solid var(--border-subtle); }
+        .type-row:last-child { border-block-end: 0; }
+        .type-row .t { color: var(--text-strong); line-height: var(--lh-tight); overflow-wrap: anywhere; }
+        @media (max-width: 40rem) { .type-row { grid-template-columns: 1fr; gap: var(--space-1); } }
+
+        /* ─── Surfaces for demos ──────────────────────────────────────────────────────── */
+        .card { background: var(--surface-solid); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-5); }
+        .glass { background: var(--surface-raised); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-5); -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(180%); backdrop-filter: blur(var(--blur-glass)) saturate(180%); box-shadow: var(--elev-2); }
+        .overlay { background: var(--surface-overlay); border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); padding: var(--space-5); -webkit-backdrop-filter: blur(var(--blur-elevated)) saturate(180%); backdrop-filter: blur(var(--blur-elevated)) saturate(180%); box-shadow: var(--elev-3); }
+        .stage { background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: var(--space-5); }
+        .card h4, .glass h4, .overlay h4 { font-size: var(--fs-300); color: var(--text-strong); line-height: var(--lh-tight); margin-block-end: var(--space-2); }
+        .card p, .glass p, .overlay p { font-size: var(--fs-200); }
+
+        /* ─── 4. Buttons (DESIGN.md §4) ───────────────────────────────────────────────── */
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+            padding: var(--space-3) var(--space-5); min-block-size: var(--tap-target);
+            border: 1px solid transparent; border-radius: var(--radius-sm);
+            font: inherit; font-weight: var(--fw-semibold); font-size: var(--fs-200); line-height: var(--lh-normal);
+            cursor: default; text-decoration: none; background: none; color: var(--text-default);
+            transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
+        }
+        .btn-primary { background: var(--gradient-brand); color: var(--text-on-accent); box-shadow: var(--elev-glow); }
+        .btn-primary.is-hover { background: linear-gradient(180deg, var(--accent-hover), var(--accent) 70%, var(--accent-active)); transform: translateY(-1px); }
+        .btn-primary.is-active { background: var(--accent-active); box-shadow: none; transform: scale(0.97); }
+        .btn-primary.is-focus { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: var(--elev-glow), 0 0 0 var(--ring) var(--accent-ring); }
+        .btn-secondary { background: var(--surface-glass); color: var(--text-strong); border-color: var(--border-subtle); }
+        .btn-secondary.is-hover { background: var(--surface-glass-hover); border-color: var(--border-strong); }
+        .btn-secondary.is-active { background: color-mix(in srgb, var(--text-strong) 14%, transparent); border-color: var(--border-strong); }
+        .btn-secondary.is-focus, .btn-ghost.is-focus { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 var(--ring) var(--accent-ring); }
+        .btn-ghost { color: var(--text-default); }
+        .btn-ghost.is-hover { background: var(--surface-glass-hover); color: var(--text-strong); }
+        .btn-ghost.is-active { background: color-mix(in srgb, var(--text-strong) 14%, transparent); color: var(--text-strong); }
+        .btn-danger { background: var(--danger-soft); color: var(--danger-text); border-color: var(--border-danger); }
+        .btn-danger.is-hover { background: color-mix(in srgb, var(--danger) 22%, transparent); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+        .btn-danger.is-active { background: color-mix(in srgb, var(--danger) 30%, transparent); }
+        .btn-danger.is-focus { outline: 2px solid var(--danger); outline-offset: 2px; box-shadow: 0 0 0 var(--ring) color-mix(in srgb, var(--danger) 32%, transparent); }
+        .btn.is-disabled { opacity: var(--opacity-disabled); cursor: not-allowed; box-shadow: none; transform: none; }
+        .btn.is-busy { opacity: var(--opacity-busy); }
+        .spin { inline-size: 1em; block-size: 1em; border-radius: 50%; border: 2px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .matrix-scroll { overflow-x: auto; padding-block: var(--space-2); }
+        .matrix-inner { display: grid; grid-template-columns: 6rem repeat(6, minmax(7rem, 1fr)); gap: var(--space-3) var(--space-4); align-items: center; min-inline-size: 52rem; }
+        .matrix-inner .head { font-size: var(--fs-100); color: var(--text-muted); font-weight: var(--fw-semibold); }
+
+        /* ─── 5. Inputs ───────────────────────────────────────────────────────────────── */
+        .field { display: grid; gap: var(--space-1); }
+        .field label { font-size: var(--fs-200); font-weight: var(--fw-medium); color: var(--text-strong); }
+        .input {
+            inline-size: 100%; padding: var(--space-3); min-block-size: var(--tap-target);
+            background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+            color: var(--text-strong); font: inherit; font-size: var(--fs-200); line-height: var(--lh-normal);
+        }
+        textarea.input { line-height: var(--lh-loose); min-block-size: 6rem; resize: vertical; }
+        .input::placeholder { color: var(--text-muted); opacity: 1; }
+        .input.is-focus { border-color: var(--accent); box-shadow: 0 0 0 var(--ring) var(--accent-ring); outline: 2px solid transparent; }
+        .input.is-invalid { border-color: var(--danger); box-shadow: 0 0 0 var(--ring) color-mix(in srgb, var(--danger) 32%, transparent); }
+        .input.is-disabled { opacity: var(--opacity-disabled); }
+        select.input { appearance: none; background-image: var(--select-chevron); background-repeat: no-repeat; background-position: right var(--space-3) center; padding-inline-end: var(--space-7); }
+        :root[dir='rtl'] select.input { background-position: left var(--space-3) center; }
+        .hint { font-size: var(--fs-100); color: var(--text-muted); }
+        .hint.err { color: var(--danger-text); }
+
+        /* ─── 7. Chips, badges, pills ─────────────────────────────────────────────────── */
+        .chip { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); background: var(--surface-glass-hover); border: 1px solid var(--border-subtle); font-size: var(--fs-100); color: var(--text-default); line-height: var(--lh-normal); }
+        .chip-accent { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+        .chip-danger { background: var(--danger-soft); color: var(--danger-text); border-color: var(--border-danger); }
+        .badge { display: inline-flex; align-items: center; gap: var(--space-1); padding: var(--space-1) var(--space-2); font-size: var(--fs-100); font-weight: var(--fw-semibold); border-radius: var(--radius-pill); white-space: nowrap; line-height: var(--lh-normal); }
+        .badge-success { background: var(--success-soft); color: var(--success-text); }
+        .badge-warning { background: var(--warning-soft); color: var(--warning-text); }
+        .badge-danger { background: var(--danger-soft); color: var(--danger-text); }
+        .badge-info { background: var(--info-soft); color: var(--info-text); }
+        .badge-instagram { background: var(--brand-instagram-soft); color: var(--brand-instagram-text); }
+        .badge-facebook { background: var(--brand-facebook-soft); color: var(--brand-facebook-text); }
+        .badge-tiktok { background: var(--brand-tiktok-soft); color: var(--text-strong); }
+        .badge-youtube { background: var(--brand-youtube-soft); color: var(--text-strong); }
+        .platform-tag { display: inline-flex; align-items: center; font-size: var(--fs-100); font-weight: var(--fw-semibold); padding: 2px var(--space-2); border-radius: var(--radius-xs); line-height: var(--lh-normal); }
+        .platform-tag.ig { background: var(--brand-instagram-soft); color: var(--brand-instagram-text); }
+        .platform-tag.fb { background: var(--brand-facebook-soft); color: var(--brand-facebook-text); }
+        .bar-data { block-size: 10px; border-radius: var(--radius-pill); inline-size: 100%; background: var(--surface-glass); overflow: hidden; display: flex; }
+        .bar-data i { display: block; block-size: 100%; }
+        .bar-ig { background: var(--brand-instagram); } .bar-fb { background: var(--brand-facebook); }
+
+        /* ─── 8. The keyword highlight: the signature ─────────────────────────────────── */
+        .kw { border-radius: var(--radius-sm); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-ring); color: var(--accent-text); padding: 0.1em 0.3em; margin-inline: -0.2em; font-weight: var(--fw-semibold); }
+        .eyebrow { display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent-ring); color: var(--accent-text); font-size: var(--fs-200); font-weight: var(--fw-semibold); line-height: var(--lh-normal); }
+        .eyebrow::before { content: ''; inline-size: 6px; block-size: 6px; border-radius: 50%; background: currentColor; }
+        .said { font-size: var(--fs-300); color: var(--text-strong); }
+
+        /* ─── 9. DM bubbles ───────────────────────────────────────────────────────────── */
+        .thread { display: grid; gap: var(--space-2); }
+        .rowb { display: flex; }
+        .rowb.in { justify-content: flex-start; } .rowb.out { justify-content: flex-end; }
+        .bubble { max-inline-size: min(68ch, 78%); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-size: var(--fs-200); line-height: var(--lh-loose); display: flex; flex-direction: column; gap: var(--space-2); unicode-bidi: plaintext; overflow-wrap: anywhere; }
+        .bubble.in { background: var(--surface-sunken); border: 1px solid var(--border-subtle); color: var(--text-strong); border-start-start-radius: var(--radius-xs); }
+        .bubble.out { background: var(--gradient-brand); color: var(--text-on-accent); border-start-end-radius: var(--radius-xs); }
+        .bubble.pending { opacity: 0.55; }
+        .bubble time { font-size: var(--fs-100); color: color-mix(in srgb, currentColor 78%, transparent); align-self: flex-end; font-variant-numeric: tabular-nums; }
+        .bubble.hero { background: var(--accent); color: var(--text-on-accent); border-radius: var(--radius-lg); border-end-end-radius: var(--radius-sm); }
+
+        /* ─── 11. Nav ─────────────────────────────────────────────────────────────────── */
+        .nav { display: grid; gap: var(--space-1); inline-size: min(100%, 17rem); background: var(--surface-chrome); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-2); }
+        .nav-item { position: relative; display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); min-block-size: var(--tap-target); border-radius: var(--radius-sm); font-size: var(--fs-200); font-weight: var(--fw-medium); color: var(--text-default); }
+        .nav-item svg { inline-size: var(--icon-lg); block-size: var(--icon-lg); flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .nav-item.is-hover { background: var(--surface-glass-hover); color: var(--text-strong); }
+        .nav-item.is-active { color: var(--text-strong); background: var(--accent-soft); border-inline-start: 2px solid var(--accent); }
+
+        /* ─── 12. Mark ────────────────────────────────────────────────────────────────── */
+        /* The frozen mark: pinned tokens, exactly as .logo-mark and .login-mark paint them. */
+        .mark { display: inline-flex; align-items: center; justify-content: center; flex: none; background-color: var(--mark-tile); background-image: var(--mark-tile-lit); }
+        .mark svg { color: var(--mark-glyph); fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .mark.lg { inline-size: 62px; block-size: 62px; border-radius: var(--radius-lg); box-shadow: var(--elev-glow); }
+        .mark.lg svg { inline-size: 30px; block-size: 30px; }
+        .mark.sm { inline-size: 38px; block-size: 38px; border-radius: var(--radius-sm); }
+        .mark.sm svg { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
+        /* The planned ر mark (DESIGN.md §4): local to this page, because it is not in tokens.css yet. */
+        :root { --next-tile: var(--accent); --next-glyph: var(--text-on-accent); }
+        :root[data-theme='light'] { --next-tile: #1a1c15; --next-glyph: #bcde70; }
+        .next-tile { inline-size: 62px; block-size: 62px; border-radius: 15px; background: var(--next-tile); display: inline-flex; }
+        .next-tile svg { inline-size: 100%; block-size: 100%; }
+        .wordmark { display: flex; align-items: center; gap: var(--space-3); }
+        .wordmark b { display: block; font-size: var(--fs-300); color: var(--text-strong); line-height: var(--lh-tight); }
+        .wordmark small { display: block; font-size: var(--fs-100); color: var(--text-muted); line-height: var(--lh-tight); }
+
+        /* ─── Bidi: Latin runs stay LTR inside an RTL page ────────────────────────────── */
+        .ltr { direction: ltr; text-align: start; unicode-bidi: isolate; }
+        .rtl { direction: rtl; text-align: start; unicode-bidi: isolate; }
+        /* The catalog's own English prose keeps its punctuation at the right end in either direction, and
+           still aligns to the reading start of the page around it (the physical text-align is the point). */
+        section > h2, section > p.lede, h3.sub, .hint, .label, .bar h1 small { direction: ltr; unicode-bidi: isolate; }
+        :root[dir='rtl'] section > h2, :root[dir='rtl'] section > p.lede, :root[dir='rtl'] h3.sub, :root[dir='rtl'] .hint, :root[dir='rtl'] .label { text-align: right; }
+        @media (prefers-reduced-motion: reduce) { * { animation-duration: 1ms !important; transition-duration: 1ms !important; } }
+    </style>
+</head>
+<body>
+    <header class="bar">
+        <div class="bar-inner">
+            <h1>AutoReply Pro · <bdi lang="ar" dir="rtl">أوتوريبلاي برو</bdi>
+                <small>design preview · <span id="theme-name">dark</span> · <span id="dir-name"></span> · reads <code>dashboard/css/tokens.css</code> live</small>
+            </h1>
+            <nav aria-label="Preview controls">
+                <button type="button" id="dir-toggle" aria-pressed="false">RTL ⇄ LTR</button>
+                <a href="preview.html">Light preview</a>
+            </nav>
+        </div>
+        <nav class="bar-sections" aria-label="Sections">
+            <a href="#palette">Palette</a><a href="#contrast">Contrast</a><a href="#type">Type</a><a href="#buttons">Buttons</a><a href="#inputs">Inputs</a><a href="#cards">Cards</a><a href="#chips">Chips</a><a href="#kw">.kw</a><a href="#dm">DM</a><a href="#platform">Platforms</a><a href="#nav">Nav</a><a href="#mark">Mark</a>
+        </nav>
+    </header>
+
+    <main class="wrap">
+        <!-- 1 ─── Palette ─────────────────────────────────────────────────────────────── -->
+        <section id="palette">
+            <h2>1 · Palette</h2>
+            <p class="lede">Every colour token, read live. Translucent tokens sit on a checker so you can see what they are. Fill and label are different tokens: never swap them.</p>
+            <div id="swatches"></div>
+        </section>
+
+        <!-- 2 ─── Contrast ────────────────────────────────────────────────────────────── -->
+        <section id="contrast">
+            <h2>2 · Contrast</h2>
+            <p class="lede">The guard's arithmetic, run in the page: each translucent layer is composited down to the opaque canvas, then WCAG. Text floor 4.5:1; a shape (focus outline, active marker) 3:1. <code>npm run check:contrast</code> is the authority; this is the picture.</p>
+            <div class="table-wrap"><table>
+                <thead><tr><th>Pair</th><th>Ground</th><th>Ratio</th><th>Floor</th><th></th><th>Sample</th></tr></thead>
+                <tbody id="contrast-rows"></tbody>
+            </table></div>
+        </section>
+
+        <!-- 3 ─── Type ────────────────────────────────────────────────────────────────── -->
+        <section id="type">
+            <h2>3 · Type</h2>
+            <p class="lede">The system stack (<code>--font-ui</code>); no webfont yet. Arabic leads, Latin is a peer, line-height is never <code>normal</code>, and Arabic letter-spacing is always 0. Latin digits everywhere.</p>
+            <div class="card" id="type-scale">
+                <div class="type-row"><span class="label">--fs-700 · 36</span><span class="t rtl" lang="ar" style="font-size:var(--fs-700);font-weight:var(--fw-bold)">كل تعليق ضيف</span><span class="t ltr" lang="en" style="font-size:var(--fs-700);font-weight:var(--fw-bold)">Every comment is a guest</span></div>
+                <div class="type-row"><span class="label">--fs-600 · 28</span><span class="t rtl" lang="ar" style="font-size:var(--fs-600);font-weight:var(--fw-bold)">والضيف يُجاب</span><span class="t ltr" lang="en" style="font-size:var(--fs-600);font-weight:var(--fw-bold)">and a guest is answered</span></div>
+                <div class="type-row"><span class="label">--fs-500 · 22</span><span class="t rtl" lang="ar" style="font-size:var(--fs-500);font-weight:var(--fw-bold)">لوحة التحكم</span><span class="t ltr" lang="en" style="font-size:var(--fs-500);font-weight:var(--fw-bold)">Dashboard</span></div>
+                <div class="type-row"><span class="label">--fs-400 · 18</span><span class="t rtl" lang="ar" style="font-size:var(--fs-400);font-weight:var(--fw-semibold)">حملات التعليقات إلى رسائل خاصة</span><span class="t ltr" lang="en" style="font-size:var(--fs-400);font-weight:var(--fw-semibold)">Comment-to-DM campaigns</span></div>
+                <div class="type-row"><span class="label">--fs-300 · 16</span><span class="t rtl" lang="ar" style="font-size:var(--fs-300);font-weight:var(--fw-regular);color:var(--text-default)">تعتمد كل ريل قبل نشره، ولا يُنشر شيء بلا موافقتك.</span><span class="t ltr" lang="en" style="font-size:var(--fs-300);font-weight:var(--fw-regular);color:var(--text-default)">You approve every reel before it posts.</span></div>
+                <div class="type-row"><span class="label">--fs-200 · 14</span><span class="t rtl" lang="ar" style="font-size:var(--fs-200);font-weight:var(--fw-medium);color:var(--text-default)">الواجهة الافتراضية: أزرار وحقول وجداول</span><span class="t ltr" lang="en" style="font-size:var(--fs-200);font-weight:var(--fw-medium);color:var(--text-default)">The UI default: buttons, fields, tables</span></div>
+                <div class="type-row"><span class="label">--fs-100 · 12</span><span class="t rtl" lang="ar" style="font-size:var(--fs-100);color:var(--text-muted)">الحد الأدنى: ملاحظات وأوقات <bdi lang="en" dir="ltr">13:00</bdi></span><span class="t ltr" lang="en" style="font-size:var(--fs-100);color:var(--text-muted)">The floor: meta and timestamps 13:00</span></div>
+                <div class="type-row"><span class="label">weights</span><span class="t rtl" lang="ar"><span style="font-weight:var(--fw-regular)">عادي</span> · <span style="font-weight:var(--fw-medium)">متوسط</span> · <span style="font-weight:var(--fw-semibold)">شبه عريض</span> · <span style="font-weight:var(--fw-bold)">عريض</span></span><span class="t ltr" lang="en"><span style="font-weight:var(--fw-regular)">400</span> · <span style="font-weight:var(--fw-medium)">500</span> · <span style="font-weight:var(--fw-semibold)">600</span> · <span style="font-weight:var(--fw-bold)">700</span></span></div>
+                <div class="type-row"><span class="label">--font-mono</span><span class="t mono ltr" style="font-size:var(--fs-200)">comment_id 17914520…</span><span class="t mono ltr" style="font-size:var(--fs-200)">POST /webhook → 200</span></div>
+            </div>
+        </section>
+
+        <!-- 4 ─── Buttons ─────────────────────────────────────────────────────────────── -->
+        <section id="buttons">
+            <h2>4 · Buttons</h2>
+            <p class="lede">States, in DESIGN.md's order. One primary (filled) action per view. Hover, active and focus are forced here with classes.</p>
+            <div class="stage matrix-scroll" role="region" aria-label="Button states" tabindex="0"><div class="matrix-inner">
+                <span></span><span class="head">rest</span><span class="head">hover</span><span class="head">active</span><span class="head">focus-visible</span><span class="head">disabled</span><span class="head">busy</span>
+                <span class="head">primary</span>
+                <button class="btn btn-primary" type="button">Publish</button>
+                <button class="btn btn-primary is-hover" type="button">Publish</button>
+                <button class="btn btn-primary is-active" type="button">Publish</button>
+                <button class="btn btn-primary is-focus" type="button">Publish</button>
+                <button class="btn btn-primary is-disabled" type="button" disabled>Publish</button>
+                <button class="btn btn-primary is-busy" type="button" aria-busy="true"><span class="spin" aria-hidden="true"></span>Publishing</button>
+                <span class="head">secondary</span>
+                <button class="btn btn-secondary" type="button">Save</button>
+                <button class="btn btn-secondary is-hover" type="button">Save</button>
+                <button class="btn btn-secondary is-active" type="button">Save</button>
+                <button class="btn btn-secondary is-focus" type="button">Save</button>
+                <button class="btn btn-secondary is-disabled" type="button" disabled>Save</button>
+                <button class="btn btn-secondary is-busy" type="button" aria-busy="true"><span class="spin" aria-hidden="true"></span>Saving</button>
+                <span class="head">ghost</span>
+                <button class="btn btn-ghost" type="button">Cancel</button>
+                <button class="btn btn-ghost is-hover" type="button">Cancel</button>
+                <button class="btn btn-ghost is-active" type="button">Cancel</button>
+                <button class="btn btn-ghost is-focus" type="button">Cancel</button>
+                <button class="btn btn-ghost is-disabled" type="button" disabled>Cancel</button>
+                <span></span>
+                <span class="head">danger</span>
+                <button class="btn btn-danger" type="button">Delete</button>
+                <button class="btn btn-danger is-hover" type="button">Delete</button>
+                <button class="btn btn-danger is-active" type="button">Delete</button>
+                <button class="btn btn-danger is-focus" type="button">Delete</button>
+                <button class="btn btn-danger is-disabled" type="button" disabled>Delete</button>
+                <span></span>
+            </div></div>
+            <h3 class="sub">Arabic labels</h3>
+            <div class="row">
+                <button class="btn btn-primary" type="button" lang="ar">انشر الآن</button>
+                <button class="btn btn-secondary" type="button" lang="ar">احفظ المسودّة</button>
+                <button class="btn btn-ghost" type="button" lang="ar">إلغاء</button>
+                <button class="btn btn-danger" type="button" lang="ar">حذف الحملة</button>
+            </div>
+        </section>
+
+        <!-- 5 ─── Inputs ──────────────────────────────────────────────────────────────── -->
+        <section id="inputs">
+            <h2>5 · Inputs</h2>
+            <p class="lede">Sunken well, hairline border, 44px. Focus is the accent border plus the ring; invalid is danger plus a 32% danger ring; disabled is <code>--opacity-disabled</code>.</p>
+            <div class="grid">
+                <div class="field"><label for="i-rest">Keyword · الكلمة المفتاحية</label><input class="input" id="i-rest" placeholder="دليل" dir="auto"><span class="hint">rest</span></div>
+                <div class="field"><label for="i-focus">Keyword</label><input class="input is-focus" id="i-focus" value="دليل" dir="auto"><span class="hint">focus</span></div>
+                <div class="field"><label for="i-bad">Keyword</label><input class="input is-invalid" id="i-bad" value="" placeholder="required" aria-invalid="true"><span class="hint err">Enter a keyword · أدخل كلمة</span></div>
+                <div class="field"><label for="i-dis">Keyword</label><input class="input is-disabled" id="i-dis" value="guide" disabled><span class="hint">disabled</span></div>
+                <div class="field"><label for="i-sel">Platform</label><select class="input" id="i-sel"><option>Instagram · إنستجرام</option><option>Facebook · فيسبوك</option></select><span class="hint">select</span></div>
+                <div class="field"><label for="i-ta">DM · الرسالة الخاصة</label><textarea class="input" id="i-ta" dir="auto">أهلاً بك! هذا دليل البدء، وستجد الرابط أدناه.</textarea><span class="hint">textarea, <code>--lh-loose</code></span></div>
+            </div>
+        </section>
+
+        <!-- 6 ─── Cards and depth ─────────────────────────────────────────────────────── -->
+        <section id="cards">
+            <h2>6 · Cards and depth</h2>
+            <p class="lede">Three roles: glass floats over scrolling content, solid is anything that must render predictably (every grid card), tint is a small inline fill. The bands behind the glass here are only to show it.</p>
+            <div class="grid" style="position:relative">
+                <div class="card"><h4>Solid · <bdi lang="ar" dir="rtl">صلب</bdi></h4><p>--surface-solid. Cards in any scrolling grid are solid.</p></div>
+                <div class="stage"><h4 style="font-size:var(--fs-300);color:var(--text-strong);margin-block-end:var(--space-2)">Sunken · <bdi lang="ar" dir="rtl">غائر</bdi></h4><p style="font-size:var(--fs-200)">--surface-sunken. Wells, inputs, the inbound bubble.</p></div>
+                <div style="position:relative;border-radius:var(--radius-lg);padding:var(--space-4);background:var(--surface-glass-hover)">
+                    <div class="glass"><h4>Glass · <bdi lang="ar" dir="rtl">زجاج</bdi></h4><p>--surface-raised with blur. A lone panel only.</p></div>
+                </div>
+                <div style="position:relative;border-radius:var(--radius-lg);padding:var(--space-4);background:var(--surface-scrim)">
+                    <div class="overlay"><h4>Overlay · <bdi lang="ar" dir="rtl">نافذة</bdi></h4><p>--surface-overlay, --elev-3. The modal.</p></div>
+                </div>
+            </div>
+            <h3 class="sub">Elevation</h3>
+            <div class="row">
+                <div class="card" style="box-shadow:var(--elev-1);min-inline-size:9rem"><span class="label">--elev-1</span></div>
+                <div class="card" style="box-shadow:var(--elev-2);min-inline-size:9rem"><span class="label">--elev-2</span></div>
+                <div class="card" style="box-shadow:var(--elev-3);min-inline-size:9rem"><span class="label">--elev-3</span></div>
+                <div class="card" style="box-shadow:var(--elev-glow);min-inline-size:9rem"><span class="label">--elev-glow</span></div>
+            </div>
+            <h3 class="sub">Radius</h3>
+            <div class="row" id="radii"></div>
+        </section>
+
+        <!-- 7 ─── Chips ───────────────────────────────────────────────────────────────── -->
+        <section id="chips">
+            <h2>7 · Chips, badges, pills</h2>
+            <p class="lede">Pill radius, 12px. A status is a tone's soft tint with its <code>-text</code> label; cardamom is never a status.</p>
+            <div class="row">
+                <span class="chip">Draft · مسودّة</span>
+                <span class="chip chip-accent">Selected · محدّد</span>
+                <span class="chip chip-danger">Blocked · محظور</span>
+            </div>
+            <div class="row" style="margin-block-start:var(--space-3)">
+                <span class="badge badge-success">Published · منشور</span>
+                <span class="badge badge-warning">Pending · قيد الانتظار</span>
+                <span class="badge badge-danger">Failed · فشل</span>
+                <span class="badge badge-info">Scheduled · مجدول</span>
+            </div>
+        </section>
+
+        <!-- 8 ─── .kw ─────────────────────────────────────────────────────────────────── -->
+        <section id="kw">
+            <h2>8 · The keyword highlight <code>.kw</code></h2>
+            <p class="lede">The signature. A highlighter on the one word that triggers the campaign, or the one word that matters in a block. Never more than one per block.</p>
+            <div class="grid">
+                <div class="card"><p class="said" lang="ar" dir="rtl">كم <span class="kw">السعر</span>؟ وهل فيه توصيل؟</p></div>
+                <div class="card"><p class="said" lang="en" dir="ltr">How much is the <span class="kw">price</span>? Do you deliver?</p></div>
+                <div class="card"><span class="eyebrow" lang="ar" dir="rtl">ردّ على كل تعليق</span></div>
+                <div class="card"><span class="eyebrow" lang="en" dir="ltr">Answer every comment</span></div>
+            </div>
+        </section>
+
+        <!-- 9 ─── DM bubbles ──────────────────────────────────────────────────────────── -->
+        <section id="dm">
+            <h2>9 · DM bubbles</h2>
+            <p class="lede">Inbound is a sunken tint with a hairline; outbound is the brand gradient with <code>--text-on-accent</code>. The sharp corner is the one at the speaker's side, in both directions.</p>
+            <div class="stage"><div class="thread">
+                <div class="rowb in"><div class="bubble in" dir="auto">كم السعر؟ وهل فيه توصيل؟<time>13:00</time></div></div>
+                <div class="rowb out"><div class="bubble out" dir="auto">أهلاً بك! السعر والتوصيل في الرابط أدناه.<time>13:01</time></div></div>
+                <div class="rowb in"><div class="bubble in" dir="auto">How much is the price?<time>13:02</time></div></div>
+                <div class="rowb out"><div class="bubble out pending" dir="auto">Sending… (pending, opacity .55)<time>13:02</time></div></div>
+            </div></div>
+            <h3 class="sub">Public hero bubble</h3>
+            <div class="row"><div class="bubble hero" dir="auto" style="max-inline-size:26rem">أهلاً بك! هذا دليل البدء.</div></div>
+        </section>
+
+        <!-- 10 ─── Platform badges ────────────────────────────────────────────────────── -->
+        <section id="platform">
+            <h2>10 · Platform badges</h2>
+            <p class="lede">Platform colours are data, never decoration: a soft tint with its label, never a solid fill on a control. Solid appears only in a data bar.</p>
+            <div class="row">
+                <span class="badge badge-instagram">Instagram · إنستجرام</span>
+                <span class="badge badge-facebook">Facebook · فيسبوك</span>
+                <span class="badge badge-tiktok">TikTok · تيك توك</span>
+                <span class="badge badge-youtube">YouTube · يوتيوب</span>
+            </div>
+            <div class="row" style="margin-block-start:var(--space-3)">
+                <span class="platform-tag ig">IG</span><span class="platform-tag fb">FB</span>
+                <div style="flex:1 1 14rem"><div class="bar-data" role="img" aria-label="Instagram 62%, Facebook 38%"><i class="bar-ig" style="inline-size:62%"></i><i class="bar-fb" style="inline-size:38%"></i></div><span class="label">the one place a solid platform colour is allowed: a data bar</span></div>
+            </div>
+        </section>
+
+        <!-- 11 ─── Nav ────────────────────────────────────────────────────────────────── -->
+        <section id="nav">
+            <h2>11 · Navigation item</h2>
+            <p class="lede">44px, 14px medium. Active is the highlighter plus a 2px inline-start accent bar, and the label turns strong.</p>
+            <div class="nav" role="presentation">
+                <div class="nav-item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12 12 3l9 9"/><path d="M5 10v10h14V10"/></svg><span>Overview · نظرة عامة</span></div>
+                <div class="nav-item is-hover"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg><span>Posts · المنشورات</span></div>
+                <div class="nav-item is-active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Campaigns · الحملات</span></div>
+            </div>
+            <p class="hint" style="margin-block-start:var(--space-2)">rest · hover · active (selected)</p>
+        </section>
+
+        <!-- 12 ─── Mark ───────────────────────────────────────────────────────────────── -->
+        <section id="mark">
+            <h2>12 · The mark</h2>
+            <p class="lede"><b>Frozen</b> until TikTok accepts the app: Lucide's zap on the blue tile, painted from <code>--mark-tile</code>, <code>--mark-tile-lit</code> and <code>--mark-glyph</code>. It must look the same in both previews.</p>
+            <div class="row" style="gap:var(--space-6)">
+                <div class="wordmark"><span class="mark lg" role="img" aria-label="AutoReply Pro (login mark)"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">AutoReply Pro · .login-mark 62px</small></span></div>
+                <div class="wordmark"><span class="mark sm" role="img" aria-label="AutoReply Pro (sidebar mark)"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">.logo-mark 38px</small></span></div>
+                <div class="wordmark"><img src="public/favicon.svg" width="48" height="48" alt="public/favicon.svg" style="border-radius:var(--radius-sm)"><span><b lang="en" dir="ltr">favicon.svg</b><small lang="en" dir="ltr">flat, literal hex; byte-pinned</small></span></div>
+            </div>
+            <h3 class="sub">Next, after TikTok accepts the app (DESIGN.md §4): the ر mark</h3>
+            <div class="row" style="gap:var(--space-6)">
+                <div class="wordmark"><span class="next-tile" role="img" aria-label="AutoReply Pro (the planned ر mark)"><svg viewBox="0 0 64 64"><g fill="none" stroke="var(--next-glyph)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"><path d="M38 14c1.6 10.5 1 19.5-4.5 25.5-4.2 4.6-10 6.8-16.5 7"/><path d="M24.5 38.5 16.5 46.5l8.5 7.5"/></g></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">planned · not shipped · never mirrored</small></span></div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+    (function () {
+        'use strict';
+        var root = document.documentElement;
+        var cs = getComputedStyle(root);
+        var tok = function (n) { return cs.getPropertyValue('--' + n).trim(); };
+
+        /* ─── 1. Swatches, grouped, with the live value ─────────────────────────────── */
+        var GROUPS = [
+            ['Surfaces', ['surface-page', 'surface-ambient', 'surface-sunken', 'surface-solid', 'surface-raised', 'surface-overlay', 'surface-chrome', 'surface-glass', 'surface-glass-hover', 'surface-scrim']],
+            ['Borders and text', ['border-subtle', 'border-strong', 'text-strong', 'text-default', 'text-muted']],
+            ['Accent: fill, label on the fill, label on the highlighter', ['accent', 'accent-hover', 'accent-active', 'text-on-accent', 'accent-text', 'accent-soft', 'accent-ring', 'gradient-brand', 'gradient-brand-soft']],
+            ['Status: fill, tint, label', ['success', 'success-soft', 'success-text', 'danger', 'danger-soft', 'danger-text', 'warning', 'warning-soft', 'warning-text', 'info', 'info-soft', 'info-text']],
+            ['Platforms (data, never decoration)', ['brand-instagram', 'brand-instagram-soft', 'brand-instagram-text', 'brand-facebook', 'brand-facebook-soft', 'brand-facebook-text', 'brand-tiktok', 'brand-tiktok-soft', 'brand-youtube-soft']],
+            ['Charts', ['chart-grid', 'chart-tick', 'chart-positive', 'chart-negative']],
+            ['The mark (frozen)', ['mark-tile', 'mark-tile-lit', 'mark-glyph']]
+        ];
+        var host = document.getElementById('swatches');
+        GROUPS.forEach(function (g) {
+            var h = document.createElement('h3'); h.className = 'sub'; h.textContent = g[0]; host.appendChild(h);
+            var grid = document.createElement('div'); grid.className = 'grid';
+            g[1].forEach(function (name) {
+                var el = document.createElement('div'); el.className = 'sw';
+                el.innerHTML = '<div class="sw-chip" style="--swatch:var(--' + name + ')"></div><div class="sw-meta"><span class="sw-name">--' + name + '</span><span class="sw-val"></span></div>';
+                el.querySelector('.sw-val').textContent = tok(name) || '(not set)';
+                grid.appendChild(el);
+            });
+            host.appendChild(grid);
+        });
+
+        /* ─── Radii ─────────────────────────────────────────────────────────────────── */
+        var radii = document.getElementById('radii');
+        ['xs', 'sm', 'md', 'lg', 'xl', '2xl', 'pill'].forEach(function (r) {
+            var d = document.createElement('div');
+            d.style.cssText = 'inline-size:5rem;block-size:3rem;background:var(--surface-glass-hover);border:1px solid var(--border-strong);display:flex;align-items:center;justify-content:center;border-radius:var(--radius-' + r + ')';
+            d.innerHTML = '<span class="label">' + r + ' · ' + tok('radius-' + r) + '</span>';
+            radii.appendChild(d);
+        });
+
+        /* ─── 2. Contrast: the guard's arithmetic ───────────────────────────────────── */
+        function parse(v) {
+            v = (v || '').trim();
+            var m;
+            if (v.charAt(0) === '#') {
+                var h = v.slice(1); if (h.length === 3) h = h.split('').map(function (c) { return c + c; }).join('');
+                return [0, 2, 4].map(function (i) { return parseInt(h.slice(i, i + 2), 16); }).concat([1]);
+            }
+            m = v.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+))?/);
+            return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null;
+        }
+        function over(s, d) { return [0, 1, 2].map(function (i) { return Math.round(s[i] * s[3] + d[i] * (1 - s[3])); }); }
+        function lin(c) { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+        function lum(p) { return 0.2126 * lin(p[0]) + 0.7152 * lin(p[1]) + 0.0722 * lin(p[2]); }
+        function ratio(a, b) { var x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+        function flatten(stack) {
+            var out = null;
+            stack.slice().reverse().forEach(function (n) {
+                var c = parse(tok(n)); if (!c) return;
+                out = out === null ? c.slice(0, 3) : over(c, out);
+            });
+            return out;
+        }
+        var P = 'surface-page', R = 'surface-raised';
+        var PAIRS = [
+            ['text-strong', [P], 4.5], ['text-strong', ['surface-solid'], 4.5], ['text-strong', [R, P], 4.5],
+            ['text-default', [P], 4.5], ['text-default', ['surface-solid'], 4.5], ['text-default', [R, P], 4.5],
+            ['text-muted', [P], 4.5], ['text-muted', ['surface-solid'], 4.5], ['text-muted', [R, P], 4.5],
+            ['text-muted', ['surface-glass-hover', R, P], 4.5],
+            ['accent-text', [P], 4.5], ['accent-text', ['accent-soft', R, P], 4.5], ['accent-text', ['accent-soft', P], 4.5],
+            ['text-strong', ['accent-soft', 'surface-chrome', P], 4.5],
+            ['text-on-accent', ['accent'], 4.5], ['text-on-accent', ['accent-hover'], 4.5], ['text-on-accent', ['accent-active'], 4.5],
+            ['success-text', ['surface-glass-hover', P], 4.5], ['danger-text', ['surface-glass-hover', P], 4.5],
+            ['warning-text', ['surface-glass-hover', P], 4.5], ['info-text', ['surface-glass-hover', P], 4.5],
+            ['brand-instagram-text', ['brand-instagram-soft', R, P], 4.5], ['brand-facebook-text', ['brand-facebook-soft', R, P], 4.5],
+            ['chart-tick', ['surface-solid'], 4.5],
+            ['accent', [P], 3], ['accent', ['surface-solid'], 3], ['accent', [R, P], 3]
+        ];
+        var tbody = document.getElementById('contrast-rows');
+        PAIRS.forEach(function (p) {
+            var fg = parse(tok(p[0])), bg = flatten(p[1]);
+            if (!fg || !bg) return;
+            var r = ratio(fg.slice(0, 3), bg), ok = r >= p[2];
+            var tr = document.createElement('tr');
+            tr.innerHTML = '<td class="mono">--' + p[0] + '</td><td class="mono"></td><td class="num">' + r.toFixed(2) + ':1</td><td class="num">' + p[2].toFixed(1) + ':1</td><td><span class="' + (ok ? 'pass' : 'fail') + '">' + (ok ? 'pass' : 'FAIL') + '</span></td><td></td>';
+            tr.children[1].textContent = p[1].map(function (x) { return '--' + x; }).join(' on ');
+            var s = document.createElement('span'); s.className = 'sample';
+            s.style.background = 'rgb(' + bg.join(',') + ')'; s.style.color = 'rgb(' + fg.slice(0, 3).join(',') + ')';
+            s.textContent = p[2] === 3 ? '■■■■' : 'Aa أب';
+            tr.children[5].appendChild(s);
+            tbody.appendChild(tr);
+        });
+
+        /* ─── Direction toggle ──────────────────────────────────────────────────────── */
+        var btn = document.getElementById('dir-toggle'), dirName = document.getElementById('dir-name');
+        function paint() { dirName.textContent = root.dir.toUpperCase(); btn.setAttribute('aria-pressed', String(root.dir === 'ltr')); }
+        btn.addEventListener('click', function () {
+            var ltr = root.dir === 'rtl';
+            root.dir = ltr ? 'ltr' : 'rtl'; root.lang = ltr ? 'en' : 'ar'; paint();
+        });
+        /* ?dir=ltr or ?dir=rtl opens the page already flipped, for a link or a screenshot. */
+        var asked = new URLSearchParams(location.search).get('dir');
+        if (asked === 'ltr' || asked === 'rtl') { root.dir = asked; root.lang = asked === 'ltr' ? 'en' : 'ar'; }
+        paint();
+    })();
+    </script>
+</body>
+</html>

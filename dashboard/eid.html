@@ -20,8 +20,8 @@
     <meta name="description" content="تسعة كورسات برمجة بالعربية متاحة مجاناً بكوبونات محدودة — اختر كورسك وسجّل فوراً.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111210">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4ee">
     <link rel="canonical" href="https://msg-response-auto.vercel.app/eid">
     <meta property="og:title" content="عيدية المبرمجين — 9 كورسات مجانية بالكامل 🎉">
     <meta property="og:description" content="تسعة كورسات برمجة بالعربية متاحة مجاناً بكوبونات محدودة — اختر كورسك وسجّل فوراً.">
@@ -30,7 +30,6 @@
     <meta property="og:site_name" content="أوتوريبلاي برو · AutoReply Pro">
     <meta property="og:locale" content="ar_SA">
     <meta property="og:locale:alternate" content="en_US">
-    <!-- Google Fonts: IBM Plex Sans Arabic & IBM Plex Sans -->
     <!-- One design system in this repo, not two. This page used to redefine the
          whole variable block with values a hex digit and a pixel away from the
          app's; it now consumes the same tokens and only maps the handful of
@@ -40,7 +39,7 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.10">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.11">
     <style>
         :root {
             --bg-primary: var(--surface-page);
@@ -52,26 +51,13 @@
             --gradient-hero: var(--gradient-brand);
             --radius: var(--radius-lg);
 
-            /* The two ambient glows. Dark values; the light peers are below.
-               These are the only colours this page owns, because tokens.css has
-               no "decorative glow" semantic and inventing one for a single
-               landing page would be the wrong place to extend the scale. */
-            --glow-1: rgba(99, 102, 241, 0.15);
-            --glow-2: rgba(168, 85, 247, 0.1);
-        }
-
-        /* The light peers, mirroring tokens.css's own two-block pattern: once
-           under the media query for "OS asks for light and nothing is pinned",
-           once for an explicitly pinned light theme. */
-        @media (prefers-color-scheme: light) {
-            :root:not([data-theme='dark']) {
-                --glow-1: rgba(79, 70, 229, 0.1);
-                --glow-2: rgba(147, 51, 234, 0.07);
-            }
-        }
-        :root[data-theme='light'] {
-            --glow-1: rgba(79, 70, 229, 0.1);
-            --glow-2: rgba(147, 51, 234, 0.07);
+            /* The two ambient glows, drawn from --accent-ring so they are the accent's
+               own light and follow both themes without a light peer. (They used to be
+               literal indigo and violet, a third palette this page owned alone.)
+               35% and 22% of the ring is about the alpha they always had: 0.14 and
+               0.09 in dark, 0.16 and 0.10 in light. */
+            --glow-1: color-mix(in srgb, var(--accent-ring) 35%, transparent);
+            --glow-2: color-mix(in srgb, var(--accent-ring) 22%, transparent);
         }
 
         * {
@@ -308,18 +294,17 @@
             min-height: var(--tap-target);
             padding: var(--space-3);
             border-radius: var(--radius-sm);
-            /* Was `background: var(--accent)` with white text, which measures
-               3.34:1 on the dark theme — below AA, on the nine buttons that are
-               the entire point of the page. --gradient-brand is the token whose
-               stops were chosen for white text: 5.50 / 5.32 / 5.13:1 on dark and
-               6.29 / 5.70 / 5.38:1 on light. */
+            /* The brand gradient with the accent's own label, --text-on-accent: the
+               nine buttons are the entire point of the page, and
+               scripts/check-contrast.mjs measures that label on every stop of the
+               gradient in both themes. */
             background: var(--gradient-brand);
             color: var(--text-on-accent);
             font-weight: var(--fw-bold);
             font-size: var(--fs-200);
             text-decoration: none;
-            /* Hover changes elevation, not colour: brightening a gradient under
-               white text is how the contrast above gets lost again. */
+            /* Hover changes elevation, not colour: re-colouring a gradient under its
+               label is how the contrast above gets lost again. */
             transition:
                 box-shadow var(--motion-base) var(--ease-standard),
                 transform var(--motion-fast) var(--ease-standard);

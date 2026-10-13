@@ -1316,7 +1316,7 @@ const GrowthPage = {
                 <h2 class="chart-card-title" id="growth-audience-title">${t('growth.audience.title')}</h2>
             </div>
             ${Charts.splitBar([
-                { label: t('growth.audience.new'), value: split.nonFollowers, token: '--accent', fallback: '#0071e3' },
+                { label: t('growth.audience.new'), value: split.nonFollowers, token: '--accent', fallback: 'currentColor' },
                 { label: t('growth.audience.followers'), value: split.followers, token: '--info', fallback: '#5e5ce6' },
             ], {
                 label: t('growth.audience.title'),

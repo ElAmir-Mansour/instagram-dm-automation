@@ -51,7 +51,11 @@ const Charts = {
     /** Monotonic, so two charts on one page cannot share an SVG element id. */
     _seq: 0,
 
-    /** Every chart reads its colours from the design tokens, never a literal. */
+    /**
+     * Every chart reads its colours from the design tokens, never a literal. The accent's own
+     * fallback is `currentColor` (the text colour), not a hex: a hex here is a second palette
+     * that keeps painting the old brand after tokens.css moves on.
+     */
     token(name, fallback) {
         const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
         return v || fallback;
@@ -178,7 +182,7 @@ const Charts = {
         const labelStep = Math.max(1, Math.ceil(ordered.length / 8));
         const labels = ordered.map((d, i) => {
             const show = i % labelStep === 0 || i === ordered.length - 1;
-            return html`<span style="flex:1 1 0%;min-width:0;overflow:visible;white-space:nowrap;text-align:center;font-size:var(--fs-100, 12px);color:var(--text-muted, #aeaeb2);">${show ? UI.formatDayShort(d.day) : ''}</span>`;
+            return html`<span style="flex:1 1 0%;min-width:0;overflow:visible;white-space:nowrap;text-align:center;font-size:var(--fs-100, 12px);color:var(--text-muted);">${show ? UI.formatDayShort(d.day) : ''}</span>`;
         });
 
         return html`
@@ -271,7 +275,7 @@ const Charts = {
             const y = H - PAD - ((n - min) / span) * (H - PAD * 2);
             return `${x.toFixed(2)},${y.toFixed(2)}`;
         });
-        const stroke = Charts.token(opts.token || '--accent', '#0071e3');
+        const stroke = Charts.token(opts.token || '--accent', 'currentColor');
 
         return html`
             <div class="chart-spark" dir="ltr">
@@ -339,7 +343,7 @@ const Charts = {
             return Number((rtl ? W - x : x).toFixed(2));
         };
         const yOf = (v) => Number((BOTTOM - (Math.max(0, v) / top) * (BOTTOM - TOP)).toFixed(2));
-        const stroke = Charts.token(opts.token || '--accent', '#0071e3');
+        const stroke = Charts.token(opts.token || '--accent', 'currentColor');
         const grid = Charts.token('--chart-grid', 'rgba(255,255,255,0.08)');
 
         // Contiguous runs of measured days: each is its own line; a lone day is a dot.

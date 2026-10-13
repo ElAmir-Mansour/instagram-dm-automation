@@ -20,7 +20,14 @@
  *      exclusion is the point - a guard that cries wolf gets switched off.
  *
  * Threshold is WCAG AA for normal text (4.5:1). Every real pair currently clears it; the
- * tightest is ~4.71:1, so there is little headroom and that is exactly why this is checked.
+ * tightest is 5.05:1 in dark and 4.76:1 in light, so there is little headroom and that is
+ * exactly why this is checked.
+ *
+ * Since the Ink & Cardamom palette (DESIGN.md §2) the guard also measures the accent as a
+ * FILL, not only as a label: the label on the fill (`--text-on-accent` on `--accent`, its hover
+ * and press steps and every stop of `--gradient-brand`), the fill against the canvas as a
+ * non-text shape (3:1), and `--accent-text` on the `--accent-soft` highlighter, which is the
+ * ground behind the keyword, the eyebrow and the active nav row.
  */
 import { readFileSync } from 'node:fs';
 const css = readFileSync('dashboard/css/tokens.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -60,8 +67,9 @@ const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.0
 const L = p => 0.2126 * lin(p[0]) + 0.7152 * lin(p[1]) + 0.0722 * lin(p[2]);
 const ratio = (a, b) => { const x = L(a), y = L(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
 
-// Text tokens actually painted on content surfaces. `text-on-accent` is excluded: it is
-// white-on-accent-button, never on a content surface. `surface-scrim` is excluded as a text
+// Text tokens actually painted on content surfaces. `text-on-accent` is excluded here: it is
+// the label on the accent FILL, never on a content surface, and is measured against the fill
+// (and its hover and press steps) in FILL_PAIRS below. `surface-scrim` is excluded as a text
 // surface: it is the modal backdrop (styles.css:910), nothing reads on top of it.
 const TEXT = ['text-strong', 'text-default', 'text-muted',
               'accent-text', 'success-text', 'danger-text', 'warning-text', 'info-text',
@@ -84,7 +92,7 @@ const SURFACE_STACKS = [
     ['surface-solid'],
     ['surface-raised', 'surface-page'],
     ['surface-overlay', 'surface-page'],
-    // The HIG "secondary fill": a tint on a glass card, which is itself on the canvas.
+    // The tint on a glass card, which is itself on the canvas.
     ['surface-glass', 'surface-raised', 'surface-page'],
     ['surface-glass-hover', 'surface-raised', 'surface-page'],
     // The same tint directly on the canvas.
@@ -102,6 +110,14 @@ const SURFACE_STACKS = [
     ['brand-facebook-soft', 'surface-raised', 'surface-page'],
     ['brand-instagram-soft', 'surface-page'],
     ['brand-facebook-soft', 'surface-page'],
+    // The accent highlighter: the keyword (.kw), the eyebrow, .chip-accent, the active nav row
+    // (.nav-indicator, which sits on the chrome) and a text selection. Its labels are
+    // `--accent-text` and, for the nav row and ::selection, `--text-strong`.
+    ['accent-soft', 'surface-raised', 'surface-page'],
+    ['accent-soft', 'surface-page'],
+    ['accent-soft', 'surface-solid'],
+    ['accent-soft', 'surface-sunken', 'surface-page'],
+    ['accent-soft', 'surface-chrome', 'surface-page'],
 ];
 
 /**
@@ -115,11 +131,17 @@ const SURFACE_STACKS = [
  * not exist, sitting exactly on the floor, which is the kind of failure that gets a guard
  * switched off.
  */
-const TINT_LABEL = { 'brand-instagram-soft': 'brand-instagram-text', 'brand-facebook-soft': 'brand-facebook-text' };
-const BRAND_TEXT = new Set(Object.values(TINT_LABEL));
+const TINT_LABEL = {
+    'brand-instagram-soft': ['brand-instagram-text'],
+    'brand-facebook-soft': ['brand-facebook-text'],
+    // The highlighter carries two labels: the accent's own, and the strong text of the active nav
+    // row and of a selection. Nothing else is painted on it.
+    'accent-soft': ['accent-text', 'text-strong'],
+};
+const BRAND_TEXT = new Set(['brand-instagram-text', 'brand-facebook-text']);
 const coOccurs = (txt, stack) => {
-    const label = TINT_LABEL[stack[0]];
-    return label ? label === txt : !BRAND_TEXT.has(txt);
+    const labels = TINT_LABEL[stack[0]];
+    return labels ? labels.includes(txt) : !BRAND_TEXT.has(txt);
 };
 
 /** Flatten a stack to one opaque colour by compositing each layer over the one below. */
@@ -135,7 +157,8 @@ function flatten(theme, stack) {
 
 const MIN = 4.5;
 const failures = [];
-let total = 0, worst = Infinity, worstLabel = '';
+let total = 0;
+const worstBy = {};   // theme -> { r, label }: the tightest TEXT pair in each theme
 
 for (const name of Object.keys(THEMES)) {
     const t = THEMES[name];
@@ -153,7 +176,7 @@ for (const name of Object.keys(THEMES)) {
             const r = ratio(fg, bg);
             total++;
             const label = stack.map(x => `--${x}`).join(' on ');
-            if (r < worst) { worst = r; worstLabel = `--${txt} on ${label} (${name})`; }
+            if (!worstBy[name] || r < worstBy[name].r) worstBy[name] = { r, label: `--${txt} on ${label}` };
             if (r < MIN) {
                 failures.push(`${r.toFixed(2)}:1 - --${txt} on ${label} (${name} theme) is below the ${MIN}:1 AA floor.`);
             }
@@ -161,17 +184,95 @@ for (const name of Object.keys(THEMES)) {
     }
 }
 
+// ─── The accent as a FILL ───────────────────────────────────────────────────────────────────
+//
+// The loop above measures text on the surfaces it is painted on. The accent is also a surface
+// of its own (the primary button, the outgoing bubble, a switch that is on), so the other half
+// of the contract is measured here:
+//
+//   text      the label on the fill: `--text-on-accent` on `--accent`, on its hover and press
+//             steps, and on every stop of `--gradient-brand` (the button face is that gradient,
+//             not the flat token, so a stop that dips under 4.5:1 is a button nobody can read).
+//   non-text  the fill against the grounds it sits on, at the WCAG 1.4.11 floor of 3:1: the
+//             focus outline and the active marker are `--accent`, and a switch track is too.
+//   chart     `--chart-tick` is the axis label and the native select's chevron is a glyph; both
+//             are theme values that once measured under their floor in one theme.
+//
+// `--accent-text` on the `--accent-soft` highlighter is in SURFACE_STACKS above.
+
+const MIN_NON_TEXT = 3.0;
+const gradientStops = (v) => [...(v || '').matchAll(/#[0-9a-fA-F]{6}\b/g)].map(m => parse(m[0]));
+const chevronStroke = (v) => {
+    const m = (v || '').match(/stroke='%23([0-9a-fA-F]{6})'/);
+    return m ? parse('#' + m[1]) : null;
+};
+const nonText = {};   // theme -> { r, label }: the tightest non-text pair
+let fillTotal = 0;
+
+for (const [name, t] of Object.entries(THEMES)) {
+    const onAccent = resolve(t, t['text-on-accent']);
+    if (!onAccent) { failures.push(`--text-on-accent (${name}) could not be resolved.`); continue; }
+
+    // The label on the fill, its steps, and every stop of the brand gradient.
+    const fills = [
+        ['--accent', resolve(t, t['accent'])],
+        ['--accent-hover', resolve(t, t['accent-hover'])],
+        ['--accent-active', resolve(t, t['accent-active'])],
+        ...gradientStops(t['gradient-brand']).map((c, i) => [`--gradient-brand stop ${i + 1}`, c]),
+    ];
+    if (gradientStops(t['gradient-brand']).length < 2) failures.push(`--gradient-brand (${name}) has no hex stops the guard can read.`);
+    for (const [label, fill] of fills) {
+        if (!fill) { failures.push(`${label} (${name}) could not be resolved.`); continue; }
+        const r = ratio(onAccent.slice(0, 3), fill.slice(0, 3));
+        fillTotal++;
+        if (r < MIN) failures.push(`${r.toFixed(2)}:1 - --text-on-accent on ${label} (${name} theme) is below the ${MIN}:1 AA floor.`);
+    }
+
+    // The fill as a shape on the grounds it is painted on: the canvas, an opaque card, a glass card.
+    const accent = resolve(t, t['accent']);
+    for (const stack of [['surface-page'], ['surface-solid'], ['surface-raised', 'surface-page']]) {
+        const bg = flatten(t, stack);
+        if (!accent || !bg) continue;
+        const r = ratio(accent.slice(0, 3), bg);
+        fillTotal++;
+        const label = `--accent on ${stack.map(x => `--${x}`).join(' on ')}`;
+        if (!nonText[name] || r < nonText[name].r) nonText[name] = { r, label };
+        if (r < MIN_NON_TEXT) failures.push(`${r.toFixed(2)}:1 - ${label} (${name} theme) is below the ${MIN_NON_TEXT}:1 non-text floor (focus outline, active marker, switch track).`);
+    }
+
+    // The axis label is text; the chevron is a glyph. Both sit on the card or the input well.
+    const tick = resolve(t, t['chart-tick']);
+    for (const stack of [['surface-page'], ['surface-solid']]) {
+        const bg = flatten(t, stack);
+        if (!tick || !bg) continue;
+        const r = ratio(tick.slice(0, 3), bg);
+        fillTotal++;
+        if (r < MIN) failures.push(`${r.toFixed(2)}:1 - --chart-tick on --${stack[0]} (${name} theme) is below the ${MIN}:1 AA floor.`);
+    }
+    const chev = chevronStroke(t['select-chevron']);
+    const well = flatten(t, ['surface-sunken', 'surface-page']);
+    if (!chev || !well) failures.push(`--select-chevron (${name}) has no stroke colour the guard can read.`);
+    else {
+        const r = ratio(chev.slice(0, 3), well);
+        fillTotal++;
+        if (r < MIN_NON_TEXT) failures.push(`${r.toFixed(2)}:1 - the select chevron on --surface-sunken (${name} theme) is below the ${MIN_NON_TEXT}:1 non-text floor.`);
+    }
+}
+
 // ─── Semantic hue separation ────────────────────────────────────────────────────────────────
 //
-// Contrast is not the only way a palette fails. The accent moved to terracotta (hue ~16) to
-// agree with the warm neutrals, which put it BETWEEN the two alarm colours: danger was at
-// 358 and warning at 38 — 18 and 22 degrees away. Two solid buttons side by side at that
-// separation are genuinely hard to tell apart at a glance, and "delete" must never be
-// mistakable for "publish".
+// Contrast is not the only way a palette fails. The accent was once terracotta (hue ~16), which
+// sat BETWEEN the two alarm colours: danger was at 358 and warning at 38 — 18 and 22 degrees
+// away. Two solid buttons side by side at that separation are genuinely hard to tell apart at a
+// glance, and "delete" must never be mistakable for "publish".
 //
 // So danger went cooler and warning yellower until both cleared 25 degrees. This check is
 // what stops that widening being quietly undone by the next colour tweak — nobody would
 // notice, because each colour still passes contrast on its own.
+//
+// The accent is cardamom now (hue ~78) and its nearest neighbour is success (135), because both
+// are green-ish: "published" and "primary action" must not collapse into one colour either, and
+// a tweak that pulled the accent toward #34c759 would pass every contrast row above.
 //
 // 25 degrees is a judgement, not a standard. It is the point at which these three read as
 // distinct in side-by-side rows in this product; saturation difference helps too and is
@@ -184,6 +285,7 @@ const MUST_DIFFER = [
     ['accent', 'danger', 'a primary action must not read as a destructive one'],
     ['accent', 'warning', 'a primary action must not read as a caution state'],
     ['danger', 'warning', 'an error must not read as a warning'],
+    ['accent', 'success', 'a primary action must not read as a success state (cardamom is never a status)'],
 
     // NOT accent-vs-platform. That pair was checked here and it was the wrong test: it
     // assumed both are used as solid fills, and in this codebase the platform colours never
@@ -276,8 +378,12 @@ if (failures.length > 0) {
     console.error('');
     process.exit(1);
 }
+const tightest = Object.entries(worstBy)
+    .map(([theme, w]) => `${w.r.toFixed(2)}:1 ${theme} - ${w.label}`).join('; ');
 console.log(
-    `\u2713 colour system: ${total} pairs clear ${MIN}:1 (tightest ${worst.toFixed(2)}:1 - ${worstLabel}); `
+    `\u2713 colour system: ${total} text pairs clear ${MIN}:1 (tightest ${tightest}); `
+    + `${fillTotal} accent-fill / axis / chevron pairs clear their floors `
+    + `(accent shape vs ground tightest ${Object.entries(nonText).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}); `
     + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart; `
     + `platform colours solid only in data viz`
 );

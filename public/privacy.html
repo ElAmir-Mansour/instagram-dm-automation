@@ -137,8 +137,8 @@
     <meta name="description" data-lang-only="en" content="What AutoReply Pro collects, where it goes, and how to have it deleted.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111210">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4ee">
     <link rel="canonical" href="https://msg-response-auto.vercel.app/privacy{{LANG_QUERY}}">
     <link rel="alternate" hreflang="ar" href="https://msg-response-auto.vercel.app/privacy">
     <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/privacy?lang=en">
@@ -159,16 +159,18 @@
          dashboard and dashboard/eid.html load, so the review surface and the
          product cannot drift apart. Same origin, and allowed by the CSP that
          src/routes/api.ts:50-63 sets on this route.
-         The `var(--x, literal)` fallbacks below are deliberate and are the only
-         duplication: if this stylesheet ever 404s — the dashboard moving behind
-         Vercel Deployment Protection would do it — the page has to stay legible
-         rather than render as unstyled black-on-transparent. -->
+         The type, spacing and radius `var(--x, literal)` fallbacks below are deliberate:
+         if this stylesheet ever 404s — the dashboard moving behind Vercel Deployment
+         Protection would do it — the page has to stay legible. There are no COLOUR
+         fallbacks: a literal colour is a second palette that keeps painting the old brand
+         after tokens.css moves on, and without tokens the browser's own black on white
+         is legible. -->
     <!-- No webfont. HIG's answer to typography is the system font, and --font-ui in
          tokens.css is the -apple-system stack, so there is nothing to download: one fewer
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.10">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.11">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -179,8 +181,8 @@
             font-family: var(--font-ui, system-ui, sans-serif);
             font-size: var(--fs-300, 1rem);
             line-height: var(--lh-loose, 1.9);
-            background: var(--surface-page, #ffffff);
-            color: var(--text-default, #2c3444);
+            background: var(--surface-page);
+            color: var(--text-default);
             -webkit-text-size-adjust: 100%;
         }
 
@@ -193,8 +195,8 @@
            The old .masthead is gone — the bar is sticky and full-bleed now, so it
            sits OUTSIDE .shell. .skip, .wordmark, .headnav and .langswitch live in
            that shared block, byte-identical with the other three public pages, and
-           WITHOUT this page's `var(--x, literal)` fallbacks: those literals are the
-           pre-HIG indigo palette and have already drifted from tokens.css. */
+           WITHOUT this page's `var(--x, literal)` fallbacks (type, spacing and radius
+           only: the colour literals are gone, see the shared block's comment). */
         :root {
             --page-max: 52rem;
             --page-gutter: var(--space-4);
@@ -210,7 +212,7 @@
         /* This page keeps its own focus ring for the elements the shared block
            does not own. */
         a:focus-visible {
-            outline: 2px solid var(--accent, #0071e3);
+            outline: 2px solid var(--accent);
             outline-offset: 2px;
             border-radius: var(--radius-xs, 6px);
         }
@@ -223,36 +225,36 @@
             font-size: var(--fs-600, 1.75rem);
             line-height: var(--lh-tight, 1.35);
             font-weight: var(--fw-bold, 700);
-            color: var(--text-strong, #14182a);
+            color: var(--text-strong);
             margin: 0 0 var(--space-2, 0.5rem);
         }
         h2 {
             font-size: var(--fs-400, 1.125rem);
             line-height: var(--lh-tight, 1.35);
             font-weight: var(--fw-semibold, 600);
-            color: var(--text-strong, #14182a);
+            color: var(--text-strong);
             margin: var(--space-6, 2rem) 0 var(--space-2, 0.5rem);
             padding-top: var(--space-4, 1rem);
-            border-top: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+            border-top: 1px solid var(--border-subtle);
         }
         h3 {
             font-size: var(--fs-300, 1rem);
             font-weight: var(--fw-semibold, 600);
-            color: var(--text-strong, #14182a);
+            color: var(--text-strong);
             margin: var(--space-5, 1.5rem) 0 var(--space-2, 0.5rem);
         }
         p, ul, ol { margin: 0 0 var(--space-4, 1rem); }
         ul, ol { padding-inline-start: var(--space-5, 1.5rem); }
         li { margin-bottom: var(--space-2, 0.5rem); }
-        strong { color: var(--text-strong, #14182a); font-weight: var(--fw-semibold, 600); }
+        strong { color: var(--text-strong); font-weight: var(--fw-semibold, 600); }
 
-        a { color: var(--accent-text, #4338ca); text-decoration-thickness: 1px; text-underline-offset: 3px; }
-        a:hover { color: var(--accent-hover, #4338ca); }
+        a { color: var(--accent-text); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+        a:hover { color: var(--accent-hover); }
 
         .stamp {
             display: inline-block;
             font-size: var(--fs-100, 0.75rem);
-            color: var(--text-muted, #5f6a7d);
+            color: var(--text-muted);
             margin-bottom: var(--space-5, 1.5rem);
         }
 
@@ -264,8 +266,8 @@
             unicode-bidi: isolate;
             padding: 0.1em 0.35em;
             border-radius: var(--radius-xs, 6px);
-            background: var(--surface-glass, rgba(0, 0, 0, 0.05));
-            border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
+            background: var(--surface-glass);
+            border: 1px solid var(--border-subtle);
         }
 
         /* A callout for the one thing a reader is most likely to want. */
@@ -273,9 +275,9 @@
             padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
             margin: 0 0 var(--space-5, 1.5rem);
             border-radius: var(--radius-md, 14px);
-            border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
-            border-inline-start: 3px solid var(--accent, #4f46e5);
-            background: var(--surface-raised, rgba(0, 0, 0, 0.03));
+            border: 1px solid var(--border-subtle);
+            border-inline-start: 3px solid var(--accent);
+            background: var(--surface-raised);
         }
         .callout > :last-child { margin-bottom: 0; }
 
@@ -285,14 +287,14 @@
             margin: 0 0 var(--space-5, 1.5rem);
             padding: var(--space-4, 1rem) var(--space-5, 1.5rem);
             border-radius: var(--radius-md, 14px);
-            border: 1px solid var(--border-subtle, rgba(19, 24, 41, 0.1));
-            background: var(--surface-raised, rgba(0, 0, 0, 0.03));
+            border: 1px solid var(--border-subtle);
+            background: var(--surface-raised);
         }
         .toc-h {
             margin: 0 0 var(--space-2, 0.5rem);
             font-size: var(--fs-200, 0.875rem);
             font-weight: var(--fw-semibold, 600);
-            color: var(--text-strong, #14182a);
+            color: var(--text-strong);
         }
         .toc ol {
             list-style: none;
@@ -312,7 +314,7 @@
             height: 1px;
             border: 0;
             margin: var(--space-8, 4rem) 0;
-            background: var(--border-strong, rgba(19, 24, 41, 0.2));
+            background: var(--border-strong);
         }
 
         /* .pagefoot and the .t-* language filter now live in the SHARED SITE
@@ -366,12 +368,12 @@
            Both have fallbacks, so the block still renders correctly on a page
            that forgets to declare them.
 
-           NO var() LITERAL FALLBACKS HERE, unlike the rest of privacy.html and
-           data-deletion.html. The literals those two carry are the pre-HIG
-           indigo palette and have already drifted from tokens.css (--accent is
-           #0071e3 now, not #4f46e5). A second palette hiding inside a fallback
-           is worse than an unstyled bar, and four copies of one would be four
-           times worse. */
+           NO var() LITERAL COLOUR FALLBACKS HERE, and none anywhere else on these
+           pages. A colour literal in a fallback is a second palette that keeps
+           painting the old brand after tokens.css moves on (the pre-HIG indigo
+           and then the system blue both did). A second palette hiding inside a
+           fallback is worse than an unstyled bar, and six copies of one would be
+           six times worse. */
         :root {
             --nav-h: 3.5rem;    /* the bar's own height, and the scroll-margin every
                                    in-page anchor now needs to clear it */
@@ -711,7 +713,7 @@
         .pagefoot .foot-mail { overflow-wrap: anywhere; }
 
         /* Follow: three logos, 44px square each, in the default text colour
-           rather than the link colour — a row of three accent-blue logos reads
+           rather than the link colour — a row of three accent-coloured logos reads
            as an advert. They are glyphs and are NEVER mirrored: a logo is not
            a direction. Each link's name is real text (.foot-sr), in the same
            two <bdi>s every other label here uses, so the language filter hides
