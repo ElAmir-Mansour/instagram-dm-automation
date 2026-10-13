@@ -55,7 +55,7 @@ import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../servi
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
 import { storageKeyKind, storageKeyProblem } from '../services/supabaseStorage.js';
 import { checkGeminiKey } from '../services/geminiKey.js';
-import { dmModelsInUse } from '../services/ai.js';
+import { dmModelsInUse, STARTER_PERSONA } from '../services/ai.js';
 
 const router = Router();
 
@@ -621,7 +621,7 @@ router.post('/tenants', async (req, res) => {
                 `INSERT INTO ai_agents (creator_id, is_active, system_prompt, knowledge_base)
                  VALUES ($1, false, $2, '')
                  ON CONFLICT (creator_id) DO NOTHING`,
-                [created.id, 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.']
+                [created.id, STARTER_PERSONA]
             );
         } catch (agentErr) {
             log('warn', 'admin.tenant_agent_seed_failed', {

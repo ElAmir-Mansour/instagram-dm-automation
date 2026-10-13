@@ -1,0 +1,126 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "clips": {
+      "type": "ARRAY",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "clip": {
+            "type": "INTEGER",
+            "description": "the clip's number, C<n>"
+          },
+          "edits": {
+            "type": "ARRAY",
+            "items": {
+              "type": "OBJECT",
+              "properties": {
+                "line": {
+                  "type": "INTEGER",
+                  "description": "the n of the line, L<n>"
+                },
+                "word": {
+                  "type": "STRING",
+                  "description": "the exact word in that line the edit lands on"
+                },
+                "kind": {
+                  "type": "STRING",
+                  "enum": [
+                    "keyword",
+                    "tool",
+                    "emoji",
+                    "image",
+                    "broll",
+                    "highlight",
+                    "punch",
+                    "example",
+                    "callout",
+                    "step",
+                    "define",
+                    "compare",
+                    "recap",
+                    "icon"
+                  ]
+                },
+                "text": {
+                  "type": "STRING",
+                  "description": "keyword: 2-4 words, at most 28 characters; tool: the tool's name in Latin script; example, callout, step: its label; define: the term"
+                },
+                "meaning": {
+                  "type": "STRING",
+                  "description": "define: what the term means, at most 5 plain words"
+                },
+                "items": {
+                  "type": "ARRAY",
+                  "items": {
+                    "type": "STRING"
+                  },
+                  "description": "compare: [wrong or before, right or after]; recap: 2-3 takeaways"
+                },
+                "emoji": {
+                  "type": "STRING",
+                  "description": "emoji: one emoji"
+                },
+                "icon": {
+                  "type": "STRING",
+                  "description": "icon: one name from the icon list, exactly as written"
+                },
+                "query": {
+                  "type": "STRING",
+                  "description": "image, broll or example: one topic from the picture library list, exactly as written"
+                },
+                "sfx": {
+                  "type": "STRING",
+                  "enum": [
+                    "whoosh",
+                    "pop",
+                    "click",
+                    "ding",
+                    "impact",
+                    "glitch",
+                    "error",
+                    "whip",
+                    "switch",
+                    "none"
+                  ]
+                }
+              },
+              "required": [
+                "line",
+                "word",
+                "kind",
+                "sfx"
+              ],
+              "propertyOrdering": [
+                "line",
+                "word",
+                "kind",
+                "text",
+                "meaning",
+                "items",
+                "emoji",
+                "icon",
+                "query",
+                "sfx"
+              ]
+            }
+          }
+        },
+        "required": [
+          "clip",
+          "edits"
+        ],
+        "propertyOrdering": [
+          "clip",
+          "edits"
+        ]
+      }
+    }
+  },
+  "required": [
+    "clips"
+  ],
+  "propertyOrdering": [
+    "clips"
+  ]
+}

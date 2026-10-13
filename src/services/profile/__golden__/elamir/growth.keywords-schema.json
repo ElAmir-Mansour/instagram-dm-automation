@@ -1,0 +1,47 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "keywords": {
+      "type": "ARRAY",
+      "maxItems": 12,
+      "description": "search terms, best first",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "term": {
+            "type": "STRING",
+            "description": "what someone types into Instagram search, 1–4 words"
+          },
+          "why": {
+            "type": "STRING",
+            "description": "one line: who searches it and why it fits"
+          }
+        },
+        "required": [
+          "term",
+          "why"
+        ],
+        "propertyOrdering": [
+          "term",
+          "why"
+        ]
+      }
+    },
+    "hashtags": {
+      "type": "ARRAY",
+      "maxItems": 15,
+      "items": {
+        "type": "STRING"
+      },
+      "description": "with #, no spaces"
+    }
+  },
+  "required": [
+    "keywords",
+    "hashtags"
+  ],
+  "propertyOrdering": [
+    "keywords",
+    "hashtags"
+  ]
+}

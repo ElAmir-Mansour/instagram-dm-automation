@@ -1,0 +1,43 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "lessons": {
+      "type": "ARRAY",
+      "maxItems": 10,
+      "description": "at most 10",
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "rule": {
+            "type": "STRING",
+            "description": "an imperative, at most 140 characters"
+          },
+          "evidence": {
+            "type": "STRING",
+            "description": "the numbers behind it, at most 100 characters"
+          }
+        },
+        "required": [
+          "rule",
+          "evidence"
+        ],
+        "propertyOrdering": [
+          "rule",
+          "evidence"
+        ]
+      }
+    },
+    "summary": {
+      "type": "STRING",
+      "description": "at most 280 characters"
+    }
+  },
+  "required": [
+    "lessons",
+    "summary"
+  ],
+  "propertyOrdering": [
+    "lessons",
+    "summary"
+  ]
+}

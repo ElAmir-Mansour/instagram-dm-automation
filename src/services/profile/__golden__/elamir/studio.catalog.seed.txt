@@ -1,0 +1,18 @@
+<sources>
+[facts] Facts about «Agentic AI: الدليل العملي لبناء ما تحتاجه بالذكاء الاصطناعي»: ٣٤ درس · ٥ ساعات و٤٠ دقيقة · شهادة إتمام
+[idea] The creator's idea for this post: ملفاتك السرية تشتغل على جهازك
+
+[L1] Lesson 8.3 «Local RAG with LM Studio» — section: Chapter 8 - Local RAG lmstudio
+[L1.summary] تشغيل نموذج على جهازك والإجابة من ملفاتك.
+[L1.point1] ليش محلي: الملفات ما تطلع من الجهاز (at 0:10)
+[L1.point2] LM Studio: تنزيل نموذج مفتوح (at 1:00)
+[L1.prompt1] Prompt shown on screen, verbatim (at 3:30): «جاوب فقط من المستندات المرفقة»
+[L1.demo1] Demo: بدون إنترنت → النموذج يجاوب والنت مفصول (at 1:35)
+[L1.tools] Tools used: LM Studio
+Screens from L1 (moments):
+[M1] L1 · 0:12 · result · clean — A laptop with a lock on screen
+[M2] L1 · 1:35 · result · clean — The model answering with Wi-Fi off
+[M3] L1 · 2:10 · result · NOT CLEAN: a fact only, never a momentId — Arrows scribbled over the settings
+[M4] L1 · 3:20 · result · clean — RAG answering from a PDF
+[M5] L1 · 4:10 · result · clean — The model list in LM Studio
+</sources>
