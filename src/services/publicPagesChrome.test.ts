@@ -120,3 +120,32 @@ describe('public pages — the footer says what the product is now (L4)', () => 
         assert.ok(foot.includes('instagram-dm-automation/issues'));
     });
 });
+
+describe('public pages — the legal line names every trademark the footer draws (L8)', () => {
+    const legal = (page: (typeof PAGES)[number]) => {
+        const m = /<p class="foot-legal">([\s\S]*?)<\/p>/.exec(chrome.get(page)!.foot.replace(/<!--[\s\S]*?-->/g, ''));
+        assert.ok(m, `${page}: the legal line`);
+        return m[1]!;
+    };
+
+    for (const page of PAGES) {
+        it(`${page}: names WhatsApp, YouTube and Google, in both languages, and still disclaims endorsement`, () => {
+            const line = legal(page);
+            const ar = /<bdi class="t-ar"[^>]*>([\s\S]*?)<\/bdi>\s*<bdi class="t-en"/.exec(line)![1]!;
+            const en = /<bdi class="t-en"[^>]*>([\s\S]*?)<\/bdi>\s*$/.exec(line)![1]!;
+            // Arabic: the five marks (the glossary's spellings), Meta and Google as the companies it is not.
+            for (const mark of ['إنستجرام', 'فيسبوك', 'واتساب', 'تيك توك', 'يوتيوب']) assert.ok(ar.includes(mark), `${page}: ${mark}`);
+            assert.ok(ar.includes('<bdi lang="en" dir="ltr">Meta</bdi>') && ar.includes('<bdi lang="en" dir="ltr">Google</bdi>'), `${page}: Meta and Google, each isolated`);
+            assert.ok(ar.includes('ولا ترتبط هذه الأداة') && ar.includes('تأييد'), `${page}: not affiliated, not endorsed`);
+            // English: the five trademarks, then the three companies.
+            assert.ok(en.includes('Instagram, Facebook, WhatsApp, TikTok and YouTube are trademarks of their respective owners'), page);
+            assert.ok(en.includes('is not affiliated with, or endorsed by, Meta, TikTok or Google.'), page);
+        });
+    }
+
+    it("the Follow row carries the founder's YouTube channel too, on every page", () => {
+        for (const page of PAGES) {
+            assert.ok(chrome.get(page)!.foot.includes('href="https://www.youtube.com/@elamir"'), page);
+        }
+    });
+});

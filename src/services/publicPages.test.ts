@@ -123,6 +123,40 @@ describe('renderSiteTemplate — data-unless, the fallback a data-when element r
     });
 });
 
+describe('renderSiteTemplate — a data-when link that carries a logo (L8)', () => {
+    // The primary WhatsApp buttons hold `<svg><use/></svg>` before their label. stripMarked cuts a
+    // `data-when` <a> up to its first </a>, and an <svg> is not an <a>: the glyph must go with the link, and
+    // nothing of it (no orphan <svg>, no stray </a>) may be left behind when there is no number.
+    const GLYPH = '<svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-whatsapp"/></svg>';
+    const BUTTONS = [
+        '<div class="cta-row">',
+        `    <a class="btn btn-primary" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">${GLYPH}تحدّث معنا على واتساب</a>`,
+        '    <a class="btn btn-primary" data-unless="whatsapp" href="#contact-ar">راسلنا</a>',
+        '    <a class="btn btn-secondary" href="#samples-ar">شاهد ما صنعناه</a>',
+        '</div>',
+    ].join('\n');
+
+    it('removes the whole link, glyph and label together, when no number is set', () => {
+        const out = renderSiteTemplate(BUTTONS, NONE);
+        assert.equal(out.includes('<svg'), false, 'no orphaned glyph');
+        assert.equal(out.includes('<use'), false);
+        assert.equal(out.includes('plogo'), false);
+        assert.equal(out.includes('واتساب'), false, 'with its label');
+        assert.equal(out.includes('data-when'), false);
+        assert.equal((out.match(/<a /g) ?? []).length, (out.match(/<\/a>/g) ?? []).length, 'every <a> still has its </a>');
+        assert.ok(out.includes('href="#contact-ar">راسلنا</a>'), 'the fallback stays');
+        assert.ok(out.includes('href="#samples-ar">شاهد ما صنعناه</a>'), 'and the unmarked sibling');
+        assert.equal(out.split('\n').filter((l) => l.trim() === '').length, 0, 'no blank line left behind');
+    });
+
+    it('keeps the glyph and the label together, and drops the fallback, when a number is set', () => {
+        const out = renderSiteTemplate(BUTTONS, ALL);
+        assert.ok(out.includes(`${GLYPH}تحدّث معنا على واتساب</a>`));
+        assert.equal(out.includes('data-unless'), false);
+        assert.equal((out.match(/class="btn btn-primary"/g) ?? []).length, 1, 'exactly one primary button');
+    });
+});
+
 describe('renderSiteTemplate — the language of the served page', () => {
     const HEAD = [
         '<html lang="ar" dir="rtl">',

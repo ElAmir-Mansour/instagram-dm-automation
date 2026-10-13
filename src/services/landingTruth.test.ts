@@ -92,7 +92,9 @@ describe('landing — Arabic and English documents match', () => {
         for (const [doc, suffix] of [[L.ar, '-ar'], [L.en, '-en']] as const) {
             const have = new Set([...doc.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]!));
             for (const m of doc.matchAll(/aria-labelledby="([^"]+)"/g)) assert.ok(have.has(m[1]!), `${m[1]} (${suffix})`);
-            for (const m of doc.matchAll(/href="#([^"]+)"/g)) assert.ok(have.has(m[1]!), `#${m[1]} (${suffix})`);
+            // A link, not a logo: `<use href="#plogo-…">` points at the sprite after <body>, outside both
+            // articles, and landingLogos.test.ts checks that every one of those resolves.
+            for (const m of doc.matchAll(/(?<!<use )href="#([^"]+)"/g)) assert.ok(have.has(m[1]!), `#${m[1]} (${suffix})`);
         }
     });
 
@@ -388,6 +390,22 @@ describe('landing — the new CSS: logical properties, existing breakpoints, tok
         between('.cut { grid-template-columns: minmax(0, 1fr) minmax(0, 7.5rem)', '.cmp-col { padding: 0.3rem; }'),
         // the shared slide / comparison-card look
         rule('.slide,\n        .cmp {'),
+        // the platform logos (L8): the base mark, the button's, the rows' tiles, the samples' marks, the
+        // footer's. Not the three --logo-* token blocks: a colour literal is allowed there and only there.
+        rule('\n        .plogo {'),
+        rule('.plogo-yt {'),
+        rule('.btn > .plogo {'),
+        rule('.reqs h3 {'),
+        rule('.ptile {'),
+        rule('.ptile-instagram {'),
+        rule('.ptile-facebook {'),
+        rule('.ptile-tiktok {'),
+        rule('.ptile-youtube {'),
+        rule('.live a > .plogo {'),
+        rule('.reel figcaption .plogo {'),
+        rule('.reel figcaption .nw {'),
+        rule('.pagefoot .foot-social .plogo {'),
+        rule('.pagefoot .foot-wa .plogo {'),
     ].join('\n');
 
     const PHYSICAL = [
