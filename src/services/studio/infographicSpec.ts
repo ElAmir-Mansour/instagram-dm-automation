@@ -58,9 +58,13 @@ export type Mini = { kind: DiagramKind; name?: string; badge?: string; label?: s
 /** A technology's logo, found by the worker in simple-icons from the name Claude gives: its title, colour and 24×24 path. */
 export type InfographicLogo = { title: string; hex: string; path: string };
 
+/** A real product or tool that does what a column describes: its logo when simple-icons has one, else its name alone. */
+export type InfographicExample = { title: string; hex: string | null; path: string | null };
+
 export type InfographicColumn = {
     name: string;
     logo?: InfographicLogo;
+    examples?: InfographicExample[];
     hero: Mini;
     kind: string;
     note: string;
@@ -94,12 +98,18 @@ export const BUDGETS = {
     caption: 2200,
 } as const;
 const SLACK = 6;
+/** Real products shown under a column, as logos. */
+export const MAX_EXAMPLES = 3;
 /** Likely expert comments Claude prepares a reply for. */
 export const MAX_OBJECTIONS = 3;
 const MAX_REVIEW_TEXT = 700;
 
 /** An SVG path's commands and numbers only: it is drawn as a `d` attribute, never as markup. */
 const SVG_PATH = /^[MmLlHhVvCcSsQqTtAaZz0-9.,\s+-]+$/;
+const isExample = (v: unknown): boolean =>
+    isPlainObject(v) && typeof v.title === 'string' && v.title.trim().length > 0 && v.title.length <= 40
+    && (v.hex === null || (typeof v.hex === 'string' && /^#[0-9a-f]{6}$/i.test(v.hex)))
+    && (v.path === null || (typeof v.path === 'string' && v.path.length > 0 && v.path.length <= 20_000 && SVG_PATH.test(v.path)));
 const isLogo = (v: unknown): boolean =>
     isPlainObject(v) && typeof v.title === 'string' && v.title.length <= 60 && typeof v.hex === 'string' && /^#[0-9a-f]{6}$/i.test(v.hex)
     && typeof v.path === 'string' && v.path.length > 0 && v.path.length <= 20_000 && SVG_PATH.test(v.path);
@@ -154,6 +164,11 @@ export function specProblems(spec: unknown): string[] {
         }
         text(col.name, `${where}'s name`, BUDGETS.name);
         if (col.logo !== undefined && !isLogo(col.logo)) problems.push(`${where}'s logo must be { title, hex, path } from the worker`);
+        if (col.examples !== undefined) {
+            if (!Array.isArray(col.examples) || col.examples.length > MAX_EXAMPLES || !col.examples.every(isExample)) {
+                problems.push(`${where}'s examples must be up to ${MAX_EXAMPLES} of { title, hex, path } from the worker`);
+            }
+        }
         if (typeof col.name === 'string') names.push(col.name.trim().toLowerCase());
         mini(col.hero, `${where}'s main diagram`);
         text(col.kind, `${where}'s "kind of problem" line`, BUDGETS.kind[n]);
@@ -243,6 +258,12 @@ export const WRITE_SCHEMA = {
                 type: 'object',
                 properties: {
                     name: { type: 'string' },
+                    examples: {
+                        type: 'array',
+                        maxItems: MAX_EXAMPLES,
+                        items: { type: 'string' },
+                        description: '1–3 real products, tools or services that do what this column describes, by brand name (e.g. PostgreSQL, Veeam, Cloudflare). Shown as their logos.',
+                    },
                     logo: {
                         type: 'string',
                         description: 'Only when the column IS a product, language or tool with a logo (e.g. Go, Node.js, Python, PostgreSQL, Docker): its brand name. Omit for ideas and techniques (RAG, Chatbot, Serverless as a concept).',
@@ -261,7 +282,7 @@ export const WRITE_SCHEMA = {
                         },
                     },
                 },
-                required: ['name', 'kind', 'note', 'hero', 'steps'],
+                required: ['name', 'kind', 'note', 'hero', 'steps', 'examples'],
             },
         },
         caption: { type: 'string', description: 'The post\'s caption, about this infographic.' },
@@ -322,6 +343,7 @@ export function writeSystemPrompt(language: 'ar' | 'en'): string {
         '',
         'Columns go from the simplest or oldest to the most capable: the last column is drawn in the accent colour.',
         'When a column is a real product, language or tool (Go, Node.js, PostgreSQL), give its brand name in `logo`: its logo is drawn beside its name. Never for an idea or a technique.',
+        `Real examples, always: give every column 1–${MAX_EXAMPLES} \`examples\`, the real products, tools or services that do what it describes, by brand name as their makers write it (PostgreSQL, Veeam, Cloudflare, Kubernetes). They are drawn as logos under the column, so readers recognise them at a glance. Only ones a practitioner would agree are true examples of that column, well known, and the same kind of thing across columns. Leave the list empty only when no real product fits.`,
         '',
         'Make it concrete, so a reader sees it rather than reads it:',
         '- Pick ONE real example and carry it through every column, e.g. "your API gets 10,000 photo uploads at once" or "a customer asks for a refund". Put it in the subtitle, and let each column\'s steps show what happens to that same example.',
