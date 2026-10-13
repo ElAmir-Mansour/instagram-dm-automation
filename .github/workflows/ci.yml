@@ -57,6 +57,12 @@ jobs:
       - name: Check icon subset
         run: npm run check:icon-subset
 
+      # The landing's 3D hero is a committed, content-hashed bundle (public/brand/hero3d.<sha8>.js) of
+      # scripts/hero3d/scene.mjs + three: there is no build step on Vercel, so nothing else notices a scene edit that was
+      # never rebuilt, a loader pointing at a stale name, a third bundle, or the bundle growing past 145 KB gzipped.
+      - name: Check hero 3D bundle
+        run: npm run check:hero3d
+
       # Token colours are one hex edit away from failing AA, and nothing else in this repo
       # would notice. The tightest real pair currently sits at ~4.71:1 - almost no headroom.
       - name: Check colour contrast

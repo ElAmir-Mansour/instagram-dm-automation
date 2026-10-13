@@ -1082,3 +1082,347 @@ describe('landing — the diagrams and the real infographic (L9)', () => {
         });
     });
 });
+
+describe('landing — the hero 3D stage (L10)', () => {
+    const SECTIONS = [['ar', L.ar], ['en', L.en]] as const;
+    const rawCss = /<style>[\s\S]*?<\/style>/.exec(landing)![0];
+    const strip = (c: string) => c.replace(/\/\*[\s\S]*?\*\//g, '');
+    const css = strip(rawCss);
+
+    type Comment = { t: string; kw?: string; p: string };
+    /** The stage of one language: from its opening tag to the `</div>` right after the card it wraps. */
+    function stage(doc: string, s: string): string {
+        const at = doc.indexOf(`<div class="hero-stage" id="hero-stage-${s}"`);
+        assert.ok(at > 0, `#hero-stage-${s} is in the ${s} document`);
+        const card = doc.indexOf('</aside>', at);
+        const end = doc.indexOf('</div>', card) + '</div>'.length;
+        assert.equal(doc.slice(card + '</aside>'.length, end).trim(), '</div>', 'the card is the last thing in the stage');
+        return doc.slice(at, end);
+    }
+    const cast = (html: string): Comment[] => {
+        const raw = /data-hero3d='([^']*)'/.exec(html)![1]!;
+        const parsed = JSON.parse(raw) as { comments: Comment[] };
+        assert.deepEqual(Object.keys(parsed), ['comments']);
+        return parsed.comments;
+    };
+    /** The flat rules of the page's CSS (media blocks included) whose selector matches, as {sel, body}. */
+    function rulesNaming(re: RegExp): Array<{ sel: string; body: string }> {
+        const out: Array<{ sel: string; body: string }> = [];
+        for (const m of css.matchAll(/([^{}@]+)\{([^{}]*)\}/g)) {
+            const sel = m[1]!.trim().replace(/\s+/g, ' ');
+            if (re.test(sel)) out.push({ sel, body: m[2]! });
+        }
+        return out;
+    }
+    const exact = (selector: string) => new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\>]/g, '\\$&')}$`);
+
+    describe('the markup', () => {
+        it('each language has one stage, wrapping the hero card, with the poster in front of it in the DOM', () => {
+            for (const [s, doc] of SECTIONS) {
+                assert.equal((doc.match(/class="hero-stage"/g) ?? []).length, 1, s);
+                const html = stage(doc, s);
+                assert.equal((html.match(/<aside\b/g) ?? []).length, 1, 'the card, and nothing else with a role');
+                assert.ok(html.indexOf('class="stage-poster"') > 0 && html.indexOf('class="stage-poster"') < html.indexOf('<aside'), `${s}: the poster is behind the card`);
+                // It is inside the hero's grid, in the card's place, and the hero holds no other section.
+                const hero = /<section class="hero"[\s\S]*?<\/section>/.exec(doc)![0];
+                assert.ok(hero.includes(`id="hero-stage-${s}"`));
+                assert.equal((hero.match(/<section\b/g) ?? []).length, 1, 'no new <section> in the hero');
+                // The card keeps its exact class and label: other tests, and screen readers, rely on them.
+                assert.match(html, /<aside class="card artifact" aria-label="[^"]+">/);
+            }
+            assert.ok(stage(L.ar, 'ar').includes('aria-label="مثال: تعليق وما نتج عنه"'));
+            assert.ok(stage(L.en, 'en').includes('aria-label="Example: one comment and what it produced"'));
+        });
+
+        it('the stage carries its pause labels, in its own language and different from each other', () => {
+            for (const [s, doc] of SECTIONS) {
+                const tag = /<div class="hero-stage"[^>]*>/.exec(stage(doc, s))![0];
+                const pause = /data-pause-label="([^"]+)"/.exec(tag)?.[1];
+                const play = /data-play-label="([^"]+)"/.exec(tag)?.[1];
+                assert.ok(pause && play && pause !== play, s);
+                if (s === 'ar') assert.ok(/^[\u0600-\u06ff ]+$/.test(pause) && /^[\u0600-\u06ff ]+$/.test(play), 'Arabic');
+                else assert.ok(/^[A-Za-z ]+$/.test(pause) && /^[A-Za-z ]+$/.test(play), 'English');
+            }
+        });
+
+        it('the toggle the loader inserts is one template: a 44px-target button with Lucide pause and play, the icon hidden from screen readers', () => {
+            assert.equal((landing.match(/<template id="hero-toggle">/g) ?? []).length, 1);
+            const tpl = /<template id="hero-toggle">([\s\S]*?)<\/template>/.exec(landing)![1]!;
+            assert.match(tpl, /^<button type="button" class="stage-toggle"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">/);
+            assert.ok(tpl.includes('class="i-pause"') && tpl.includes('class="i-play"'), 'both icons: the loader never draws one');
+            assert.equal(/aria-label|aria-pressed/.test(tpl), false, "the loader sets the name and the state from the stage's own data attributes");
+            // Lucide 0.577.0's pause (two rounded bars) and play (one rounded triangle), as published.
+            assert.ok(tpl.includes('<rect x="14" y="3" width="5" height="18" rx="1"/><rect x="5" y="3" width="5" height="18" rx="1"/>'));
+            assert.ok(tpl.includes('d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"'));
+            const rule = rulesNaming(exact('.stage-toggle'))[0]!.body;
+            assert.match(rule, /inline-size:\s*var\(--tap-target\)/);
+            assert.match(rule, /block-size:\s*var\(--tap-target\)/);
+        });
+    });
+
+    describe('the cast (data-hero3d)', () => {
+        const casts = { ar: cast(stage(L.ar, 'ar')), en: cast(stage(L.en, 'en')) };
+
+        it('both languages have the same number of comments, on the same platforms, with the same ones lit', () => {
+            assert.equal(casts.ar.length, casts.en.length);
+            assert.ok(casts.ar.length >= 8, 'enough for the full profile, which shows eight bubbles');
+            assert.deepEqual(casts.ar.map((c) => c.p), casts.en.map((c) => c.p));
+            assert.deepEqual(casts.ar.map((c) => !!c.kw), casts.en.map((c) => !!c.kw));
+        });
+
+        it('only Meta platforms appear, because comment-to-DM is Meta only', () => {
+            for (const lang of ['ar', 'en'] as const) {
+                for (const c of casts[lang]) assert.ok(c.p === 'instagram' || c.p === 'facebook', `${lang}: ${c.p}`);
+                assert.ok(casts[lang].some((c) => c.p === 'instagram') && casts[lang].some((c) => c.p === 'facebook'));
+            }
+        });
+
+        it('a keyword stands alone in its comment: after a space or the start, before a space or ؟ ? ، . ,', () => {
+            for (const lang of ['ar', 'en'] as const) {
+                for (const c of casts[lang]) {
+                    if (c.kw === undefined) continue;
+                    const at = c.t.indexOf(c.kw);
+                    assert.ok(at >= 0, `${lang}: "${c.kw}" is in "${c.t}"`);
+                    assert.ok(at === 0 || c.t[at - 1] === ' ', `${lang}: "${c.kw}" starts a word in "${c.t}"`);
+                    assert.match(c.t[at + c.kw.length] ?? '', /^[ \u061f?\u060c.,]$/, `${lang}: "${c.kw}" is followed by a delimiter in "${c.t}"`);
+                    assert.equal(c.t.indexOf(c.kw, at + 1), -1, `${lang}: "${c.kw}" appears once`);
+                }
+            }
+        });
+
+        it('there are comments that match nothing, and the lite profile (the first five) shows both kinds', () => {
+            for (const lang of ['ar', 'en'] as const) {
+                assert.ok(casts[lang].filter((c) => !c.kw).length >= 2, `${lang}: quiet comments that never light`);
+                assert.ok(casts[lang].filter((c) => c.kw).length >= 4);
+                assert.ok(casts[lang].slice(0, 5).some((c) => !c.kw) && casts[lang].slice(0, 5).some((c) => c.kw), `${lang}: lite has both kinds`);
+            }
+        });
+
+        it('has no names and no other fields: comments are speech, with no persona or handle in them', () => {
+            for (const lang of ['ar', 'en'] as const) {
+                for (const c of casts[lang]) {
+                    assert.deepEqual(Object.keys(c).filter((k) => !['t', 'kw', 'p'].includes(k)), [], 'no name, handle or author field');
+                    assert.equal(/سالم|Salem|نورة|Noura|@/.test(c.t), false, `${lang}: "${c.t}"`);
+                    assert.equal(/\b[A-Z][a-z]+\b/.test(c.t.replace(/^[A-Z][a-z]+/, '')), false, `${lang}: "${c.t}" has a capitalised word after its first, which would be a name`);
+                    assert.ok(c.t.length >= 8 && c.t.length <= 28, `${lang}: "${c.t}" fits a bubble`);
+                }
+            }
+        });
+
+        it("the first comment is the card's own: the one the DM answers, with the same keyword lit", () => {
+            for (const [s, doc] of SECTIONS) {
+                const card = /<p class="said"[^>]*>([\s\S]*?)<\/p>/.exec(stage(doc, s))![1]!;
+                const first = casts[s][0]!;
+                assert.ok(card.replace(/<[^>]+>/g, '').startsWith(first.t), s);
+                assert.equal(/<span class="kw">([^<]+)<\/span>/.exec(card)![1], first.kw, s);
+            }
+        });
+    });
+
+    describe('the poster', () => {
+        const poster = (s: string, doc: string) => /<svg class="stage-poster"[\s\S]*?<\/svg>/.exec(stage(doc, s))![0];
+        const shapes = (svg: string) =>
+            [...svg.matchAll(/<(rect|use)\b([^>]*)\/>/g)].map((m) => {
+                const a = Object.fromEntries([...m[2]!.matchAll(/([\w-]+)="([^"]*)"/g)].map((x) => [x[1]!, x[2]!]));
+                return { tag: m[1]!, a };
+            });
+
+        it('is an aria-hidden SVG on a 400x480 board, with three ghost bubbles, one accent pill and the two Meta glyphs', () => {
+            for (const [s, doc] of SECTIONS) {
+                const svg = poster(s, doc);
+                assert.match(svg, /^<svg class="stage-poster" aria-hidden="true" focusable="false" viewBox="0 0 400 480">/);
+                assert.equal((svg.match(/class="pb"/g) ?? []).length, 3, `${s}: ghost bubbles`);
+                assert.equal((svg.match(/class="pk"/g) ?? []).length, 1, `${s}: one lit pill`);
+                assert.deepEqual([...svg.matchAll(/href="#plogo-([a-z]+)"/g)].map((m) => m[1]), ['instagram', 'facebook'], s);
+                assert.equal(/<text|<image|url\(|<style|transform=|filter=/.test(svg), false, `${s}: shapes and sprite glyphs only, nothing that flips`);
+            }
+        });
+
+        it('the Arabic poster is the English one authored mirrored (x -> 400 - x - width), never flipped', () => {
+            const en = shapes(poster('en', L.en));
+            const ar = shapes(poster('ar', L.ar));
+            assert.equal(ar.length, en.length);
+            assert.ok(en.length >= 12, 'three ghost bubbles, a pill, bars and two glyphs');
+            en.forEach((e, i) => {
+                const a = ar[i]!;
+                assert.equal(a.tag, e.tag);
+                assert.equal(Number(a.a.x), 400 - Number(e.a.x) - Number(e.a.width), `shape ${i}: x`);
+                for (const k of ['y', 'width', 'height', 'rx', 'class', 'href']) assert.equal(a.a[k], e.a[k], `shape ${i}: ${k}`);
+            });
+            // And the page does not flip it either.
+            for (const r of rulesNaming(/\.stage-poster/)) {
+                assert.equal(/transform|scale|rotate|direction|unicode-bidi|writing-mode/.test(r.body), false, r.sel);
+            }
+        });
+
+        it('is painted from tokens, the glyphs from --logo-mono', () => {
+            assert.match(rulesNaming(exact('.stage-poster use'))[0]!.body, /fill:\s*var\(--logo-mono\)/);
+            assert.match(rulesNaming(exact('.stage-poster .pk'))[0]!.body, /fill:\s*var\(--accent-soft\);\s*stroke:\s*var\(--accent-ring\)/);
+            assert.match(rulesNaming(exact('.stage-poster .pb'))[0]!.body, /fill:\s*var\(--surface-solid\)/);
+        });
+    });
+
+    describe('the CSS', () => {
+        const mine = [
+            css.slice(css.indexOf('.hero {\n            padding-block: clamp'), css.indexOf('.hero-grid {')),
+            css.slice(css.indexOf('.hero-stage {'), css.indexOf('.loop {')), // comments are stripped: the stage block ends where the loop's rail begins
+        ].join('\n');
+
+        it("uses logical properties, only the page's breakpoints and no colour literal", () => {
+            assert.ok(mine.includes('.hero-stage') && mine.includes('.hero {') && mine.includes('hero-receipt'));
+            for (const re of [/\b(?:margin|padding)-(?:left|right)\b/, /\bborder-(?:left|right)\b/, /(?<![-\w])(?:left|right)\s*:/, /\bfloat\s*:/, /text-align\s*:\s*(?:left|right)\b/]) {
+                assert.equal(re.test(mine), false, String(re));
+            }
+            for (const m of mine.matchAll(/@media \((?:min|max)-width: ([\d.]+)rem\)/g)) assert.ok(['30', '40', '48', '51.999', '52', '62'].includes(m[1]!), `breakpoint ${m[1]}rem`);
+            assert.equal(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/.test(mine), false, 'tokens only');
+        });
+
+        it('stacks the card (z 1) over the poster and canvas (z 0, unclickable), in its own stacking context', () => {
+            const body = (re: RegExp) => rulesNaming(re).map((r) => r.body).join('\n');
+            assert.match(body(exact('.hero-stage')), /position:\s*relative/);
+            assert.match(body(exact('.hero-stage')), /isolation:\s*isolate/);
+            assert.match(body(exact('.hero-stage > .artifact')), /z-index:\s*1/);
+            const layer = body(exact('.stage-poster, .stage-canvas'));
+            assert.match(layer, /position:\s*absolute/);
+            assert.match(layer, /z-index:\s*0/);
+            assert.match(layer, /pointer-events:\s*none/);
+            assert.match(rulesNaming(exact('.hero'))[0]!.body, /overflow-x:\s*clip/);
+        });
+
+        it('reaches past the card by space-6 above and below by default, and space-7 / space-6 from 62rem; the card is solid under the scene', () => {
+            assert.match(css, /\.hero-stage \{\s*--hs-y: var\(--space-6\);\s*--hs-x: 0px;/);
+            assert.match(css, /@media \(min-width: 62rem\) \{\s*\.hero-stage \{ --hs-y: var\(--space-7\); --hs-x: var\(--space-6\); \}/);
+            assert.match(css, /inset-block-start:\s*calc\(var\(--hs-y\) \* -1\)/);
+            assert.match(css, /block-size:\s*calc\(100% \+ var\(--hs-y\) \* 2\)/);
+            assert.match(css, /inline-size:\s*calc\(100% \+ var\(--hs-x\) \* 2\)/);
+            assert.match(rulesNaming(exact('.hero-stage.is-3d > .artifact'))[0]!.body, /background:\s*var\(--surface-solid\)/);
+        });
+
+        it('cross-fades over 320 ms, and takes no space: nothing in the stage is in flow but the card', () => {
+            assert.match(css, /--lp-t-fade:\s*320ms/);
+            assert.match(rulesNaming(exact('.stage-poster, .stage-canvas'))[0]!.body, /transition:\s*opacity var\(--lp-t-fade\)/);
+            assert.match(rulesNaming(exact('.hero-stage.is-3d .stage-canvas'))[0]!.body, /opacity:\s*1/);
+            assert.match(rulesNaming(exact('.hero-stage.is-3d .stage-poster'))[0]!.body, /opacity:\s*0/);
+            assert.match(rulesNaming(exact('.stage-toggle'))[0]!.body, /position:\s*absolute/);
+        });
+
+        it('swaps the toggle icon on the stage, keeps the toggle a circle on focus, and gives Safari 15 (no overflow: clip) no reach into the gutters', () => {
+            assert.match(css, /\.hero-stage\.is-paused \.i-pause,\s*\.hero-stage:not\(\.is-paused\) \.i-play \{ display: none; \}/);
+            assert.match(rulesNaming(exact('.stage-toggle:focus-visible'))[0]!.body, /border-radius:\s*var\(--radius-pill\)/);
+            assert.match(css, /@supports not \(overflow-x: clip\) \{\s*\.hero-stage \{ --hs-x: 0px; \}\s*\}/);
+            // It must come after the 62rem rule that gives --hs-x its reach, or that rule would win.
+            assert.ok(css.indexOf('@supports not (overflow-x: clip)') > css.indexOf('--hs-x: var(--space-6); }'), 'the @supports rule is later in the source than the media rule');
+        });
+
+        it('is hidden under forced colours and in print, and the receipt is one ring, once', () => {
+            assert.match(css, /@media \(forced-colors: active\), print \{\s*\.stage-poster,\s*\.stage-canvas,\s*\.stage-toggle \{ display: none; \}/);
+            assert.match(css, /\.hero-stage \.bubble\.is-delivering \{ animation: hero-receipt var\(--lp-kw-receipt\) var\(--ease-exit\) 1; \}/);
+            assert.match(css, /--lp-kw-receipt:\s*800ms/);
+            assert.match(css, /@keyframes hero-receipt \{\s*0%, 100% \{[^}]*0 0 0 0 var\(--accent-ring\)[^}]*\}\s*40% \{[^}]*0 0 0 var\(--ring\) var\(--accent-ring\)/);
+        });
+    });
+
+    describe('the loader (its own inline script, the last in the page)', () => {
+        const scripts = [...landing.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+        const script = scripts[scripts.length - 1]!;
+        const shippedAt = script.indexOf('        /* The hero scene (L10): the loader.');
+        const shipped = script.slice(shippedAt);
+        const code = shipped.replace(/\/\*[\s\S]*?\*\//g, '');   // what runs: the comment says import() too
+
+        it('is a script element of its own, right after the shared one, so a browser that cannot parse import() loses only this', () => {
+            assert.equal(scripts.filter((s) => s.includes('import(')).length, 1, 'import() is in exactly one script');
+            assert.ok(script.includes('import(HERO3D)'));
+            assert.ok(shippedAt > 0, 'the loader is the last script');
+            const shared = scripts[scripts.length - 2]!;
+            assert.ok(shared.includes('is-inview') && shared.includes('data-set-lang'), 'the script before it is the shared one: the switch, the rows, the diagrams');
+            assert.equal(shared.includes('import('), false, 'the shared script is plain ES5: it parses everywhere');
+            assert.equal((shared.match(/\n {8}\(function \(\) \{\n/g) ?? []).length, 4, 'the switch, the fragments, the rows, the diagrams and video');
+            assert.equal((script.match(/\n {8}\(function \(\) \{\n/g) ?? []).length, 1, 'one IIFE in the loader script');
+            assert.match(landing, /<\/script>\s*<script>\s*\/\* The hero scene \(L10\): the loader\./, 'adjacent, with nothing between them');
+            assert.match(landing, /<\/script>\s*<\/body>/, 'and it is the last thing in the body');
+        });
+
+        it('keeps every gate the spec names', () => {
+            for (const gate of [
+                'prefers-reduced-motion:no-preference', 'c.saveData', '[23]g', 'n.deviceMemory < 4', 'n.hardwareConcurrency <',
+                "coarse = ok('(pointer:coarse)')", 'coarse ? 6 : 4', "getContext('webgl2', { failIfMajorPerformanceCaveat: true })",
+                ".offsetWidth < 300", 'n.webdriver', '3d=0', "sessionStorage.getItem('hero3d_off')", "localStorage.getItem('hero3d_paused')",
+            ]) {
+                assert.ok(shipped.includes(gate), `the loader has the gate ${gate}`);
+            }
+        });
+
+        it('starts on load, when idle (a 1.2 s timer where there is no idle callback), and imports one file', () => {
+            assert.match(shipped, /w\.addEventListener\('load', function \(\) \{\s*\(w\.requestIdleCallback \|\| function \(f\) \{ setTimeout\(f, 1200\); \}\)\(start, \{ timeout: 2000 \}\);/);
+            assert.equal((code.match(/import\(/g) ?? []).length, 1);
+            assert.match(shipped, /import\(HERO3D\)\.then\(function \(m\) \{ return m\.mount\(stages, \{ lite: coarse \}\); \}\)/);
+            assert.equal(/console\.(?:error|warn)/.test(code), false, 'a failure is an info line');
+        });
+
+        it('a paused visitor never downloads three: go() returns while paused, before the import', () => {
+            const go = /function go\(\) \{[\s\S]*?\n {12}\}/.exec(shipped)![0];
+            assert.ok(go.indexOf('paused') > 0 && go.indexOf('paused') < go.indexOf('import('));
+            assert.match(shipped, /api \? api\.pause\(paused\) : go\(\);/, 'a press pauses a running scene, or starts a load');
+        });
+
+        it('a pause pressed while the scene downloads is applied when it mounts', () => {
+            assert.match(shipped, /\.then\(function \(a\) \{ api = a; if \(paused\) a\.pause\(true\); \}/);
+        });
+
+        it('a failed scene is never tried twice: the toggles go, the flag that blocks a second import stays set', () => {
+            const reject = /, function \(e\) \{[\s\S]*?\n {20}\}\);/.exec(shipped)![0];
+            assert.match(reject, /each\(function \(s\) \{ s\.lastElementChild\.remove\(\); \}\);/, 'the controls are removed');
+            assert.match(reject, /console\.info\('hero3d: poster', e\);/);
+            assert.equal(/busy = (?:0|false)/.test(shipped), false, 'busy is only ever set, so a later press cannot mount a second renderer');
+            assert.match(shipped, /if \(busy \|\| api \|\| paused\) return;\s*busy = 1;/);
+        });
+
+        it('the toggle announces its state once: a name that swaps, and no aria-pressed', () => {
+            assert.equal(shipped.includes('aria-pressed'), false);
+            assert.match(shipped, /s\.lastElementChild\.setAttribute\('aria-label', s\.getAttribute\(paused \? 'data-play-label' : 'data-pause-label'\)\);/);
+            assert.match(shipped, /s\.classList\.toggle\('is-paused', paused\);/);
+            assert.match(shipped, /paused = false;/, 'a storage error leaves it false, never undefined');
+            const tpl = /<template id="hero-toggle">[\s\S]*?<\/template>/.exec(landing)![0];
+            assert.equal(/aria-pressed/.test(tpl) || /stage-toggle[^{]*\{[^}]*aria-pressed|\[aria-pressed[^\]]*\][^{]*\.i-(?:pause|play)/.test(css), false, 'neither the template nor the toggle CSS knows it');
+        });
+
+        it("names the bundle by its hash, with no ?v=, and the file is there; '' is the rollback", () => {
+            const name = /var HERO3D = '([^']*)';/.exec(shipped)![1]!;
+            assert.match(name, /^\/brand\/hero3d\.[0-9a-f]{8}\.js$/);
+            assert.ok(statSync(`public${name}`).isFile(), name);
+            assert.match(shipped, /if \(!HERO3D \|\|/, "HERO3D = '' switches it off");
+        });
+
+        it('is at most 1.2 KB gzipped as shipped, comment included, so the critical path grows by well under 2 KB', () => {
+            const gz = gzipSync(shipped.replace(/\s+$/, '')).length;
+            assert.ok(gz <= 1.2 * 1024, `${gz} bytes gzipped`);
+        });
+
+        it('adds no ?v= (a content-hashed file is its own version) and no script source: the import is same-origin, so the CSP is untouched', () => {
+            assert.equal(/\/brand\/[^"'\s]*\?v=/.test(landing), false);
+            assert.equal(/<script[^>]*\bsrc=/.test(noComments(landing)), false, 'no external <script src>');
+            const api = readFileSync('src/routes/api.ts', 'utf8');
+            assert.ok(api.includes(`"script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com",`), 'script-src is exactly what it was');
+            assert.equal(/worker-src|script-src[^"]*blob:/.test(api), false);
+        });
+    });
+
+    describe('serving /brand', () => {
+        it('vercel.json routes /brand/* to public/brand, immutable for a year, after /samples and right before the catch-all', () => {
+            const routes = (JSON.parse(readFileSync('vercel.json', 'utf8')) as { routes: Array<{ src: string; dest?: string; headers?: Record<string, string> }> }).routes;
+            const srcs = routes.map((r) => r.src);
+            const brand = routes.find((r) => r.src === '/brand/(.*)')!;
+            assert.ok(brand);
+            assert.equal(brand.dest, 'public/brand/$1');
+            assert.deepEqual(brand.headers, { 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+            assert.ok(srcs.indexOf('/brand/(.*)') > srcs.indexOf('/samples/(.*)'));
+            assert.equal(srcs.indexOf('/brand/(.*)'), srcs.indexOf('/(.*)') - 1, 'immediately before the catch-all');
+        });
+
+        it('src/index.ts serves /brand and /samples itself, off Vercel only', () => {
+            const index = readFileSync('src/index.ts', 'utf8');
+            assert.match(index, /if \(!process\.env\.VERCEL\) \{\s*app\.use\('\/samples', express\.static\('public\/samples'/);
+            assert.match(index, /app\.use\('\/brand', express\.static\('public\/brand', \{ maxAge: '365d', immutable: true \}\)\);/);
+        });
+    });
+});

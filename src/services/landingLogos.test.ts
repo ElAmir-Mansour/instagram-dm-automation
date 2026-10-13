@@ -248,15 +248,17 @@ describe('platform logos — served the way src/index.ts serves them', () => {
     const uses = (html: string, id = '') => (html.match(new RegExp(`href="#plogo-${id}`, 'g')) ?? []).length;
 
     for (const lang of ['ar', 'en'] as const) {
-        it(`landing (${lang}): 61 glyphs with a WhatsApp number, 56 without, and none of the missing ones is a WhatsApp mark`, () => {
+        it(`landing (${lang}): 65 glyphs with a WhatsApp number, 60 without, and none of the missing ones is a WhatsApp mark`, () => {
             const src = read('landing');
             const full = renderSiteTemplate(src, WITH, lang);
             const bare = renderSiteTemplate(src, WITHOUT, lang);
             // Each language: 15 (buttons, rows, samples) + 13 in the L9 diagrams (the flow chips: 2 + 3 + 4, and
-            // the platform map's four row heads). Two languages, plus the footer's five.
-            assert.equal(uses(full), 61, 'two languages x 28, plus the footer\'s five');
+            // the platform map's four row heads) + 2 in the hero poster (L10: Instagram and Facebook, on the two
+            // ghost bubbles; they are <use> in an aria-hidden SVG, not .plogo, so the tests below do not read them
+            // as labelled logos). Two languages, plus the footer's five.
+            assert.equal(uses(full), 65, 'two languages x 30, plus the footer\'s five');
             assert.equal(uses(full, 'whatsapp'), 5, 'hero and contact in each language, and the footer');
-            assert.equal(uses(bare), 56);
+            assert.equal(uses(bare), 60);
             assert.equal(uses(bare, 'whatsapp'), 0, 'a link that is removed takes its glyph with it');
             assert.equal(bare.includes('class="foot-wa"'), false);
         });
@@ -269,6 +271,53 @@ describe('platform logos — served the way src/index.ts serves them', () => {
             assert.equal(uses(renderSiteTemplate(src, WITHOUT)), 4);
         });
     }
+});
+
+describe('platform logos — a glyph without .plogo is only ever the hero poster\'s', () => {
+    // IDENTITY.md section 5 says a platform's mark always sits beside its name. The hero poster (L10) is the one exception the
+    // spec makes: it is the still of the 3D scene, a decorative SVG with two ghost bubbles carrying the Instagram and Facebook
+    // glyphs as bare <use>, aria-hidden, with no name beside them (the scene's bubbles have none either). Anywhere else a glyph
+    // is a .plogo, which markupProblems above holds to the name rule.
+
+    /** Every `href="#plogo-*"` that is neither inside a `<svg class="plogo…">` nor inside the hero poster. */
+    function strayGlyphs(html: string): string[] {
+        const covered: Array<[number, number]> = glyphsOf(html).map((g) => [g.at, g.end]);
+        for (const m of html.matchAll(/<svg class="stage-poster"[\s\S]*?<\/svg>/g)) covered.push([m.index!, m.index! + m[0].length]);
+        const strays: string[] = [];
+        for (const m of html.matchAll(/href="#plogo-([a-z]+)"/g)) {
+            if (!covered.some(([a, b]) => m.index! >= a && m.index! < b)) strays.push(`#plogo-${m[1]} @${m.index}`);
+        }
+        return strays;
+    }
+
+    for (const page of PAGES) {
+        it(`${page}: every glyph is a .plogo, or sits inside the hero poster`, () => {
+            assert.deepEqual(strayGlyphs(HTML.get(page)!), []);
+        });
+    }
+
+    it('the poster exists on the landing page only, once per language, aria-hidden, with the two Meta glyphs and nothing else', () => {
+        for (const page of PAGES) {
+            const posters = [...HTML.get(page)!.matchAll(/<svg class="stage-poster"[\s\S]*?<\/svg>/g)].map((m) => m[0]);
+            assert.equal(posters.length, page === 'landing' ? 2 : 0, page);
+            for (const svg of posters) {
+                assert.match(svg, /^<svg class="stage-poster" aria-hidden="true" focusable="false"/);
+                assert.deepEqual([...svg.matchAll(/href="#plogo-([a-z]+)"/g)].map((m) => m[1]), ['instagram', 'facebook']);
+            }
+        }
+    });
+
+    it('the guard is not blind: a bare glyph outside the poster is a stray, inside it is not, and a .plogo is neither', () => {
+        const bare = '<div><use href="#plogo-instagram"/></div>';
+        const inPoster = '<svg class="stage-poster" aria-hidden="true" focusable="false" viewBox="0 0 400 480"><use href="#plogo-instagram" x="1"/></svg>';
+        const labelled = '<svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>Instagram';
+        assert.deepEqual(strayGlyphs(bare).length, 1);
+        assert.deepEqual(strayGlyphs(inPoster), []);
+        assert.deepEqual(strayGlyphs(labelled), []);
+        assert.equal(strayGlyphs(`${bare}${inPoster}${labelled}`).length, 1, 'only the bare one');
+        assert.equal(strayGlyphs('<svg class="plogo big" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>').length, 0);
+        assert.equal(strayGlyphs('<svg class="not-the-poster"><use href="#plogo-facebook"/></svg>').length, 1);
+    });
 });
 
 describe('platform logos — nothing mirrors, transforms or colours a logo', () => {

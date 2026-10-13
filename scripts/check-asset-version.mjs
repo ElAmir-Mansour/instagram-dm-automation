@@ -167,6 +167,30 @@ for (const page of [INDEX, ...SHARED_ASSET_PAGES]) {
     }
 }
 
+// ─── Content-hashed assets carry no `?v=` ───────────────────────────────────────────────────────
+//
+// `?v=N` is the dashboard's hand-kept cache-buster, and this script reads every one it finds in the public pages as a
+// dashboard pin. The assets under /brand (the hero scene's bundle, hero3d.<sha8>.js) and /samples are different: a /brand
+// file is named for the hash of its bytes and served `immutable` for a year, so a new build is a new URL and a version
+// query is at best noise and at worst a second, disagreeing cache key for the same bytes. And a `?v=` on one would be
+// counted above as a dashboard pin that can never match ASSET_VERSION.
+const HASHED = /(?:\/brand\/|\/samples\/)[^"'\s)<>]*\?v=/;
+for (const page of [INDEX, ...SHARED_ASSET_PAGES]) {
+    let src;
+    try {
+        src = readFileSync(page, 'utf8');
+    } catch {
+        continue;
+    }
+    const m = HASHED.exec(src.replace(/<!--[\s\S]*?-->/g, ''));
+    if (m) {
+        fail.push(
+            `${page} puts a ?v= on a content-hashed asset (${m[0]}). /brand and /samples files are cached by name, `
+            + `so the name is the version: drop the query.`
+        );
+    }
+}
+
 // ─── The CSP is declared TWICE, and the copies can drift ────────────────────────────────────
 //
 // `src/routes/api.ts` sets a CSP for routes the Express app serves; `vercel.json` sets one for
