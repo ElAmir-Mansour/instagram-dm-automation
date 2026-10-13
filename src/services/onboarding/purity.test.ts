@@ -11,8 +11,9 @@ import { describe, it } from 'node:test';
 const DIR = new URL('./', import.meta.url);
 
 const PURE_MODULES = [
-    'brand.ts', 'colour.ts', 'draftPrompt.ts', 'draftSchema.ts', 'draftSignals.ts', 'fence.ts', 'geo.ts', 'html.ts', 'imageSniff.ts', 'netGuard.ts', 'register.ts',
-    'robots.ts', 'safeFetch.ts', 'siteExtract.ts', 'socials.ts', 'textClean.ts', 'validateDraft.ts', 'website.ts',
+    'brand.ts', 'captions.ts', 'colour.ts', 'discoveryProbe.ts', 'draftPrompt.ts', 'draftSchema.ts', 'draftSignals.ts', 'fence.ts', 'geo.ts', 'handles.ts', 'html.ts',
+    'igMap.ts', 'imageSniff.ts', 'netGuard.ts', 'register.ts', 'robots.ts', 'safeFetch.ts', 'siteExtract.ts', 'socials.ts', 'sourceError.ts', 'textClean.ts',
+    'validateDraft.ts', 'website.ts', 'ytMap.ts',
 ];
 
 const importsOf = (file: string): string[] =>

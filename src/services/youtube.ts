@@ -227,7 +227,13 @@ export interface YouTubeChannel {
     /** `@handle`, when the channel has one. */
     handle: string | null;
     thumbnailUrl: string | null;
+    /** The channel's own description, country (two letters) and default language: the same `channels.list` answer already carries them, so they cost no extra quota. The onboarding draft reads them (docs/onboarding/03 §1). */
+    description: string | null;
+    country: string | null;
+    defaultLanguage: string | null;
 }
+
+const nonEmpty = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
 /** The channel the token belongs to. Throws `youtubeSignupRequired` when the account has none. */
 export async function getMyChannel(accessToken: string): Promise<YouTubeChannel> {
@@ -251,6 +257,9 @@ export async function getMyChannel(accessToken: string): Promise<YouTubeChannel>
         title: item.snippet?.title ?? null,
         handle: item.snippet?.customUrl ?? null,
         thumbnailUrl: thumbs.default?.url ?? thumbs.medium?.url ?? null,
+        description: nonEmpty(item.snippet?.description),
+        country: nonEmpty(item.snippet?.country),
+        defaultLanguage: nonEmpty(item.snippet?.defaultLanguage),
     };
 }
 
