@@ -82,7 +82,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.10',
+    ASSET_VERSION: '12.11',
 
     _modules: Object.create(null),
 
@@ -303,8 +303,8 @@ const App = {
      * Three rules:
      *   - the label is the target language's AUTONYM — العربية, never "Arabic",
      *     because a language name belongs in its own script;
-     *   - `lang` on the button so Plex Sans Arabic shapes العربية and Plex Sans sets English,
-     *     instead of whichever face the surrounding UI happens to be using;
+     *   - `lang` on the button so the browser shapes العربية with an Arabic face and sets
+     *     English in a Latin one, instead of whichever face the surrounding UI happens to be using;
      *   - the visible label is a noun, so the accessible name is the verb:
      *     "التبديل إلى الإنجليزية" / "Switch to Arabic".
      */

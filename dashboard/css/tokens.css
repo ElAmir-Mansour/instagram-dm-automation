@@ -7,6 +7,11 @@
    used to carry its own copy of the variable block with values 1px and a few
    hex digits away from the app's, which is two design systems in one repo.
 
+   The palette is direction A, «حبر وهيل · Ink & Cardamom» (DESIGN.md §2). Every
+   palette colour below (shadows and the derived tone borders aside) has a row in
+   DESIGN.md's tables, and src/dashboard/design-md.test.ts fails when the two
+   disagree: this file wins.
+
    Rules this file encodes:
 
    1.  Every value is a token. If a component needs a number that is not here,
@@ -24,10 +29,11 @@
        Seven steps, replacing the twelve ad-hoc sizes (9,10,11,12,13,14,15,16,
        18,20,28,32px) the eight screens used to share. 11px was unreadable in
        the UI face and carried table headers and timestamps; the floor is now 12px. */
-    /* ─── Apple system stack, and no webfont at all ───────────────────────────
-       HIG's own answer to typography is "use the system font", so this loads
-       nothing: the Google Fonts request is gone, which removes a third-party
-       round trip from the critical path as well as ~100KB.
+    /* ─── The system stack, and no webfont at all ─────────────────────────────
+       The platform's own UI face is the default answer for UI text, so this
+       loads nothing: the Google Fonts request is gone, which removes a third-party
+       round trip from the critical path as well as ~100KB. (A display face for
+       headings and figures is a separate step; DESIGN.md §3 describes it.)
 
        Arabic coverage is the part that needed care, because it is functional
        rather than aesthetic here. On Apple platforms `-apple-system` resolves to
@@ -74,10 +80,10 @@
     --space-8: 4rem;      /* 64 */
 
     /* ─── Radius ─────────────────────────────────────────────────────────── */
-    /* HIG geometry: buttons and inputs 8-10, inner panels 12-14, outer windows
-       and modals 16-20, chips full-pill. Larger than the previous 3/6/9/13/18
-       because macOS surfaces are softer than a dense data tool - the radius is
-       part of what makes a window read as a window. */
+    /* Geometry: buttons and inputs 8, inner panels 12, outer windows and modals
+       16-20, chips full-pill. Larger than the previous 3/6/9/13/18 because a
+       softer surface reads as a window rather than a dense data table - the
+       radius is part of what makes a window read as a window. */
     --radius-xs: 6px;
     --radius-sm: 8px;
     --radius-md: 12px;
@@ -125,8 +131,8 @@
     --opacity-busy: 0.75;
 
     /* ─── Motion ─────────────────────────────────────────────────────────── */
-    /* The HIG-style ease: a long, decelerating tail so a hover settles rather
-       than snapping. Used for everything that is not an exit. */
+    /* A long, decelerating tail so a hover settles rather than snapping. Used
+       for everything that is not an exit. */
     --ease-standard: cubic-bezier(0.16, 1, 0.3, 1);
     --ease-exit: cubic-bezier(0.4, 0, 1, 1);
     /* Blur radii for the glass surfaces, so a component never hardcodes one. */
@@ -154,6 +160,22 @@
     --brand-youtube-soft: rgba(255, 0, 51, 0.14);
     --brand-on-solid: #ffffff;
 
+    /* ─── The logo mark: FROZEN, and independent of the palette ──────────────
+       The dashboard's mark (.logo-mark, .login-mark) is Lucide's zap on a blue
+       tile, the same picture as public/favicon.svg. The app is in TikTok's review
+       with this logo, so it must not change when the palette does: the tile and
+       glyph are pinned here, the same in both themes, and nothing else paints
+       the mark. `--mark-tile-lit` is the lit gradient the dashboard has always
+       drawn on that tile, and the mark paints it as ONE background layer: a flat
+       colour under it shifts the antialiased edge by a few levels, and the mark
+       is pixel-for-pixel what it was. The favicon is the flat `--mark-tile`,
+       which is also the gradient's middle stop, so there is one blue.
+       Frozen until TikTok accepts the app; then the ر mark from DESIGN.md §4.
+       src/dashboard/design-md.test.ts pins these three values. */
+    --mark-tile: #0071e3;
+    --mark-tile-lit: linear-gradient(180deg, #0a7cf0, var(--mark-tile) 60%, #0064cc);
+    --mark-glyph: #ffffff;
+
     /* ─── Chart series ───────────────────────────────────────────────────────
        Read by js/charts.js through getComputedStyle, so the charts follow the
        theme instead of carrying their own duplicated hex values. */
@@ -161,7 +183,8 @@
     --chart-negative: #f87171;
 }
 
-/* ─── Dark theme (default, and the product's identity) ─────────────────── */
+/* ─── Dark theme (default, and the product's identity) ───────────────────
+   An editing suite: olive-tinted ink neutrals, one cardamom accent. */
 :root,
 :root[data-theme='dark'] {
     color-scheme: dark;
@@ -172,22 +195,22 @@
        once composited over the canvas. Anything that needs an opaque background
        (a chart canvas, an image frame) must use `--surface-solid`, which exists
        for exactly that and is not glass. */
-    --surface-page: #161617;
+    --surface-page: #111210;
     /* The lightest stop equals --surface-page, so the flat value the contrast
        guard measures remains the worst case for light text. */
     --surface-ambient:
-        radial-gradient(1100px 760px at 18% -12%, #161617 0%, #121213 48%, #0d0d0e 100%);
-    --surface-sunken: #0f0f10;
-    --surface-raised: rgba(40, 40, 44, 0.65);
-    --surface-overlay: rgba(48, 48, 52, 0.82);
+        radial-gradient(1100px 760px at 18% -12%, #111210 0%, #0f100e 48%, #0b0c0a 100%);
+    --surface-sunken: #0b0c0a;
+    --surface-raised: rgba(36, 38, 32, 0.66);
+    --surface-overlay: rgba(44, 46, 39, 0.84);
     /* The opaque escape hatch. Matches what `surface-raised` composites to. */
-    --surface-solid: #222225;
+    --surface-solid: #1e1f1b;
     /* The window chrome: the sidebar AND the top bar, one recipe so their L-shaped
        join has no seam. `--surface-solid` at 86%: the colour the sidebar already
        composited to, opaque enough that the page title stays legible over content
        scrolling under the bar. */
-    --surface-chrome: rgba(34, 34, 37, 0.86);
-    /* HIG "secondary fill": the tint behind a pill, a chip, a hover row. */
+    --surface-chrome: rgba(30, 31, 27, 0.86);
+    /* The tint behind a pill, a chip, a hover row. */
     --surface-glass: rgba(255, 255, 255, 0.08);
     --surface-glass-hover: rgba(255, 255, 255, 0.11);
     --surface-scrim: rgba(0, 0, 0, 0.5);
@@ -196,32 +219,39 @@
     --border-subtle: rgba(255, 255, 255, 0.12);
     --border-strong: rgba(255, 255, 255, 0.2);
 
-    --text-strong: #f5f5f7;
-    --text-default: #d1d1d6;
-    --text-muted: #aeaeb2;
-    --text-on-accent: #ffffff;
+    --text-strong: #f2f3ec;
+    --text-default: #d2d4ca;
+    --text-muted: #a8ab9e;
+    /* The label on the cardamom fill: ink, not white. 12.0:1 on --accent. */
+    --text-on-accent: #141610;
     /* The native <select> chevron, as a data URI because a <select> cannot host a
-       pseudo-element. The stroke is a theme value: one fixed grey measured under
-       3:1 on the light sunken well. */
-    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+       pseudo-element. The stroke is a theme value (it is --chart-tick): one fixed
+       grey measured under 3:1 on the light sunken well. */
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a3a698' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-    /* ─── Accent ──────────────────────────────────────────────────────────────
-       `--accent` is the FILL (buttons, active states, focus rings) and
-       `--accent-text` is the LABEL colour. They differ on purpose: #0071E3 as
-       text on the glass surface measures 3.38:1, below AA, while white on
-       #0071E3 measures 4.70:1 and passes. Apple ships separate "accessible"
-       variants for precisely this, and `--accent-text` is theirs (#409CFF, which
-       measures 5.60:1 on glass). Using the fill colour as text is the single
-       easiest way to make this palette inaccessible. */
-    --accent: #0071e3;
-    --accent-hover: #0077ed;
-    --accent-active: #005bb5;
-    --accent-soft: rgba(0, 113, 227, 0.18);
-    --accent-ring: rgba(0, 113, 227, 0.35);
-    --accent-text: #6bb1ff;
+    /* ─── Accent: cardamom ────────────────────────────────────────────────────
+       `--accent` is the FILL (the primary button, the active marker, the focus
+       outline) and `--accent-text` is the LABEL colour for links, eyebrows and
+       the keyword highlight. They are different tokens on purpose, and the
+       label on a fill is a third one, `--text-on-accent`.
 
-    /* Same fill-vs-text split. The bare system colours are Apple's fills; every
-       `-text` value is Apple's published accessible variant. */
+       In dark the fill is bright enough to be text too, so `--accent-text` is
+       only one step lighter (#c9e683), which keeps the label above 4.5:1 on the
+       tinted ground `--accent-soft` lays down. The ink label on the fill is
+       12.0:1. In light the roles pull apart: the fill is ink, the label is a
+       deep olive, and cardamom survives only as the highlighter. Using a fill
+       colour as text is the easiest way to make this palette inaccessible;
+       scripts/check-contrast.mjs measures every pair. */
+    --accent: #bcde70;
+    --accent-hover: #c9e683;
+    --accent-active: #a8ca5c;
+    --accent-soft: rgba(188, 222, 112, 0.16);
+    --accent-ring: rgba(188, 222, 112, 0.4);
+    --accent-text: #c9e683;
+
+    /* Same fill-vs-text split for status: the bare colours are fills, the
+       `-text` values are the labels. Cardamom is never a status, and these
+       four are unchanged by the palette. */
     --success: #34c759;
     --success-soft: rgba(52, 199, 89, 0.16);
     --success-text: #30db5b;
@@ -242,10 +272,11 @@
     --border-danger: color-mix(in srgb, var(--danger) 30%, transparent);
     --border-success: color-mix(in srgb, var(--success) 30%, transparent);
 
-    /* Barely a gradient: a single hue lit from the top edge, which is what a
-       macOS control does. Anything more is a different operating system. */
-    --gradient-brand: linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc);
-    --gradient-brand-soft: linear-gradient(180deg, rgba(0, 113, 227, 0.16), rgba(0, 100, 204, 0.05));
+    /* Barely a gradient: one hue lit from the top edge. The primary button, the
+       outgoing bubble and the current step all paint it, and the label on every
+       stop of it is --text-on-accent (the guard measures the stops). */
+    --gradient-brand: linear-gradient(180deg, #c9e683, #bcde70 60%, #afd263);
+    --gradient-brand-soft: linear-gradient(180deg, rgba(188, 222, 112, 0.16), rgba(168, 202, 92, 0.05));
 
     /* Soft and diffuse, never harsh. Dark mode leans on borders more than
        shadow, so these are restrained and the modal carries the depth. */
@@ -255,58 +286,65 @@
     --elev-glow: 0 4px 24px -1px rgba(0, 0, 0, 0.38);
 
     --chart-grid: rgba(255, 255, 255, 0.08);
-    --chart-tick: #a1a1a6;
+    --chart-tick: #a3a698;
+    /* The accent as DATA: the sparkline, the line chart, the heat map, the audience split. In dark
+       it is the fill; in light it is the deep olive, because a near-black line on a card reads as
+       a default rather than a brand. A 3:1 shape against every ground a chart sits on. */
+    --chart-accent: #bcde70;
 }
 
 
 /* ─── Light theme ────────────────────────────────────────────────────────────
    Applied when the OS asks for light and the operator has not pinned a theme,
-   or when they pin light explicitly. Glass is inverted rather than reused:
-   a white-alpha overlay on a light page is invisible. */
+   or when they pin light explicitly. Paper, ink actions, a cardamom highlighter.
+   Glass is inverted rather than reused: a white-alpha overlay on a light page
+   is invisible. */
 @media (prefers-color-scheme: light) {
     :root:not([data-theme='dark']) {
         color-scheme: light;
 
-        --surface-page: #f5f5f7;
+        --surface-page: #f4f4ee;
         /* Darkest stop equals --surface-page: worst case for dark text. */
         --surface-ambient:
-            radial-gradient(1100px 760px at 18% -12%, #ffffff 0%, #fafafc 48%, #f5f5f7 100%);
-        --surface-sunken: #ededf0;
-        --surface-raised: rgba(255, 255, 255, 0.72);
-        --surface-overlay: rgba(255, 255, 255, 0.88);
+            radial-gradient(1100px 760px at 18% -12%, #ffffff 0%, #fafaf6 48%, #f4f4ee 100%);
+        --surface-sunken: #eaeae2;
+        --surface-raised: rgba(255, 255, 255, 0.74);
+        --surface-overlay: rgba(255, 255, 255, 0.9);
         --surface-solid: #ffffff;
         --surface-chrome: rgba(255, 255, 255, 0.86);
-        --surface-glass: rgba(0, 0, 0, 0.05);
-        --surface-glass-hover: rgba(0, 0, 0, 0.075);
+        --surface-glass: rgba(24, 26, 16, 0.05);
+        --surface-glass-hover: rgba(24, 26, 16, 0.075);
         --surface-scrim: rgba(0, 0, 0, 0.28);
 
-        --border-subtle: rgba(0, 0, 0, 0.06);
-        --border-strong: rgba(0, 0, 0, 0.12);
+        --border-subtle: rgba(24, 26, 16, 0.08);
+        --border-strong: rgba(24, 26, 16, 0.14);
 
-        /* `--text-muted` is #6E6E73, not the #86868B the brief gave. That value
-           measures 3.33:1 on the canvas and 3.53:1 on glass - below AA for
-           normal text, and it carries form hints, table headers, empty states
-           and every timestamp in the product. #6E6E73 is still an Apple system
-           grey and measures 4.66:1 / 4.95:1. The brief's value is not kept: it
-           passed only as large text, and no rule here ever used it. */
-        --text-strong: #1d1d1f;
-        --text-default: #3a3a3c;
-        --text-muted: #636366;
+        /* Paper and ink. `--text-muted` carries form hints, table headers, empty
+           states and every timestamp, so it is held to 4.5:1 on every ground the
+           guard builds, glass tint included. */
+        --text-strong: #181913;
+        --text-default: #393b32;
+        --text-muted: #5e6155;
         --text-on-accent: #ffffff;
-        --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+        --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2366695c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-        --accent: #0071e3;
-        --accent-hover: #0077ed;
-        --accent-active: #005bb5;
-        --accent-soft: rgba(0, 113, 227, 0.1);
-        --accent-ring: rgba(0, 113, 227, 0.3);
-        /* Apple's accessible blue. #0071E3 as text on the canvas is 4.31:1. */
-        --accent-text: #0040dd;
+        /* Light inverts the roles. The FILL is ink (#1a1c15, white label 17.2:1),
+           cardamom is the highlighter behind a keyword or a selected row
+           (`--accent-soft`), and the label that sits on that highlighter is a deep
+           olive, `--accent-text`, 7.9:1 on the page. Cardamom itself, as text on
+           paper, would not pass; that is why it is never used as one here. */
+        --accent: #1a1c15;
+        --accent-hover: #2a2d23;
+        --accent-active: #0e0f0b;
+        --accent-soft: rgba(170, 204, 72, 0.3);
+        --accent-ring: rgba(130, 165, 40, 0.45);
+        --accent-text: #3e5208;
 
         --success: #34c759;
         --success-soft: rgba(52, 199, 89, 0.14);
-        /* Apple's accessibleGreen (#248A3D) is 4.04:1 here, still short, so this
-           is one step darker in the same family at 4.96:1. */
+        /* The system green (#248a3d) is 4.04:1 here, still short, so this is one step
+           darker in the same family: 4.76:1 on the tint over the page, which is the
+           tightest text pair in the light theme. */
         --success-text: #1c712f;
         --danger: #ff3b30;
         --danger-soft: rgba(255, 59, 48, 0.12);
@@ -330,8 +368,8 @@
         --brand-instagram-text: #b5185c;
         --brand-facebook-text: #0a58ca;
 
-        --gradient-brand: linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc);
-        --gradient-brand-soft: linear-gradient(180deg, rgba(0, 113, 227, 0.09), rgba(0, 100, 204, 0.03));
+        --gradient-brand: linear-gradient(180deg, #2a2d23, #1a1c15 60%, #121310);
+        --gradient-brand-soft: linear-gradient(180deg, rgba(170, 204, 72, 0.18), rgba(170, 204, 72, 0.05));
 
         --elev-1: 0 1px 2px rgba(0, 0, 0, 0.04);
         --elev-2: 0 4px 24px -1px rgba(0, 0, 0, 0.06), 0 2px 6px -1px rgba(0, 0, 0, 0.04);
@@ -341,7 +379,8 @@
         --chart-positive: #248a3d;
         --chart-negative: #d70015;
         --chart-grid: rgba(0, 0, 0, 0.07);
-        --chart-tick: #6e6e73;
+        --chart-tick: #66695c;
+        --chart-accent: #3e5208;
     }
 }
 
@@ -352,46 +391,48 @@
 :root[data-theme='light'] {
     color-scheme: light;
 
-    --surface-page: #f5f5f7;
-        /* Darkest stop equals --surface-page: worst case for dark text. */
-        --surface-ambient:
-            radial-gradient(1100px 760px at 18% -12%, #ffffff 0%, #fafafc 48%, #f5f5f7 100%);
-    --surface-sunken: #ededf0;
-    --surface-raised: rgba(255, 255, 255, 0.72);
-    --surface-overlay: rgba(255, 255, 255, 0.88);
+    --surface-page: #f4f4ee;
+    /* Darkest stop equals --surface-page: worst case for dark text. */
+    --surface-ambient:
+        radial-gradient(1100px 760px at 18% -12%, #ffffff 0%, #fafaf6 48%, #f4f4ee 100%);
+    --surface-sunken: #eaeae2;
+    --surface-raised: rgba(255, 255, 255, 0.74);
+    --surface-overlay: rgba(255, 255, 255, 0.9);
     --surface-solid: #ffffff;
     --surface-chrome: rgba(255, 255, 255, 0.86);
-    --surface-glass: rgba(0, 0, 0, 0.05);
-    --surface-glass-hover: rgba(0, 0, 0, 0.075);
+    --surface-glass: rgba(24, 26, 16, 0.05);
+    --surface-glass-hover: rgba(24, 26, 16, 0.075);
     --surface-scrim: rgba(0, 0, 0, 0.28);
 
-    --border-subtle: rgba(0, 0, 0, 0.06);
-    --border-strong: rgba(0, 0, 0, 0.12);
+    --border-subtle: rgba(24, 26, 16, 0.08);
+    --border-strong: rgba(24, 26, 16, 0.14);
 
-    /* `--text-muted` is #6E6E73, not the #86868B the brief gave. That value
-       measures 3.33:1 on the canvas and 3.53:1 on glass - below AA for
-       normal text, and it carries form hints, table headers, empty states
-       and every timestamp in the product. #6E6E73 is still an Apple system
-       grey and measures 4.66:1 / 4.95:1. The brief's value is not kept: it
-       passed only as large text, and no rule here ever used it. */
-    --text-strong: #1d1d1f;
-    --text-default: #3a3a3c;
-    --text-muted: #636366;
+    /* Paper and ink. `--text-muted` carries form hints, table headers, empty
+       states and every timestamp, so it is held to 4.5:1 on every ground the
+       guard builds, glass tint included. */
+    --text-strong: #181913;
+    --text-default: #393b32;
+    --text-muted: #5e6155;
     --text-on-accent: #ffffff;
-    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2366695c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
-    --accent: #0071e3;
-    --accent-hover: #0077ed;
-    --accent-active: #005bb5;
-    --accent-soft: rgba(0, 113, 227, 0.1);
-    --accent-ring: rgba(0, 113, 227, 0.3);
-    /* Apple's accessible blue. #0071E3 as text on the canvas is 4.31:1. */
-    --accent-text: #0040dd;
+    /* Light inverts the roles. The FILL is ink (#1a1c15, white label 17.2:1),
+       cardamom is the highlighter behind a keyword or a selected row
+       (`--accent-soft`), and the label that sits on that highlighter is a deep
+       olive, `--accent-text`, 7.9:1 on the page. Cardamom itself, as text on
+       paper, would not pass; that is why it is never used as one here. */
+    --accent: #1a1c15;
+    --accent-hover: #2a2d23;
+    --accent-active: #0e0f0b;
+    --accent-soft: rgba(170, 204, 72, 0.3);
+    --accent-ring: rgba(130, 165, 40, 0.45);
+    --accent-text: #3e5208;
 
     --success: #34c759;
     --success-soft: rgba(52, 199, 89, 0.14);
-    /* Apple's accessibleGreen (#248A3D) is 4.04:1 here, still short, so this
-       is one step darker in the same family at 4.96:1. */
+    /* The system green (#248a3d) is 4.04:1 here, still short, so this is one step
+       darker in the same family: 4.76:1 on the tint over the page, which is the
+       tightest text pair in the light theme. */
     --success-text: #1c712f;
     --danger: #ff3b30;
     --danger-soft: rgba(255, 59, 48, 0.12);
@@ -415,8 +456,8 @@
     --brand-instagram-text: #b5185c;
     --brand-facebook-text: #0a58ca;
 
-    --gradient-brand: linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc);
-    --gradient-brand-soft: linear-gradient(180deg, rgba(0, 113, 227, 0.09), rgba(0, 100, 204, 0.03));
+    --gradient-brand: linear-gradient(180deg, #2a2d23, #1a1c15 60%, #121310);
+    --gradient-brand-soft: linear-gradient(180deg, rgba(170, 204, 72, 0.18), rgba(170, 204, 72, 0.05));
 
     --elev-1: 0 1px 2px rgba(0, 0, 0, 0.04);
     --elev-2: 0 4px 24px -1px rgba(0, 0, 0, 0.06), 0 2px 6px -1px rgba(0, 0, 0, 0.04);
@@ -426,7 +467,8 @@
     --chart-positive: #248a3d;
     --chart-negative: #d70015;
     --chart-grid: rgba(0, 0, 0, 0.07);
-    --chart-tick: #6e6e73;
+    --chart-tick: #66695c;
+    --chart-accent: #3e5208;
 }
 
 /* Latin UI runs tighter than Arabic at the same size. */

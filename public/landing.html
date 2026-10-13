@@ -32,7 +32,8 @@
   measures 46–96px; zero product visuals on the whole page; ~75 words of hero
   copy in three stacked blocks, the third of which was a bordered caveat about
   the MIT licence; a completely flat background; single-layer pure-black
-  shadows that are invisible on #161617; six identically-shaped feature cards
+  shadows that are invisible on the near-black page (#161617 then, #111210 now);
+  six identically-shaped feature cards
   in a row; 64px of rhythm between sections; and `--lh-tight: 1.45` — a
   paragraph line-height — applied to headings.
 
@@ -68,7 +69,7 @@
   hairline — plus a hairline ring and three hue-matched shadow layers with
   falling opacity and blur at roughly twice the Y offset. The old `--elev-1`
   (`0 1px 2px rgba(0,0,0,.32)`) is pure black and single-layer, which is
-  invisible against a #161617 page. A radial accent glow and a 346-byte inline
+  invisible against a near-black page (#161617 then, #111210 now). A radial accent glow and a 346-byte inline
   SVG grain sit behind the hero; both are positioned with `inset-inline-start`
   rather than baked into the gradient, because gradients do NOT mirror in RTL
   and the glow belongs behind the headline, which starts at the right.
@@ -601,53 +602,57 @@
       why the footer disclaims it explicitly (DESIGN.md §3).
 
   NOTE ON COLOUR: like public/pricing.html, this page cites tokens with no
-  literal fallbacks. public/privacy.html's `var(--x, #4f46e5)` fallbacks are
-  the pre-HIG indigo palette and have already drifted from tokens.css, which
-  is a second palette hiding in a fallback. Every text/ground pair used here
-  is one `npm run check:contrast` already measures, with the exceptions below
-  that the guard's SURFACE_STACKS does not model — it knows nothing about a
-  decorative glow layer between a panel and its text, nor about
-  --surface-glass sitting on --surface-sunken — and that were therefore
-  computed by hand against tokens.css with the guard's own arithmetic
-  (composite every translucent layer down to the canvas, then WCAG) and are
-  recorded here:
+  literal fallbacks, and no page in this repo carries one any more: a colour
+  literal in a fallback is a second palette that keeps painting the old brand
+  after tokens.css moves on. Every text/ground pair used here is one
+  `npm run check:contrast` already measures, with the exceptions below that the
+  guard's SURFACE_STACKS does not model — it knows nothing about a decorative
+  glow layer between a panel and its text, nor about --surface-glass sitting on
+  --surface-sunken — and that were therefore computed by hand against
+  tokens.css with the guard's own arithmetic (composite every translucent layer
+  down to the canvas, then WCAG) and are recorded here.
+  RE-MEASURED 2026-10-13 for Ink & Cardamom (DESIGN.md §2), with the same
+  arithmetic, which was first run against the previous palette to confirm it
+  reproduces the figures that stood here (it did: exactly for the keyword,
+  bubble, CTA and .norm figures, within 0.04 for the slides and captions):
       --accent-text on --accent-soft on --surface-raised on --surface-page
-          5.99:1 dark · 6.44:1 light   (the normalised keyword)
+          8.03:1 dark · 7.16:1 light   (the normalised keyword)
       --text-on-accent on --accent (the outgoing DM bubble)
-          4.70:1 dark · 4.70:1 light
+          12.00:1 dark · 17.20:1 light
   Added 2026-09-22, all measured AT THE GLOW'S PEAK ALPHA, which is the worst
-  case and is where the headline sits:
+  case and is where the headline sits. The glow is cardamom now, so in dark it
+  LIGHTENS the ground behind the headline instead of deepening it; that is why
+  these dark figures fell and why they are recorded:
       CTA panel = --accent-ring × --lp-glow over --surface-raised over the page
-          --text-strong  11.01 dark · 13.60 light
-          --text-default  7.88 dark ·  9.17 light
-          (the .cta-foot line, --text-muted at 5.42 dark · 4.84 light, and its
-          GitHub link, --accent-text at 5.34 dark · 6.11 light, went on
-          2026-10-13 with the open-source claim they carried)
+          --text-strong   8.48 dark · 14.91 light
+          --text-default  6.32 dark ·  9.59 light
+          (the .cta-foot line and its GitHub link went on 2026-10-13 with the
+          open-source claim they carried)
       --accent-text on --accent-soft over the .norm glow
-          5.01 dark · 5.75 light
+          5.79 dark · 6.67 light
       --text-default on --surface-glass over the .norm glow (the variants)
-          6.87 dark · 8.82 light
+          6.12 dark · 9.15 light
       --text-muted on --surface-glass on --surface-sunken (the refusal marks,
       a graphic, so the floor is 3:1 rather than 4.5:1)
-          7.19 dark · 4.59 light
+          7.06 dark · 4.76 light
   Added 2026-09-25, for the Studio's slides. The slide is opaque
   --surface-sunken with grid lines of --surface-glass, so the stack below it
   does not matter, and every pair is measured ON A LINE, the worst case:
-      --text-strong  on a line        14.56 dark · 12.91 light
-      --text-default on a line        10.42 dark ·  8.71 light
+      --text-strong  on a line        14.77 dark · 13.30 light
+      --text-default on a line        11.01 dark ·  8.56 light
       --accent-text on --accent-soft on a line (the sign-off, the keyword)
-                                       5.98 dark ·  5.13 light
+                                       8.00 dark ·  5.91 light
       --text-strong on --surface-sunken (the timestamp chip)
-                                      17.60 dark · 14.40 light
+                                      17.56 dark · 14.63 light
   --text-muted is kept OFF the slides on purpose: on a line in light it is
-  4.59, which passes, but by less than the grid is worth. The captions under
+  4.76, which passes, but by less than the grid is worth. The captions under
   the slides are --text-muted on the card, measured at the corner sheen's
-  peak: 5.85 dark · 5.86 light (7.20 dark away from the sheen).
-  The tightest text pair of all of them is now the outgoing bubble's 4.70:1;
-  the 4.84:1 light pair that used to be the tightest was the .cta-foot line,
-  which is gone. The floor is 4.5.
-  The one non-text colour is the heart glyph, --danger as a fill: 4.47:1 dark
-  and 3.45:1 light against the card, both clear of the 3:1 floor for a
+  peak: 5.77 dark · 6.17 light (7.09 dark away from the sheen).
+  The tightest text pair of all of them is now the slide captions' --text-muted
+  at the sheen's peak in dark, 5.77:1, and --accent-text on the slide's line in
+  light, 5.91:1. The floor is 4.5.
+  The one non-text colour is the heart glyph, --danger as a fill: 4.67:1 dark
+  and 3.46:1 light against the card, both clear of the 3:1 floor for a
   meaningful graphic. The decorative layers — the radial glow and the grain —
   carry no text and sit behind everything; the glow's own stops are drawn from
   --accent-ring, so they cannot drift from the accent.
@@ -665,8 +670,8 @@
     <meta name="description" data-lang-only="en" content="Reels from long videos, carousels from lessons, posts to Instagram, Facebook, TikTok and YouTube, and a DM for every keyword comment. Arabic-first.">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161617">
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f5f7">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111210">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f4ee">
     <link rel="canonical" href="https://msg-response-auto.vercel.app/{{LANG_QUERY}}">
     <link rel="alternate" hreflang="ar" href="https://msg-response-auto.vercel.app/">
     <link rel="alternate" hreflang="en" href="https://msg-response-auto.vercel.app/?lang=en">
@@ -692,7 +697,7 @@
          Keep this ?v= pinned to ASSET_VERSION in dashboard/js/app.js —
          scripts/check-asset-version.mjs enforces it, and public/landing.html
          is in its SHARED_ASSET_PAGES list. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.10">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.11">
 
     <style>
         /* ═══════════════════════════════════════════════════════════════════
@@ -769,26 +774,26 @@
             --lp-elev-card:
                 inset 0 1px 0 0 var(--lp-lift),
                 0 0 0 1px var(--border-subtle),
-                0 1px 2px    hsl(222 50% 2% / 0.36),
-                0 6px 12px  -4px hsl(222 50% 2% / 0.28),
-                0 18px 36px -12px hsl(222 50% 2% / 0.24);
+                0 1px 2px    hsl(78 30% 2% / 0.36),
+                0 6px 12px  -4px hsl(78 30% 2% / 0.28),
+                0 18px 36px -12px hsl(78 30% 2% / 0.24);
             --lp-elev-lifted:
                 inset 0 1px 0 0 var(--lp-lift),
                 0 0 0 1px var(--border-strong),
-                0 2px 4px    hsl(222 50% 2% / 0.38),
-                0 10px 20px -6px hsl(222 50% 2% / 0.32),
-                0 26px 52px -16px hsl(222 50% 2% / 0.28);
+                0 2px 4px    hsl(78 30% 2% / 0.38),
+                0 10px 20px -6px hsl(78 30% 2% / 0.32),
+                0 26px 52px -16px hsl(78 30% 2% / 0.28);
             --lp-elev-btn:
                 inset 0 1px 0 0 rgba(255, 255, 255, 0.22),
-                0 1px 2px  hsl(211 90% 12% / 0.40),
-                0 6px 12px -4px hsl(211 90% 12% / 0.30);
+                0 1px 2px  hsl(78 40% 8% / 0.40),
+                0 6px 12px -4px hsl(78 40% 8% / 0.30);
 
-            /* The ambient layers. --accent-ring is rgba(accent, 0.35), so this
-               multiplier IS the glow's peak alpha: 0.8 × 0.35 = 0.28 in dark
-               and 0.46 × 0.35 = 0.16 in light, which are the two values the
-               reference radials measure at. Drawing the glow from the ring
-               token rather than a literal means it cannot drift from --accent. */
-            --lp-glow: 0.8;
+            /* The ambient layers. --accent-ring is a translucent cardamom (alpha 0.40
+               in dark, 0.45 in light), so this multiplier times that alpha IS the
+               glow's peak alpha: 0.55 × 0.40 = 0.22 in dark and 0.35 × 0.45 = 0.16
+               in light. Drawing the glow from the ring token rather than a literal
+               means it cannot drift from --accent. */
+            --lp-glow: 0.55;
             --lp-grain: 0.16;
             --lp-grain-blend: overlay;
 
@@ -811,20 +816,20 @@
                 --lp-elev-card:
                     inset 0 1px 0 0 var(--lp-lift),
                     0 0 0 1px var(--border-subtle),
-                    0 1px 2px    hsl(222 32% 40% / 0.10),
-                    0 6px 12px  -4px hsl(222 32% 40% / 0.08),
-                    0 18px 36px -12px hsl(222 32% 40% / 0.07);
+                    0 1px 2px    hsl(78 18% 36% / 0.10),
+                    0 6px 12px  -4px hsl(78 18% 36% / 0.08),
+                    0 18px 36px -12px hsl(78 18% 36% / 0.07);
                 --lp-elev-lifted:
                     inset 0 1px 0 0 var(--lp-lift),
                     0 0 0 1px var(--border-strong),
-                    0 2px 4px    hsl(222 32% 40% / 0.12),
-                    0 10px 20px -6px hsl(222 32% 40% / 0.10),
-                    0 26px 52px -16px hsl(222 32% 40% / 0.09);
+                    0 2px 4px    hsl(78 18% 36% / 0.12),
+                    0 10px 20px -6px hsl(78 18% 36% / 0.10),
+                    0 26px 52px -16px hsl(78 18% 36% / 0.09);
                 --lp-elev-btn:
                     inset 0 1px 0 0 rgba(255, 255, 255, 0.28),
-                    0 1px 2px  hsl(211 60% 30% / 0.22),
-                    0 6px 12px -4px hsl(211 60% 30% / 0.16);
-                --lp-glow: 0.46;
+                    0 1px 2px  hsl(78 30% 20% / 0.22),
+                    0 6px 12px -4px hsl(78 30% 20% / 0.16);
+                --lp-glow: 0.35;
                 --lp-grain: 0.05;
                 --lp-grain-blend: multiply;
             }
@@ -2454,12 +2459,12 @@
            Both have fallbacks, so the block still renders correctly on a page
            that forgets to declare them.
 
-           NO var() LITERAL FALLBACKS HERE, unlike the rest of privacy.html and
-           data-deletion.html. The literals those two carry are the pre-HIG
-           indigo palette and have already drifted from tokens.css (--accent is
-           #0071e3 now, not #4f46e5). A second palette hiding inside a fallback
-           is worse than an unstyled bar, and four copies of one would be four
-           times worse. */
+           NO var() LITERAL COLOUR FALLBACKS HERE, and none anywhere else on these
+           pages. A colour literal in a fallback is a second palette that keeps
+           painting the old brand after tokens.css moves on (the pre-HIG indigo
+           and then the system blue both did). A second palette hiding inside a
+           fallback is worse than an unstyled bar, and six copies of one would be
+           six times worse. */
         :root {
             --nav-h: 3.5rem;    /* the bar's own height, and the scroll-margin every
                                    in-page anchor now needs to clear it */
@@ -2799,7 +2804,7 @@
         .pagefoot .foot-mail { overflow-wrap: anywhere; }
 
         /* Follow: three logos, 44px square each, in the default text colour
-           rather than the link colour — a row of three accent-blue logos reads
+           rather than the link colour — a row of three accent-coloured logos reads
            as an advert. They are glyphs and are NEVER mirrored: a logo is not
            a direction. Each link's name is real text (.foot-sr), in the same
            two <bdi>s every other label here uses, so the language filter hides
