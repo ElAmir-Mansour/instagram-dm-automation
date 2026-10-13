@@ -97,15 +97,48 @@ describe('checkGoldenFile', () => {
 
 describe('UPDATE_GOLDEN=1', () => {
     it('writes a new golden, rewrites a changed one, and then the comparison passes', () => {
-        const file = path.join(dir, 'sub', 'g.txt');
+        const fresh = path.join(dir, 'sub', 'g.txt');
+        const stale = path.join(dir, 'stale.txt');
+        writeFileSync(stale, 'first');
         process.env.UPDATE_GOLDEN = '1';
-        checkGoldenFile(file, 'first');
-        assert.equal(readFileSync(file, 'utf8'), 'first');
-        checkGoldenFile(file, 'second');
-        assert.equal(readFileSync(file, 'utf8'), 'second');
+        checkGoldenFile(fresh, 'first');
+        assert.equal(readFileSync(fresh, 'utf8'), 'first');
+        checkGoldenFile(stale, 'second');
+        assert.equal(readFileSync(stale, 'utf8'), 'second');
         delete process.env.UPDATE_GOLDEN;
-        checkGoldenFile(file, 'second');
-        assert.match(message(() => checkGoldenFile(file, 'first')), /golden mismatch/);
+        checkGoldenFile(stale, 'second');
+        assert.match(message(() => checkGoldenFile(stale, 'first')), /golden mismatch/);
+    });
+
+    it('refuses to write one golden twice in a run with different bytes, and keeps the first', () => {
+        // Path (a) and path (b) of a builder share a golden. Under UPDATE_GOLDEN=1 the later one would overwrite
+        // the earlier and the files would come from whichever ran last: a disagreement must stop the run.
+        const file = path.join(dir, 'twice.txt');
+        process.env.UPDATE_GOLDEN = '1';
+        checkGoldenFile(file, 'from path a');
+        assert.match(message(() => checkGoldenFile(file, 'from path b')), /would be written twice in one run, with different bytes/);
+        assert.equal(readFileSync(file, 'utf8'), 'from path a', 'the second write did not happen');
+        // The same bytes again is the normal case (both paths agree) and is fine, however many times.
+        checkGoldenFile(file, 'from path a');
+        checkGoldenFile(file, 'from path a');
+        assert.equal(readFileSync(file, 'utf8'), 'from path a');
+    });
+
+    it('also stops when the first write changed nothing, because the file already held those bytes', () => {
+        const file = path.join(dir, 'already.txt');
+        writeFileSync(file, 'same');
+        process.env.UPDATE_GOLDEN = '1';
+        checkGoldenFile(file, 'same');
+        assert.match(message(() => checkGoldenFile(file, 'different')), /would be written twice/);
+        assert.equal(readFileSync(file, 'utf8'), 'same');
+    });
+
+    it('does not touch the comparison when UPDATE_GOLDEN is not set: two different texts against one golden is just a mismatch', () => {
+        const file = path.join(dir, 'plain.txt');
+        writeFileSync(file, 'one');
+        checkGoldenFile(file, 'one');
+        assert.match(message(() => checkGoldenFile(file, 'two')), /golden mismatch/);
+        assert.doesNotMatch(message(() => checkGoldenFile(file, 'two')), /written twice/);
     });
 
     it('is only the exact string "1", so a stray UPDATE_GOLDEN=0 or "true" cannot rewrite the net', () => {

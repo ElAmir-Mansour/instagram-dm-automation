@@ -39,6 +39,12 @@ const SHOWN_LINES = 6;
 const WINDOW = 70;
 
 const touched = new Set<string>();
+/**
+ * What this run has written, by file. Several assertions share a golden on purpose (path (a) and path (b)
+ * of one builder write the same file), and they must agree: under UPDATE_GOLDEN=1 the second would otherwise
+ * quietly overwrite the first, and the files would be regenerated from whichever path ran last.
+ */
+const written = new Map<string, Buffer>();
 
 /**
  * Whether this run rewrites goldens (`UPDATE_GOLDEN=1`). Never on CI: a pipeline that rewrote the net
@@ -99,6 +105,15 @@ export function checkGoldenFile(file: string, actual: unknown): void {
     touched.add(file);
     const bytes = Buffer.from(actual, 'utf8');
     if (updating()) {
+        const earlier = written.get(file);
+        if (earlier && !earlier.equals(bytes)) {
+            throw new Error([
+                `golden: ${path.relative(process.cwd(), file)} would be written twice in one run, with different bytes.`,
+                'Two assertions share this golden and they disagree (path (a) and path (b) of one builder, usually).',
+                'Nothing is written for the second. Fix the disagreement: regenerating cannot settle it.',
+            ].join('\n'));
+        }
+        written.set(file, bytes);
         if (existsSync(file) && readFileSync(file).equals(bytes)) return;
         const created = !existsSync(file);
         mkdirSync(path.dirname(file), { recursive: true });
