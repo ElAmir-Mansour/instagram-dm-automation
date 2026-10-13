@@ -8,14 +8,16 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { TranscriptWord } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { withProfileCache } from '../profile/cache.js';
+import { profileFromLegacy } from '../profile/legacy.js';
 import { profileReads } from '../profile/stampSupport.js';
 import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import { ASK_POOL } from './copy.js';
-import { EDITOR_MAX_OUTPUT, EDITOR_SCHEMA, EDITOR_THINKING, editorSchema, HUMAN_TOUCHES_PROMPT } from './editor.js';
+import { EDITOR_MAX_OUTPUT, EDITOR_SCHEMA, EDITOR_THINKING, editorSchema, editorSystemPrompt, humanTouchesPrompt } from './editor.js';
+import { LEGACY_EDITOR_KIT, PRONOUN_KITS } from './editorKits.js';
 import { PICK_MAX_OUTPUT } from './pick.js';
 import {
-    CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, setEditRetryWaits, sweepMonteur,
+    CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, PROFILE_UNREADABLE, setEditRetryWaits, sweepMonteur,
     transientModelError,
 } from './sweep.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
@@ -87,6 +89,8 @@ let calls: ModelRequest[];
 let answers: Record<string, unknown | Error>;
 let logs: { event: string; [k: string]: unknown }[];
 let copyCalledAt: number;
+/** How many statements had run when each Editor call was made. */
+let editCalledAt: number[];
 let inFlight: string[];
 let inFlightVariants: string[];
 let saveClaimed: boolean;
@@ -110,6 +114,7 @@ beforeEach(() => {
     human = undefined;
     logs = [];
     copyCalledAt = -1;
+    editCalledAt = [];
     inFlight = [];
     inFlightVariants = [];
     saveClaimed = true;
@@ -120,6 +125,7 @@ beforeEach(() => {
     previousCaller = setModelCaller(async (req) => {
         calls.push(req);
         if (req.purpose === 'monteur.copy') copyCalledAt = db.statements.length;
+        if (req.purpose === 'monteur.edit') editCalledAt.push(db.statements.length);
         // `{ queue: [...] }` answers one call each, and repeats its last.
         const entry = answers[req.purpose] as unknown;
         const queue = entry && typeof entry === 'object' && 'queue' in entry ? (entry as { queue: unknown[] }).queue : null;
@@ -459,7 +465,7 @@ describe('sweepMonteur — the human touches (MONTEUR.md §6.2)', () => {
         answers['monteur.edit'] = EDIT_HUMAN;
         await sweepMonteur(later());
         assert.deepEqual(editCall().schema, EDITOR_SCHEMA);
-        assert.ok(editCall().system.includes(HUMAN_TOUCHES_PROMPT));
+        assert.ok(editCall().system.includes(humanTouchesPrompt(PRONOUN_KITS.he)));
         assert.match(insert().sql, /\(creator_id, source_id, .*, copy, edits, direction, profile_version\) VALUES \(.*\$15::jsonb, \$16::jsonb, \$17\)/);
         assert.deepEqual(JSON.parse(insert().params[15]), DIRECTION);
         assert.deepEqual(JSON.parse(insert().params[14]), EDITS, 'the edits as before');
@@ -521,6 +527,62 @@ describe('sweepMonteur — the human touches (MONTEUR.md §6.2)', () => {
         // Clip 2 starts at 49.85 s: its L2 is «جملة12.», so words anchored on «جملة4» fall to the line's start.
         assert.deepEqual(JSON.parse(stored[1]).emphasis, [5.15]);
         assert.ok(!('direction' in renderPayloads()[0]!) && 'direction' in renderPayloads()[1]!);
+    });
+});
+
+describe('sweepMonteur — the Editor is written for the creator the profile describes (P10)', () => {
+    const editCall = () => calls.find((c) => c.purpose === 'monteur.edit')!;
+
+    it('a tenant whose profile says she, a rule of its own and the general domain is told so, and nothing of the owner\'s', async () => {
+        const base = profileFromLegacy(ELAMIR_SETTINGS);
+        const profile = {
+            ...base,
+            presenter: { name: 'Sami', pronouns: 'she', on_camera: 'face' },
+            content: { ...base.content, domain: 'general', rules: [], custom_rules: ['No before-and-after body photos'] },
+        };
+        db.routes.unshift([/FROM creator_profiles/, () => ({ rows: [{ profile, version: 2, activated_at: null }] })]);
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'rendering');
+        const { system } = editCall();
+        assert.ok(system.includes('Show what she refers to') && system.includes('an arrow at her when she addresses the viewer'));
+        assert.doesNotMatch(system, /\b(he|him|his)\b/);
+        assert.ok(system.includes('names a tool or product (an app, a brand, a product)') && !system.includes('ChatGPT'));
+        assert.ok(!system.includes('Never a woman'), 'the rule is the tenant\'s to tick');
+        assert.ok(system.endsWith('set behind her. text: 1-2 words.\nCreator\'s rules: No before-and-after body photos.'));
+    });
+
+    it('a tenant with no stored profile is read from its rows: his, for a row like his, byte for byte', async () => {
+        await sweepMonteur(later());
+        assert.equal(editCall().system, editorSystemPrompt(ELAMIR_SETTINGS, LEGACY_EDITOR_KIT));
+        assert.equal(logs.filter((l) => l.event === 'monteur.editor_profile_unreadable').length, 0);
+    });
+
+    it('a profile that cannot be read is no Editor call: the reel goes out with no edits, the record says why, nothing is thrown', async () => {
+        // The settings were read before the Editor; the database goes away between the Marketer's call and the Editor's own read.
+        db.routes.unshift([/FROM creator_profiles/, () => {
+            if (calls.some((c) => c.purpose === 'monteur.copy')) throw new Error('connection terminated');
+            return { rows: [] };
+        }]);
+        answers['monteur.edit'] = EDIT;
+        const result = await sweepMonteur(later());
+        // The owner's pronouns, Arabic labels and tech tools are not sent for a tenant whose profile could not be read.
+        assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.copy'], 'the Editor was not asked');
+        assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 }, 'the reel goes out; the attempt did not fail');
+        assert.deepEqual(JSON.parse(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[14]), [], 'no edits');
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/)[0]!.params[15], null, 'and no plan: SQL NULL');
+        assert.deepEqual(handOffRecord().edit, { model: null, tokens_in: 0, tokens_out: 0, error: PROFILE_UNREADABLE });
+        assert.equal(PROFILE_UNREADABLE, 'profile unreadable');
+        const failed = logs.find((l) => l.event === 'monteur.edit_failed');
+        assert.equal(failed?.error, 'profile unreadable');
+        assert.equal(logs.filter((l) => l.event === 'monteur.editor_profile_unreadable').length, 1, 'and why, once');
+        assert.equal(db.ran(/^UPDATE monteur_sources SET error = \$2/).length, 0, 'a thrown error would have failed the attempt and run the copy again');
+        assert.deepEqual(db.ran(/^WITH picked AS/).map((s) => s.params[1]), [3], 'one claim, one attempt');
+    });
+
+    it('reads the profile once for the call, not once per retry of a busy model', async () => {
+        answers['monteur.edit'] = { queue: [new Error('Gemini request failed [HTTP 503] high demand'), EDIT] };
+        await sweepMonteur(later());
+        assert.equal(editCalledAt.length, 2, 'asked again');
+        assert.deepEqual(db.statements.slice(editCalledAt[0], editCalledAt[1]).filter((s) => /FROM creator_profiles/.test(s.sql)), [], 'and not again before the retry');
     });
 });
 
@@ -768,6 +830,24 @@ describe('sweepMonteur — Claude on the Mac (monteur.brain = claude_mac)', () =
         assert.match(edit.request, new RegExp(`^source/${SOURCE}/a1/clips-[0-9a-f]{10}/monteur\\.edit$`));
         assert.match(edit.user, /^C1\nL1 \[00:00\.2\] جملة3\./, 'the clip’s own lines, on its own clock');
         assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0, 'a reel never goes out without the edits it waits for');
+    });
+
+    it('a profile that cannot be read is the owner\'s text for the Mac: a call waited for needs a prompt, and only the owner\'s tenants are here (G1)', async () => {
+        thinks = { 'monteur.pick': claude(PICK), 'monteur.copy': claude(COPY) };
+        // The Marketer's answer is looked up before the Editor reads the profile; from then on the profile cannot be read.
+        const copyLookedUp = () => db.statements.some((s) => /AS try/.test(s.sql) && String(s.params[1]).endsWith('/monteur.copy'));
+        db.routes.unshift([/FROM creator_profiles/, () => {
+            if (copyLookedUp()) throw new Error('connection terminated');
+            return { rows: [] };
+        }]);
+        const result = await sweepMonteur(later());
+        assert.equal(result.pick?.outcome, 'waiting', 'the Editor\'s call is on the Mac, as it is for a readable profile');
+        const [edit] = queued();
+        assert.match(edit.request, /\/monteur\.edit$/);
+        assert.equal(edit.system, editorSystemPrompt(ELAMIR_SETTINGS, LEGACY_EDITOR_KIT));
+        assert.equal(logs.filter((l) => l.event === 'monteur.editor_profile_unreadable').length, 1);
+        assert.equal(logs.filter((l) => l.event === 'monteur.edit_failed').length, 0, 'the Mac\'s edits are never dropped');
+        assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
     });
 
     it('a repair still on the Mac is waited for; one whose every try failed leaves the first answer standing', async () => {

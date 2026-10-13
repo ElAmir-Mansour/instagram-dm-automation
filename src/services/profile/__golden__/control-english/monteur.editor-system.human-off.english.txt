@@ -7,8 +7,8 @@ Teach, don't decorate (multimedia learning, on a phone):
 - Redundancy: the captions already show every word he says, so on-screen words condense and never copy his.
 - Coherence: every edit needs a reason in the clip; no reason, no edit.
 For each clip, mark a moment about every 5 seconds (12 in a 60-second clip), each with its reason, none in its first second or last 3 seconds, each on a word from its lines. On-screen words are in English, tech terms in Latin script. The teaching kinds come first whenever the clip gives a reason:
-- example: something outside the lesson he refers to. query: the library topic that shows it (none close: no example). text: a label, 1-4 words, e.g. «مثال: مطعم».
-- callout: an arrow at the button, menu, field or result he is using on screen. text: its name as shown or said, 1-3 words, never «هنا».
+- example: something outside the lesson he refers to. query: the library topic that shows it (none close: no example). text: a label, 1-4 words, e.g. "Example: restaurant".
+- callout: an arrow at the button, menu, field or result he is using on screen. text: its name as shown or said, 1-3 words, never "here".
 - step: when he walks through a procedure, or lists things to do, add or set one after another, each one is a step as he starts it (2 or more), not a keyword. text: the step in 2-4 words. The video numbers them.
 - define: a term he introduces. text: the term; meaning: what it means in at most 5 plain words.
 - compare: two things he contrasts. items: [the wrong or before, the right or after], at most 4 words each.

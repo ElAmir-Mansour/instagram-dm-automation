@@ -144,10 +144,17 @@ function holdsMarker(text: string, marker: string): boolean {
 /**
  * Fails if `text` holds any of the owner's markers (`OWNER_MARKERS`, with «بالعربي» as a whole word). `label` names what was
  * being checked, so a failure says which builder.
+ *
+ * `except` is the canonical lines of the presets the tenant itself ticked, which are said verbatim and are not a leak:
+ * the no-women rule is the owner's by default and a tenant's by choice, and its line («Never a woman…», `NO_WOMEN_LINE`) holds
+ * one of his markers. Each is taken out of the text before the markers are looked for, so a tenant that ticked the rule may say
+ * it and nothing else of his; a tenant that did not passes none, and its text must not hold the line. Whether the line is
+ * there at all is the caller's to assert: this only says what is not a leak.
  */
-export function assertNoOwnerMarkers(text: string, label = 'text'): void {
-    const found = OWNER_MARKERS.filter((marker) => holdsMarker(text, marker));
-    assert.deepEqual(found, [], `${label} holds the owner's ${found.length === 1 ? 'marker' : 'markers'}: ${found.join(', ')}\n${text.slice(0, 300)}`);
+export function assertNoOwnerMarkers(text: string, label = 'text', { except = [] }: { except?: readonly string[] } = {}): void {
+    const rest = except.reduce((left, line) => left.split(line).join(''), text);
+    const found = OWNER_MARKERS.filter((marker) => holdsMarker(rest, marker));
+    assert.deepEqual(found, [], `${label} holds the owner's ${found.length === 1 ? 'marker' : 'markers'}: ${found.join(', ')}\n${rest.slice(0, 300)}`);
 }
 
 /** Arabic script: the block the DM and comment paths themselves test for (`dmFallbackReply`). */

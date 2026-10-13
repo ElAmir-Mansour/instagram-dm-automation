@@ -38,6 +38,7 @@ import { currentLessons, runDueAnalyst } from './analyst.js';
 import { autoApproveClips, type AutoApproveResult } from './auto.js';
 import { askOf, writeCopy } from './copy.js';
 import { writeEdits } from './editor.js';
+import { editorKitFor } from './editorKits.js';
 import { inFlightTriggers } from './keywords.js';
 import { pickClips, type PickOutcome } from './pick.js';
 import { loadReelEvidence, type ReelEvidenceSet } from './reelEvidence.js';
@@ -280,11 +281,16 @@ async function editReady(
     words: readonly TranscriptWord[], record: SourcePick, deadline: number, think?: ThinkOn,
 ): Promise<void> {
     let lastErr: unknown = null;
+    // What the prompt says about the creator, from their profile; read once, not once per retry. A profile that cannot
+    // be read is the owner's text for the Mac brain, and for every other tenant no Editor call (`editorKitFor`): the
+    // reels go out without edits, as for any failed call, and nothing is thrown, which would re-run the copy.
+    const kit = await editorKitFor(source.creator_id, think);
+    if (!kit) return leaveWithoutEdits(source, ready, record, new Error(PROFILE_UNREADABLE));
     // Asked about these clips, in this order: C1… is by position (think.ts, clipsThinkKey).
     const on = think ? { ...think, key: clipsThinkKey(think.key, ready.map((r) => r.clip)) } : undefined;
     for (let attempt = 0; ; attempt++) {
         try {
-            const { edits, directions, cost } = await writeEdits(ready.map((r) => r.clip), lines, words, settings, deadline, on);
+            const { edits, directions, cost } = await writeEdits(ready.map((r) => r.clip), lines, words, settings, kit, deadline, on);
             ready.forEach((r, i) => {
                 r.edits = edits[i] ?? [];
                 r.direction = directions[i] ?? null;
@@ -311,12 +317,20 @@ async function editReady(
             await new Promise((r) => setTimeout(r, wait));
         }
     }
+    leaveWithoutEdits(source, ready, record, lastErr);
+}
+
+/** What `record.edit.error` says when the tenant's profile could not be read, so the Editor was not asked. */
+export const PROFILE_UNREADABLE = 'profile unreadable';
+
+/** Every clip goes on with no edits and no touches; the failure is on the source's record and in the log. */
+function leaveWithoutEdits(source: ClaimedSource, ready: ReadyClip[], record: SourcePick, err: unknown): void {
     for (const r of ready) {
         r.edits = [];
         r.direction = null;
     }
-    record.edit = { model: null, tokens_in: 0, tokens_out: 0, error: errorText(lastErr) };
-    log('warn', 'monteur.edit_failed', { source_id: source.id, creator_id: source.creator_id, error: errorText(lastErr), ...describeError(lastErr) });
+    record.edit = { model: null, tokens_in: 0, tokens_out: 0, error: errorText(err) };
+    log('warn', 'monteur.edit_failed', { source_id: source.id, creator_id: source.creator_id, error: errorText(err), ...describeError(err) });
 }
 
 /** How many touches a plan holds, every list together. */

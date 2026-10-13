@@ -80,6 +80,15 @@ describe('the checks themselves', () => {
         }
     });
 
+    it('assertNoOwnerMarkers `except`: a line a tenant ticked is said without being a leak, and only that line', () => {
+        const line = 'Never a woman or a girl in any picture';
+        assertNoOwnerMarkers(`Before.\n${line}.\nAfter.`, 'ticked', { except: [line] });
+        assertNoOwnerMarkers(`${line}.\n${line}.`, 'said twice', { except: [line] });
+        assert.throws(() => assertNoOwnerMarkers(`${line}.`, 'not ticked'), /Never a woman/);
+        assert.throws(() => assertNoOwnerMarkers(`${line}. And udemy.`, 'ticked, and a leak beside it', { except: [line] }), /udemy/);
+        assert.throws(() => assertNoOwnerMarkers('Never a woman at all', 'a different sentence', { except: [line] }), /Never a woman/);
+    });
+
     it('passes text with none of them, and «بالعربية» (the ordinary word) is not the owner\'s «بالعربي»', () => {
         assertNoOwnerMarkers('Programs, products, services and offers. منتجات وخدمات وعروضًا.');
         assertNoOwnerMarkers('الرد يكون بالعربية الفصحى البسيطة');

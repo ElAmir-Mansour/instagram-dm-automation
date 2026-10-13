@@ -178,6 +178,25 @@ describe('runParity, on the rows of a tenant', () => {
         for (const row of report.rows.filter((r) => !r.match)) assert.ok(row.firstDifference, `${row.name} says where`);
     });
 
+    it('what the profile says about the presenter, the rules and the domain moves the Editor\'s two prompts and nothing else (P10)', async () => {
+        const EDITOR = ['monteur.editor-system.human-on', 'monteur.editor-system.human-off'];
+        // The infographic writer reads the domain from the same profile (P12), so a domain edit moves its payloads too.
+        const INFOGRAPHIC = ['infographic.render-payload.ar', 'infographic.render-payload.en'];
+        const edits: [string, (p: ReturnType<typeof profileFromLegacy>) => void, string[]][] = [
+            ['a woman on camera', (p) => { p.presenter = { name: '', pronouns: 'she', on_camera: 'face' }; }, EDITOR],
+            ['no one on camera', (p) => { p.presenter = null; }, EDITOR],
+            ['the no-women rule unticked', (p) => { p.content.rules = []; }, EDITOR],
+            ['a rule of its own', (p) => { p.content.custom_rules = ['No gym selfies']; }, EDITOR],
+            ['the general domain', (p) => { p.content.domain = 'general'; }, [...EDITOR, ...INFOGRAPHIC]],
+        ];
+        for (const [what, edit, moved] of edits) {
+            const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+            edit(profile);
+            const report = await runParity({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH, profile });
+            assert.deepEqual(report.rows.filter((r) => !r.match).map((r) => r.name), moved, what);
+        }
+    });
+
     it('another audience in the profile moves the Growth builders and nothing the Studio writes', async () => {
         const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
         profile.audience.countries = ['EG'];
