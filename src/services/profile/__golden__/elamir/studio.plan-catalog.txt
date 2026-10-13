@@ -1,0 +1,10 @@
+<lessons>
+[L1] Lesson 8.3 «Local RAG with LM Studio» — section: Chapter 8 - Local RAG lmstudio
+  summary: تشغيل نموذج على جهازك والإجابة من ملفاتك.
+  teaches: ليش محلي · LM Studio
+  demos: بدون إنترنت
+  on-screen prompts: 1
+  tools: LM Studio
+[L2] Lesson 9.1 «Agents that use tools» — section: Chapter 9 - Tool use
+  (not indexed yet: title only)
+</lessons>

@@ -1,0 +1,22 @@
+{
+  "name": "English",
+  "copyLabel": "\"Copy the prompt\"",
+  "statRule": "a number or one word, e.g. \"34\" or \"Zero\". \"20 minutes\" is too long: write \"20\" with the label \"minutes instead of a week\"",
+  "swipeArrow": "👉",
+  "learnTags": [
+    "#LearnOnTikTok"
+  ],
+  "timeWords": [
+    "today",
+    "tonight",
+    "tomorrow",
+    "yesterday",
+    "this week",
+    "next week",
+    "this month",
+    "right now"
+  ],
+  "keywordExamples": "context, local, resume",
+  "fallbackQuestion": "Want to try this yourself, step by step? 👀",
+  "fallbackPitch": "I walk through it step by step in the course."
+}

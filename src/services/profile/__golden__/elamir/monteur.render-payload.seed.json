@@ -1,0 +1,77 @@
+{
+  "clipId": "clip",
+  "sourceId": "src",
+  "path": "/v/a.mp4",
+  "start": 9.85,
+  "end": 34.8,
+  "title": "ملفاتك السرية ما تطلع من جهازك",
+  "words": [
+    [
+      0.15,
+      0.55,
+      "كلمة"
+    ],
+    [
+      0.65,
+      1.15,
+      "ثانية"
+    ]
+  ],
+  "cta": {
+    "line1": "اكتب في التعليقات «محلي»",
+    "line2": "ويوصلك الرابط بالخاص 📩"
+  },
+  "cta_tiktok": {
+    "line1": "رابطه في البايو",
+    "line2": "ادخل البروفايل واضغط الرابط 👆"
+  },
+  "brand": {
+    "accent": "#FFD60A",
+    "font": "Cairo",
+    "direction": "rtl",
+    "style": "classic"
+  },
+  "cover_at": 0.5,
+  "edits": [],
+  "direction": {
+    "cuts": [
+      {
+        "t": 2.5,
+        "shot": "close"
+      },
+      {
+        "t": 8,
+        "shot": "wide"
+      }
+    ],
+    "doodles": [
+      {
+        "t": 3.1,
+        "shape": "arrow",
+        "target": "head"
+      }
+    ],
+    "freezes": [
+      {
+        "t": 9.4,
+        "text": "استنى"
+      }
+    ],
+    "transitions": [
+      {
+        "t": 12,
+        "kind": "glitch"
+      }
+    ]
+  },
+  "emphasis": [
+    2.5,
+    6.25
+  ],
+  "behind": [
+    {
+      "t": 5,
+      "text": "عشرة أضعاف"
+    }
+  ]
+}

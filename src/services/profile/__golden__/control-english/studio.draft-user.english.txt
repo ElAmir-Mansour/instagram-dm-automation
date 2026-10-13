@@ -1,0 +1,33 @@
+Write one carousel.
+Angle: tips: numbered tips: point slides with n and a tip each, plus a list and a prompt.
+Slides: exactly 8 (cover, 6 in between, cta).
+The creator's idea: Run a private AI on your own laptop
+Keyword: choose one. Active keywords (live campaigns already fire on these):
+- وكيل
+- سياق
+Search terms this audience types: «ذكاء اصطناعي», «برومبت», «وكيل ذكي», «Agentic AI», «NotebookLM». Work one or two of them, word for word, into the Instagram caption's first line, and onto slides and alt text where they read naturally. Never force one in, and never add a term the topic doesn't cover.
+Hashtags: take the Instagram caption's hashtags from this creator's sets, choosing the ones that fit this topic: #ذكاء_اصطناعي #الذكاء_الاصطناعي #AI #برومبت #PromptEngineering #Gemini #NotebookLM #LMStudio #ChatGPT
+Recent posts (don't repeat their hook or angle):
+- Stop asking AI questions. Give it a goal
+- Context in five layers
+Use 1–3 of the clean moments as screenshots.
+
+The only facts you may use:
+<sources>
+[facts] Facts about «Spreadsheets from Zero»: 12 lessons · 3 hours of video · Lifetime access
+[idea] The creator's idea for this post: Run a private AI on your own laptop
+
+[L1] Lesson 8.3 «Local RAG with LM Studio» — section: Chapter 8 - Local RAG lmstudio
+[L1.summary] تشغيل نموذج على جهازك والإجابة من ملفاتك.
+[L1.point1] ليش محلي: الملفات ما تطلع من الجهاز (at 0:10)
+[L1.point2] LM Studio: تنزيل نموذج مفتوح (at 1:00)
+[L1.prompt1] Prompt shown on screen, verbatim (at 3:30): «جاوب فقط من المستندات المرفقة»
+[L1.demo1] Demo: بدون إنترنت → النموذج يجاوب والنت مفصول (at 1:35)
+[L1.tools] Tools used: LM Studio
+Screens from L1 (moments):
+[M1] L1 · 0:12 · result · clean — A laptop with a lock on screen
+[M2] L1 · 1:35 · result · clean — The model answering with Wi-Fi off
+[M3] L1 · 2:10 · result · NOT CLEAN: a fact only, never a momentId — Arrows scribbled over the settings
+[M4] L1 · 3:20 · result · clean — RAG answering from a PDF
+[M5] L1 · 4:10 · result · clean — The model list in LM Studio
+</sources>

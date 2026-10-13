@@ -1,0 +1,18 @@
+Pick up to 4 clips, best first, each 20–45 seconds, none overlapping.
+This creator's reels with the most views (90 days). A moment on a topic like these, or of the same kind, is worth more on send:
+- 48,200 views, skipped in 3s 41.5%: title «الذكاء الاصطناعي على ملفاتك»; topic «نموذج محلي»; opening «ملفاتك السرية ما لازم تطلع من جهازك»
+Their reels with the fewest views. Prefer other moments over ones like these:
+- 310 views: opening «هنا جينا نشوف الإعدادات»
+Reels whose opening held viewers (lowest share gone within 3 s). Open a clip the way these opened:
+- 12,900 views, skipped in 3s 38%: title «برومبت واحد يلخص كتاب»; topic «تلخيص»; opening «برومبت واحد يلخص لك أي كتاب»
+Reels whose opening lost viewers (highest share gone within 3 s). Never open a clip like these:
+- 2,400 views, skipped in 3s 91.2%: title «مقدمة عن الوكلاء»; opening «أهلاً بكم في هذا الفيديو الجديد»
+Lessons from this creator's past reels:
+- ابدأ بالنتيجة في أول جملة، مو باسم الأداة
+- اجعل الريل بين ٢٥ و٣٥ ثانية
+Transcript (English):
+L1 [00:00.0] ملفاتك السرية ما لازم تطلع من جهازك أبداً.
+L2 [00:04.6] شغّل نموذج ذكاء اصطناعي محلي في LM Studio وهو يجاوب من ملفاتك والنت مفصول.
+L3 [00:12.4] أول خطوة: نزّل النموذج، وبعدين اسحب ملفاتك عليه.
+L4 [00:19.6] ثاني خطوة: اسأله عن أي شي في المستند، وهو يجاوبك بدون ما يرسل شي لأي سيرفر.
+L5 [00:28.1] والنتيجة: خصوصية كاملة وسرعة ما تتوقعها.

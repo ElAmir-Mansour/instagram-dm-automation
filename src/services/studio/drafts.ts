@@ -360,7 +360,7 @@ export async function fillMomentShots(
  * What the worker needs to render: the carousel, each shot the slides use with its video path,
  * and the tenant's brand, CTA words and product facts as they are now.
  */
-async function renderPayload(
+export async function renderPayload(
     creatorId: string, draftId: string, carousel: Carousel, shots: Record<string, ShotSpec>, settings: StudioSettings
 ): Promise<RenderCarouselPayload> {
     const used = unique(carousel.slides.map(slideShotName).filter((n): n is string => Boolean(n)));
