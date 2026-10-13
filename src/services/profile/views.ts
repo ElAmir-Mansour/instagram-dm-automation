@@ -19,6 +19,7 @@
  * these objects as JSON); and an optional key the profile has nothing for is left out, not written
  * as `undefined` or an empty list.
  */
+import { isDeepStrictEqual } from 'node:util';
 import type { GrowthSettings } from '../../db/rows.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
 import type { ArabicRegister, CreatorProfile, Lang, Offer, Surface } from './types.js';
@@ -38,6 +39,24 @@ export const STUDIO_PROFILE_PATHS = [
 export const GROWTH_PROFILE_PATHS = [
     'audience.countries', 'audience.languages', 'audience.timezone', 'goal_followers', 'goal_views',
 ] as const;
+
+function valueAt(root: unknown, path: string): unknown {
+    let at: unknown = root;
+    for (const key of path.split('.')) {
+        if (typeof at !== 'object' || at === null || Array.isArray(at)) return undefined;
+        at = (at as Record<string, unknown>)[key];
+    }
+    return at;
+}
+
+/**
+ * The paths of `paths` whose value differs between two settings objects: what an edit changed among the fields the
+ * profile owns. P4's writers route a change here into `saveProfile`; a change to anything else (the Monteur, the CTA
+ * words, the palette, the slots…) never touches the profile. A path an object does not hold reads as undefined.
+ */
+export function changedPaths(before: object, after: object, paths: readonly string[]): string[] {
+    return paths.filter((path) => !isDeepStrictEqual(valueAt(before, path), valueAt(after, path)));
+}
 
 /** The language a surface speaks: its own override, else the profile's. */
 export function surfaceLanguage(p: CreatorProfile, surface: Surface): Lang {
@@ -186,12 +205,25 @@ export function intoProfile(p: CreatorProfile, s: StudioSettings, g?: GrowthSett
         next.offers.push(created);
     }
 
-    if (g) {
-        next.audience.countries = [...(g.audience.countries ?? [])];
-        next.audience.languages = [...(g.audience.languages ?? [])];
-        if (g.audience.timezone === undefined) delete next.audience.timezone;
-        else next.audience.timezone = g.audience.timezone;
-        next.goals = { followers: g.goal_followers, views: g.goal_views };
-    }
+    if (g) applyGrowth(next, g);
+    return next;
+}
+
+/** `next`'s audience and goals, taken from the Growth settings (`GROWTH_PROFILE_PATHS`). */
+function applyGrowth(next: CreatorProfile, g: GrowthSettings): void {
+    next.audience.countries = [...(g.audience.countries ?? [])];
+    next.audience.languages = [...(g.audience.languages ?? [])];
+    if (g.audience.timezone === undefined) delete next.audience.timezone;
+    else next.audience.timezone = g.audience.timezone;
+    next.goals = { followers: g.goal_followers, views: g.goal_views };
+}
+
+/**
+ * `p` with only its audience and goals taken from the Growth settings: what a Growth settings write changes in the
+ * profile. `intoProfile` needs Studio settings too; this is the half a Growth write has.
+ */
+export function growthIntoProfile(p: CreatorProfile, g: GrowthSettings): CreatorProfile {
+    const next = structuredClone(p);
+    applyGrowth(next, g);
     return next;
 }

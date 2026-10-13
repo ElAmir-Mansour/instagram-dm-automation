@@ -391,6 +391,8 @@ describe('getMonteurSettings — the claim path’s read', () => {
         const statements: string[] = [];
         (pool as unknown as { query: unknown }).query = async (sql: string) => {
             statements.push(sql.replace(/\s+/g, ' '));
+            // The second statement is the profile's timezone (a different table); this tenant has no stored profile.
+            if (/FROM creator_profiles/.test(sql)) return { rows: [], rowCount: 0 };
             return { rows: [{ monteur: { enabled: true, folder: '/v' }, schedule: { timezone: 'Asia/Riyadh', slots: ['13:00'] } }], rowCount: 1 };
         };
         try {
@@ -398,7 +400,11 @@ describe('getMonteurSettings — the claim path’s read', () => {
             assert.equal(monteur.folder, '/v');
             assert.equal(monteur.run_at, '07:00', 'over the defaults');
             assert.equal(timezone, 'Asia/Riyadh');
-            assert.deepEqual(statements, ['SELECT monteur, schedule FROM studio_settings WHERE creator_id = $1']);
+            assert.deepEqual(statements, [
+                'SELECT monteur, schedule FROM studio_settings WHERE creator_id = $1',
+                // Narrow: the two values the timezone is read from, never the whole profile.
+                `SELECT profile->'schema' AS profile_schema, profile->'identity'->'timezone' AS identity_timezone FROM creator_profiles WHERE creator_id = $1`,
+            ]);
         } finally {
             (pool as unknown as { query: unknown }).query = originalQuery;
         }

@@ -13,6 +13,11 @@
  * Refuses to replace settings the tenant has already saved unless `--force` is given: those
  * were edited in the dashboard, and this would silently undo them.
  *
+ * Refuses outright, `--force` or not, for a tenant that has a stored Creator Profile (`creator_profiles`): the settings
+ * the profile owns (`STUDIO_PROFILE_PATHS` in src/services/profile/views.ts) are then a mirror of it. The readers show
+ * the profile's values, not these columns, so a write here is hidden, and the next save through the profile writes the
+ * profile's values back over it. Those settings are edited in the dashboard (or through `saveProfile`), never here.
+ *
  * `settings.test.ts` imports STUDIO_SETTINGS and holds it to the same validation as
  * `PUT /api/studio/settings`, so a typo here fails CI instead of the first render.
  */
@@ -133,6 +138,78 @@ export const STUDIO_SETTINGS = {
     },
 };
 
+/**
+ * What a refusal says for a tenant with a stored profile. Exported for its test.
+ * @param {string} creatorId
+ * @param {number | null} version the stored profile's version
+ */
+export function profileRefusal(creatorId, version) {
+    return [
+        `Refusing to seed ${creatorId}: this tenant has a stored Creator Profile (version ${version}), and --force does not override that.`,
+        'The settings the profile owns (brand name and display font, voice language, digits, guide and avoid list, product, timezone,',
+        'the infographic brand: STUDIO_PROFILE_PATHS in src/services/profile/views.ts) are a mirror of the profile. The readers show the',
+        "profile's values, so a write here is hidden, and the next save through the profile writes its values back over it.",
+        'Edit them in the dashboard, or through saveProfile.',
+    ].join('\n');
+}
+
+/**
+ * The stored profile's version, or null when the tenant has none (or the database has not had v33 applied yet).
+ * @param {{ query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> }} pool
+ * @param {string} creatorId
+ * @returns {Promise<number | null>}
+ */
+export async function storedProfileVersion(pool, creatorId) {
+    try {
+        const { rows } = await pool.query('SELECT version FROM creator_profiles WHERE creator_id = $1', [creatorId]);
+        return rows[0] ? rows[0].version : null;
+    } catch (err) {
+        if (err?.code === '42P01') return null;
+        throw err;
+    }
+}
+
+/**
+ * Seed one tenant, or say why not. The profile check comes first and `force` cannot skip it.
+ * @param {{ query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }> }} pool
+ * @param {string} creatorId
+ * @param {{ force?: boolean }} [options]
+ * @returns {Promise<{ status: 'seeded' | 'refused' | 'missing', message: string }>}
+ */
+export async function seedTenant(pool, creatorId, { force = false } = {}) {
+    const creator = await pool.query('SELECT id, name FROM creators WHERE id = $1', [creatorId]);
+    if (!creator.rows[0]) return { status: 'missing', message: `No creator with id ${creatorId}.` };
+
+    const version = await storedProfileVersion(pool, creatorId);
+    if (version !== null) return { status: 'refused', message: profileRefusal(creatorId, version) };
+
+    const existing = await pool.query('SELECT updated_at FROM studio_settings WHERE creator_id = $1', [creatorId]);
+    if (existing.rows[0] && !force) {
+        return {
+            status: 'refused',
+            message: `This tenant already has Studio settings (saved ${existing.rows[0].updated_at?.toISOString?.() ?? 'earlier'}). Re-run with --force to replace them.`,
+        };
+    }
+    const s = STUDIO_SETTINGS;
+    await pool.query(
+        `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, updated_at)
+         VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, NOW())
+         ON CONFLICT (creator_id) DO UPDATE
+            SET brand = EXCLUDED.brand, voice = EXCLUDED.voice, product = EXCLUDED.product,
+                cta = EXCLUDED.cta, schedule = EXCLUDED.schedule, library = EXCLUDED.library,
+                examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, infographic = EXCLUDED.infographic, updated_at = NOW()`,
+        [
+            creatorId,
+            JSON.stringify(s.brand), JSON.stringify(s.voice), JSON.stringify(s.product),
+            JSON.stringify(s.cta), JSON.stringify(s.schedule), JSON.stringify(s.library),
+            s.examples === null ? null : JSON.stringify(s.examples),
+            JSON.stringify(s.monteur),
+            JSON.stringify(s.infographic),
+        ]
+    );
+    return { status: 'seeded', message: `Seeded Studio settings for ${creator.rows[0].name ?? creatorId}.` };
+}
+
 async function main() {
     const [creatorId, ...flags] = process.argv.slice(2);
     const dryRun = flags.includes('--dry-run');
@@ -159,36 +236,12 @@ async function main() {
         connectionTimeoutMillis: 15000,
     });
     try {
-        const creator = await pool.query('SELECT id, name FROM creators WHERE id = $1', [creatorId]);
-        if (!creator.rows[0]) {
-            console.error(`No creator with id ${creatorId}.`);
+        const { status, message } = await seedTenant(pool, creatorId, { force });
+        if (status === 'seeded') console.log(message);
+        else {
+            console.error(message);
             process.exitCode = 1;
-            return;
         }
-        const existing = await pool.query('SELECT updated_at FROM studio_settings WHERE creator_id = $1', [creatorId]);
-        if (existing.rows[0] && !force) {
-            console.error(`This tenant already has Studio settings (saved ${existing.rows[0].updated_at?.toISOString?.() ?? 'earlier'}). Re-run with --force to replace them.`);
-            process.exitCode = 1;
-            return;
-        }
-        const s = STUDIO_SETTINGS;
-        await pool.query(
-            `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, updated_at)
-             VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, NOW())
-             ON CONFLICT (creator_id) DO UPDATE
-                SET brand = EXCLUDED.brand, voice = EXCLUDED.voice, product = EXCLUDED.product,
-                    cta = EXCLUDED.cta, schedule = EXCLUDED.schedule, library = EXCLUDED.library,
-                    examples = EXCLUDED.examples, monteur = EXCLUDED.monteur, infographic = EXCLUDED.infographic, updated_at = NOW()`,
-            [
-                creatorId,
-                JSON.stringify(s.brand), JSON.stringify(s.voice), JSON.stringify(s.product),
-                JSON.stringify(s.cta), JSON.stringify(s.schedule), JSON.stringify(s.library),
-                s.examples === null ? null : JSON.stringify(s.examples),
-                JSON.stringify(s.monteur),
-                JSON.stringify(s.infographic),
-            ]
-        );
-        console.log(`Seeded Studio settings for ${creator.rows[0].name ?? creatorId}.`);
     } finally {
         await pool.end();
     }

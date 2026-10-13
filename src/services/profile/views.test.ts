@@ -15,7 +15,7 @@ import { legacyBase, profileFromLegacy } from './legacy.js';
 import { deepFreeze, getAt, hasAt, jsonbReorder, leafPaths, richProfile, scramble, throughJsonb, UPLOAD_A, UPLOAD_B } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
 import { validateProfile } from './validate.js';
-import { GROWTH_PROFILE_PATHS, growthView, intoProfile, STUDIO_PROFILE_PATHS, studioView } from './views.js';
+import { changedPaths, GROWTH_PROFILE_PATHS, growthIntoProfile, growthView, intoProfile, STUDIO_PROFILE_PATHS, studioView } from './views.js';
 
 const withBrand = (s: StudioSettings, brand: Partial<StudioSettings['brand']>): StudioSettings => ({ ...s, brand: { ...s.brand, ...brand } });
 const withProductUrl = (s: StudioSettings, url: string): StudioSettings => ({ ...s, product: { ...s.product, url } });
@@ -553,5 +553,78 @@ describe('intoProfile', () => {
         const egyptian = intoProfile({ ...arabic, language: { ...arabic.language, register: 'egyptian' } }, ENGLISH_SETTINGS);
         assert.equal(egyptian.language.primary, 'en');
         assert.equal(egyptian.language.register, 'egyptian', 'the chosen register survives a trip through English');
+    });
+});
+
+describe('changedPaths: which profile-owned fields an edit changed (P4 routes exactly those into saveProfile)', () => {
+    it('names the owned paths whose value differs, and only those', () => {
+        const before = ELAMIR_SEED_SETTINGS;
+        const after: StudioSettings = {
+            ...before,
+            brand: { ...before.brand, name: 'Another', palette: ['#FFD60A'] },
+            schedule: { ...before.schedule, timezone: 'Europe/London' },
+            voice: { ...before.voice, avoid: [...(before.voice.avoid ?? []), 'extra'] },
+        };
+        assert.deepStrictEqual(changedPaths(before, after, STUDIO_PROFILE_PATHS), ['brand.name', 'voice.avoid', 'schedule.timezone']);
+    });
+
+    it('is empty for a change to anything the profile does not own, however large', () => {
+        const after: StudioSettings = {
+            ...ELAMIR_SEED_SETTINGS,
+            brand: { ...ELAMIR_SEED_SETTINGS.brand, palette: ['#FFD60A'], direction: 'rtl', signature: { latin: 'X', local: 'ي' } },
+            cta: { ...ELAMIR_SEED_SETTINGS.cta, tiktokLine: 'Changed' },
+            schedule: { ...ELAMIR_SEED_SETTINGS.schedule, slots: ['09:00'] },
+            library: { root: '/elsewhere' },
+            monteur: { ...ELAMIR_SEED_SETTINGS.monteur, enabled: !ELAMIR_SEED_SETTINGS.monteur.enabled },
+            infographic: { ...ELAMIR_SEED_SETTINGS.infographic, platforms: ['facebook'] },
+        };
+        assert.deepStrictEqual(changedPaths(ELAMIR_SEED_SETTINGS, after, STUDIO_PROFILE_PATHS), []);
+        assert.deepStrictEqual(changedPaths(ELAMIR_GROWTH, { ...ELAMIR_GROWTH, keywords: ['x'], hashtag_sets: [], competitors: [] }, GROWTH_PROFILE_PATHS), []);
+    });
+
+    it('compares lists and objects by value, and reads an absent key as undefined: adding or removing an optional key is a change', () => {
+        assert.deepStrictEqual(changedPaths(ELAMIR_GROWTH, { ...ELAMIR_GROWTH, audience: { ...ELAMIR_GROWTH.audience, countries: [...ELAMIR_GROWTH.audience.countries!] } }, GROWTH_PROFILE_PATHS), []);
+        const { timezone: _tz, ...withoutTimezone } = ELAMIR_GROWTH.audience;
+        assert.deepStrictEqual(changedPaths(ELAMIR_GROWTH, { ...ELAMIR_GROWTH, audience: withoutTimezone }, GROWTH_PROFILE_PATHS), ['audience.timezone']);
+        assert.deepStrictEqual(changedPaths({}, {}, GROWTH_PROFILE_PATHS), [], 'nothing on either side');
+        assert.deepStrictEqual(changedPaths({ goal_followers: 1 }, { goal_followers: 2, goal_views: 3 }, GROWTH_PROFILE_PATHS), ['goal_followers', 'goal_views']);
+    });
+});
+
+describe('growthIntoProfile: the Growth half of intoProfile', () => {
+    const profiles: readonly [string, CreatorProfile][] = [
+        ['the owner\'s', profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH)],
+        ['a rich one', richProfile()],
+        ['the default', defaultProfile()],
+    ];
+
+    it('is intoProfile with a Studio the profile already says, for every Growth settings and profile', () => {
+        for (const [name, p] of profiles) {
+            for (const [growthName, g] of GROWTHS) {
+                same(growthIntoProfile(p, g), intoProfile(p, studioView(defaultStudioSettings(), p), g), `${name} profile, ${growthName}`);
+            }
+        }
+    });
+
+    it('changes the audience countries, languages, timezone and the goals, and nothing else', () => {
+        for (const [name, p] of profiles) {
+            const out = growthIntoProfile(p, { keywords: ['x'], hashtag_sets: [], competitors: [], audience: { countries: ['KW'], languages: ['en'] }, goal_followers: 77, goal_views: 88 });
+            assert.deepStrictEqual(out.audience.countries, ['KW'], name);
+            assert.deepStrictEqual(out.audience.languages, ['en'], name);
+            assert.ok(!('timezone' in out.audience), `${name}: a Growth row without an override removes the profile's`);
+            assert.deepStrictEqual(out.goals, { followers: 77, views: 88 }, name);
+            const { countries: _c, languages: _l, timezone: _t, ...restOfAudience } = out.audience;
+            const { countries: _c2, languages: _l2, timezone: _t2, ...restBefore } = p.audience;
+            assert.deepStrictEqual({ ...out, audience: restOfAudience, goals: p.goals }, { ...p, audience: restBefore }, `${name}: every other field is the profile's own`);
+        }
+    });
+
+    it('is the inverse of growthView, and leaves its input alone', () => {
+        for (const [name, p] of profiles) {
+            const frozen = deepFreeze(structuredClone(p));
+            for (const [growthName, g] of GROWTHS) {
+                same(growthIntoProfile(frozen, growthView(g, frozen)), p, `${name} profile, ${growthName}`);
+            }
+        }
     });
 });
