@@ -163,6 +163,17 @@ app.get('/dashboard/eid.html', (_req, res) => {
 // ─── Dashboard Static Files ─────────────────────────────────────────────────
 app.use('/dashboard', express.static(path.join(__dirname, '../dashboard')));
 
+// `/samples/*` (the landing's covers and videos) and `/brand/*` (the hero scene's content-hashed bundle,
+// public/brand/hero3d.<sha8>.js) are routed straight to public/ by vercel.json and never reach this app in
+// production. Locally nothing routes them, so the landing would show broken images and no 3D: serve them here, off
+// Vercel only. The roots are plain cwd-relative strings (`npm run start:dev` runs from the repo root) rather than
+// `path.join(__dirname, …)`, because Vercel bundles whatever a literal path.join names, and these 3 MB are already
+// served as static files.
+if (!process.env.VERCEL) {
+    app.use('/samples', express.static('public/samples', { maxAge: '1d' }));
+    app.use('/brand', express.static('public/brand', { maxAge: '365d', immutable: true }));
+}
+
 // `/docs` used to be served statically from a gitignored directory. It 404s in production
 // only by accident of the deploy contents — anyone who dropped a file there would have
 // published TOKEN_GUIDE.md and friends unauthenticated. Removed rather than guarded: local

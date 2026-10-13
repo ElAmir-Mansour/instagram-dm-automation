@@ -805,6 +805,11 @@
             --lp-ease-quad: cubic-bezier(0.25, 0.46, 0.45, 0.94);
             --lp-t-press: 90ms;
             --lp-t-hover: 160ms;
+            /* The hero scene (L10): the canvas and the poster cross-fade over this, and the card's own message
+               bubble answers the flying one with a ring. 200 ms x 4 is IDENTITY.md 6's receipt at the hero's
+               four-times-slower tempo (the scene's own copy of it is RECEIPT_MS in scripts/hero3d/core.mjs). */
+            --lp-t-fade: 320ms;
+            --lp-kw-receipt: 800ms;
         }
 
         /* Light is a peer, not an afterthought — and the same selector
@@ -1157,7 +1162,17 @@
         }
 
         /* ─── Hero ─────────────────────────────────────────────────────────── */
-        .hero { padding-block: clamp(2.5rem, 6vw, 5rem) 0; }
+        /* The hero clips sideways (L10): the scene's canvas reaches past the card into the gutter, and from 62rem
+           it would add a few pixels of sideways scroll on a window only a little wider than the page. `clip`, not
+           `hidden`: it does not make the hero a scroll container and leaves the vertical axis alone. The inline
+           padding and its matching negative margin leave the content box where it was and widen the clip to the
+           gutters, so a focus ring on the hero's first button (outline + 5px halo) is not cut at the column edge. */
+        .hero {
+            padding-block: clamp(2.5rem, 6vw, 5rem) 0;
+            margin-inline: calc(var(--lp-gutter) * -1);
+            padding-inline: var(--lp-gutter);
+            overflow-x: clip;
+        }
         .hero-grid {
             display: grid;
             gap: clamp(2rem, 5vw, 3.5rem);
@@ -1301,6 +1316,107 @@
            semantic colour that is true (the like is a like). */
         .receipts svg { flex: none; inline-size: 0.9rem; block-size: 0.9rem; color: var(--accent-text); }
         .receipts .heart { color: var(--danger); }
+
+        /* ─── The hero stage (L10) ─────────────────────────────────────────────
+           The artifact above stays the content, in front, and the LCP element. Behind it a poster (an inline SVG,
+           present for everyone) and, for a visitor who passes the loader's gates, a WebGL canvas: flat comment
+           bubbles drifting in depth, one keyword lit, that bubble flying into the card's own message bubble
+           (scripts/hero3d/scene.mjs; docs/brand/LANDING_3D_LOGOS.md section 3). Nothing here changes the card's size
+           or position, so the stage costs no layout shift: the poster and the canvas are absolute, the toggle too.
+           --hs-y and --hs-x are how far both reach past the card, above and below and to each side: the spec's
+           inset of space-6 / 0 by default and space-7 / space-6 from 62rem. */
+        .hero-stage {
+            --hs-y: var(--space-6);
+            --hs-x: 0px;
+            position: relative;
+            isolation: isolate;
+        }
+        @media (min-width: 62rem) {
+            .hero-stage { --hs-y: var(--space-7); --hs-x: var(--space-6); }
+        }
+        /* Safari before 16 has no `overflow: clip`, so there the hero cannot cut off what reaches into its gutters (an iPad in
+           landscape is 62rem wide): the canvas and poster then reach only as far as the card's own edges sideways. */
+        @supports not (overflow-x: clip) {
+            .hero-stage { --hs-x: 0px; }
+        }
+        .hero-stage > .artifact { z-index: 1; }
+        .stage-poster,
+        .stage-canvas {
+            position: absolute;
+            inset-block-start: calc(var(--hs-y) * -1);
+            inset-inline-start: calc(var(--hs-x) * -1);
+            inline-size: calc(100% + var(--hs-x) * 2);
+            block-size: calc(100% + var(--hs-y) * 2);
+            z-index: 0;
+            pointer-events: none;
+            transition: opacity var(--lp-t-fade) var(--lp-ease-quad);
+        }
+        .stage-canvas { opacity: 0; }
+        .hero-stage.is-3d .stage-canvas { opacity: 1; }
+        .hero-stage.is-3d .stage-poster { opacity: 0; }
+        /* With the scene running the card is solid, so what it is measured against does not move with whatever
+           bubble is behind it. */
+        .hero-stage.is-3d > .artifact { background: var(--surface-solid); }
+        /* The poster is the scene standing still: ghost bubbles in the margins, one keyword pill. It is authored
+           mirrored for Arabic, never flipped here, and its glyphs are the sprite's, in the monochrome token. */
+        .stage-poster .pb { fill: var(--surface-solid); stroke: var(--border-strong); stroke-width: 1; }
+        .stage-poster .pk { fill: var(--accent-soft); stroke: var(--accent-ring); stroke-width: 1; }
+        .stage-poster .pl { fill: var(--text-muted); opacity: 0.6; }
+        .stage-poster use { fill: var(--logo-mono); opacity: 0.7; }
+
+        /* The pause control (WCAG 2.2.2), inserted by the loader only for a visitor who will get the animation.
+           A 44px target that overhangs the card's corner, in the margin the scene leaves free: 24px above the card, so on
+           a phone it clears the button above it by 8px. */
+        .stage-toggle {
+            position: absolute;
+            inset-block-start: calc(var(--space-5) * -1);
+            inset-inline-end: 0;
+            z-index: 2;
+            display: grid;
+            place-items: center;
+            inline-size: var(--tap-target);
+            block-size: var(--tap-target);
+            padding: 0;
+            border: 0;
+            border-radius: var(--radius-pill);
+            background: var(--surface-solid);
+            color: var(--text-default);
+            box-shadow: inset 0 0 0 1px var(--border-strong);
+            cursor: pointer;
+            transition: color var(--lp-t-hover) var(--lp-ease-quad);
+        }
+        .stage-toggle:hover { color: var(--text-strong); }
+        .stage-toggle svg {
+            inline-size: 1.125rem;
+            block-size: 1.125rem;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        /* One icon at a time: the pause bars while it moves, the triangle while it is paused (the loader sets .is-paused on
+           the stage and swaps the button's name; the state is in the name, so it is not also announced as "pressed"). */
+        .hero-stage.is-paused .i-pause,
+        .hero-stage:not(.is-paused) .i-play { display: none; }
+        /* The page's focus rule squares every button's corners; this one is a circle. */
+        .stage-toggle:focus-visible { border-radius: var(--radius-pill); }
+
+        /* The receipt: when the flying bubble arrives (the scene's hero3d:deliver event), the card's own message
+           bubble rings once, 0 -> --ring -> 0, in the accent's ring colour. */
+        @keyframes hero-receipt {
+            0%, 100% { box-shadow: var(--lp-elev-btn), 0 0 0 0 var(--accent-ring); }
+            40% { box-shadow: var(--lp-elev-btn), 0 0 0 var(--ring) var(--accent-ring); }
+        }
+        .hero-stage .bubble.is-delivering { animation: hero-receipt var(--lp-kw-receipt) var(--ease-exit) 1; }
+
+        /* A canvas and a poster carry nothing a screen reader, a forced palette or a printer needs: the card is
+           the content, and it is solid. */
+        @media (forced-colors: active), print {
+            .stage-poster,
+            .stage-canvas,
+            .stage-toggle { display: none; }
+        }
 
         /* ─── The loop ─────────────────────────────────────────────────────────
            A rail, not three cards. Six identically-shaped sections in a row is
@@ -3404,30 +3520,56 @@
                             </div>
                         </div>
 
-                        <aside class="card artifact" aria-label="مثال: تعليق وما نتج عنه">
-                            <p class="artifact-label">تعليق على منشورك</p>
-                            <div class="comment">
-                                <span class="avatar" aria-hidden="true">س</span>
-                                <div>
-                                    <p class="who"><span class="sr-only">تعليق من</span>سالم</p>
-                                    <p class="said" dir="auto">كم <span class="kw">السعر</span>؟ وهل فيه توصيل؟</p>
+                        <!-- The hero stage (L10): the card below stays the content; behind it a poster, and for a visitor who passes the
+                             loader's gates a WebGL scene (scripts/hero3d/scene.mjs). data-hero3d is the scene's cast: user comments, so
+                             colloquial words are fine; no names; p is the platform glyph, Meta only because comment-to-DM is Meta only;
+                             kw is a campaign keyword standing alone in its comment. The poster is authored mirrored for Arabic. -->
+                        <div class="hero-stage" id="hero-stage-ar" data-hero3d='{"comments":[{"t":"كم السعر؟ وهل فيه توصيل؟","kw":"السعر","p":"instagram"},{"t":"بكم الاشتراك الشهري؟","kw":"بكم","p":"facebook"},{"t":"أبي الرابط لو سمحت","kw":"الرابط","p":"instagram"},{"t":"عمل رائع، استمر","p":"facebook"},{"t":"كيف أشترك في الدورة؟","kw":"أشترك","p":"instagram"},{"t":"شكراً على الفائدة","p":"instagram"},{"t":"أرسلوا التفاصيل لو سمحتم","kw":"التفاصيل","p":"facebook"},{"t":"مبدع كالعادة","p":"facebook"}]}' data-pause-label="إيقاف الحركة" data-play-label="تشغيل الحركة">
+                            <svg class="stage-poster" aria-hidden="true" focusable="false" viewBox="0 0 400 480">
+                                <g opacity="0.5">
+                                    <rect class="pb" x="18" y="1" width="132" height="34" rx="12"/>
+                                    <rect class="pl" x="62" y="12" width="72" height="6" rx="3"/>
+                                    <rect class="pl" x="86" y="23" width="48" height="5" rx="2.5"/>
+                                </g>
+                                <g>
+                                    <rect class="pb" x="206" y="4" width="180" height="42" rx="14"/>
+                                    <use href="#plogo-instagram" x="356" y="16" width="16" height="16"/>
+                                    <rect class="pl" x="292" y="14" width="54" height="6" rx="3"/>
+                                    <rect class="pk" x="250" y="11" width="40" height="12" rx="4"/>
+                                    <rect class="pl" x="260" y="28" width="86" height="5" rx="2.5"/>
+                                </g>
+                                <g>
+                                    <rect class="pb" x="14" y="434" width="172" height="42" rx="14"/>
+                                    <use href="#plogo-facebook" x="156" y="446" width="16" height="16"/>
+                                    <rect class="pl" x="50" y="444" width="96" height="6" rx="3"/>
+                                    <rect class="pl" x="86" y="458" width="60" height="5" rx="2.5"/>
+                                </g>
+                            </svg>
+                            <aside class="card artifact" aria-label="مثال: تعليق وما نتج عنه">
+                                <p class="artifact-label">تعليق على منشورك</p>
+                                <div class="comment">
+                                    <span class="avatar" aria-hidden="true">س</span>
+                                    <div>
+                                        <p class="who"><span class="sr-only">تعليق من</span>سالم</p>
+                                        <p class="said" dir="auto">كم <span class="kw">السعر</span>؟ وهل فيه توصيل؟</p>
+                                    </div>
                                 </div>
-                            </div>
 
-                            <p class="artifact-label"><span class="sr-only">رسالة خاصة صادرة من حسابك:</span>رسالة خاصة</p>
-                            <p class="bubble">أهلاً سالم! هذه تفاصيل الأسعار والتوصيل.</p>
+                                <p class="artifact-label"><span class="sr-only">رسالة خاصة صادرة من حسابك:</span>رسالة خاصة</p>
+                                <p class="bubble">أهلاً سالم! هذه تفاصيل الأسعار والتوصيل.</p>
 
-                            <ul class="receipts">
-                                <li>
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
-                                    رُدَّ على التعليق علناً
-                                </li>
-                                <li>
-                                    <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
-                                    سُجِّل إعجاب بالتعليق
-                                </li>
-                            </ul>
-                        </aside>
+                                <ul class="receipts">
+                                    <li>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                        رُدَّ على التعليق علناً
+                                    </li>
+                                    <li>
+                                        <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
+                                        سُجِّل إعجاب بالتعليق
+                                    </li>
+                                </ul>
+                            </aside>
+                        </div>
                     </div>
                 </section>
 
@@ -4501,30 +4643,56 @@
                             </div>
                         </div>
 
-                        <aside class="card artifact" aria-label="Example: one comment and what it produced">
-                            <p class="artifact-label">A comment on your post</p>
-                            <div class="comment">
-                                <span class="avatar" aria-hidden="true">S</span>
-                                <div>
-                                    <p class="who"><span class="sr-only">Comment from</span>Salem</p>
-                                    <p class="said" dir="auto">How much is the <span class="kw">price</span>? Do you deliver?</p>
+                        <!-- The hero stage (L10): the card below stays the content; behind it a poster, and for a visitor who passes the
+                             loader's gates a WebGL scene (scripts/hero3d/scene.mjs). data-hero3d is the scene's cast: user comments, so
+                             colloquial words are fine; no names; p is the platform glyph, Meta only because comment-to-DM is Meta only;
+                             kw is a campaign keyword standing alone in its comment. The poster is authored mirrored for Arabic. -->
+                        <div class="hero-stage" id="hero-stage-en" data-hero3d='{"comments":[{"t":"How much is the price?","kw":"price","p":"instagram"},{"t":"What does it cost?","kw":"cost","p":"facebook"},{"t":"Send me the link please","kw":"link","p":"instagram"},{"t":"Great work, keep going","p":"facebook"},{"t":"How do I join the course?","kw":"join","p":"instagram"},{"t":"Thanks for the tip","p":"instagram"},{"t":"Send the details please","kw":"details","p":"facebook"},{"t":"Brilliant as always","p":"facebook"}]}' data-pause-label="Pause motion" data-play-label="Play motion">
+                            <svg class="stage-poster" aria-hidden="true" focusable="false" viewBox="0 0 400 480">
+                                <g opacity="0.5">
+                                    <rect class="pb" x="250" y="1" width="132" height="34" rx="12"/>
+                                    <rect class="pl" x="266" y="12" width="72" height="6" rx="3"/>
+                                    <rect class="pl" x="266" y="23" width="48" height="5" rx="2.5"/>
+                                </g>
+                                <g>
+                                    <rect class="pb" x="14" y="4" width="180" height="42" rx="14"/>
+                                    <use href="#plogo-instagram" x="28" y="16" width="16" height="16"/>
+                                    <rect class="pl" x="54" y="14" width="54" height="6" rx="3"/>
+                                    <rect class="pk" x="110" y="11" width="40" height="12" rx="4"/>
+                                    <rect class="pl" x="54" y="28" width="86" height="5" rx="2.5"/>
+                                </g>
+                                <g>
+                                    <rect class="pb" x="214" y="434" width="172" height="42" rx="14"/>
+                                    <use href="#plogo-facebook" x="228" y="446" width="16" height="16"/>
+                                    <rect class="pl" x="254" y="444" width="96" height="6" rx="3"/>
+                                    <rect class="pl" x="254" y="458" width="60" height="5" rx="2.5"/>
+                                </g>
+                            </svg>
+                            <aside class="card artifact" aria-label="Example: one comment and what it produced">
+                                <p class="artifact-label">A comment on your post</p>
+                                <div class="comment">
+                                    <span class="avatar" aria-hidden="true">S</span>
+                                    <div>
+                                        <p class="who"><span class="sr-only">Comment from</span>Salem</p>
+                                        <p class="said" dir="auto">How much is the <span class="kw">price</span>? Do you deliver?</p>
+                                    </div>
                                 </div>
-                            </div>
 
-                            <p class="artifact-label"><span class="sr-only">Private message sent from your account:</span>Direct message</p>
-                            <p class="bubble">Hi Salem! Here are the prices and delivery options.</p>
+                                <p class="artifact-label"><span class="sr-only">Private message sent from your account:</span>Direct message</p>
+                                <p class="bubble">Hi Salem! Here are the prices and delivery options.</p>
 
-                            <ul class="receipts">
-                                <li>
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
-                                    Comment answered publicly
-                                </li>
-                                <li>
-                                    <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
-                                    Comment liked
-                                </li>
-                            </ul>
-                        </aside>
+                                <ul class="receipts">
+                                    <li>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                        Comment answered publicly
+                                    </li>
+                                    <li>
+                                        <svg class="heart" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M12 21s-7.5-4.7-9.6-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.6 12c-2.1 4.3-9.6 9-9.6 9Z"/></svg>
+                                        Comment liked
+                                    </li>
+                                </ul>
+                            </aside>
+                        </div>
                     </div>
                 </section>
 
@@ -5718,6 +5886,10 @@
         </footer>
     </div>
 
+    <!-- The pause control (WCAG 2.2.2) that the hero loader, the last script below, adds to each .hero-stage for a visitor who
+         will get the scene. A template, not script: the icons are Lucide 0.577.0's pause and play, and no script carries them. -->
+    <template id="hero-toggle"><button type="button" class="stage-toggle"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g class="i-pause"><rect x="14" y="3" width="5" height="18" rx="1"/><rect x="5" y="3" width="5" height="18" rx="1"/></g><path class="i-play" d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/></svg></button></template>
+
     <script>
         /* The switch. Sets the attribute the CSS filters on, keeps <html lang dir>
            honest, and remembers the choice under the same key the dashboard uses
@@ -5915,6 +6087,58 @@
                     io.observe(v);
                 })(vids[j]);
             }
+        })();
+    </script>
+    <script>
+        /* The hero scene (L10): the loader. When idle after load, a visitor who passes these gates gets
+           /brand/hero3d.<sha8>.js (npm run build:hero3d); any no keeps the poster. Its own script: import() can't parse in old browsers. */
+        (function () {
+            var HERO3D = '/brand/hero3d.64a07794.js';
+            var w = window, d = document, n = navigator, stages = d.querySelectorAll('.hero-stage'), api, busy, coarse, paused = false;
+            try { paused = !!localStorage.getItem('hero3d_paused'); } catch (e) {}
+
+            function ok(q) { return w.matchMedia(q).matches; }
+            function each(f) { for (var i = 0; i < stages.length; i++) f(stages[i]); }
+            function label() {
+                each(function (s) {
+                    s.classList.toggle('is-paused', paused);
+                    s.lastElementChild.setAttribute('aria-label', s.getAttribute(paused ? 'data-play-label' : 'data-pause-label'));
+                });
+            }
+            function go() {
+                if (busy || api || paused) return;
+                busy = 1;
+                import(HERO3D).then(function (m) { return m.mount(stages, { lite: coarse }); })
+                    .then(function (a) { api = a; if (paused) a.pause(true); }, function (e) {
+                        each(function (s) { s.lastElementChild.remove(); });
+                        console.info('hero3d: poster', e);
+                    });
+            }
+            function flip() {
+                paused = !paused;
+                try { localStorage[paused ? 'setItem' : 'removeItem']('hero3d_paused', 1); } catch (e) {}
+                label();
+                api ? api.pause(paused) : go();
+            }
+            function start() {
+                var c = n.connection || {}, g;
+                coarse = ok('(pointer:coarse)');
+                if (!HERO3D || n.webdriver || c.saveData || /^(slow-)?[23]g$/.test(c.effectiveType) || n.deviceMemory < 4 ||
+                    n.hardwareConcurrency < (coarse ? 6 : 4) || !ok('(prefers-reduced-motion:no-preference)') ||
+                    /[?&]3d=0/.test(location.search) || d.getElementById('hero-stage-' + d.documentElement.lang).offsetWidth < 300) return;
+                try { if (sessionStorage.getItem('hero3d_off')) return; } catch (e) {}
+                try { (g = d.createElement('canvas').getContext('webgl2', { failIfMajorPerformanceCaveat: true })).getExtension('WEBGL_lose_context').loseContext(); } catch (e) {}
+                if (!g) return;
+                each(function (s) {
+                    s.appendChild(d.getElementById('hero-toggle').content.cloneNode(true));
+                    s.lastElementChild.onclick = flip;
+                });
+                label();
+                go();
+            }
+            w.addEventListener('load', function () {
+                (w.requestIdleCallback || function (f) { setTimeout(f, 1200); })(start, { timeout: 2000 });
+            });
         })();
     </script>
 </body>
