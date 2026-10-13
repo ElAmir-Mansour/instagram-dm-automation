@@ -20,6 +20,11 @@
  * two paths must also agree before a file is written (golden.ts refuses to write one file twice with
  * different bytes), so regenerating cannot hide a disagreement.
  *
+ * Path (c), "through the real readers" (P4): the owner's row (its profile-owned fields scrambled) and his stored profile are
+ * put in a stand-in database, and the builders are handed what the real `getStudioSettings` and `getGrowthSettings` return.
+ * Path (b) proves the view; this proves the readers return it, over the statements they send, jsonb's key order
+ * included. The same goldens again: dropping the overlay from a reader fails here, and nowhere that reads a fixture.
+ *
  * The DM instruction has no path (b): its knowledge base is an agent setting, not a profile field, and the
  * DM path reads nothing else from the profile until P8 gives it a profile context.
  *
@@ -66,9 +71,13 @@ import {
     GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_LINES, GOLDEN_REEL_EVIDENCE, GOLDEN_REELS, GOLDEN_SOURCES, GOLDEN_UNINDEXED_LESSON,
 } from '../studio/testFixtures.js';
 import { videoResource } from '../youtube.js';
+import { getGrowthSettings } from '../growth/settings.js';
+import { defaultGrowthSettings } from '../growth/settingsRow.js';
+import { getStudioSettings } from '../studio/settings.js';
 import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from './golden.js';
 import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
+import { emptyState, growthRow, installProfileDb, OWNER, studioRow } from './testDb.js';
 import { scramble, throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
 import { GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
@@ -97,22 +106,51 @@ const through = (settings: StudioSettings, owner: boolean): StudioSettings => st
     storedProfile(settings, owner ? ELAMIR_GROWTH : undefined),
 );
 
+/**
+ * Path (c): what the real readers return for a tenant whose profile is stored. The stored rows hold junk in every
+ * profile-owned field (nothing may survive from them), the profile is `profileFromLegacy` as the database holds it, and
+ * the answers are what `getStudioSettings` and `getGrowthSettings` give over those statements.
+ */
+async function throughTheReaders(settings: StudioSettings, growth?: GrowthSettings): Promise<{ studio: StudioSettings; growth: GrowthSettings }> {
+    const state = emptyState();
+    state.studio.set(OWNER, studioRow(scramble(settings, STUDIO_PROFILE_PATHS)));
+    state.growth.set(OWNER, growthRow(scramble(growth ?? defaultGrowthSettings(), GROWTH_PROFILE_PATHS)));
+    state.profiles.set(OWNER, { profile: throughJsonb(profileFromLegacy(settings, growth)), version: 1, activated_at: null, updated_by: null });
+    const db = installProfileDb(state);
+    const restoreSink = setLogSink(() => {});
+    try {
+        const studio = await getStudioSettings(OWNER);
+        const read = await getGrowthSettings(OWNER);
+        assert.ok(!JSON.stringify([studio, read]).includes('JUNK:'), 'nothing survives from the stale row that the profile owns');
+        assert.equal(db.ran(/FROM creator_profiles/).length, 2, 'the readers asked for the stored profile');
+        return { studio, growth: read };
+    } finally {
+        setLogSink(restoreSink);
+        db.restore();
+    }
+}
+
 type Variant = {
     slug: 'elamir' | 'seed' | 'english'; settings: StudioSettings; set: GoldenSet; lang: 'ar' | 'en';
-    /** How the builder is handed the settings: as they are, or as the owner's profile gives them back. */
-    via: 'today' | 'profile';
+    /** How the builder is handed the settings: as they are, as the owner's profile gives them back, or as the real readers return them. */
+    via: 'today' | 'profile' | 'readers';
 };
 const FIXTURES = [
     { slug: 'elamir', settings: ELAMIR_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
     { slug: 'seed', settings: ELAMIR_SEED_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
     { slug: 'english', settings: ENGLISH_SETTINGS, set: 'control', lang: 'en', owner: false },
 ] as const;
-/** Each fixture twice, into the same golden: once as it is, once through the profile. */
+/** What the real readers return for each fixture (path (c)). Read once, before any test: it swaps the pool for a stand-in and puts it back. */
+const READER_SETTINGS = {} as Record<(typeof FIXTURES)[number]['slug'], { studio: StudioSettings; growth: GrowthSettings }>;
+// One at a time: each swaps the one shared pool for its own stand-in.
+for (const f of FIXTURES) READER_SETTINGS[f.slug] = await throughTheReaders(f.settings, f.owner ? ELAMIR_GROWTH : undefined);
+/** Each fixture three times, into the same golden: as it is, through the profile, and through the real readers. */
 const VARIANTS: readonly Variant[] = FIXTURES.flatMap((f): Variant[] => [
     { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today' },
     { slug: f.slug, settings: through(f.settings, f.owner), set: f.set, lang: f.lang, via: 'profile' },
+    { slug: f.slug, settings: READER_SETTINGS[f.slug].studio, set: f.set, lang: f.lang, via: 'readers' },
 ]);
-const describeVariant = (v: Variant): string => `${v.slug} settings${v.via === 'profile' ? ', through the profile' : ''}`;
+const describeVariant = (v: Variant): string => `${v.slug} settings${v.via === 'profile' ? ', through the profile' : v.via === 'readers' ? ', through the real readers' : ''}`;
 /** `<name>.<fixture>`: the owner's two fixtures in his set, the English control in its own. */
 const text = (v: Variant, name: string, actual: string): void => matchGolden(`${name}.${v.slug}`, actual, v.set);
 const json = (v: Variant, name: string, value: unknown): void => matchGoldenJson(`${name}.${v.slug}`, value, v.set);
@@ -205,7 +243,7 @@ describe('DM and comment golden prompts', () => {
         matchGolden('dm.starter-persona', STARTER_PERSONA, 'control');
     });
 
-    for (const [via, owner] of [['today', ELAMIR_SETTINGS], ['through the profile', through(ELAMIR_SETTINGS, true)]] as const) it(`dmFallbackReply: the public reply that replaces an undeliverable DM, every variant (${via})`, () => {
+    for (const [via, owner] of [['today', ELAMIR_SETTINGS], ['through the profile', through(ELAMIR_SETTINGS, true)], ['through the real readers', READER_SETTINGS.elamir.studio]] as const) it(`dmFallbackReply: the public reply that replaces an undeliverable DM, every variant (${via})`, () => {
         const ownerDm = buildDm(owner.cta.dmTemplate, {
             question: SAY.ar.question, pitch: SAY.ar.pitch, url: owner.product.url, bullets: owner.product.dmBullets,
         });
@@ -387,7 +425,7 @@ describe('Infographic golden prompts', () => {
         matchGolden('infographic.system.en', writeSystemPrompt('en'), 'control');
     });
 
-    for (const [via, seed] of [['today', ELAMIR_SEED_SETTINGS], ['through the profile', through(ELAMIR_SEED_SETTINGS, true)]] as const) {
+    for (const [via, seed] of [['today', ELAMIR_SEED_SETTINGS], ['through the profile', through(ELAMIR_SEED_SETTINGS, true)], ['through the real readers', READER_SETTINGS.seed.studio]] as const) {
         it(`renderPayload: the job the Mac gets in write mode, assembled from his seed settings (${via})`, () => {
             // The call site itself, not a copy of it: brand, system prompt, user prompt (with his never-use
             // list from voice.avoid) and schema. spec = null is write mode, which is how a new one starts.
@@ -456,14 +494,20 @@ describe('Growth coach golden prompts', () => {
      * His rows as the Growth readers and the Studio settings behind `tenantLanguage` read them: as they are
      * (path a), or as the profile gives them back from a scrambled row (path b).
      */
-    type Rows = { growth: GrowthSettings; studio: StudioSettings };
+    type Rows = { growth: GrowthSettings; studio: StudioSettings; /** The stored profile the database answers with, when it has one. */ profile?: unknown };
     const TODAY: Rows = { growth: ELAMIR_GROWTH, studio: ELAMIR_SEED_SETTINGS };
     const profile = storedProfile(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
     const THROUGH_THE_PROFILE: Rows = {
         growth: growthView(scramble(ELAMIR_GROWTH, GROWTH_PROFILE_PATHS), profile),
         studio: studioView(scramble(ELAMIR_SEED_SETTINGS, STUDIO_PROFILE_PATHS), profile),
     };
-    const PATHS = [['today', TODAY], ['through the profile', THROUGH_THE_PROFILE]] as const;
+    // Path (c): the database holds the scrambled rows and the stored profile; the real readers do the overlay.
+    const THROUGH_THE_REAL_READERS: Rows = {
+        growth: scramble(ELAMIR_GROWTH, GROWTH_PROFILE_PATHS),
+        studio: scramble(ELAMIR_SEED_SETTINGS, STUDIO_PROFILE_PATHS),
+        profile: throughJsonb(profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH)),
+    };
+    const PATHS = [['today', TODAY], ['through the profile', THROUGH_THE_PROFILE], ['through the real readers', THROUGH_THE_REAL_READERS]] as const;
 
     const mockDatabase = (rows: Rows = TODAY): void => {
         (pool as any).query = async (sql: string) => {
@@ -471,6 +515,7 @@ describe('Growth coach golden prompts', () => {
             if (/FROM post_insights/.test(q)) return { rows: POSTS };
             if (/DISTINCT ON \(platform\)/.test(q)) return { rows: [{ platform: 'instagram', followers: 8412 }] };
             if (/FROM account_insights_daily/.test(q)) return { rows: DAYS };
+            if (/FROM creator_profiles/.test(q)) return { rows: rows.profile ? [{ profile: rows.profile, version: 1, activated_at: null }] : [] };
             if (/SELECT last_sync FROM growth_settings/.test(q)) return { rows: [] };
             if (/FROM growth_settings/.test(q)) return { rows: [{ ...rows.growth }] };
             if (/FROM studio_settings/.test(q)) return { rows: [{ ...rows.studio }] };

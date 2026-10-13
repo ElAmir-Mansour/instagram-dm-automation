@@ -9,14 +9,26 @@
  * audience merges field by field), a key it leaves out is kept. Everything is normalised before it
  * is stored — `@Name` becomes `name`, `ذكاء` becomes `#ذكاء` — and a value that can't be made valid
  * is refused with the sentence the dashboard shows.
+ *
+ * **The Creator Profile owns the audience and the goals** (docs/onboarding/01 §2, `GROWTH_PROFILE_PATHS`); the
+ * keywords, hashtag sets and competitors are how the Growth agent works and stay here. A tenant with a stored
+ * profile reads the owned fields from it (`getGrowthSettings` is the row with them replaced, `growthView`), and a
+ * write that changes one goes into the profile through `saveProfile`, which mirrors it back into the row. A tenant
+ * without a stored profile reads and writes its row exactly as before.
  */
+import { isDeepStrictEqual } from 'node:util';
 import type { GrowthAudience, GrowthSettings, HashtagSet } from '../../db/rows.js';
 import { queryOne } from '../../db/query.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
 import { isMissingSchema } from '../health.js';
 import { GrowthError } from './common.js';
-import { lockTenantSettings, withTransaction } from '../studio/common.js';
+import { type Exec, lockTenantSettings, withTransaction } from '../studio/common.js';
+import {
+    loadOverlayProfile, lockStoredProfile, lockStudioRow, newerSchemaError, overlayProfile, ProfileError, saveProfile, type SavedProfile,
+} from '../profile/store.js';
+import type { CreatorProfile } from '../profile/types.js';
+import { changedPaths, GROWTH_PROFILE_PATHS, growthIntoProfile, growthView } from '../profile/views.js';
 import { DEFAULT_GOALS, defaultGrowthSettings, fromRow, readGrowthSettings } from './settingsRow.js';
 
 // Defined in ./settingsRow.ts, which imports nothing from here: the profile store reads the stored rows with them.
@@ -250,6 +262,13 @@ export function resetGoalColumnsWarning(): void {
  * gets. A missing TABLE still throws, because that is v22 missing and the route names the fix.
  */
 export async function getGrowthSettings(creatorId: string): Promise<GrowthSettings> {
+    const row = await readStoredGrowth(creatorId);
+    const profile = await loadOverlayProfile(creatorId);
+    return profile ? growthView(row, profile) : row;
+}
+
+/** The stored row over the defaults, with the v25 tolerance above. */
+async function readStoredGrowth(creatorId: string): Promise<GrowthSettings> {
     try {
         const row = await queryOne<GrowthSettings>(
             'SELECT keywords, hashtag_sets, competitors, audience, goal_followers, goal_views FROM growth_settings WHERE creator_id = $1', [creatorId]
@@ -272,27 +291,69 @@ export async function getGrowthSettings(creatorId: string): Promise<GrowthSettin
  * Read, change, write whole row: so it runs in a transaction that holds the tenant's settings lock first
  * (`lockTenantSettings`), the way a profile save does, or a save that landed between its read and its write would be
  * overwritten by the stale row. A patch the rules refuse rolls back having written nothing, as before.
+ *
+ * With a stored profile the patch is applied over what the reader shows (`growthView`), and a change to a field the
+ * profile owns (`GROWTH_PROFILE_PATHS`) goes into the profile too: a new version, with its history row, through
+ * `saveProfile`, expecting the version read in this transaction. Keywords, hashtag sets and competitors never touch
+ * the profile. A profile's own refusals (a version conflict, one written by a newer release, an invalid result) are
+ * `GrowthError`s with the same status.
  */
 export async function updateGrowthSettings(creatorId: string, patch: unknown): Promise<GrowthSettings> {
-    return withTransaction(async (tx) => {
-        await lockTenantSettings(tx, creatorId);
-        const { settings, problems } = applyGrowthPatch(await readGrowthSettings(tx, creatorId, true), patch);
-        if (problems.length) {
-            const list = problems.slice(0, MAX_PROBLEMS);
-            throw new GrowthError(400, list.length === 1 ? list[0]! : `${list.length} problems with these settings.`, { problems: list });
-        }
-        await tx.query(
-            `INSERT INTO growth_settings (creator_id, keywords, hashtag_sets, competitors, audience, goal_followers, goal_views, updated_at)
-             VALUES ($1, $2::text[], $3::jsonb, $4::text[], $5::jsonb, $6::integer, $7::bigint, NOW())
-             ON CONFLICT (creator_id) DO UPDATE
-                SET keywords = EXCLUDED.keywords, hashtag_sets = EXCLUDED.hashtag_sets,
-                    competitors = EXCLUDED.competitors, audience = EXCLUDED.audience,
-                    goal_followers = EXCLUDED.goal_followers, goal_views = EXCLUDED.goal_views, updated_at = NOW()`,
-            [creatorId, settings.keywords, JSON.stringify(settings.hashtag_sets), settings.competitors, JSON.stringify(settings.audience),
-                settings.goal_followers, settings.goal_views]
-        );
-        return settings;
-    });
+    try {
+        return await withTransaction((tx) => applyGrowthUpdate(creatorId, patch, tx));
+    } catch (err) {
+        throw err instanceof ProfileError
+            ? new GrowthError(err.status, err.message, err.detail.problems ? { problems: err.detail.problems } : undefined)
+            : err;
+    }
+}
+
+/** The top-level settings whose value is, wholly or in part, a profile field: the patches that may need `saveProfile`. */
+const OWNED_KEYS: ReadonlySet<string> = new Set(GROWTH_PROFILE_PATHS.map((path) => path.split('.')[0]!));
+
+async function applyGrowthUpdate(creatorId: string, patch: unknown, tx: Exec): Promise<GrowthSettings> {
+    // Lock order, everywhere: creators, creator_profiles, studio_settings, growth_settings.
+    await lockTenantSettings(tx, creatorId);
+    const locked = await lockStoredProfile(creatorId, tx);
+    const profile = overlayProfile(creatorId, locked);
+    // `saveProfile` mirrors into the Studio row before the Growth row: when this write may need it, lock them in that order.
+    if (locked && isObj(patch) && Object.keys(patch).some((key) => OWNED_KEYS.has(key))) await lockStudioRow(creatorId, tx);
+    const stored = await readGrowthSettings(tx, creatorId, true);
+    const current = profile ? growthView(stored, profile) : stored;
+    const { settings, problems } = applyGrowthPatch(current, patch);
+    if (problems.length) {
+        const list = problems.slice(0, MAX_PROBLEMS);
+        throw new GrowthError(400, list.length === 1 ? list[0]! : `${list.length} problems with these settings.`, { problems: list });
+    }
+
+    // What the profile owns and this patch changed. A profile this release cannot fully read takes no write (it would
+    // delete what a newer release stored), so an edit that needs it is refused before anything is written; an edit
+    // that does not is written to the row as before.
+    let proposed: CreatorProfile | null = null;
+    if (locked && changedPaths(current, settings, GROWTH_PROFILE_PATHS).length > 0) {
+        if (!profile) throw newerSchemaError(locked.version);
+        const into = growthIntoProfile(profile, settings);
+        if (!isDeepStrictEqual(into, profile)) proposed = into;
+    }
+
+    await tx.query(
+        `INSERT INTO growth_settings (creator_id, keywords, hashtag_sets, competitors, audience, goal_followers, goal_views, updated_at)
+         VALUES ($1, $2::text[], $3::jsonb, $4::text[], $5::jsonb, $6::integer, $7::bigint, NOW())
+         ON CONFLICT (creator_id) DO UPDATE
+            SET keywords = EXCLUDED.keywords, hashtag_sets = EXCLUDED.hashtag_sets,
+                competitors = EXCLUDED.competitors, audience = EXCLUDED.audience,
+                goal_followers = EXCLUDED.goal_followers, goal_views = EXCLUDED.goal_views, updated_at = NOW()`,
+        [creatorId, settings.keywords, JSON.stringify(settings.hashtag_sets), settings.competitors, JSON.stringify(settings.audience),
+            settings.goal_followers, settings.goal_views]
+    );
+    // The row is written whole first, so the mirror in `saveProfile` reads this very row (FOR UPDATE, in this
+    // transaction) and writes back the same audience and goals it was given: the second write cannot undo the first.
+    let saved: SavedProfile | null = null;
+    if (proposed && locked) {
+        saved = await saveProfile(creatorId, proposed, { expectVersion: locked.version, source: 'user', userId: null }, tx);
+    }
+    // What the reader answers from now on, so the response and the next GET cannot differ.
+    return profile ? growthView(settings, saved?.profile ?? profile) : settings;
 }
 
 /**

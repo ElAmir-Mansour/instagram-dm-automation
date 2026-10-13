@@ -48,6 +48,8 @@ export interface ProfileDb extends FakeDb {
     v33: boolean;
     /** Runs just before the step-0 insert into creator_profiles: another save's commit, landing in the gap. */
     beforeProfileInsert: (() => void) | null;
+    /** Runs before each statement, with its whitespace-collapsed SQL: a write from another connection, landing between two of ours. */
+    onStatement: ((sql: string) => void) | null;
 }
 
 export function installProfileDb(state: State, options: { v33?: boolean } = {}): ProfileDb {
@@ -57,6 +59,7 @@ export function installProfileDb(state: State, options: { v33?: boolean } = {}):
     db.snapshot = null;
     db.v33 = options.v33 ?? true;
     db.beforeProfileInsert = null;
+    db.onStatement = null;
 
     const copy = (s: State): State => structuredClone(s);
     const restore = (from: State): void => {
@@ -105,6 +108,7 @@ export function installProfileDb(state: State, options: { v33?: boolean } = {}):
     const guard = (pool as unknown as { query: (sql: string, params?: any[]) => Promise<unknown> }).query;
     const guarded = async (sql: string, params: any[] = []): Promise<unknown> => {
         const flat = sql.replace(/\s+/g, ' ').trim();
+        db.onStatement?.(flat);
         if (db.failOn?.test(flat)) {
             db.statements.push({ sql: flat, params });
             throw db.failWith ?? new Error(`injected failure on: ${flat.slice(0, 60)}`);
@@ -129,6 +133,13 @@ export function installProfileDb(state: State, options: { v33?: boolean } = {}):
     route(/^SELECT profile, version FROM creator_profiles WHERE creator_id = \$1 FOR UPDATE$/, ([id]) => {
         const row = state.profiles.get(id);
         return { rows: row ? [{ profile: jsonb(row.profile), version: row.version }] : [] };
+    });
+    // The Monteur's narrow read: only the two values the timezone is read from, as Postgres hands a jsonb value back.
+    route(/^SELECT profile->'schema' AS profile_schema, profile->'identity'->'timezone' AS identity_timezone FROM creator_profiles WHERE creator_id = \$1$/, ([id]) => {
+        const row = state.profiles.get(id);
+        if (!row) return { rows: [] };
+        const stored = jsonb(row.profile) as { schema?: unknown; identity?: { timezone?: unknown } } | null;
+        return { rows: [{ profile_schema: stored?.schema ?? null, identity_timezone: stored?.identity?.timezone ?? null }] };
     });
     route(/^SELECT id FROM creators WHERE id = \$1 FOR NO KEY UPDATE$/, ([id]) => ({ rows: [{ id }] }));
     route(/^INSERT INTO creator_profiles .* ON CONFLICT \(creator_id\) DO NOTHING RETURNING version$/, ([id, profile]) => {
@@ -157,11 +168,17 @@ export function installProfileDb(state: State, options: { v33?: boolean } = {}):
         const row = state.studio.get(id);
         return { rows: row ? [Object.fromEntries(STUDIO_COLUMNS.map((c) => [c, jsonb(row[c] ?? null)]))] : [] };
     });
+    route(/^SELECT monteur, schedule FROM studio_settings WHERE creator_id = \$1$/, ([id]) => {
+        const row = state.studio.get(id);
+        return { rows: row ? [{ monteur: jsonb(row.monteur ?? null), schedule: jsonb(row.schedule ?? null) }] : [] };
+    });
     route(/^SELECT keywords, hashtag_sets, competitors, audience, goal_followers, goal_views FROM growth_settings WHERE creator_id = \$1( FOR UPDATE)?$/, ([id]) => {
         const row = state.growth.get(id);
         // BIGINT arrives as a string, as `pg` returns it.
         return { rows: row ? [{ ...Object.fromEntries(GROWTH_COLUMNS.map((c) => [c, jsonb(row[c] ?? null)])), goal_views: String(row.goal_views) }] : [] };
     });
+    // A lock and nothing else: the Growth writer takes the Studio row before the Growth row (the global order).
+    route(/^SELECT creator_id FROM studio_settings WHERE creator_id = \$1 FOR UPDATE$/, ([id]) => ({ rows: state.studio.has(id) ? [{ creator_id: id }] : [] }));
     route(/^INSERT INTO studio_settings /, (params, sql) => ({ rows: upsert(state.studio, sql, params) }));
     route(/^INSERT INTO growth_settings /, (params, sql) => ({ rows: upsert(state.growth, sql, params) }));
 

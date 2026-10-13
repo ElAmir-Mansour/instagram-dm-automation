@@ -6,12 +6,24 @@
  * no row gets `defaultStudioSettings()`, which is deliberately neutral: English, generic copy,
  * no product. A stored row is merged over those defaults on every read, section by section, so
  * a field added to a section later reads as its default for every tenant with no backfill.
+ *
+ * **The Creator Profile owns some of these fields** (docs/onboarding/01 §2, `STUDIO_PROFILE_PATHS`): the brand name and
+ * display font, the voice's language, digits, guide and avoid list, the product, the timezone, the infographic's brand.
+ * A tenant with a stored profile reads them from it: `getStudioSettings` is the stored row with those fields
+ * replaced (`studioView`), and `updateStudioSettings` routes a change to one of them into `saveProfile`, which
+ * mirrors it back into the row. A tenant without a stored profile reads and writes its row exactly as before.
  */
+import { isDeepStrictEqual } from 'node:util';
 import { pool } from '../../config/db.js';
 import type { MonteurConfig, MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
+import type { CreatorProfile } from '../profile/types.js';
 import type { InfographicPlatform, InfographicSocial, InfographicTheme, MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
 import { type Exec, isPlainObject, lockTenantSettings, problemsError, StudioError, withTransaction } from './common.js';
 import { defaultStudioSettings, mergeSettings, overDefaults, readStudioSettings, STUDIO_SETTINGS_SECTIONS } from './settingsMerge.js';
+import {
+    loadOverlayProfile, loadScheduleTimezone, lockStoredProfile, newerSchemaError, overlayProfile, ProfileError, saveProfile, type SavedProfile,
+} from '../profile/store.js';
+import { changedPaths, intoProfile, STUDIO_PROFILE_PATHS, studioView } from '../profile/views.js';
 
 // Read and merged in ./settingsMerge.ts, which imports nothing from here: the profile store reads the stored rows with them.
 export { defaultStudioSettings, mergeSettings, overDefaults, STUDIO_SETTINGS_SECTIONS };
@@ -228,18 +240,30 @@ export function settingsProblems(s: StudioSettings): string[] {
  * Only what the Monteur's daily run needs — its section and the timezone — over the defaults.
  * Every worker poll reads this, so it does not fetch the rest of the row (the few-shot examples
  * alone can be 100KB).
+ *
+ * The timezone is the profile's when the tenant has a stored one (`identity.timezone`), the same value
+ * `getStudioSettings` gives as `schedule.timezone`. That is a second, narrow query for that one value: not the
+ * profile, which can be 128 KB.
  */
 export async function getMonteurSettings(creatorId: string, exec: Exec = pool): Promise<{ monteur: MonteurConfig; timezone: string }> {
     const { rows } = await exec.query<Pick<StudioSettingsRow, 'monteur' | 'schedule'>>(
         'SELECT monteur, schedule FROM studio_settings WHERE creator_id = $1', [creatorId]
     );
     const s = overDefaults(rows[0] ?? {});
-    return { monteur: s.monteur, timezone: s.schedule.timezone };
+    return { monteur: s.monteur, timezone: (await loadScheduleTimezone(creatorId, exec)) ?? s.schedule.timezone };
 }
 
-/** The tenant's settings, over the defaults. `exec` is a transaction's client, when inside one. */
+/**
+ * The tenant's settings, over the defaults, with the fields the Creator Profile owns read from it. `exec` is a
+ * transaction's client, when inside one.
+ *
+ * The row is read first, by the same statement as before, then the profile (once per request, for the pool). A tenant
+ * with no stored profile, or one written by a newer release, gets its row unchanged.
+ */
 export async function getStudioSettings(creatorId: string, exec: Exec = pool): Promise<StudioSettings> {
-    return readStudioSettings(exec, creatorId);
+    const row = await readStudioSettings(exec, creatorId);
+    const profile = await loadOverlayProfile(creatorId, exec);
+    return profile ? studioView(row, profile) : row;
 }
 
 /**
@@ -249,6 +273,16 @@ export async function getStudioSettings(creatorId: string, exec: Exec = pool): P
  * Read, change, write whole row: so it runs in a transaction that holds the tenant's settings lock first
  * (`lockTenantSettings`), the way a profile save does, or a save that landed between its read and its write would
  * be overwritten by the stale row. Given a transaction's client it uses that; the caller's commit releases the lock.
+ *
+ * With a stored profile the patch is applied over what the reader shows (`studioView`), and a change to a field the
+ * profile owns (`STUDIO_PROFILE_PATHS`) goes into the profile too: a new version, with its history row, through
+ * `saveProfile`, expecting the version read in this transaction. A change to anything else never touches the profile.
+ * A profile's own refusals (a version conflict, one written by a newer release, an invalid result) are
+ * `StudioError`s with the same status, so the route answers them as it answers every other refusal.
+ *
+ * The profile cache (`profile/cache.ts`) is cleared by `saveProfile`, which for a caller's own transaction is before the
+ * caller commits: a caller that changes a profile-owned field through its own `exec` calls `clearProfileCache` after the
+ * commit. The only such caller today (the Monteur's folder pick) edits `monteur.folder`, which the profile does not own.
  */
 export async function updateStudioSettings(
     creatorId: string, patch: unknown, exec: Exec = pool
@@ -256,20 +290,38 @@ export async function updateStudioSettings(
     if (!isPlainObject(patch) || Object.keys(patch).length === 0) {
         throw new StudioError(400, 'Send the settings to change, e.g. { "schedule": { "timezone": "Asia/Riyadh" } }.');
     }
-    return (exec as unknown) === pool
-        ? withTransaction((tx) => applyStudioPatch(creatorId, patch, tx))
-        : applyStudioPatch(creatorId, patch, exec);
+    try {
+        return (exec as unknown) === pool
+            ? await withTransaction((tx) => applyStudioPatch(creatorId, patch, tx))
+            : await applyStudioPatch(creatorId, patch, exec);
+    } catch (err) {
+        throw err instanceof ProfileError ? new StudioError(err.status, err.message, err.detail.problems) : err;
+    }
 }
 
 async function applyStudioPatch(
     creatorId: string, patch: Record<string, unknown>, exec: Exec
 ): Promise<{ settings: StudioSettings; changed: string[] }> {
+    // Lock order, everywhere: creators, creator_profiles, studio_settings, growth_settings.
     await lockTenantSettings(exec, creatorId);
-    const current = await readStudioSettings(exec, creatorId, true);
+    const locked = await lockStoredProfile(creatorId, exec);
+    const profile = overlayProfile(creatorId, locked);
+    const stored = await readStudioSettings(exec, creatorId, true);
+    const current = profile ? studioView(stored, profile) : stored;
     const problems: string[] = [];
     const next = mergeSettings(current, patch, problems);
     problems.push(...settingsProblems(next));
     if (problems.length) throw problemsError(problems.slice(0, MAX_PROBLEMS), 'these settings');
+
+    // What the profile owns and this patch changed. A profile this release cannot fully read takes no write (it would
+    // delete what a newer release stored), so an edit that needs it is refused before anything is written; an edit
+    // that does not is written to the row as before.
+    let proposed: CreatorProfile | null = null;
+    if (locked && changedPaths(current, next, STUDIO_PROFILE_PATHS).length > 0) {
+        if (!profile) throw newerSchemaError(locked.version);
+        const into = intoProfile(profile, next);
+        if (!isDeepStrictEqual(into, profile)) proposed = into;
+    }
 
     await exec.query(
         `INSERT INTO studio_settings (creator_id, brand, voice, product, cta, schedule, library, examples, monteur, infographic, updated_at)
@@ -288,8 +340,16 @@ async function applyStudioPatch(
             JSON.stringify(next.infographic),
         ]
     );
+    // The row is written whole first, so the mirror in `saveProfile` reads this very row (FOR UPDATE, in this
+    // transaction) and writes back the same fields it was given: the second write cannot undo the first, and the
+    // fields of a mirrored section that the profile does not own (`brand.palette`, `schedule.slots`…) keep what this wrote.
+    let saved: SavedProfile | null = null;
+    if (proposed && locked) {
+        saved = await saveProfile(creatorId, proposed, { expectVersion: locked.version, source: 'user', userId: null }, exec);
+    }
     await supersedeStaleScans(exec, creatorId, current.monteur, next.monteur);
-    return { settings: next, changed: Object.keys(patch) };
+    // What the reader answers from now on, so the response and the next GET cannot differ.
+    return { settings: profile ? studioView(next, saved?.profile ?? profile) : next, changed: Object.keys(patch) };
 }
 
 /**
