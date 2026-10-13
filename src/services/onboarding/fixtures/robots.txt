@@ -1,0 +1,14 @@
+# A robots.txt with a group for everyone and a stricter one for this bot.
+User-agent: *
+Disallow: /admin
+Disallow: /cart
+Allow: /cart/help
+Disallow: /*.json$
+
+User-agent: AutoReplyProBot
+User-agent: SomeOtherBot
+Disallow: /private/
+Allow: /private/press
+Disallow: /pages/faq$
+
+Sitemap: https://noor-perfumes.example/sitemap.xml

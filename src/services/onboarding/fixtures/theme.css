@@ -1,0 +1,24 @@
+/* A stylesheet in the shape the brand reader meets. */
+@charset "utf-8";
+@font-face { font-family: "Cairo"; src: url("data:font/woff2;base64,AAAA;BBBB") format("woff2"); color: #ff00ff; }
+:root {
+  --primary: #7b3f61;
+  --accent: #D9A441;
+  --bs-primary: #0d6efd;
+  --text-muted: #6c757d;
+  --surface: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --primary: #ffd0e8; }
+}
+body { color: #333333; background: #fafafa; font-family: Cairo, sans-serif; }
+p, li, span { color: #444; }
+header { background-color: rgb(123, 63, 97); }
+.btn-primary, button { background: var(--primary); border-color: #7B3F61; color: #fff; }
+.btn-primary:hover { background: hsl(330 32% 38%); }
+a { color: #7b3f61; }
+a:hover { color: #5c2e49; }
+.footer-link { color: #7b3f61; }
+.badge { background: #E4572E; }
+.badge-sale { background: #e4572e; }
+.divider { border-color: #cccccc; }
