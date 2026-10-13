@@ -1102,6 +1102,8 @@ export interface InfographicRow {
     schedule: InfographicSchedule | null;
     job_id: string | null;
     error: string | null;
+    /** v33: the Creator Profile version the words were written under (profile/stamp.ts). Null: none stored then, or before v33. Never in the view. */
+    profile_version: number | null;
     created_at: Timestamptz;
     updated_at: Timestamptz;
 }

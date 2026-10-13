@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setLogSink } from '../../utils/log.js';
+import { withProfileCache } from '../profile/cache.js';
+import { profileReads } from '../profile/stampSupport.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { THINK_MODEL } from '../monteur/think.js';
 import { StudioError } from './common.js';
@@ -295,7 +297,7 @@ describe('createInfographic', () => {
     it('queues one job that asks Claude (the latest Opus) to write it, then render it in the tenant’s brand', async () => {
         await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG', notes: 'Mention cost' });
         const insert = db.ran(/^INSERT INTO infographics/)[0]!;
-        assert.deepEqual(insert.params, [TENANT, 'RAG vs CAG vs KAG', 'Mention cost', 'ar', 'light', null], 'the settings’ language and theme by default');
+        assert.deepEqual(insert.params, [TENANT, 'RAG vs CAG vs KAG', 'Mention cost', 'ar', 'light', null, null], 'the settings’ language and theme by default, and no profile stamp for a tenant with no profile');
         const payload = jobPayload();
         assert.equal(db.ran(/^INSERT INTO studio_jobs/)[0]!.params[1], 'render_infographic');
         assert.equal(payload.infographicId, ID);
@@ -313,7 +315,7 @@ describe('createInfographic', () => {
 
     it('takes a language and theme of its own, and refuses a topic that says nothing', async () => {
         await createInfographic(TENANT, { topic: 'Chatbot vs Agent', language: 'en', theme: 'dark' });
-        assert.deepEqual(db.ran(/^INSERT INTO infographics/)[0]!.params.slice(3), ['en', 'dark', null]);
+        assert.deepEqual(db.ran(/^INSERT INTO infographics/)[0]!.params.slice(3, 6), ['en', 'dark', null]);
         await assert.rejects(createInfographic(TENANT, { topic: 'x' }), isStudioError(400));
         await assert.rejects(createInfographic(TENANT, { topic: 'RAG', theme: 'blue' }), isStudioError(400));
     });
@@ -322,7 +324,7 @@ describe('createInfographic', () => {
 describe('createInfographic — both themes', () => {
     it('writes once in the settings’ theme and keeps the other to copy into', async () => {
         await createInfographic(TENANT, { topic: 'RAG vs CAG', theme: 'both' });
-        assert.deepEqual(db.ran(/^INSERT INTO infographics/)[0]!.params.slice(4), ['light', 'dark']);
+        assert.deepEqual(db.ran(/^INSERT INTO infographics/)[0]!.params.slice(4, 6), ['light', 'dark']);
         assert.ok(jobPayload().write, 'Claude is asked once');
     });
 });
@@ -512,7 +514,7 @@ describe('the job: completeJob and failJob', () => {
         db.routes.unshift([/^SELECT id, creator_id, kind, status, payload FROM studio_jobs/, () => ({
             rows: [{ id: JOB, creator_id: TENANT, kind: 'render_infographic', status: 'claimed', payload: { infographicId: ID } }],
         })]);
-        db.routes.unshift([/^SELECT job_id, spec, caption, topic, notes, language, pair_theme FROM infographics/, () => ({ rows: [row] })]);
+        db.routes.unshift([/^SELECT job_id, spec, caption, topic, notes, language, pair_theme, profile_version FROM infographics/, () => ({ rows: [row] })]);
     });
     const applied = () => db.ran(/^UPDATE infographics SET status = 'ready'/)[0]!;
 
@@ -589,5 +591,167 @@ describe('normaliseSpec', () => {
     it('refuses what the page can’t draw with a 400', () => {
         assert.throws(() => normaliseSpec({ columns: [column('A')] }, 'ar'), isStudioError(400));
         assert.throws(() => normaliseSpec('x', 'ar'), isStudioError(400));
+    });
+});
+
+// ─── The profile stamp (P7) ─────────────────────────────────────────────────────────────
+
+describe('profile_version — createInfographic', () => {
+    const NOBODY = '99999999-9999-4999-8999-999999999999';
+    /** `profile_version` is the INSERT's last column and parameter. */
+    const stamped = () => {
+        const [insert] = db.ran(/^INSERT INTO infographics/);
+        assert.ok(insert, 'an infographic row was inserted');
+        assert.match(insert!.sql, /\(creator_id, topic, notes, language, theme, pair_theme, status, profile_version\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, 'writing', \$7\)/);
+        return insert!.params[6];
+    };
+
+    it('carries the version of the tenant’s stored profile', async () => {
+        db.routes.push(profileReads({ [TENANT]: 7 }).route);
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.equal(stamped(), 7);
+    });
+
+    it('carries null for a tenant with no stored profile', async () => {
+        db.routes.push(profileReads({ [NOBODY]: 7 }).route);
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.equal(stamped(), null);
+    });
+
+    it('still creates the row and queues Claude, with null, when the version read fails', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        reads.failAt = 2; // the first read is getStudioSettings' own, the second the stamp's
+        db.routes.push(route);
+        await createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' });
+        assert.ok(reads.creators.length >= 2, 'the stamp did ask');
+        assert.equal(stamped(), null);
+        assert.ok(jobPayload().write, 'and Claude was asked to write it');
+    });
+
+    it('reads before the transaction opens, and a "both themes" request stamps its one write once', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        db.routes.push(route);
+        await createInfographic(TENANT, { topic: 'RAG vs CAG', theme: 'both' });
+        const order = db.statements.map((s) => s.sql);
+        const lastRead = order.map((s, i) => (/FROM creator_profiles/.test(s) ? i : -1)).filter((i) => i >= 0).at(-1)!;
+        assert.ok(lastRead < order.indexOf('BEGIN'), 'no profile read inside the transaction: it takes no part in its lock order');
+        assert.equal(db.ran(/^INSERT INTO infographics/).length, 1, 'the other theme is a copy made later, from this row');
+        assert.equal(stamped(), 7);
+        assert.ok(reads.creators.length >= 2);
+    });
+
+    it('costs no query beyond the settings’ own when a request scope is open', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        db.routes.push(route);
+        await withProfileCache(() => createInfographic(TENANT, { topic: 'RAG vs CAG vs KAG' }));
+        assert.equal(reads.creators.length, 1);
+        assert.equal(stamped(), 7);
+    });
+});
+
+describe('profile_version — a copy takes its source’s stamp, a rewrite restamps', () => {
+    const restamps = () => db.ran(/^UPDATE infographics SET profile_version = \$3 WHERE id = \$1 AND creator_id = \$2/);
+
+    it('copyInfographic carries the source’s version, not the profile’s version now', async () => {
+        row.profile_version = 4;
+        const { reads, route } = profileReads({ [TENANT]: 9 });
+        db.routes.push(route);
+        await copyInfographic(TENANT, ID, {});
+        const insert = db.ran(/^INSERT INTO infographics/)[0]!;
+        assert.match(insert.sql, /\(creator_id, topic, notes, language, theme, status, spec, caption, review, profile_version\) VALUES \(.*, \$9\)/);
+        assert.equal(insert.params[8], 4);
+        assert.equal(reads.creators.length, 1, 'only the settings’ own read: a copy asks nothing of the profile');
+    });
+
+    it('copyInfographic of a row with no stamp is unstamped, though the tenant has a profile now', async () => {
+        row.profile_version = null;
+        db.routes.push(profileReads({ [TENANT]: 9 }).route);
+        await copyInfographic(TENANT, ID, {});
+        assert.equal(db.ran(/^INSERT INTO infographics/)[0]!.params[8], null);
+        delete row.profile_version; // a row the fake database never gave the column at all reads the same
+        db.statements.length = 0;
+        await copyInfographic(TENANT, ID, {});
+        assert.equal(db.ran(/^INSERT INTO infographics/)[0]!.params[8], null);
+    });
+
+    it('rerenderInfographic with rewrite restamps with the version now, in the transaction that queues Claude, after the queue accepted it', async () => {
+        row.profile_version = 4;
+        db.routes.push(profileReads({ [TENANT]: 9 }).route);
+        await rerenderInfographic(TENANT, ID, { rewrite: true });
+        assert.deepEqual(restamps().map((s) => s.params), [[ID, TENANT, 9]]);
+        const order = db.statements.map((s) => s.sql);
+        const at = (re: RegExp) => order.findIndex((s) => re.test(s));
+        assert.ok(at(/^BEGIN$/) < at(/^INSERT INTO studio_jobs/) && at(/^INSERT INTO studio_jobs/) < at(/^UPDATE infographics SET profile_version/), 'queued first: a refused rewrite writes nothing');
+        assert.ok(at(/^UPDATE infographics SET profile_version/) < at(/^COMMIT$/), 'and committed with it');
+        assert.ok(jobPayload().write, 'Claude wrote it again');
+    });
+
+    it('a row with no spec is written again too, so it restamps', async () => {
+        row.spec = null;
+        db.routes.push(profileReads({ [TENANT]: 9 }).route);
+        await rerenderInfographic(TENANT, ID, {});
+        assert.deepEqual(restamps().map((s) => s.params), [[ID, TENANT, 9]]);
+    });
+
+    it('rerenderInfographic of the same spec, and an edit, leave the stamp alone: nothing was generated', async () => {
+        row.profile_version = 4;
+        db.routes.push(profileReads({ [TENANT]: 9 }).route);
+        await rerenderInfographic(TENANT, ID, { theme: 'light' });
+        await updateInfographic(TENANT, ID, { spec: SPEC });
+        await updateInfographic(TENANT, ID, { caption: 'RAG only' });
+        assert.equal(restamps().length, 0);
+        assert.equal(db.ran(/profile_version/).length, 0, 'no statement of theirs names the column');
+    });
+
+    it('a rewrite whose version read fails is stamped null: unknown is not the old version', async () => {
+        row.profile_version = 4;
+        const { reads, route } = profileReads({ [TENANT]: 9 });
+        reads.failAt = 2;
+        db.routes.push(route);
+        await rerenderInfographic(TENANT, ID, { rewrite: true });
+        assert.deepEqual(restamps().map((s) => s.params), [[ID, TENANT, null]]);
+        assert.ok(jobPayload().write, 'and Claude is still asked');
+    });
+});
+
+describe('profile_version — the "both themes" copy, made when Claude’s answer lands', () => {
+    const RESULT = { mp4_url: up(4), gif_url: up(5), cover_url: up(6), gif_width: 720, gif_fps: 15 };
+    const WRITTEN = { ...RESULT, written: { spec: SPEC, caption: CAPTION, model: 'm' } };
+    let reads: ReturnType<typeof profileReads>['reads'];
+
+    beforeEach(() => {
+        row.pair_theme = 'light';
+        const pair = profileReads({ [TENANT]: 9 });
+        reads = pair.reads;
+        db.routes.unshift(
+            [/^SELECT id, creator_id, kind, status, payload FROM studio_jobs/, () => ({
+                rows: [{ id: JOB, creator_id: TENANT, kind: 'render_infographic', status: 'claimed', payload: {
+                    infographicId: ID, theme: 'dark', language: 'ar', brand: { site: 'elamirmansour.dev' }, write: { system: 's' },
+                } }],
+            })],
+            [/^SELECT job_id, spec, caption, topic, notes, language, pair_theme, profile_version FROM infographics/, () => ({ rows: [row] })],
+            [/^INSERT INTO infographics/, () => ({ rows: [{ id: 'copy-1' }] })],
+            pair.route,
+        );
+    });
+
+    it('carries the written row’s stamp, which is the version it was queued under, not the profile’s version now', async () => {
+        row.profile_version = 4;
+        await completeJob(TENANT, JOB, WRITTEN);
+        const copy = db.ran(/^INSERT INTO infographics/)[0]!;
+        assert.match(copy.sql, /\(creator_id, topic, notes, language, theme, status, spec, caption, review, profile_version\) VALUES \(.*, \$9\)/);
+        assert.equal(copy.params[8], 4, 'the profile moved on to 9 while Claude wrote; these words were written under 4');
+    });
+
+    it('is unstamped when the written row is', async () => {
+        row.profile_version = null;
+        await completeJob(TENANT, JOB, WRITTEN);
+        assert.equal(db.ran(/^INSERT INTO infographics/)[0]!.params[8], null);
+    });
+
+    it('reads nothing of the profile: completing a job is not a generation', async () => {
+        row.profile_version = 4;
+        await completeJob(TENANT, JOB, WRITTEN);
+        assert.equal(reads.creators.length, 0);
     });
 });

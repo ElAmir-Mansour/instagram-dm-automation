@@ -5,6 +5,8 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setLogSink } from '../../utils/log.js';
+import { withProfileCache } from '../profile/cache.js';
+import { profileReads } from '../profile/stampSupport.js';
 import { StudioError } from '../studio/common.js';
 import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
 import {
@@ -292,5 +294,87 @@ describe('the Analyst on Claude on the Mac (monteur.brain = claude_mac, MONTEUR.
         const view = presentLessons({ ...running, thinking: true } as never);
         assert.equal(view.status, 'running');
         assert.equal(presentLessons({ ...running, thinking: false } as never).status, 'failed', 'a Gemini run that old was cut off');
+    });
+});
+
+// ─── The profile stamp (P7) ─────────────────────────────────────────────────────────────
+
+describe('runAnalyst — profile_version', () => {
+    let db: FakeDb;
+    let previousCaller: CallModel;
+    let restoreSink: (() => void) | undefined;
+    const reel = { id: 'insight-1', platform: 'instagram', media_type: 'REELS', caption: 'hook', published_at: new Date('2026-09-20T16:00:00Z'), metrics: { views: 900 } };
+    const waiting = { id: 'run-1', creator_id: TENANT, status: 'running', lessons: null, summary: null, basis: null, model: null, error: null, created_at: new Date(Date.now() - 3 * HOUR) };
+
+    before(() => {
+        const previous = setLogSink(() => {});
+        restoreSink = () => setLogSink(previous);
+    });
+    after(() => restoreSink?.());
+
+    beforeEach(() => {
+        db = installFakeDb();
+        previousCaller = setModelCaller(async (req) => {
+            req.onUsage?.({ model: 'gemini-test', tokensIn: 900, tokensOut: 100, thinking: 20 });
+            return { lessons: [{ rule: 'Open on the result', evidence: 'skip 40% vs 70%' }], summary: 'Hooks work.' };
+        });
+        db.routes.push(
+            [/FROM studio_settings/, () => ({ rows: [{ voice: { language: 'ar', digits: 'arabic-indic', guide: '' } }] })],
+            [/^INSERT INTO studio_lessons/, () => ({ rows: [{ id: 'run-1', creator_id: TENANT, status: 'running', created_at: new Date() }] })],
+            [/FROM post_insights WHERE creator_id = \$1 AND media_type/, () => ({ rows: [reel] })],
+            [/FROM account_insights_daily/, () => ({ rows: [] })],
+            [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [] })],
+            [/^UPDATE studio_lessons SET status = 'done'/, (p) => ({ rows: [{ id: p[0], status: 'done', lessons: JSON.parse(p[1]), summary: p[2], basis: JSON.parse(p[3]), model: p[4], created_at: new Date() }] })],
+        );
+    });
+    afterEach(() => {
+        db.restore();
+        setModelCaller(previousCaller);
+    });
+
+    /** `profile_version` is the INSERT's last column and parameter. */
+    const stamped = () => {
+        const [insert] = db.ran(/^INSERT INTO studio_lessons/);
+        assert.ok(insert, 'a run row was inserted');
+        assert.match(insert!.sql, /^INSERT INTO studio_lessons \(creator_id, status, profile_version\) VALUES \(\$1, 'running', \$2\)/);
+        return insert!.params[1];
+    };
+
+    it('stamps the version of the tenant’s stored profile on the run', async () => {
+        db.routes.push(profileReads({ [TENANT]: 7 }).route);
+        assert.equal((await runAnalyst(TENANT, Date.now() + 100_000)).status, 'done');
+        assert.equal(stamped(), 7);
+    });
+
+    it('stamps null for a tenant with no stored profile', async () => {
+        db.routes.push(profileReads({ '22222222-2222-4222-8222-222222222222': 7 }).route);
+        await runAnalyst(TENANT, Date.now() + 100_000);
+        assert.equal(stamped(), null);
+    });
+
+    it('still records the run, stamped null, when the version read fails', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        reads.failAt = 2; // the first read is the settings' own, the second the stamp's
+        db.routes.push(route);
+        assert.equal((await runAnalyst(TENANT, Date.now() + 100_000)).status, 'done', 'the lessons were written all the same');
+        assert.ok(reads.creators.length >= 2, 'the stamp did ask');
+        assert.equal(stamped(), null);
+    });
+
+    it('costs no query beyond the settings’ own when a request scope is open', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        db.routes.push(route);
+        await withProfileCache(() => runAnalyst(TENANT, Date.now() + 100_000));
+        assert.equal(reads.creators.length, 1);
+        assert.equal(stamped(), 7);
+    });
+
+    it('does not read or write a stamp for a run it resumes: that row keeps the one it was inserted with', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 9 });
+        db.routes.push(route);
+        await runAnalyst(TENANT, Date.now() + 100_000, waiting as never);
+        assert.equal(db.ran(/^INSERT INTO studio_lessons/).length, 0);
+        assert.equal(db.ran(/profile_version/).length, 0, 'nothing writes the column but the insert');
+        assert.equal(reads.creators.length, 1, 'only the settings’ own read');
     });
 });

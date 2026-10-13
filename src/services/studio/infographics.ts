@@ -25,6 +25,7 @@ import { log } from '../../utils/log.js';
 import { assertMacBrainAllowed } from '../macBrain.js';
 import { insertVideoPost, metaPlatformFor } from '../monteur/clips.js';
 import { THINK_MODEL } from '../monteur/think.js';
+import { profileVersionFor } from '../profile/stamp.js';
 import { clipText, type Exec, isPlainObject, lockTenantPublishing, problemsError, requireId, StudioError, withTransaction } from './common.js';
 import {
     captionProblems, dirFor, headline, payloadBrand, specProblems, THEMES, WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt,
@@ -42,7 +43,7 @@ export const MAX_NOTES = 2000;
 export const LIST_LIMIT = 60;
 const SLOT_LOOKAHEAD = 30;
 
-export type InfographicView = Omit<InfographicRow, 'creator_id'> & {
+export type InfographicView = Omit<InfographicRow, 'creator_id' | 'profile_version'> & {
     /** "A vs B: subtitle", or the topic until Claude has written it. */
     headline: string;
     /** What the spec or the caption breaks, one per line (the stored `error` of a ready row). */
@@ -58,7 +59,7 @@ const VIEW_SQL = `
       LEFT JOIN studio_jobs j ON j.id = i.job_id
      WHERE i.creator_id = $1`;
 
-type ViewRow = Omit<InfographicRow, 'creator_id'> & { job_status: string | null; job_progress: string | null };
+type ViewRow = Omit<InfographicRow, 'creator_id' | 'profile_version'> & { job_status: string | null; job_progress: string | null };
 
 function present(row: ViewRow): InfographicView {
     const { job_status, job_progress, ...rest } = row;
@@ -154,11 +155,14 @@ export async function createInfographic(creatorId: string, body: unknown): Promi
     // Both: the settings' theme first, the other one copied from it once it is written.
     const theme = both ? settings.infographic.theme : parseTheme(b.theme, settings.infographic.theme);
     const pair: InfographicTheme | null = both ? (theme === 'dark' ? 'light' : 'dark') : null;
+    // The profile it is written under (profile/stamp.ts), read through the pool BEFORE the transaction opens: a plain
+    // SELECT takes no row lock, so the lock order is untouched, and a failure in it cannot abort the insert.
+    const profileVersion = await profileVersionFor(creatorId);
     return withTransaction(async (client) => {
         const { rows } = await client.query<{ id: string }>(
-            `INSERT INTO infographics (creator_id, topic, notes, language, theme, pair_theme, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 'writing') RETURNING id`,
-            [creatorId, topic, notes, language, theme, pair]
+            `INSERT INTO infographics (creator_id, topic, notes, language, theme, pair_theme, status, profile_version)
+             VALUES ($1, $2, $3, $4, $5, $6, 'writing', $7) RETURNING id`,
+            [creatorId, topic, notes, language, theme, pair, profileVersion]
         );
         const id = rows[0]!.id;
         await queue(client, creatorId, id, renderPayload(id, { topic: topic!, notes, language }, theme, settings, null), 'writing');
@@ -220,12 +224,17 @@ export async function rerenderInfographic(creatorId: string, rawId: unknown, bod
     // spec yet is a rewrite whatever the body says, and `enqueueJob` refuses that one. A render alone needs none.
     if (b.rewrite === true) await assertMacBrainAllowed(creatorId);
     const settings = await getStudioSettings(creatorId);
+    // Read before the transaction opens, as in createInfographic; used only when Claude writes it again.
+    const profileVersion = await profileVersionFor(creatorId);
     return withTransaction(async (client) => {
         const row = await lockRow(client, creatorId, id);
         assertIdle(row);
         const theme = parseTheme(b.theme, row.theme);
         const rewrite = b.rewrite === true || !row.spec;
         await queue(client, creatorId, id, renderPayload(id, row, theme, settings, rewrite ? null : row.spec), rewrite ? 'writing' : 'rendering');
+        // A rewrite is a new generation, so it restamps; a re-render of the same spec keeps the stamp (profile/stamp.ts).
+        // After the queue, which is where `enqueueJob` refuses a tenant the Mac is not for (G1): a refused rewrite writes nothing.
+        if (rewrite) await client.query('UPDATE infographics SET profile_version = $3 WHERE id = $1 AND creator_id = $2', [id, creatorId, profileVersion]);
         return loadView(client, creatorId, id);
     });
 }
@@ -239,11 +248,13 @@ export async function copyInfographic(creatorId: string, rawId: unknown, body: u
         const source = await lockRow(client, creatorId, id);
         if (!source.spec) throw new StudioError(409, 'Claude hasn\'t written this infographic yet: wait for it, then copy it.');
         const theme = parseTheme(b.theme, source.theme === 'dark' ? 'light' : 'dark');
+        // The copy has the source's words, so it has the source's stamp, none if it has none: the profile current
+        // now did not write them (profile/stamp.ts).
         const { rows } = await client.query<{ id: string }>(
-            `INSERT INTO infographics (creator_id, topic, notes, language, theme, status, spec, caption, review)
-             VALUES ($1, $2, $3, $4, $5, 'rendering', $6::jsonb, $7, $8::jsonb) RETURNING id`,
+            `INSERT INTO infographics (creator_id, topic, notes, language, theme, status, spec, caption, review, profile_version)
+             VALUES ($1, $2, $3, $4, $5, 'rendering', $6::jsonb, $7, $8::jsonb, $9) RETURNING id`,
             [creatorId, source.topic, source.notes, source.language, theme, JSON.stringify(source.spec), source.caption,
-                source.review ? JSON.stringify(source.review) : null]
+                source.review ? JSON.stringify(source.review) : null, source.profile_version ?? null]
         );
         const copyId = rows[0]!.id;
         await queue(client, creatorId, copyId, renderPayload(copyId, source, theme, settings, source.spec), 'rendering');

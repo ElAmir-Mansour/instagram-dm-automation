@@ -23,6 +23,7 @@ import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
 import { seoForWriter } from '../growth/settings.js';
 import { inFlightTriggers } from '../monteur/keywords.js';
+import { profileVersionFor } from '../profile/stamp.js';
 import type { Carousel, Slide } from './carouselTypes.js';
 import {
     type Exec, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN, withTransaction,
@@ -489,9 +490,11 @@ export async function createDraft(creatorId: string, raw: unknown): Promise<Draf
         loadSources(creatorId, input.lessonIds, true),
         getStudioSettings(creatorId),
     ]);
+    // The profile the carousel is written under (profile/stamp.ts): read once, before the model is asked.
+    const profileVersion = await profileVersionFor(creatorId);
     const { rows } = await pool.query<CarouselDraftRow>(
-        `INSERT INTO carousel_drafts (creator_id, status, input) VALUES ($1, 'generating', $2::jsonb) RETURNING *`,
-        [creatorId, JSON.stringify(input)]
+        `INSERT INTO carousel_drafts (creator_id, status, input, profile_version) VALUES ($1, 'generating', $2::jsonb, $3) RETURNING *`,
+        [creatorId, JSON.stringify(input), profileVersion]
     );
     const draft = rows[0]!;
 
