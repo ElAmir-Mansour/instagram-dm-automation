@@ -65,6 +65,16 @@ export function isMissingSchema(err: unknown): boolean {
     return code === PG_UNDEFINED_TABLE || code === PG_UNDEFINED_COLUMN;
 }
 
+/**
+ * `undefined_table`, and for a table whose name starts with `table`: a database that has not had the migration
+ * that creates it applied yet. Stricter than `isMissingSchema` on purpose, for a caller that has a fallback for
+ * one particular table and must not swallow the same error about another.
+ */
+export function isMissingTable(err: unknown, table: string): boolean {
+    const e = err as { code?: unknown; message?: unknown } | null;
+    return e?.code === PG_UNDEFINED_TABLE && typeof e.message === 'string' && e.message.includes(`"${table}`);
+}
+
 /** `pg` hands back a Date; the wire wants an ISO string or null, never `"Invalid Date"`. */
 export function toIso(value: unknown): string | null {
     if (value === null || value === undefined) return null;

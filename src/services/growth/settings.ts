@@ -11,17 +11,20 @@
  * is refused with the sentence the dashboard shows.
  */
 import type { GrowthAudience, GrowthSettings, HashtagSet } from '../../db/rows.js';
-import { queryCount, queryOne } from '../../db/query.js';
+import { queryOne } from '../../db/query.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
 import { isMissingSchema } from '../health.js';
 import { GrowthError } from './common.js';
+import { lockTenantSettings, withTransaction } from '../studio/common.js';
+import { DEFAULT_GOALS, defaultGrowthSettings, fromRow, readGrowthSettings } from './settingsRow.js';
+
+// Defined in ./settingsRow.ts, which imports nothing from here: the profile store reads the stored rows with them.
+export { DEFAULT_GOALS, defaultGrowthSettings };
 
 export const GROWTH_SETTING_KEYS = ['keywords', 'hashtag_sets', 'competitors', 'audience', 'goal_followers', 'goal_views'] as const;
 const GOAL_KEYS = ['goal_followers', 'goal_views'] as const;
 
-/** What a tenant with no row is aiming at (docs/agents/BRIEF.md): 10k followers or 1M views. */
-export const DEFAULT_GOALS = Object.freeze({ goal_followers: 10_000, goal_views: 1_000_000 });
 const AUDIENCE_KEYS = ['countries', 'languages', 'timezone'] as const;
 
 export const GROWTH_LIMITS = {
@@ -46,10 +49,6 @@ const LANGUAGE = /^[a-z]{2,3}$/;
 /** A hashtag: `#` then letters (any script), digits or underscores — no spaces or punctuation. */
 const HASHTAG = /^#[\p{L}\p{M}\p{N}_]+$/u;
 const MAX_PROBLEMS = 20;
-
-export function defaultGrowthSettings(): GrowthSettings {
-    return { keywords: [], hashtag_sets: [], competitors: [], audience: {}, ...DEFAULT_GOALS };
-}
 
 type Loose = Record<string, unknown>;
 const isObj = (v: unknown): v is Loose => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -235,28 +234,6 @@ export function applyGrowthPatch(current: GrowthSettings, patch: unknown): { set
     return { settings: next, problems };
 }
 
-/** A stored row, read defensively: the columns have defaults, but JSONB can hold anything. */
-function fromRow(row: Partial<GrowthSettings> | null): GrowthSettings {
-    if (!row) return defaultGrowthSettings();
-    const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
-    return {
-        keywords: strings(row.keywords),
-        hashtag_sets: (Array.isArray(row.hashtag_sets) ? row.hashtag_sets : [])
-            .filter(isObj)
-            .map((s) => ({ name: typeof s.name === 'string' ? s.name : '', tags: strings(s.tags) })),
-        competitors: strings(row.competitors),
-        audience: isObj(row.audience) ? (row.audience as GrowthAudience) : {},
-        goal_followers: storedGoal(row.goal_followers, DEFAULT_GOALS.goal_followers),
-        goal_views: storedGoal(row.goal_views, DEFAULT_GOALS.goal_views),
-    };
-}
-
-/** `pg` returns BIGINT as a string; a row written before v25 has neither column. */
-function storedGoal(value: unknown, fallback: number): number {
-    const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
-    return Number.isInteger(n) && n >= 1 ? n : fallback;
-}
-
 /** Logged once per process: every Growth route reads the settings, so a warning per call would be noise. */
 let goalColumnsWarned = false;
 
@@ -291,23 +268,31 @@ export async function getGrowthSettings(creatorId: string): Promise<GrowthSettin
     }
 }
 
+/**
+ * Read, change, write whole row: so it runs in a transaction that holds the tenant's settings lock first
+ * (`lockTenantSettings`), the way a profile save does, or a save that landed between its read and its write would be
+ * overwritten by the stale row. A patch the rules refuse rolls back having written nothing, as before.
+ */
 export async function updateGrowthSettings(creatorId: string, patch: unknown): Promise<GrowthSettings> {
-    const { settings, problems } = applyGrowthPatch(await getGrowthSettings(creatorId), patch);
-    if (problems.length) {
-        const list = problems.slice(0, MAX_PROBLEMS);
-        throw new GrowthError(400, list.length === 1 ? list[0]! : `${list.length} problems with these settings.`, { problems: list });
-    }
-    await queryCount(
-        `INSERT INTO growth_settings (creator_id, keywords, hashtag_sets, competitors, audience, goal_followers, goal_views, updated_at)
-         VALUES ($1, $2::text[], $3::jsonb, $4::text[], $5::jsonb, $6::integer, $7::bigint, NOW())
-         ON CONFLICT (creator_id) DO UPDATE
-            SET keywords = EXCLUDED.keywords, hashtag_sets = EXCLUDED.hashtag_sets,
-                competitors = EXCLUDED.competitors, audience = EXCLUDED.audience,
-                goal_followers = EXCLUDED.goal_followers, goal_views = EXCLUDED.goal_views, updated_at = NOW()`,
-        [creatorId, settings.keywords, JSON.stringify(settings.hashtag_sets), settings.competitors, JSON.stringify(settings.audience),
-            settings.goal_followers, settings.goal_views]
-    );
-    return settings;
+    return withTransaction(async (tx) => {
+        await lockTenantSettings(tx, creatorId);
+        const { settings, problems } = applyGrowthPatch(await readGrowthSettings(tx, creatorId, true), patch);
+        if (problems.length) {
+            const list = problems.slice(0, MAX_PROBLEMS);
+            throw new GrowthError(400, list.length === 1 ? list[0]! : `${list.length} problems with these settings.`, { problems: list });
+        }
+        await tx.query(
+            `INSERT INTO growth_settings (creator_id, keywords, hashtag_sets, competitors, audience, goal_followers, goal_views, updated_at)
+             VALUES ($1, $2::text[], $3::jsonb, $4::text[], $5::jsonb, $6::integer, $7::bigint, NOW())
+             ON CONFLICT (creator_id) DO UPDATE
+                SET keywords = EXCLUDED.keywords, hashtag_sets = EXCLUDED.hashtag_sets,
+                    competitors = EXCLUDED.competitors, audience = EXCLUDED.audience,
+                    goal_followers = EXCLUDED.goal_followers, goal_views = EXCLUDED.goal_views, updated_at = NOW()`,
+            [creatorId, settings.keywords, JSON.stringify(settings.hashtag_sets), settings.competitors, JSON.stringify(settings.audience),
+                settings.goal_followers, settings.goal_views]
+        );
+        return settings;
+    });
 }
 
 /**

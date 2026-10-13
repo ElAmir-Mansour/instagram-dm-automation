@@ -11,6 +11,7 @@ import { isDiagnosticProbe } from './utils/probe.js';
 import { enqueueWebhookBody, processWebhookBody } from './webhook/router.js';
 import { drainInline } from './jobs/drain.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
+import { profileCacheScope } from './services/profile/cache.js';
 import apiRouter, { securityHeaders } from './routes/api.js';
 import { getSiteSettings, getVerificationFiles, siteSettingsFromEnv } from './services/appSettings.js';
 import { pageLangFromQuery, renderSiteTemplate, type PageLang } from './services/publicPages.js';
@@ -64,6 +65,12 @@ app.use((req, _res, next) => {
     const requestId = typeof platformId === 'string' && platformId ? platformId : newRequestId();
     withLogContext({ request_id: requestId, method: req.method, path: req.path }, next);
 });
+
+// ─── Profile cache ──────────────────────────────────────────────────────────
+// One scope per request: the stored Creator Profile is read once per tenant however many readers ask
+// (src/services/profile/cache.ts). Opened here, after the log context, so it covers the webhook and
+// /api/jobs/drain as well as the dashboard API, and any work left running after the response.
+app.use(profileCacheScope);
 
 // ─── Security Headers ───────────────────────────────────────────────────────
 // Ahead of every route so the dashboard's static files are covered too, not just /api.

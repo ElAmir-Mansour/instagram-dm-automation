@@ -12,6 +12,7 @@
  * checks the budget before claiming the next job, and stops rather than starting work it
  * probably cannot finish. Anything left is still `pending`; the next drain takes it.
  */
+import { withProfileCache } from '../services/profile/cache.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 import type { Job, JobHandlerRegistry, JobQueue } from './types.js';
 
@@ -62,8 +63,23 @@ export interface DrainResult {
     budgetExhausted: boolean;
 }
 
-/** Run one job, translating its outcome into a queue call. Never throws. */
+/**
+ * Run one job, translating its outcome into a queue call. Never throws.
+ *
+ * Each job gets a profile cache of its own (`withProfileCache`, a fresh scope even inside the request's). The
+ * request's scope would otherwise be one snapshot for the whole drain, and a drain is up to 45 s of jobs: a
+ * profile saved halfway through would be missed by everything after it. A job is short enough to share one.
+ */
 async function runOne(
+    job: Job,
+    handlers: JobHandlerRegistry,
+    queue: JobQueue,
+    random: () => number
+): Promise<boolean> {
+    return withProfileCache(() => runInScope(job, handlers, queue, random));
+}
+
+async function runInScope(
     job: Job,
     handlers: JobHandlerRegistry,
     queue: JobQueue,
