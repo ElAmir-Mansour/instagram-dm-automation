@@ -183,7 +183,8 @@ describe('the Studio settings writer takes the same locks', () => {
         const client = { query: (q: string, p?: unknown[]) => { calls.push(q.replace(/\s+/g, ' ').trim()); return (pool as unknown as { query: (a: string, b?: unknown[]) => Promise<never> }).query(q, p); } };
         await updateStudioSettings(OWNER, { voice: { guide: 'Short.' } }, client as never);
         assert.ok(MUTEX.test(calls[0]!));
-        assert.ok(STUDIO_READ.test(calls[1]!));
+        assert.ok(PROFILE_ROW.test(calls[1]!), 'the profile row is the second lock, whether or not the tenant has one');
+        assert.ok(STUDIO_READ.test(calls[2]!));
         assert.equal(calls.filter((c) => /^(BEGIN|COMMIT|ROLLBACK)$/.test(c)).length, 0, 'the caller commits');
     });
 });

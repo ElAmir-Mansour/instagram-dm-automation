@@ -6,7 +6,8 @@
  *   loadProfile         the stored profile, else the one the tenant's legacy settings describe (`version: null`).
  *   saveProfile         one transaction: validate, bump the version, keep the history, mirror into the settings.
  *
- * Nothing reads these yet (P4 wires the Studio and Growth readers), so this changes no request's behaviour.
+ * The Studio and Growth settings readers overlay the stored profile (`overlayProfile`, `loadScheduleTimezone`) and their
+ * writers route a change to a profile-owned field into `saveProfile` (`lockStoredProfile`, `newerSchemaError`): P4.
  *
  * **The mirror.** Until the settings stop being stored at all, every `saveProfile` writes the profile's view back
  * into `studio_settings` and `growth_settings` in the same transaction. A code rollback then finds the settings
@@ -36,7 +37,7 @@ import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import type { CreatorProfile } from './types.js';
 import { PROFILE_LIMITS, validateProfile } from './validate.js';
-import { growthView, studioView } from './views.js';
+import { changedPaths, growthView, scheduleTimezone, studioView } from './views.js';
 
 // ─── Errors ──────────────────────────────────────────────────────────────────────────────────
 
@@ -160,6 +161,126 @@ export async function loadProfile(creatorId: string, exec: Exec = pool): Promise
     return { profile: await loadLegacyProfile(creatorId, exec), version: null, activated_at: null, repaired: [], newerSchema: false };
 }
 
+// ─── Reading for the settings (P4) ───────────────────────────────────────────────────────────
+
+/** Logged once per tenant per process: every reader asks, so a warning per call would be noise. */
+const newerSchemaWarned = new Set<string>();
+const repairedWarned = new Set<string>();
+/** Keyed by tenant and settings (`<id>:studio`, `<id>:growth`): the two readers drift independently, and one should not hide the other. */
+const driftWarned = new Set<string>();
+
+/** Test hook: forget which tenants' newer-schema, repaired-profile and row-drift warnings were logged. */
+export function resetProfileWarnings(): void {
+    newerSchemaWarned.clear();
+    repairedWarned.clear();
+    driftWarned.clear();
+}
+
+/**
+ * Says, once per tenant and settings, that the settings row differs from what the profile says: the fields of
+ * `paths` where `row` and `view` disagree. The readers show the view, so nothing is wrong for the tenant; the row is
+ * what a code rollback would read, and a row that has drifted (an SQL edit, a write that bypassed the mirror) is healed
+ * silently by the next write, so without this line the drift is invisible until a rollback shows it.
+ */
+export function warnRowDrift(creatorId: string, settings: 'studio' | 'growth', row: object, view: object, paths: readonly string[]): void {
+    const key = `${creatorId}:${settings}`;
+    if (driftWarned.has(key)) return;
+    const drifted = changedPaths(row, view, paths);
+    if (drifted.length === 0) return;
+    driftWarned.add(key);
+    log('warn', 'profile.row_drift', {
+        creator_id: creatorId,
+        settings,
+        paths: drifted,
+        effect: 'readers show the profile\'s values; the row, which a rollback would read, says something else',
+        fix: 'the next write to these settings rewrites the row from the profile; edit them in the dashboard, never in SQL',
+    });
+}
+
+/** Who is writing a settings change: the signed-in user, or null for the shared-password login and for a job. It is `updated_by` of the profile version the write makes. */
+export interface SettingsActor {
+    userId: string | null;
+}
+
+/** No one in particular: a job, a script, a caller that does not know. */
+export const SYSTEM_ACTOR: SettingsActor = Object.freeze({ userId: null });
+
+/** A stored profile some of whose fields could not be read as stored: they read as defaults, so the settings views carry those. The drift signal. */
+function warnRepaired(creatorId: string, repaired: readonly string[]): void {
+    if (repairedWarned.has(creatorId)) return;
+    repairedWarned.add(creatorId);
+    log('warn', 'profile.repaired', {
+        creator_id: creatorId,
+        count: repaired.length,
+        paths: repaired.slice(0, 20),
+        effect: 'these fields read as their defaults in the Studio and Growth settings',
+        fix: 'save the profile again with valid values, or restore an earlier version of it',
+    });
+}
+
+function warnNewerSchema(creatorId: string): void {
+    if (newerSchemaWarned.has(creatorId)) return;
+    newerSchemaWarned.add(creatorId);
+    log('warn', 'profile.newer_schema', {
+        creator_id: creatorId,
+        effect: 'the Studio and Growth settings are read from their own rows, without the profile',
+        fix: 'deploy the release that wrote this profile, or restore an earlier version of it',
+    });
+}
+
+/**
+ * The profile a settings reader overlays on the stored row, or null when the row speaks for itself: the tenant has
+ * no stored profile (a tenant without one reads its rows exactly as before: no virtual overlay), or the profile was
+ * written by a newer release. That one is read as far as this release can (`upgradeProfile` keeps what it does not
+ * know), but a view over it would present half a profile as the tenant's, so the rows answer instead, logged once.
+ * A profile with fields that had to be repaired when it was read (`repaired`) is overlaid, and says so once.
+ */
+export function overlayProfile(creatorId: string, stored: Pick<StoredProfile, 'profile' | 'newerSchema'> & { repaired?: readonly string[] } | null): CreatorProfile | null {
+    if (!stored) return null;
+    if (stored.newerSchema) {
+        warnNewerSchema(creatorId);
+        return null;
+    }
+    if (stored.repaired?.length) warnRepaired(creatorId, stored.repaired);
+    return stored.profile;
+}
+
+/** The profile to overlay for this tenant, read once per request when `exec` is the pool (`loadStoredProfile`). */
+export async function loadOverlayProfile(creatorId: string, exec: Exec = pool): Promise<CreatorProfile | null> {
+    return overlayProfile(creatorId, await loadStoredProfile(creatorId, exec));
+}
+
+/**
+ * `schedule.timezone` as the profile gives it (`identity.timezone`, UTC when empty), for a reader that needs the
+ * timezone and nothing else: the Monteur's run reads this on every poll, so it does not fetch the profile, which can
+ * be 128 KB. null means the settings row's own timezone applies (no stored profile, a newer-schema one, or no v33).
+ *
+ * The two values it selects are read by `upgradeProfile` itself, over a profile that holds only them, so what a
+ * missing, empty or wrongly typed timezone reads as is decided in one place, and `readers.test.ts` holds this equal
+ * to `getStudioSettings(...).schedule.timezone` across those cases.
+ */
+export async function loadScheduleTimezone(creatorId: string, exec: Exec = pool): Promise<string | null> {
+    let row: { profile_schema: unknown; identity_timezone: unknown } | undefined;
+    try {
+        const result = await exec.query<{ profile_schema: unknown; identity_timezone: unknown }>(
+            `SELECT profile->'schema' AS profile_schema, profile->'identity'->'timezone' AS identity_timezone FROM creator_profiles WHERE creator_id = $1`, [creatorId]
+        );
+        row = result.rows[0];
+    } catch (err) {
+        if (!isProfileTableMissing(err)) throw err;
+        if (!tableMissingWarned) {
+            tableMissingWarned = true;
+            log('warn', 'profile.table_missing', { ...describeError(err), fix: 'npm run migrate (migration_v33_creator_profiles.sql)' });
+        }
+        return null;
+    }
+    if (!row) return null;
+    const read = upgradeProfile({ schema: row.profile_schema, identity: { timezone: row.identity_timezone } });
+    // Only the two values were read, so what `repaired` lists is about the stand-in, not the stored profile: not passed on.
+    const profile = overlayProfile(creatorId, { profile: read.profile, newerSchema: read.newerSchema });
+    return profile ? scheduleTimezone(profile) : null;
+}
+
 // ─── Writing ─────────────────────────────────────────────────────────────────────────────────
 
 // What the mirror writes is exactly the SET list of each statement below, and `store.test.ts` holds those lists
@@ -228,9 +349,7 @@ export async function saveProfile(creatorId: string, next: unknown, options: Sav
     try {
         return isPool(exec) ? await withTransaction((tx) => write(creatorId, next, options, tx)) : await write(creatorId, next, options, exec);
     } catch (err) {
-        if (isProfileTableMissing(err)) {
-            throw new ProfileError('PROFILE_STORAGE_MISSING', 503, 'The profile tables are missing: apply migration v33 (npm run migrate).');
-        }
+        if (isProfileTableMissing(err)) throw storageMissing();
         if (isSizeViolation(err)) {
             const problems = [`the profile is larger than the ${PROFILE_LIMITS.profileBytes} bytes the database stores`];
             throw new ProfileError('PROFILE_INVALID', 400, problemsMessage(problems), { problems });
@@ -284,11 +403,7 @@ async function write(creatorId: string, next: unknown, { expectVersion, source, 
 
     // 1. Never write over a profile this release cannot fully read.
     if (upgradeProfile(current.profile).newerSchema) {
-        throw new ProfileError(
-            'PROFILE_NEWER_SCHEMA', 409,
-            'This profile was saved by a newer version of the app. Saving it from this one would delete part of it.',
-            { currentVersion: current.version }
-        );
+        throw newerSchemaError(current.version);
     }
 
     // 2. Everything wrong with it, in one answer.
@@ -328,12 +443,60 @@ async function write(creatorId: string, next: unknown, { expectVersion, source, 
 const conflict = (currentVersion: number): ProfileError =>
     new ProfileError('PROFILE_VERSION_CONFLICT', 409, 'The profile changed since you opened it. Reload it and try again.', { currentVersion });
 
+const storageMissing = (): ProfileError =>
+    new ProfileError('PROFILE_STORAGE_MISSING', 503, 'The profile tables are missing: apply migration v33 (npm run migrate).');
+
+/** The refusal for a write that would have to land in a profile this release cannot fully read (`write` step 1, and the settings writers). */
+export const newerSchemaError = (currentVersion: number): ProfileError =>
+    new ProfileError(
+        'PROFILE_NEWER_SCHEMA', 409,
+        'This profile was saved by a newer version of the app. Saving it from this one would delete part of it.',
+        { currentVersion }
+    );
+
 /** The row, locked until the transaction ends so a second save for the tenant waits instead of interleaving its mirror with ours. */
 async function selectForUpdate(creatorId: string, tx: Exec): Promise<Pick<CreatorProfileRow, 'profile' | 'version'> | null> {
     const { rows } = await tx.query<Pick<CreatorProfileRow, 'profile' | 'version'>>(
         'SELECT profile, version FROM creator_profiles WHERE creator_id = $1 FOR UPDATE', [creatorId]
     );
     return rows[0] ?? null;
+}
+
+/** What a settings writer holds after `lockStoredProfile`: the profile as read, and the version a save must expect. */
+export interface LockedProfile {
+    profile: CreatorProfile;
+    version: number;
+    repaired: string[];
+    newerSchema: boolean;
+}
+
+/**
+ * The tenant's stored profile, read `FOR UPDATE` inside the writer's transaction: the second lock of the global order
+ * (creators, creator_profiles, studio_settings, growth_settings), taken after `lockTenantSettings` and before any settings
+ * row. `version` is what the writer then passes to `saveProfile` as `expectVersion`. null is no stored profile, and a
+ * row that does not exist locks nothing, which is why the creators mutex, held by every writer, is what serialises a
+ * tenant's first save. A database without v33 cannot be tolerated here as a reader tolerates it (a failed statement
+ * aborts the transaction), so it is `PROFILE_STORAGE_MISSING`.
+ */
+export async function lockStoredProfile(creatorId: string, tx: Exec): Promise<LockedProfile | null> {
+    let row: Pick<CreatorProfileRow, 'profile' | 'version'> | null;
+    try {
+        row = await selectForUpdate(creatorId, tx);
+    } catch (err) {
+        if (isProfileTableMissing(err)) throw storageMissing();
+        throw err;
+    }
+    if (!row) return null;
+    const read = upgradeProfile(row.profile);
+    return { profile: read.profile, version: row.version, repaired: read.repaired, newerSchema: read.newerSchema };
+}
+
+/**
+ * The tenant's `studio_settings` row, locked, for a writer that is not going to read it (the Growth writer) but whose
+ * `saveProfile` mirrors into it: the lock order puts it before `growth_settings`, which the writer reads next.
+ */
+export async function lockStudioRow(creatorId: string, tx: Exec): Promise<void> {
+    await tx.query('SELECT creator_id FROM studio_settings WHERE creator_id = $1 FOR UPDATE', [creatorId]);
 }
 
 async function insertVersion(creatorId: string, version: number, profile: CreatorProfile, source: ProfileSource, userId: string | null, tx: Exec): Promise<void> {

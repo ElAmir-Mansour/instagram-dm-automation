@@ -341,14 +341,26 @@ const DAYS = [
 /** The tenant's rows as the Growth readers and the Studio settings behind `tenantLanguage` read them. */
 export interface GrowthRows { growth: GrowthSettings; studio: StudioSettings }
 
+/** What `withRows` can be told beyond the rows. */
+export interface WithRowsOptions {
+    /**
+     * A stored profile (as the database holds it) for the stored-profile lookup to answer with. Without one the lookup is
+     * answered "none", which is what the parity script relies on. Only the golden test passes one: its "through the real
+     * readers" path hands the readers the tenant's stored rows and a stored profile, and the readers do the overlay.
+     * `scripts/prompt-parity.mts` and `parity.ts` never do (`promptSurface.test.ts` scans them for it).
+     */
+    storedProfile?: unknown;
+}
+
 /**
  * `body` run with the pool answering from `rows`: the Growth readers and the language lookup get the tenant's
- * rows, the insight queries get fixed evidence, the stored-profile lookup is answered "none", and a query it has no answer
+ * rows, the insight queries get fixed evidence, the stored-profile lookup is answered "none" (unless the golden test
+ * supplies one: `WithRowsOptions.storedProfile`), and a query it has no answer
  * for is refused by name (so a reader that starts asking something new fails here, loudly, instead of being handed an empty
  * result it may quietly work around). Nothing reaches a database. The pool is put back, and the log sink too, whatever
  * `body` does. Exported for its test; the surfaces below are the callers.
  */
-export async function withRows<T>(rows: GrowthRows, body: () => Promise<T>): Promise<T> {
+export async function withRows<T>(rows: GrowthRows, body: () => Promise<T>, { storedProfile }: WithRowsOptions = {}): Promise<T> {
     const original = { query: pool.query, connect: pool.connect };
     const sink = setLogSink(() => {});
     (pool as any).query = async (sql: string) => {
@@ -358,8 +370,9 @@ export async function withRows<T>(rows: GrowthRows, body: () => Promise<T>): Pro
         if (/FROM account_insights_daily/.test(q)) return { rows: DAYS };
         if (/SELECT last_sync FROM growth_settings/.test(q)) return { rows: [] };
         // The rows handed in ARE the answer: path (b)'s are already the profile's view. A reader that lays a stored profile
-        // over them (P4's `getStudioSettings`) must find none, or (b) would be a view of a view.
-        if (/FROM creator_profiles/.test(q)) return { rows: [] };
+        // over them (P4's `getStudioSettings`) must find none, or (b) would be a view of a view. Only the golden test's
+        // "through the real readers" path hands in the stored rows and a stored profile instead (`storedProfile`).
+        if (/FROM creator_profiles/.test(q)) return { rows: storedProfile === undefined ? [] : [{ profile: storedProfile, version: 1, activated_at: null }] };
         if (/FROM growth_settings/.test(q)) return { rows: [{ ...rows.growth }] };
         if (/FROM studio_settings/.test(q)) return { rows: [{ ...rows.studio }] };
         throw new Error(`the prompt surface has no answer for: ${q.slice(0, 80)}`);
@@ -381,7 +394,7 @@ export async function withRows<T>(rows: GrowthRows, body: () => Promise<T>): Pro
  * (`growth.coach-system.ar`), so a tenant that no longer speaks Arabic fails to find its golden rather than being
  * compared against another language's.
  */
-export async function growthSurface(rows: GrowthRows, { slug }: { slug?: string } = {}): Promise<SurfaceEntry[]> {
+export async function growthSurface(rows: GrowthRows, { slug, storedProfile }: { slug?: string } & WithRowsOptions = {}): Promise<SurfaceEntry[]> {
     return withRows(rows, async () => {
         const out: SurfaceEntry[] = [];
         const setOf = (code: string): GoldenSet => (code === 'ar' ? 'elamir' : 'control');
@@ -417,7 +430,7 @@ export async function growthSurface(rows: GrowthRows, { slug }: { slug?: string 
             out.push(failed('growth.coach', err));
         }
         return out;
-    });
+    }, { storedProfile });
 }
 
 // ─── The whole surface of a live tenant ─────────────────────────────────────────────────────

@@ -127,12 +127,16 @@ describe('updateGrowthSettings and seoForWriter', () => {
         assert.equal(writes.length, 0);
     });
 
+    // The reader also asks whether the tenant has a stored profile (a different table): a stub that answers every
+    // statement with the growth row would hand it that row as a profile, so the profile table answers no row.
+    const growthOnly = (answer: (sql: string) => unknown) => async (sql: string) => (/FROM creator_profiles/.test(sql) ? { rows: [] } : answer(sql));
+
     it('reads a BIGINT goal back as a number and fills the defaults on a row written before v25', async () => {
-        (pool as any).query = async () => ({ rows: [{ keywords: [], hashtag_sets: [], competitors: [], audience: {}, goal_followers: 500, goal_views: '2500000' }] });
+        (pool as any).query = growthOnly(() => ({ rows: [{ keywords: [], hashtag_sets: [], competitors: [], audience: {}, goal_followers: 500, goal_views: '2500000' }] }));
         const s = await getGrowthSettings(TENANT);
         assert.equal(s.goal_followers, 500);
         assert.equal(s.goal_views, 2500000);
-        (pool as any).query = async () => ({ rows: [{ keywords: [], hashtag_sets: [], competitors: [], audience: {} }] });
+        (pool as any).query = growthOnly(() => ({ rows: [{ keywords: [], hashtag_sets: [], competitors: [], audience: {} }] }));
         assert.equal((await getGrowthSettings(TENANT)).goal_views, DEFAULT_GOALS.goal_views);
     });
 
@@ -141,11 +145,11 @@ describe('updateGrowthSettings and seoForWriter', () => {
         const previous = setLogSink((level, line) => { lines.push({ level, event: JSON.parse(line).event }); });
         resetGoalColumnsWarning();
         const selects: string[] = [];
-        (pool as any).query = async (sql: string) => {
+        (pool as any).query = growthOnly((sql) => {
             selects.push(sql);
             if (/goal_followers/.test(sql)) throw Object.assign(new Error('column "goal_followers" does not exist'), { code: '42703' });
             return { rows: [{ keywords: ['برومبت'], hashtag_sets: [], competitors: ['rival'], audience: { timezone: 'Asia/Riyadh' } }] };
-        };
+        });
         try {
             const first = await getGrowthSettings(TENANT);
             assert.deepEqual(first.keywords, ['برومبت'], 'the v22 settings still come back');

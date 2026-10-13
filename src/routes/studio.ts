@@ -247,7 +247,8 @@ studioRouter.get('/settings', handle('studio.settings_read_failed', 'Failed to r
 
 studioRouter.put('/settings', handle('studio.settings_save_failed', 'Failed to save the Studio settings.', async (req, res) => {
     const creatorId = getTenantId(req);
-    const { settings, changed } = await updateStudioSettings(creatorId, req.body);
+    // `undefined` is the pool; the session's user is who the profile version (if the change makes one) is recorded as written by.
+    const { settings, changed } = await updateStudioSettings(creatorId, req.body, undefined, { userId: req.session?.userId ?? null });
     await writeAudit(await actorFromSession(req.session), {
         action: AUDIT_ACTIONS.studioSettingsWrite, targetType: 'creator', targetId: creatorId, detail: { sections: changed },
     });

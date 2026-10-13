@@ -170,7 +170,20 @@ describe('the pool stand-in answers what the Growth builders ask and nothing els
         });
         // ... and says so in the code, so it stays a decision (a scan: the answer and the refusal are both behaviour).
         const src = readFileSync(new URL('./promptSurface.ts', import.meta.url), 'utf8');
-        assert.match(src, /if \(\/FROM creator_profiles\/\.test\(q\)\) return \{ rows: \[\] \};/);
+        assert.match(src, /if \(\/FROM creator_profiles\/\.test\(q\)\) return \{ rows: storedProfile === undefined \? \[\] : \[\{ profile: storedProfile, version: 1, activated_at: null \}\] \};/);
+    });
+
+    it('answers it with a stored profile only when one is passed in', async () => {
+        const stored = { schema: 1, marker: 'a stored profile' };
+        await withRows(rows, async () => {
+            assert.deepEqual((await ask('SELECT profile, version, activated_at FROM creator_profiles WHERE creator_id = $1')).rows, [{ profile: stored, version: 1, activated_at: null }]);
+        }, { storedProfile: stored });
+    });
+
+    it('the parity script and its library never supply a stored profile: that is the golden test\'s alone', () => {
+        for (const file of ['../../../scripts/prompt-parity.mts', './parity.ts', './backfill.ts']) {
+            assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), 'utf8'), /storedProfile/, file);
+        }
     });
 
     it('answers the settings rows with the rows it was given, a copy each', async () => {
