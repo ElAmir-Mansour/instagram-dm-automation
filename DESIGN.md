@@ -57,7 +57,7 @@ How to read the tables:
 | `--border-strong` | `rgba(255,255,255,0.2)` | `rgba(24,26,16,0.14)` | hairlines that must read |
 | `--text-strong` | `#F2F3EC` | `#181913` | headings, values |
 | `--text-default` | `#D2D4CA` | `#393B32` | body |
-| `--text-muted` | `#A8AB9E` | `#5E6155` | hints, timestamps, table heads (≥ 5.05:1 dark / 4.76:1 light, glass tint included) |
+| `--text-muted` | `#A8AB9E` | `#5E6155` | hints, timestamps, table heads (≥ 5.05:1 dark / 4.96:1 light, glass tint included) |
 
 ### Brand: fill and label are different tokens
 Three tokens, three jobs: the **fill** (`--accent`), the **label on the fill** (`--text-on-accent`), and the **label
@@ -118,12 +118,14 @@ Instagram and Facebook say which network a row belongs to. TikTok and YouTube ar
 
 ### Charts
 Read by `dashboard/js/charts.js` through `getComputedStyle`, so charts follow the theme. A chart's accent series
-falls back to `currentColor`, never to a hex.
+is `--chart-accent`, not `--accent`: in light the fill is near-black ink, which reads as a default on a card, so the
+series takes the deep olive instead. It falls back to `currentColor`, never to a hex.
 
 | token | dark | light | role |
 |---|---|---|---|
 | `--chart-grid` | `rgba(255,255,255,0.08)` | `rgba(0,0,0,0.07)` | grid lines |
 | `--chart-tick` | `#A3A698` | `#66695C` | axis labels and the select chevron |
+| `--chart-accent` | `#BCDE70` | `#3E5208` | the data series: sparkline, line chart, heat map, audience split; a 3:1 shape |
 | `--chart-positive` | `#2DD4A7` | `#248A3D` | up |
 | `--chart-negative` | `#F87171` | `#D70015` | down |
 
@@ -135,7 +137,7 @@ Three pinned tokens, the same in both themes and **independent of the palette**.
 | token | dark | light | role |
 |---|---|---|---|
 | `--mark-tile` | `#0071E3` | `=` | the tile; also `public/favicon.svg`'s fill |
-| `--mark-tile-lit` | `linear-gradient(180deg, #0A7CF0, #0071E3 60%, #0064CC)` | `=` | the lit tile the dashboard has always drawn |
+| `--mark-tile-lit` | `linear-gradient(180deg, #0A7CF0, var(--mark-tile) 60%, #0064CC)` | `=` | the lit tile the dashboard has always drawn, as one background layer (its middle stop is `--mark-tile`) |
 | `--mark-glyph` | `#FFFFFF` | `=` | the zap |
 
 ### Measured (the guard's arithmetic: glass composited down to the canvas)
@@ -145,7 +147,10 @@ Three pinned tokens, the same in both themes and **independent of the palette**.
 - **The accent as a fill:** `--text-on-accent` on `--accent`, `--accent-hover`, `--accent-active` and on every stop
   of `--gradient-brand`, at 4.5:1. Dark ink on the fill is 12.0:1; light white on ink is 17.2:1.
 - **The accent as a shape, vs the grounds it sits on (3:1):** 10.9:1 dark, 15.6:1 light, at the tightest. The
-  focus outline against the page is 12.4:1 dark and 15.6:1 light.
+  focus outline against the page is 12.4:1 dark and 15.6:1 light. The chart accent clears the same floor at 10.9:1
+  dark and 7.9:1 light.
+- **The outgoing bubble's furniture:** the quick-reply pill (12% of the label colour as its fill) and the
+  timestamp (78% of it as ink), on the flat accent and every gradient stop, at 4.5:1.
 - **`--accent-text` on `--accent-soft` over a card:** 8.03:1 dark, 7.16:1 light.
 - **Hue (≥ 25° apart, enforced):** the accent is 78.5° dark and 77.1° light, against danger 3.2°, warning 36.5° and
   success 135.1°.
@@ -307,7 +312,10 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - **Outbound:** `--gradient-brand` with `--text-on-accent`, start-end corner 6. In dark, the outgoing message is a
   cardamom bubble with ink text.
 - 14px, `--lh-loose`, `max-width: min(68ch,78%)`, `unicode-bidi: plaintext`.
-- Time: 12px tabular, `currentColor` at 78%. Pending: opacity .55.
+- Time: 12px tabular, `currentColor` at 78%. Pending: opacity .7.
+- **Quick-reply pill** inside an outbound bubble: the bubble's own label colour (`color: inherit`), filled with 12%
+  of it and edged with 30% of it. Left as `--text-default` on `--surface-glass` it measured 1.10:1 in dark and 1.51:1
+  in light; `check:contrast` now measures the mix on every stop of the gradient.
 - **Public hero bubble:** `--accent` fill, radius 16, end-end corner 8.
 
 ### Platform badge
@@ -320,7 +328,7 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 
 **In use today, and frozen: Lucide's `zap` on a blue tile.**
 - It is the dashboard's `.logo-mark` (sidebar, 38px) and `.login-mark` (login card, 62px), and `public/favicon.svg`.
-- The tile paints `--mark-tile` / `--mark-tile-lit`, the glyph `--mark-glyph`, all pinned in tokens.css (§2). The
+- The tile paints `--mark-tile-lit` as one background layer (its middle stop is `--mark-tile`), the glyph `--mark-glyph`, all pinned in tokens.css (§2). The
   favicon uses the literal `#0071E3` and white, because CSS variables don't reach a favicon.
 - **Why frozen:** the app is in TikTok's review with this logo. Nothing in the palette may recolour it, so
   `src/dashboard/design-md.test.ts` pins the three tokens, the favicon's checksum and the manifest's icon list.
@@ -353,8 +361,10 @@ optically in preview.html.
   `#BCDE70` in light, and `--mark-tile-lit` goes (the new tile is flat). The pin in the test is then edited on
   purpose, in the same PR.
 - **The switch is one PR:** the three tokens, the two markup spots in `dashboard/index.html`, `public/favicon.svg`
-  (literal hex, with an inner `@media (prefers-color-scheme: light)` swap) and `public/site.webmanifest` (`icons`,
-  `theme_color` to the new page colour, `background_color`).
+  (literal hex, with an inner `@media (prefers-color-scheme: light)` swap) and `public/site.webmanifest`.
+- **The manifest at the switch:** `icons` (the new file), `theme_color` (`#0071e3` today, the browser chrome colour)
+  and `background_color` (`#161617` today, which is the previous page colour; the page is `#111210` now, so it
+  should follow `--surface-page`). Neither was touched in the palette PR, to keep the submitted manifest identical.
 - **Google:** don't change the logo on Google's OAuth consent screen until the YouTube audit is done; it re-triggers
   brand verification.
 - **Wordmark:** the mark plus «أوتوريبلاي برو» in `--font-display` 600 once L3 ships (the system face until then), with
@@ -425,7 +435,7 @@ is wrong; extend the scale.
   - light: `hsl(78 30% 20% / .22, .16)`
 
 **Ambient**
-- One radial glow from `--accent-ring` (`--lp-glow` .8 dark / .35 light, so its peak alpha is .32 / .16), plus a
+- One radial glow from `--accent-ring` (`--lp-glow` .55 dark / .35 light, so its peak alpha is .22 / .16), plus a
   monochrome grain.
 - Both are placed with `inset-inline-start`, because gradients don't mirror.
 - The glow never sits behind blocks of body text. Where it does reach a headline (the closing call to action), the
@@ -539,7 +549,7 @@ the same paragraph as the feature.
 ### The guards
 | check | stops |
 |---|---|
-| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent as a shape under 3:1 against its grounds; two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation |
+| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
 | `check:i18n` | an English string with no Arabic translation, a placeholder mismatch, an Arabic-Indic digit outside its allow-list |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |

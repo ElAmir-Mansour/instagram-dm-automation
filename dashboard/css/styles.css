@@ -274,9 +274,9 @@ bdi { unicode-bidi: isolate; }
 .logo-mark {
     width: 38px; height: 38px;
     /* The mark is frozen (tokens.css, "The logo mark"): it paints its own pinned tokens and
-       never --accent or --gradient-brand, so a palette change cannot recolour the logo. */
-    background-color: var(--mark-tile);
-    background-image: var(--mark-tile-lit);
+       never --accent or --gradient-brand, so a palette change cannot recolour the logo. One
+       layer, as it always was: a background-color beneath the gradient changes its edge pixels. */
+    background: var(--mark-tile-lit);
     border-radius: var(--radius-sm);
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
@@ -1253,11 +1253,13 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     padding: var(--space-5);
 }
 .login-glow {
+    /* Centred with auto margins, not `inset-inline-start: 50%` plus a translate: that pair is
+       measured from the right edge under dir=rtl and the translate runs the other way, which put
+       the glow off-centre in Arabic. Half the accent highlighter, so cardamom stays a glow. */
     position: fixed;
-    inset-block-start: 50%; inset-inline-start: 50%;
-    transform: translate(-50%, -50%);
+    inset: 0; margin: auto;
     width: min(600px, 120vw); height: min(600px, 120vw);
-    background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+    background: radial-gradient(circle, color-mix(in srgb, var(--accent-soft) 50%, transparent) 0%, transparent 70%);
     pointer-events: none;
 }
 /* The glow used to breathe on a 4s loop. It marked no state and explained no
@@ -1273,8 +1275,7 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
 .login-mark {
     width: 62px; height: 62px;
     /* Frozen, like .logo-mark: pinned mark tokens, not the accent. */
-    background-color: var(--mark-tile);
-    background-image: var(--mark-tile-lit);
+    background: var(--mark-tile-lit);
     border-radius: var(--radius-lg);
     display: inline-flex; align-items: center; justify-content: center;
     margin-block-end: var(--space-4);
@@ -1907,7 +1908,7 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
    the one thing it must not do is look like a message that was delivered.
    It is removed on both outcomes: replaced by the canonical row on success,
    and taken away with the draft restored on failure. */
-.message-bubble.is-pending { opacity: 0.55; }
+.message-bubble.is-pending { opacity: 0.7; }
 
 .chat-composer {
     padding: var(--space-3) var(--space-4);
@@ -1940,6 +1941,14 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
     border: 1px solid var(--border-subtle);
     font-size: var(--fs-100);
     color: var(--text-default);
+}
+/* Inside the outgoing bubble the pill sits on the brand gradient, where --text-default and
+   --surface-glass are the wrong pair (1.10:1 in dark, 1.51:1 in light). It takes the bubble's own
+   label colour and tints with it, so one rule reads on every theme: check:contrast measures it. */
+.bubble-outbound .qr-pill {
+    color: inherit;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    border-color: color-mix(in srgb, currentColor 30%, transparent);
 }
 .msg-carousel { display: flex; gap: var(--space-3); overflow-x: auto; padding-block-end: var(--space-2); width: 100%; }
 .carousel-card {
@@ -4054,10 +4063,10 @@ mark.help-hit {
 .growth-heat thead td:first-child { inline-size: 3.2em; }
 .heat { block-size: 18px; border-radius: 3px; background: var(--surface-glass); }
 td.heat { padding: 0; }
-.heat-1 { background: color-mix(in srgb, var(--accent) 22%, transparent); }
-.heat-2 { background: color-mix(in srgb, var(--accent) 45%, transparent); }
-.heat-3 { background: color-mix(in srgb, var(--accent) 70%, transparent); }
-.heat-4 { background: var(--accent); }
+.heat-1 { background: color-mix(in srgb, var(--chart-accent) 22%, transparent); }
+.heat-2 { background: color-mix(in srgb, var(--chart-accent) 45%, transparent); }
+.heat-3 { background: color-mix(in srgb, var(--chart-accent) 70%, transparent); }
+.heat-4 { background: var(--chart-accent); }
 .growth-heat-legend { display: flex; align-items: center; gap: var(--space-1); margin-block-start: var(--space-3); font-size: var(--fs-100); color: var(--text-muted); }
 .growth-heat-legend .heat { display: inline-block; inline-size: 16px; block-size: 12px; }
 .growth-zone { margin: var(--space-2) 0 0; }

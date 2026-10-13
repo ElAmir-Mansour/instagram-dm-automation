@@ -52,9 +52,10 @@ const Charts = {
     _seq: 0,
 
     /**
-     * Every chart reads its colours from the design tokens, never a literal. The accent's own
-     * fallback is `currentColor` (the text colour), not a hex: a hex here is a second palette
-     * that keeps painting the old brand after tokens.css moves on.
+     * Every chart reads its colours from the design tokens, never a literal. The accent series is
+     * `--chart-accent` (not `--accent`, which is near-black ink in light), and its fallback is
+     * `currentColor` (the text colour), not a hex: a hex here is a second palette that keeps
+     * painting the old brand after tokens.css moves on.
      */
     token(name, fallback) {
         const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -275,7 +276,7 @@ const Charts = {
             const y = H - PAD - ((n - min) / span) * (H - PAD * 2);
             return `${x.toFixed(2)},${y.toFixed(2)}`;
         });
-        const stroke = Charts.token(opts.token || '--accent', 'currentColor');
+        const stroke = Charts.token(opts.token || '--chart-accent', 'currentColor');
 
         return html`
             <div class="chart-spark" dir="ltr">
@@ -343,7 +344,7 @@ const Charts = {
             return Number((rtl ? W - x : x).toFixed(2));
         };
         const yOf = (v) => Number((BOTTOM - (Math.max(0, v) / top) * (BOTTOM - TOP)).toFixed(2));
-        const stroke = Charts.token(opts.token || '--accent', 'currentColor');
+        const stroke = Charts.token(opts.token || '--chart-accent', 'currentColor');
         const grid = Charts.token('--chart-grid', 'rgba(255,255,255,0.08)');
 
         // Contiguous runs of measured days: each is its own line; a lone day is a dot.

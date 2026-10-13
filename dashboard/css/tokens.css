@@ -166,11 +166,14 @@
        with this logo, so it must not change when the palette does: the tile and
        glyph are pinned here, the same in both themes, and nothing else paints
        the mark. `--mark-tile-lit` is the lit gradient the dashboard has always
-       drawn on that tile (the favicon is the flat `--mark-tile`).
+       drawn on that tile, and the mark paints it as ONE background layer: a flat
+       colour under it shifts the antialiased edge by a few levels, and the mark
+       is pixel-for-pixel what it was. The favicon is the flat `--mark-tile`,
+       which is also the gradient's middle stop, so there is one blue.
        Frozen until TikTok accepts the app; then the ر mark from DESIGN.md §4.
        src/dashboard/design-md.test.ts pins these three values. */
     --mark-tile: #0071e3;
-    --mark-tile-lit: linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc);
+    --mark-tile-lit: linear-gradient(180deg, #0a7cf0, var(--mark-tile) 60%, #0064cc);
     --mark-glyph: #ffffff;
 
     /* ─── Chart series ───────────────────────────────────────────────────────
@@ -284,6 +287,10 @@
 
     --chart-grid: rgba(255, 255, 255, 0.08);
     --chart-tick: #a3a698;
+    /* The accent as DATA: the sparkline, the line chart, the heat map, the audience split. In dark
+       it is the fill; in light it is the deep olive, because a near-black line on a card reads as
+       a default rather than a brand. A 3:1 shape against every ground a chart sits on. */
+    --chart-accent: #bcde70;
 }
 
 
@@ -373,6 +380,7 @@
         --chart-negative: #d70015;
         --chart-grid: rgba(0, 0, 0, 0.07);
         --chart-tick: #66695c;
+        --chart-accent: #3e5208;
     }
 }
 
@@ -460,6 +468,7 @@
     --chart-negative: #d70015;
     --chart-grid: rgba(0, 0, 0, 0.07);
     --chart-tick: #66695c;
+    --chart-accent: #3e5208;
 }
 
 /* Latin UI runs tighter than Arabic at the same size. */

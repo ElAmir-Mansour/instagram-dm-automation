@@ -20,6 +20,29 @@ import { describe, it } from 'node:test';
 
 const read = (p: string): string => readFileSync(p, 'utf8');
 
+/** Every style rule in a stylesheet, descending into @media and @supports blocks. */
+function rulesIn(css: string): Array<{ selectors: string[]; body: string }> {
+    const out: Array<{ selectors: string[]; body: string }> = [];
+    let i = 0;
+    while (i < css.length) {
+        const open = css.indexOf('{', i);
+        if (open === -1) break;
+        const head = css.slice(i, open).trim();
+        let depth = 1;
+        let j = open + 1;
+        while (j < css.length && depth > 0) {
+            if (css[j] === '{') depth++;
+            else if (css[j] === '}') depth--;
+            j++;
+        }
+        const body = css.slice(open + 1, j - 1);
+        if (head.startsWith('@')) out.push(...rulesIn(body));
+        else out.push({ selectors: head.split(',').map((x) => x.trim().replace(/\s+/g, ' ')), body });
+        i = j;
+    }
+    return out;
+}
+
 // ─── tokens.css, parsed the way scripts/check-contrast.mjs parses it ───────────────────────────
 const cssNoComments = read('dashboard/css/tokens.css').replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -183,7 +206,9 @@ describe('DESIGN.md §2 = tokens.css', () => {
 // Constants, not reads: the point is that changing any of them is a deliberate edit of this file.
 const FROZEN = {
     markTile: '#0071e3',
-    markTileLit: 'linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc)',
+    markTileLit: 'linear-gradient(180deg, #0a7cf0, var(--mark-tile) 60%, #0064cc)',
+    /** What that gradient resolves to: the one main drew on the tile before the palette changed. */
+    markTileLitResolved: 'linear-gradient(180deg, #0a7cf0, #0071e3 60%, #0064cc)',
     markGlyph: '#ffffff',
     /** sha256 of public/favicon.svg as it stood on main before the Ink & Cardamom palette. */
     faviconSha256: 'a02eb3d94c25766bcbca5fdc76b7ba9fc8b0a9b7f49be7c5537859949eabf49f',
@@ -193,6 +218,7 @@ describe('the logo mark is frozen until TikTok accepts the app', () => {
     it('the three mark tokens hold their pinned values, in the theme-independent block only', () => {
         assert.equal(base['mark-tile'], FROZEN.markTile);
         assert.equal(base['mark-tile-lit'], FROZEN.markTileLit);
+        assert.equal((base['mark-tile-lit'] as string).replace('var(--mark-tile)', base['mark-tile'] as string), FROZEN.markTileLitResolved);
         assert.equal(base['mark-glyph'], FROZEN.markGlyph);
         for (const [name, block] of Object.entries({ dark: darkBlock, 'light (media)': lightMedia, 'light (pinned)': lightPinned })) {
             for (const t of ['mark-tile', 'mark-tile-lit', 'mark-glyph']) {
@@ -201,19 +227,33 @@ describe('the logo mark is frozen until TikTok accepts the app', () => {
         }
     });
 
-    it('.logo-mark and .login-mark paint the mark tokens and never the accent', () => {
-        const css = read('dashboard/css/styles.css').replace(/\/\*[\s\S]*?\*\//g, '');
+    it('.logo-mark and .login-mark paint the mark tokens, and no rule anywhere paints them from the accent', () => {
+        const css = read('dashboard/css/styles.css').replace(/\/\*[\s\S]*?\*\//g, '').replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, '""');
+        const rules = rulesIn(css);
+
+        // 1. The base rules say what the mark is made of.
         for (const sel of ['.logo-mark', '.login-mark']) {
-            const rule = new RegExp(`${sel.replace('.', '\\.')}\\s*\\{([^}]*)\\}`).exec(css)?.[1];
-            assert.ok(rule, `${sel} has no rule`);
-            assert.match(rule, /background-color:\s*var\(--mark-tile\)/);
-            assert.match(rule, /background-image:\s*var\(--mark-tile-lit\)/);
-            assert.doesNotMatch(rule, /--accent|--gradient-brand|--text-on-accent/);
-            const glyph = new RegExp(`${sel.replace('.', '\\.')}\\s+svg\\s*\\{([^}]*)\\}`).exec(css)?.[1];
-            assert.ok(glyph, `${sel} svg has no rule`);
-            assert.match(glyph, /color:\s*var\(--mark-glyph\)/);
-            assert.doesNotMatch(glyph, /--accent|--text-on-accent/);
+            const base = rules.filter((r) => r.selectors.includes(sel));
+            assert.ok(base.length >= 1, `${sel} has no rule`);
+            const tile = base.find((r) => /(^|[;\s])background:\s*var\(--mark-tile-lit\)/.test(r.body));
+            assert.ok(tile, `${sel}: no rule paints its background from --mark-tile-lit, as one layer`);
+            assert.doesNotMatch(tile.body, /background-color:/, `${sel}: a background-color under the gradient shifts the mark's edge pixels`);
+            const glyph = rules.filter((r) => r.selectors.includes(`${sel} svg`));
+            assert.ok(glyph.some((r) => /(^|[;\s])color:\s*var\(--mark-glyph\)/.test(r.body)), `${sel} svg: no rule paints the glyph from --mark-glyph`);
         }
+
+        // 2. EVERY rule that can reach the mark, in any block (a @media rule, a later override, a parent
+        //    selector), is free of the accent family. The first-match version of this test passed a
+        //    `@media { .logo-mark { background: var(--gradient-brand) } }` appended further down the file.
+        const REACHES_THE_MARK = /logo-mark|login-mark|sidebar-logo|login-logo/;
+        const ACCENT_FAMILY = /var\(--(?:accent[a-z-]*|gradient-brand[a-z-]*|text-on-accent|chart-accent)\)/;
+        const touching = rules.filter((r) => r.selectors.some((x) => REACHES_THE_MARK.test(x)));
+        assert.ok(touching.length >= 6, `only ${touching.length} rules reach the mark; the scan is not reading the stylesheet`);
+        const offenders = touching.filter((r) => ACCENT_FAMILY.test(r.body)).map((r) => `${r.selectors.join(', ')} { ${r.body.trim()} }`);
+        assert.deepEqual(offenders, [], 'a rule paints the frozen mark from the accent');
+        // ...and none of them re-colours it by a literal either.
+        const literal = touching.filter((r) => /(?:background|color|fill|stroke)[a-z-]*:[^;]*(?:#[0-9a-fA-F]{3,8}\b|rgba?\()/.test(r.body)).map((r) => r.selectors.join(', '));
+        assert.deepEqual(literal, [], 'a rule paints the frozen mark from a colour literal instead of the mark tokens');
     });
 
     it('the markup is still Lucide\'s zap in both places', () => {
@@ -281,6 +321,21 @@ describe('nothing old is left behind in the pages', () => {
             assert.equal(/#4f46e5|#14182a|#4338ca/i.test(html), false, `${page}: an indigo literal is back`);
             const css = html.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
             assert.equal(fallback.test(css), false, `${page}: a colour literal in a var() fallback is a second palette`);
+        }
+    });
+
+    it('the charts take their series colour from --chart-accent, not the (near-black, in light) --accent', () => {
+        const charts = read('dashboard/js/charts.js');
+        assert.equal((charts.match(/opts\.token \|\| '--chart-accent'/g) ?? []).length, 2, 'the sparkline and the line chart');
+        assert.equal(/opts\.token \|\| '--accent'/.test(charts), false);
+        const growth = read('dashboard/js/pages/growth.js');
+        assert.ok(growth.includes("token: '--chart-accent'"), 'the audience split and the trend line');
+        assert.equal(/token: '--accent'/.test(growth), false);
+        const css = read('dashboard/css/styles.css');
+        for (const level of [1, 2, 3, 4]) {
+            const body = new RegExp(`\\.heat-${level} \\{([^}]*)\\}`).exec(css)?.[1] ?? '';
+            assert.match(body, /var\(--chart-accent\)/, `.heat-${level}`);
+            assert.doesNotMatch(body, /var\(--accent\)/, `.heat-${level}`);
         }
     });
 

@@ -32,7 +32,8 @@
   measures 46–96px; zero product visuals on the whole page; ~75 words of hero
   copy in three stacked blocks, the third of which was a bordered caveat about
   the MIT licence; a completely flat background; single-layer pure-black
-  shadows that are invisible on #161617; six identically-shaped feature cards
+  shadows that are invisible on the near-black page (#161617 then, #111210 now);
+  six identically-shaped feature cards
   in a row; 64px of rhythm between sections; and `--lh-tight: 1.45` — a
   paragraph line-height — applied to headings.
 
@@ -68,7 +69,7 @@
   hairline — plus a hairline ring and three hue-matched shadow layers with
   falling opacity and blur at roughly twice the Y offset. The old `--elev-1`
   (`0 1px 2px rgba(0,0,0,.32)`) is pure black and single-layer, which is
-  invisible against a #161617 page. A radial accent glow and a 346-byte inline
+  invisible against a near-black page (#161617 then, #111210 now). A radial accent glow and a 346-byte inline
   SVG grain sit behind the hero; both are positioned with `inset-inline-start`
   rather than baked into the gradient, because gradients do NOT mirror in RTL
   and the glow belongs behind the headline, which starts at the right.
@@ -623,14 +624,14 @@
   LIGHTENS the ground behind the headline instead of deepening it; that is why
   these dark figures fell and why they are recorded:
       CTA panel = --accent-ring × --lp-glow over --surface-raised over the page
-          --text-strong   6.41 dark · 14.91 light
-          --text-default  4.78 dark ·  9.59 light
+          --text-strong   8.48 dark · 14.91 light
+          --text-default  6.32 dark ·  9.59 light
           (the .cta-foot line and its GitHub link went on 2026-10-13 with the
           open-source claim they carried)
       --accent-text on --accent-soft over the .norm glow
-          4.94 dark · 6.67 light
+          5.79 dark · 6.67 light
       --text-default on --surface-glass over the .norm glow (the variants)
-          5.14 dark · 9.15 light
+          6.12 dark · 9.15 light
       --text-muted on --surface-glass on --surface-sunken (the refusal marks,
       a graphic, so the floor is 3:1 rather than 4.5:1)
           7.06 dark · 4.76 light
@@ -647,8 +648,8 @@
   4.76, which passes, but by less than the grid is worth. The captions under
   the slides are --text-muted on the card, measured at the corner sheen's
   peak: 5.77 dark · 6.17 light (7.09 dark away from the sheen).
-  The tightest text pair of all of them is now the CTA panel's --text-default
-  at the glow's peak in dark, 4.78:1, and --accent-text on the slide's line in
+  The tightest text pair of all of them is now the slide captions' --text-muted
+  at the sheen's peak in dark, 5.77:1, and --accent-text on the slide's line in
   light, 5.91:1. The floor is 4.5.
   The one non-text colour is the heart glyph, --danger as a fill: 4.67:1 dark
   and 3.46:1 light against the card, both clear of the 3:1 floor for a
@@ -789,10 +790,10 @@
 
             /* The ambient layers. --accent-ring is a translucent cardamom (alpha 0.40
                in dark, 0.45 in light), so this multiplier times that alpha IS the
-               glow's peak alpha: 0.8 × 0.40 = 0.32 in dark and 0.35 × 0.45 = 0.16
+               glow's peak alpha: 0.55 × 0.40 = 0.22 in dark and 0.35 × 0.45 = 0.16
                in light. Drawing the glow from the ring token rather than a literal
                means it cannot drift from --accent. */
-            --lp-glow: 0.8;
+            --lp-glow: 0.55;
             --lp-grain: 0.16;
             --lp-grain-blend: overlay;
 

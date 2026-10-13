@@ -195,6 +195,7 @@
         .platform-tag.fb { background: var(--brand-facebook-soft); color: var(--brand-facebook-text); }
         .bar-data { block-size: 10px; border-radius: var(--radius-pill); inline-size: 100%; background: var(--surface-glass); overflow: hidden; display: flex; }
         .bar-data i { display: block; block-size: 100%; }
+        .hm { display: block; inline-size: 24px; block-size: 18px; border-radius: 3px; background: color-mix(in srgb, var(--chart-accent) var(--l), var(--surface-glass)); }
         .bar-ig { background: var(--brand-instagram); } .bar-fb { background: var(--brand-facebook); }
 
         /* ─── 8. The keyword highlight: the signature ─────────────────────────────────── */
@@ -210,8 +211,12 @@
         .bubble { max-inline-size: min(68ch, 78%); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); font-size: var(--fs-200); line-height: var(--lh-loose); display: flex; flex-direction: column; gap: var(--space-2); unicode-bidi: plaintext; overflow-wrap: anywhere; }
         .bubble.in { background: var(--surface-sunken); border: 1px solid var(--border-subtle); color: var(--text-strong); border-start-start-radius: var(--radius-xs); }
         .bubble.out { background: var(--gradient-brand); color: var(--text-on-accent); border-start-end-radius: var(--radius-xs); }
-        .bubble.pending { opacity: 0.55; }
+        .bubble.pending { opacity: 0.7; }
         .bubble time { font-size: var(--fs-100); color: color-mix(in srgb, currentColor 78%, transparent); align-self: flex-end; font-variant-numeric: tabular-nums; }
+        .qrs { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+        .qr { padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); background: var(--surface-glass); border: 1px solid var(--border-subtle); font-size: var(--fs-100); color: var(--text-default); line-height: var(--lh-normal); }
+        /* Inside the outgoing bubble the pill takes the bubble's own label colour and tints with it. */
+        .bubble.out .qr { color: inherit; background: color-mix(in srgb, currentColor 12%, transparent); border-color: color-mix(in srgb, currentColor 30%, transparent); }
         .bubble.hero { background: var(--accent); color: var(--text-on-accent); border-radius: var(--radius-lg); border-end-end-radius: var(--radius-sm); }
 
         /* ─── 11. Nav ─────────────────────────────────────────────────────────────────── */
@@ -223,7 +228,7 @@
 
         /* ─── 12. Mark ────────────────────────────────────────────────────────────────── */
         /* The frozen mark: pinned tokens, exactly as .logo-mark and .login-mark paint them. */
-        .mark { display: inline-flex; align-items: center; justify-content: center; flex: none; background-color: var(--mark-tile); background-image: var(--mark-tile-lit); }
+        .mark { display: inline-flex; align-items: center; justify-content: center; flex: none; background: var(--mark-tile-lit); }
         .mark svg { color: var(--mark-glyph); fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
         .mark.lg { inline-size: 62px; block-size: 62px; border-radius: var(--radius-lg); box-shadow: var(--elev-glow); }
         .mark.lg svg { inline-size: 30px; block-size: 30px; }
@@ -378,6 +383,12 @@
                 <div class="card" style="box-shadow:var(--elev-3);min-inline-size:9rem"><span class="label">--elev-3</span></div>
                 <div class="card" style="box-shadow:var(--elev-glow);min-inline-size:9rem"><span class="label">--elev-glow</span></div>
             </div>
+            <h3 class="sub">Chart series (<code>--chart-accent</code>)</h3>
+            <div class="card row" style="gap:var(--space-6)">
+                <svg viewBox="0 0 120 36" width="120" height="36" role="img" aria-label="sparkline" style="flex:none"><polyline points="2,30 20,24 38,27 56,14 74,18 92,8 118,4" fill="none" stroke="var(--chart-accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <div class="row" style="gap:2px" role="img" aria-label="heat map ramp"><i class="hm" style="--l:0%"></i><i class="hm" style="--l:22%"></i><i class="hm" style="--l:45%"></i><i class="hm" style="--l:70%"></i><i class="hm" style="--l:100%"></i></div>
+                <div style="flex:1 1 12rem"><div class="bar-data" role="img" aria-label="audience split"><i style="inline-size:58%;background:var(--chart-accent)"></i><i style="inline-size:42%;background:var(--info)"></i></div></div>
+            </div>
             <h3 class="sub">Radius</h3>
             <div class="row" id="radii"></div>
         </section>
@@ -416,10 +427,10 @@
             <h2>9 · DM bubbles</h2>
             <p class="lede">Inbound is a sunken tint with a hairline; outbound is the brand gradient with <code>--text-on-accent</code>. The sharp corner is the one at the speaker's side, in both directions.</p>
             <div class="stage"><div class="thread">
-                <div class="rowb in"><div class="bubble in" dir="auto">كم السعر؟ وهل فيه توصيل؟<time>13:00</time></div></div>
-                <div class="rowb out"><div class="bubble out" dir="auto">أهلاً بك! السعر والتوصيل في الرابط أدناه.<time>13:01</time></div></div>
+                <div class="rowb in"><div class="bubble in" dir="auto">كم السعر؟ وهل فيه توصيل؟<div class="qrs"><span class="qr" lang="ar" dir="auto">السعر</span><span class="qr" lang="ar" dir="auto">التوصيل</span></div><time>13:00</time></div></div>
+                <div class="rowb out"><div class="bubble out" dir="auto">أهلاً بك! السعر والتوصيل في الرابط أدناه.<div class="qrs"><span class="qr" lang="ar" dir="auto">افتح الرابط</span><span class="qr" lang="ar" dir="auto">سؤال آخر</span></div><time>13:01</time></div></div>
                 <div class="rowb in"><div class="bubble in" dir="auto">How much is the price?<time>13:02</time></div></div>
-                <div class="rowb out"><div class="bubble out pending" dir="auto">Sending… (pending, opacity .55)<time>13:02</time></div></div>
+                <div class="rowb out"><div class="bubble out pending" dir="auto">Sending… (pending, opacity .7)<time>13:02</time></div></div>
             </div></div>
             <h3 class="sub">Public hero bubble</h3>
             <div class="row"><div class="bubble hero" dir="auto" style="max-inline-size:26rem">أهلاً بك! هذا دليل البدء.</div></div>
@@ -458,8 +469,8 @@
             <h2>12 · The mark</h2>
             <p class="lede"><b>Frozen</b> until TikTok accepts the app: Lucide's zap on the blue tile, painted from <code>--mark-tile</code>, <code>--mark-tile-lit</code> and <code>--mark-glyph</code>. It must look the same in both previews.</p>
             <div class="row" style="gap:var(--space-6)">
-                <div class="wordmark"><span class="mark lg" role="img" aria-label="AutoReply Pro (login mark)"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">AutoReply Pro · .login-mark 62px</small></span></div>
-                <div class="wordmark"><span class="mark sm" role="img" aria-label="AutoReply Pro (sidebar mark)"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">.logo-mark 38px</small></span></div>
+                <div class="wordmark"><span class="mark lg" role="img" aria-label="AutoReply Pro (login mark)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">AutoReply Pro · .login-mark 62px</small></span></div>
+                <div class="wordmark"><span class="mark sm" role="img" aria-label="AutoReply Pro (sidebar mark)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg></span><span><b lang="ar">أوتوريبلاي برو</b><small lang="en" dir="ltr">.logo-mark 38px</small></span></div>
                 <div class="wordmark"><img src="public/favicon.svg" width="48" height="48" alt="public/favicon.svg" style="border-radius:var(--radius-sm)"><span><b lang="en" dir="ltr">favicon.svg</b><small lang="en" dir="ltr">flat, literal hex; byte-pinned</small></span></div>
             </div>
             <h3 class="sub">Next, after TikTok accepts the app (DESIGN.md §4): the ر mark</h3>
@@ -483,7 +494,7 @@
             ['Accent: fill, label on the fill, label on the highlighter', ['accent', 'accent-hover', 'accent-active', 'text-on-accent', 'accent-text', 'accent-soft', 'accent-ring', 'gradient-brand', 'gradient-brand-soft']],
             ['Status: fill, tint, label', ['success', 'success-soft', 'success-text', 'danger', 'danger-soft', 'danger-text', 'warning', 'warning-soft', 'warning-text', 'info', 'info-soft', 'info-text']],
             ['Platforms (data, never decoration)', ['brand-instagram', 'brand-instagram-soft', 'brand-instagram-text', 'brand-facebook', 'brand-facebook-soft', 'brand-facebook-text', 'brand-tiktok', 'brand-tiktok-soft', 'brand-youtube-soft']],
-            ['Charts', ['chart-grid', 'chart-tick', 'chart-positive', 'chart-negative']],
+            ['Charts', ['chart-grid', 'chart-tick', 'chart-accent', 'chart-positive', 'chart-negative']],
             ['The mark (frozen)', ['mark-tile', 'mark-tile-lit', 'mark-glyph']]
         ];
         var host = document.getElementById('swatches');
@@ -544,7 +555,8 @@
             ['warning-text', ['surface-glass-hover', P], 4.5], ['info-text', ['surface-glass-hover', P], 4.5],
             ['brand-instagram-text', ['brand-instagram-soft', R, P], 4.5], ['brand-facebook-text', ['brand-facebook-soft', R, P], 4.5],
             ['chart-tick', ['surface-solid'], 4.5],
-            ['accent', [P], 3], ['accent', ['surface-solid'], 3], ['accent', [R, P], 3]
+            ['accent', [P], 3], ['accent', ['surface-solid'], 3], ['accent', [R, P], 3],
+            ['chart-accent', [P], 3], ['chart-accent', ['surface-solid'], 3], ['chart-accent', [R, P], 3]
         ];
         var tbody = document.getElementById('contrast-rows');
         PAIRS.forEach(function (p) {

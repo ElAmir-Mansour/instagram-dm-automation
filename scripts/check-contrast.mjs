@@ -195,8 +195,12 @@ for (const name of Object.keys(THEMES)) {
 //             not the flat token, so a stop that dips under 4.5:1 is a button nobody can read).
 //   non-text  the fill against the grounds it sits on, at the WCAG 1.4.11 floor of 3:1: the
 //             focus outline and the active marker are `--accent`, and a switch track is too.
-//   chart     `--chart-tick` is the axis label and the native select's chevron is a glyph; both
-//             are theme values that once measured under their floor in one theme.
+//   bubble    the outgoing bubble's own furniture, which is `currentColor` mixed into the bubble:
+//             the quick-reply pill (12% of the label colour as its fill) and the timestamp (78%
+//             of it as its ink). The pill once inherited `--text-default` on `--surface-glass`
+//             and measured 1.10:1 in dark and 1.51:1 in light on the bubble, in the inbox.
+//   chart     `--chart-tick` is the axis label and the native select's chevron is a glyph;
+//             `--chart-accent` is the data series (a shape, 3:1). All three are theme values.
 //
 // `--accent-text` on the `--accent-soft` highlighter is in SURFACE_STACKS above.
 
@@ -206,7 +210,8 @@ const chevronStroke = (v) => {
     const m = (v || '').match(/stroke='%23([0-9a-fA-F]{6})'/);
     return m ? parse('#' + m[1]) : null;
 };
-const nonText = {};   // theme -> { r, label }: the tightest non-text pair
+const nonText = {};   // theme -> { r, label }: the tightest accent-as-a-shape pair
+const nonTextChart = {};   // theme -> { r, label }: the tightest chart-accent pair
 let fillTotal = 0;
 
 for (const [name, t] of Object.entries(THEMES)) {
@@ -228,16 +233,39 @@ for (const [name, t] of Object.entries(THEMES)) {
         if (r < MIN) failures.push(`${r.toFixed(2)}:1 - --text-on-accent on ${label} (${name} theme) is below the ${MIN}:1 AA floor.`);
     }
 
-    // The fill as a shape on the grounds it is painted on: the canvas, an opaque card, a glass card.
-    const accent = resolve(t, t['accent']);
-    for (const stack of [['surface-page'], ['surface-solid'], ['surface-raised', 'surface-page']]) {
-        const bg = flatten(t, stack);
-        if (!accent || !bg) continue;
-        const r = ratio(accent.slice(0, 3), bg);
-        fillTotal++;
-        const label = `--accent on ${stack.map(x => `--${x}`).join(' on ')}`;
-        if (!nonText[name] || r < nonText[name].r) nonText[name] = { r, label };
-        if (r < MIN_NON_TEXT) failures.push(`${r.toFixed(2)}:1 - ${label} (${name} theme) is below the ${MIN_NON_TEXT}:1 non-text floor (focus outline, active marker, switch track).`);
+    // The outgoing bubble's furniture, on the flat accent and every stop of the gradient: the
+    // quick-reply pill (`.bubble-outbound .qr-pill`: label colour, filled with 12% of itself) and the
+    // timestamp (`.message-time`: 78% of the label colour). Both are mixes of `currentColor`.
+    const label3 = onAccent.slice(0, 3);
+    for (const [label, fill] of fills.filter(([l]) => l === '--accent' || l.startsWith('--gradient-brand'))) {
+        if (!fill) continue;
+        const ground = fill.slice(0, 3);
+        const pillBg = over([...label3, 0.12], ground);
+        const timeInk = over([...label3, 0.78], ground);
+        fillTotal += 2;
+        const rp = ratio(label3, pillBg);
+        const rt = ratio(timeInk, ground);
+        if (rp < MIN) failures.push(`${rp.toFixed(2)}:1 - the quick-reply pill (label colour on 12% of itself) on the outgoing bubble at ${label} (${name} theme) is below the ${MIN}:1 AA floor.`);
+        if (rt < MIN) failures.push(`${rt.toFixed(2)}:1 - the timestamp (78% label colour) on the outgoing bubble at ${label} (${name} theme) is below the ${MIN}:1 AA floor.`);
+    }
+
+    // The fill, and the chart accent, as shapes on the grounds they are painted on: the canvas, an
+    // opaque card, a glass card.
+    for (const [token, record, what] of [
+        ['accent', nonText, 'focus outline, active marker, switch track'],
+        ['chart-accent', nonTextChart, 'a chart series: the line, the heat map, the split bar'],
+    ]) {
+        const shape = resolve(t, t[token]);
+        if (!shape) { failures.push(`--${token} (${name}) could not be resolved.`); continue; }
+        for (const stack of [['surface-page'], ['surface-solid'], ['surface-raised', 'surface-page']]) {
+            const bg = flatten(t, stack);
+            if (!bg) continue;
+            const r = ratio(shape.slice(0, 3), bg);
+            fillTotal++;
+            const label = `--${token} on ${stack.map(x => `--${x}`).join(' on ')}`;
+            if (!record[name] || r < record[name].r) record[name] = { r, label };
+            if (r < MIN_NON_TEXT) failures.push(`${r.toFixed(2)}:1 - ${label} (${name} theme) is below the ${MIN_NON_TEXT}:1 non-text floor (${what}).`);
+        }
     }
 
     // The axis label is text; the chevron is a glyph. Both sit on the card or the input well.
@@ -370,7 +398,32 @@ function checkPlatformColourUsage() {
     }
 }
 
+/**
+ * The bubble pairs measured above are CONSTANTS in this file: they describe what
+ * `.bubble-outbound .qr-pill` and `.message-time` are meant to paint. A guard that models a rule it
+ * never reads passes when the rule is deleted, so this checks the rules still say what the model
+ * assumes (the pill inherits the label and fills with 12% of it; the timestamp is 78% of it).
+ */
+function checkBubbleFurniture() {
+    let css;
+    try {
+        css = readFileSync('dashboard/css/styles.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    } catch {
+        failures.push('dashboard/css/styles.css could not be read, so the outgoing bubble furniture is unchecked.');
+        return;
+    }
+    const rule = (sel) => (css.match(new RegExp(`${sel.replace(/[.\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`)) || [])[1] || '';
+    const pill = rule('.bubble-outbound .qr-pill');
+    if (!/color:\s*inherit/.test(pill) || !/background:\s*color-mix\(in srgb,\s*currentColor 12%/.test(pill)) {
+        failures.push('.bubble-outbound .qr-pill no longer inherits the label colour and fills with 12% of it: the quick-reply pill would sit on the outgoing bubble as --text-default on --surface-glass (1.10:1 dark, 1.51:1 light).');
+    }
+    if (!/color:\s*color-mix\(in srgb,\s*currentColor 78%/.test(rule('.message-time'))) {
+        failures.push('.message-time is no longer 78% of the bubble label colour, which is what check-contrast measures.');
+    }
+}
+
 checkPlatformColourUsage();
+checkBubbleFurniture();
 
 if (failures.length > 0) {
     console.error('\n\u274c contrast check failed:\n');
@@ -382,8 +435,9 @@ const tightest = Object.entries(worstBy)
     .map(([theme, w]) => `${w.r.toFixed(2)}:1 ${theme} - ${w.label}`).join('; ');
 console.log(
     `\u2713 colour system: ${total} text pairs clear ${MIN}:1 (tightest ${tightest}); `
-    + `${fillTotal} accent-fill / axis / chevron pairs clear their floors `
-    + `(accent shape vs ground tightest ${Object.entries(nonText).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}); `
+    + `${fillTotal} accent-fill / bubble / chart / chevron pairs clear their floors `
+    + `(accent shape vs ground tightest ${Object.entries(nonText).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}; `
+    + `chart accent ${Object.entries(nonTextChart).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}); `
     + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart; `
     + `platform colours solid only in data viz`
 );
