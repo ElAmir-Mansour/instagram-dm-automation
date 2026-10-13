@@ -303,7 +303,7 @@ describe('YouTube golden payloads', () => {
 
 describe('Growth coach golden prompts', () => {
     /**
-     * His rows as the Growth readers and the Studio settings behind `tenantLanguage` read them: as they are
+     * His rows as the Growth readers and the profile context behind `tenantLanguage` / `tenantTimezone` read them: as they are
      * (path a), or as the profile gives them back from a scrambled row (path b).
      */
     const TODAY: GrowthRows = { growth: ELAMIR_GROWTH, studio: ELAMIR_SEED_SETTINGS };

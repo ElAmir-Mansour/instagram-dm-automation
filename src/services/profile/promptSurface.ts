@@ -338,16 +338,17 @@ const DAYS = [
     { platform: 'instagram', day: '2026-10-12', metrics: { reach_followers: 300, reach_non_followers: 4100, followers: 8412 } },
 ];
 
-/** The tenant's rows as the Growth readers and the Studio settings behind `tenantLanguage` read them. */
+/** The tenant's rows as the Growth readers and the profile context behind `tenantLanguage` / `tenantTimezone` read them (a tenant with no stored profile is described from them). */
 export interface GrowthRows { growth: GrowthSettings; studio: StudioSettings }
 
 /** What `withRows` can be told beyond the rows. */
 export interface WithRowsOptions {
     /**
      * A stored profile (as the database holds it) for the stored-profile lookup to answer with. Without one the lookup is
-     * answered "none", which is what the parity script relies on. Only the golden test passes one: its "through the real
-     * readers" path hands the readers the tenant's stored rows and a stored profile, and the readers do the overlay.
-     * `scripts/prompt-parity.mts` and `parity.ts` never do (`promptSurface.test.ts` scans them for it).
+     * answered "none". The golden test passes one on its "through the real readers" path (the readers do the overlay), and
+     * `runParity` passes one on path (b) for a tenant that has one stored: the Growth coach reads its language from the
+     * profile context (`language.surfaces.coach`), which the rows alone cannot say, so without it a stored coach override
+     * would change the coach and show no drift. Path (a) never does: it is today's rows, and a profile laid over them is what (b) is.
      */
     storedProfile?: unknown;
 }
@@ -443,12 +444,12 @@ export interface TenantRows extends GrowthRows { agent?: AgentPersona | null }
  * tenant, once with the rows as stored and once with the same rows read through the profile. A tenant with no agent row
  * has no DM instruction to hash.
  */
-export async function tenantSurface(rows: TenantRows): Promise<SurfaceEntry[]> {
+export async function tenantSurface(rows: TenantRows, options: WithRowsOptions = {}): Promise<SurfaceEntry[]> {
     return [
         ...await studioSurface(rows.studio, { lang: rows.studio.voice.language }),
         ...infographicSurface(rows.studio),
         ...(rows.agent ? dmInstructionSurface(rows.agent) : []),
         ...dmFallbackSurface(rows.studio),
-        ...await growthSurface(rows),
+        ...await growthSurface(rows, options),
     ];
 }

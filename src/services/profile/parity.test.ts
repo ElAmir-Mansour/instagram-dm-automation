@@ -197,6 +197,42 @@ describe('runParity, on the rows of a tenant', () => {
     });
 });
 
+describe('a stored profile\'s coach language: the one fact the rows cannot say', () => {
+    const clean = { repaired: [] as string[], newerSchema: false };
+    const withCoachEnglish = (): ReturnType<typeof profileFromLegacy> => {
+        const p = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+        p.language.surfaces = { ...p.language.surfaces, coach: { language: 'en' } };
+        return p;
+    };
+    const rows = { studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH };
+
+    it('a coach override in a STORED profile is drift: the coach and the keyword finder would write in English, and today\'s rows say Arabic', async () => {
+        const report = await runParity({ ...rows, profile: withCoachEnglish(), stored: clean });
+        assert.equal(report.ok, false);
+        assert.equal(parityExitCode(report), 1);
+        const differing = report.rows.filter((r) => !r.match).map((r) => r.name);
+        // Named for the language each was written in: the Arabic ones only path (a) built, the English ones only (b).
+        for (const name of ['growth.coach-system.ar', 'growth.coach-system.en', 'growth.keywords-system.ar', 'growth.keywords-system.en']) {
+            assert.ok(differing.includes(name), `${name} in ${differing.join(', ')}`);
+        }
+        assert.ok(differing.every((n) => n.startsWith('growth.')), 'and nothing the Studio writes');
+    });
+
+    it('the same profile described from the rows alone (none stored) is not drift: a profile nobody stored cannot hold an override', async () => {
+        const report = await runParity({ ...rows, profile: withCoachEnglish() });
+        assert.equal(report.ok, true);
+    });
+
+    it('the owner\'s own stored profile: parity, with the hashes it has without it (nothing moved)', async () => {
+        const profile = throughJsonb(profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH));
+        const stored = await runParity({ ...rows, profile, stored: clean });
+        const legacy = await runParity({ ...rows, profile });
+        assert.equal(stored.ok, true, JSON.stringify(stored.rows.filter((r) => !r.match).map((r) => r.name)));
+        assert.deepEqual(stored.digest, legacy.digest);
+        assert.equal(stored.builders, legacy.builders);
+    });
+});
+
 describe('the entries are text', () => {
     it('entryText is what is hashed', () => {
         const report = compareSurfaces([j('p', { a: [1] })], [j('p', { a: [1] })]);

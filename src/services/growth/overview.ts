@@ -22,7 +22,7 @@ import type { AccountDayMetrics, AccountInsightsDailyRow, PostInsightRow, PostMe
 import { queryRows } from '../../db/query.js';
 import { describeError, log } from '../../utils/log.js';
 import { isMissingSchema } from '../health.js';
-import { getStudioSettings } from '../studio/settings.js';
+import { profileContext } from '../profile/context.js';
 import { clampInt } from './common.js';
 import { addDays, FOLLOWER_METRICS_MIN, UNDER_100_REASON, utcDay } from './mapping.js';
 import { getGrowthSettings } from './settings.js';
@@ -412,11 +412,11 @@ export function parsePlatform(raw: unknown): OverviewPlatform {
 
 const platformsOf = (p: OverviewPlatform): string[] => (p === 'all' ? [...GROWTH_PLATFORMS] : [p]);
 
-/** The tenant's timezone for the heatmap: the Growth audience's, else the Studio's, else UTC. */
+/** The tenant's timezone for the heatmap: the Growth audience's, else the profile's (`identity.timezone`), else UTC. */
 export async function tenantTimezone(creatorId: string, audienceTimezone?: string): Promise<string> {
     if (audienceTimezone) return audienceTimezone;
     try {
-        const tz = (await getStudioSettings(creatorId)).schedule?.timezone;
+        const tz = (await profileContext(creatorId, 'growth_coach')).timezone;
         if (typeof tz === 'string' && tz) return tz;
     } catch (err) {
         if (!isMissingSchema(err)) log('warn', 'growth.timezone_unreadable', describeError(err));

@@ -1,7 +1,8 @@
 /**
  * `POST /api/growth/coach` (GROWTH.md §3): Gemini reads the tenant's numbers, captions and
- * settings and answers `{ summary, wins, problems, actions, experiments }` in the tenant's voice
- * language (`studio_settings.voice.language`, else English).
+ * settings and answers `{ summary, wins, problems, actions, experiments }` in the language the
+ * tenant's profile gives the coach (`profileContext(…, 'growth_coach')`: `language.surfaces.coach`,
+ * else `language.primary`; English when it cannot be read).
  *
  * It runs on the Studio's writer chain (`callGemini`: `STUDIO_MODELS` in order, never the DM
  * bot's model), with a response schema, and the answer is checked here rather than trusted: every
@@ -12,7 +13,7 @@
  * already comes from non-followers — and to say a number is missing rather than guess it.
  */
 import { callGemini, type CallModel, type GeminiSchema } from '../studio/generate.js';
-import { getStudioSettings } from '../studio/settings.js';
+import { profileContext } from '../profile/context.js';
 import { describeError, log } from '../../utils/log.js';
 import { isMissingSchema } from '../health.js';
 import { clip, GrowthError } from './common.js';
@@ -250,10 +251,14 @@ export function coerceCoach(raw: unknown, knownIds: ReadonlySet<string>): CoachA
 
 // ─── Running it ──────────────────────────────────────────────────────────────────────────
 
-/** The tenant's voice language, from the Studio settings; English when there are none. */
+/**
+ * The language the tenant's coach (and keyword finder) writes in: the profile context's, for the `coach` surface
+ * (so a tenant with no stored profile is read from its legacy settings, `voice.language`, as before). English when
+ * the profile cannot be read.
+ */
 export async function tenantLanguage(creatorId: string): Promise<'ar' | 'en'> {
     try {
-        return (await getStudioSettings(creatorId)).voice?.language === 'ar' ? 'ar' : 'en';
+        return (await profileContext(creatorId, 'growth_coach')).language.code === 'ar' ? 'ar' : 'en';
     } catch (err) {
         if (!isMissingSchema(err)) log('warn', 'growth.language_unreadable', describeError(err));
         return 'en';

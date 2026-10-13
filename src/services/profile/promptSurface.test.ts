@@ -180,10 +180,14 @@ describe('the pool stand-in answers what the Growth builders ask and nothing els
         }, { storedProfile: stored });
     });
 
-    it('the parity script and its library never supply a stored profile: that is the golden test\'s alone', () => {
-        for (const file of ['../../../scripts/prompt-parity.mts', './parity.ts', './backfill.ts']) {
+    it('besides the golden test, only runParity supplies a stored profile, and only on path (b), for a tenant that has one', () => {
+        for (const file of ['../../../scripts/prompt-parity.mts', './backfill.ts']) {
             assert.doesNotMatch(readFileSync(new URL(file, import.meta.url), 'utf8'), /storedProfile/, file);
         }
+        const parity = readFileSync(new URL('./parity.ts', import.meta.url), 'utf8');
+        assert.equal(parity.match(/storedProfile/g)?.length, 1, 'one use');
+        assert.match(parity, /const a = await tenantSurface\(\{ studio, growth, agent \}\);/, 'path (a), today\'s rows, is handed none');
+        assert.match(parity, /const b = await tenantSurface\(\{[^\n]*\}, stored \? \{ storedProfile: profile \} : \{\}\);/, 'path (b) is handed the stored profile, when there is one');
     });
 
     it('answers the settings rows with the rows it was given, a copy each', async () => {

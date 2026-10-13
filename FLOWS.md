@@ -1259,6 +1259,80 @@ The switcher's data source is `GET /api/auth/me` (**`src/routes/api.ts:942`**) �
 `listTenantsForSession` (**`src/services/tenant.ts:341`**): every active creator for a
 `platform_admin`, otherwise creators joined through `memberships`.
 
+### 4.7 — The creator profile: reading it, changing it, and what the agents are told
+
+Once the tenant is pinned, one record says who it is: `creator_profiles.profile` (who the creator is,
+how they speak, what they sell, what the agents must never do). The Studio and Growth settings are
+*views* over it; the agents read *contexts* cut from it. Every tenant has one: the stored row, or,
+until it has one, the virtual profile its legacy settings describe (`version: null`).
+
+**Reading it.**
+
+1. **`src/index.ts:73`** — `profileCacheScope` opens a per-request cache, right after the log context,
+   so the webhook, the dashboard API and `/api/jobs/drain` all share one read per tenant per request.
+2. **`src/services/profile/store.ts:158`** — `loadProfile`: the stored row through `upgradeProfile`
+   (a stored profile is merged over the defaults, so a field a later release adds reads as its
+   default), else `loadLegacyProfile` — the tenant's settings rows read directly and described by
+   `profileFromLegacy`. A database without v33 reads as "no stored profile" (logged once).
+3. **`src/services/studio/settings.ts:265`**, **`src/services/growth/settings.ts:266`** — the settings
+   readers overlay the stored profile on their own row (`studioView` / `growthView`). A tenant with
+   no stored profile, or one written by a *newer* release, gets its row unchanged.
+4. **`src/services/profile/context.ts:270`** — `profileContext(creatorId, purpose)` is `loadProfile`
+   then the pure `contextFor` (**:243**): a base every purpose shares (`language` resolved for the
+   purpose's surface, `who`, `guard`) plus that purpose's slice. A stored profile written by a *newer*
+   release is passed over exactly as the settings readers pass it over (**:274**): the context is cut
+   from the legacy rows, `version: null`. Today two readers use it:
+   `tenantLanguage` (**`src/services/growth/coach.ts:259`**: the coach's and the keyword finder's
+   language) and `tenantTimezone` (**`src/services/growth/overview.ts:416`**: the heatmap, after the
+   audience's own override). The DM's knowledge base is *not* in a context: it stays on `ai_agents`.
+
+**`GET /api/profile`** — **`src/routes/profile.ts:61`**, mounted below `resolveTenant`
+(**`src/routes/api.ts:1509`**), operator or owner (**:58**), like every read of the Studio's and Growth's
+settings: a `viewer` sees the account's numbers, not how it is run (403 otherwise). Answers
+`{ profile, version, stored, activationMissing }` — `stored: false` and `version: null` for the
+virtual profile, `activationMissing` the fields the wizard still needs.
+
+**`PATCH /api/profile { version, patch }`** — **`src/routes/profile.ts:65`**, owner only (**:59**).
+
+1. **`src/services/profile/patch.ts:169`** — `patchProfile` refuses a body that is not
+   `{ version, patch }` (400, one problem), and a patch nested deeper than any profile (400).
+2. **Without the lock** (**`patch.ts:184`**): it reads the profile and `plan`s the patch (**:146**):
+   a newer-schema profile (409 `PROFILE_NEWER_SCHEMA`), a `version` that is not the stored one
+   (409 `PROFILE_VERSION_CONFLICT`, `currentVersion` in the body) — both *before* merging, because the
+   patch was written against a profile that has moved on — then `mergePatch` (**:83**: objects merge
+   key by key; lists, scalars and `null` replace; in `language.surfaces`, `socials.links` and
+   `audience.timezone` a `null` removes the entry), then the *merged* result is validated (400
+   `PROFILE_INVALID`, every problem listed). A refusal here never takes the tenant's mutex.
+3. **A patch that changes nothing writes nothing** (**`patch.ts:152`**) — no version, no history row,
+   no audit entry.
+4. **With the lock** (**`patch.ts:191-196`**): one transaction. `lockTenantSettings` first
+   (creators → creator_profiles → studio_settings → growth_settings, the order every settings writer
+   takes), then the profile row `FOR UPDATE` — or, for a tenant with none, the legacy rows, read
+   *after* the lock — and step 2 is made again on *that*. This is what makes the merge sound: a Studio
+   or Growth settings write that committed between the first read and the lock is in what the patch is
+   merged onto; one that comes later waits for the mutex. (Merged onto the first read, the stale rows
+   would have been saved over it as the next version and mirrored back.)
+5. **`src/services/profile/store.ts:360`** — `saveProfile(…, { expectVersion, startFromCaller })` on that
+   transaction: validates again, bumps the version, keeps the history row and mirrors the view back into
+   `studio_settings` / `growth_settings`. Under the mutex the `WHERE version =` cannot lose to a writer
+   that takes it; it is the backstop for one that does not. A tenant whose legacy rows are not a valid
+   profile on their own (a colour that is no colour) is repaired by a valid merged result, which is
+   stored as version 1 (`startFromCaller`); otherwise version 1 is the legacy baseline (source
+   `backfill`) and the patch is version 2. The profile cache is cleared after the commit.
+6. **`src/routes/profile.ts:70`** — the audit row `profile.write`: `detail.paths` names the
+   top-level sections that changed and `detail.version` the new version. **Never a value.**
+
+> **Why the version check comes before the merge.** A patch is a *diff against what its author saw*.
+> Merged onto a newer profile it would still validate and still save — and silently overwrite the
+> change that made it stale. The 409 is what tells the wizard to reload instead.
+>
+> **Why the second read.** Everything that refuses is decided on the first read, so a bad request costs the
+> tenant nothing. But a merge made on a read taken *before* the lock can be of rows that have since
+> changed, and `saveProfile` validates a profile, not its freshness: only the read under the mutex is.
+>
+> **Why a no-op is not a write.** The wizard retries, and a double-click is a second request. Without
+> this each would mint a version and a history row that differ from the last by nothing.
+
 ---
 
 ## 5. Job lifecycle
@@ -1746,6 +1820,7 @@ error, and several write **no row at all**.
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
+| 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:152`** | *(none)* | no (200, version unchanged, no audit entry) |
 | 5 | budget spent — **`runner.ts:145`** | `job.drain_complete` (`budgetExhausted: true`) | jobs stay `pending` |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |
