@@ -19,28 +19,28 @@ import { setLogSink } from '../../utils/log.js';
 import { defaultGrowthSettings, fromRow } from '../growth/settingsRow.js';
 import { getGrowthSettings, resetGoalColumnsWarning } from '../growth/settings.js';
 import { defaultStudioSettings, overDefaults } from '../studio/settingsMerge.js';
-import { getMonteurSettings, getStudioSettings } from '../studio/settings.js';
+import { getMonteurSettings, getStudioSettings, updateStudioSettings } from '../studio/settings.js';
 import { ELAMIR_GROWTH } from '../studio/testFixtures.js';
 import { withProfileCache } from './cache.js';
 import { profileFromLegacy } from './legacy.js';
-import { resetNewerSchemaWarnings, resetProfileTableWarning } from './store.js';
+import { resetProfileTableWarning, resetProfileWarnings, saveProfile } from './store.js';
 import {
     growthRow, installProfileDb, OTHER, OWNER, OWNER_STUDIO, type ProfileDb, seededState, studioRow, type State,
 } from './testDb.js';
 import { leafPaths, richProfile, scramble, throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
-import { GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
+import { changedPaths, GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
 
 let state: State;
 let db: ProfileDb;
-let events: { level: string; event: string }[];
+let events: { level: string; event: string; fields: Record<string, unknown> }[];
 let restoreSink: (() => void) | undefined;
 
 beforeEach(() => {
     events = [];
-    const previous = setLogSink((level, line) => { events.push({ level, event: JSON.parse(line).event }); });
+    const previous = setLogSink((level, line) => { const fields = JSON.parse(line); events.push({ level, event: fields.event, fields }); });
     restoreSink = () => setLogSink(previous);
-    resetNewerSchemaWarnings();
+    resetProfileWarnings();
     resetProfileTableWarning();
     resetGoalColumnsWarning();
     state = seededState();
@@ -278,6 +278,19 @@ describe('getMonteurSettings\' timezone is the Studio reader\'s schedule.timezon
         });
     }
 
+    // A stored profile that is not an object at all (a hand edit, a bad write): both readers read it as the default.
+    const notObjects: [string, unknown][] = [['a string', 'garbage'], ['a number', 42], ['a list', ['x']], ['an empty list', []], ['JSON null', null], ['a boolean', true]];
+    for (const [name, raw] of notObjects) {
+        it(`a stored profile that is ${name} reads as the default, UTC, in both readers`, async () => {
+            state.profiles.set(OWNER, { profile: raw, version: 1, activated_at: null, updated_by: null });
+            const studio = (await getStudioSettings(OWNER)).schedule.timezone;
+            const monteur = (await getMonteurSettings(OWNER)).timezone;
+            assert.equal(studio, 'UTC', 'the Studio reader');
+            assert.equal(monteur, studio, 'the Monteur reader agrees');
+            assert.equal((await getGrowthSettings(OWNER)).goal_followers, 10_000, 'and the Growth reader reads the default goals');
+        });
+    }
+
     it('a newer-schema profile, no profile, and no v33: the row\'s own timezone, as the Studio reader gives it', async () => {
         const rowTimezone = todayStudio(OWNER).schedule.timezone;
         store(OWNER, profileWith({ ...base(), timezone: 'Europe/London' }, { schema: 2 }));
@@ -337,5 +350,72 @@ describe('a stored profile with fields that had to be repaired when it was read'
         store(OWNER, { ...richProfile(), identity: { ...richProfile().identity, timezone: 5 } });
         assert.equal((await getMonteurSettings(OWNER)).timezone, 'UTC');
         assert.equal(logged('profile.repaired'), 0, 'the narrow read repairs a stand-in profile, which says nothing about the stored one');
+    });
+});
+
+describe('a settings row that has drifted from the profile', () => {
+    const drift = (settings: 'studio' | 'growth'): { fields: Record<string, unknown> }[] =>
+        events.filter((e) => e.event === 'profile.row_drift' && e.fields.settings === settings);
+
+    it('is logged once per tenant and settings, with the paths that differ', async () => {
+        // The row is the owner's; the profile says something else in several owned fields.
+        store(OWNER, richProfile());
+        await getStudioSettings(OWNER);
+        await getStudioSettings(OWNER);
+        const [line] = drift('studio');
+        assert.equal(drift('studio').length, 1, 'once, however many reads');
+        assert.equal(events.find((e) => e.event === 'profile.row_drift')!.level, 'warn');
+        assert.equal(line!.fields.creator_id, OWNER);
+        const paths = line!.fields.paths as string[];
+        assert.deepEqual(paths, changedPaths(todayStudio(OWNER), studioView(todayStudio(OWNER), richProfile()), STUDIO_PROFILE_PATHS), 'exactly the owned paths where the row and the view differ');
+        for (const path of ['brand.name', 'schedule.timezone', 'voice.digits', 'product.name', 'infographic.theme']) assert.ok(paths.includes(path), path);
+        assert.ok(!paths.includes('monteur.enabled') && !paths.includes('schedule.slots'), 'only what the profile owns');
+
+        await getGrowthSettings(OWNER);
+        await getGrowthSettings(OWNER);
+        assert.equal(drift('growth').length, 1, 'Growth drifts on its own line');
+        assert.deepEqual(drift('growth')[0]!.fields.paths, ['audience.countries', 'audience.languages', 'audience.timezone', 'goal_followers', 'goal_views']);
+        assert.equal(logged('profile.row_drift'), 2);
+    });
+
+    it('another tenant is another line', async () => {
+        store(OWNER, richProfile());
+        store(OTHER, richProfile());
+        await getStudioSettings(OWNER);
+        await getStudioSettings(OTHER);
+        assert.equal(drift('studio').length, 2);
+    });
+
+    it('is not logged when the row is what the profile says: the owner\'s stored profile, and a row the mirror wrote', async () => {
+        store(OWNER, profileFromLegacy(OWNER_STUDIO, ELAMIR_GROWTH as GrowthSettings));
+        await getStudioSettings(OWNER);
+        await getGrowthSettings(OWNER);
+        assert.equal(logged('profile.row_drift'), 0);
+        await saveProfile(OTHER, richProfile(), { expectVersion: null, source: 'wizard', userId: null });
+        await getStudioSettings(OTHER);
+        await getGrowthSettings(OTHER);
+        assert.equal(logged('profile.row_drift'), 0, 'after a save the rows mirror the profile');
+    });
+
+    it('is not logged for a tenant with no profile or one from a newer release: nothing is overlaid, so nothing differs', async () => {
+        await getStudioSettings(OWNER);
+        store(OTHER, { ...richProfile(), schema: 2 });
+        await getStudioSettings(OTHER);
+        await getGrowthSettings(OTHER);
+        assert.equal(logged('profile.row_drift'), 0);
+    });
+
+    it('the reader still answers with the profile: drift is a line in the log, not a different answer', async () => {
+        store(OWNER, richProfile());
+        sameBytes(await getStudioSettings(OWNER), studioView(todayStudio(OWNER), richProfile()), 'the view');
+    });
+
+    it('a write heals it: the row then equals the view, and a process that starts afresh finds nothing to say', async () => {
+        store(OWNER, richProfile());
+        await updateStudioSettings(OWNER, { cta: { tiktokLine: 'Comment below' } });
+        resetProfileWarnings();
+        events.length = 0;
+        await getStudioSettings(OWNER);
+        assert.equal(logged('profile.row_drift'), 0);
     });
 });

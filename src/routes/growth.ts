@@ -90,7 +90,7 @@ growthRouter.get('/settings', handle('growth.settings_read_failed', 'Failed to r
 
 growthRouter.put('/settings', handle('growth.settings_save_failed', 'Failed to save the Growth settings.', async (req, res) => {
     const creatorId = getTenantId(req);
-    const settings = await updateGrowthSettings(creatorId, req.body);
+    const settings = await updateGrowthSettings(creatorId, req.body, { userId: req.session?.userId ?? null });
     await writeAudit(await actorFromSession(req.session), {
         action: AUDIT_ACTIONS.growthSettingsWrite, targetType: 'creator', targetId: creatorId,
         detail: { keys: Object.keys(req.body ?? {}) },

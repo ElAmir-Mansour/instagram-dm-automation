@@ -37,7 +37,7 @@ import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import type { CreatorProfile } from './types.js';
 import { PROFILE_LIMITS, validateProfile } from './validate.js';
-import { growthView, scheduleTimezone, studioView } from './views.js';
+import { changedPaths, growthView, scheduleTimezone, studioView } from './views.js';
 
 // ─── Errors ──────────────────────────────────────────────────────────────────────────────────
 
@@ -166,12 +166,44 @@ export async function loadProfile(creatorId: string, exec: Exec = pool): Promise
 /** Logged once per tenant per process: every reader asks, so a warning per call would be noise. */
 const newerSchemaWarned = new Set<string>();
 const repairedWarned = new Set<string>();
+/** Keyed by tenant and settings (`<id>:studio`, `<id>:growth`): the two readers drift independently, and one should not hide the other. */
+const driftWarned = new Set<string>();
 
-/** Test hook: forget which tenants' newer-schema and repaired-profile warnings were logged. */
-export function resetNewerSchemaWarnings(): void {
+/** Test hook: forget which tenants' newer-schema, repaired-profile and row-drift warnings were logged. */
+export function resetProfileWarnings(): void {
     newerSchemaWarned.clear();
     repairedWarned.clear();
+    driftWarned.clear();
 }
+
+/**
+ * Says, once per tenant and settings, that the settings row differs from what the profile says: the fields of
+ * `paths` where `row` and `view` disagree. The readers show the view, so nothing is wrong for the tenant; the row is
+ * what a code rollback would read, and a row that has drifted (an SQL edit, a write that bypassed the mirror) is healed
+ * silently by the next write, so without this line the drift is invisible until a rollback shows it.
+ */
+export function warnRowDrift(creatorId: string, settings: 'studio' | 'growth', row: object, view: object, paths: readonly string[]): void {
+    const key = `${creatorId}:${settings}`;
+    if (driftWarned.has(key)) return;
+    const drifted = changedPaths(row, view, paths);
+    if (drifted.length === 0) return;
+    driftWarned.add(key);
+    log('warn', 'profile.row_drift', {
+        creator_id: creatorId,
+        settings,
+        paths: drifted,
+        effect: 'readers show the profile\'s values; the row, which a rollback would read, says something else',
+        fix: 'the next write to these settings rewrites the row from the profile; edit them in the dashboard, never in SQL',
+    });
+}
+
+/** Who is writing a settings change: the signed-in user, or null for the shared-password login and for a job. It is `updated_by` of the profile version the write makes. */
+export interface SettingsActor {
+    userId: string | null;
+}
+
+/** No one in particular: a job, a script, a caller that does not know. */
+export const SYSTEM_ACTOR: SettingsActor = Object.freeze({ userId: null });
 
 /** A stored profile some of whose fields could not be read as stored: they read as defaults, so the settings views carry those. The drift signal. */
 function warnRepaired(creatorId: string, repaired: readonly string[]): void {

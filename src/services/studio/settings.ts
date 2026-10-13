@@ -20,8 +20,10 @@ import type { CreatorProfile } from '../profile/types.js';
 import type { InfographicPlatform, InfographicSocial, InfographicTheme, MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
 import { type Exec, isPlainObject, lockTenantSettings, problemsError, StudioError, withTransaction } from './common.js';
 import { defaultStudioSettings, mergeSettings, overDefaults, readStudioSettings, STUDIO_SETTINGS_SECTIONS } from './settingsMerge.js';
+import { clearProfileCache } from '../profile/cache.js';
 import {
     loadOverlayProfile, loadScheduleTimezone, lockStoredProfile, newerSchemaError, overlayProfile, ProfileError, saveProfile, type SavedProfile,
+    type SettingsActor, SYSTEM_ACTOR, warnRowDrift,
 } from '../profile/store.js';
 import { changedPaths, intoProfile, STUDIO_PROFILE_PATHS, studioView } from '../profile/views.js';
 
@@ -263,7 +265,10 @@ export async function getMonteurSettings(creatorId: string, exec: Exec = pool): 
 export async function getStudioSettings(creatorId: string, exec: Exec = pool): Promise<StudioSettings> {
     const row = await readStudioSettings(exec, creatorId);
     const profile = await loadOverlayProfile(creatorId, exec);
-    return profile ? studioView(row, profile) : row;
+    if (!profile) return row;
+    const view = studioView(row, profile);
+    warnRowDrift(creatorId, 'studio', row, view, STUDIO_PROFILE_PATHS);
+    return view;
 }
 
 /**
@@ -278,29 +283,34 @@ export async function getStudioSettings(creatorId: string, exec: Exec = pool): P
  * profile owns (`STUDIO_PROFILE_PATHS`) goes into the profile too: a new version, with its history row, through
  * `saveProfile`, expecting the version read in this transaction. A change to anything else never touches the profile.
  * A profile's own refusals (a version conflict, one written by a newer release, an invalid result) are
- * `StudioError`s with the same status, so the route answers them as it answers every other refusal.
+ * `StudioError`s with the same status, so the route answers them as it answers every other refusal. `actor` is who is
+ * writing: the profile version a change makes records it as `updated_by` (the route passes the session's user).
  *
- * The profile cache (`profile/cache.ts`) is cleared by `saveProfile`, which for a caller's own transaction is before the
- * caller commits: a caller that changes a profile-owned field through its own `exec` calls `clearProfileCache` after the
- * commit. The only such caller today (the Monteur's folder pick) edits `monteur.folder`, which the profile does not own.
+ * The profile cache (`profile/cache.ts`) is cleared by `saveProfile`, which is before the commit: in the pool path this
+ * clears it again after the commit, so a reader that ran in between cannot leave the old profile cached for the rest of
+ * the request. A caller that changes a profile-owned field through its own `exec` calls `clearProfileCache` after its
+ * own commit. The only such caller today (the Monteur's folder pick) edits `monteur.folder`, which the profile does not own.
  */
 export async function updateStudioSettings(
-    creatorId: string, patch: unknown, exec: Exec = pool
+    creatorId: string, patch: unknown, exec: Exec = pool, actor: SettingsActor = SYSTEM_ACTOR
 ): Promise<{ settings: StudioSettings; changed: string[] }> {
     if (!isPlainObject(patch) || Object.keys(patch).length === 0) {
         throw new StudioError(400, 'Send the settings to change, e.g. { "schedule": { "timezone": "Asia/Riyadh" } }.');
     }
     try {
-        return (exec as unknown) === pool
-            ? await withTransaction((tx) => applyStudioPatch(creatorId, patch, tx))
-            : await applyStudioPatch(creatorId, patch, exec);
+        if ((exec as unknown) !== pool) return await applyStudioPatch(creatorId, patch, exec, actor);
+        try {
+            return await withTransaction((tx) => applyStudioPatch(creatorId, patch, tx, actor));
+        } finally {
+            clearProfileCache(creatorId);
+        }
     } catch (err) {
         throw err instanceof ProfileError ? new StudioError(err.status, err.message, err.detail.problems) : err;
     }
 }
 
 async function applyStudioPatch(
-    creatorId: string, patch: Record<string, unknown>, exec: Exec
+    creatorId: string, patch: Record<string, unknown>, exec: Exec, actor: SettingsActor
 ): Promise<{ settings: StudioSettings; changed: string[] }> {
     // Lock order, everywhere: creators, creator_profiles, studio_settings, growth_settings.
     await lockTenantSettings(exec, creatorId);
@@ -345,7 +355,7 @@ async function applyStudioPatch(
     // fields of a mirrored section that the profile does not own (`brand.palette`, `schedule.slots`…) keep what this wrote.
     let saved: SavedProfile | null = null;
     if (proposed && locked) {
-        saved = await saveProfile(creatorId, proposed, { expectVersion: locked.version, source: 'user', userId: null }, exec);
+        saved = await saveProfile(creatorId, proposed, { expectVersion: locked.version, source: 'user', userId: actor.userId }, exec);
     }
     await supersedeStaleScans(exec, creatorId, current.monteur, next.monteur);
     // What the reader answers from now on, so the response and the next GET cannot differ.

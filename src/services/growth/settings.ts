@@ -24,8 +24,10 @@ import { describeError, log } from '../../utils/log.js';
 import { isMissingSchema } from '../health.js';
 import { GrowthError } from './common.js';
 import { type Exec, lockTenantSettings, withTransaction } from '../studio/common.js';
+import { clearProfileCache } from '../profile/cache.js';
 import {
     loadOverlayProfile, lockStoredProfile, lockStudioRow, newerSchemaError, overlayProfile, ProfileError, saveProfile, type SavedProfile,
+    type SettingsActor, SYSTEM_ACTOR, warnRowDrift,
 } from '../profile/store.js';
 import type { CreatorProfile } from '../profile/types.js';
 import { changedPaths, GROWTH_PROFILE_PATHS, growthIntoProfile, growthView } from '../profile/views.js';
@@ -264,7 +266,10 @@ export function resetGoalColumnsWarning(): void {
 export async function getGrowthSettings(creatorId: string): Promise<GrowthSettings> {
     const row = await readStoredGrowth(creatorId);
     const profile = await loadOverlayProfile(creatorId);
-    return profile ? growthView(row, profile) : row;
+    if (!profile) return row;
+    const view = growthView(row, profile);
+    warnRowDrift(creatorId, 'growth', row, view, GROWTH_PROFILE_PATHS);
+    return view;
 }
 
 /** The stored row over the defaults, with the v25 tolerance above. */
@@ -296,11 +301,17 @@ async function readStoredGrowth(creatorId: string): Promise<GrowthSettings> {
  * profile owns (`GROWTH_PROFILE_PATHS`) goes into the profile too: a new version, with its history row, through
  * `saveProfile`, expecting the version read in this transaction. Keywords, hashtag sets and competitors never touch
  * the profile. A profile's own refusals (a version conflict, one written by a newer release, an invalid result) are
- * `GrowthError`s with the same status.
+ * `GrowthError`s with the same status. `actor` is who is writing: the profile version a change makes records it as
+ * `updated_by` (the route passes the session's user). The profile cache is cleared again after the commit
+ * (`saveProfile` clears it before), so a reader that ran in between cannot leave the old profile cached for the request.
  */
-export async function updateGrowthSettings(creatorId: string, patch: unknown): Promise<GrowthSettings> {
+export async function updateGrowthSettings(creatorId: string, patch: unknown, actor: SettingsActor = SYSTEM_ACTOR): Promise<GrowthSettings> {
     try {
-        return await withTransaction((tx) => applyGrowthUpdate(creatorId, patch, tx));
+        try {
+            return await withTransaction((tx) => applyGrowthUpdate(creatorId, patch, tx, actor));
+        } finally {
+            clearProfileCache(creatorId);
+        }
     } catch (err) {
         throw err instanceof ProfileError
             ? new GrowthError(err.status, err.message, err.detail.problems ? { problems: err.detail.problems } : undefined)
@@ -311,7 +322,7 @@ export async function updateGrowthSettings(creatorId: string, patch: unknown): P
 /** The top-level settings whose value is, wholly or in part, a profile field: the patches that may need `saveProfile`. */
 const OWNED_KEYS: ReadonlySet<string> = new Set(GROWTH_PROFILE_PATHS.map((path) => path.split('.')[0]!));
 
-async function applyGrowthUpdate(creatorId: string, patch: unknown, tx: Exec): Promise<GrowthSettings> {
+async function applyGrowthUpdate(creatorId: string, patch: unknown, tx: Exec, actor: SettingsActor): Promise<GrowthSettings> {
     // Lock order, everywhere: creators, creator_profiles, studio_settings, growth_settings.
     await lockTenantSettings(tx, creatorId);
     const locked = await lockStoredProfile(creatorId, tx);
@@ -350,7 +361,7 @@ async function applyGrowthUpdate(creatorId: string, patch: unknown, tx: Exec): P
     // transaction) and writes back the same audience and goals it was given: the second write cannot undo the first.
     let saved: SavedProfile | null = null;
     if (proposed && locked) {
-        saved = await saveProfile(creatorId, proposed, { expectVersion: locked.version, source: 'user', userId: null }, tx);
+        saved = await saveProfile(creatorId, proposed, { expectVersion: locked.version, source: 'user', userId: actor.userId }, tx);
     }
     // What the reader answers from now on, so the response and the next GET cannot differ.
     return profile ? growthView(settings, saved?.profile ?? profile) : settings;

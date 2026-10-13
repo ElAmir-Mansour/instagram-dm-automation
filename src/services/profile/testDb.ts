@@ -49,7 +49,7 @@ export interface ProfileDb extends FakeDb {
     /** Runs just before the step-0 insert into creator_profiles: another save's commit, landing in the gap. */
     beforeProfileInsert: (() => void) | null;
     /** Runs before each statement, with its whitespace-collapsed SQL: a write from another connection, landing between two of ours. */
-    onStatement: ((sql: string) => void) | null;
+    onStatement: ((sql: string) => void | Promise<void>) | null;
 }
 
 export function installProfileDb(state: State, options: { v33?: boolean } = {}): ProfileDb {
@@ -108,7 +108,7 @@ export function installProfileDb(state: State, options: { v33?: boolean } = {}):
     const guard = (pool as unknown as { query: (sql: string, params?: any[]) => Promise<unknown> }).query;
     const guarded = async (sql: string, params: any[] = []): Promise<unknown> => {
         const flat = sql.replace(/\s+/g, ' ').trim();
-        db.onStatement?.(flat);
+        await db.onStatement?.(flat);
         if (db.failOn?.test(flat)) {
             db.statements.push({ sql: flat, params });
             throw db.failWith ?? new Error(`injected failure on: ${flat.slice(0, 60)}`);

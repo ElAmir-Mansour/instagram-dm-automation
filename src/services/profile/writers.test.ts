@@ -16,6 +16,8 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import type { GrowthSettings, StudioSettings } from '../../db/rows.js';
+import { growthRouter } from '../../routes/growth.js';
+import { studioRouter } from '../../routes/studio.js';
 import { setLogSink } from '../../utils/log.js';
 import { GrowthError } from '../growth/common.js';
 import { getGrowthSettings, updateGrowthSettings } from '../growth/settings.js';
@@ -24,11 +26,12 @@ import { getStudioSettings, updateStudioSettings } from '../studio/settings.js';
 import { ELAMIR_GROWTH } from '../studio/testFixtures.js';
 import { withProfileCache } from './cache.js';
 import { profileFromLegacy } from './legacy.js';
-import { resetNewerSchemaWarnings } from './store.js';
+import { defaultProfile } from './defaults.js';
+import { resetProfileWarnings, saveProfile } from './store.js';
 import {
-    GROWTH_COLUMNS, growthRow, installProfileDb, OWNER, OWNER_STUDIO, type ProfileDb, seededState, STUDIO_COLUMNS, studioRow, type State,
+    GROWTH_COLUMNS, growthRow, installProfileDb, OWNER, OWNER_STUDIO, type ProfileDb, seededState, STUDIO_COLUMNS, studioRow, type State, USER,
 } from './testDb.js';
-import { throughJsonb } from './testSupport.js';
+import { richProfile, throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
 
 const MUTEX = /^SELECT id FROM creators WHERE id = \$1 FOR NO KEY UPDATE$/;
@@ -52,7 +55,7 @@ let restoreSink: (() => void) | undefined;
 beforeEach(() => {
     const previous = setLogSink(() => {});
     restoreSink = () => setLogSink(previous);
-    resetNewerSchemaWarnings();
+    resetProfileWarnings();
     state = seededState();
     db = installProfileDb(state);
 });
@@ -603,5 +606,306 @@ describe('updateGrowthSettings: locks', () => {
         inOrder(['the creators mutex', MUTEX], ['the profile row', PROFILE_ROW], ['the Growth row', GROWTH_READ], ['the write', GROWTH_WRITE]);
         assert.equal(count(STUDIO_LOCK) + count(STUDIO_READ), 0);
         lockOrderIsGlobal();
+    });
+});
+
+// ─── What the dashboard really sends ─────────────────────────────────────────────────────────
+
+/**
+ * The Studio settings screen's body (`StudioPage.settingsPayload`, dashboard/js/pages/studio.js): the six sections it
+ * edits, each whole, as the last GET gave them, tidied the way the screen tidies them. A save with nothing edited is this.
+ */
+function studioScreenPayload(read: StudioSettings): Record<string, unknown> {
+    const w = JSON.parse(JSON.stringify(read)) as StudioSettings;
+    const tidy = (list: unknown): string[] => (Array.isArray(list) ? list.map((x) => String(x).trim()).filter(Boolean) : []);
+    w.brand.palette = w.brand.palette.map((c) => String(c).toUpperCase()).filter((c) => /^#[0-9A-Fa-f]{6}$/.test(c));
+    for (const key of ['ink', 'paper', 'muted'] as const) w.brand.colors[key] = String(w.brand.colors[key] || '').toUpperCase();
+    w.product.facts = tidy(w.product.facts);
+    w.product.dmBullets = tidy(w.product.dmBullets);
+    w.schedule.slots = tidy(w.schedule.slots);
+    w.library.root = typeof w.library.root === 'string' && w.library.root.trim() ? w.library.root.trim() : null;
+    return Object.fromEntries((['brand', 'voice', 'product', 'cta', 'schedule', 'library'] as const).map((section) => [section, w[section]]));
+}
+
+/** The Growth screen's body for every save but a goal (`GrowthPage.settingsPayload`): the lists and the audience, whole. */
+function growthScreenPayload(read: GrowthSettings, change: Partial<GrowthSettings> = {}): Record<string, unknown> {
+    const w = JSON.parse(JSON.stringify({ ...read, ...change })) as GrowthSettings;
+    return { keywords: w.keywords, hashtag_sets: w.hashtag_sets.map((x) => ({ name: x.name, tags: x.tags })), competitors: w.competitors, audience: w.audience };
+}
+
+/**
+ * The tenant a profile was saved for: its rows are what the profile mirrored, as after a wizard or an edit. The first
+ * save stores the legacy profile as version 1 and `profile` as version 2, so the tenant starts at version 2.
+ */
+async function savedAs(profile: CreatorProfile): Promise<void> {
+    await saveProfile(OWNER, profile, { expectVersion: null, source: 'wizard', userId: null });
+    assert.equal(versionNow(), 2);
+    state.versions.length = 0;
+    db.statements.length = 0;
+}
+
+describe('the Studio screen saves its six sections whole: with nothing edited that is no new version', () => {
+    const TENANTS: [string, () => Promise<void>][] = [
+        ['the owner, whose profile describes his rows', async () => storeProfile()],
+        ['a tenant whose rows are a wizard\'s mirror', () => savedAs(richProfile())],
+        ['a new Arabic tenant: a neutral profile and no row, which reads as the defaults, UTC and "My Studio" included', async () => {
+            state.studio.delete(OWNER);
+            state.growth.delete(OWNER);
+            storeProfile(defaultProfile({ lang: 'ar' }));
+        }],
+        ['a new English tenant', async () => {
+            state.studio.delete(OWNER);
+            state.growth.delete(OWNER);
+            storeProfile(defaultProfile({ lang: 'en' }));
+        }],
+    ];
+    for (const [name, setup] of TENANTS) {
+        it(name, async () => {
+            await setup();
+            const versionBefore = versionNow();
+            const read = await getStudioSettings(OWNER);
+            db.statements.length = 0;
+            const { settings } = await updateStudioSettings(OWNER, studioScreenPayload(read));
+            assert.equal(versionNow(), versionBefore, 'no new version');
+            assert.equal(count(PROFILE_WRITES), 0, 'no profile write of any kind');
+            assert.equal(state.versions.length, 0, 'no history row');
+            assert.deepStrictEqual(settings, read, 'and the screen is answered with what it already showed');
+        });
+    }
+
+    it('an edit among the six sections is one version, and the rest of the payload changes nothing else', async () => {
+        await savedAs(richProfile());
+        const payload = studioScreenPayload(await getStudioSettings(OWNER)) as { schedule: { timezone: string }; cta: { tiktokLine: string } };
+        payload.schedule.timezone = 'Europe/London';
+        payload.cta.tiktokLine = 'Comment below 👇';
+        await updateStudioSettings(OWNER, payload);
+        assert.equal(versionNow(), 3, 'one version on top of the wizard\'s');
+        assert.equal(storedProfile().identity.timezone, 'Europe/London');
+        assert.equal(studioNow().cta.tiktokLine, 'Comment below 👇');
+        const { identity: after, ...restAfter } = storedProfile();
+        const { identity: before, ...restBefore } = richProfile();
+        assert.deepStrictEqual(restAfter, restBefore, 'nothing else in the profile moved');
+        assert.deepStrictEqual({ ...after, timezone: before.timezone }, before);
+    });
+});
+
+describe('the infographics screen', () => {
+    it('removing the portrait, { infographic: { photo_url: null } }, is a profile change: portrait_url becomes null, one version', async () => {
+        await savedAs(richProfile());
+        assert.equal(richProfile().brand.portrait_url !== null, true);
+        const { settings } = await updateStudioSettings(OWNER, { infographic: { photo_url: null } });
+        assert.equal(versionNow(), 3, 'one version on top of the wizard\'s');
+        assert.equal(storedProfile().brand.portrait_url, null);
+        assert.equal(settings.infographic.photo_url, null);
+        assert.equal(studioNow().infographic.photo_url, null);
+        assert.deepStrictEqual((await getStudioSettings(OWNER)).infographic.photo_url, null);
+    });
+
+    it('removing a portrait there is none of is no change: no version', async () => {
+        storeProfile();
+        await updateStudioSettings(OWNER, { infographic: { photo_url: null } });
+        assert.equal(versionNow(), 1);
+        assert.equal(count(PROFILE_WRITES), 0);
+        assert.equal(studioNow().infographic.photo_url, null);
+    });
+
+    it('uploading one, { infographic: { photo_url: <upload> } }, sets portrait_url', async () => {
+        storeProfile();
+        const url = 'https://app.example.com/api/uploads/33333333-3333-4333-8333-333333333333';
+        await updateStudioSettings(OWNER, { infographic: { photo_url: url } });
+        assert.equal(versionNow(), 2);
+        assert.equal(storedProfile().brand.portrait_url, url);
+    });
+
+    it('saving the brand form (the whole infographic section, as read) with nothing edited is no version; one field edited is one', async () => {
+        await savedAs(richProfile());
+        const brand = JSON.parse(JSON.stringify((await getStudioSettings(OWNER)).infographic)) as StudioSettings['infographic'];
+        await updateStudioSettings(OWNER, { infographic: brand });
+        assert.equal(versionNow(), 2, 'still the wizard\'s');
+        assert.equal(count(PROFILE_WRITES), 0);
+        await updateStudioSettings(OWNER, { infographic: { ...brand, accent: '#123456' } });
+        assert.equal(versionNow(), 3);
+        assert.equal(storedProfile().brand.accent, '#123456');
+        assert.equal(storedProfile().brand.portrait_url, richProfile().brand.portrait_url, 'the portrait the form carried is kept');
+    });
+});
+
+describe('the Growth screen always sends the audience: a keyword, hashtag or competitor save is no new version', () => {
+    const TENANTS: [string, () => Promise<void>][] = [
+        ['the owner', async () => storeProfile()],
+        ['a tenant whose rows are a wizard\'s mirror (audience with a timezone override)', () => savedAs(richProfile())],
+        ['a new tenant: a neutral profile and no row (an empty audience)', async () => {
+            state.studio.delete(OWNER);
+            state.growth.delete(OWNER);
+            storeProfile(defaultProfile({ lang: 'ar' }));
+        }],
+    ];
+    for (const [name, setup] of TENANTS) {
+        it(name, async () => {
+            await setup();
+            const versionBefore = versionNow();
+            const read = await getGrowthSettings(OWNER);
+            db.statements.length = 0;
+            const settings = await updateGrowthSettings(OWNER, growthScreenPayload(read, { keywords: [...read.keywords, 'ai agents'] }));
+            assert.equal(versionNow(), versionBefore, 'no new version');
+            assert.equal(count(PROFILE_WRITES), 0);
+            assert.equal(state.versions.length, 0);
+            // The Studio row is locked (the patch carries an audience, so it may need a save) but never written: no mirror ran.
+            assert.equal(count(STUDIO_WRITE), 0, 'the Studio row is not written');
+            assert.deepEqual(settings.keywords, [...read.keywords, 'ai agents']);
+            assert.deepEqual(growthNow().keywords, [...read.keywords, 'ai agents']);
+            assert.deepStrictEqual(settings.audience, read.audience);
+        });
+    }
+
+    it('a payload with the audience changed is one version, and the lists in it land too', async () => {
+        await savedAs(richProfile());
+        const read = await getGrowthSettings(OWNER);
+        await updateGrowthSettings(OWNER, growthScreenPayload(read, { keywords: ['x'], audience: { ...read.audience, countries: ['KW'] } }));
+        assert.equal(versionNow(), 3, 'one version on top of the wizard\'s');
+        assert.deepEqual(storedProfile().audience.countries, ['KW']);
+        assert.deepEqual(growthNow().keywords, ['x']);
+    });
+
+    it('the goals form sends only the goals: one version', async () => {
+        storeProfile();
+        await updateGrowthSettings(OWNER, { goal_followers: 25_000, goal_views: 2_000_000 });
+        assert.equal(versionNow(), 2);
+        assert.deepEqual(storedProfile().goals, { followers: 25_000, views: 2_000_000 });
+    });
+});
+
+// ─── Who wrote it ────────────────────────────────────────────────────────────────────────────
+
+describe('the profile version records who wrote it', () => {
+    it('updateStudioSettings: the actor is updated_by on the profile and on its history row', async () => {
+        storeProfile();
+        await updateStudioSettings(OWNER, { schedule: { timezone: 'Europe/London' } }, undefined, { userId: USER });
+        assert.equal(state.profiles.get(OWNER)!.updated_by, USER);
+        assert.deepEqual(state.versions.map((v) => [v.version, v.source, v.updated_by]), [[2, 'user', USER]]);
+    });
+
+    it('updateGrowthSettings: the same', async () => {
+        storeProfile();
+        await updateGrowthSettings(OWNER, { goal_followers: 25_000 }, { userId: USER });
+        assert.equal(state.profiles.get(OWNER)!.updated_by, USER);
+        assert.deepEqual(state.versions.map((v) => [v.version, v.source, v.updated_by]), [[2, 'user', USER]]);
+    });
+
+    it('with no actor (a job, a script) it is null, as before', async () => {
+        storeProfile();
+        await updateStudioSettings(OWNER, { schedule: { timezone: 'Europe/London' } });
+        await updateGrowthSettings(OWNER, { goal_followers: 25_000 });
+        assert.deepEqual(state.versions.map((v) => v.updated_by), [null, null]);
+    });
+
+    it('through a caller\'s transaction too: the actor goes in the fourth argument', async () => {
+        storeProfile();
+        const client = { query: (q: string, p?: unknown[]) => (pool as unknown as { query: (a: string, b?: unknown[]) => Promise<never> }).query(q, p) };
+        await updateStudioSettings(OWNER, { schedule: { timezone: 'Europe/London' } }, client as never, { userId: USER });
+        assert.equal(state.profiles.get(OWNER)!.updated_by, USER);
+    });
+
+    interface Layer { route?: { path: string; methods: Record<string, boolean>; stack: { handle: Function }[] } }
+    const handlerFor = (router: unknown, path: string): Function => {
+        const layer = (router as { stack: Layer[] }).stack.find((l) => l.route?.path === path && l.route.methods.put);
+        assert.ok(layer, `PUT ${path} must be mounted`);
+        return layer!.route!.stack.at(-1)!.handle;
+    };
+    const put = async (router: unknown, userId: string | null, body: unknown): Promise<{ statusCode: number; body: any }> => {
+        const res = {
+            statusCode: 200, body: null as any,
+            status(code: number) { this.statusCode = code; return this; },
+            json(payload: unknown) { this.body = payload; return this; },
+            setHeader() {}, end() { return this; },
+        };
+        await handlerFor(router, '/settings')({ params: {}, query: {}, headers: {}, body, session: { userId, role: 'user', tenantId: OWNER }, tenantRole: 'operator' }, res, () => {});
+        return res;
+    };
+
+    it('PUT /api/studio/settings passes the session\'s user: that user is on the version the save made', async () => {
+        storeProfile();
+        const res = await put(studioRouter, USER, { schedule: { timezone: 'Europe/London' } });
+        assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+        assert.deepEqual(state.versions.map((v) => [v.version, v.updated_by]), [[2, USER]]);
+        assert.equal(res.body.settings.schedule.timezone, 'Europe/London');
+    });
+
+    it('PUT /api/growth/settings passes the session\'s user', async () => {
+        storeProfile();
+        const res = await put(growthRouter, USER, { goal_followers: 25_000 });
+        assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+        assert.deepEqual(state.versions.map((v) => [v.version, v.updated_by]), [[2, USER]]);
+    });
+
+    it('the shared-password login has no user: the version is written by null, not refused', async () => {
+        storeProfile();
+        assert.equal((await put(studioRouter, null, { schedule: { timezone: 'Europe/London' } })).statusCode, 200);
+        assert.equal((await put(growthRouter, null, { goal_followers: 25_000 })).statusCode, 200);
+        assert.deepEqual(state.versions.map((v) => v.updated_by), [null, null]);
+    });
+
+    it('a profile refusal reaches the route as the same status and message: a newer-schema profile is a 409', async () => {
+        storeProfile({ ...ownerProfile(), schema: 2 });
+        const studio = await put(studioRouter, USER, { schedule: { timezone: 'Europe/London' } });
+        assert.equal(studio.statusCode, 409);
+        assert.match(studio.body.error, /newer version of the app/);
+        const growth = await put(growthRouter, USER, { goal_followers: 25_000 });
+        assert.equal(growth.statusCode, 409);
+        assert.match(growth.body.error, /newer version of the app/);
+    });
+});
+
+// ─── The request cache, after the commit ─────────────────────────────────────────────────────
+
+describe('the request cache is cleared after the commit, not only before it', () => {
+    /**
+     * Another read of the profile that lands after `saveProfile` has cleared the cache and before the commit: it still sees
+     * the committed-before state (a second connection's view), and caches it. The stand-in applies writes at once, so the
+     * profile row is put back to what it was for the length of that read.
+     */
+    function readerLandsBeforeCommit(read: () => Promise<unknown>): void {
+        const before = structuredClone(state.profiles.get(OWNER)!);
+        let done = false;
+        db.onStatement = async (statement) => {
+            if (done || !/^COMMIT$/.test(statement)) return;
+            done = true;
+            const written = state.profiles.get(OWNER)!;
+            state.profiles.set(OWNER, structuredClone(before));
+            await read();
+            state.profiles.set(OWNER, written);
+        };
+    }
+
+    it('updateStudioSettings: a read in the same request afterwards sees the new profile', async () => {
+        storeProfile();
+        readerLandsBeforeCommit(() => getStudioSettings(OWNER));
+        await withProfileCache(async () => {
+            await updateStudioSettings(OWNER, { schedule: { timezone: 'Europe/London' } });
+            assert.equal(versionNow(), 2);
+            assert.equal((await getStudioSettings(OWNER)).schedule.timezone, 'Europe/London', 'not the profile a reader cached before the commit');
+        });
+    });
+
+    it('updateGrowthSettings: the same', async () => {
+        storeProfile();
+        readerLandsBeforeCommit(() => getGrowthSettings(OWNER));
+        await withProfileCache(async () => {
+            await updateGrowthSettings(OWNER, { goal_followers: 25_000 });
+            assert.equal(versionNow(), 2);
+            assert.equal((await getGrowthSettings(OWNER)).goal_followers, 25_000);
+        });
+    });
+
+    it('a write that is refused clears it too: the next read asks the database', async () => {
+        storeProfile();
+        await withProfileCache(async () => {
+            await getStudioSettings(OWNER);
+            intruderBumpsProfileOn(STUDIO_WRITE);
+            await assert.rejects(updateStudioSettings(OWNER, { schedule: { timezone: 'Europe/London' } }), (err: unknown) => err instanceof StudioError && err.status === 409);
+            db.statements.length = 0;
+            await getStudioSettings(OWNER);
+            assert.equal(count(/FROM creator_profiles/), 1, 'read again, not served from before the refused write');
+        });
     });
 });
