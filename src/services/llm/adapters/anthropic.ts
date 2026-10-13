@@ -31,8 +31,9 @@
 import { AiError } from '../errors.js';
 import { totalUsage } from '../cost.js';
 import { jsonSchemaFor, schemaComplexity } from '../schema.js';
-import type { Adapter, AdapterArgs, AdapterResult, Billed, Effort, FamilyAdapter, LlmTurn, StopReason } from '../types.js';
-import { postJson } from './post.js';
+import type { Adapter, AdapterArgs, AdapterResult, Billed, Effort, FamilyAdapter, LlmTurn, ProviderQuery, StopReason } from '../types.js';
+import { modelIdsFrom, prepareQuery } from './endpoint.js';
+import { getJson, postJson } from './post.js';
 
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 export const ANTHROPIC_VERSION = '2023-06-01';
@@ -192,4 +193,25 @@ export const anthropicAdapter: Adapter = async (a) => {
     return parseAnthropicResponse(data, a.model);
 };
 
-export const anthropicFamily: FamilyAdapter = { generate: anthropicAdapter };
+/**
+ * `GET /v1/models?limit=…` (platform.claude.com, List Models: `limit` is 1 to 1000, default 20;
+ * newest first; `data[].id`). A list takes the largest page, a key check the smallest: neither is
+ * billed, and a bad key is a 401.
+ */
+function getModels(q: ProviderQuery, limit: number): Promise<unknown> {
+    const { key, signal } = prepareQuery(q);
+    return getJson({
+        provider: q.provider, model: '', url: `${ANTHROPIC_BASE_URL}/v1/models?limit=${limit}`,
+        headers: { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION },
+        key, signal, fetchImpl: q.fetchImpl,
+    });
+}
+
+export const anthropicFamily: FamilyAdapter = {
+    generate: anthropicAdapter,
+    listModels: async (q) => modelIdsFrom(await getModels(q, 1000)),
+    checkKey: async (q) => {
+        await getModels(q, 1);
+        return { ok: true };
+    },
+};

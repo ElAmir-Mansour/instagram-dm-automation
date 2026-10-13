@@ -71,6 +71,40 @@ describe('errorFromHttp', () => {
         });
     }
 
+    describe('a 403', () => {
+        const body = (error: Record<string, unknown>) => JSON.stringify({ error });
+        // OpenRouter's 403 is "insufficient permissions, a guardrail block, or a moderation flag", and the body says which.
+        const rows: Array<[string, string, string, AiErrorKind]> = [
+            ['a key that may not do this', 'openrouter', body({ code: 403, message: 'Insufficient permissions' }), 'auth'],
+            ['no body at all', 'openrouter', '', 'auth'],
+            ['a moderation flag, by metadata.reasons', 'openrouter', body({ code: 403, message: 'Your input was flagged', metadata: { reasons: ['hate'], flagged_input: 'text', provider_name: 'OpenAI', model_slug: 'openai/gpt-6-astra' } }), 'refusal'],
+            ['a moderation flag, by metadata.flagged_input alone', 'openrouter', body({ code: 403, message: 'Flagged', metadata: { flagged_input: 'text' } }), 'refusal'],
+            ['a guardrail, by its words', 'openrouter', body({ code: 403, message: 'This request was blocked by a guardrail policy' }), 'refusal'],
+            ['a guardrail, by a metadata key', 'openrouter', body({ code: 403, message: 'Blocked', metadata: { guardrail_name: 'no-pii' } }), 'refusal'],
+            ['a spent key limit, by metadata.limit_source', 'openrouter', body({ code: 403, message: 'Key limit exceeded', metadata: { limit_source: 'openrouter_key_limit' } }), 'quota'],
+            ['a budget, ahead of a moderation field', 'openrouter', body({ code: 403, message: 'Budget', metadata: { limit_source: 'openrouter_in_flight_budget', reasons: ['x'] } }), 'quota'],
+            ['metadata that says nothing', 'openrouter', body({ code: 403, message: 'No', metadata: { provider_name: 'OpenAI' } }), 'auth'],
+            // Only OpenRouter's bodies mean these things: everyone else's 403 is a key.
+            ['the same moderation fields from another provider', 'openai', body({ message: 'Nope', metadata: { reasons: ['x'] } }), 'auth'],
+            ['the same fields from a custom endpoint', 'custom', body({ message: 'guardrail', metadata: { limit_source: 'x' } }), 'auth'],
+            ['Anthropic', 'anthropic', JSON.stringify({ type: 'error', error: { type: 'permission_error', message: 'Not allowed' } }), 'auth'],
+            ['Gemini', 'gemini', geminiBody(403, 'PERMISSION_DENIED', 'Permission denied'), 'auth'],
+        ];
+        for (const [name, provider, text, kind] of rows) {
+            it(`${name} is ${kind}`, () => {
+                const err = errorFromHttp(provider, 'm', 403, text);
+                assert.equal(err.kind, kind);
+                assert.equal(err.status, 403);
+                assert.equal(err.retryable, false);
+                assert.equal(err.retryAfterMs, undefined);
+            });
+        }
+
+        it('keeps what the provider said, whichever kind it is', () => {
+            assert.equal(errorFromHttp('openrouter', 'm', 403, body({ code: 403, message: 'Your input was flagged', metadata: { reasons: ['x'] } })).message, 'Your input was flagged');
+        });
+    });
+
     describe('a 429, which means two different things', () => {
         // The words say "quota" for a limit that lifts in a minute and for one that lifts at
         // midnight, so the structure is read first. [name, provider, body, what it is].
@@ -88,6 +122,15 @@ describe('errorFromHttp', () => {
             ['OpenAI, a rate limit', 'openai', JSON.stringify({ error: { message: 'Rate limit reached for gpt-6 on tokens per min.', type: 'tokens', code: 'rate_limit_exceeded' } }), 'rate'],
             ['a custom endpoint that only has words for billing', 'custom', JSON.stringify({ error: 'Billing hard limit reached' }), 'quota'],
             ['a custom endpoint that only has words for a limit', 'custom', JSON.stringify({ error: 'Too many requests, slow down' }), 'rate'],
+            // OpenAI's own words for an empty balance or a spend cap: the code decides, whatever `type` says.
+            ['OpenAI, credit_balance_exhausted under a rate_limit_error type', 'openai', JSON.stringify({ error: { message: 'Your organization has no prepaid credits remaining.', type: 'rate_limit_error', code: 'credit_balance_exhausted' } }), 'quota'],
+            ['OpenAI, organization_spend_limit_exceeded', 'openai', JSON.stringify({ error: { message: 'Request blocked.', type: 'billing_error', code: 'organization_spend_limit_exceeded' } }), 'quota'],
+            ['OpenAI, project_spend_limit_exceeded', 'openai', JSON.stringify({ error: { message: 'Request blocked.', type: 'rate_limit_error', code: 'project_spend_limit_exceeded' } }), 'quota'],
+            ['OpenAI, organization_usage_limit_exceeded', 'openai', JSON.stringify({ error: { message: 'Request blocked.', type: 'rate_limit_error', code: 'organization_usage_limit_exceeded' } }), 'quota'],
+            ['OpenAI, slow_down, which is a rate_limit_error', 'openai', JSON.stringify({ error: { message: 'You are sending requests too quickly.', type: 'rate_limit_error', code: 'slow_down' } }), 'rate'],
+            ['OpenAI, an empty balance said only in words, with the underscores', 'openai', JSON.stringify({ error: { message: 'Blocked.', type: 'x', code: 'credit_balance_exhausted_for_org' } }), 'quota'],
+            ['a compatible endpoint that says the credits are gone', 'custom', JSON.stringify({ error: 'Your organization has no prepaid credits remaining.' }), 'quota'],
+            ['OpenRouter, its 429 for a rate limit', 'openrouter', JSON.stringify({ error: { code: 429, message: 'Rate limit exceeded', metadata: { error_type: 'rate_limit_exceeded' } } }), 'rate'],
             ['a 429 with nothing to read', 'openai', '', 'rate'],
             ['a 429 with an HTML body', 'custom', '<html>429</html>', 'rate'],
         ];
@@ -289,7 +332,7 @@ describe('scrub', () => {
         const samples: Record<string, string> = {
             openai: 'sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789',
             anthropic: 'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789',
-            openrouter: 'sk-or-v1-0123456789abcdef0123456789abcdef',
+            openrouter: 'sk-or-v1-' + '0123'.repeat(8),
             google: 'AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY',
             // Providers that mask the middle of a key still print its two ends.
             masked: 'sk-proj-********************abcd',

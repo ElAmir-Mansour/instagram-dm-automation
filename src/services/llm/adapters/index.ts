@@ -1,23 +1,26 @@
 /**
  * Which adapter speaks which wire family.
  *
- * Each family is `{generate, normalize?, listModels?, checkKey?}` (see `FamilyAdapter`): P20b adds
- * the families that are missing and fills in the optional parts without touching `callLlm`.
- * OpenAI Responses and Chat Completions (OpenRouter, Custom) arrive in P20b. Until then asking
- * for them is a `bad_request` that says so, rather than a crash or a silent wrong answer: the
- * registry already lists those providers, and a route can already name one.
+ * Each family is `{generate, normalize?, listModels?, checkKey?}` (see `FamilyAdapter`). All four
+ * families have an adapter, so every provider in the registry can be called; `adapterFor` still
+ * answers a family that is missing from a map it was given (a test's, or one built piecemeal)
+ * with a `bad_request` rather than a crash.
  */
 import { AiError } from '../errors.js';
 import { providerName, type ProviderFamily } from '../registry.js';
 import type { AdapterArgs, FamilyAdapter } from '../types.js';
 import { anthropicFamily } from './anthropic.js';
+import { chatCompletionsFamily } from './chatCompletions.js';
 import { geminiFamily } from './gemini.js';
+import { openaiFamily } from './openai.js';
 
 export type FamilyAdapters = Partial<Record<ProviderFamily, FamilyAdapter>>;
 
 export const ADAPTERS: FamilyAdapters = {
     anthropic: anthropicFamily,
+    openai_responses: openaiFamily,
     gemini: geminiFamily,
+    chat_completions: chatCompletionsFamily,
 };
 
 export function adapterFor(family: ProviderFamily, call: Pick<AdapterArgs, 'provider' | 'model'>, adapters: FamilyAdapters = ADAPTERS): FamilyAdapter {
@@ -27,6 +30,6 @@ export function adapterFor(family: ProviderFamily, call: Pick<AdapterArgs, 'prov
         kind: 'bad_request',
         provider: call.provider,
         model: call.model,
-        message: `${providerName(call.provider)} is not available yet: the ${family} adapter is not implemented.`,
+        message: `${providerName(call.provider)} cannot be called: there is no adapter for the ${family} family.`,
     });
 }

@@ -45,6 +45,28 @@ export function matchesRoot(json: unknown, kind: RootKind | undefined): boolean 
     return true;
 }
 
+/**
+ * The top-level properties the schema says an object answer must have (`required`), or none when
+ * it says nothing or the answer is not an object.
+ */
+export function requiredKeys(schema: LlmSchema): string[] {
+    if (rootKind(schema) !== 'object') return [];
+    const required: unknown = isRawJsonSchema(schema) ? schema.json.required : schema.required;
+    return Array.isArray(required) ? required.filter((k): k is string => typeof k === 'string') : [];
+}
+
+/**
+ * The required top-level keys an object answer lacks. A key that is there with the value `null`
+ * is there: whether `null` is allowed is the schema's business and the caller's own validation's.
+ * Only one level, on purpose: it is the check that catches an endpoint that took `strict` for a
+ * hint (some OpenRouter providers do) and left a field out; everything deeper stays with the
+ * validator of whoever asked.
+ */
+export function missingRequired(json: unknown, schema: LlmSchema): string[] {
+    if (typeof json !== 'object' || json === null || Array.isArray(json)) return [];
+    return requiredKeys(schema).filter((key) => !Object.prototype.hasOwnProperty.call(json, key));
+}
+
 // ─── OpenAI strict mode ──────────────────────────────────────────────────────────────────────
 
 type Node = Record<string, any>;
@@ -80,14 +102,25 @@ function strictifyNode(node: unknown, path: string): void {
     }
     const isObject = node.type === 'object' || (Array.isArray(node.type) && node.type.includes('object')) || isNode(node.properties);
     if (!isObject) return;
-    // `additionalProperties: {schema}` is a map: any keys, one value type. Strict mode has no way
-    // to say that, and closing the object would quietly turn the map into an empty object.
-    if (isNode(node.additionalProperties)) {
-        throw new Error(
-            `Strict mode cannot express an object with free-form keys (additionalProperties is a schema) at ${path || '/'}: ` +
+    // Free-form keys: strict mode has no way to say "any keys". Closing such an object would
+    // quietly turn it into an empty one, so it is refused: a map (`additionalProperties` is a
+    // schema), `additionalProperties: true`, and an object that lists no properties and does not
+    // say it is closed. `additionalProperties: false` with no properties is an empty object, and
+    // an `additionalProperties` that is absent on an object that lists properties is just JSON
+    // Schema's default, which strict mode closes.
+    const freeForm = (why: string) =>
+        new Error(
+            `Strict mode cannot express an object with free-form keys (${why}) at ${path || '/'}: ` +
                 'list its keys, or ask for an array of {key, value} instead.',
         );
+    if (isNode(node.additionalProperties)) throw freeForm('additionalProperties is a schema');
+    if (node.additionalProperties === true) throw freeForm('additionalProperties is true');
+    if (!isNode(node.properties)) {
+        if (node.additionalProperties !== false) throw freeForm('it lists no properties');
+        node.properties = {};
     }
+    // Strict mode wants the type said; an object found by its `properties` alone gets it.
+    if (node.type === undefined) node.type = 'object';
     if (isNode(node.properties)) {
         const required = new Set<string>(Array.isArray(node.required) ? node.required : []);
         for (const [key, sub] of Object.entries(node.properties)) {
@@ -104,8 +137,9 @@ function strictifyNode(node: unknown, path: string): void {
  * `required`, a property that was optional is made nullable instead, and every object is closed
  * with `additionalProperties: false`. Returns a copy; the schema it was given is not touched.
  * `dropNulls` undoes the optional-to-nullable half when the answer is read. Throws, saying where,
- * for a schema strict mode cannot represent (an object whose `additionalProperties` is a schema,
- * i.e. a map): the adapter that called it turns that into a `bad_request` before anything is sent.
+ * for a schema strict mode cannot represent (an object with free-form keys: a map, an
+ * `additionalProperties: true`, or an object that lists no properties): the adapter that called it
+ * turns that into a `bad_request` before anything is sent.
  */
 export function strictify(schema: JsonSchema): JsonSchema {
     const copy = structuredClone(schema);

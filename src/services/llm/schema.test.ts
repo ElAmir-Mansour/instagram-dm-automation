@@ -222,10 +222,39 @@ describe('strictify', () => {
         assert.throws(() => strictify({ type: 'object', properties: { a: { $ref: '#/$defs/M' } }, $defs: { M: { type: 'object', additionalProperties: { type: 'string' } } } }), /\$defs\/M/);
     });
 
-    it('closes additionalProperties: true or absent, which is what strict mode asks, and the input is not touched', () => {
-        const open = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'], additionalProperties: true };
+    it('closes an object whose additionalProperties is absent, which is what strict mode asks, and the input is not touched', () => {
+        const open = { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] };
         assert.equal((strictify(open) as any).additionalProperties, false);
-        assert.equal(open.additionalProperties, true);
+        assert.ok(!('additionalProperties' in open));
+    });
+
+    it('refuses additionalProperties: true, which says "and any other key": closing it would quietly drop them', () => {
+        assert.throws(() => strictify({ type: 'object', properties: { a: { type: 'string' } }, additionalProperties: true }), /free-form keys \(additionalProperties is true\)/);
+        assert.throws(() => strictify({ type: 'object', properties: { a: { type: 'object', properties: { b: { type: 'string' } }, additionalProperties: true } } }), /properties\/a/);
+    });
+
+    it('refuses an object that lists no properties and does not say it is closed: it is free-form too', () => {
+        assert.throws(() => strictify({ type: 'object' }), /free-form keys \(it lists no properties\) at \//);
+        assert.throws(() => strictify({ type: 'object', properties: { blob: { type: 'object' } } }), /properties\/blob/);
+        assert.throws(() => strictify({ type: 'array', items: { type: 'object', description: 'anything' } }), /items/);
+        assert.throws(() => strictify({ type: ['object', 'null'] }), /free-form keys/);
+    });
+
+    it('lets an object that says it is closed and lists nothing be the empty object it is', () => {
+        const out = strictify({ type: 'object', properties: { none: { type: 'object', additionalProperties: false } }, required: ['none'] }) as any;
+        assert.deepEqual(out.properties.none, { type: 'object', additionalProperties: false, properties: {}, required: [] });
+        // An empty `properties` is the same thing said the other way.
+        assert.deepEqual((strictify({ type: 'object', properties: {} }) as any), { type: 'object', properties: {}, required: [], additionalProperties: false });
+    });
+
+    it('says type object for a node that has properties and no type', () => {
+        const out = strictify({ properties: { a: { properties: { b: { type: 'string' } } }, c: { type: 'string' } }, required: ['c'] }) as any;
+        assert.equal(out.type, 'object');
+        assert.equal(out.properties.a.type[0], 'object');
+        assert.deepEqual(out.properties.a.type, ['object', 'null']);
+        assert.deepEqual(out.properties.a.properties.b, { type: ['string', 'null'] });
+        assert.deepEqual(out.properties.a.required, ['b']);
+        assert.deepEqual(out.required, ['a', 'c']);
     });
 
     it('is applied to the app\'s real schemas: every object closed, every property required', () => {

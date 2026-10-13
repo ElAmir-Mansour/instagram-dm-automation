@@ -27,11 +27,32 @@ export type LlmTurn = { role: 'user' | 'model'; text: string };
 export type Usage = { in: number; out: number };
 
 /**
+ * Where a `usd` came from. `provider`: the provider said what it charged (OpenRouter's
+ * `usage.cost`), an adapter set it, and `costOf` keeps it. `table`: `costOf` worked it out from
+ * the price table (a guess, at the ceiling for a model with no price). Only `provider` is trusted
+ * on the way in: a `usd` without it is recomputed, so pricing a result a second time cannot turn
+ * a ceiling estimate into a figure that looks like an invoice.
+ */
+export type CostSource = 'provider' | 'table';
+
+/**
  * One model's share of what a call was billed. Normally a call has one entry; Anthropic's
  * server-side fallback can have several (the model that declined, then the one that answered),
- * each at its own price. `usd` is filled by whoever knows the prices (`costOf`, cost.ts).
+ * each at its own price. An adapter sets `usd` (with `source: 'provider'`) only when the provider
+ * reports a charge; otherwise `costOf` (cost.ts) fills in `usd` from the price table and marks it
+ * `source: 'table'`.
  */
-export type Billed = { model: string; in: number; out: number; usd?: number };
+export type Billed = { model: string; in: number; out: number; usd?: number; source?: CostSource };
+
+/**
+ * How a Custom (OpenAI-compatible) endpoint is asked for JSON. `schema` sends the schema as a
+ * strict `json_schema` response format, which is what OpenAI and OpenRouter speak. `object` is
+ * for endpoints that only do JSON mode: it sends `{type: 'json_object'}` and describes the schema
+ * in the system prompt instead. The operator's setting (`ai.providers.custom.jsonMode`, P20c).
+ */
+export const JSON_MODES = ['schema', 'object'] as const;
+export type JsonMode = (typeof JSON_MODES)[number];
+export const isJsonMode = (value: unknown): value is JsonMode => typeof value === 'string' && (JSON_MODES as readonly string[]).includes(value);
 
 /** `fetch`, as far as this library needs it: tests hand in a stub, production uses the global. */
 export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
@@ -43,11 +64,16 @@ export interface AdapterArgs {
     apiKey: string;
     /**
      * An operator's base URL. Only a provider whose registry entry has `editableBaseUrl` (Custom)
-     * ever has one: `callLlm` withholds it from every other, and the Anthropic and Gemini
-     * adapters ignore it regardless. A URL a tenant could point elsewhere would be a way to send
-     * the platform's key to a server of their choosing.
+     * ever has one: `callLlm` withholds it from every other, and every adapter but Custom's
+     * ignores it regardless. A URL a tenant could point elsewhere would be a way to send the
+     * platform's key to a server of their choosing.
      */
     baseUrl?: string;
+    /**
+     * Only Custom reads it: how the endpoint is asked for JSON (default `schema`). `callLlm`
+     * withholds it from every other provider, as it does `baseUrl`; OpenRouter is always `schema`.
+     */
+    jsonMode?: JsonMode;
     model: string;
     system: string;
     user: string | LlmTurn[];
@@ -83,19 +109,24 @@ export interface AdapterResult {
 
 export type Adapter = (args: AdapterArgs) => Promise<AdapterResult>;
 
-/** What listing a provider's models and checking its key need (P20b implements both). */
+/** What listing a provider's models and checking its key need. */
 export type ProviderQuery = Pick<AdapterArgs, 'provider' | 'apiKey' | 'baseUrl' | 'signal' | 'fetchImpl'>;
 /** A key that passed. One that did not throws an `AiError`; `warning` is for a key that works but should be looked at. */
 export type KeyCheck = { ok: true; warning?: string };
 
 /**
- * What a wire family provides. Only `generate` exists in P20a; the rest are the seams P20b fills
- * so that nothing in `callLlm` has to be reordered to make room:
+ * What a wire family provides. Every family has `generate`; the rest are optional so that a test
+ * (or a family added later) can stand in with only what it needs:
  *
  *   - `normalize` runs on the parsed answer, before its shape is checked: undoing what the
  *     family did to the schema (OpenAI strict mode's `null`s are `dropNulls`'s to remove).
  *   - `listModels` is the provider's model list, for "Load models".
- *   - `checkKey` is the free call a key must pass before it is saved.
+ *   - `checkKey` is the free call a key must pass before it is saved. It throws the `AiError`
+ *     of whatever went wrong; what it returns is a pass, possibly with a `warning`.
+ *
+ * `listModels` and `checkKey` are the family's own: a `ProviderQuery` carries the provider
+ * because two providers can share a family (OpenRouter and Custom), and they differ here.
+ * `listProviderModels` and `checkProviderKey` (providerQuery.ts) are what callers use.
  */
 export interface FamilyAdapter {
     generate: Adapter;

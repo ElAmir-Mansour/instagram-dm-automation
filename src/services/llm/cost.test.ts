@@ -167,3 +167,65 @@ describe('totalUsage and costOf', () => {
         assert.deepEqual(entries, [{ model: 'claude-opus-5-5', in: 10, out: 10 }]);
     });
 });
+
+describe('a figure the provider reports', () => {
+    // OpenRouter's `usage.cost` arrives as `usd` with `source: 'provider'` (adapters/chatCompletions.ts).
+    it('is kept by costOf and beats the table, and the entry counts as priced even for a model nobody has a price for', () => {
+        const cost = costOf([{ model: 'anthropic/claude-opus-5.5', in: 1_000_000, out: 1_000_000, usd: 0.0123, source: 'provider' }], DEFAULT_PRICES);
+        assert.equal(cost.usd, 0.0123);
+        assert.equal(cost.priced, true);
+        assert.deepEqual(cost.billed, [{ model: 'anthropic/claude-opus-5.5', in: 1_000_000, out: 1_000_000, usd: 0.0123, source: 'provider' }]);
+        // Even one the table does price: the provider's number is the invoice.
+        assert.equal(costOf([{ model: 'claude-opus-5-5', in: 1_000_000, out: 1_000_000, usd: 1, source: 'provider' }], DEFAULT_PRICES).usd, 1);
+    });
+
+    it('may be zero: a free model is free', () => {
+        const cost = costOf([{ model: 'meta/llama:free', in: 500, out: 500, usd: 0, source: 'provider' }], DEFAULT_PRICES);
+        assert.equal(cost.usd, 0);
+        assert.equal(cost.priced, true);
+    });
+
+    it('is ignored when it is not a usable number, so a bad figure cannot make a call free or negative', () => {
+        for (const usd of [-1, Number.NaN, Number.POSITIVE_INFINITY, '0.5' as unknown as number]) {
+            const cost = costOf([{ model: 'claude-opus-5-5', in: 1_000_000, out: 0, usd, source: 'provider' }], DEFAULT_PRICES);
+            assert.equal(cost.usd, 4, String(usd));
+            assert.equal(cost.priced, true);
+            assert.equal(cost.billed[0]!.source, 'table');
+        }
+    });
+
+    it('is not trusted without its source: a usd nobody marked as the provider\'s is the table\'s to compute', () => {
+        const cost = costOf([{ model: 'claude-opus-5-5', in: 1_000_000, out: 0, usd: 0.0001 }], DEFAULT_PRICES);
+        assert.equal(cost.usd, 4);
+        assert.deepEqual(cost.billed.map((b) => b.source), ['table']);
+        assert.equal(costOf([{ model: 'claude-opus-5-5', in: 1_000_000, out: 0, usd: 0.0001, source: 'table' }], DEFAULT_PRICES).usd, 4);
+    });
+
+    it('is added to the table\'s price for the other entries of the same call', () => {
+        const cost = costOf([{ model: 'claude-opus-5-5', in: 1_000_000, out: 0 }, { model: 'x/y', in: 5, out: 5, usd: 0.01, source: 'provider' }], DEFAULT_PRICES);
+        assert.equal(cost.usd, 4.01);
+        assert.deepEqual(cost.billed.map((b) => b.usd), [4, 0.01]);
+        assert.deepEqual(cost.billed.map((b) => b.source), ['table', 'provider']);
+    });
+
+    it('marks what it priced itself as the table\'s', () => {
+        assert.deepEqual(costOf([{ model: 'claude-opus-5-5', in: 1_000_000, out: 0 }], DEFAULT_PRICES).billed, [{ model: 'claude-opus-5-5', in: 1_000_000, out: 0, usd: 4, source: 'table' }]);
+    });
+
+    it('costs the same when the result is priced again, a provider\'s figure or the table\'s', () => {
+        const mixed = costOf([{ model: 'x/y', in: 5, out: 5, usd: 0.0123, source: 'provider' }, { model: 'claude-opus-5-5', in: 1000, out: 1000 }], DEFAULT_PRICES);
+        assert.deepEqual(costOf(mixed.billed, DEFAULT_PRICES), mixed);
+    });
+
+    it('cannot turn an unpriced ceiling estimate into a priced one by running costOf twice', () => {
+        // A model nobody has a price for is charged at the table's ceiling and flagged.
+        const first = costOf([{ model: 'mystery/model-9', in: 1_000_000, out: 1_000_000 }], DEFAULT_PRICES);
+        assert.equal(first.priced, false);
+        assert.equal(first.usd, 30);
+        // Its `usd` is now on the entry, which is what used to make the second pass trust it.
+        const second = costOf(first.billed, DEFAULT_PRICES);
+        assert.equal(second.priced, false);
+        assert.equal(second.usd, 30);
+        assert.deepEqual(costOf(second.billed, DEFAULT_PRICES), second);
+    });
+});

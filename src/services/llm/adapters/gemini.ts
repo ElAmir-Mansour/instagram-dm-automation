@@ -32,8 +32,9 @@
 import { totalUsage } from '../cost.js';
 import { withoutArrayBounds } from '../geminiSchema.js';
 import { isRawJsonSchema } from '../schema.js';
-import type { Adapter, AdapterArgs, AdapterResult, Billed, Effort, FamilyAdapter, StopReason } from '../types.js';
-import { postJson } from './post.js';
+import type { Adapter, AdapterArgs, AdapterResult, Billed, Effort, FamilyAdapter, ProviderQuery, StopReason } from '../types.js';
+import { prepareQuery } from './endpoint.js';
+import { getJson, postJson } from './post.js';
 
 export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -131,4 +132,36 @@ export const geminiAdapter: Adapter = async (a) => {
     return parseGeminiResponse(data, a.model);
 };
 
-export const geminiFamily: FamilyAdapter = { generate: geminiAdapter };
+/**
+ * `GET /v1beta/models?pageSize=…` (ai.google.dev, models.list: `pageSize` up to 1000, default 50;
+ * `models[].name` is `models/<id>`; `supportedGenerationMethods`). The key is in `x-goog-api-key`,
+ * not the `?key=` the reference's own example uses: a URL lands in logs. A key check takes one
+ * model, a list the largest page. Only models that can `generateContent` are listed: the rest
+ * are embedding, image and speech models that cannot answer in JSON.
+ */
+function getModels(q: ProviderQuery, pageSize: number): Promise<unknown> {
+    const { key, signal } = prepareQuery(q);
+    return getJson({
+        provider: q.provider, model: '', url: `${GEMINI_BASE_URL}/models?pageSize=${pageSize}`,
+        headers: { 'x-goog-api-key': key },
+        key, signal, fetchImpl: q.fetchImpl,
+    });
+}
+
+function generativeModels(body: unknown): string[] {
+    const list: any[] = Array.isArray((body as any)?.models) ? (body as any).models : [];
+    const ids = list
+        .filter((m) => typeof m?.name === 'string' && (!Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes('generateContent')))
+        .map((m) => (m.name as string).replace(/^models\//, ''))
+        .filter(Boolean);
+    return [...new Set(ids)];
+}
+
+export const geminiFamily: FamilyAdapter = {
+    generate: geminiAdapter,
+    listModels: async (q) => generativeModels(await getModels(q, 1000)),
+    checkKey: async (q) => {
+        await getModels(q, 1);
+        return { ok: true };
+    },
+};
