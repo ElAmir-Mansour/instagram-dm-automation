@@ -28,21 +28,46 @@
  * and press steps and every stop of `--gradient-brand`), the fill against the canvas as a
  * non-text shape (3:1), and `--accent-text` on the `--accent-soft` highlighter, which is the
  * ground behind the keyword, the eyebrow and the active nav row.
+ *
+ * The platform logos on the public pages (L8) are monochrome, painted by three tokens that live in
+ * the SHARED SITE CHROME of public/*.html rather than in tokens.css (`--logo-mono`, `--logo-mono-yt`,
+ * `--logo-on-accent`). They are read from there, and each pair a logo is painted on is measured as a
+ * non-text shape at 3:1 (LOGO PAIRS below). checkPlatformColourUsage also reads the `<style>` of every
+ * public page, so a platform colour cannot come back as a solid fill there either.
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 const css = readFileSync('dashboard/css/tokens.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
-function block(re) {
-    const m = css.match(re); if (!m) return {};
+/** The custom properties declared in the block that follows the first match of `re` in `src`. */
+function blockIn(src, re) {
+    const m = src.match(re); if (!m) return {};
     const from = m.index + m[0].length; let d = 1, i = from;
-    while (i < css.length && d > 0) { if (css[i] === '{') d++; else if (css[i] === '}') d--; i++; }
+    while (i < src.length && d > 0) { if (src[i] === '{') d++; else if (src[i] === '}') d--; i++; }
     const o = {};
-    for (const x of css.slice(from, i - 1).matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/g)) o[x[1]] = x[2].trim();
+    for (const x of src.slice(from, i - 1).matchAll(/--([a-z0-9-]+)\s*:\s*([^;]+);/g)) o[x[1]] = x[2].trim();
     return o;
 }
+const block = (re) => blockIn(css, re);
 const base = block(/:root\s*\{/), dark = block(/:root,\s*:root\[data-theme='dark'\]\s*\{/);
 const lM = block(/:root:not\(\[data-theme='dark'\]\)\s*\{/), lE = block(/:root\[data-theme='light'\]\s*\{/);
 const THEMES = { dark: { ...base, ...dark }, light: { ...base, ...dark, ...lM, ...lE } };
+
+// The logo tokens: the same three-selector shape as tokens.css, in the shared chrome of the public pages. The
+// chrome is byte-identical on all six (publicPagesChrome.test.ts), so landing.html stands for them.
+const publicPages = readdirSync('public').filter((f) => f.endsWith('.html')).sort().map((f) => `public/${f}`);
+const chromeCss = (() => {
+    const html = readFileSync('public/landing.html', 'utf8');
+    const at = html.indexOf('SHARED SITE CHROME \u00b7 CSS');
+    const from = html.indexOf('*/', at) + 2;                 // past the comment that names the block
+    return html.slice(from, html.indexOf('</style>', from)).replace(/\/\*[\s\S]*?\*\//g, '');
+})();
+const chromeDark = blockIn(chromeCss, /:root,\s*:root\[data-theme='dark'\]\s*\{/);
+const chromeLightMedia = blockIn(chromeCss, /:root:not\(\[data-theme='dark'\]\)\s*\{/);
+const chromeLightPinned = blockIn(chromeCss, /:root\[data-theme='light'\]\s*\{/);
+const LOGO_THEMES = {
+    dark: { ...THEMES.dark, ...chromeDark },
+    light: { ...THEMES.light, ...chromeDark, ...chromeLightMedia, ...chromeLightPinned },
+};
 
 function parse(v) {                      // -> [r,g,b,a] or null
     v = (v || '').trim();
@@ -287,7 +312,64 @@ for (const [name, t] of Object.entries(THEMES)) {
     }
 }
 
-// ─── Semantic hue separation ────────────────────────────────────────────────────────────────
+// ─── LOGO PAIRS: the monochrome platform marks on the public pages (L8) ─────────────────────────────
+//
+// A platform mark is painted in ONE ink, never in the platform's colour (DESIGN.md §2: brand colours are
+// data). The ink is a token, and the tokens are the ones in the shared chrome of public/*.html:
+//
+//   --logo-mono      white in dark, black in light: Instagram, Facebook, TikTok and WhatsApp (outside a button)
+//   --logo-mono-yt   white in dark, #282828 in light: YouTube's own two allowed inks
+//   --logo-on-accent the glyph inside the primary button, on --accent and its hover and press steps
+//
+// A mark is a graphic, so the floor is the non-text 3:1 (WCAG 1.4.11), and each pair is the ground the mark is
+// actually painted on: the canvas, an opaque card, a glass card, the footer link's hover tint, the
+// platform's own -soft tile over a card, the `.live-first` highlighter. checkLogoRules() below confirms the
+// stylesheet still paints these inks on these grounds, so a pair measured here is a pair that exists.
+
+const MIN_LOGO = 3.0;
+const TILE = (brand) => [`brand-${brand}-soft`, 'surface-raised', 'surface-page'];
+const LOGO_PAIRS = [
+    ['logo-mono', [['surface-page'], ['surface-solid'], ['surface-raised', 'surface-page'],
+        ['surface-glass', 'surface-page'], ['surface-glass-hover', 'surface-page'],
+        ['surface-glass', 'surface-raised', 'surface-page'],
+        ['accent-soft', 'surface-page'], ['accent-soft', 'surface-raised', 'surface-page'],
+        TILE('instagram'), TILE('facebook'), TILE('tiktok')]],
+    ['logo-mono-yt', [['surface-page'], ['surface-glass', 'surface-page'], ['surface-glass-hover', 'surface-page'], TILE('youtube')]],
+];
+const logoTightest = {};   // theme -> { r, label }
+let logoTotal = 0;
+
+for (const [name, t] of Object.entries(LOGO_THEMES)) {
+    for (const token of ['logo-mono', 'logo-mono-yt', 'logo-on-accent']) {
+        if (!resolve(t, t[token])) failures.push(`--${token} (${name}) is not declared in the shared chrome of public/landing.html, or is not a colour the guard can read.`);
+    }
+    const note = (r, label) => {
+        logoTotal++;
+        if (!logoTightest[name] || r < logoTightest[name].r) logoTightest[name] = { r, label };
+        if (r < MIN_LOGO) failures.push(`${r.toFixed(2)}:1 - ${label} (${name} theme) is below the ${MIN_LOGO}:1 non-text floor (a platform mark).`);
+    };
+    for (const [token, stacks] of LOGO_PAIRS) {
+        const ink = resolve(t, t[token]);
+        if (!ink) continue;
+        for (const stack of stacks) {
+            const bg = flatten(t, stack);
+            if (!bg) { failures.push(`${stack.map(x => `--${x}`).join(' on ')} (${name}) could not be resolved for a logo pair.`); continue; }
+            note(ratio(ink.slice(0, 3), bg), `--${token} on ${stack.map(x => `--${x}`).join(' on ')}`);
+        }
+    }
+    const onAccent = resolve(t, t['logo-on-accent']);
+    if (onAccent) {
+        for (const fill of ['accent', 'accent-hover', 'accent-active']) {
+            const bg = resolve(t, t[fill]);
+            if (bg) note(ratio(onAccent.slice(0, 3), bg.slice(0, 3)), `--logo-on-accent on --${fill}`);
+        }
+    }
+}
+if (JSON.stringify(chromeLightMedia) !== JSON.stringify(chromeLightPinned)) {
+    failures.push("The shared chrome's two light blocks (the OS-asked and the pinned [data-theme='light']) differ: the logo tokens would change with how light was chosen.");
+}
+
+// ─── Semantic hue separation────────────────────────────────────────────────────────────────
 //
 // Contrast is not the only way a palette fails. The accent was once terracotta (hue ~16), which
 // sat BETWEEN the two alarm colours: danger was at 358 and warning at 38 — 18 and 22 degrees
@@ -396,6 +478,46 @@ function checkPlatformColourUsage() {
             );
         }
     }
+
+    // The public pages have no data visualisation at all, so for them the rule has no exception: every
+    // `<style>` is read, and neither a bare --brand-* token nor a platform's own hex may paint anything. A
+    // logo is drawn in the --logo-* ink and its tile in a -soft tint; the brand colour is not used.
+    const BRAND_HEX = /#(?:25d366|128c7e|e1306c|ff0069|1877f2|0866ff|25f4ee|fe2c55|ff0000|ff0033)\b/i;
+    const publicBare = /([^{}]+)\{[^}]*?\bvar\(--brand-(?:instagram|facebook|tiktok|youtube|whatsapp)\)/g;
+    for (const file of publicPages) {
+        const styles = [...readFileSync(file, 'utf8').matchAll(/<style>([\s\S]*?)<\/style>/g)]
+            .map(m => m[1]).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+        for (const m of styles.matchAll(publicBare)) {
+            failures.push(
+                `${file}: ${m[1].split('\n').pop().trim()} uses a bare --brand-* colour. The public pages have no data `
+                + `visualisation: use --brand-*-soft as a tint, and the --logo-* ink for a mark.`
+            );
+        }
+        const hex = styles.match(BRAND_HEX);
+        if (hex) failures.push(`${file}: the platform colour ${hex[0]} is written out in its CSS. A mark is monochrome (--logo-*), a tile is a -soft tint.`);
+    }
+}
+
+/**
+ * The logo pairs measured above are CONSTANTS in this file: they describe which ink the stylesheet paints on
+ * which ground. A guard that models a rule it never reads passes when the rule is edited away, so this
+ * checks the rules still say what the model assumes: the base mark is --logo-mono, YouTube's is
+ * --logo-mono-yt, the glyph in a primary button is --logo-on-accent, and each tile is its own platform's -soft.
+ */
+function checkLogoRules() {
+    const styles = readFileSync('public/landing.html', 'utf8').match(/<style>([\s\S]*?)<\/style>/)?.[1].replace(/\/\*[\s\S]*?\*\//g, '') ?? '';
+    // A rule starts its line: `.plogo` must not be found inside `.btn > .plogo`.
+    const rule = (sel) => (styles.match(new RegExp(`(?:^|\\n)[ \\t]*${sel.replace(/[.>]/g, '\\$&')}[ \\t]*\\{([^}]*)\\}`)) || [])[1] || '';
+    const want = [
+        ['.plogo', /(?<![-\w])fill:\s*var\(--logo-mono\)/, 'the base mark is painted in --logo-mono'],
+        ['.plogo-yt', /(?<![-\w])fill:\s*var\(--logo-mono-yt\)/, "YouTube's mark is painted in --logo-mono-yt"],
+        ['.btn > .plogo', /(?<![-\w])fill:\s*var\(--logo-on-accent\)/, 'the glyph in a primary button is painted in --logo-on-accent'],
+        ...['instagram', 'facebook', 'tiktok', 'youtube'].map((b) =>
+            [`.ptile-${b}`, new RegExp(`background:\\s*var\\(--brand-${b}-soft\\)`), `the ${b} tile is its own -soft tint`]),
+    ];
+    for (const [sel, re, what] of want) {
+        if (!re.test(rule(sel))) failures.push(`${sel} no longer says what check-contrast measures: ${what}.`);
+    }
 }
 
 /**
@@ -424,6 +546,7 @@ function checkBubbleFurniture() {
 
 checkPlatformColourUsage();
 checkBubbleFurniture();
+checkLogoRules();
 
 if (failures.length > 0) {
     console.error('\n\u274c contrast check failed:\n');
@@ -439,5 +562,6 @@ console.log(
     + `(accent shape vs ground tightest ${Object.entries(nonText).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}; `
     + `chart accent ${Object.entries(nonTextChart).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th}`).join(', ')}); `
     + `${MUST_DIFFER.length * 2} semantic pair(s) at least ${MIN_HUE_SEPARATION}\u00b0 apart; `
-    + `platform colours solid only in data viz`
+    + `platform colours solid only in data viz (and nowhere on the public pages); `
+    + `${logoTotal} platform-logo pairs clear ${MIN_LOGO}:1 as shapes (tightest ${Object.entries(logoTightest).map(([th, w]) => `${w.r.toFixed(2)}:1 ${th} - ${w.label}`).join('; ')})`
 );
