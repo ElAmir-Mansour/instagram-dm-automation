@@ -1075,8 +1075,8 @@ async function applyInfographicRender(exec: Exec, job: LockedJob, result: unknow
     const r = parsed.result;
     const id = payloadId(job, 'infographicId');
     const { rows } = id
-        ? await exec.query<Pick<InfographicRow, 'job_id' | 'spec' | 'caption' | 'topic' | 'notes' | 'language' | 'pair_theme'>>(
-            `SELECT job_id, spec, caption, topic, notes, language, pair_theme FROM infographics
+        ? await exec.query<Pick<InfographicRow, 'job_id' | 'spec' | 'caption' | 'topic' | 'notes' | 'language' | 'pair_theme' | 'profile_version'>>(
+            `SELECT job_id, spec, caption, topic, notes, language, pair_theme, profile_version FROM infographics
               WHERE id = $1 AND creator_id = $2 FOR UPDATE`,
             [id, job.creator_id]
         )
@@ -1113,14 +1113,17 @@ async function applyInfographicRender(exec: Exec, job: LockedJob, result: unknow
  * render, with the same brand and language as the job that wrote it. Claude is asked once.
  */
 async function renderPair(
-    exec: Exec, job: LockedJob, row: Pick<InfographicRow, 'topic' | 'notes' | 'language' | 'pair_theme'>, spec: unknown, caption: string,
+    exec: Exec, job: LockedJob, row: Pick<InfographicRow, 'topic' | 'notes' | 'language' | 'pair_theme' | 'profile_version'>, spec: unknown, caption: string,
     review: InfographicRow['review']
 ): Promise<void> {
     const theme = row.pair_theme!;
+    // The copy takes the written row's stamp (set when the job was queued), not a read made now: the profile may have
+    // moved while Claude wrote, and it was the queued one these words were written under (profile/stamp.ts).
     const { rows } = await exec.query<{ id: string }>(
-        `INSERT INTO infographics (creator_id, topic, notes, language, theme, status, spec, caption, review)
-         VALUES ($1, $2, $3, $4, $5, 'rendering', $6::jsonb, $7, $8::jsonb) RETURNING id`,
-        [job.creator_id, row.topic, row.notes, row.language, theme, JSON.stringify(spec), caption, review ? JSON.stringify(review) : null]
+        `INSERT INTO infographics (creator_id, topic, notes, language, theme, status, spec, caption, review, profile_version)
+         VALUES ($1, $2, $3, $4, $5, 'rendering', $6::jsonb, $7, $8::jsonb, $9) RETURNING id`,
+        [job.creator_id, row.topic, row.notes, row.language, theme, JSON.stringify(spec), caption, review ? JSON.stringify(review) : null,
+            row.profile_version ?? null]
     );
     const copyId = rows[0]!.id;
     const { write: _write, ...base } = job.payload as RenderInfographicPayload;

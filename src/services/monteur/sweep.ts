@@ -28,6 +28,7 @@ import { pool } from '../../config/db.js';
 import type { ClipCopy, ClipDirection, ClipEdit, MonteurSourceRow, SourcePick, StudioSettings, TranscriptWord } from '../../db/rows.js';
 import { describeError, log } from '../../utils/log.js';
 import { MacBrainRefused } from '../macBrain.js';
+import { profileVersionFor } from '../profile/stamp.js';
 import { withTransaction } from '../studio/common.js';
 import { buildGenContext } from '../studio/drafts.js';
 import { toArabicDigits } from '../studio/generate.js';
@@ -229,7 +230,8 @@ type ReadyClip = { clip: PickedClip; copy: ClipCopy; edits: ClipEdit[]; directio
  * claim's 10 minutes finds another attempt has it, and writes nothing.
  */
 async function handOff(
-    source: ClaimedSource, settings: StudioSettings, ready: readonly ReadyClip[], record: SourcePick, topic: string | null
+    source: ClaimedSource, settings: StudioSettings, ready: readonly ReadyClip[], record: SourcePick, topic: string | null,
+    profileVersion: number | null,
 ): Promise<{ outcome: PickOutcomeKind; clips: number }> {
     return withTransaction(async (client) => {
         const { rows } = await client.query<{ id: string }>(
@@ -246,14 +248,15 @@ async function handOff(
             const title = digits(clip.title);
             const { rows: inserted } = await client.query<{ id: string }>(
                 `INSERT INTO clip_drafts
-                     (creator_id, source_id, rank, status, start_s, end_s, title, hook, why, score, topic, hook_type, scores, text, copy, edits, direction)
-                 VALUES ($1, $2, $3, 'rendering', $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15::jsonb, $16::jsonb)
+                     (creator_id, source_id, rank, status, start_s, end_s, title, hook, why, score, topic, hook_type, scores, text, copy, edits, direction, profile_version)
+                 VALUES ($1, $2, $3, 'rendering', $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14::jsonb, $15::jsonb, $16::jsonb, $17)
                  RETURNING id`,
                 [
                     source.creator_id, source.id, i + 1, clip.start, clip.end, title, clip.hook, clip.why, clip.score,
                     topic, clip.hookType, JSON.stringify(clip.scores), clip.text, JSON.stringify(copy), JSON.stringify(edits),
                     // SQL NULL, never the JSON null: "no plan" is the column's NULL (v29).
                     direction ? JSON.stringify(direction) : null,
+                    profileVersion,
                 ]
             );
             await enqueueMonteurRender(client, source.creator_id, buildRenderPayload({
@@ -337,6 +340,9 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
     const began = Date.now();
     try {
         const settings = await getStudioSettings(source.creator_id);
+        // Read once per drain of this attempt: every clip of the pick carries it (profile/stamp.ts). With the Mac brain an
+        // attempt spans several drains, so the stamp is the version at hand-off, which can be newer than the pick's prompt.
+        const profileVersion = await profileVersionFor(source.creator_id);
         // Claude on the Mac, keyed by this attempt: the drain that finds an answer reads it by the same key.
         const think: ThinkOn | undefined = settings.monteur.brain === 'claude_mac'
             ? { creatorId: source.creator_id, key: sourceThinkKey(source.id, source.attempts) }
@@ -415,7 +421,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         if (!ready.length) throw new Error(`The Marketer's copy could not be used: ${unusable.join('; ')}`);
 
         await editReady(source, settings, ready, picked.lines, words, record, deadline, think);
-        const handed = await handOff(source, settings, ready, record, picked.topic);
+        const handed = await handOff(source, settings, ready, record, picked.topic, profileVersion);
         return { source_id: source.id, outcome: handed.outcome, clips: handed.clips };
     } catch (err) {
         if (err instanceof ThinkWaiting) return releaseWaiting(source, err);

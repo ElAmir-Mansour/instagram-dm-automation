@@ -25,6 +25,7 @@
 import { pool } from '../../config/db.js';
 import type { LessonBasis, StudioLesson, StudioLessonRow, StudioSettings } from '../../db/rows.js';
 import { describeError, log } from '../../utils/log.js';
+import { profileVersionFor } from '../profile/stamp.js';
 import { type Exec, StudioError } from '../studio/common.js';
 import { trimText, type GeminiSchema } from '../studio/generate.js';
 import { languageKit, oneLine } from '../studio/prompts.js';
@@ -245,8 +246,10 @@ const iso = (d: Date | null): string | null => (d ? new Date(d).toISOString() : 
  */
 export async function runAnalyst(creatorId: string, deadline: number, resume: StudioLessonRow | null = null): Promise<StudioLessonRow> {
     const settings = await getStudioSettings(creatorId);
+    // A resumed run keeps the stamp it was inserted with: the version the run began under, however long it waited for the Mac.
     const run = resume ?? (await pool.query<StudioLessonRow>(
-        `INSERT INTO studio_lessons (creator_id, status) VALUES ($1, 'running') RETURNING *`, [creatorId]
+        `INSERT INTO studio_lessons (creator_id, status, profile_version) VALUES ($1, 'running', $2) RETURNING *`,
+        [creatorId, await profileVersionFor(creatorId)]
     )).rows[0]!;
     const think = settings.monteur.brain === 'claude_mac' ? { creatorId, key: lessonsThinkKey(run.id) } : undefined;
     const cost = emptyCost();

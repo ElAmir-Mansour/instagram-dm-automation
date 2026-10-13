@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { TranscriptWord } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
+import { withProfileCache } from '../profile/cache.js';
+import { profileReads } from '../profile/stampSupport.js';
 import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import { ASK_POOL } from './copy.js';
@@ -458,7 +460,7 @@ describe('sweepMonteur — the human touches (MONTEUR.md §6.2)', () => {
         await sweepMonteur(later());
         assert.deepEqual(editCall().schema, EDITOR_SCHEMA);
         assert.ok(editCall().system.includes(HUMAN_TOUCHES_PROMPT));
-        assert.match(insert().sql, /\(creator_id, source_id, .*, copy, edits, direction\) VALUES \(.*\$15::jsonb, \$16::jsonb\)/);
+        assert.match(insert().sql, /\(creator_id, source_id, .*, copy, edits, direction, profile_version\) VALUES \(.*\$15::jsonb, \$16::jsonb, \$17\)/);
         assert.deepEqual(JSON.parse(insert().params[15]), DIRECTION);
         assert.deepEqual(JSON.parse(insert().params[14]), EDITS, 'the edits as before');
         const line = logs.find((l) => l.event === 'monteur.edit');
@@ -837,5 +839,86 @@ describe('sweepMonteur — Claude on the Mac (monteur.brain = claude_mac)', () =
         assert.equal(queued().length, 0, 'try 2 after 10 minutes, not at once');
         assert.equal(released().length, 1);
         assert.equal(calls.length, 0);
+    });
+});
+
+// ─── The profile stamp (P7) ─────────────────────────────────────────────────────────────
+
+describe('sweepMonteur — profile_version', () => {
+    /** The INSERT's last column and parameter: after `direction`. */
+    const stamps = () => db.ran(/^INSERT INTO clip_drafts/).map((i) => i.params[16]);
+    const twoClips = () => {
+        reelsPerVideo = 2;
+        answers['monteur.pick'] = {
+            topic: PICK.topic,
+            clips: [PICK.clips[0], { ...PICK.clips[0], start_line: 11, end_line: 15, title: 'عنوان ثاني', scores: { hook: 3, alone: 3, payoff: 2, send: 1 } }],
+        };
+        answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, clip: 1 }, { ...COPY_ITEM, clip: 2, keyword_candidates: ['ملاحظة'] }] };
+        answers['monteur.edit'] = { clips: [] };
+    };
+
+    it('stamps the version of the tenant’s stored profile on the clip', async () => {
+        db.routes.push(profileReads({ [TENANT]: 7 }).route);
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'rendering');
+        const [insert] = db.ran(/^INSERT INTO clip_drafts/);
+        assert.match(insert!.sql, /\(creator_id, source_id, .*, direction, profile_version\) VALUES \(.*\$16::jsonb, \$17\)/);
+        assert.deepEqual(stamps(), [7]);
+    });
+
+    it('stamps null for a tenant with no stored profile', async () => {
+        db.routes.push(profileReads({ '22222222-2222-4222-8222-222222222222': 7 }).route);
+        await sweepMonteur(later());
+        assert.deepEqual(stamps(), [null]);
+    });
+
+    it('gives every clip of one pick the same version, from one read', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        db.routes.push(route);
+        twoClips();
+        assert.equal((await sweepMonteur(later())).pick?.clips, 2);
+        assert.deepEqual(stamps(), [7, 7]);
+        // The pick's profile reads (the settings' own, the stamp's, growth's for the SEO terms) are the same count for one clip.
+        const forTwo = reads.creators.length;
+        db.statements.length = 0;
+        reads.creators.length = 0;
+        reelsPerVideo = 1;
+        answers['monteur.pick'] = PICK;
+        answers['monteur.copy'] = COPY;
+        await sweepMonteur(later());
+        assert.equal(reads.creators.length, forTwo, 'the number of reads does not grow with the clips');
+    });
+
+    it('does not move once the pick is under way: a profile saved while the model writes reaches the next pick, not this one', async () => {
+        const versions: Record<string, number> = { [TENANT]: 7 };
+        db.routes.push(profileReads(versions).route);
+        const first = setModelCaller(async (req) => {
+            if (req.purpose === 'monteur.copy') versions[TENANT] = 8; // the owner saves a new profile while the Marketer writes
+            req.onUsage?.({ model: 'gemini-test', tokensIn: 1, tokensOut: 1, thinking: 0 });
+            return answers[req.purpose];
+        });
+        try {
+            await sweepMonteur(later());
+        } finally {
+            setModelCaller(first);
+        }
+        assert.deepEqual(stamps(), [7]);
+    });
+
+    it('still hands the clip off, stamped null, when the version read fails', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        reads.failAt = 2; // the first read is the settings' own, the second the stamp's
+        db.routes.push(route);
+        assert.deepEqual((await sweepMonteur(later())).pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 });
+        assert.ok(reads.creators.length >= 2, 'the stamp did ask');
+        assert.deepEqual(stamps(), [null]);
+        assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 1, 'and the render is queued');
+    });
+
+    it('costs no query beyond the settings’ own when the drain’s request scope is open', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        db.routes.push(route);
+        await withProfileCache(() => sweepMonteur(later()));
+        assert.equal(reads.creators.length, 1, 'one read of the tenant’s profile for the whole pick');
+        assert.deepEqual(stamps(), [7]);
     });
 });

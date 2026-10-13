@@ -8,6 +8,8 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import type { CarouselDraftRow } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
+import { withProfileCache } from '../profile/cache.js';
+import { profileReads } from '../profile/stampSupport.js';
 import type { Carousel } from './carouselTypes.js';
 import { StudioError } from './common.js';
 import {
@@ -17,6 +19,7 @@ import {
 import { defaultStudioSettings } from './settings.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
+const OTHER_TENANT = '22222222-2222-4222-8222-222222222222';
 const LESSON = '66666666-6666-4666-8666-666666666666';
 const DRAFT = '77777777-7777-4777-8777-777777777777';
 const MOMENT = '88888888-8888-4888-8888-888888888888';
@@ -381,5 +384,78 @@ describe('preferPrimaryKeyword', () => {
         routes.push([/SELECT trigger_keyword FROM campaigns/, () => ({ rows: [{ trigger_keyword: 'منديل, رسمة, stitch' }] })]);
         assert.equal((await preferPrimaryKeyword(TENANT, generated('منديل'), settings)).carousel.keyword, 'منديل');
         assert.equal((await preferPrimaryKeyword(TENANT, generated('دفتر'), settings)).carousel.keyword, 'دفتر');
+    });
+});
+
+// ─── The profile stamp (P7) ─────────────────────────────────────────────────────────────
+
+describe('createDraft — profile_version', () => {
+    const generate = () => setGeneration({
+        generateDraft: async () => ({ carousel: CAROUSEL, shots: SHOTS, campaign: CAMPAIGN }),
+        validateCarousel: () => [],
+    });
+    /** `profile_version` is the INSERT's last column and parameter. */
+    const stamped = () => {
+        const [insert] = ran(/^INSERT INTO carousel_drafts/);
+        assert.ok(insert, 'a draft row was inserted');
+        assert.match(insert!.sql, /\(creator_id, status, input, profile_version\) VALUES \(\$1, 'generating', \$2::jsonb, \$3\)/);
+        return insert!.params[2];
+    };
+
+    it('carries the version of the tenant’s stored profile', async () => {
+        routes.push(profileReads({ [TENANT]: 7 }).route);
+        library();
+        generate();
+        await createDraft(TENANT, { lessonIds: [LESSON] });
+        assert.equal(stamped(), 7);
+    });
+
+    it('carries null for a tenant with no stored profile', async () => {
+        routes.push(profileReads({ [OTHER_TENANT]: 7 }).route); // another tenant has one; this one does not
+        library();
+        generate();
+        await createDraft(TENANT, { lessonIds: [LESSON] });
+        assert.equal(stamped(), null);
+    });
+
+    it('still creates the draft, with null, when the version read fails', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        reads.failAt = 2; // the first read is getStudioSettings' own, the second the stamp's
+        routes.push(route);
+        library();
+        generate();
+        const draft = await createDraft(TENANT, { lessonIds: [LESSON] });
+        assert.equal(draft.status, 'rendering', 'the draft went on to be written and rendered');
+        assert.ok(reads.creators.length >= 2, 'the stamp did ask');
+        assert.equal(stamped(), null);
+    });
+
+    it('reads the profile once per request: the stamp costs no query beyond the settings’ own', async () => {
+        const { reads, route } = profileReads({ [TENANT]: 7 });
+        routes.push(route);
+        library();
+        generate();
+        await withProfileCache(() => createDraft(TENANT, { lessonIds: [LESSON] }));
+        assert.equal(reads.creators.length, 1);
+        assert.equal(stamped(), 7);
+    });
+
+    it('reads before the model is asked, so the version is the one the draft was written under', async () => {
+        routes.push(profileReads({ [TENANT]: 7 }).route);
+        library();
+        let askedAfter = -1;
+        setGeneration({
+            generateDraft: async () => {
+                askedAfter = statements.length;
+                return { carousel: CAROUSEL, shots: SHOTS, campaign: CAMPAIGN };
+            },
+            validateCarousel: () => [],
+        });
+        await createDraft(TENANT, { lessonIds: [LESSON] });
+        const order = statements.map((s) => s.sql);
+        const stampRead = order.findIndex((s, i) => /FROM creator_profiles/.test(s) && order.slice(0, i).some((p) => /FROM creator_profiles/.test(p)));
+        const insert = order.findIndex((s) => /^INSERT INTO carousel_drafts/.test(s));
+        assert.ok(stampRead >= 0, 'a second profile read, after the settings’ own: the stamp');
+        assert.ok(stampRead < insert && insert < askedAfter, 'stamp read, then the row, then the model');
     });
 });
