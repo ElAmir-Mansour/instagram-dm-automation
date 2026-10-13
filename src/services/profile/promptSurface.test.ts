@@ -144,11 +144,15 @@ describe('the DM and comment wording is the profile\'s', () => {
         assert.deepEqual([...handedIn], [...described]);
     });
 
-    it('a profile that speaks Egyptian about products moves the infographic (P12), DM and comment entries, and nothing the Studio or the Monteur writes', async () => {
+    it('a profile that speaks Egyptian about products moves the Editor (P10), infographic (P12), DM and comment entries, and nothing else the Studio or the Monteur writes', async () => {
         const before = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT }));
         const after = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile: SHOP_EG }));
         const moved = [...before.keys()].filter((name) => before.get(name) !== after.get(name));
-        assert.deepEqual(moved, ['infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'comments.dm-fallback-replies.ar']);
+        // The Editor moves because the shop has no one on camera and speaks of no tech (P10); its two prompts come with the Monteur's entries.
+        assert.deepEqual(moved, [
+            'monteur.editor-system.human-on', 'monteur.editor-system.human-off',
+            'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'comments.dm-fallback-replies.ar',
+        ]);
         assert.match(after.get('dm.system-instruction')!, /باللهجة المصرية البسيطة/);
         assert.match(after.get('dm.system-instruction')!, /إذا طلب المستخدم منتجات/);
         assert.match(after.get('dm.response-schema')!, /GO_TO_OFFER_1/);
@@ -162,11 +166,12 @@ describe('the DM and comment wording is the profile\'s', () => {
         assert.match(after.get('dm.response-schema')!, /Must be written in English if appropriate/);
     });
 
-    it('a profile that cannot be made into a context fails the entries that need it (the infographic\'s too), by name, and the rest are still built', async () => {
+    it('a profile that cannot be made into a context fails the entries that need it (the Editor\'s and the infographic\'s too), by name, and the rest are still built', async () => {
         const profile = new Proxy({}, { get() { throw new Error('profile unreadable'); } }) as never;
         const entries = await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile });
         const failed = entries.filter((e) => e.error !== undefined).map((e) => e.name);
         assert.deepEqual(failed, [
+            'monteur.editor-system.human-on', 'monteur.editor-system.human-off',
             'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'dm.disclosure-line', 'dm.starter-persona',
             'comments.dm-fallback-replies.ar', 'comments.dm-fallback-replies.en',
         ]);

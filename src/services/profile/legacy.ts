@@ -22,9 +22,9 @@ import { intoProfile } from './views.js';
  * the golden prompts, so a value that stops matching the code fails there rather than here.
  */
 export const LEGACY_ASSUMPTIONS: {
-    /** He/him, on camera: `monteur/editor.ts` writes "he", "him" and "his" 17 times. */
+    /** He/him, on camera: `monteur/editor.ts` wrote "he", "him" and "his" 17 times; since P10 it reads `presenter` (`PRONOUN_KITS`, `monteur/editorKits.ts`). */
     readonly presenter: Readonly<Presenter>;
-    /** `monteur/editor.ts` ends every Editor prompt with "Never a woman or a girl in any picture". */
+    /** `monteur/editor.ts` ended every Editor prompt with "Never a woman or a girl in any picture"; since P10 only a tenant with this rule gets the line. */
     readonly rules: readonly ContentRulePreset[];
     /** The Gulf asks and fallbacks: `monteur/copy.ts` ASK_POOL, `studio/prompts.ts` language kit, `webhook/errors.ts`. */
     readonly register: ArabicRegister;
@@ -38,7 +38,7 @@ export const LEGACY_ASSUMPTIONS: {
     readonly kind: CreatorKind;
     /** `studio/infographicSpec.ts`: "…for a tech educator's Instagram…". */
     readonly role: string;
-    /** The tech block of the infographic writer and the Editor's tool examples (05 R12, R16). */
+    /** The tech block of the infographic writer and the Editor's tool examples (05 R12, R16; the Editor's are `EDITOR_DOMAIN_KITS` since P10). */
     readonly domain: Domain;
     /** «الكورس», "the course": the Studio's framing of what is sold (05 R6). */
     readonly offerKind: OfferKind;

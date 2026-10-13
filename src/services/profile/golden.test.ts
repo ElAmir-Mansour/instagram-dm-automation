@@ -54,7 +54,8 @@ import { COACH_SCHEMA, coachSystemPrompt } from '../growth/coach.js';
 import { KEYWORDS_SCHEMA } from '../growth/keywords.js';
 import { analystUserPrompt, LESSONS_SCHEMA } from '../monteur/analyst.js';
 import { ASK_POOL, COPY_SCHEMA } from '../monteur/copy.js';
-import { editorSchema, HUMAN_TOUCHES_PROMPT } from '../monteur/editor.js';
+import { editorSchema, humanTouchesPrompt } from '../monteur/editor.js';
+import { PRONOUN_KITS } from '../monteur/editorKits.js';
 import { PICK_SCHEMA } from '../monteur/pick.js';
 import { DRAFT_SCHEMA, PLAN_SCHEMA } from '../studio/generate.js';
 import { WRITE_SCHEMA, writeSystemPrompt } from '../studio/infographicSpec.js';
@@ -106,7 +107,7 @@ const through = (settings: StudioSettings, owner: boolean): StudioSettings => st
  * Path (c): what the real `getStudioSettings` returns for a tenant whose profile is stored. The stored row holds junk in
  * every profile-owned field (nothing may survive from it), the profile is `profileFromLegacy` as the database holds it.
  */
-async function throughTheReader(settings: StudioSettings, growth?: GrowthSettings): Promise<StudioSettings> {
+async function throughTheReader(settings: StudioSettings, growth?: GrowthSettings): Promise<{ settings: StudioSettings; editor: ProfileContext<'clip_edit'> }> {
     const state = emptyState();
     state.studio.set(OWNER, studioRow(scramble(settings, STUDIO_PROFILE_PATHS)));
     state.profiles.set(OWNER, { profile: throughJsonb(profileFromLegacy(settings, growth)), version: 1, activated_at: null, updated_by: null });
@@ -116,7 +117,8 @@ async function throughTheReader(settings: StudioSettings, growth?: GrowthSetting
         const read = await getStudioSettings(OWNER);
         assert.ok(!JSON.stringify(read).includes('JUNK:'), 'nothing survives from the stale row that the profile owns');
         assert.equal(db.ran(/FROM creator_profiles/).length, 1, 'the reader asked for the stored profile');
-        return read;
+        // The Editor asks for the same stored profile through `profileContext`, the call `sweep.ts` makes (P10).
+        return { settings: read, editor: await profileContext(OWNER, 'clip_edit') };
     } finally {
         setLogSink(previousSink);
         db.restore();
@@ -173,7 +175,14 @@ const OWNER_CONTEXTS = {
 type Variant = {
     slug: 'elamir' | 'seed' | 'english'; settings: StudioSettings; set: GoldenSet; lang: 'ar' | 'en';
     /** How the builder is handed the settings: as they are, as the owner's profile gives them back, or as the real reader returns them. */
-    via: 'today' | 'profile' | 'readers';
+    via: 'today' | 'profile' | 'readers' | 'unreadable';
+    /**
+     * The context the Editor's prompt is written from (P10), reached the same way: described from the rows (none given:
+     * `studioSurface` makes it), from the stored profile, or by the real `profileContext`. The same for every fixture: the English
+     * control's Editor golden is what its profile (`profileFromLegacy(ENGLISH_SETTINGS)`: English labels, the legacy man, the tech
+     * tools) selects, not the text of a profile that cannot be read (`LEGACY_EDITOR_KIT`, which has Arabic labels).
+     */
+    editor: ProfileContext<'clip_edit'> | undefined;
 };
 const FIXTURES = [
     { slug: 'elamir', settings: ELAMIR_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
@@ -181,7 +190,7 @@ const FIXTURES = [
     { slug: 'english', settings: ENGLISH_SETTINGS, set: 'control', lang: 'en', owner: false },
 ] as const;
 /** What the real reader returns for each fixture (path (c)). Read once, before any test: each swaps the one shared pool for a stand-in and puts it back, so one at a time. */
-const READ = {} as Record<(typeof FIXTURES)[number]['slug'], StudioSettings>;
+const READ = {} as Record<(typeof FIXTURES)[number]['slug'], { settings: StudioSettings; editor: ProfileContext<'clip_edit'> }>;
 for (const f of FIXTURES) READ[f.slug] = await throughTheReader(f.settings, f.owner ? ELAMIR_GROWTH : undefined);
 /**
  * His context on the infographic surface (tech educator, tech, فصحى), reached the three ways: described from his rows (today, no
@@ -195,15 +204,20 @@ const INFOGRAPHIC_CONTEXT = {
 } as const;
 /** Each fixture three times, into the same golden: as it is, through the profile, and through the real reader. */
 const VARIANTS: readonly Variant[] = FIXTURES.flatMap((f): Variant[] => [
-    { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today' },
-    { slug: f.slug, settings: through(f.settings, f.owner), set: f.set, lang: f.lang, via: 'profile' },
-    { slug: f.slug, settings: READ[f.slug], set: f.set, lang: f.lang, via: 'readers' },
+    { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today', editor: undefined },
+    {
+        slug: f.slug, settings: through(f.settings, f.owner), set: f.set, lang: f.lang, via: 'profile',
+        editor: contextFor(storedProfile(f.settings, f.owner ? ELAMIR_GROWTH : undefined), 'clip_edit', 1),
+    },
+    { slug: f.slug, settings: READ[f.slug].settings, set: f.set, lang: f.lang, via: 'readers', editor: READ[f.slug].editor },
+    // The Mac brain keeps the owner's wording when the profile cannot be read (`editorKitFor`): only his fixtures, and only the Editor changes.
+    ...(f.owner ? [{ slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'unreadable' as const, editor: legacyContext('clip_edit') }] : []),
 ]);
-const describeVariant = (v: Variant): string => `${v.slug} settings${v.via === 'profile' ? ', through the profile' : v.via === 'readers' ? ', through the real readers' : ''}`;
+const describeVariant = (v: Variant): string => `${v.slug} settings${v.via === 'profile' ? ', through the profile' : v.via === 'readers' ? ', through the real readers' : v.via === 'unreadable' ? ', a profile that cannot be read' : ''}`;
 /** The Studio and Monteur builders' output for a variant, built once: the two sections below each check their half. */
 const surfaces = new Map<Variant, Promise<SurfaceEntry[]>>();
 const studioEntries = (v: Variant, prefixes: readonly string[]): Promise<SurfaceEntry[]> => {
-    if (!surfaces.has(v)) surfaces.set(v, studioSurface(v.settings, { lang: v.lang, slug: v.slug, set: v.set }));
+    if (!surfaces.has(v)) surfaces.set(v, studioSurface(v.settings, { lang: v.lang, slug: v.slug, set: v.set, editor: v.editor }));
     return surfaces.get(v)!.then((all) => all.filter((e) => prefixes.some((p) => e.name.startsWith(p))));
 };
 /**
@@ -263,7 +277,7 @@ describe('DM and comment golden prompts', () => {
     for (const [via, owner, contexts] of [
         ['today', ELAMIR_SETTINGS, OWNER_CONTEXTS['the legacy assumptions']],
         ['through the profile', through(ELAMIR_SETTINGS, true), OWNER_CONTEXTS['his stored profile']],
-        ['through the real readers', READ.elamir, OWNER_CONTEXTS['the real profileContext']],
+        ['through the real readers', READ.elamir.settings, OWNER_CONTEXTS['the real profileContext']],
         ['a profile that cannot be read', ELAMIR_SETTINGS, OWNER_CONTEXTS['a profile that cannot be read']],
     ] as const) it(`dmFallbackReply: the public reply that replaces an undeliverable DM, every variant (${via})`, async (t) => {
         await matchEach(t, dmFallbackSurface(owner, contexts.comments));
@@ -312,8 +326,8 @@ describe('Monteur golden prompts', () => {
         matchGoldenJson('monteur.editor-schema.human-off', editorSchema(false));
     });
 
-    it('HUMAN_TOUCHES_PROMPT: the Editor\'s human-touch rules', () => {
-        matchGolden('monteur.editor-human-touches', HUMAN_TOUCHES_PROMPT);
+    it('humanTouchesPrompt: the Editor\'s human-touch rules, for a man on camera (his)', () => {
+        matchGolden('monteur.editor-human-touches', humanTouchesPrompt(PRONOUN_KITS.he));
     });
 
     it('analystUserPrompt: the Analyst\'s turn, with rules and the reach split, and on a cold start', () => {
@@ -338,7 +352,7 @@ describe('Infographic golden prompts', () => {
         });
     }
 
-    for (const [via, seed] of [['today', ELAMIR_SEED_SETTINGS], ['through the profile', through(ELAMIR_SEED_SETTINGS, true)], ['through the real readers', READ.seed]] as const) {
+    for (const [via, seed] of [['today', ELAMIR_SEED_SETTINGS], ['through the profile', through(ELAMIR_SEED_SETTINGS, true)], ['through the real readers', READ.seed.settings]] as const) {
         it(`renderPayload and payloadBrand: the job the Mac gets in write mode and the brand it draws, from his seed settings (${via})`, async (t) => {
             await matchEach(t, infographicSurface(seed, { slug: 'seed', ctx: INFOGRAPHIC_CONTEXT[via] }));
         });

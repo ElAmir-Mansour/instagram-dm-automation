@@ -38,6 +38,7 @@ import { keywordsSystemPrompt, suggestKeywords } from '../growth/keywords.js';
 import { analystSystemPrompt } from '../monteur/analyst.js';
 import { copySystemPrompt, copyUserPrompt, toClipCopy, type CopyContext } from '../monteur/copy.js';
 import { editorSystemPrompt } from '../monteur/editor.js';
+import { editorKit } from '../monteur/editorKits.js';
 import { pickSystemPrompt, pickUserPrompt } from '../monteur/pick.js';
 import { buildRenderPayload } from '../monteur/render.js';
 import type { Carousel } from '../studio/carouselTypes.js';
@@ -183,13 +184,20 @@ export interface StudioSurfaceOptions {
     slug?: string;
     /** The golden set these belong to. */
     set?: GoldenSet;
+    /**
+     * The profile context the Editor's prompt is written from (P10: `editorKit(ctx)`), or a function that makes it (so a tenant whose
+     * profile cannot be described fails the Editor's entries by name, not the whole surface). Without one it is the context of the
+     * profile these settings describe (`profileFromLegacy`): what a tenant with no stored profile is given, so the owner's Editor
+     * prompt is built through the profile path, not around it.
+     */
+    editor?: Wording<ProfileContext<'clip_edit'>>;
 }
 
 /**
  * Every builder that reads the Studio settings and nothing else of the tenant: the writer's prompts, the CTA lines,
  * the DM, the caption normalisers, the carousel payload, and the Monteur's pick, copy, Editor, Analyst and render.
  */
-export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir' }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
+export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
     const say = SAY[lang];
     const out: SurfaceEntry[] = [];
     const t = (base: string, build: () => string): void => { out.push(built(named(base, slug), 'text', set, build)); };
@@ -242,8 +250,10 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
     const item = { clip: 1, ask_line: 'no keyword here', question: '', pitch: '', ...say.copy };
     j('monteur.copy-clip-fallbacks', () => toClipCopy(item, GOLDEN_CLIPS[0]!, settings, ctx, [], [], 0));
 
-    t('monteur.editor-system.human-on', () => editorSystemPrompt({ ...settings, monteur: { ...settings.monteur, human: true } }));
-    t('monteur.editor-system.human-off', () => editorSystemPrompt({ ...settings, monteur: { ...settings.monteur, human: false } }));
+    // The Editor is written from the creator's profile context: his, here, is what `profileFromLegacy` makes of his rows.
+    const editorKitOfTenant = lazy(() => editorKit(wordingOf(editor ?? (() => contextFor(profileFromLegacy(settings), 'clip_edit', null)))));
+    t('monteur.editor-system.human-on', () => editorSystemPrompt({ ...settings, monteur: { ...settings.monteur, human: true } }, editorKitOfTenant()));
+    t('monteur.editor-system.human-off', () => editorSystemPrompt({ ...settings, monteur: { ...settings.monteur, human: false } }, editorKitOfTenant()));
 
     t('monteur.analyst-system', () => analystSystemPrompt(settings));
 
@@ -502,7 +512,7 @@ export async function tenantSurface(rows: TenantRows, options: WithRowsOptions =
     const dm = () => contextFor(profile(), 'dm', null);
     const comments = () => contextFor(profile(), 'comment_reply', null);
     return [
-        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language }),
+        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null) }),
         ...infographicSurface(rows.studio, { ctx: () => contextFor(profile(), 'infographic', null) }),
         ...(rows.agent ? dmInstructionSurface(rows.agent, dm) : []),
         ...dmContextSurface(dm),

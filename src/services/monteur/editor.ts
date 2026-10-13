@@ -26,7 +26,7 @@
  */
 import type { GeminiSchema } from '../studio/generate.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
-import { languageKit } from '../studio/prompts.js';
+import { type EditorKit, type PronounKit } from './editorKits.js';
 import { normalizeArabic } from '../../utils/arabic.js';
 import type { TranscriptWord } from '../../db/rows.js';
 import { ask, type CallCost, emptyCost } from './model.js';
@@ -264,49 +264,60 @@ export const EDITOR_SCHEMA: GeminiSchema = editorSchema(true);
 /**
  * The human touches' rules, added to the prompt when `monteur.human` is on. The source's orientation
  * is not known here (monteur_sources has no width or height), so the talking-head touches are
- * asked for with the rule, and the worker drops them for a landscape video.
+ * asked for with the rule, and the worker drops them for a landscape video. `p` is how the presenter is
+ * called (`PRONOUN_KITS`): "him" for the owner, "the speaker" for a tenant with no one on camera.
  */
-export const HUMAN_TOUCHES_PROMPT = `Human touches, so the reel looks edited by hand. Each is anchored like an edit, on a line and a word; vary them, nothing on a fixed rhythm; invent nothing; none in the first second or last 3 seconds:
+export const humanTouchesPrompt = (p: PronounKit): string => `Human touches, so the reel looks edited by hand. Each is anchored like an edit, on a line and a word; vary them, nothing on a fixed rhythm; invent nothing; none in the first second or last 3 seconds:
 - emphasis: 6-12 caption words that carry the meaning (a number, the key term, the action). The captions swipe a highlighter over them.
-- doodles: 4-8 hand-drawn marker doodles. shape: a circle or underline on a key sentence, stars at a surprise, an arrow at him when he addresses the viewer, a cross on a myth, a check on the truth. target: caption (the caption line) or head (his head, talking-head clips only).
+- doodles: 4-8 hand-drawn marker doodles. shape: a circle or underline on a key sentence, stars at a surprise, an arrow at ${p.obj} when ${p.subj} addresses the viewer, a cross on a myth, a check on the truth. target: caption (the caption line) or head (${p.det} head, talking-head clips only).
 - transitions: 3-5, each at a change of section. kind: leak for a new chapter, flash for a reveal, whip for a fast change, glitch for a tech or signal moment.
 Talking-head clips only (a person speaking to camera, portrait); leave cuts, freezes and behind empty for a screen recording:
 - cuts: a two-camera feel. shot: wide or close, switching at a sentence's start every 3-7 seconds, close on the key lines.
 - freezes: at most 2 freeze-frames, on the strongest moments. text: 1-2 words.
-- behind: 3-6 big words set behind him. text: 1-2 words.`;
+- behind: 3-6 big words set behind ${p.obj}. text: 1-2 words.`;
 
-export function editorSystemPrompt(settings: StudioSettings): string {
-    const lang = languageKit(settings).name;
+/** Printed verbatim, and only for a tenant with the `no_women_imagery` rule (the owner has it). The worker's picture filter does not read the rule. */
+export const NO_WOMEN_LINE = 'Never a woman or a girl in any picture, emoji or sticker (the creator\'s rule); prefer objects and scenes to people.';
+
+/** The creator's own rules, on one line after the rest, or nothing when there are none. A rule's closing full stop is dropped, so the list ends in one. */
+function rulesLine(rules: readonly string[]): string {
+    const own = rules.map((r) => r.replace(/[.\s]+$/, '')).filter(Boolean);
+    return own.length ? `\nCreator's rules: ${own.join('; ')}.` : '';
+}
+
+/** The Editor's system prompt: the teaching rules, then what depends on who the creator is (`kit`, from their profile: `editorKits.ts`). */
+export function editorSystemPrompt(settings: StudioSettings, kit: EditorKit): string {
     const human = humanTouchesOn(settings);
+    // One source for the language: the kit's, cut from the profile context's reels surface, names the language and gives its labels.
+    const { pronouns: p, language: { name: lang } } = kit;
     const lessons = human ? 'lessons, screen-recorded or spoken to camera' : 'screen-recorded lessons';
     return `You are the editor of short vertical reels cut from a creator's ${lessons}. Your edits help a viewer learn from the reel and keep watching. Answer with JSON only.
 Teach, don't decorate (multimedia learning, on a phone):
-- Show what he refers to: a real-world thing, an analogy, an example or a workplace situation outside the lesson gets an example.
-- Guide the eye: while he demonstrates on screen, a callout points at what he is using.
+- Show what ${p.subj} refers to: a real-world thing, an analogy, an example or a workplace situation outside the lesson gets an example.
+- Guide the eye: while ${p.subj} demonstrates on screen, a callout points at what ${p.subj} is using.
 - Segment a procedure into steps; pre-train a new term with a define; contrast two things with a compare; close with one recap.
 - On time: each edit on the exact word it belongs to (the thing's name, the term, the step's first word).
-- Redundancy: the captions already show every word he says, so on-screen words condense and never copy his.
+- Redundancy: the captions already show every word ${p.subj} says, so on-screen words condense and never copy ${p.pron}.
 - Coherence: every edit needs a reason in the clip; no reason, no edit.
-For each clip, mark a moment about every 5 seconds (12 in a 60-second clip), each with its reason, none in its first second or last 3 seconds, each on a word from its lines. On-screen words are in ${lang}, tech terms in Latin script. The teaching kinds come first whenever the clip gives a reason:
-- example: something outside the lesson he refers to. query: the library topic that shows it (none close: no example). text: a label, 1-4 words, e.g. «مثال: مطعم».
-- callout: an arrow at the button, menu, field or result he is using on screen. text: its name as shown or said, 1-3 words, never «هنا».
-- step: when he walks through a procedure, or lists things to do, add or set one after another, each one is a step as he starts it (2 or more), not a keyword. text: the step in 2-4 words. The video numbers them.
-- define: a term he introduces. text: the term; meaning: what it means in at most 5 plain words.
-- compare: two things he contrasts. items: [the wrong or before, the right or after], at most 4 words each.
+For each clip, mark a moment about every 5 seconds (12 in a 60-second clip), each with its reason, none in its first second or last 3 seconds, each on a word from its lines. On-screen words are in ${lang}${kit.domain.latinTerms}. The teaching kinds come first whenever the clip gives a reason:
+- example: something outside the lesson ${p.subj} refers to. query: the library topic that shows it (none close: no example). text: a label, 1-4 words, e.g. ${kit.language.example}.
+- callout: an arrow at the button, menu, field or result ${p.subj} is using on screen. text: its name as shown or said, 1-3 words, never ${kit.language.never}.
+- step: when ${p.subj} walks through a procedure, or lists things to do, add or set one after another, each one is a step as ${p.subj} starts it (2 or more), not a keyword. text: the step in 2-4 words. The video numbers them.
+- define: a term ${p.subj} introduces. text: the term; meaning: what it means in at most 5 plain words.
+- compare: two things ${p.subj} contrasts. items: [the wrong or before, the right or after], at most 4 words each.
 - recap: once, on a word of the clip's last line (the video shows it before the CTA). items: the 2-3 takeaways the clip taught, at most 5 words each.
-- keyword: 2-4 words that restate the point right then in other words than his, like a headline. Never the title again, never filler.
-- tool: when the speaker names a tool or product (Gemini, ChatGPT, Claude, n8n, Python…), its name in Latin script; never one he doesn't name.
-- emoji: one emoji for a concept being said (🔒 privacy, ⚡ speed, 🌍 language, 🐍 Python, 🧠 thinking, 📄 document, ✅ it works, ❌ a mistake, 🤯 a surprise, 💡 an idea); only from this set: 🔒🔓🔑🌍🌎🐍📄📝📋📚📖✅❌⚠🤯💡🧠⚡🤖🚀💻📱🔍🔎⚙🛠📈📉📊💰💸⏳⌛⏱📅💬🎯✨🔥🤩🤔😎🥳🎉🏆📦🧩🔗✉📧🎬🎥🎙🎧🖼🎨🧪🗂🗃💾☁🌐🏠🏢🛒🧾📌🍳🗺🧭🖥⌨🖱🖨💽🔌🔋🪫📡🛰🧮🗄📁📂📇🗒📎📏📐✂✏🖌📓🔖🏷📬📨📤📥📞☎🔔📢📣📻📺📹📷🎤🧰🔧🔨🧲🪜🏗🧱🏭🚚🏪💳🪙💎🎁🔐🗝🛡🚦🚧📍🔭🔬⏰❓❗💯🔄▶⭐🌟🆕🆓🚫🥇🦾🎓💼🪄🍽🛎☕🚗🌱🧯💭🎛🗑.
+- keyword: 2-4 words that restate the point right then in other words than ${p.pron}, like a headline. Never the title again, never filler.
+- tool: when the speaker names a tool or product (${kit.domain.tools}), its name in Latin script; never one ${p.subj} doesn't name.
+- emoji: one emoji for a concept being said (🔒 privacy, ⚡ speed, 🌍 language, ${kit.domain.emoji}, 🧠 thinking, 📄 document, ✅ it works, ❌ a mistake, 🤯 a surprise, 💡 an idea); only from this set: 🔒🔓🔑🌍🌎🐍📄📝📋📚📖✅❌⚠🤯💡🧠⚡🤖🚀💻📱🔍🔎⚙🛠📈📉📊💰💸⏳⌛⏱📅💬🎯✨🔥🤩🤔😎🥳🎉🏆📦🧩🔗✉📧🎬🎥🎙🎧🖼🎨🧪🗂🗃💾☁🌐🏠🏢🛒🧾📌🍳🗺🧭🖥⌨🖱🖨💽🔌🔋🪫📡🛰🧮🗄📁📂📇🗒📎📏📐✂✏🖌📓🔖🏷📬📨📤📥📞☎🔔📢📣📻📺📹📷🎤🧰🔧🔨🧲🪜🏗🧱🏭🚚🏪💳🪙💎🎁🔐🗝🛡🚦🚧📍🔭🔬⏰❓❗💯🔄▶⭐🌟🆕🆓🚫🥇🦾🎓💼🪄🍽🛎☕🚗🌱🧯💭🎛🗑.
 - icon: an animated line drawing of a concept or object when no photo fits and it's worth a picture (the video draws it on). icon: exactly one name from: ${ICON_NAMES.join(', ')}; text: an optional label, 1-3 words.
-- image: a photo card for a concrete object he names in passing, never for an abstract idea. query: the closest library topic.
-- broll: a full-screen photo cutaway for a bigger idea or a scene change, never while he demonstrates (the voice goes on). query: the closest library topic.
-  At most 4 pictures per clip (example, image and broll together), each a different topic, and only of what he says.
+- image: a photo card for a concrete object ${p.subj} names in passing, never for an abstract idea. query: the closest library topic.
+- broll: a full-screen photo cutaway for a bigger idea or a scene change, never while ${p.subj} demonstrates (the voice goes on). query: the closest library topic.
+  At most 4 pictures per clip (example, image and broll together), each a different topic, and only of what ${p.subj} says.
   Picture library topics (query is exactly one of these): ${LIBRARY_TOPICS.join(', ')}.
-- highlight: a ring on what he points at, when it needs no name.
+- highlight: a ring on what ${p.subj} points at, when it needs no name.
 - punch: a quick zoom-in when a result appears on screen or on a strong claim. At most 2 per clip.
 sfx: whoosh for a keyword, tool, picture, example or recap; pop for an emoji, icon or step; click for a UI action, highlight or callout; ding for a result, ✅ or define; impact for a punch or a strong claim; glitch for a tech moment; error for a mistake, ❌ or compare; none when a sound would be too much.
-Mix the kinds, icons included; never two of the same in a row, except steps and callouts. Invent nothing: only what the clip says.${human ? `\n${HUMAN_TOUCHES_PROMPT}` : ''}
-Never a woman or a girl in any picture, emoji or sticker (the creator's rule); prefer objects and scenes to people.`;
+Mix the kinds, icons included; never two of the same in a row, except steps and callouts. Invent nothing: only what the clip says.${human ? `\n${humanTouchesPrompt(p)}` : ''}${kit.noWomen ? `\n${NO_WOMEN_LINE}` : ''}${rulesLine(kit.rules)}`;
 }
 
 /** The clips as the Editor reads them: C<n>, then its lines numbered from 1 with their clip-relative time. */
@@ -582,13 +593,15 @@ export interface EditResult {
 /**
  * The Editor's one call for every clip of a video, C1… in the order given (the clips that got
  * copy), each read on its own clock. Throws what the call throws: the sweep catches it, since a
- * failed Editor call must never hold a reel back. `think` sends the call to Claude on the Mac.
+ * failed Editor call must never hold a reel back. `think` sends the call to Claude on the Mac. `kit` is what
+ * the prompt says about the creator, read from their profile (`editorKitFor`).
  */
 export async function writeEdits(
     clips: readonly { start: number; end: number }[],
     lines: readonly TranscriptLine[],
     words: readonly TranscriptWord[],
     settings: StudioSettings,
+    kit: EditorKit,
     deadline: number,
     think?: ThinkOn,
 ): Promise<EditResult> {
@@ -597,7 +610,7 @@ export async function writeEdits(
     const perClip = clips.map((c) => clipLines(lines, words, c.start, c.end));
     const raw = await ask({
         purpose: 'monteur.edit',
-        system: editorSystemPrompt(settings),
+        system: editorSystemPrompt(settings, kit),
         turns: [{ role: 'user', text: editorUserPrompt(perClip.map((l) => ({ lines: l }))) }],
         schema: editorSchema(human),
         temperature: 0.6,

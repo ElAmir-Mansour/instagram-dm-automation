@@ -538,6 +538,23 @@ never copy his (redundancy); every edit needs a reason in the clip (coherence); 
 seconds; at most 4 pictures (example, image and broll together), only of what he says; no broll while he
 demonstrates; invent nothing; never a woman or a girl in any picture, emoji or sticker.
 
+**Who it is written for** (`editorKits.ts`, from `profileContext(creator, 'clip_edit')`): "he" above is the owner's
+presenter. The prompt says he/him/his, she/her/her/hers, or "the speaker" by `presenter.pronouns` (none: the speaker).
+The language the on-screen words are in, and the example and callout labels («مثال: مطعم», «هنا»), are the reels
+surface's `language.code`: one source for the sentence and its examples. The `content.domain` gives the tool examples,
+the words kept in Latin script and the emoji example (`tech` keeps Gemini, ChatGPT, Claude, n8n, Python, "tech terms
+in Latin script" and "🐍 Python"; `general` says "an app, a brand, a product", "brand and product names in Latin
+script" and "🎁 a gift"). The "never a woman" line is printed only for a tenant with the `no_women_imagery` rule, and
+the tenant's own rules follow as one "Creator's rules:" line.
+
+A profile that cannot be read is logged `monteur.editor_profile_unreadable`, and then depends on the brain. With the
+Mac brain (the owner, under G1) the owner's text (`LEGACY_EDITOR_KIT`) is sent: a call waited for on the Mac needs a
+prompt. Without it (Gemini, every other tenant) the Editor is not asked: the reels go out with no edits and
+`record.edit.error = 'profile unreadable'`, the same best-effort path as a failed call, so the owner's words never reach
+another tenant. It is not thrown, which would fail the attempt, run the Marketer again and stop the source after three
+tries. The worker's picture filter (`NO_WOMEN` in aicourse-captions `stock.mjs`) does not read any of this: it is the
+strictest rule for every tenant.
+
 **Code, not the prompt** (`editsByClip`, `placeEdits`):
 - Answers are matched to clips by `C<n>`, never by position.
 - An edit lands on the start of its `word` in its line, else on the line's start, on the clip's clock. A recap

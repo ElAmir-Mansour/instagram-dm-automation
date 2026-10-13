@@ -8,13 +8,19 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import type { TranscriptWord } from '../../db/rows.js';
 import type { GeminiSchema } from '../studio/generate.js';
+import { contextFor } from '../profile/context.js';
+import { profileFromLegacy } from '../profile/legacy.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import {
     anchorTime, directionsByClip, DOODLE_SHAPES, DOODLE_TARGETS, EDIT_KINDS, EDITOR_SCHEMA, editorSchema, echoesSpeech, editorSystemPrompt,
-    HUMAN_TOUCHES_PROMPT, humanTouchesOn, ICON_NAMES, KIND_CAP, LIBRARY_TOPICS, MAX_IMAGES_PER_CLIP, MAX_QUERY, phrase, PHRASE_LIMITS,
+    humanTouchesOn, humanTouchesPrompt, ICON_NAMES, KIND_CAP, LIBRARY_TOPICS, MAX_IMAGES_PER_CLIP, MAX_QUERY, phrase, PHRASE_LIMITS,
     placeDirection, placeEdits, SHOTS, TALKING_HEAD_TOUCHES, TEACHING_SFX, TOUCH_CAP, TOUCH_LEAD_S, TOUCH_TAIL_S, TRANSITION_KINDS,
 } from './editor.js';
+import { editorKit, PRONOUN_KITS } from './editorKits.js';
 import { toJsonSchema } from './think.js';
+
+/** The Editor's kit for the owner: what his profile (a man on camera, Arabic, tech, the no-women rule) selects. */
+const OWNER_KIT = editorKit(contextFor(profileFromLegacy(ELAMIR_SETTINGS), 'clip_edit', 1));
 
 /** One clip's lines on its clock: L1 «خريطة العالم» at 1 s, L2 «كتاب وصفات» at 6 s. */
 const LINES: { t: number; words: TranscriptWord[] }[] = [
@@ -68,7 +74,7 @@ describe('placeEdits — an image is a photo library query, never a generation p
 
 describe('the Editor prompt and schema', () => {
     it('asks for a free photo library query for an image, and says nothing of generating one', () => {
-        const system = editorSystemPrompt(ELAMIR_SETTINGS);
+        const system = editorSystemPrompt(ELAMIR_SETTINGS, OWNER_KIT);
         assert.ok(system.includes('- image: a photo card for a concrete object he names in passing, never for an abstract idea'));
         assert.ok(system.includes('- broll: a full-screen photo cutaway'));
         assert.ok(system.includes('At most 4 pictures per clip (example, image and broll together)'));
@@ -81,7 +87,7 @@ describe('the Editor prompt and schema', () => {
         assert.ok('query' in item.properties && !('prompt' in item.properties));
         // No enum: 81 values in the schema made Gemini refuse the request (HTTP 400). The prompt lists them.
         assert.equal((item.properties.query as unknown as { enum?: string[] }).enum, undefined);
-        assert.ok(editorSystemPrompt(ELAMIR_SETTINGS).includes(LIBRARY_TOPICS.join(', ')), 'the topics are in the prompt');
+        assert.ok(editorSystemPrompt(ELAMIR_SETTINGS, OWNER_KIT).includes(LIBRARY_TOPICS.join(', ')), 'the topics are in the prompt');
         assert.deepEqual(item.propertyOrdering, ['line', 'word', 'kind', 'text', 'meaning', 'items', 'emoji', 'icon', 'query', 'sfx']);
     });
 
@@ -98,7 +104,7 @@ describe('the Editor prompt and schema', () => {
     });
 
     it('states the teaching rules, each teaching kind and when it is used, in one prompt', () => {
-        const system = editorSystemPrompt(ELAMIR_SETTINGS);
+        const system = editorSystemPrompt(ELAMIR_SETTINGS, OWNER_KIT);
         for (const rule of ['Show what he refers to', 'Guide the eye', 'Segment a procedure', 'pre-train a new term', 'close with one recap',
             'On time: each edit on the exact word', 'Redundancy: the captions already show every word', 'Coherence: every edit needs a reason']) {
             assert.ok(system.includes(rule), rule);
@@ -110,7 +116,7 @@ describe('the Editor prompt and schema', () => {
         // The icon names (about 1,150 characters) are in the prompt, not a schema enum: a big enum is an HTTP 400.
         // The human touches add about 1,200 (MONTEUR.md §6.2); without them the prompt is as it was.
         assert.ok(system.length < 8000, `the prompt runs daily: ${system.length} characters`);
-        const plain = editorSystemPrompt({ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, human: false } });
+        const plain = editorSystemPrompt({ ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, human: false } }, OWNER_KIT);
         assert.ok(plain.length < 6500, `without the human touches: ${plain.length} characters`);
     });
 });
@@ -286,7 +292,7 @@ describe('placeEdits — an icon is a line drawing from the worker\'s set', () =
     });
 
     it('is asked for in the prompt with its names and its sound, and is a plain string in the schema', () => {
-        const system = editorSystemPrompt(ELAMIR_SETTINGS);
+        const system = editorSystemPrompt(ELAMIR_SETTINGS, OWNER_KIT);
         assert.ok(system.includes("\n- icon: an animated line drawing of a concept or object when no photo fits and it's worth a picture (the video draws it on)."));
         assert.ok(system.includes(`icon: exactly one name from: ${ICON_NAMES.join(', ')}; text: an optional label, 1-3 words.`));
         assert.ok(system.includes('pop for an emoji, icon or step'));
@@ -467,8 +473,8 @@ describe('the Editor prompt and schema — the human touches', () => {
         assert.equal(ELAMIR_SETTINGS.monteur.human, true);
         assert.equal(humanTouchesOn(ELAMIR_SETTINGS), true);
         assert.equal(humanTouchesOn(OFF), false);
-        const on = editorSystemPrompt(ELAMIR_SETTINGS);
-        assert.ok(on.includes(`\n${HUMAN_TOUCHES_PROMPT}\n`));
+        const on = editorSystemPrompt(ELAMIR_SETTINGS, OWNER_KIT);
+        assert.ok(on.includes(`\n${humanTouchesPrompt(PRONOUN_KITS.he)}\n`));
         for (const rule of [
             'emphasis: 6-12 caption words that carry the meaning', 'doodles: 4-8 hand-drawn marker doodles', 'a cross on a myth, a check on the truth',
             'transitions: 3-5, each at a change of section', 'leak for a new chapter, flash for a reveal, whip for a fast change, glitch for a tech or signal moment',
@@ -477,10 +483,10 @@ describe('the Editor prompt and schema — the human touches', () => {
             'vary them, nothing on a fixed rhythm; invent nothing',
         ]) assert.ok(on.includes(rule), rule);
         assert.match(on, /^You are the editor of short vertical reels cut from a creator's lessons, screen-recorded or spoken to camera\./);
-        const off = editorSystemPrompt(OFF);
+        const off = editorSystemPrompt(OFF, OWNER_KIT);
         assert.ok(!off.includes('Human touches') && !off.includes('doodle') && !off.includes('emphasis'));
         assert.match(off, /^You are the editor of short vertical reels cut from a creator's screen-recorded lessons\./, 'the prompt as it was');
-        assert.equal(off, on.replace(`\n${HUMAN_TOUCHES_PROMPT}`, '').replace("creator's lessons, screen-recorded or spoken to camera", "creator's screen-recorded lessons"));
+        assert.equal(off, on.replace(`\n${humanTouchesPrompt(PRONOUN_KITS.he)}`, '').replace("creator's lessons, screen-recorded or spoken to camera", "creator's screen-recorded lessons"));
     });
 
     it('puts six optional lists next to each clip’s edits, in order, each anchored on line and word', () => {
