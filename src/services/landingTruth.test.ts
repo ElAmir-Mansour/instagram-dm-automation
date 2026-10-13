@@ -1134,29 +1134,20 @@ describe('landing — the hero 3D stage (L10)', () => {
             assert.ok(stage(L.en, 'en').includes('aria-label="Example: one comment and what it produced"'));
         });
 
-        it('the stage carries its pause labels, in its own language and different from each other', () => {
-            for (const [s, doc] of SECTIONS) {
-                const tag = /<div class="hero-stage"[^>]*>/.exec(stage(doc, s))![0];
-                const pause = /data-pause-label="([^"]+)"/.exec(tag)?.[1];
-                const play = /data-play-label="([^"]+)"/.exec(tag)?.[1];
-                assert.ok(pause && play && pause !== play, s);
-                if (s === 'ar') assert.ok(/^[\u0600-\u06ff ]+$/.test(pause) && /^[\u0600-\u06ff ]+$/.test(play), 'Arabic');
-                else assert.ok(/^[A-Za-z ]+$/.test(pause) && /^[A-Za-z ]+$/.test(play), 'English');
+        it('the animation has no control of its own: no pause button, template, labels or stored choice anywhere on the page', () => {
+            // The owner's call (L10 follow-up): the opt-out is the visitor's own prefers-reduced-motion, which keeps the scene from
+            // starting and tears it down if it is switched on. A pause control, its labels and its remembered state are gone.
+            const live = noComments(landing);
+            for (const gone of ['hero-toggle', 'stage-toggle', 'data-pause-label', 'data-play-label', 'hero3d_paused', 'is-paused', 'i-pause', 'i-play']) {
+                assert.equal(live.includes(gone), false, `${gone} is not in the page`);
             }
-        });
-
-        it('the toggle the loader inserts is one template: a 44px-target button with Lucide pause and play, the icon hidden from screen readers', () => {
-            assert.equal((landing.match(/<template id="hero-toggle">/g) ?? []).length, 1);
-            const tpl = /<template id="hero-toggle">([\s\S]*?)<\/template>/.exec(landing)![1]!;
-            assert.match(tpl, /^<button type="button" class="stage-toggle"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">/);
-            assert.ok(tpl.includes('class="i-pause"') && tpl.includes('class="i-play"'), 'both icons: the loader never draws one');
-            assert.equal(/aria-label|aria-pressed/.test(tpl), false, "the loader sets the name and the state from the stage's own data attributes");
-            // Lucide 0.577.0's pause (two rounded bars) and play (one rounded triangle), as published.
-            assert.ok(tpl.includes('<rect x="14" y="3" width="5" height="18" rx="1"/><rect x="5" y="3" width="5" height="18" rx="1"/>'));
-            assert.ok(tpl.includes('d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"'));
-            const rule = rulesNaming(exact('.stage-toggle'))[0]!.body;
-            assert.match(rule, /inline-size:\s*var\(--tap-target\)/);
-            assert.match(rule, /block-size:\s*var\(--tap-target\)/);
+            for (const [s2, doc] of SECTIONS) {
+                const tag = /<div class="hero-stage"[^>]*>/.exec(stage(doc, s2))![0];
+                assert.deepEqual([...tag.matchAll(/ (data-[a-z0-9-]+|id|class)=/g)].map((m) => m[1]), ['class', 'id', 'data-hero3d'], `${s2}: the stage carries its id, class and cast, nothing else`);
+            }
+            assert.equal(/<template/.test(live), false, 'no template: the loader inserts no markup');
+            const scene = readFileSync('scripts/hero3d/scene.mjs', 'utf8');
+            assert.equal(/stage-toggle|\.pause\(|pause\(p\)/.test(scene), false, 'the scene has no pause API and knows no toggle');
         });
     });
 
@@ -1303,19 +1294,16 @@ describe('landing — the hero 3D stage (L10)', () => {
             assert.match(rulesNaming(exact('.stage-poster, .stage-canvas'))[0]!.body, /transition:\s*opacity var\(--lp-t-fade\)/);
             assert.match(rulesNaming(exact('.hero-stage.is-3d .stage-canvas'))[0]!.body, /opacity:\s*1/);
             assert.match(rulesNaming(exact('.hero-stage.is-3d .stage-poster'))[0]!.body, /opacity:\s*0/);
-            assert.match(rulesNaming(exact('.stage-toggle'))[0]!.body, /position:\s*absolute/);
         });
 
-        it('swaps the toggle icon on the stage, keeps the toggle a circle on focus, and gives Safari 15 (no overflow: clip) no reach into the gutters', () => {
-            assert.match(css, /\.hero-stage\.is-paused \.i-pause,\s*\.hero-stage:not\(\.is-paused\) \.i-play \{ display: none; \}/);
-            assert.match(rulesNaming(exact('.stage-toggle:focus-visible'))[0]!.body, /border-radius:\s*var\(--radius-pill\)/);
+        it('gives Safari 15 (no overflow: clip) no reach into the gutters', () => {
             assert.match(css, /@supports not \(overflow-x: clip\) \{\s*\.hero-stage \{ --hs-x: 0px; \}\s*\}/);
             // It must come after the 62rem rule that gives --hs-x its reach, or that rule would win.
             assert.ok(css.indexOf('@supports not (overflow-x: clip)') > css.indexOf('--hs-x: var(--space-6); }'), 'the @supports rule is later in the source than the media rule');
         });
 
         it('is hidden under forced colours and in print, and the receipt is one ring, once', () => {
-            assert.match(css, /@media \(forced-colors: active\), print \{\s*\.stage-poster,\s*\.stage-canvas,\s*\.stage-toggle \{ display: none; \}/);
+            assert.match(css, /@media \(forced-colors: active\), print \{\s*\.stage-poster,\s*\.stage-canvas \{ display: none; \}/);
             assert.match(css, /\.hero-stage \.bubble\.is-delivering \{ animation: hero-receipt var\(--lp-kw-receipt\) var\(--ease-exit\) 1; \}/);
             assert.match(css, /--lp-kw-receipt:\s*800ms/);
             assert.match(css, /@keyframes hero-receipt \{\s*0%, 100% \{[^}]*0 0 0 0 var\(--accent-ring\)[^}]*\}\s*40% \{[^}]*0 0 0 var\(--ring\) var\(--accent-ring\)/);
@@ -1346,44 +1334,26 @@ describe('landing — the hero 3D stage (L10)', () => {
             for (const gate of [
                 'prefers-reduced-motion:no-preference', 'c.saveData', '[23]g', 'n.deviceMemory < 4', 'n.hardwareConcurrency <',
                 "coarse = ok('(pointer:coarse)')", 'coarse ? 6 : 4', "getContext('webgl2', { failIfMajorPerformanceCaveat: true })",
-                ".offsetWidth < 300", 'n.webdriver', '3d=0', "sessionStorage.getItem('hero3d_off')", "localStorage.getItem('hero3d_paused')",
+                '.offsetWidth < 300', 'n.webdriver', '3d=0', "sessionStorage.getItem('hero3d_off')",
             ]) {
                 assert.ok(shipped.includes(gate), `the loader has the gate ${gate}`);
             }
         });
 
-        it('starts on load, when idle (a 1.2 s timer where there is no idle callback), and imports one file', () => {
+        it('starts on load, when idle (a 1.2 s timer where there is no idle callback), and imports one file, once', () => {
             assert.match(shipped, /w\.addEventListener\('load', function \(\) \{\s*\(w\.requestIdleCallback \|\| function \(f\) \{ setTimeout\(f, 1200\); \}\)\(start, \{ timeout: 2000 \}\);/);
             assert.equal((code.match(/import\(/g) ?? []).length, 1);
-            assert.match(shipped, /import\(HERO3D\)\.then\(function \(m\) \{ return m\.mount\(stages, \{ lite: coarse \}\); \}\)/);
-            assert.equal(/console\.(?:error|warn)/.test(code), false, 'a failure is an info line');
+            assert.equal((code.match(/\bstart\(/g) ?? []).length, 1, 'start is defined and only handed to the load handler: nothing calls it again');
+            assert.match(code, /import\(HERO3D\)\.then\(function \(m\) \{ return m\.mount\(d\.querySelectorAll\('\.hero-stage'\), \{ lite: coarse \}\); \}\)/);
+            assert.match(code, /\.catch\(function \(e\) \{ console\.info\('hero3d: poster', e\); \}\);/, 'a failure is an info line and the poster');
+            assert.equal(/console\.(?:error|warn)/.test(code), false);
         });
 
-        it('a paused visitor never downloads three: go() returns while paused, before the import', () => {
-            const go = /function go\(\) \{[\s\S]*?\n {12}\}/.exec(shipped)![0];
-            assert.ok(go.indexOf('paused') > 0 && go.indexOf('paused') < go.indexOf('import('));
-            assert.match(shipped, /api \? api\.pause\(paused\) : go\(\);/, 'a press pauses a running scene, or starts a load');
-        });
-
-        it('a pause pressed while the scene downloads is applied when it mounts', () => {
-            assert.match(shipped, /\.then\(function \(a\) \{ api = a; if \(paused\) a\.pause\(true\); \}/);
-        });
-
-        it('a failed scene is never tried twice: the toggles go, the flag that blocks a second import stays set', () => {
-            const reject = /, function \(e\) \{[\s\S]*?\n {20}\}\);/.exec(shipped)![0];
-            assert.match(reject, /each\(function \(s\) \{ s\.lastElementChild\.remove\(\); \}\);/, 'the controls are removed');
-            assert.match(reject, /console\.info\('hero3d: poster', e\);/);
-            assert.equal(/busy = (?:0|false)/.test(shipped), false, 'busy is only ever set, so a later press cannot mount a second renderer');
-            assert.match(shipped, /if \(busy \|\| api \|\| paused\) return;\s*busy = 1;/);
-        });
-
-        it('the toggle announces its state once: a name that swaps, and no aria-pressed', () => {
-            assert.equal(shipped.includes('aria-pressed'), false);
-            assert.match(shipped, /s\.lastElementChild\.setAttribute\('aria-label', s\.getAttribute\(paused \? 'data-play-label' : 'data-pause-label'\)\);/);
-            assert.match(shipped, /s\.classList\.toggle\('is-paused', paused\);/);
-            assert.match(shipped, /paused = false;/, 'a storage error leaves it false, never undefined');
-            const tpl = /<template id="hero-toggle">[\s\S]*?<\/template>/.exec(landing)![0];
-            assert.equal(/aria-pressed/.test(tpl) || /stage-toggle[^{]*\{[^}]*aria-pressed|\[aria-pressed[^\]]*\][^{]*\.i-(?:pause|play)/.test(css), false, 'neither the template nor the toggle CSS knows it');
+        it('has no pause machinery and keeps no stored state: no localStorage, no hero3d_paused, no handlers, no markup', () => {
+            for (const gone of ['localStorage', 'hero3d_paused', 'paused', 'flip', 'label', 'aria-', 'classList', 'onclick', 'addEventListener(\'click\'', 'appendChild', 'cloneNode', 'template', 'stage-toggle', 'busy']) {
+                assert.equal(code.includes(gone), false, `${gone} is not in the loader`);
+            }
+            assert.equal((code.match(/addEventListener/g) ?? []).length, 1, 'one listener: the load event');
         });
 
         it("names the bundle by its hash, with no ?v=, and the file is there; '' is the rollback", () => {
