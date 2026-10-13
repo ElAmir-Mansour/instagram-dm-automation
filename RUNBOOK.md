@@ -670,6 +670,16 @@ Both are also available as dashboard screens for a `platform_admin`: **Tenants**
 The Tenants screen leads on the two columns that say something is broken — token status and
 last webhook received (`dashboard/js/pages/tenants.js:3-8`).
 
+**Bringing the tenant's person in (invite link, P17).** Prefer this to typing them a password. **Tenants → New tenant** (a name,
+no Meta ids) returns an invite card: **Copy link**, or **Send on WhatsApp**. The same card is on the tenant's page under Members
+(**New invite link**, **Regenerate**, **Revoke**, and **Reset link** for a member who forgot their password). The link is a single-use
+URL whose token is in the `#` fragment: it works once, lasts 7 days by default (Settings → Onboarding and invites), and is shown
+**only once**, because only its sha256 is stored: *Regenerate* if it was lost. If the person's address already has an account the
+page tells them to sign in and then adds the tenant to that account; it never replaces a password. Every create, regenerate, revoke
+and accept is in **Audit** (`invite.*`), without the link. Checking a link works: open it in a private window, never in the
+admin's own session (that is refused, so it is not used up). Sessions from a link last 24 hours, or 30 days if the person leaves
+"keep me signed in" ticked (also a setting). Full walk-through: FLOWS.md §4.8.
+
 ### 8.2 Meta side — get the verify token right *before* the subscription exists
 
 This is the ordering trap, and it has already cost hours.

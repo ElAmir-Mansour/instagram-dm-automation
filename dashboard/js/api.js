@@ -117,10 +117,15 @@ const API = {
      * always existed and is still the operator's only way in, so it must send
      * exactly the body it used to — no `email: null`, no `email: ''`.
      */
-    login: (password, email) => API.request('/auth/login', {
+    login: (password, email, keepSignedIn) => API.request('/auth/login', {
         method: 'POST',
-        body: JSON.stringify(email ? { email, password } : { password }),
+        body: JSON.stringify(email ? { email, password, ...(keepSignedIn ? { keepSignedIn: true } : {}) } : { password }),
     }),
+
+    // Invite links (P17). Public: a person opening a link has no session. The token travels in the BODY, never in a URL.
+    // `peek` carries the Bearer token when there is one, so the page can say who is signed in; the server ignores a dead one.
+    peekInvite: (token) => API.request('/invites/peek', { method: 'POST', body: JSON.stringify({ token }) }),
+    acceptInvite: (data) => API.request('/invites/accept', { method: 'POST', body: JSON.stringify(data) }),
 
     /** Who am I, what may I do, and which tenants can I act as. */
     getMe: () => API.request('/auth/me'),
@@ -144,6 +149,18 @@ const API = {
     createUserMembership: (id, data) => API.request(`/admin/users/${encodeURIComponent(id)}/memberships`, {
         method: 'POST', body: JSON.stringify(data),
     }),
+
+    // Invite links, from the tenant's page (platform admin). The link comes back ONCE, in `invite.url`.
+    getTenantInvites: (tenantId) => API.request(`/admin/tenants/${encodeURIComponent(tenantId)}/invites`),
+    createTenantInvite: (tenantId, data) => API.request(`/admin/tenants/${encodeURIComponent(tenantId)}/invites`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    regenerateInvite: (id, data) => API.request(`/admin/invites/${encodeURIComponent(id)}/regenerate`, {
+        method: 'POST', body: JSON.stringify(data || {}),
+    }),
+    revokeInvite: (id) => API.request(`/admin/invites/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    getOnboardingSettings: () => API.request('/admin/onboarding-settings'),
+    saveOnboardingSettings: (data) => API.request('/admin/onboarding-settings', { method: 'PUT', body: JSON.stringify(data) }),
 
     // ─── Administration UI (operations, jobs, audit, erasure) ────────────────
     // Every route below follows the same rule as the block above: a 403 or a

@@ -52,7 +52,7 @@ import {
 import {
     commitErasure, executeErasure, previewErasure, rollbackErasure,
 } from '../services/erasure.js';
-import { APP_SETTING_KEYS, describeGeminiKey, getOnboardingDefaultRules, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
+import { APP_SETTING_KEYS, describeGeminiKey, getOnboardingDefaultRules, getPublicBaseUrl, getSetting, normaliseOrigin, setSetting } from '../services/appSettings.js';
 import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../services/storage.js';
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
 import { storageKeyKind, storageKeyProblem } from '../services/supabaseStorage.js';
@@ -64,6 +64,14 @@ import { defaultProfile } from '../services/profile/defaults.js';
 import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
 import aiRouter from './adminAi.js';
+import {
+    buildInviteUrl, createInvite, InviteError, listInvites, readTtl, regenerateInvite, revokeInvite, shareFor, tenantLanguage,
+    type AdminInvite, type CreatedInvite, type InvitePurpose,
+} from '../services/invites.js';
+import {
+    describeOnboardingSettings, getOnboardingSettings, isInviteLang, isInviteRole, saveOnboardingSettings, validateOnboardingPatch,
+    type InviteLang, type OnboardingSettings,
+} from '../services/onboardingSettings.js';
 
 const router = Router();
 
@@ -139,6 +147,82 @@ function failWith(res: Response, err: unknown, event: string, message: string): 
         return;
     }
     res.status(500).json({ error: message });
+}
+
+// ─── Invite links (P17) ─────────────────────────────────────────────────────────────────────────────
+
+/** The origin this request arrived on: `getPublicBaseUrl`'s last resort, after the saved setting and PUBLIC_BASE_URL. */
+function requestOrigin(req: Request): string | null {
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0]!.trim();
+    const host = req.headers.host;
+    return host ? `${proto}://${host}` : null;
+}
+
+/** An invite as the card renders it right after it is made: the listed fields, plus the one link and its message. */
+interface ShareableInvite extends AdminInvite {
+    /** The link. Carries the token in its fragment, and exists only in the response of the call that made it. */
+    url: string;
+    whatsapp_text: string;
+    lang: InviteLang;
+}
+
+function shareable(created: CreatedInvite & { tenantName: string | null }, base: string, lang: InviteLang, settings: OnboardingSettings): ShareableInvite {
+    const url = buildInviteUrl(base, created.token, lang);
+    return {
+        ...created.invite,
+        url,
+        lang,
+        ...shareFor(settings, created.tenantName, url, lang, created.invite.purpose),
+    };
+}
+
+/** The refusals the invite service throws, as the status and body the dashboard reads; anything else is a 500. */
+function answerInviteFailure(res: Response, err: unknown, event: string, message: string): void {
+    if (err instanceof InviteError) {
+        res.status(err.status).json({ error: err.message, code: err.code, ...err.extra });
+        return;
+    }
+    failWith(res, err, event, message);
+}
+
+/** What an audit row says about an invite: ids and facts, never the link. */
+function inviteAuditDetail(invite: AdminInvite, extra: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+        tenant_id: invite.creator_id,
+        purpose: invite.purpose,
+        membership_role: invite.role,
+        email: invite.email,
+        for_user_id: invite.user_id,
+        expires_at: invite.expires_at,
+        ...extra,
+    };
+}
+
+/**
+ * Make a link for a tenant and record it. Used by the invite route and by creating a tenant by name, which hands the operator
+ * the link in the same response. The public base is resolved BEFORE the invite is written, so a deployment that cannot build
+ * a link never leaves an invite behind that nobody can ever be given.
+ */
+async function issueInvite(
+    req: Request,
+    input: { creatorId: string; purpose?: InvitePurpose; role?: unknown; email?: unknown; userId?: string | null; ttlDays?: number | null; ttlHours?: number | null; lang: InviteLang },
+    extra: Record<string, unknown> = {}
+): Promise<ShareableInvite> {
+    const settings = await getOnboardingSettings();
+    const base = await getPublicBaseUrl(requestOrigin(req));
+    if (!base) throw new InviteError(500, 'PUBLIC_URL_UNKNOWN', 'The public site address is not set (Settings → TikTok app → site address), so a link cannot be built.');
+    const created = await createInvite({
+        creatorId: input.creatorId,
+        purpose: input.purpose,
+        role: isInviteRole(input.role) ? input.role : null,
+        email: typeof input.email === 'string' ? input.email : null,
+        userId: input.userId ?? null,
+        ttlDays: input.ttlDays ?? null,
+        ttlHours: input.ttlHours ?? null,
+        createdBy: req.session?.userId ?? null,
+    }, settings);
+    await audit(req, AUDIT_ACTIONS.inviteCreate, 'invite', created.invite.id, inviteAuditDetail(created.invite, { language: input.lang, ...extra }));
+    return shareable(created, base, input.lang, settings);
 }
 
 // ─── Ops ────────────────────────────────────────────────────────────────────
@@ -820,6 +904,19 @@ router.post('/tenants', async (req, res) => {
             website_url: created.website_url,
         });
 
+        // A tenant made by name is handed to a person who is not here yet: the invite link comes back with it, so the success
+        // card can show Copy and WhatsApp at once. Best-effort, like the starter agent: the tenant exists whether or not the
+        // link could be made, and "Create invite link" on its page makes one later. A tenant made WITH credentials is the
+        // operator's own (the first run) and has nobody to invite.
+        let invite: ShareableInvite | null = null;
+        if (!withCredentials) {
+            try {
+                invite = await issueInvite(req, { creatorId: created.id, lang }, { via: 'tenant_create' });
+            } catch (inviteErr) {
+                log('warn', 'admin.tenant_invite_failed', { creator_id: created.id, ...describeError(inviteErr) });
+            }
+        }
+
         res.status(201).json({
             ...created,
             language: lang,
@@ -827,6 +924,7 @@ router.post('/tenants', async (req, res) => {
             meta_connected: checked !== null,
             profile: { version: 1 },
             onboarding: { status: 'invited' },
+            invite,
         });
     } catch (err: any) {
         if (err?.code === PG_UNIQUE_VIOLATION) {
@@ -1117,6 +1215,163 @@ router.post('/tenants/:id/recheck-token', async (req, res) => {
         res.json(result);
     } catch (err) {
         failWith(res, err, 'admin.token_recheck_failed', 'Failed to re-check the token.');
+    }
+});
+
+// ─── Invites ────────────────────────────────────────────────────────────────
+
+/**
+ * Make a link for a tenant: `join` (a new person: `email` optional, the role from the body or the setting) or `reset` (a
+ * member who lost their password: `user_id`). The answer carries the link ONCE, in `invite.url`; the token is never stored,
+ * so no later call can show it again (Regenerate makes a new one). The tenant is the one in the PATH: nothing in the body can
+ * point a link at another.
+ */
+router.post('/tenants/:id/invites', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        const body = req.body ?? {};
+
+        const purpose = body.purpose === undefined || body.purpose === null ? 'join' : body.purpose;
+        if (purpose !== 'join' && purpose !== 'reset') {
+            res.status(400).json({ error: "purpose must be 'join' or 'reset'." });
+            return;
+        }
+        if (body.role !== undefined && body.role !== null && !isInviteRole(body.role)) {
+            res.status(400).json({ error: "role must be 'owner', 'operator' or 'viewer'." });
+            return;
+        }
+        // Absent: the language the tenant writes in (its profile's), so the operator who never touches the picker gets the right one.
+        const requestedLang = body.lang === undefined || body.lang === null || body.lang === '' ? null : body.lang;
+        if (requestedLang !== null && !isInviteLang(requestedLang)) {
+            res.status(400).json({ error: 'lang must be "ar" or "en".' });
+            return;
+        }
+        const days = readTtl(body.ttl_days, 'days');
+        const hours = readTtl(body.ttl_hours, 'hours');
+        if (!days.ok || !hours.ok) {
+            res.status(400).json({ error: (!days.ok ? days : hours as { error: string }).error });
+            return;
+        }
+        if (purpose === 'reset' && !isUuid(body.user_id)) {
+            res.status(400).json({ error: 'A reset link needs user_id: the account whose password it replaces.' });
+            return;
+        }
+
+        const invite = await issueInvite(req, {
+            creatorId: id, purpose, role: body.role, email: body.email, userId: purpose === 'reset' ? body.user_id : null,
+            ttlDays: days.value, ttlHours: hours.value, lang: requestedLang ?? await tenantLanguage(id),
+        });
+        res.status(201).json({ invite });
+    } catch (err) {
+        answerInviteFailure(res, err, 'admin.invite_create_failed', 'Failed to create the invite.');
+    }
+});
+
+/** A tenant's newest invites, without their links: the card's "Opened 2h ago", "Expires in 5 days". */
+router.get('/tenants/:id/invites', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        const exists = await queryRows<{ id: string }>('SELECT id FROM creators WHERE id = $1', [id]);
+        if (exists.length === 0) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        res.json({ invites: await listInvites(id) });
+    } catch (err) {
+        failWith(res, err, 'admin.invites_list_failed', 'Failed to list invites.');
+    }
+});
+
+/** Replace a link with a new one for the same person: the old one stops working in the same step. */
+router.post('/invites/:id/regenerate', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Invite not found.' });
+            return;
+        }
+        const requested = (req.body ?? {}).lang;
+        const requestedLang = requested === undefined || requested === null || requested === '' ? null : requested;
+        if (requestedLang !== null && !isInviteLang(requestedLang)) {
+            res.status(400).json({ error: 'lang must be "ar" or "en".' });
+            return;
+        }
+        const settings = await getOnboardingSettings();
+        const base = await getPublicBaseUrl(requestOrigin(req));
+        if (!base) {
+            res.status(500).json({ error: 'The public site address is not set (Settings → TikTok app → site address), so a link cannot be built.', code: 'PUBLIC_URL_UNKNOWN' });
+            return;
+        }
+        const regenerated = await regenerateInvite(id, req.session?.userId ?? null, settings);
+        const lang = requestedLang ?? await tenantLanguage(regenerated.invite.creator_id);
+        await audit(req, AUDIT_ACTIONS.inviteRegenerate, 'invite', regenerated.invite.id, inviteAuditDetail(regenerated.invite, {
+            previous_invite_id: regenerated.previousId, language: lang,
+        }));
+        res.status(201).json({ invite: shareable(regenerated, base, lang, settings), previous_invite_id: regenerated.previousId });
+    } catch (err) {
+        answerInviteFailure(res, err, 'admin.invite_regenerate_failed', 'Failed to regenerate the invite.');
+    }
+});
+
+/** Revoke a link: it stops working at once. One that was already used cannot be: the person is in. */
+router.delete('/invites/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!isUuid(id)) {
+            res.status(404).json({ error: 'Invite not found.' });
+            return;
+        }
+        const outcome = await revokeInvite(id);
+        if (outcome.changed) {
+            await audit(req, AUDIT_ACTIONS.inviteRevoke, 'invite', outcome.id, { tenant_id: outcome.creatorId, purpose: outcome.purpose });
+        }
+        res.json({ revoked: true, already_revoked: !outcome.changed, id: outcome.id });
+    } catch (err) {
+        answerInviteFailure(res, err, 'admin.invite_revoke_failed', 'Failed to revoke the invite.');
+    }
+});
+
+// ─── Onboarding settings ────────────────────────────────────────────────────
+
+router.get('/onboarding-settings', async (_req, res) => {
+    try {
+        res.json(await describeOnboardingSettings());
+    } catch (err) {
+        failWith(res, err, 'admin.onboarding_settings_read_failed', 'Failed to read the onboarding settings.');
+    }
+});
+
+/**
+ * Each field is optional: absent leaves it alone, `null` or an empty string returns it to its default. Everything is checked
+ * before anything is written, so a refused value never leaves the others half saved; a 400 names the `field` to mark.
+ */
+router.put('/onboarding-settings', async (req, res) => {
+    try {
+        const patch = validateOnboardingPatch(req.body ?? {});
+        if (!patch.ok) {
+            res.status(400).json({ error: patch.error, field: patch.field });
+            return;
+        }
+        if (patch.writes.length === 0) {
+            res.status(400).json({ error: 'Nothing to save.' });
+            return;
+        }
+        await saveOnboardingSettings(patch.writes, req.session?.userId ?? null);
+        await audit(req, AUDIT_ACTIONS.settingsOnboardingWrite, 'app', null, {
+            changed: patch.writes.filter((w) => w.value !== null).map((w) => w.field),
+            reset_to_default: patch.writes.filter((w) => w.value === null).map((w) => w.field),
+        });
+        res.json(await describeOnboardingSettings());
+    } catch (err) {
+        failWith(res, err, 'admin.onboarding_settings_write_failed', 'Failed to save the onboarding settings.');
     }
 });
 

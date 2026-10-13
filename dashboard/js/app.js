@@ -79,10 +79,17 @@ const App = {
         jobs: { src: 'jobs', page: () => JobsPage, adminOnly: true },
         audit: { src: 'audit', page: () => AuditPage, adminOnly: true },
         erasure: { src: 'erasure', page: () => ErasurePage, adminOnly: true },
+        // ─── Modules that are not routes (`routable: false`) ──────────────────
+        // `pageFromHash` never lands on these. The invite page is the PUBLIC page a link opens: it renders into
+        // #invite-screen, outside #app, and `init`/`onHashChange` route to it before they look for a session
+        // (`showInvite`). The invite card is the platform admin's Copy / WhatsApp / Regenerate / Revoke dialog, loaded
+        // on demand by Tenants and the tenant detail.
+        invite: { src: 'invite', page: () => InvitePage, routable: false },
+        invite_card: { src: 'invite_card', page: () => InviteCard, routable: false, adminOnly: true },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.14',
+    ASSET_VERSION: '12.15',
 
     _modules: Object.create(null),
 
@@ -155,10 +162,15 @@ const App = {
             btn.innerHTML = UI.buttonSpinner();
 
             try {
-                const result = await API.login(password, email);
+                const keep = document.getElementById('login-keep');
+                const result = await API.login(password, email, !!(email && keep && keep.checked));
                 API.setToken(result.token);
+                // The address is not a secret, and the next visit opens with the email field already showing it.
+                if (email) this.rememberEmail(email);
                 errorEl.classList.add('hidden');
-                await this.showApp();
+                // Came here from an invite ("Sign in to add {tenant}"): back to that link, now with a session.
+                if (this.consumeInviteReturn()) await this.showInvite();
+                else await this.showApp();
             } catch (err) {
                 errorEl.textContent = err && err.status === 401
                     ? (email ? t('login.invalidAccount') : t('login.invalidPassword'))
@@ -249,7 +261,11 @@ const App = {
 
         UI.icons();
 
-        if (API.token) {
+        // An invite link is opened by somebody who may have no session at all, and by somebody who has the wrong one
+        // (the operator testing his own link): it is routed before a token is looked for, and the page decides.
+        if (this.isInviteHash()) {
+            this.showInvite();
+        } else if (API.token) {
             this.showApp();
         } else {
             this.showLogin();
@@ -357,7 +373,7 @@ const App = {
      */
     pageFromHash() {
         const raw = (location.hash || '').replace(/^#\/?/, '').split(/[/?#]/)[0];
-        return this.pages[raw] ? raw : this.DEFAULT_PAGE;
+        return this.pages[raw] && this.pages[raw].routable !== false ? raw : this.DEFAULT_PAGE;
     },
 
     /**
@@ -367,6 +383,16 @@ const App = {
      * Every other change is a navigation, exactly as before.
      */
     onHashChange() {
+        if (this.isInviteHash()) {
+            this.showInvite();
+            return;
+        }
+        // Leaving the invite page by the address bar: back to whichever screen this browser would otherwise show.
+        const invite = document.getElementById('invite-screen');
+        if (invite && !invite.classList.contains('hidden')) {
+            if (API.token) this.showApp(); else this.showLogin();
+            return;
+        }
         if (!API.token) return;
         const page = this.pageFromHash();
         if (page === this.currentPage) {
@@ -476,8 +502,12 @@ const App = {
         this.currentPage = null;
         // A signed-out tab must not keep saying "(3)" in its title.
         this.setInboxWaiting(0);
+        // Lifted: the head script hid the login card from the first frame of an invite link (index.html), and this is where it is wanted.
+        document.documentElement.removeAttribute('data-invite');
         document.getElementById('login-screen').classList.remove('hidden');
         document.getElementById('app').classList.add('hidden');
+        const inviteScreen = document.getElementById('invite-screen');
+        if (inviteScreen) inviteScreen.classList.add('hidden');
         const errorEl = document.getElementById('login-error');
         if (errorEl) {
             errorEl.textContent = reason ? String(reason) : '';
@@ -485,17 +515,147 @@ const App = {
         }
         const pw = document.getElementById('login-password');
         if (pw) pw.value = '';
-        // Back to the one-field form: the email affordance is opt-in every time.
+        // The one-field form (the shared password, the operator's only way in) unless an address was remembered: somebody
+        // who set a password from an invite link, or signed in with an account, comes back to the email field already filled.
+        const remembered = this.rememberedEmail();
         const email = document.getElementById('login-email');
-        if (email) email.value = '';
+        if (email) email.value = remembered;
         const group = document.getElementById('login-email-group');
-        if (group) group.classList.add('hidden');
+        if (group) group.classList.toggle('hidden', !remembered);
         const toggle = document.getElementById('login-email-toggle');
-        if (toggle) toggle.classList.remove('hidden');
+        if (toggle) toggle.classList.toggle('hidden', !!remembered);
+        const keep = document.getElementById('login-keep');
+        if (keep) keep.checked = false;
+    },
+
+    // ─── Remembering who signed in last ──────────────────────────────────────
+
+    EMAIL_KEY: 'login_email',
+
+    rememberedEmail() {
+        try {
+            const value = localStorage.getItem(this.EMAIL_KEY) || '';
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? value : '';
+        } catch {
+            return '';
+        }
+    },
+
+    rememberEmail(email) {
+        try {
+            if (email) localStorage.setItem(this.EMAIL_KEY, String(email).trim().toLowerCase());
+        } catch { /* private mode: the form simply opens as it always did */ }
+    },
+
+    // ─── Invite links ────────────────────────────────────────────────────────
+    //
+    // The token lives in the URL hash, so no server, log or Referer ever sees it. It is moved into sessionStorage and the
+    // hash is cut back to a bare `#/invite` before anything renders, so the address bar, the history entry and a screenshot
+    // never hold it, and a reload (switching language reloads) still finds it.
+
+    INVITE_KEY: 'invite_token',
+    INVITE_RETURN_KEY: 'invite_return',
+    _inviteToken: '',
+
+    isInviteHash() {
+        return /^#\/invite(?:[?/#]|$)/.test(String(location.hash || ''));
+    },
+
+    /** Read the token out of the hash (once), keep it for this tab, and take it out of the address bar. */
+    captureInvite() {
+        const raw = String(location.hash || '');
+        const at = raw.indexOf('?');
+        let token = '';
+        try { token = new URLSearchParams(at === -1 ? '' : raw.slice(at + 1)).get('t') || ''; } catch { token = ''; }
+        if (token) {
+            this._inviteToken = token;
+            try { sessionStorage.setItem(this.INVITE_KEY, token); } catch { /* the in-memory copy serves this page view */ }
+        }
+        if (at !== -1) history.replaceState(null, '', '#/invite');
+    },
+
+    /** The token this tab is holding, or '' (none, or one that cannot be a token). */
+    inviteToken() {
+        let token = this._inviteToken;
+        if (!token) {
+            try { token = sessionStorage.getItem(this.INVITE_KEY) || ''; } catch { token = ''; }
+        }
+        return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : '';
+    },
+
+    forgetInvite() {
+        this._inviteToken = '';
+        try {
+            sessionStorage.removeItem(this.INVITE_KEY);
+            sessionStorage.removeItem(this.INVITE_RETURN_KEY);
+        } catch { /* nothing to clear */ }
+    },
+
+    /** Did the person leave the invite page for the login, meaning to come back to it? One-shot. */
+    consumeInviteReturn() {
+        let pending = false;
+        try {
+            pending = sessionStorage.getItem(this.INVITE_RETURN_KEY) === '1' && !!this.inviteToken();
+            sessionStorage.removeItem(this.INVITE_RETURN_KEY);
+        } catch { pending = false; }
+        if (pending) history.replaceState(null, '', '#/invite');
+        return pending;
+    },
+
+    /** Show the invite page, outside the app: there may be no session, or the wrong one. */
+    async showInvite() {
+        this.captureInvite();
+        this.teardownCurrentPage();
+        this.currentPage = null;
+        this.setInboxWaiting(0);
+        document.getElementById('login-screen').classList.add('hidden');
+        document.getElementById('app').classList.add('hidden');
+        const screen = document.getElementById('invite-screen');
+        if (screen) screen.classList.remove('hidden');
+        this.renderLanguageToggle();
+
+        const page = await this.loadPageModule('invite');
+        const card = document.getElementById('invite-card');
+        if (!page) {
+            if (card) card.textContent = t('invite.loadFailed');
+            return;
+        }
+        await page.start();
+    },
+
+    /**
+     * Leave the invite page for the login. `comeBack` keeps the link: the person has an account, signs in with it, and the
+     * page then offers to add the tenant to it. Without it the link is dropped: it is dead, or not theirs to use.
+     */
+    leaveInviteForLogin(comeBack, email) {
+        if (comeBack) {
+            try { sessionStorage.setItem(this.INVITE_RETURN_KEY, '1'); } catch { /* the login then simply opens the dashboard */ }
+            if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) this.rememberEmail(email);
+        } else {
+            this.forgetInvite();
+        }
+        history.replaceState(null, '', location.pathname + location.search);
+        this.showLogin();
+    },
+
+    /**
+     * The link worked: keep the session it answered with, remember the address for the login, forget the token, and open the
+     * dashboard. The tenant's wizard comes later (P18); for now they land where every member lands.
+     */
+    async completeInvite(result, email) {
+        API.setToken(result.token);
+        this.rememberEmail(email || result.email);
+        this.forgetInvite();
+        const screen = document.getElementById('invite-screen');
+        if (screen) screen.classList.add('hidden');
+        history.replaceState(null, '', `#/${this.DEFAULT_PAGE}`);
+        await this.showApp();
     },
 
     async showApp() {
         document.getElementById('login-screen').classList.add('hidden');
+        const inviteScreen = document.getElementById('invite-screen');
+        if (inviteScreen) inviteScreen.classList.add('hidden');
         document.getElementById('app').classList.remove('hidden');
 
         const ok = await this.loadSession();
@@ -1220,6 +1380,20 @@ UI.registerActions('app', {
         el.classList.add('hidden');
         const input = document.getElementById('login-email');
         if (input) input.focus();
+    },
+    /**
+     * Back to the one-field form: an address was remembered and the operator wants the shared password. An empty email
+     * is what makes the login send the body it always sent.
+     */
+    useSharedPassword() {
+        const group = document.getElementById('login-email-group');
+        const toggle = document.getElementById('login-email-toggle');
+        const email = document.getElementById('login-email');
+        if (email) email.value = '';
+        if (group) group.classList.add('hidden');
+        if (toggle) toggle.classList.remove('hidden');
+        const pw = document.getElementById('login-password');
+        if (pw) pw.focus();
     },
 });
 

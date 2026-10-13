@@ -106,7 +106,10 @@ const SettingsPage = {
         let youtubeApp = null;
         let youtubeAppError = null;
         let cleanup = null;
-        const [tt, ttApp, ms, st, yt, ytApp, cu] = await Promise.allSettled([
+        // The onboarding settings (invite lifetime, role, sessions, the message): the deployment's, so platform admins only.
+        let onboarding = null;
+        let onboardingError = null;
+        const [tt, ttApp, ms, st, yt, ytApp, cu, ob] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
@@ -114,6 +117,7 @@ const SettingsPage = {
             API.getYouTubeConnection(),
             App.isAdmin() ? API.getYouTubeAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaCleanup() : Promise.resolve(null),
+            App.isAdmin() ? API.getOnboardingSettings() : Promise.resolve(null),
         ]);
         // The clean-up block is extra: if it fails to load, the storage card shows without it.
         if (cu.status === 'fulfilled') cleanup = cu.value;
@@ -123,6 +127,7 @@ const SettingsPage = {
         if (ttApp.status === 'fulfilled') tiktokApp = ttApp.value; else tiktokAppError = ttApp.reason;
         if (ms.status === 'fulfilled') media = ms.value; else mediaError = ms.reason;
         if (st.status === 'fulfilled') site = st.value; else siteError = st.reason;
+        if (ob.status === 'fulfilled') onboarding = ob.value; else onboardingError = ob.reason;
 
         if (!live()) return;
         gate.done();
@@ -351,6 +356,8 @@ const SettingsPage = {
             ${App.isAdmin() ? this.mediaStorageSection(media, mediaError, cleanup) : ''}
 
             ${App.isAdmin() ? this.siteSection(site, siteError) : ''}
+
+            ${App.isAdmin() ? this.onboardingSection(onboarding, onboardingError) : ''}
 
 
             <section class="section">
@@ -1331,6 +1338,167 @@ const SettingsPage = {
         }
     },
 
+    // ─── Onboarding (platform admin): how invite links behave ─────────────────────────────────────────
+
+    /** The field each input maps to, for marking the one a refusal names. */
+    ONBOARDING_FIELDS: {
+        inviteTtlDays: 'onboarding-ttl', resetTtlHours: 'onboarding-reset-ttl', sessionDays: 'onboarding-session-days',
+        defaultRole: 'onboarding-role', inviterName: 'onboarding-inviter', whatsappText: 'onboarding-whatsapp', defaultRules: 'onboarding-rule-women',
+    },
+
+    onboardingSection(data, error) {
+        if (error || !data) {
+            return html`
+                <section class="section">
+                    <h2 class="section-title">${t('settings.onboarding.title')}</h2>
+                    <div class="settings-card surface">
+                        <div class="inline-error" role="alert">
+                            <i data-lucide="alert-circle" aria-hidden="true"></i>
+                            <div><strong dir="auto">${t('settings.onboarding.loadFailed', { message: (error && error.message) || '' })}</strong></div>
+                        </div>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                    </div>
+                </section>
+            `;
+        }
+        const v = data.settings || {};
+        const saved = data.saved || {};
+        const limits = data.limits || {};
+        const range = (key) => limits[key] || { min: 1, max: 90, fallback: 7 };
+        const shown = (name, value) => (saved[name] ? value : '');
+        const womenRule = Array.isArray(v.defaultRules) && v.defaultRules.includes('no_women_imagery');
+        const defaults = data.whatsappDefaults || {};
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.onboarding.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.onboarding.intro')}</p>
+                    <div id="onboarding-settings-error"></div>
+                    <form id="onboarding-settings-form" data-submit="settings:saveOnboardingSettings" novalidate>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label class="form-label" for="onboarding-ttl">${t('settings.onboarding.inviteTtl')}</label>
+                                <input class="field" id="onboarding-ttl" name="inviteTtlDays" type="number" inputmode="numeric" dir="ltr"
+                                       min="${range('inviteTtlDays').min}" max="${range('inviteTtlDays').max}" step="1"
+                                       placeholder="${range('inviteTtlDays').fallback}" value="${shown('inviteTtlDays', v.inviteTtlDays)}"
+                                       aria-describedby="onboarding-ttl-hint">
+                                <p class="form-hint" id="onboarding-ttl-hint">${t('settings.onboarding.inviteTtlHint', { days: range('inviteTtlDays').fallback })}</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="onboarding-reset-ttl">${t('settings.onboarding.resetTtl')}</label>
+                                <input class="field" id="onboarding-reset-ttl" name="resetTtlHours" type="number" inputmode="numeric" dir="ltr"
+                                       min="${range('resetTtlHours').min}" max="${range('resetTtlHours').max}" step="1"
+                                       placeholder="${range('resetTtlHours').fallback}" value="${shown('resetTtlHours', v.resetTtlHours)}"
+                                       aria-describedby="onboarding-reset-ttl-hint">
+                                <p class="form-hint" id="onboarding-reset-ttl-hint">${t('settings.onboarding.resetTtlHint', { hours: range('resetTtlHours').fallback })}</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="onboarding-session-days">${t('settings.onboarding.sessionDays')}</label>
+                                <input class="field" id="onboarding-session-days" name="sessionDays" type="number" inputmode="numeric" dir="ltr"
+                                       min="${range('sessionDays').min}" max="${range('sessionDays').max}" step="1"
+                                       placeholder="${range('sessionDays').fallback}" value="${shown('sessionDays', v.sessionDays)}"
+                                       aria-describedby="onboarding-session-days-hint">
+                                <p class="form-hint" id="onboarding-session-days-hint">${t('settings.onboarding.sessionDaysHint', { days: range('sessionDays').fallback })}</p>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label" for="onboarding-role">${t('settings.onboarding.role')}</label>
+                                <select class="select" id="onboarding-role" name="defaultRole">
+                                    ${Admin.TENANT_ROLES.map((role) => html`<option value="${role}" ${role === (v.defaultRole || 'owner') ? html.raw('selected') : ''}>${t(`roles.${role}`)}</option>`)}
+                                </select>
+                                <p class="form-hint">${t('settings.onboarding.roleHint')}</p>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="onboarding-inviter">
+                                ${t('settings.onboarding.inviter')} <span class="label-optional">${t('common.optional')}</span>
+                            </label>
+                            <input class="field" id="onboarding-inviter" name="inviterName" type="text" dir="auto" maxlength="80" autocomplete="off"
+                                   value="${shown('inviterName', v.inviterName || '')}" aria-describedby="onboarding-inviter-hint">
+                            <p class="form-hint" id="onboarding-inviter-hint">${t('settings.onboarding.inviterHint')}</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="onboarding-whatsapp">
+                                ${t('settings.onboarding.whatsapp')} <span class="label-optional">${t('common.optional')}</span>
+                            </label>
+                            <textarea class="field-textarea" id="onboarding-whatsapp" name="whatsappText" rows="3" maxlength="600" dir="auto"
+                                      placeholder="${defaults[I18N.lang] || defaults.ar || ''}" aria-describedby="onboarding-whatsapp-hint">${shown('whatsappText', v.whatsappText || '')}</textarea>
+                            <p class="form-hint" id="onboarding-whatsapp-hint">${t('settings.onboarding.whatsappHint')}</p>
+                        </div>
+                        <fieldset class="onboarding-rules">
+                            <legend class="form-label">${t('settings.onboarding.rules')}</legend>
+                            <div class="check-row">
+                                <input type="checkbox" id="onboarding-rule-women" name="rule" value="no_women_imagery" ${womenRule ? html.raw('checked') : ''}>
+                                <div class="check-text">
+                                    <label class="check-label" for="onboarding-rule-women">${t('settings.onboarding.ruleWomen')}</label>
+                                    <p class="form-hint">${t('settings.onboarding.rulesHint')}</p>
+                                </div>
+                            </div>
+                        </fieldset>
+                        <div class="form-actions">
+                            ${UI.button({
+                                variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
+                                label: t('settings.onboarding.save'), id: 'onboarding-settings-submit',
+                            })}
+                        </div>
+                    </form>
+                </div>
+            </section>
+        `;
+    },
+
+    showOnboardingError(field, message) {
+        const host = document.getElementById('onboarding-settings-error');
+        const form = document.getElementById('onboarding-settings-form');
+        if (form) UI.clearInvalid(form);
+        if (!host) { UI.toast(message, 'error'); return; }
+        const stripId = 'onboarding-settings-error-strip';
+        host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+        UI.icons(host);
+        const input = field && this.ONBOARDING_FIELDS[field] ? document.getElementById(this.ONBOARDING_FIELDS[field]) : null;
+        if (input) UI.markInvalid(input, stripId);
+        else if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
+    },
+
+    async saveOnboardingSettings(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const read = (name) => (data.get(name) || '').toString().trim();
+        const host = document.getElementById('onboarding-settings-error');
+        if (host) host.innerHTML = '';
+        UI.clearInvalid(form);
+
+        // Every field is always sent: an emptied one is a real "back to the default". The rules are an explicit list, so an
+        // unticked box is a deliberate "none" and not a missing field. The server checks again and has the last word.
+        const payload = {
+            inviteTtlDays: read('inviteTtlDays'),
+            resetTtlHours: read('resetTtlHours'),
+            sessionDays: read('sessionDays'),
+            defaultRole: read('defaultRole'),
+            inviterName: read('inviterName'),
+            whatsappText: read('whatsappText'),
+            defaultRules: data.getAll('rule').map((value) => value.toString()),
+        };
+        if (payload.whatsappText && !payload.whatsappText.includes('{link}')) {
+            this.showOnboardingError('whatsappText', t('settings.onboarding.invalid.whatsappText'));
+            return;
+        }
+
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveOnboardingSettings(payload);
+            UI.toast(t('settings.onboarding.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            const field = err && err.body && err.body.field;
+            const known = field && this.ONBOARDING_FIELDS[field];
+            this.showOnboardingError(field, known ? t(`settings.onboarding.invalid.${field}`) : ((err && err.message) || t('error.unexpected')));
+        }
+    },
+
     async saveMediaStorage(form, event) {
         event.preventDefault();
         const data = new FormData(form);
@@ -1567,4 +1735,5 @@ UI.registerActions('settings', {
     previewDirectPost: (el) => SettingsPage.previewDirectPost(el),
     previewWhatsapp: (el) => SettingsPage.previewWhatsapp(el),
     saveSiteSettings: (el, e) => SettingsPage.saveSiteSettings(el, e),
+    saveOnboardingSettings: (el, e) => SettingsPage.saveOnboardingSettings(el, e),
 });

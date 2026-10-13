@@ -10,7 +10,9 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { Request, Response } from 'express';
-import { consumeDownloadToken, createDownloadToken, createSession, requireAuth, verifySession } from './auth.js';
+import {
+    consumeDownloadToken, createDownloadToken, createSession, describeSessionLifetime, MAX_SESSION_TTL_MS, requireAuth, verifySession,
+} from './auth.js';
 
 /** A representative session. Every test that needs a token starts from this. */
 const SESSION = { userId: 'u-1', role: 'platform_admin' as const, tenantId: 't-1', tokenVersion: 1 };
@@ -168,6 +170,111 @@ describe('session tokens', () => {
         process.env.DASHBOARD_PASSWORD = PASSWORD;
         delete process.env.META_APP_SECRET;
         assert.throws(() => createSession(SESSION), /DASHBOARD_PASSWORD and META_APP_SECRET/);
+    });
+});
+
+/**
+ * "Keep me signed in" (P17): a session that carries its own absolute expiry instead of the global 24 hours.
+ *
+ * What is pinned: an ordinary token is byte-for-byte what it was (no `exp` key), a long one lives exactly as long as it
+ * said and not a minute longer, the cap holds even for a token this file would no longer sign, and re-minting a long
+ * session (a tenant switch, a password change) carries the original `exp` rather than starting the clock again.
+ */
+describe('long-lived sessions (keep me signed in)', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    let savedPassword: string | undefined;
+    let savedAppSecret: string | undefined;
+
+    beforeEach(() => {
+        savedPassword = process.env.DASHBOARD_PASSWORD;
+        savedAppSecret = process.env.META_APP_SECRET;
+        process.env.DASHBOARD_PASSWORD = PASSWORD;
+        process.env.META_APP_SECRET = APP_SECRET;
+    });
+
+    afterEach(() => {
+        setEnv('DASHBOARD_PASSWORD', savedPassword);
+        setEnv('META_APP_SECRET', savedAppSecret);
+    });
+
+    /** A correctly signed token with an arbitrary payload, for the shapes `createSession` would never produce. */
+    function signed(payload: Record<string, unknown>): string {
+        const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+        return `${body}.${createHmac('sha256', `${PASSWORD}:${APP_SECRET}`).update(body).digest('hex')}`;
+    }
+
+    const decode = (token: string): Record<string, unknown> => JSON.parse(Buffer.from(token.split('.')[0]!, 'base64url').toString('utf8'));
+
+    it('an ordinary session carries no exp, so its token is what it always was', () => {
+        const payload = decode(newToken());
+        assert.equal('exp' in payload, false);
+        assert.deepEqual(Object.keys(payload), ['userId', 'role', 'tenantId', 'tokenVersion', 'iat']);
+    });
+
+    it('a 30-day session stays valid at day 29 and is refused at day 31', () => {
+        const token = createSession(SESSION, { ttlMs: 30 * DAY });
+        const issued = (decode(token).iat as number);
+        const realNow = Date.now;
+        try {
+            Date.now = () => issued + 29 * DAY;
+            assert.ok(verifySession(token), 'inside its 30 days');
+            Date.now = () => issued + 31 * DAY;
+            assert.equal(verifySession(token), null, 'past its 30 days');
+        } finally {
+            Date.now = realNow;
+        }
+    });
+
+    it('a long session is not cut at 24 hours, and an ordinary one still is', () => {
+        const long = createSession(SESSION, { ttlMs: 30 * DAY });
+        const issued = (decode(long).iat as number);
+        const realNow = Date.now;
+        try {
+            Date.now = () => issued + 3 * DAY;
+            assert.ok(verifySession(long), 'the long session is alive on day 3');
+            assert.equal(verifySession(staleToken(25 * 60 * 60 * 1000)), null, 'an ordinary token that old is refused');
+        } finally {
+            Date.now = realNow;
+        }
+    });
+
+    it('clamps what a session may ask for to the 90-day cap', () => {
+        const token = createSession(SESSION, { ttlMs: 10_000 * DAY });
+        const payload = decode(token) as { iat: number; exp: number };
+        assert.equal(payload.exp - payload.iat, MAX_SESSION_TTL_MS);
+    });
+
+    it('ignores a request that would shorten the day-long default', () => {
+        const payload = decode(createSession(SESSION, { ttlMs: 60_000 }));
+        assert.equal('exp' in payload, false, 'a minute is not a "keep me signed in"');
+    });
+
+    it('refuses a correctly signed token whose exp is past the cap, or not a number', () => {
+        const iat = Date.now();
+        assert.equal(verifySession(signed({ ...SESSION, iat, exp: iat + MAX_SESSION_TTL_MS + 1000 })), null, 'longer than any session could be');
+        assert.equal(verifySession(signed({ ...SESSION, iat, exp: 'never' })), null, 'not a number');
+        assert.equal(verifySession(signed({ ...SESSION, iat, exp: null })), null, 'null is not "no exp"');
+        assert.ok(verifySession(signed({ ...SESSION, iat, exp: iat + 30 * DAY })), 'the control: a good one passes');
+    });
+
+    it('refuses a session whose own exp has passed, even though it is under 24 hours old', () => {
+        const iat = Date.now() - 60 * 60 * 1000;
+        assert.equal(verifySession(signed({ ...SESSION, iat, exp: iat + 30 * 60 * 1000 })), null);
+    });
+
+    it('re-minting carries the original exp instead of restarting the clock', () => {
+        const first = createSession(SESSION, { ttlMs: 30 * DAY });
+        const { exp } = decode(first) as { exp: number };
+        const carried = createSession({ ...SESSION, tenantId: 't-2', exp });
+        assert.equal((decode(carried) as { exp: number }).exp, exp, 'the same expiry');
+        assert.equal((decode(carried) as { tenantId: string }).tenantId, 't-2');
+    });
+
+    it('describes the lifetime a login answers with', () => {
+        assert.equal(describeSessionLifetime(), '24h');
+        assert.equal(describeSessionLifetime(60_000), '24h');
+        assert.equal(describeSessionLifetime(30 * DAY), '30d');
+        assert.equal(describeSessionLifetime(10_000 * DAY), '90d');
     });
 });
 

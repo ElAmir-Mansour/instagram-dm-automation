@@ -111,8 +111,8 @@ export const APP_SETTING_KEYS = {
      * JSON `["no_women_imagery", …]`: the content rules a tenant created by the operator starts with, pre-ticked on its
      * profile (D9). Unset means `['no_women_imagery']`, the owner's standard and the platform's default; `[]` is a
      * deliberate "none". The owner's own profile is not touched by it, and neither is any tenant that already exists:
-     * it is read once, when a tenant is created (`getOnboardingDefaultRules`). Not a secret. Its Settings card ships with the
-     * invite settings (P17); until then the default holds.
+     * it is read once, when a tenant is created (`getOnboardingDefaultRules`). Not a secret. Edited on the Settings → Onboarding card
+     * with the invite settings below.
      */
     onboardingDefaultRules: 'onboarding.default_rules',
     /**
@@ -142,6 +142,30 @@ export const APP_SETTING_KEYS = {
     aiBudgetMonthlyUsd: 'ai.budget.monthly_usd',
     aiBudgetTenantDailyUsd: 'ai.budget.tenant_daily_usd',
     aiBudgetTenantMonthlyUsd: 'ai.budget.tenant_monthly_usd',
+    /**
+     * How many days an invite link (`purpose` join) lasts: 1 to 90, default 7. Read when the link is made, so a change reaches
+     * links created after it and never shortens or stretches one already out (`src/services/onboardingSettings.ts`). Not a secret.
+     */
+    onboardingInviteTtlDays: 'onboarding.invite_ttl_days',
+    /** How many hours a password-reset link lasts: 1 to 168, default 24. Read when the link is made. */
+    onboardingResetTtlHours: 'onboarding.reset_ttl_hours',
+    /** The membership role an invite gives when the operator does not choose one: `owner` (default), `operator` or `viewer`. */
+    onboardingDefaultRole: 'onboarding.default_role',
+    /**
+     * Days a "keep me signed in" session lasts: 1 to 90, default 30. Read when the session is issued, and the token carries its
+     * own expiry from then on (`createSession`'s `ttlMs`), so a change never reaches a session that already exists.
+     */
+    onboardingSessionDays: 'onboarding.session_days',
+    /**
+     * The name an invite page shows as whoever sent it ("{name} invited you"). Never an email: the page is public. Unset: the
+     * page says nothing about who invited.
+     */
+    onboardingInviterName: 'onboarding.inviter_name',
+    /**
+     * The WhatsApp message the invite card prefills, with `{name}` (the tenant), `{inviter}` and `{link}` filled in. It must
+     * contain `{link}`. Unset: the card uses its own text, in the language the link was made for.
+     */
+    onboardingWhatsappText: 'onboarding.whatsapp_text',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];

@@ -398,15 +398,28 @@ const TenantsPage = {
         if (!restore) return; // already in flight
 
         try {
-            await API.createAdminTenant(payload);
+            const created = await API.createAdminTenant(payload);
             UI.closeModal();
             UI.toast(t('tenants.created'));
             await App.refreshSession();
             if (firstRun) {
                 App.go(App.DEFAULT_PAGE);
-            } else {
-                this.render();
+                return;
             }
+            // The list behind the dialog refreshes at once; the invite card is what the operator came for.
+            this.render();
+            if (created && created.invite) {
+                const card = await App.loadPageModule('invite_card');
+                if (card) {
+                    card.showCreated(created.invite, {
+                        tenantId: created.id, tenantName: created.name, lang: payload.lang, title: t('invites.createdTitle'),
+                        onChange: () => this.render(),
+                    });
+                    return;
+                }
+            }
+            // No link came back (it is made after the tenant is stored, and may have failed): say where to make one.
+            UI.toast(t('tenants.createdNoInvite'), 'error');
         } catch (err) {
             restore();
             UI.toast(err.message || t('tenants.createFailed'), 'error');

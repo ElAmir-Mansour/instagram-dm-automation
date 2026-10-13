@@ -233,6 +233,8 @@ Unauthenticated:
 | `GET` | `/privacy`, `/data-deletion` | Meta App Review compliance pages |
 | `GET` | `/api/uploads/:id` | Serve stored media by UUID (Meta cURLs this during ingestion) |
 | `POST` | `/api/auth/login` | Login — returns an HMAC session token |
+| `POST` | `/api/invites/peek` | What an invite link is for (tenant, role, expiry); never uses the link up. The token is in the body, never the URL |
+| `POST` | `/api/invites/accept` | Use a link: create the account (or add a signed-in one, or reset a password) and answer a session. Single-use, one atomic claim |
 
 Bearer `CRON_SECRET`:
 
@@ -269,6 +271,10 @@ Platform admin only (returns **404** to everyone else — the surface does not a
 | `GET`/`POST` | `/api/admin/users` | List / create a user, optionally with a membership |
 | `POST` | `/api/admin/users/:id/revoke` | Invalidate every session that user holds |
 | `POST` | `/api/admin/users/:id/memberships` | Grant or change a membership |
+| `POST`/`GET` | `/api/admin/tenants/:id/invites` | Make an invite (or a password-reset link): the link comes back once / list a tenant's invites, without links |
+| `POST` | `/api/admin/invites/:id/regenerate` | A new link for the same person; the old one stops working in the same step |
+| `DELETE` | `/api/admin/invites/:id` | Revoke a link |
+| `GET`/`PUT` | `/api/admin/onboarding-settings` | Invite lifetime, default role, "keep me signed in" length, sender name, WhatsApp text, default content rules |
 
 ---
 

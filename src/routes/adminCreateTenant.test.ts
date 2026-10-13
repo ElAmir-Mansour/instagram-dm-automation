@@ -17,6 +17,7 @@
  * credentials in `.env`, and nothing here may reach Meta.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import axios from 'axios';
 import { afterEach, before, after, beforeEach, describe, it } from 'node:test';
 import type { Request, Response } from 'express';
@@ -149,6 +150,9 @@ describe('creating a tenant by name', () => {
             id: NEW, name: 'متجر نور', instagram_page_id: null, facebook_page_id: null, instagram_username: 'nour.shop', website_url: 'https://nour.example/',
             is_active: true, token_status: 'unknown', created_at: new Date('2026-10-14T10:00:00Z'),
             language: 'ar', meta_connected: false, profile: { version: 1 }, onboarding: { status: 'invited' },
+            // The invite link is made best-effort after the tenant is stored (src/routes/invites.test.ts covers it). This file's
+            // stand-in has no `invites` table, so the tenant is made without one, and that is not an error.
+            invite: null,
         });
     });
 
@@ -277,6 +281,102 @@ describe('creating a tenant by name', () => {
         // The route never asks which creator is the owner, and never writes the Mac-brain list.
         assert.deepEqual(db.ran(/studio\.mac_brain_tenants/), []);
         assert.deepEqual(db.statements.filter((s) => /app_settings/.test(s.sql) && /^(INSERT|UPDATE|DELETE)/.test(s.sql)), []);
+    });
+});
+
+// ─── The invite link comes back with the tenant (P17) ────────────────────────────────────────
+
+describe('creating a tenant by name hands back its invite link', () => {
+    let invites: Array<Record<string, any>>;
+
+    beforeEach(() => {
+        invites = [];
+        // This file's request has no Host header, so the public address comes from the setting, as it does in production.
+        delete process.env.PUBLIC_BASE_URL;
+        settings['app.public_base_url'] = 'https://app.test';
+        db.routes.push(
+            [/^SELECT id, name, is_active FROM creators WHERE id = \$1$/, ([id]) => ({ rows: creators.has(id) ? [{ id, name: creators.get(id)!.name, is_active: true }] : [] })],
+            [/^INSERT INTO invites \(token_hash,/, ([hash, creatorId, email, role, purpose, userId, createdBy, expiresAt]) => {
+                const row = { id: `invite-${invites.length + 1}`, token_hash: hash, creator_id: creatorId, email, membership_role: role, purpose, user_id: userId, created_by: createdBy, created_at: new Date(), expires_at: expiresAt, first_opened_at: null, open_count: 0, used_at: null, revoked_at: null };
+                invites.push(row);
+                return { rows: [row] };
+            }],
+        );
+    });
+
+    /** The `?t=` out of a link's fragment. */
+    const tokenOf = (url: string): string => new URLSearchParams(new URL(url).hash.slice(new URL(url).hash.indexOf('?') + 1)).get('t')!;
+
+    it('answers the link in the same 201: Copy and WhatsApp need no second request', async () => {
+        const reply = await call('POST', '/tenants', { name: 'متجر نور', lang: 'ar' }, SESSION);
+        assert.equal(reply.status, 201);
+        const invite = reply.body.invite;
+        assert.equal(invites.length, 1);
+        assert.equal(invite.id, 'invite-1');
+        assert.equal(invite.purpose, 'join');
+        assert.equal(invite.role, 'owner');
+        assert.equal(invite.lang, 'ar');
+        assert.equal(invite.creator_id, NEW);
+        assert.equal(invite.status, 'pending');
+        const url = new URL(invite.url);
+        assert.equal(url.origin, 'https://app.test');
+        assert.equal(url.pathname, '/dashboard');
+        assert.equal(url.search, '', 'the token is in the fragment');
+        assert.ok(url.hash.startsWith('#/invite?t='));
+        assert.ok(invite.whatsapp_text.includes('متجر نور') && invite.whatsapp_text.includes(invite.url));
+        assert.equal(Math.round((new Date(invite.expires_at).getTime() - Date.now()) / 86_400_000), 7);
+    });
+
+    it('stores only the hash of that token', async () => {
+        const reply = await call('POST', '/tenants', { name: 'Nour' }, SESSION);
+        const token = tokenOf(reply.body.invite.url);
+        assert.equal(invites[0]!.token_hash, createHash('sha256').update(token).digest('hex'));
+        assert.equal(JSON.stringify(invites).includes(token), false);
+        assert.equal(JSON.stringify(audits).includes(token), false);
+        assert.equal(logs.some((l) => JSON.stringify(l).includes(token)), false);
+    });
+
+    it('writes the link for the language the tenant was made in', async () => {
+        const reply = await call('POST', '/tenants', { name: 'Sami Fit', lang: 'en' }, SESSION);
+        assert.ok(reply.body.invite.url.endsWith('&lang=en'));
+        assert.match(reply.body.invite.whatsapp_text, /workspace/);
+    });
+
+    it('audits it as invite.create after tenant.create, with facts and no link', async () => {
+        await call('POST', '/tenants', { name: 'Nour' }, SESSION);
+        assert.deepEqual(audits.map((a) => a.action), [AUDIT_ACTIONS.tenantCreate, AUDIT_ACTIONS.inviteCreate]);
+        const row = audits[1]!;
+        assert.equal(row.targetId, 'invite-1');
+        assert.deepEqual([row.detail.tenant_id, row.detail.purpose, row.detail.membership_role, row.detail.via, row.detail.language], [NEW, 'join', 'owner', 'tenant_create', 'ar']);
+        assert.equal(JSON.stringify(row.detail).includes('#/invite'), false);
+    });
+
+    it('is made AFTER the tenant is stored, so a failing invite never undoes the tenant: it answers invite null', async () => {
+        db.routes.unshift([/^INSERT INTO invites /, () => { throw new Error('the invites table is missing'); }]);
+        const reply = await call('POST', '/tenants', { name: 'Nour' }, SESSION);
+        assert.equal(reply.status, 201);
+        assert.equal(reply.body.invite, null);
+        assert.ok(creators.has(NEW), 'the tenant exists');
+        assert.ok(state.profiles.has(NEW), 'and its profile');
+        assert.ok(logs.some((l) => l.event === 'admin.tenant_invite_failed'));
+        assert.deepEqual(audits.map((a) => a.action), [AUDIT_ACTIONS.tenantCreate]);
+    });
+
+    it('is not made for a tenant created with credentials: that is the operator\'s own, with nobody to invite', async () => {
+        const reply = await call('POST', '/tenants', { name: 'Own', instagram_page_id: '17841400000000001', page_access_token: 'EAAGx'.repeat(8) }, SESSION);
+        assert.equal(reply.status, 201);
+        assert.equal(reply.body.invite, null);
+        assert.equal(invites.length, 0);
+    });
+
+    it('uses the saved lifetime and role, and the operator\'s own message', async () => {
+        settings['onboarding.invite_ttl_days'] = '3';
+        settings['onboarding.default_role'] = 'operator';
+        settings['onboarding.whatsapp_text'] = 'Welcome to {name}: {link}';
+        const reply = await call('POST', '/tenants', { name: 'Nour' }, SESSION);
+        assert.equal(reply.body.invite.role, 'operator');
+        assert.equal(Math.round((new Date(reply.body.invite.expires_at).getTime() - Date.now()) / 86_400_000), 3);
+        assert.equal(reply.body.invite.whatsapp_text, `Welcome to Nour: ${reply.body.invite.url}`);
     });
 });
 
