@@ -2,19 +2,20 @@
  * The Studio writer is written from the tenant's profile (docs/onboarding/05 §2 "P9 · Studio writer", §3; P9).
  *
  * Pinned here:
- *   - the owner's context writes the golden prompts byte for byte, and the examples he is shown are today's, whether they come from the
- *     built-in fallback or from his own row after the copy (jsonb reorders keys: `exampleJson` does not care);
+ *   - the owner's context writes the golden prompts byte for byte, and the examples he is shown are the three references in his own row
+ *     (P14 removed the built-in fallback they were once read from; jsonb reorders keys: `exampleJson` does not care);
  *   - a second tenant's prompts, schema and fallbacks name its own offer, say its register's words, take no hashtag that is not its kind's,
  *     carry none of the owner's markers, and have no "Approved carousels" section unless it has examples;
  *   - the register kits: every non-Gulf register rejects what Gulf rejected, and names its own time words;
- *   - `studioWording` resolves the context as the DM and the comments do, and shows the built-in carousels to the owner alone;
- *   - the one-off that copies his three carousels into his row decides what to do from what the row holds.
+ *   - `studioWording` resolves the context as the DM and the comments do, and says nothing about examples: they are the row's.
  *
  * `golden.test.ts` holds the owner's bytes through four paths; this file holds everything that is not his.
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { setLogSink } from '../../utils/log.js';
 import { contextFor, legacyContext } from '../profile/context.js';
 import { defaultProfile } from '../profile/defaults.js';
@@ -28,19 +29,19 @@ import type { ArabicRegister, CreatorKind, CreatorProfile } from '../profile/typ
 import { studioView } from '../profile/views.js';
 import { StudioError } from './common.js';
 import { studioWording, WRITER_PROFILE_UNREADABLE } from './drafts.js';
-import { ARABIC_EXAMPLES, ENGLISH_EXAMPLES, exampleJson } from './examples.js';
+import { ARABIC_EXAMPLES, ENGLISH_EXAMPLES, OWNER_REFERENCE_EXAMPLES } from './exampleFixtures.js';
+import { exampleJson } from './examples.js';
 import { DRAFT_SCHEMA, draftSchema, normalizeTiktokCaption } from './generate.js';
-import { ownerExamples, planOwnerExamples } from './ownerExamples.js';
 import {
     buildDm, buildPlanSystemPrompt, buildSystemPrompt, examplesFor, LANGUAGES, LEARNING_KINDS, pitchCore, type StudioWording, writerKit,
 } from './prompts.js';
 import { settingsProblems } from './settings.js';
 import { defaultStudioSettings, type StudioSettings } from './settingsTypes.js';
-import { ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from './testFixtures.js';
+import { ELAMIR_SEED_SERVED, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from './testFixtures.js';
 
 // ─── The fixtures ───────────────────────────────────────────────────────────────────────────
 
-const wordingOf = (p: CreatorProfile, builtInExamples = false): StudioWording => ({ ...contextFor(p, 'carousel', 1), builtInExamples });
+const wordingOf = (p: CreatorProfile): StudioWording => contextFor(p, 'carousel', 1);
 const withRegister = (p: CreatorProfile, register: ArabicRegister): CreatorProfile => ({ ...p, language: { ...p.language, register } });
 const withKind = (p: CreatorProfile, kind: CreatorKind | null): CreatorProfile => ({ ...p, identity: { ...p.identity, kind } });
 
@@ -51,17 +52,11 @@ const DEFAULT_AR = defaultProfile({ lang: 'ar' });
 const DEFAULT_EN = defaultProfile({ lang: 'en' });
 
 /**
- * The tenant's Studio settings as its profile gives them (`studioView` over the neutral defaults), with a call to action that names no
- * course. The neutral defaults still say "The full course" (docs/onboarding/05 R18, which is P15's), and a second tenant's prompt is
- * only free of the owner's markers when its settings are: what is under test here is the writer's own text.
+ * The tenant's Studio settings as its profile gives them: `studioView` over the neutral defaults, as they are. The default call to
+ * action names no course (docs/onboarding/05 R18, P15), so a second tenant's prompt is free of the owner's markers on the defaults alone.
  */
 function settingsOf(p: CreatorProfile): StudioSettings {
-    const base = defaultStudioSettings();
-    const neutral: StudioSettings = {
-        ...base,
-        cta: { ...base.cta, tiktokLine: '🔗 Link in my bio', slide: { ...base.cta.slide, ttHeadline: 'Everything in one place' } },
-    };
-    return studioView(neutral, p);
+    return studioView(defaultStudioSettings(), p);
 }
 
 type Tenant = readonly [name: string, profile: CreatorProfile];
@@ -90,7 +85,7 @@ const read = (set: 'elamir' | 'control', name: string): string => readFileSync(g
 // ─── The owner ──────────────────────────────────────────────────────────────────────────────
 
 describe('the owner\'s context writes his golden prompts', () => {
-    const ownerWording = (): StudioWording => ({ ...legacyContext('carousel'), builtInExamples: true });
+    const ownerWording = (): StudioWording => legacyContext('carousel');
 
     it('is a Gulf educator who sells a course', () => {
         const w = ownerWording();
@@ -98,8 +93,8 @@ describe('the owner\'s context writes his golden prompts', () => {
         assert.deepEqual({ kind: w.who.kind, offerKind: w.who.offerKind }, { kind: 'educator', offerKind: 'course' });
     });
 
-    it('byte for byte: the system prompt with the built-in carousels, and the planner\'s', () => {
-        assert.equal(buildSystemPrompt(ELAMIR_SEED_SETTINGS, ownerWording()), read('elamir', 'studio.system.seed'));
+    it('byte for byte: the system prompt with the three references in his row, and the planner\'s', () => {
+        assert.equal(buildSystemPrompt(ELAMIR_SEED_SERVED, ownerWording()), read('elamir', 'studio.system.seed'));
         assert.equal(buildSystemPrompt(ELAMIR_SETTINGS, ownerWording()), read('elamir', 'studio.system.elamir'));
         assert.equal(buildPlanSystemPrompt(ELAMIR_SETTINGS, ownerWording()), read('elamir', 'studio.plan-system.elamir'));
     });
@@ -177,39 +172,37 @@ describe('exampleJson: the examples as the prompt prints them', () => {
 });
 
 describe('examplesFor', () => {
-    const lang = (code: 'ar' | 'en') => ({ language: { code, register: null, digits: 'latin' as const, dir: 'ltr' as const }, builtInExamples: false });
     const mine = { ...ENGLISH_EXAMPLES[0]!, id: 'Mine' };
     const theirs = { ...ENGLISH_EXAMPLES[0]!, id: 'Theirs', reference: true };
 
     it('a tenant with none of its own is shown none', () => {
-        for (const examples of [null, []]) assert.deepEqual(examplesFor({ ...defaultStudioSettings(), examples }, lang('ar')), { examples: [], own: false });
+        for (const examples of [null, []]) assert.deepEqual(examplesFor({ ...defaultStudioSettings(), examples }), { examples: [], own: false });
     });
 
-    it('the owner is shown the built-ins for his language until they are in his row: as reference, three at most', () => {
-        assert.deepEqual(examplesFor(ELAMIR_SETTINGS, { ...lang('ar'), builtInExamples: true }), { examples: ARABIC_EXAMPLES.slice(0, 3), own: false });
-        assert.deepEqual(examplesFor(ELAMIR_SETTINGS, { ...lang('en'), builtInExamples: true }), { examples: ENGLISH_EXAMPLES.slice(0, 3), own: false });
+    it('the owner is shown the three references his row holds, as references: another creator\'s, three at most', () => {
+        assert.deepEqual(examplesFor(ELAMIR_SETTINGS), { examples: OWNER_REFERENCE_EXAMPLES(), own: false });
     });
 
     it('a row\'s examples win, and are the tenant\'s own unless every one is marked as a reference', () => {
         const settings = (examples: StudioSettings['examples']): StudioSettings => ({ ...defaultStudioSettings(), examples });
-        assert.deepEqual(examplesFor(settings([mine]), { ...lang('en'), builtInExamples: true }), { examples: [mine], own: true }, 'the fallback is only for a row with none');
-        assert.equal(examplesFor(settings([theirs]), lang('en')).own, false, 'only references: another creator\'s');
-        assert.equal(examplesFor(settings([theirs, mine]), lang('en')).own, true, 'one of its own makes them its own');
-        assert.equal(examplesFor(settings([theirs, theirs, theirs, mine]), lang('en')).own, false, 'the fourth is not shown, so it does not count');
-        assert.equal(examplesFor(settings([mine, mine, mine, mine]), lang('en')).examples.length, 3);
+        assert.deepEqual(examplesFor(settings([mine])), { examples: [mine], own: true });
+        assert.equal(examplesFor(settings([theirs])).own, false, 'only references: another creator\'s');
+        assert.equal(examplesFor(settings([theirs, mine])).own, true, 'one of its own makes them its own');
+        assert.equal(examplesFor(settings([theirs, theirs, theirs, mine])).own, false, 'the fourth is not shown, so it does not count');
+        assert.equal(examplesFor(settings([mine, mine, mine, mine])).examples.length, 3);
     });
 
     it('ignores what is not a carousel', () => {
         const settings = { ...defaultStudioSettings(), examples: [null, 'x', { id: 'no slides' }] as never };
-        assert.deepEqual(examplesFor(settings, lang('en')).examples, []);
+        assert.deepEqual(examplesFor(settings).examples, []);
     });
 });
 
 describe('the examples section of the prompt', () => {
     const own = { ...ENGLISH_EXAMPLES[0]!, id: 'MineOnly' };
     const reference = { ...ENGLISH_EXAMPLES[0]!, id: 'ReferenceOnly', reference: true };
-    const prompt = (p: CreatorProfile, examples: StudioSettings['examples'], builtIn = false): string =>
-        buildSystemPrompt({ ...settingsOf(p), examples }, wordingOf(p, builtIn));
+    const prompt = (p: CreatorProfile, examples: StudioSettings['examples']): string =>
+        buildSystemPrompt({ ...settingsOf(p), examples }, wordingOf(p));
 
     it('is left out, whole, for a tenant with no examples: the last section is "Keyword, DM and id"', () => {
         for (const [name, p] of TENANTS) {
@@ -240,19 +233,27 @@ describe('the examples section of the prompt', () => {
         assert.ok(prompt(FITNESS_EN, stored).includes('{\n  "id": "MineOnly",\n  "accent"'));
     });
 
-    it('an owner whose row holds the three built-ins as references is written for exactly as the fallback writes for him', () => {
-        const wording = { ...legacyContext('carousel') };
-        const fallback = buildSystemPrompt(ELAMIR_SEED_SETTINGS, { ...wording, builtInExamples: true });
-        const stored = throughJsonb(ownerExamples());
-        for (const builtIn of [true, false]) {
-            assert.equal(buildSystemPrompt({ ...ELAMIR_SEED_SETTINGS, examples: stored }, { ...wording, builtInExamples: builtIn }), fallback, `with the fallback ${builtIn ? 'on' : 'off'}`);
-        }
-        assert.equal(fallback, read('elamir', 'studio.system.seed'));
+    it('the owner\'s row holds his three references: his prompt is the golden one, whatever order jsonb keeps their keys in', () => {
+        const wording = legacyContext('carousel');
+        const stored = throughJsonb(OWNER_REFERENCE_EXAMPLES());
+        assert.notEqual(JSON.stringify(stored), JSON.stringify(OWNER_REFERENCE_EXAMPLES()), 'the keys really were reordered');
+        assert.equal(buildSystemPrompt({ ...ELAMIR_SEED_SERVED, examples: stored }, wording), read('elamir', 'studio.system.seed'));
+        assert.equal(buildSystemPrompt(ELAMIR_SEED_SERVED, wording), read('elamir', 'studio.system.seed'));
     });
 
-    it('a tenant that is not the owner is not shown his carousels, whatever its language', () => {
+    it('there is no fallback: the owner\'s row with no examples is shown none, whoever asks and whatever the language', () => {
+        for (const wording of [legacyContext('carousel'), contextFor(profileFromLegacy(ENGLISH_SETTINGS), 'carousel', null)]) {
+            for (const examples of [null, []]) {
+                const system = buildSystemPrompt({ ...ELAMIR_SEED_SERVED, examples }, wording);
+                assert.ok(!system.includes('Approved carousels') && !system.includes('Reference carousels'), 'no section');
+                assert.ok(system.trimEnd().endsWith('e.g. "LocalAI".'), 'nothing follows the id line');
+            }
+        }
+    });
+
+    it('a tenant whose row holds no examples is not shown the owner\'s carousels, whatever its language', () => {
         for (const [name, p] of TENANTS) {
-            const system = prompt(p, null, false);
+            const system = prompt(p, null);
             for (const c of [...ARABIC_EXAMPLES, ...ENGLISH_EXAMPLES]) assert.ok(!system.includes(`"id": "${c.id}"`), `${name} was shown ${c.id}`);
         }
     });
@@ -482,19 +483,18 @@ describe('studioWording', () => {
         setPlatformOwner(db, owner);
     }
 
-    it('is the stored profile\'s carousel context, and shows the owner the built-in carousels', async () => {
+    it('is the stored profile\'s carousel context, and nothing else: the examples are the row\'s, so there is no flag about the owner', async () => {
         tenant(FITNESS_EN);
         const w = await studioWording(OWNER);
         assert.equal(w.who.role, 'fitness coach');
         assert.equal(w.who.offerKind, 'mixed');
         assert.deepEqual({ code: w.language.code, register: w.language.register }, { code: 'en', register: null });
-        assert.equal(w.builtInExamples, true, 'he is the owner');
+        assert.deepEqual(Object.keys(w).sort(), ['language', 'who']);
     });
 
-    it('shows another tenant none of them', async () => {
+    it('is the same for another tenant: its own context', async () => {
         tenant(SHOP_EG, OTHER);
         const w = await studioWording(OWNER);
-        assert.equal(w.builtInExamples, false);
         assert.equal(w.who.offerKind, 'product');
         assert.equal(w.language.register, 'egyptian');
     });
@@ -510,25 +510,24 @@ describe('studioWording', () => {
         assert.deepEqual({ kind: w.who.kind, role: w.who.role, offerKind: w.who.offerKind }, { kind: 'educator', role: 'tech educator', offerKind: 'course' });
     });
 
-    it('nobody is shown them when the owner cannot be found out, or there is none: never another tenant\'s, because a lookup failed', async () => {
-        tenant(FITNESS_EN, new Error('connection reset'));
-        assert.equal((await studioWording(OWNER)).builtInExamples, false);
-        db.restore();
-        tenant(FITNESS_EN, null);
-        assert.equal((await studioWording(OWNER)).builtInExamples, false);
+    it('does not depend on who the platform owner is: a lookup that fails, or finds nobody, changes nothing when the profile reads', async () => {
+        for (const owner of [new Error('connection reset'), null, OWNER, OTHER]) {
+            tenant(FITNESS_EN, owner);
+            assert.deepEqual(await studioWording(OWNER), { language: wordingOf(FITNESS_EN).language, who: wordingOf(FITNESS_EN).who });
+            db.restore();
+        }
     });
 
     describe('the profile cannot be read', () => {
-        it('the owner is written for in today\'s wording, logged, with the built-ins', async () => {
+        it('the owner is written for in today\'s wording, logged', async () => {
             tenant(FITNESS_EN);
             db.failOn = /FROM creator_profiles/;
             db.failWith = new Error('connection reset');
             const w = await studioWording(OWNER);
             const legacy = contextFor(legacyBase('ar'), 'carousel', null);
             assert.deepEqual({ language: w.language, who: w.who }, { language: legacy.language, who: legacy.who });
-            assert.equal(w.builtInExamples, true);
             assert.equal(warnings.filter((l) => /profile\.context_unreadable/.test(l)).length, 1);
-            assert.equal(buildSystemPrompt(ELAMIR_SEED_SETTINGS, w), read('elamir', 'studio.system.seed'));
+            assert.equal(buildSystemPrompt(ELAMIR_SEED_SERVED, w), read('elamir', 'studio.system.seed'));
         });
 
         it('any other tenant gets a retryable 503, never the owner\'s wording', async () => {
@@ -547,74 +546,31 @@ describe('studioWording', () => {
     });
 });
 
-// ─── The one-off that copies the owner's carousels ──────────────────────────────────────────
+// ─── The owner's reference carousels ────────────────────────────────────────────────────────
 
-describe('ownerExamples and planOwnerExamples', () => {
-    it('are his three Arabic built-ins, in order, marked as references, and not the built-ins themselves', () => {
-        const copy = ownerExamples();
+describe('the owner\'s reference carousels (the fixture his row\'s examples are built from)', () => {
+    it('are his three Arabic carousels, in order, marked as references, as fresh copies', () => {
+        const copy = OWNER_REFERENCE_EXAMPLES();
         assert.equal(copy.length, 3);
         assert.deepEqual(copy.map((c) => c.id), ['ChatVsAgent', 'ContextPyramid', 'LocalAI']);
         assert.ok(copy.every((c) => c.reference === true));
         assert.deepEqual(copy.map(({ reference: _r, ...c }) => c), ARABIC_EXAMPLES.slice(0, 3));
-        assert.ok(ARABIC_EXAMPLES.every((c) => !('reference' in c)), 'the built-ins are not marked');
         copy[0]!.slides.pop();
-        assert.notEqual(copy[0]!.slides.length, ARABIC_EXAMPLES[0]!.slides.length, 'a copy: editing it leaves the built-in alone');
+        assert.notEqual(copy[0]!.slides.length, ARABIC_EXAMPLES[0]!.slides.length, 'a copy: editing it leaves the fixture alone');
+        assert.equal(OWNER_REFERENCE_EXAMPLES()[0]!.slides.length, ARABIC_EXAMPLES[0]!.slides.length);
     });
 
-    it('copy, for a row with none (NULL or empty)', () => {
-        assert.deepEqual(planOwnerExamples(null), { action: 'copy' });
-        assert.deepEqual(planOwnerExamples([]), { action: 'copy' });
+    it('are what the owner\'s fixtures hold, and nobody else\'s', () => {
+        assert.deepEqual(ELAMIR_SETTINGS.examples, OWNER_REFERENCE_EXAMPLES());
+        assert.deepEqual(ELAMIR_SEED_SERVED.examples, OWNER_REFERENCE_EXAMPLES());
+        assert.equal(ENGLISH_SETTINGS.examples, null);
     });
 
-    it('done, for a row that already holds exactly these three, whatever order jsonb keeps their keys in', () => {
-        assert.deepEqual(planOwnerExamples(ownerExamples()), { action: 'done' });
-        assert.deepEqual(planOwnerExamples(throughJsonb(ownerExamples())), { action: 'done' });
-    });
-
-    it('refuse, for a row that holds anything else: one of his own, the built-ins without the flag, a different count or order', () => {
-        const mine = { ...ENGLISH_EXAMPLES[0]!, id: 'Mine' };
-        const [a, b, c] = ownerExamples() as [ReturnType<typeof ownerExamples>[number], ReturnType<typeof ownerExamples>[number], ReturnType<typeof ownerExamples>[number]];
-        const refused = (rows: Parameters<typeof planOwnerExamples>[0]): boolean => planOwnerExamples(rows).action === 'refuse';
-        assert.ok(refused([mine]));
-        assert.ok(refused([...ownerExamples(), mine]));
-        assert.ok(refused(ARABIC_EXAMPLES.slice(0, 3) as never), 'the built-ins, not marked as references');
-        assert.ok(refused([a, b]));
-        assert.ok(refused([b, a, c]));
-        assert.ok(refused([{ ...a, reference: false }, b, c]));
-        const plan = planOwnerExamples([mine]);
-        assert.ok(plan.action === 'refuse' && /already holds 1 example that is not the three built-in carousels; this script never overwrites/.test(plan.reason));
-    });
-});
-
-// ─── The script around them ─────────────────────────────────────────────────────────────────
-
-describe('scripts/copy-owner-examples.mts, by its source', () => {
-    const source = readFileSync(new URL('../../../scripts/copy-owner-examples.mts', import.meta.url), 'utf8');
-    /** The code alone: no comments, and not the usage text (which prints the rollback SQL, and is not a statement the script runs). */
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/const USAGE = `[\s\S]*?`;/, '');
-
-    it('closes the application pool before it connects or reads, and reopens it only after the dry run has ended', () => {
-        const forbid = code.indexOf('forbidPool(');
-        const connect = code.indexOf('connectReadOnly(');
-        const reopen = code.indexOf('reopenPool()');
-        const gate = code.indexOf("if (!apply) {");
-        assert.ok(forbid > 0 && forbid < connect, 'forbidPool, then connect');
-        assert.ok(gate > connect && reopen > gate, 'the pool is reopened after the line that ends a dry run');
-        assert.equal((code.match(/reopenPool\(\)/g) ?? []).length, 1);
-        assert.doesNotMatch(code.slice(0, reopen), /config\/db|updateStudioSettings|withTransaction/, 'nothing before the gate can write');
-    });
-
-    it('writes only through the application\'s settings writer, in a transaction that holds the tenant\'s lock, and never in SQL of its own', () => {
-        assert.equal((code.match(/updateStudioSettings\(/g) ?? []).length, 1);
-        assert.match(code, /lockTenantSettings\(tx, id\)/);
-        assert.match(code, /readStudioSettings\(tx, id, true\)/, 'the row is read again under the lock');
-        assert.doesNotMatch(code, /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|GRANT)\b/, 'its own statements only read');
-        assert.doesNotMatch(code, /saveProfile/, 'examples is not a profile-owned path');
-    });
-
-    it('sets the environment before anything that builds the pool is imported', () => {
-        const env = source.indexOf('loadEnv(');
-        assert.ok(env > 0 && source.indexOf("await import('../src/") > env);
-        assert.doesNotMatch(source.slice(0, env), /^import .* from '\.\.\/src\//m);
+    it('are in no production module: only tests and the test fixtures import the fixture file', () => {
+        const files = execFileSync('git', ['ls-files', 'src'], { encoding: 'utf8', cwd: fileURLToPath(new URL('../../../', import.meta.url)) }).split('\n').filter(Boolean);
+        const importers = files
+            .filter((file) => /\.ts$/.test(file) && !/\.test\.ts$/.test(file))
+            .filter((file) => /from '[^']*exampleFixtures\.js'/.test(readFileSync(new URL(`../../../${file}`, import.meta.url), 'utf8')));
+        assert.deepEqual(importers, ['src/services/studio/testFixtures.ts']);
     });
 });

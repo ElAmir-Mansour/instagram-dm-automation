@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import { defaultGrowthSettings } from '../growth/settingsRow.js';
-import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
+import { ELAMIR_GROWTH, ELAMIR_SEED_SERVED, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
 import { contextFor } from './context.js';
 import { FITNESS_EN, SHOP_EG } from './fixtures.js';
 import { goldenPath } from './golden.js';
@@ -21,11 +21,11 @@ import {
 } from './promptSurface.js';
 
 /** The owner's DM and comment contexts: what the surface is handed for him. */
-const OWNER_PROFILE = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+const OWNER_PROFILE = profileFromLegacy(ELAMIR_SEED_SERVED, ELAMIR_GROWTH);
 const OWNER_DM = contextFor(OWNER_PROFILE, 'dm', 1);
 const OWNER_COMMENTS = contextFor(OWNER_PROFILE, 'comment_reply', 1);
-/** What the Studio's writer is told about the owner: his carousel context, and the built-in carousels (his alone until P14). */
-const OWNER_CAROUSEL: StudioWording = { ...contextFor(OWNER_PROFILE, 'carousel', 1), builtInExamples: true };
+/** What the Studio's writer is told about the owner: his carousel context. His examples are in his row (`ELAMIR_SETTINGS.examples`), not here. */
+const OWNER_CAROUSEL: StudioWording = contextFor(OWNER_PROFILE, 'carousel', 1);
 
 /** Every builder the parity script hashes for a live tenant, in order. A builder added to the goldens is added here and to this list. */
 const TENANT_SURFACE = [
@@ -43,7 +43,7 @@ const fileOf = (e: SurfaceEntry): string => goldenPath(e.name, e.kind === 'text'
 
 describe('tenantSurface', () => {
     it('is exactly these builders, once each, for the owner\'s settings', async () => {
-        const entries = await tenantSurface({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH });
+        const entries = await tenantSurface({ studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH });
         assert.deepEqual(entries.map((e) => e.name), TENANT_SURFACE);
     });
 
@@ -57,28 +57,28 @@ describe('tenantSurface', () => {
     });
 
     it('builds the same bytes twice: nothing in it depends on the clock or on chance', async () => {
-        const rows = { studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH };
+        const rows = { studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH };
         const first = (await tenantSurface(rows)).map(entryText);
         const second = (await tenantSurface(rows)).map(entryText);
         assert.deepEqual(first, second);
     });
 
     it('does not mutate what it is handed', async () => {
-        const studio = structuredClone(ELAMIR_SEED_SETTINGS);
+        const studio = structuredClone(ELAMIR_SEED_SERVED);
         const growth = structuredClone(ELAMIR_GROWTH);
         await tenantSurface({ studio, growth });
-        assert.deepStrictEqual(studio, ELAMIR_SEED_SETTINGS);
+        assert.deepStrictEqual(studio, ELAMIR_SEED_SERVED);
         assert.deepStrictEqual(growth, ELAMIR_GROWTH);
     });
 
     it('puts the pool back, and never opens a connection while it runs', async () => {
         const before = { query: pool.query, connect: pool.connect };
-        await tenantSurface({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH });
+        await tenantSurface({ studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH });
         assert.equal(pool.query, before.query);
         assert.equal(pool.connect, before.connect);
 
         // ... also when what runs inside throws: the stand-in is not left installed.
-        await assert.rejects(withRows({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH }, async () => {
+        await assert.rejects(withRows({ studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH }, async () => {
             assert.notEqual(pool.query, before.query, 'while it runs, the pool answers from the rows');
             await assert.rejects(pool.connect(), /never opens a database connection/);
             throw new Error('boom');
@@ -92,15 +92,15 @@ describe('the entries are what the golden files hold', () => {
     it('every entry of every fixture is a golden file, and the parity script\'s hash of it is that file\'s sha256', async () => {
         const entries: SurfaceEntry[] = [];
         for (const [settings, slug, lang, set, wording] of [
-            [ELAMIR_SETTINGS, 'elamir', 'ar', 'elamir', OWNER_CAROUSEL], [ELAMIR_SEED_SETTINGS, 'seed', 'ar', 'elamir', OWNER_CAROUSEL],
-            // The control is a tenant that is not the owner: it is shown no examples.
-            [ENGLISH_SETTINGS, 'english', 'en', 'control', { ...contextFor(profileFromLegacy(ENGLISH_SETTINGS), 'carousel', null), builtInExamples: false }],
+            [ELAMIR_SETTINGS, 'elamir', 'ar', 'elamir', OWNER_CAROUSEL], [ELAMIR_SEED_SERVED, 'seed', 'ar', 'elamir', OWNER_CAROUSEL],
+            // The control is a tenant that is not the owner: its row holds no examples, so it is shown none.
+            [ENGLISH_SETTINGS, 'english', 'en', 'control', contextFor(profileFromLegacy(ENGLISH_SETTINGS), 'carousel', null)],
         ] as const) entries.push(...await studioSurface(settings, { lang, slug, set, carousel: wording }));
         entries.push(
-            ...infographicSurface(ELAMIR_SEED_SETTINGS, { slug: 'seed', ctx: contextFor(OWNER_PROFILE, 'infographic', null) }), ...dmFallbackSurface(ELAMIR_SETTINGS, OWNER_COMMENTS),
+            ...infographicSurface(ELAMIR_SEED_SERVED, { slug: 'seed', ctx: contextFor(OWNER_PROFILE, 'infographic', null) }), ...dmFallbackSurface(ELAMIR_SETTINGS, OWNER_COMMENTS),
             ...dmInstructionSurface(ELAMIR_AGENT, OWNER_DM), ...dmContextSurface(OWNER_DM),
         );
-        entries.push(...await growthSurface({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH }, { slug: 'elamir' }));
+        entries.push(...await growthSurface({ studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH }, { slug: 'elamir' }));
 
         assert.ok(entries.length > 60, 'three fixtures of Studio and Monteur builders, and the rest');
         assert.ok(entries.some((e) => e.name === 'dm.system-instruction'));
@@ -115,8 +115,8 @@ describe('the entries are what the golden files hold', () => {
 
     it('a name with no fixture suffix is the golden\'s name without it', async () => {
         const [named, bare] = [
-            await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar', slug: 'seed', carousel: OWNER_CAROUSEL }),
-            await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar', carousel: OWNER_CAROUSEL }),
+            await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', slug: 'seed', carousel: OWNER_CAROUSEL }),
+            await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', carousel: OWNER_CAROUSEL }),
         ];
         assert.deepEqual(bare.map((e) => `${e.name}.seed`), named.map((e) => e.name));
         assert.deepEqual(bare.map(entryText), named.map(entryText), 'the suffix is a name, not an input');
@@ -125,7 +125,7 @@ describe('the entries are what the golden files hold', () => {
 
 describe('the DM instruction', () => {
     it('is in the tenant surface, after the infographic builders, only when the tenant has an agent row', async () => {
-        const rows = { studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH };
+        const rows = { studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH };
         const names = (await tenantSurface({ ...rows, agent: ELAMIR_AGENT })).map((e) => e.name);
         assert.deepEqual(names, [...TENANT_SURFACE.slice(0, 22), 'dm.system-instruction', ...TENANT_SURFACE.slice(22)]);
         assert.deepEqual((await tenantSurface({ ...rows, agent: null })).map((e) => e.name), TENANT_SURFACE);
@@ -140,7 +140,7 @@ describe('the DM instruction', () => {
 });
 
 describe('the DM and comment wording is the profile\'s', () => {
-    const rows = { studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH };
+    const rows = { studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH };
     const byName = (entries: SurfaceEntry[]): Map<string, string> => new Map(entries.map((e) => [e.name, entryText(e)]));
 
     it('without a profile it is the one the rows describe, which is the owner\'s wording; the same profile handed in changes nothing', async () => {
@@ -160,9 +160,12 @@ describe('the DM and comment wording is the profile\'s', () => {
             'monteur.editor-system.human-on', 'monteur.editor-system.human-off',
             'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'comments.dm-fallback-replies.ar',
         ]);
-        // The Studio's writer: what they sell, the Egyptian question, no pitch for a product, no learning hashtags, and no examples of another creator.
+        // The Studio's writer: what they sell, the Egyptian question, no pitch for a product, and no learning hashtags. The examples are the
+        // ROW's (P14): these rows are the owner's and hold his three references, so they stay; a profile does not carry examples either way.
         assert.match(after.get('studio.system')!, /whose product is «/);
-        assert.doesNotMatch(after.get('studio.system')!, /## Approved carousels/);
+        assert.match(after.get('studio.system')!, /## Approved carousels\nReference carousels by another creator\./);
+        const bare = byName(await tenantSurface({ ...rows, studio: { ...rows.studio, examples: null }, agent: ELAMIR_AGENT, profile: SHOP_EG }));
+        assert.doesNotMatch(bare.get('studio.system')!, /## Approved carousels/, 'a row with no examples is shown none: there is no fallback');
         assert.match(after.get('studio.dm-fallback')!, /عايز تطبّقها بنفسك خطوة بخطوة/);
         assert.doesNotMatch(after.get('captions.tiktok')!, /LearnOnTikTok/);
         assert.match(before.get('captions.tiktok')!, /LearnOnTikTok/);
@@ -200,10 +203,10 @@ describe('the DM and comment wording is the profile\'s', () => {
 });
 
 describe('a builder that throws is an entry that says so', () => {
-    const broken = { ...ELAMIR_SEED_SETTINGS, cta: null } as unknown as typeof ELAMIR_SEED_SETTINGS;
+    const broken = { ...ELAMIR_SEED_SERVED, cta: null } as unknown as typeof ELAMIR_SEED_SERVED;
 
     it('studioSurface: the builders that read what is missing carry the error, every other builder is built, and the order is kept', async () => {
-        const whole = await studioSurface(ELAMIR_SEED_SETTINGS, { lang: 'ar', carousel: OWNER_CAROUSEL });
+        const whole = await studioSurface(ELAMIR_SEED_SERVED, { lang: 'ar', carousel: OWNER_CAROUSEL });
         const entries = await studioSurface(broken, { lang: 'ar', carousel: OWNER_CAROUSEL });
         assert.deepEqual(entries.map((e) => e.name), whole.map((e) => e.name), 'the same entries in the same order');
         const failed = entries.filter((e) => e.error !== undefined);
@@ -230,7 +233,7 @@ describe('a builder that throws is an entry that says so', () => {
     it('a Growth builder that throws is `growth.keywords` or `growth.coach` (the language it would have been named for is unknown), and the pool is put back', async () => {
         const before = { query: pool.query, connect: pool.connect };
         const unreadable = new Proxy({}, { ownKeys() { throw new Error('row unreadable'); } }) as never;
-        const entries = await growthSurface({ studio: ELAMIR_SEED_SETTINGS, growth: unreadable }, { slug: 'x' });
+        const entries = await growthSurface({ studio: ELAMIR_SEED_SERVED, growth: unreadable }, { slug: 'x' });
         assert.deepEqual(entries.map((e) => [e.name, e.error]), [['growth.keywords.x', 'Error: row unreadable'], ['growth.coach.x', 'Error: row unreadable']]);
         assert.equal(pool.query, before.query);
         assert.equal(pool.connect, before.connect);
@@ -238,7 +241,7 @@ describe('a builder that throws is an entry that says so', () => {
 });
 
 describe('the pool stand-in answers what the Growth builders ask and nothing else', () => {
-    const rows = { studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH };
+    const rows = { studio: ELAMIR_SEED_SERVED, growth: ELAMIR_GROWTH };
     const ask = (sql: string) => pool.query(sql, ['creator']);
 
     it('answers the stored-profile lookup with none, explicitly: the rows handed in are already the answer', async () => {
@@ -264,7 +267,8 @@ describe('the pool stand-in answers what the Growth builders ask and nothing els
         }
         const parity = readFileSync(new URL('./parity.ts', import.meta.url), 'utf8');
         assert.equal(parity.match(/storedProfile/g)?.length, 1, 'one use');
-        assert.match(parity, /const a = await tenantSurface\(\{ studio, growth, agent, builtInExamples \}\);/, 'path (a), today\'s rows, is handed none');
+        assert.match(parity, /const a = await tenantSurface\(\{ studio, growth, agent \}\);/, 'path (a), today\'s rows, is handed none');
+        assert.doesNotMatch(parity, /builtInExamples/, 'nobody is shown the owner\'s carousels but from their own row (P14)');
         assert.match(parity, /const b = await tenantSurface\(\{[^\n]*\}, stored \? \{ storedProfile: profile \} : \{\}\);/, 'path (b) is handed the stored profile, when there is one');
     });
 
@@ -273,7 +277,7 @@ describe('the pool stand-in answers what the Growth builders ask and nothing els
             const g = (await ask('SELECT keywords FROM growth_settings WHERE creator_id = $1')).rows[0];
             assert.deepStrictEqual(g, ELAMIR_GROWTH);
             assert.notEqual(g, ELAMIR_GROWTH);
-            assert.deepStrictEqual((await ask('SELECT brand FROM studio_settings WHERE creator_id = $1')).rows[0], ELAMIR_SEED_SETTINGS);
+            assert.deepStrictEqual((await ask('SELECT brand FROM studio_settings WHERE creator_id = $1')).rows[0], ELAMIR_SEED_SERVED);
         });
     });
 

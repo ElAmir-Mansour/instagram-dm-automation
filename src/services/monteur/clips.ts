@@ -309,7 +309,7 @@ async function planCampaign(exec: Exec, creatorId: string, copy: ClipCopy): Prom
 
 /**
  * A Short's description: the TikTok caption (hook, body, the "link in bio" line, hashtags) and the
- * course link under it — shown in full on the watch page, where a link in a Short's own
+ * offer's link under it — shown in full on the watch page, where a link in a Short's own
  * description is not clickable but can be copied.
  */
 export function youtubeDescription(tiktokCaption: string, url: string | null | undefined): string {

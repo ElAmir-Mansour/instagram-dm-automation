@@ -56,7 +56,7 @@ Leave out every field a kind doesn't use.
 
 `captions.tiktokTitle`: the hook in at most 90 UTF-16 units (an emoji counts 2), usually the cover title plus one emoji.
 
-`captions.tiktok`: the hook, 2–4 value lines, a swipe or save line, a question to the viewer ending in 👇, then exactly «🔗 The full course is in my bio», then 4–6 hashtags including #LearnOnTikTok. No keyword ask: TikTok can't auto-reply. No time words (today, tonight, tomorrow, yesterday, this week): TikTok posts go out later than planned.
+`captions.tiktok`: the hook, 2–4 value lines, a swipe or save line, a question to the viewer ending in 👇, then exactly «🔗 Link in my bio», then 4–6 hashtags including #LearnOnTikTok. No keyword ask: TikTok can't auto-reply. No time words (today, tonight, tomorrow, yesterday, this week): TikTok posts go out later than planned.
 
 ## Keyword, DM and id
 - `keyword`: the one word followers comment to get the link by DM. A single easy English word tied to the topic, like context, local, resume. If an active keyword already fits the topic, reuse it exactly. Otherwise pick a new word that neither contains nor sits inside any active keyword, or comments meant for one campaign would trigger the other.

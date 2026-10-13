@@ -1070,7 +1070,7 @@ Nothing about any one creator is written into the code or the prompts (STUDIO.md
 
 | On screen | Key, rule, default | Example | What it affects |
 |---|---|---|---|
-| **Carousel language** (لغة الكاروسيل) | `voice.language`: `ar` or `en`. Default `en` | `ar` | The language of every slide, caption and DM line; which built-in example carousels the writer copies the shape of; TikTok's learning hashtags; the time words kept out of TikTok copy |
+| **Carousel language** (لغة الكاروسيل) | `voice.language`: `ar` or `en`. Default `en` | `ar` | The language of every slide, caption and DM line; TikTok's learning hashtags; the time words kept out of TikTok copy |
 | **Digits** (الأرقام): **Arabic-Indic (١٢٣)** (هندية) / **Latin (123)** (لاتينية) | `voice.digits`: `arabic-indic` or `latin`. Default `latin` | `arabic-indic` | The numerals the writer uses. With Arabic-Indic, a Latin digit beside Arabic text breaks a rule (and is converted where it touches Arabic), while one inside a Latin name, *Gemini 2.5*, is fine. It does not reach the templates, whose own numbers follow **Slide direction** |
 | **Voice guide** (دليل الأسلوب) | `voice.guide`: ≤ 4000. Default three neutral lines: clear and practical, short sentences, the result before the tool | The creator's guide, below | Given to the writer as the creator's voice guide, to follow closely: where it differs from the built-in craft notes, it wins. It also shapes **Plan my week**'s titles |
 | *(not in the form)* | `voice.avoid`: up to 30 terms, each ≤ 80. Default none | `["MCP"]`: the course's MCP section is not published yet | Terms the writer must never use. Generated copy containing one goes back for repair and is refused if it stays; a plan proposal mentioning one is dropped. Your own edits are not checked against it |
@@ -1097,7 +1097,7 @@ TikTok copy points to the link in the bio («رابطه في البايو»), ne
 | **Facts** (حقائق) | `product.facts`: up to 20, each ≤ 60. Default none | `٣٤ درس` · `٥ ساعات و٤٠ دقيقة` · `شهادة إتمام` | The only things a slide may claim about the product. With none, the writer is told to state no numbers about the course at all. Also the facts line on the last slide, which disappears when the list is empty |
 | **DM bullets** (نقاط الرسالة الخاصة) | `product.dmBullets`: up to 10, each ≤ 200. Default none | The four ✅ lines of the DM in section 5 | `{bullets}` in the DM, one per line |
 | **Instagram caption line** (سطر نص إنستجرام) | `cta.instagramAsk`: required, ≤ 300; must contain `{keyword}` and no other placeholder. Default `Comment "{keyword}" and I'll DM you the link 📩` | `اكتب "{keyword}" بالتعليقات ويوصلك رابط الكورس بالخاص 📩` | Every Instagram caption carries it, word for word, with the keyword filled in. A caption without it is refused, because it is what the comment automation answers |
-| **TikTok caption line** (سطر نص تيك توك) | `cta.tiktokLine`: ≤ 200. Default `🔗 The full course is in my bio` | `📚 الكورس كامل بالعربي — رابطه في البايو 🔗` | Every TikTok caption carries it word for word, when it is set. TikTok cannot send DMs, so it points to your bio |
+| **TikTok caption line** (سطر نص تيك توك) | `cta.tiktokLine`: ≤ 200. Default `🔗 Link in my bio` | `📚 الكورس كامل بالعربي — رابطه في البايو 🔗` | Every TikTok caption carries it word for word, when it is set. TikTok cannot send DMs, so it points to your bio |
 | **DM template** (قالب الرسالة الخاصة) | `cta.dmTemplate`: required, ≤ 4000; placeholders `{username}` `{question}` `{pitch}` `{url}` `{bullets}` only. Default a short neutral English DM | STUDIO.md §8, shown in section 5 | The DM every new keyword campaign sends |
 
 **Last slide words** (كلمات الشريحة الأخيرة), `cta.slide.*`, each ≤ 60. An empty one leaves its line out.
@@ -1107,7 +1107,7 @@ TikTok copy points to the link in the bio («رابطه في البايو»), ne
 | **Instagram ask** (دعوة إنستجرام) | `igAsk`, *Comment below* | *اكتب في التعليقات* | Last Instagram slide, above the keyword pill |
 | **Instagram line under it** (سطر إنستجرام تحتها) | `igSub`, *and I'll DM you the link 📩* | *ويوصلك الرابط بالخاص 📩* | Last Instagram slide, under the pill |
 | **Save prompt** (دعوة الحفظ) | `save`, *Save this post* | *احفظ المنشور* | Last Instagram slide, and the caption's save line, with 🔖 |
-| **TikTok headline** (عنوان تيك توك) | `ttHeadline`, *The full course* | *الكورس كامل بالعربي* | Last TikTok slide, the headline |
+| **TikTok headline** (عنوان تيك توك) | `ttHeadline`, *Everything in one place* | *الكورس كامل بالعربي* | Last TikTok slide, the headline |
 | **TikTok pill** (شارة تيك توك) | `ttPill`, *Link in bio* | *رابطه في البايو* | Last TikTok slide, the pill |
 | **TikTok line under it** (سطر تيك توك تحتها) | `ttSub`, *Tap the link on my profile 👆* | *ادخل البروفايل واضغط الرابط 👆* | Last TikTok slide, under the pill |
 | **Follow prompt** (دعوة المتابعة) | `follow`, *Follow for more* | *تابعني للمزيد* | Last TikTok slide, the follow button |
@@ -1138,8 +1138,8 @@ TikTok copy points to the link in the bio («رابطه في البايو»), ne
 ### Not in the form (Operator)
 
 - `examples`: up to 5 carousels you approved (100 KB at most in all) that the writer copies the
-  density, structure and voice of; it uses the first three. `null`, the default, uses the
-  built-in examples for your language.
+  density, structure and voice of; it uses the first three. `null`, the default, shows the writer
+  none: there are no built-in examples, so the "Approved carousels" part of its instructions is left out.
 - `voice.avoid` and `brand.theme`, above.
 
 Set them from the dashboard's browser console, which acts as your session. A section merges key by
@@ -1147,7 +1147,7 @@ key; a list is replaced whole:
 
 ```js
 await API.saveStudioSettings({ voice: { avoid: ['MCP'] } });
-await API.saveStudioSettings({ examples: null });      // back to the built-in examples
+await API.saveStudioSettings({ examples: null });      // back to none: the writer is shown no examples
 ```
 
 ### Settings the Studio depends on, elsewhere (Operator)

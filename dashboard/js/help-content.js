@@ -65,7 +65,7 @@ const HelpContent = {
                         ar: [
                             'أوتوريبلاي برو يرد على جمهورك في إنستجرام وفيسبوك بدالك، وينشر محتواك في وقته، حتى وأنت مشغول أو نايم. يشتغل على حسابك الرسمي عن طريق ميتا نفسها، بدون حيل ولا إضافات.',
                             { ul: [
-                                '**ردود الكلمات المفتاحية:** متابع يكتب كلمة تحددها في التعليقات (مثل «كورس»)، فتوصله رسالة خاصة فيها الرابط، ويشوف رداً علنياً على تعليقه إذا حبيت.',
+                                '**ردود الكلمات المفتاحية:** متابع يكتب كلمة تحددها في التعليقات (مثل «سعر»)، فتوصله رسالة خاصة فيها الرابط، ويشوف رداً علنياً على تعليقه إذا حبيت.',
                                 '**وكيل ذكي للرسائل:** أي رسالة توصلك في الخاص يرد عليها وكيل يعرف منتجك ويتكلم بأسلوبك، وتقدر توقفه في أي محادثة.',
                                 '**جدولة المنشورات:** صورة أو فيديو أو ريل أو كاروسيل، على إنستجرام وفيسبوك معاً، ومعها تيك توك إذا ربطته.',
                                 '**استوديو الكاروسيل:** يحوّل دروسك المصوّرة إلى منشورات كاروسيل جاهزة، بالنص والكلمة المفتاحية والرسالة الخاصة.',
@@ -74,7 +74,7 @@ const HelpContent = {
                         en: [
                             'AutoReply Pro answers your audience on Instagram and Facebook for you, and publishes your content on time, even while you are busy or asleep. It works on your real account through Meta’s own API: no tricks, no browser extensions.',
                             { ul: [
-                                '**Keyword replies:** someone comments a word you choose (say, “course”), gets a private DM with your link, and sees a public reply under their comment if you want one.',
+                                '**Keyword replies:** someone comments a word you choose (say, “price”), gets a private DM with your link, and sees a public reply under their comment if you want one.',
                                 '**An AI agent for DMs:** messages that land in your inbox are answered by an agent that knows your product and writes in your voice. You can pause it in any conversation.',
                                 '**Post scheduling:** images, videos, reels and carousels, to Instagram and Facebook together, and to TikTok too once it is connected.',
                                 '**Carousel Studio:** turns your recorded lessons into ready carousel posts, with the caption, the keyword and the DM written for you.',
@@ -130,7 +130,7 @@ const HelpContent = {
                                 ['النمو والتسويق', 'أرقام محتواك، وخطة مدرب النمو، وأدوات السيو.'],
                                 ['سجل النشاط', 'كل تعليق ورسالة وحالتها، لحظة بلحظة.'],
                                 ['الإعدادات', 'رمز الوصول، ورمز التحقق، وتيك توك، والمظهر واللغة.'],
-                                ['المساعدة', 'هنا: كل الشروحات، بالعربي والإنجليزي.'],
+                                ['المساعدة', 'هنا: كل الشروحات، بالعربية والإنجليزية.'],
                             ] },
                         ],
                         en: [
@@ -810,7 +810,7 @@ const HelpContent = {
                             { ul: [
                                 'احفظ كلماتك في **السيو والوصول** ← **الكلمات المفتاحية**. كاتب الاستوديو يستخدمها في أول سطر من نصوص الكاروسيل.',
                                 'زر **اقترح** يعطيك أفكاراً من الذكاء الاصطناعي عن موضوع تكتبه. هي أفكار، مو أرقام بحث: جرّب كل كلمة في بحث إنستجرام وشوف وش يطلع قبل ما تعتمدها.',
-                                'اكتب الكلمة بالطريقة اللي يكتبها جمهورك: «ذكاء اصطناعي» غير «AI»، وكثير يبحثون بالعربي.',
+                                'اكتب الكلمة بالطريقة اللي يكتبها جمهورك: «ذكاء اصطناعي» غير «AI»، وكثير يبحثون بالعربية.',
                             ] },
                         ],
                         en: [
@@ -1100,7 +1100,7 @@ const HelpContent = {
                         ar: [
                             'تيك توك ما يسمح برسائل خاصة تلقائية لأصحاب التعليقات، فحملات الكلمات المفتاحية ما تشتغل هناك. عشان كذا نصوص تيك توك توجّه المتابع للرابط في البايو:',
                             { ul: [
-                                'الاستوديو يضيف **سطر نص تيك توك** من إعداداته لكل وصف، مثل: «الكورس كامل بالعربي، رابطه في البايو».',
+                                'الاستوديو يضيف **سطر نص تيك توك** من إعداداته لكل وصف، مثل: «الرابط في البايو».',
                                 'والشريحة الأخيرة في نسخة تيك توك تقول نفس الكلام.',
                             ] },
                             { warn: 'تأكد أن الرابط موجود فعلاً في البايو. تيك توك ما يعطي خانة **الموقع الإلكتروني** في الملف الشخصي لكل الحسابات: عادة لحسابات الأعمال، أو للحسابات اللي تعدّت عدداً من المتابعين (غالباً 1000)، والشرط يختلف من بلد لبلد. افتح **تعديل الملف الشخصي** في تيك توك وتأكد أن الخانة موجودة عندك قبل ما تنشر.' },
@@ -1108,7 +1108,7 @@ const HelpContent = {
                         en: [
                             'TikTok doesn’t allow automatic DMs to commenters, so keyword campaigns can’t run there. That is why TikTok captions point people to the link in your bio:',
                             { ul: [
-                                'The Studio adds the **TikTok caption line** from its settings to every description, such as “The full course, link in bio”.',
+                                'The Studio adds the **TikTok caption line** from its settings to every description, such as “Link in my bio”.',
                                 'The last slide of the TikTok version says the same.',
                             ] },
                             { warn: 'Make sure the link really is in your bio. TikTok doesn’t give every account a **Website** field on the profile: typically business accounts get it, or accounts past a follower count (often 1,000), and the rule varies by country. Open **Edit profile** in TikTok and check you have the field before you post.' },
@@ -1938,7 +1938,7 @@ const HelpContent = {
                             { dl: [
                                 ['اسم العلامة', 'الاسم اللي يناديك فيه الاستوديو.'],
                                 ['التوقيع (بالحروف اللاتينية)', 'التوقيع اللي في أسفل الشرائح، بالإنجليزي، مثل «AGENTIC AI».'],
-                                ['التوقيع (بلغتك)', 'نفس التوقيع بلغتك، مثل «بالعربي».'],
+                                ['التوقيع (بلغتك)', 'نفس التوقيع بلغتك، مثل «علامتي».'],
                                 ['ألوان التمييز', 'الألوان اللي يتناوب عليها الكاروسيل، ويتجنب أحدث لون استخدمته. **أضف لوناً** يضيف، ولازم يبقى لون واحد على الأقل.'],
                                 ['لون الحبر / لون الورق / اللون الخافت', 'لون النص، ولون الخلفية، ولون النص الثانوي.'],
                                 ['خط العناوين', 'Cairo أو Tajawal أو IBM Plex Sans Arabic أو Inter.'],
@@ -1951,7 +1951,7 @@ const HelpContent = {
                             { dl: [
                                 ['Brand name', 'How the Studio refers to you.'],
                                 ['Signature (Latin)', 'The sign-off at the bottom of the slides, in Latin letters, such as “AGENTIC AI”.'],
-                                ['Signature (your language)', 'The same sign-off in your language, such as «بالعربي».'],
+                                ['Signature (your language)', 'The same sign-off in your language, such as «علامتي».'],
                                 ['Accent palette', 'The colours carousels take turns through, avoiding the most recent one. **Add colour** adds one; at least one must stay.'],
                                 ['Ink / Paper / Muted', 'The text colour, the background colour, and the secondary text colour.'],
                                 ['Display font', 'Cairo, Tajawal, IBM Plex Sans Arabic or Inter.'],
@@ -2029,7 +2029,7 @@ const HelpContent = {
                                 ['دعوة إنستجرام', 'مثل «اكتب في التعليقات».'],
                                 ['سطر إنستجرام تحتها', 'مثل «ويوصلك الرابط بالخاص».'],
                                 ['دعوة الحفظ', 'مثل «احفظ المنشور».'],
-                                ['عنوان تيك توك', 'مثل «الكورس كامل بالعربي».'],
+                                ['عنوان تيك توك', 'مثل «كل شيء في مكان واحد».'],
                                 ['شارة تيك توك', 'مثل «رابطه في البايو».'],
                                 ['سطر تيك توك تحتها', 'مثل «ادخل البروفايل واضغط الرابط».'],
                                 ['دعوة المتابعة', 'مثل «تابعني للمزيد».'],
@@ -2042,7 +2042,7 @@ const HelpContent = {
                                 ['Instagram ask', 'For example “Comment below”.'],
                                 ['Instagram line under it', 'For example “and the link lands in your DMs”.'],
                                 ['Save prompt', 'For example “Save this post”.'],
-                                ['TikTok headline', 'For example “The full course”.'],
+                                ['TikTok headline', 'For example “Everything in one place”.'],
                                 ['TikTok pill', 'For example “Link in bio”.'],
                                 ['TikTok line under it', 'For example “Open my profile and tap the link”.'],
                                 ['Follow prompt', 'For example “Follow for more”.'],
@@ -2057,13 +2057,13 @@ const HelpContent = {
                     body: {
                         ar: [
                             { dl: [
-                                ['المنطقة الزمنية', 'المواعيد اليومية بتوقيت هذي المنطقة، مثل `Asia/Riyadh`.'],
+                                ['المنطقة الزمنية', 'المواعيد اليومية بتوقيت هذي المنطقة، مثل `Europe/London`.'],
                                 ['المواعيد اليومية', 'الأوقات اللي ينزل فيها منشور كل يوم، مثل 13:00 و21:00. **أضف موعداً** يضيف وقتاً، ولازم يبقى وقت واحد على الأقل. والجدولة تقترح عليك أقرب موعد فاضي، منشوراً واحداً لكل موعد.'],
                             ] },
                         ],
                         en: [
                             { dl: [
-                                ['Time zone', 'The daily slots are times in this zone, such as `Asia/Riyadh`.'],
+                                ['Time zone', 'The daily slots are times in this zone, such as `Europe/London`.'],
                                 ['Daily slots', 'The times a post goes out each day, such as 13:00 and 21:00. **Add slot** adds one; at least one must stay. Scheduling offers you the next free slot, one post per slot.'],
                             ] },
                         ],
@@ -2075,13 +2075,13 @@ const HelpContent = {
                     body: {
                         ar: [
                             { dl: [
-                                ['المجلد على جهاز الماك', 'المسار الكامل للمجلد اللي يفحصه العامل، مثل `/Users/you/Videos/Course`. لازم يكون داخل مجلد الكورس في إعدادات العامل (`courseRoot`). وإذا تركته فاضي، يوقف الفحص.'],
+                                ['المجلد على جهاز الماك', 'المسار الكامل للمجلد اللي يفحصه العامل، مثل `/Users/you/Videos`. لازم يكون داخل مجلد الكورس في إعدادات العامل (`courseRoot`). وإذا تركته فاضي، يوقف الفحص.'],
                             ] },
                             'ترتيب المجلد والأسماء في [[library#folder]].',
                         ],
                         en: [
                             { dl: [
-                                ['Folder on your Mac', 'The full path of the folder the worker scans, such as `/Users/you/Videos/Course`. It must sit inside the course folder in the worker’s config (`courseRoot`). Leave it empty to turn scanning off.'],
+                                ['Folder on your Mac', 'The full path of the folder the worker scans, such as `/Users/you/Videos`. It must sit inside the course folder in the worker’s config (`courseRoot`). Leave it empty to turn scanning off.'],
                             ] },
                             'How to organise the folder and name the files: [[library#folder]].',
                         ],

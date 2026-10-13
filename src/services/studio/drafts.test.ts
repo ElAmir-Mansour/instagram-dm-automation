@@ -10,7 +10,6 @@ import type { CarouselDraftRow } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { withProfileCache } from '../profile/cache.js';
 import { profileReads } from '../profile/stampSupport.js';
-import { invalidateTenantCache } from '../tenant.js';
 import type { Carousel } from './carouselTypes.js';
 import { StudioError } from './common.js';
 import {
@@ -192,20 +191,14 @@ describe('buildGenContext', () => {
         assert.deepEqual(ctx.activeKeywords, ['متجر', 'البرومبت', 'برومبتات'], 'so the writer never picks «برومبت» beside them');
     });
 
-    it('carries who the writer writes for (P9): the profile\'s carousel context, and no built-in carousels unless the tenant is the owner', async () => {
+    it('carries who the writer writes for (P9): the profile\'s carousel context, and nothing about examples (they are the settings\' own, P14)', async () => {
         routes.push([/FROM studio_settings/, () => ({ rows: [{ voice: { language: 'ar', digits: 'arabic-indic', guide: '' } }] })]);
         const ctx = await buildGenContext(TENANT);
         // No stored profile: described by its rows, which say Arabic and the owner's legacy assumptions (a Gulf educator who sells a course).
         assert.deepEqual({ code: ctx.wording.language.code, register: ctx.wording.language.register }, { code: 'ar', register: 'gulf' });
         assert.deepEqual({ kind: ctx.wording.who.kind, offerKind: ctx.wording.who.offerKind }, { kind: 'educator', offerKind: 'course' });
-        assert.equal(ctx.wording.builtInExamples, false, 'the lookup of the platform owner found nobody: nobody is shown the owner\'s carousels');
-
-        routes.unshift([/^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/, () => ({ rows: [{ id: TENANT }] })]);
-        assert.equal((await buildGenContext(TENANT)).wording.builtInExamples, true, 'the owner is shown them');
-        invalidateTenantCache();
-        routes.unshift([/^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/, () => ({ rows: [{ id: OTHER_TENANT }] })]);
-        assert.equal((await buildGenContext(TENANT)).wording.builtInExamples, false, 'someone else is the owner: not shown');
-        invalidateTenantCache();
+        assert.deepEqual(Object.keys(ctx.wording).sort(), ['language', 'who'], 'the wording is the language and who, and no flag about the owner');
+        assert.deepEqual(statements.filter((s) => /FROM creators ORDER BY created_at/.test(s.sql)), [], 'no lookup of who the platform owner is: nothing here depends on it');
     });
 
     it('still builds without the Monteur’s table', async () => {

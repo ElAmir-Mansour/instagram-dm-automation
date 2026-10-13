@@ -141,6 +141,11 @@ function holdsMarker(text: string, marker: string): boolean {
     return new RegExp(`(?<![${ARABIC_LETTERS}])و?${marker}(?![${ARABIC_LETTERS}])`, 'u').test(text);
 }
 
+/** Which of the owner's markers `text` holds (`OWNER_MARKERS`, with «بالعربي» as a whole word): what `assertNoOwnerMarkers` and the repo scan both ask. */
+export function ownerMarkersIn(text: string): string[] {
+    return OWNER_MARKERS.filter((marker) => holdsMarker(text, marker));
+}
+
 /**
  * Fails if `text` holds any of the owner's markers (`OWNER_MARKERS`, with «بالعربي» as a whole word). `label` names what was
  * being checked, so a failure says which builder.
@@ -153,7 +158,7 @@ function holdsMarker(text: string, marker: string): boolean {
  */
 export function assertNoOwnerMarkers(text: string, label = 'text', { except = [] }: { except?: readonly string[] } = {}): void {
     const rest = except.reduce((left, line) => left.split(line).join(''), text);
-    const found = OWNER_MARKERS.filter((marker) => holdsMarker(rest, marker));
+    const found = ownerMarkersIn(rest);
     assert.deepEqual(found, [], `${label} holds the owner's ${found.length === 1 ? 'marker' : 'markers'}: ${found.join(', ')}\n${rest.slice(0, 300)}`);
 }
 

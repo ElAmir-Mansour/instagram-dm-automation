@@ -132,8 +132,40 @@ function lazy<T>(make: () => T): () => T {
     };
 }
 
-/** The same story in each language, so the English control is fed English. */
-export const SAY = {
+/** The story the Studio's and the Monteur's builders are fed, in one language: a topic, recent posts, a caption, a reel's copy. */
+export interface Say {
+    idea: string;
+    recent: readonly string[];
+    recentAsk: string;
+    question: string;
+    pitch: string;
+    keyword: string;
+    candidates: readonly string[];
+    igCaption: string;
+    ttCaption: string;
+    copy: {
+        first_line: string;
+        body: string;
+        tiktok_body: string;
+        hashtags: readonly string[];
+        keyword_candidates: readonly string[];
+        variants: readonly string[];
+        alt_text: string;
+    };
+}
+
+/**
+ * What a turn is made of: the story, the words of the creator's active campaigns, and the search keywords and hashtags the Growth
+ * settings hand the writer. A tenant's own come from its rows and its posts (empty, for a new one); these stand in for them.
+ */
+export interface SurfaceTurn {
+    say: Say;
+    activeKeywords: readonly string[];
+    seo: { keywords: string[]; hashtags: string[] };
+}
+
+/** The same story in each language, so the English control is fed English. It is the OWNER's: his topics, his captions, his tags. */
+export const SAY: Record<SurfaceLang, Say> = {
     ar: {
         idea: 'ملفاتك السرية تشتغل على جهازك',
         recent: ['الدردشة ماتت… وبدأ عصر الوكيل', 'سياق الذكاء الاصطناعي في ٥ طبقات'],
@@ -174,7 +206,65 @@ export const SAY = {
             alt_text: 'A speaker explains how an AI model runs without the internet',
         },
     },
-} as const;
+};
+
+/** The turn the owner's goldens and the live parity check are fed: his story and his search words. */
+export const OWNER_TURN = (lang: SurfaceLang): SurfaceTurn => ({ say: SAY[lang], activeKeywords: ['وكيل', 'سياق'], seo: ELAMIR_SEO });
+
+/**
+ * A story that is nobody's: a week plan, in each language. What a test feeds the builders to see what THEY say for a tenant, so that
+ * nothing of the owner's reaches the text through the turn (his captions, his recent posts, his hashtags are in `SAY` and `ELAMIR_SEO`).
+ * No time word, no Gulf word, no course.
+ */
+export const NEUTRAL_SAY: Record<SurfaceLang, Say> = {
+    ar: {
+        idea: 'ثلاث خطوات لتنظيم أسبوعك',
+        recent: ['خمس عادات صغيرة لصباح أهدأ', 'كيف تبدأ بخطوة واحدة'],
+        recentAsk: 'هل تودّ تجربتها؟ اكتب «{keyword}» في التعليقات 👇',
+        question: 'هل تريد تنظيم أسبوعك بخطوات بسيطة؟ 👀',
+        pitch: 'نشرح لك كل خطوة بالتفصيل.',
+        keyword: 'تنظيم',
+        candidates: ['تنظيم', 'أسبوع'],
+        igCaption: 'ثلاث خطوات تنظّم أسبوعك ✨\n\n📝 اكتب مهامك\n⏱️ وزّعها على الأيام\n\nاسحب للمزيد 👈\n\n#تنظيم #عادات',
+        ttCaption: 'اكتب "تنظيم" في التعليقات ويصلك الرابط في الخاص 📩\n\nثلاث خطوات تنظّم أسبوعك ✨\n\n#تنظيم #عادات',
+        copy: {
+            first_line: 'ثلاث خطوات تنظّم أسبوعك',
+            body: 'اكتب مهامك ثم وزّعها على الأيام\nأرسلها لصديق يحتاجها',
+            tiktok_body: 'ثلاث خطوات بسيطة لتنظيم الأسبوع، والرابط في البايو.',
+            hashtags: ['تنظيم', 'عادات', 'إنتاجية'],
+            keyword_candidates: ['تنظيم', 'أسبوع', 'مهام'],
+            variants: ['تنظيمم'],
+            alt_text: 'متحدث يشرح ثلاث خطوات لتنظيم الأسبوع',
+        },
+    },
+    en: {
+        idea: 'Three steps to plan your week',
+        recent: ['Five small habits for a calmer morning', 'Start with one step'],
+        recentAsk: 'Want to try it yourself? Comment «{keyword}» 👇',
+        question: 'Want to plan your week in three simple steps? 👀',
+        pitch: 'Every step is explained one by one.',
+        keyword: 'plan',
+        candidates: ['plan', 'week'],
+        igCaption: 'Three steps to plan your week ✨\n\n📝 Write your tasks\n⏱️ Spread them over the days\n\nSwipe for more 👉\n\n#planning #habits',
+        ttCaption: 'Comment "plan" and I\'ll DM you the link 📩\n\nThree steps to plan your week ✨\n\n#planning #habits',
+        copy: {
+            first_line: 'Three steps to plan your week',
+            body: 'Write your tasks, then spread them over the days\nSend this to a friend who needs it',
+            tiktok_body: 'Three simple steps to plan your week, and the link is in bio.',
+            hashtags: ['planning', 'habits', 'productivity'],
+            keyword_candidates: ['plan', 'week', 'tasks'],
+            variants: ['plann'],
+            alt_text: 'A speaker explains three steps to plan the week',
+        },
+    },
+};
+
+/** The neutral turn for a tenant: `NEUTRAL_SAY` in its language, and search words of no one's. */
+export const NEUTRAL_TURN = (lang: SurfaceLang): SurfaceTurn => ({
+    say: NEUTRAL_SAY[lang],
+    activeKeywords: lang === 'ar' ? ['خطة', 'مهام'] : ['routine', 'tasks'],
+    seo: { keywords: ['planning', 'habits'], hashtags: ['#planning', '#habits'] },
+});
 
 /** A direction the Editor plans, fed to the render payload. */
 const PLAN: ClipDirection = {
@@ -192,9 +282,13 @@ export interface StudioSurfaceOptions {
     /** The language the story the builders are fed is told in: the tenant's own (`settings.voice.language`). */
     lang: SurfaceLang;
     /**
+     * The story the builders are fed (`OWNER_TURN`, the default: the one every golden and the live parity check were captured with).
+     * A test that asks what the BUILDERS say for a tenant hands `NEUTRAL_TURN`, so nothing of the owner's can come in through it.
+     */
+    turn?: (lang: SurfaceLang) => SurfaceTurn;
+    /**
      * What the Studio's writer is told about the creator (P9): the `carousel` context of the profile the caller reads the tenant
-     * through (`studioWording`), and whether the owner's built-in carousels are shown. Handed to the builders exactly as
-     * `generateDraft` hands it. No default: a path that forgot to give one fails to compile instead of quietly writing the owner's text.
+     * through (`studioWording`). Handed to the builders exactly as `generateDraft` hands it. No default: a path that forgot to give one fails to compile instead of quietly writing the owner's text.
      * It may be a function that makes it (`Wording`), so a tenant whose profile cannot be made into one fails those entries by name.
      */
     carousel: Wording<StudioWording>;
@@ -221,8 +315,8 @@ export interface StudioSurfaceOptions {
  * Every builder that reads the Studio settings and nothing else of the tenant: the writer's prompts, the CTA lines,
  * the DM, the caption normalisers, the carousel payload, and the Monteur's pick, copy, Editor, Analyst and render.
  */
-export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor, carousel: wording, reelKits }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
-    const say = SAY[lang];
+export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor, carousel: wording, reelKits, turn = OWNER_TURN }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
+    const { say, activeKeywords, seo } = turn(lang);
     const out: SurfaceEntry[] = [];
     const t = (base: string, build: () => string): void => { out.push(built(named(base, slug), 'text', set, build)); };
     const j = (base: string, build: () => unknown): void => { out.push(built(named(base, slug), 'json', set, build)); };
@@ -241,7 +335,7 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
     t('studio.catalog', () => catalog().text);
     t('studio.draft-user', () => draftUserPrompt({
         input: { lessonIds: [GOLDEN_LESSON.id], idea: say.idea, angle: 'tips', slides: 8 },
-        catalog: catalog(), slides: 8, keyword: null, activeKeywords: ['وكيل', 'سياق'], recentTopics: say.recent, seo: ELAMIR_SEO,
+        catalog: catalog(), slides: 8, keyword: null, activeKeywords, recentTopics: say.recent, seo,
     }));
 
     t('captions.instagram', () => normalizeInstagramCaption(say.igCaption, say.keyword, say.candidates, settings));
@@ -268,12 +362,12 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
     t('monteur.copy-system', () => copySystemPrompt(settings, reels().copy));
     t('monteur.copy-user', () => copyUserPrompt({
         clips: GOLDEN_CLIPS, lines: GOLDEN_LINES, settings, lessons: GOLDEN_LESSONS,
-        activeKeywords: ['وكيل', 'سياق'], recentAsks: [say.recentAsk], seo: ELAMIR_SEO,
+        activeKeywords, recentAsks: [say.recentAsk], seo,
     }));
 
     const item = { clip: 1, ask_line: 'no keyword here', question: '', pitch: '', ...say.copy };
     j('monteur.copy-clip-fallbacks', () => {
-        const ctx: CopyContext = { kit: reels().copy, activeKeywords: [], seo: ELAMIR_SEO, recentAsks: [] };
+        const ctx: CopyContext = { kit: reels().copy, activeKeywords: [], seo, recentAsks: [] };
         return toClipCopy(item, GOLDEN_CLIPS[0]!, settings, ctx, [], [], 0);
     });
 
@@ -369,12 +463,13 @@ export function dmContextSurface(ctx: Wording<DmWording>): SurfaceEntry[] {
  * The public reply that replaces an undeliverable DM, for the tenant's own DM template, in every variant, in the register
  * its comment surface speaks (`ctx`, `comment_reply`).
  */
-export function dmFallbackSurface(settings: StudioSettings, ctx: Wording<CommentWording>): SurfaceEntry[] {
+export function dmFallbackSurface(settings: StudioSettings, ctx: Wording<CommentWording>, turn: (lang: SurfaceLang) => SurfaceTurn = OWNER_TURN): SurfaceEntry[] {
     // His DMs are Arabic, so the Arabic replies are his; the English ones go to English-language DMs, and do not read his settings.
     const arabic = lazy(() => {
         const register = wordingOf(ctx).language.register;
+        const say = turn('ar').say;
         const ownerDm = buildDm(settings.cta.dmTemplate, {
-            question: SAY.ar.question, pitch: SAY.ar.pitch, url: settings.product.url, bullets: settings.product.dmBullets,
+            question: say.question, pitch: say.pitch, url: settings.product.url, bullets: settings.product.dmBullets,
         });
         return [
             { name: 'arabic, instagram', isFacebook: false, dmText: ownerDm },
@@ -529,12 +624,8 @@ export async function growthSurface(rows: GrowthRows, { slug, storedProfile }: {
 export interface TenantRows extends GrowthRows {
     agent?: AgentPersona | null;
     profile?: CreatorProfile;
-    /**
-     * Whether the tenant is shown the owner's built-in carousels (`StudioWording.builtInExamples`): the platform owner, until P14.
-     * The parity script asks the database who the owner is and hands the answer in. Left out it is false: a tenant is never shown
-     * another's carousels unless it is told it is the owner.
-     */
-    builtInExamples?: boolean;
+    /** The story the Studio's and the Monteur's builders are fed (`StudioSurfaceOptions.turn`); the owner's unless a test says otherwise. */
+    turn?: (lang: SurfaceLang) => SurfaceTurn;
 }
 
 /**
@@ -547,13 +638,13 @@ export async function tenantSurface(rows: TenantRows, options: WithRowsOptions =
     const profile = lazy(() => rows.profile ?? profileFromLegacy(rows.studio, rows.growth));
     const dm = () => contextFor(profile(), 'dm', null);
     const comments = () => contextFor(profile(), 'comment_reply', null);
-    const carousel = (): StudioWording => ({ ...contextFor(profile(), 'carousel', null), builtInExamples: rows.builtInExamples === true });
+    const carousel = (): StudioWording => contextFor(profile(), 'carousel', null);
     return [
-        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null), carousel, reelKits: () => reelKitsOf(profile()) }),
+        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null), carousel, reelKits: () => reelKitsOf(profile()), turn: rows.turn }),
         ...infographicSurface(rows.studio, { ctx: () => contextFor(profile(), 'infographic', null) }),
         ...(rows.agent ? dmInstructionSurface(rows.agent, dm) : []),
         ...dmContextSurface(dm),
-        ...dmFallbackSurface(rows.studio, comments),
+        ...dmFallbackSurface(rows.studio, comments, rows.turn),
         ...await growthSurface(rows, options),
     ];
 }

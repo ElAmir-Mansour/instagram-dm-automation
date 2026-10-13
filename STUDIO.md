@@ -198,7 +198,7 @@ type GenContext = { recentTopics: string[]; recentAccents: string[]; activeKeywo
 
 - **Model and call:** Gemini with the platform's key (saved on Operations, else `GEMINI_API_KEY`) through the chain `STUDIO_MODELS` in `generate.ts` (`gemini-3.1-pro-preview`, then three flash models; a 400/404/429/500/503 moves to the next). `responseSchema` is sent without `minItems`/`maxItems`, which Gemini 3 refuses. A 120s timeout. Never `gemini-2.5-flash`, which the DM bot runs on.
 - **Repair:** up to 2 rounds that send the model `validateCarousel`'s problems to fix.
-- **Style:** 3 of ElAmir's approved carousels as few-shot examples (`examples.ts`), plus the voice guide:
+- **Style:** the tenant's own approved carousels (at most 3 of `studio_settings.examples`) as few-shot examples, none if it has none (P14 removed the built-in fallback; the owner's three are in his own row, marked `reference: true`), plus the voice guide:
   - light Gulf/white dialect
   - Arabic-Indic digits
   - the result first, the tool second
@@ -269,7 +269,7 @@ studio_settings (
   cta      jsonb NOT NULL,   -- CtaConfig
   schedule jsonb NOT NULL,   -- ScheduleConfig
   library  jsonb NOT NULL,   -- LibraryConfig
-  examples jsonb,            -- the tenant's few-shot carousels; `reference: true` marks another creator's; null = none (the owner alone gets the built-ins until his are copied here, P9/P14)
+  examples jsonb,            -- the tenant's few-shot carousels; `reference: true` marks another creator's; null = none: there are no built-in examples (P14); the owner's three are in his own row
   updated_at timestamptz DEFAULT now()
 )
 studio_workers (             -- replaces the global app_settings `studio.worker_*` keys
@@ -333,9 +333,8 @@ product). ElAmir's tenant gets today's exact values from a seed script run once 
   → `{ worker, token }` (token shown once); `DELETE /api/studio/workers/:id` (revoke). These replace
   `/api/studio/worker-token`.
 - **Generation**: `GenContext` gains `settings: StudioSettings`. Prompts are built from `voice.guide`,
-  `voice.digits`, `product`, `cta`, and the examples = `settings.examples` (the built-ins only for the platform owner,
-  until his three are copied into his row by `scripts/copy-owner-examples.mts` and P14 removes the fallback; a
-  tenant with none gets no "Approved carousels" section). Who the writer writes for is the profile's `carousel`
+  `voice.digits`, `product`, `cta`, and the examples = `settings.examples` (a tenant with none gets no "Approved carousels" section: there is no built-in
+  fallback, P14; the owner's three are in his own row, marked `reference: true`). Who the writer writes for is the profile's `carousel`
   context (`GenContext.wording`, from `studioWording`): the language and register (the time words a TikTok caption must
   not use, and the DM's fallback question, are that register's, `profile/kits.ts`), the noun for what is sold
   ("whose program is…"; a pitch fallback exists only for a course) and the kind (the learning hashtags are an

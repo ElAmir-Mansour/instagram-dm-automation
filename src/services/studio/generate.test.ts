@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import type { Carousel, Slide } from './carouselTypes.js';
-import { ARABIC_EXAMPLES, ENGLISH_EXAMPLES } from './examples.js';
+import { ARABIC_EXAMPLES, ENGLISH_EXAMPLES } from './exampleFixtures.js';
 import {
     StudioGenerationError,
     altTextFor,
@@ -70,14 +70,13 @@ const SOURCES: GenSource[] = [{ lesson: LESSON, moments: MOMENTS }];
 
 /**
  * Who the writer writes for, as the legacy rows of `settings` describe them (the tenant's profile before it has a stored one):
- * the `carousel` context cut from `profileFromLegacy`. The owner alone is shown the built-in carousels (`builtInExamples`).
+ * the `carousel` context cut from `profileFromLegacy`. The examples are the settings' own (`settings.examples`): there are no built-in ones.
  */
-const wordingOf = (settings: StudioSettings, owner = false): StudioWording =>
-    ({ ...contextFor(profileFromLegacy(settings), 'carousel', null), builtInExamples: owner });
+const wordingOf = (settings: StudioSettings): StudioWording => contextFor(profileFromLegacy(settings), 'carousel', null);
 
 const ctx = (over: Partial<GenContext> = {}): GenContext => {
     const settings = over.settings ?? AR;
-    return { recentTopics: [], recentAccents: [], activeKeywords: [], settings, wording: wordingOf(settings, settings === AR), ...over };
+    return { recentTopics: [], recentAccents: [], activeKeywords: [], settings, wording: wordingOf(settings), ...over };
 };
 
 const localAI = ARABIC_EXAMPLES[2]!;
@@ -609,7 +608,7 @@ describe('generateDraft: an English tenant', () => {
         const system = m.requests[0]!.system;
         assert.ok(system.includes('Write every slide, caption and DM line in English') && system.includes('Use Latin digits'));
         assert.ok(!system.includes('ElAmir') && !system.includes('بالعربي') && !system.includes('udemy'), 'no other tenant leaks in');
-        // A tenant with no examples of its own is shown none, and the built-in carousels are the owner's: never another tenant's.
+        // A tenant with no examples of its own is shown none: there are no built-in carousels to fall back on.
         assert.ok(!system.includes('"GoalNotQuestion"') && !system.includes('Approved carousels'), 'no examples section');
     });
 
@@ -624,9 +623,12 @@ describe('generateDraft: an English tenant', () => {
 // ─── A second tenant (P9) ───────────────────────────────────────────────────────────────────
 
 describe('generateDraft: a tenant that is not the owner is written for in its own register, offer and kind', () => {
+    // These tenants' rows hold no examples of their own (the settings are the owner's fixture with its three references taken out), so
+    // their prompts have none: there is no built-in fallback to show them.
+    const BARE = { ...AR, examples: null };
     const shop = (over: Partial<StudioWording> = {}): GenContext =>
-        ctx({ wording: { ...contextFor(SHOP_EG, 'carousel', 1), builtInExamples: false, ...over } });
-    const coach = (): GenContext => ctx({ wording: { ...contextFor(FITNESS_EN, 'carousel', 1), builtInExamples: false } });
+        ctx({ settings: BARE, wording: { ...contextFor(SHOP_EG, 'carousel', 1), ...over } });
+    const coach = (): GenContext => ctx({ settings: BARE, wording: contextFor(FITNESS_EN, 'carousel', 1) });
     const timeWordIn = (title: string) => ({ ...toFlat(localAI), captions: { ...localAI.captions, tiktokTitle: title } });
 
     it('rejects an Egyptian time word in an Egyptian shop\'s TikTok title, and still the Gulf ones', async () => {

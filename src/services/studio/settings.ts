@@ -150,14 +150,14 @@ export function settingsProblems(s: StudioSettings): string[] {
     if (!isPlainObject(cta?.slide)) problems.push('cta.slide must be an object');
     else for (const [key, value] of Object.entries(cta.slide)) text(value, `cta.slide.${key}`, 60);
 
-    if (!isTimeZone(schedule?.timezone)) problems.push('schedule.timezone must be a timezone like Asia/Riyadh or Europe/London');
+    if (!isTimeZone(schedule?.timezone)) problems.push('schedule.timezone must be a timezone like Europe/London or America/New_York');
     times(schedule?.slots, 'schedule.slots', 1, 8);
 
     if (!isPlainObject(library)) problems.push('library must be an object');
     else if (library.root !== null) {
         text(library.root, 'library.root', 1000, true);
         if (typeof library.root === 'string' && !/^(\/|[A-Za-z]:[\\/])/.test(library.root)) {
-            problems.push('library.root must be a full folder path, e.g. /Users/you/Videos/Course');
+            problems.push('library.root must be a full folder path, e.g. /Users/you/Videos');
         }
     }
 
@@ -298,7 +298,7 @@ export async function updateStudioSettings(
     creatorId: string, patch: unknown, exec: Exec = pool, actor: SettingsActor = SYSTEM_ACTOR
 ): Promise<{ settings: StudioSettings; changed: string[] }> {
     if (!isPlainObject(patch) || Object.keys(patch).length === 0) {
-        throw new StudioError(400, 'Send the settings to change, e.g. { "schedule": { "timezone": "Asia/Riyadh" } }.');
+        throw new StudioError(400, 'Send the settings to change, e.g. { "schedule": { "timezone": "Europe/London" } }.');
     }
     try {
         if ((exec as unknown) !== pool) return await applyStudioPatch(creatorId, patch, exec, actor);

@@ -10,6 +10,7 @@ import type { GrowthSettings, StudioLesson } from '../../db/rows.js';
 import type { ReelInsight } from '../monteur/analyst.js';
 import type { ReelEvidenceSet } from '../monteur/reelEvidence.js';
 import type { PickedClip, TranscriptLine } from '../monteur/transcript.js';
+import { OWNER_REFERENCE_EXAMPLES } from './exampleFixtures.js';
 import type { GenSource, LessonRow, Moment } from './generate.js';
 import { DEFAULT_PALETTE, defaultInfographicConfig, defaultMonteurConfig, defaultStudioSettings, type StudioSettings } from './settingsTypes.js';
 
@@ -85,7 +86,8 @@ export const ELAMIR_SETTINGS: StudioSettings = {
     },
     schedule: { timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'] },
     library: { root: '/Users/elamir/Desktop/AI Course' },
-    examples: null,
+    // His row holds his three reference carousels (P14: the built-in fallback they came from is gone), marked `reference: true`.
+    examples: OWNER_REFERENCE_EXAMPLES(),
     monteur: { ...defaultMonteurConfig(), post_at: ['19:00'] },
     infographic: defaultInfographicConfig(),
 };
@@ -266,6 +268,15 @@ export const ELAMIR_SEED_SETTINGS: StudioSettings = {
         platforms: ['instagram', 'facebook', 'youtube'],
     },
 };
+
+/**
+ * `ELAMIR_SEED_SETTINGS` as his live row holds it: the seed, plus the three reference carousels that were copied into `examples`
+ * afterwards (the seed script writes `null`, and refuses a tenant that has a stored profile). What the `.seed` goldens are built from,
+ * so they are the prompts of "a studio row that holds the three references": with the built-in fallback gone (P14) that row is the
+ * only way he is shown them.
+ */
+export const ELAMIR_SEED_SERVED: StudioSettings = { ...ELAMIR_SEED_SETTINGS, examples: OWNER_REFERENCE_EXAMPLES() };
+
 // ─── Inputs the golden tests give the builders that need more than settings ──────────────────
 //
 // Taken from what the builders' own tests use (generate.test.ts, pick.test.ts, coach.test.ts), and

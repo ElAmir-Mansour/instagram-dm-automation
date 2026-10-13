@@ -74,7 +74,7 @@ export function matchCampaign<T extends CampaignMatchFields>(
 
         const triggerKeywordsList = c.trigger_keyword
             // Both commas: an operator on an Arabic keyboard types «،», and the dashboard's
-            // placeholder shows it. Splitting on ASCII only turned «كورس، كوبون» into one
+            // placeholder shows it. Splitting on ASCII only turned «سعر، رابط» into one
             // dead phrase keyword that fired on nothing.
             .split(/[,،]/)
             .map((k: string) => normalizeArabic(k.trim()))

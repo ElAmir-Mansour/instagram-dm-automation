@@ -201,7 +201,7 @@ function audienceOver(current: GrowthAudience, patch: unknown, problems: string[
         if (key === 'languages') next.languages = codeList(value, 'audience.languages', LANGUAGE, GROWTH_LIMITS.languages, false, "['ar', 'en']", problems);
         if (key === 'timezone') {
             if (typeof value !== 'string' || !value.trim()) delete next.timezone;
-            else if (!isTimeZone(value.trim())) problems.push('audience.timezone must be a timezone like Asia/Riyadh or Europe/London');
+            else if (!isTimeZone(value.trim())) problems.push('audience.timezone must be a timezone like Europe/London or America/New_York');
             else next.timezone = value.trim();
         }
     }

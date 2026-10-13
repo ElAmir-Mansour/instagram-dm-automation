@@ -24,11 +24,19 @@
  * that fails or finds nobody is *not* him), the answer is his nine, `source: 'legacy'`. Every other tenant gets what its
  * own offers say, which is an empty list until they have campaigns, and never his: the nine are Arabic copy about his
  * Udemy courses. Once his offers carry them the fallback is dead code, and `source` says which one answered.
+ *
+ * **The rows no seed names (P15, R17).** The import starts those from a `fallback`, which the answer carries too: for the platform
+ * owner his own wording (`LEGACY_IMPORT_FALLBACK`, byte for byte what the dashboard used to carry), for everyone else the neutral
+ * text of the language and register their comment replies speak (`ImportFallbackLines`, `kits.ts`), which names no course and no
+ * coupon. The same rule as the seeds: a lookup that fails or finds nobody is *not* the owner, so another tenant is never handed
+ * his text because a lookup failed.
  */
 import { pool } from '../../config/db.js';
 import type { Exec } from '../studio/common.js';
 import { getPlatformOwnerId } from '../tenant.js';
-import { LEGACY_COURSE_MAPPINGS } from './legacyCourseMappings.js';
+import { contextFor } from './context.js';
+import { kitFor } from './kits.js';
+import { LEGACY_COURSE_MAPPINGS, LEGACY_IMPORT_FALLBACK } from './legacyCourseMappings.js';
 import { loadProfile } from './store.js';
 import type { CreatorProfile, MatchMode, Offer, OfferCampaign } from './types.js';
 
@@ -46,11 +54,21 @@ export interface CampaignSeed {
     public_reply_template: string;
 }
 
-/** What the route answers: the seeds, and which source they came from. */
+/**
+ * What an imported row no seed names starts from: the two columns of a campaign the import cannot make up from a name. `{name}` and `{url}`
+ * in the DM are filled in by the page (the course's name and its link), `{username}` when the DM is sent; the replies are separated by " | ".
+ */
+export interface CampaignFallback {
+    dm_template: string;
+    public_reply_template: string;
+}
+
+/** What the route answers: the seeds, which source they came from, and what a row no seed names starts from. */
 export interface CampaignSeedsAnswer {
     seeds: CampaignSeed[];
     /** 'profile': the tenant's own offers. 'legacy': the platform owner's nine, because his profile has no campaign yet. */
     source: 'profile' | 'legacy';
+    fallback: CampaignFallback;
 }
 
 /** The two separators a campaign's lists are stored with (`trigger_keyword`, `public_reply_template`). */
@@ -100,15 +118,37 @@ async function isPlatformOwner(creatorId: string): Promise<boolean> {
     return owner !== null && owner.toLowerCase() === creatorId.toLowerCase();
 }
 
+/** The owner's wording for a row no seed names: the template and replies the dashboard carried until P15, as a fresh object. */
+export function legacyCampaignFallback(): CampaignFallback {
+    return { dm_template: LEGACY_IMPORT_FALLBACK.dmTemplate, public_reply_template: LEGACY_IMPORT_FALLBACK.publicReplies };
+}
+
+/**
+ * The neutral wording for a row no seed names, in the language and register a tenant's comment replies speak: its kit's
+ * `importFallback`. Names no course and no coupon; it is the link and a pointer to the DMs.
+ */
+export function neutralCampaignFallback(language: Parameters<typeof kitFor>[0]): CampaignFallback {
+    const lines = kitFor(language).importFallback;
+    return { dm_template: lines.dm, public_reply_template: lines.replies };
+}
+
 /**
  * The seeds for `creatorId`: its own offers' campaigns; and, when there are none and it is the platform owner, his nine
  * (`source: 'legacy'`). A profile written by a newer release is not read for offers, as the settings readers do not
  * overlay it (`overlayProfile`): it yields no seeds of its own. Throws what `loadProfile` throws, and the route answers a 500.
+ *
+ * The `fallback` is the owner's own wording for him and the language kit's neutral wording for everyone else. Whether it is him is asked
+ * once, and only a lookup that answers "yes" makes it his: a lookup that fails costs the owner his Arabic fallback on that one request
+ * (the page then shows the neutral text, which he can edit before importing), never another tenant a stranger's.
  */
 export async function readCampaignSeeds(creatorId: string, exec: Exec = pool): Promise<CampaignSeedsAnswer> {
     const loaded = await loadProfile(creatorId, exec);
     const own = loaded.newerSchema ? [] : campaignSeeds(loaded.profile);
-    if (own.length > 0) return { seeds: own, source: 'profile' };
-    if (await isPlatformOwner(creatorId)) return { seeds: legacyCampaignSeeds(), source: 'legacy' };
-    return { seeds: [], source: 'profile' };
+    let owner: Promise<boolean> | undefined;
+    const isOwner = (): Promise<boolean> => (owner ??= isPlatformOwner(creatorId));
+    const fallback = async (): Promise<CampaignFallback> =>
+        (await isOwner().catch(() => false)) ? legacyCampaignFallback() : neutralCampaignFallback(contextFor(loaded.profile, 'comment_reply', loaded.version).language);
+    if (own.length > 0) return { seeds: own, source: 'profile', fallback: await fallback() };
+    if (await isOwner()) return { seeds: legacyCampaignSeeds(), source: 'legacy', fallback: await fallback() };
+    return { seeds: [], source: 'profile', fallback: await fallback() };
 }

@@ -214,7 +214,7 @@ function problemsOf(raw: unknown): string[] {
             add('identity.country must be a two-letter country code like SA, or null');
         }
         // Empty until chosen (activation asks for it); a value must be a real zone, so a typo can't reach a schedule.
-        if (identity.timezone !== '' && !isTimeZone(identity.timezone)) add('identity.timezone must be a timezone like Asia/Riyadh or Europe/London');
+        if (identity.timezone !== '' && !isTimeZone(identity.timezone)) add('identity.timezone must be a timezone like Europe/London or America/New_York');
     }
 
     // language
@@ -290,7 +290,7 @@ function problemsOf(raw: unknown): string[] {
             if (typeof v !== 'string' || !LANGUAGE.test(v)) add(`${p} must be a language code like ar`);
         });
         if (languages && new Set(languages).size !== languages.length) add('audience.languages lists the same entry twice');
-        if (audience.timezone !== undefined && !isTimeZone(audience.timezone)) add('audience.timezone must be a timezone like Asia/Riyadh or Europe/London');
+        if (audience.timezone !== undefined && !isTimeZone(audience.timezone)) add('audience.timezone must be a timezone like Europe/London or America/New_York');
     }
 
     // voice

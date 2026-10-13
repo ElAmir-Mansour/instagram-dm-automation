@@ -100,7 +100,7 @@ describe('assessTenant', () => {
         const a = assessTenant(tenant(studio, ELAMIR_GROWTH));
         assert.equal(a.ok, false);
         assert.equal(a.profile, null);
-        assert.ok(a.problems.includes('identity.timezone must be a timezone like Asia/Riyadh or Europe/London'), a.problems.join('\n'));
+        assert.ok(a.problems.includes('identity.timezone must be a timezone like Europe/London or America/New_York'), a.problems.join('\n'));
         assert.ok(a.problems.includes('brand.primary must be a colour like #FFD60A'));
         assert.doesNotMatch(JSON.stringify(a), /SECRET/, 'the offending value is not in the finding');
     });

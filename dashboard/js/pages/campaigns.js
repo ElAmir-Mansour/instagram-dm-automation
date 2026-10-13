@@ -992,9 +992,9 @@ const CampaignsPage = {
 
                 // The seeds are the tenant's own (their offers' campaigns), so they are asked for per import and
                 // not cached: a tenant switch or a profile edit is then never answered with the last one's.
-                const seeds = await this.loadSeeds();
-                if (seeds === null) return;
-                this.showBulkImportModal(uniqueCourses, seeds);
+                const loaded = await this.loadSeeds();
+                if (loaded === null) return;
+                this.showBulkImportModal(uniqueCourses, loaded.seeds, loaded.fallback);
             } catch (err) {
                 UI.toast(t('campaigns.bulk.parseError', { message: err.message }), 'error');
             }
@@ -1034,17 +1034,21 @@ const CampaignsPage = {
 
     /**
      * The wording each imported course starts from: `GET /api/profile/campaign-seeds`, one seed per offer of the
-     * ACTIVE tenant that has a campaign, in the order the import tries them. It used to be a table in this file, nine
-     * entries of one creator's Arabic; it is the tenant's own offers now (docs/onboarding/05, P13).
+     * ACTIVE tenant that has a campaign, in the order the import tries them, and the `fallback` a course no seed names
+     * starts from. Both used to be in this file, nine entries of one creator's Arabic and a template of his; they are the
+     * tenant's own now (docs/onboarding/05, P13 and P15).
      *
-     * Resolves to the list (empty for a tenant with no campaigns yet: every row is then generated), or to null when it
-     * could not be read: the caller stops there, because importing without the seeds would quietly stamp generic text on
-     * courses that have curated copy, and a retry costs one click.
+     * Resolves to `{ seeds, fallback }` (`seeds` empty for a tenant with no campaigns yet: every row is then generated
+     * from the fallback), or to null when they could not be read: the caller stops there, because importing without the
+     * seeds would quietly stamp generic text on courses that have curated copy, and a retry costs one click.
      */
     async loadSeeds() {
         try {
             const answer = await API.getCampaignSeeds();
-            return Array.isArray(answer && answer.seeds) ? answer.seeds : [];
+            return {
+                seeds: Array.isArray(answer && answer.seeds) ? answer.seeds : [],
+                fallback: answer && answer.fallback ? answer.fallback : null,
+            };
         } catch (err) {
             console.error('Campaign seeds error:', err);
             UI.toast(t('campaigns.bulk.seedsFailed'), 'error');
@@ -1065,7 +1069,22 @@ const CampaignsPage = {
         return null;
     },
 
-    showBulkImportModal(courses, seeds = []) {
+    /**
+     * What a course no seed names starts from when the server sent no fallback: the link alone. It holds no words, so it
+     * speaks no one's language; the operator edits it in the modal before anything is sent to a customer.
+     */
+    PLAIN_FALLBACK: Object.freeze({ dm_template: '{url}', public_reply_template: '' }),
+
+    /**
+     * A fallback DM with the course's name and link put in: `{name}` and `{url}`, in one pass, so a link that happens to
+     * contain «{name}» is not read a second time. (`{username}` stays: the webhook fills it when the DM is sent.)
+     */
+    fillFallback(template, name, url) {
+        return String(template).replace(/\{(name|url)\}/g, (_match, key) => (key === 'name' ? name : url));
+    },
+
+    showBulkImportModal(courses, seeds = [], fallback = null) {
+        const fallbackLines = fallback && typeof fallback.dm_template === 'string' ? fallback : this.PLAIN_FALLBACK;
         const campaignData = courses.map((course, index) => {
             const mapping = this.seedFor(course.name, seeds);
 
@@ -1079,11 +1098,12 @@ const CampaignsPage = {
                 publicReplies = mapping.public_reply_template;
             } else {
                 const cleanName = String(course.name || '').split('[')[0].split('|')[0].split('-')[0].trim();
-                // Only the course's own words. «كورس، كوبون، رابط» used to be stamped on
-                // every unmapped row, so two imported courses fired on the same comment.
+                // Only the course's own words. A generic list used to be stamped on every
+                // unmapped row, so two imported courses fired on the same comment.
                 triggerKeywords = `${cleanName.split(' ')[0].toLowerCase()}, ${cleanName}`;
-                dmTemplate = `أهلاً بك {username}! 👋\nإليك رابط التسجيل المجاني لكورس "${cleanName}":\n🔗 ${course.url}\n\nسجل الآن قبل نفاد الكوبون! ✨`;
-                publicReplies = 'تم إرسال الرابط والتفاصيل على الخاص يا {username}! 📩 | تفقد الخاص {username} للحصول على كوبون الدورة! 🚀';
+                // The wording is the tenant's (the server's `fallback`): this file carries none.
+                dmTemplate = this.fillFallback(fallbackLines.dm_template, cleanName, course.url);
+                publicReplies = String(fallbackLines.public_reply_template || '');
             }
 
             return {

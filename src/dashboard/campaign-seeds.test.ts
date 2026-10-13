@@ -3,8 +3,9 @@
  * `dashboard/js/pages/campaigns.js` in a `node:vm` context with the API, the file reader and the DOM stubbed.
  *
  * What the owner's dashboard must keep doing: choosing a CSV asks `GET /api/profile/campaign-seeds` once, gives each course the
- * first seed whose `name_match` its name contains, and shows the generated Arabic fallback for the rest; and what it must never
- * do: import generic text because the seeds could not be read, or put a `match_mode` on a campaign whose seed did not ask for one.
+ * first seed whose `name_match` its name contains, and starts the rest from the server's `fallback` (P15: the page carries no wording
+ * of its own; the owner's bytes are pinned by `campaigns.import-rows` in golden.test.ts); and what it must never do: import generic
+ * text because the seeds could not be read, or put a `match_mode` on a campaign whose seed did not ask for one.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -102,6 +103,9 @@ const COURSES = [
     { id: '2', name: 'Cooking For Beginners', code: 'COOK1', url: 'https://shop.example/cook?coupon=COOK1' },
 ];
 
+/** What the server hands a tenant for the rows no seed names (`neutralCampaignFallback`, here in plain English). */
+const FALLBACK = { dm_template: 'Hi {username}! 👋\nHere is the link for "{name}":\n🔗 {url}', public_reply_template: 'Sent to your DMs, {username}! 📩 | Check your messages, {username}! 🚀' };
+
 const SEEDS = [
     { name_match: 'twelve-week', match: 'substring', trigger_keyword: 'plan, twelve weeks', dm_template: 'Hi {username}! Your plan: {url}', public_reply_template: 'Sent! | Check your DMs' },
     { name_match: 'cooking', match: 'word', trigger_keyword: 'cook', dm_template: 'Recipes here: {url}', public_reply_template: 'Sent' },
@@ -109,7 +113,7 @@ const SEEDS = [
 
 describe('choosing a CSV asks the API for the seeds and seeds each course from the first that matches', () => {
     it('asks once, and the rows carry the seed\'s keywords, its DM with the course\'s own link, and its replies', async () => {
-        const h = load({ seeds: SEEDS, source: 'profile' });
+        const h = load({ seeds: SEEDS, source: 'profile', fallback: FALLBACK });
         await h.choose();
         assert.equal(h.seedCalls, 1);
         assert.equal(h.modals, 1);
@@ -123,11 +127,11 @@ describe('choosing a CSV asks the API for the seeds and seeds each course from t
     });
 
     it('a tenant with no seeds (an empty list) gets every row generated, as an unknown course always was', async () => {
-        const h = load({ seeds: [], source: 'profile' });
+        const h = load({ seeds: [], source: 'profile', fallback: FALLBACK });
         await h.choose();
         const rows = h.rows();
         assert.deepEqual(rows.map((r) => r.matched), [false, false]);
-        assert.match(rows[1]!.dmTemplate, /"Cooking For Beginners"/, 'the generated Arabic fallback names the course');
+        assert.match(rows[1]!.dmTemplate, /"Cooking For Beginners"/, 'the generated fallback names the course');
         assert.equal(h.toasts.length, 0);
     });
 
@@ -160,9 +164,50 @@ describe('choosing a CSV asks the API for the seeds and seeds each course from t
     });
 });
 
+describe('a course no seed names starts from the server\'s fallback (P15), and the page adds no words of its own', () => {
+    const csvOf = (name: string, url = 'https://shop.example/x?coupon=X1') => [{ id: '9', name, code: 'X1', url }];
+
+    it('puts the course\'s name (cut at the first «[», «|» or «-») and its link into the DM, and keeps {username} for the webhook', async () => {
+        const h = load({ seeds: [], source: 'profile', fallback: FALLBACK });
+        await h.choose(csvOf('Cooking For Beginners [in Arabic] - Part 1'));
+        const row = h.rows()[0]!;
+        assert.equal(row.matched, false);
+        assert.equal(row.dmTemplate, 'Hi {username}! 👋\nHere is the link for "Cooking For Beginners":\n🔗 https://shop.example/x?coupon=X1');
+        assert.equal(row.publicReplies, FALLBACK.public_reply_template);
+        assert.equal(row.triggerKeywords, 'cooking, Cooking For Beginners', 'the keywords are the course\'s own words, as they always were');
+    });
+
+    it('fills {name} and {url} in one pass: a link that contains «{name}» is not read a second time', async () => {
+        const h = load({ seeds: [], source: 'profile', fallback: FALLBACK });
+        await h.choose(csvOf('Plan', 'https://shop.example/{name}?x=1'));
+        assert.equal(h.rows()[0]!.dmTemplate, 'Hi {username}! 👋\nHere is the link for "Plan":\n🔗 https://shop.example/{name}?x=1');
+    });
+
+    it('the owner\'s fallback, handed to the page, writes his words, and the page itself holds none of them', async () => {
+        const his = {
+            dm_template: 'أهلاً بك {username}! 👋\nإليك رابط التسجيل المجاني لكورس "{name}":\n🔗 {url}\n\nسجل الآن قبل نفاد الكوبون! ✨',
+            public_reply_template: 'تم إرسال الرابط والتفاصيل على الخاص يا {username}! 📩 | تفقد الخاص {username} للحصول على كوبون الدورة! 🚀',
+        };
+        const h = load({ seeds: [], source: 'legacy', fallback: his });
+        await h.choose(csvOf('Cooking For Beginners'));
+        assert.equal(h.rows()[0]!.dmTemplate, 'أهلاً بك {username}! 👋\nإليك رابط التسجيل المجاني لكورس "Cooking For Beginners":\n🔗 https://shop.example/x?coupon=X1\n\nسجل الآن قبل نفاد الكوبون! ✨');
+        assert.equal(h.rows()[0]!.publicReplies, his.public_reply_template);
+        const source = readFileSync('dashboard/js/pages/campaigns.js', 'utf8');
+        for (const word of ['التسجيل المجاني', 'سجل الآن', 'للحصول على كوبون', 'تم إرسال الرابط']) assert.ok(!source.includes(word), `campaigns.js still holds «${word}»`);
+    });
+
+    it('with no fallback from the server (a stub, a bug) a row starts from the link alone: no words, so no one\'s language', async () => {
+        const h = load({ seeds: [], source: 'profile' });
+        await h.choose(csvOf('Cooking For Beginners'));
+        assert.equal(h.rows()[0]!.dmTemplate, 'https://shop.example/x?coupon=X1');
+        assert.equal(h.rows()[0]!.publicReplies, '');
+        assert.equal(h.toasts.length, 0);
+    });
+});
+
 describe('the campaigns the import creates', () => {
     it('a substring seed creates exactly what it always did: no match_mode on the body (the server\'s default is substring)', async () => {
-        const h = load({ seeds: [SEEDS[0]!], source: 'profile' });
+        const h = load({ seeds: [SEEDS[0]!], source: 'profile', fallback: FALLBACK });
         await h.choose([COURSES[0]!]);
         assert.ok(!('matchMode' in h.rows()[0]!), 'the row carries no extra key');
         h.fillForm();
@@ -174,7 +219,7 @@ describe('the campaigns the import creates', () => {
     });
 
     it('a seed that asks for whole-word matching creates its campaign with match_mode "word"', async () => {
-        const h = load({ seeds: SEEDS, source: 'profile' });
+        const h = load({ seeds: SEEDS, source: 'profile', fallback: FALLBACK });
         await h.choose();
         assert.equal(h.rows()[1]!.matchMode, 'word');
         h.fillForm();
@@ -185,7 +230,7 @@ describe('the campaigns the import creates', () => {
     });
 
     it('a generated row never carries a match_mode', async () => {
-        const h = load({ seeds: [], source: 'profile' });
+        const h = load({ seeds: [], source: 'profile', fallback: FALLBACK });
         await h.choose();
         h.fillForm();
         await h.page.executeBulkImport();
@@ -196,7 +241,7 @@ describe('the campaigns the import creates', () => {
 
 describe('the dashboard carries no tenant\'s mappings', () => {
     it('the page has no COURSE_MAPPINGS and none of the owner\'s course copy', () => {
-        const h = load({ seeds: [], source: 'profile' });
+        const h = load({ seeds: [], source: 'profile', fallback: FALLBACK });
         assert.equal(h.page.COURSE_MAPPINGS, undefined);
         const source = readFileSync('dashboard/js/pages/campaigns.js', 'utf8');
         for (const word of ['COURSE_MAPPINGS', 'جولانج', 'سويفت', 'ايجنتك', 'agentic ai', 'golang']) assert.ok(!source.includes(word), `campaigns.js still holds «${word}»`);

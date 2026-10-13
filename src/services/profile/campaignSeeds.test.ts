@@ -6,6 +6,9 @@
  * the file and compared byte for byte, in the golden's order; the two second tenants give their own and nothing of his
  * (`assertNoOwnerMarkers`); an offer with no campaign, or none to match by, is not a seed; and `readCampaignSeeds` answers the owner's
  * nine ONLY for the platform owner while his profile has none of its own, and never for anyone else.
+ *
+ * The rows no seed names start from a `fallback` (P15, R17): the owner's own wording for him, byte for byte, and for everyone else the
+ * neutral text of the language their comment replies speak, which names no course and no coupon.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -13,7 +16,10 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
 import { invalidateTenantCache } from '../tenant.js';
 import { setLogSink } from '../../utils/log.js';
-import { campaignSeeds, type CampaignSeed, legacyCampaignSeeds, readCampaignSeeds, seedOf } from './campaignSeeds.js';
+import {
+    campaignSeeds, type CampaignSeed, legacyCampaignFallback, legacyCampaignSeeds, neutralCampaignFallback, readCampaignSeeds, seedOf,
+} from './campaignSeeds.js';
+import { KIT_KEYS, KITS } from './kits.js';
 import { FITNESS_EN, offer, SHOP_EG } from './fixtures.js';
 import { profileFromLegacy } from './legacy.js';
 import { LEGACY_COURSE_MAPPINGS } from './legacyCourseMappings.js';
@@ -228,19 +234,21 @@ describe('readCampaignSeeds', () => {
         state.profiles.set(creator, { profile: throughJsonb(profile), version, activated_at: null, updated_by: null });
     };
 
-    it('a tenant\'s own offers\' campaigns, `source: profile`', async () => {
+    it('a tenant\'s own offers\' campaigns, `source: profile`, and the neutral fallback of its language', async () => {
         store(OTHER, fitnessWithCampaign());
         const answer = await readCampaignSeeds(OTHER);
         assert.equal(answer.source, 'profile');
         assert.deepStrictEqual(answer.seeds, campaignSeeds(fitnessWithCampaign()));
-        assert.equal(db.statements.some((s) => /FROM creators ORDER BY created_at/.test(s.sql)), false, 'it did not even ask who the owner is: the answer was its own');
+        assert.deepStrictEqual(answer.fallback, neutralCampaignFallback({ code: 'en', register: null }));
+        assertNoOwnerMarkers(JSON.stringify(answer), 'another tenant\'s answer');
     });
 
-    it('the owner once his offers carry the nine: from his profile, not the built-in copy', async () => {
+    it('the owner once his offers carry the nine: from his profile, not the built-in copy, and his own fallback', async () => {
         store(OWNER, ownerSeeded(), 2);
         const answer = await readCampaignSeeds(OWNER);
         assert.equal(answer.source, 'profile');
         assert.deepStrictEqual(answer.seeds, GOLDEN_SEEDS);
+        assert.deepStrictEqual(answer.fallback, legacyCampaignFallback());
     });
 
     it('the owner before the script has run (a stored profile with no campaign): his nine from the built-in copy, `source: legacy`', async () => {
@@ -248,26 +256,48 @@ describe('readCampaignSeeds', () => {
         const answer = await readCampaignSeeds(OWNER);
         assert.equal(answer.source, 'legacy');
         assert.deepStrictEqual(answer.seeds, GOLDEN_SEEDS);
+        assert.deepStrictEqual(answer.fallback, legacyCampaignFallback());
     });
 
     it('the owner with no stored profile at all (his rows describe it): the same nine', async () => {
         const answer = await readCampaignSeeds(OWNER);
         assert.equal(answer.source, 'legacy');
         assert.deepStrictEqual(answer.seeds, GOLDEN_SEEDS);
+        assert.deepStrictEqual(answer.fallback, legacyCampaignFallback());
     });
 
-    it('ANOTHER tenant with no campaign never gets his nine: an empty list', async () => {
+    it('ANOTHER tenant with no campaign never gets his nine, nor his fallback: no seeds, and its language\'s neutral text', async () => {
         store(OTHER, FITNESS_EN);
         const answer = await readCampaignSeeds(OTHER);
-        assert.deepStrictEqual(answer, { seeds: [], source: 'profile' });
+        assert.deepStrictEqual(answer, { seeds: [], source: 'profile', fallback: neutralCampaignFallback({ code: 'en', register: null }) });
         assertNoOwnerMarkers(JSON.stringify(answer), 'another tenant\'s answer');
+        store(OTHER, SHOP_EG);
+        const shop = await readCampaignSeeds(OTHER);
+        assert.deepStrictEqual(shop, { seeds: [], source: 'profile', fallback: neutralCampaignFallback({ code: 'ar', register: 'egyptian' }) });
+        assertNoOwnerMarkers(JSON.stringify(shop), 'the shop\'s answer');
+        assertNoGulfInEgyptianOrMsa(JSON.stringify(shop), 'the shop\'s answer');
     });
 
     it('nor when it cannot be told who the owner is: no creators at all is not "he"', async () => {
         setPlatformOwner(db, null);
         store(OTHER, SHOP_EG);
-        assert.deepStrictEqual(await readCampaignSeeds(OTHER), { seeds: [], source: 'profile' });
-        assert.deepStrictEqual(await readCampaignSeeds(OWNER), { seeds: [], source: 'profile' }, 'and not even for the id that would have been him: the lookup found nobody');
+        const neutral = neutralCampaignFallback({ code: 'ar', register: 'egyptian' });
+        assert.deepStrictEqual(await readCampaignSeeds(OTHER), { seeds: [], source: 'profile', fallback: neutral });
+        const notHim = await readCampaignSeeds(OWNER);
+        assert.deepStrictEqual(notHim.seeds, [], 'and not even for the id that would have been him: the lookup found nobody');
+        assert.notDeepEqual(notHim.fallback, legacyCampaignFallback(), 'nor his fallback');
+    });
+
+    it('a lookup that fails costs a tenant that has its own seeds nothing: they are served, with the neutral fallback, never his', async () => {
+        setPlatformOwner(db, new Error('connection refused'));
+        store(OWNER, ownerSeeded(), 2);
+        store(OTHER, fitnessWithCampaign());
+        const other = await readCampaignSeeds(OTHER);
+        assert.deepStrictEqual(other.seeds, campaignSeeds(fitnessWithCampaign()));
+        assert.deepStrictEqual(other.fallback, neutralCampaignFallback({ code: 'en', register: null }));
+        const owner = await readCampaignSeeds(OWNER);
+        assert.deepStrictEqual(owner.seeds, GOLDEN_SEEDS, 'his own offers carry his nine: they need no lookup');
+        assert.notDeepEqual(owner.fallback, legacyCampaignFallback(), 'but his fallback is his only when the lookup says it is him');
     });
 
     it('a failing owner lookup is a failure, not a quiet "no": the route answers a 500 and nothing is served in his name', async () => {
@@ -279,14 +309,18 @@ describe('readCampaignSeeds', () => {
     it('the owner id is compared case-insensitively, as the Mac guard compares it', async () => {
         setPlatformOwner(db, OWNER.toUpperCase());
         store(OWNER, ownerBackfilled(), 1);
-        assert.equal((await readCampaignSeeds(OWNER)).source, 'legacy');
+        const answer = await readCampaignSeeds(OWNER);
+        assert.equal(answer.source, 'legacy');
+        assert.deepStrictEqual(answer.fallback, legacyCampaignFallback());
     });
 
     it('a profile written by a newer release is not read for offers: the owner falls back, another tenant has none', async () => {
         store(OWNER, { ...ownerSeeded(), schema: 2 }, 5);
         store(OTHER, { ...fitnessWithCampaign(), schema: 2 }, 5);
         assert.equal((await readCampaignSeeds(OWNER)).source, 'legacy');
-        assert.deepStrictEqual(await readCampaignSeeds(OTHER), { seeds: [], source: 'profile' });
+        const other = await readCampaignSeeds(OTHER);
+        assert.deepStrictEqual([other.seeds, other.source], [[], 'profile']);
+        assertNoOwnerMarkers(JSON.stringify(other), 'a newer-schema tenant\'s answer');
     });
 
     it('a read writes nothing', async () => {
@@ -294,5 +328,39 @@ describe('readCampaignSeeds', () => {
         await readCampaignSeeds(OTHER);
         await readCampaignSeeds(OWNER);
         assert.deepStrictEqual(db.statements.filter((s) => /^(INSERT|UPDATE|DELETE)/.test(s.sql)), []);
+    });
+});
+
+// ─── The rows no seed names (P15, R17) ───────────────────────────────────────────────────────
+
+describe('the fallback for a row no seed names', () => {
+    it('the owner\'s is his Arabic template and replies, byte for byte what the dashboard carried: a coupon for a course, in Gulf Arabic', () => {
+        assert.deepStrictEqual(legacyCampaignFallback(), {
+            dm_template: 'أهلاً بك {username}! 👋\nإليك رابط التسجيل المجاني لكورس "{name}":\n🔗 {url}\n\nسجل الآن قبل نفاد الكوبون! ✨',
+            public_reply_template: 'تم إرسال الرابط والتفاصيل على الخاص يا {username}! 📩 | تفقد الخاص {username} للحصول على كوبون الدورة! 🚀',
+        });
+        const first = legacyCampaignFallback();
+        first.dm_template = 'changed';
+        assert.notEqual(legacyCampaignFallback().dm_template, 'changed', 'fresh copies: the constant is frozen and a caller cannot edit it');
+    });
+
+    for (const key of KIT_KEYS) {
+        it(`${key}: the neutral fallback names the offer and the link, greets the commenter, and says nothing of a course, a coupon or the owner`, () => {
+            const kit = KITS[key];
+            const fallback = neutralCampaignFallback({ code: kit.lang, register: key === 'en' ? null : key });
+            assert.deepStrictEqual(fallback, { dm_template: kit.importFallback.dm, public_reply_template: kit.importFallback.replies });
+            for (const placeholder of ['{username}', '{name}', '{url}']) assert.ok(fallback.dm_template.includes(placeholder), `${key}: the DM holds ${placeholder}`);
+            assert.ok(fallback.public_reply_template.split(' | ').length >= 2 && fallback.public_reply_template.includes('{username}'), `${key}: two replies, addressed to the commenter`);
+            assert.ok(fallback.dm_template.indexOf('{url}') > fallback.dm_template.indexOf('{name}'), `${key}: the link comes last`);
+            assertNoOwnerMarkers(JSON.stringify(fallback), `${key}'s fallback`);
+            assert.doesNotMatch(JSON.stringify(fallback), /كوبون|coupon|دورة|الدورة|مقعد/i, `${key}: no coupon, no course`);
+            if (key === 'en') assertNoArabicScript(JSON.stringify(fallback), 'the English fallback');
+            if (key === 'msa' || key === 'egyptian') assertNoGulfInEgyptianOrMsa(JSON.stringify(fallback), `${key}'s fallback`);
+        });
+    }
+
+    it('is the language and register of the tenant\'s comment replies, and Arabic with no register is the neutral Arabic', () => {
+        assert.equal(neutralCampaignFallback({ code: 'ar', register: null }).dm_template, KITS.msa.importFallback.dm);
+        assert.equal(neutralCampaignFallback({ code: 'en', register: 'gulf' }).dm_template, KITS.en.importFallback.dm, 'English is English whatever register is kept with it');
     });
 });

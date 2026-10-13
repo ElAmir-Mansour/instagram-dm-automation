@@ -20,7 +20,7 @@ import { withArticle } from '../profile/article.js';
 import { fallbackPitch, KITS, kitFor, offerNounSingular } from '../profile/kits.js';
 import type { CreatorKind } from '../profile/types.js';
 import type { Carousel, ExampleCarousel, Slide } from './carouselTypes.js';
-import { builtInExamples, exampleJson } from './examples.js';
+import { exampleJson } from './examples.js';
 import { ALT_TEXT_BUDGET, BUDGETS, CAPTION_LIMITS, COUNTS, fillKeyword } from './rules.js';
 import type { StudioSettings } from './settingsTypes.js';
 import type { DraftInput, GenSource, LessonRow, Moment } from './generate.js';
@@ -84,19 +84,14 @@ export const languageKit = (settings: StudioSettings): LanguageKit =>
 // ─── Who the writer writes for ──────────────────────────────────────────────────────────────
 
 /**
- * What the Studio's writer is told about the creator (P9): the language and register the carousel is written in, who they
- * are and what they sell (both from the profile's `carousel` context: `contextFor(profile, 'carousel', version)`,
- * `profileContext(creatorId, 'carousel')`), and whether the OWNER's built-in carousels are shown when the tenant's row holds
- * none of its own.
+ * What the Studio's writer is told about the creator (P9): the language and register the carousel is written in, and who they
+ * are and what they sell. Both are the profile's `carousel` context: `contextFor(profile, 'carousel', version)`,
+ * `profileContext(creatorId, 'carousel')`.
  *
- * `builtInExamples` is the one thing that is not the profile's. It is true for the platform owner alone, until his three
- * carousels are copied into his own row (`scripts/copy-owner-examples.mts`) and the built-in fallback is removed (P14): every
- * other tenant with no examples of its own gets no examples section at all, and never the owner's carousels.
- * It has no default, so a path that forgot to say fails to compile instead of quietly writing another tenant's examples.
+ * The examples are not part of it: they are the tenant's own, `settings.examples` (`examplesFor`). Nobody is shown a carousel that is
+ * not in their own row, the owner included: his three are in his row, marked `reference: true` (P14).
  */
-export interface StudioWording extends Pick<ProfileContext<'carousel'>, 'language' | 'who'> {
-    builtInExamples: boolean;
-}
+export type StudioWording = Pick<ProfileContext<'carousel'>, 'language' | 'who'>;
 
 /** The creator kinds whose TikTok caption carries the learning hashtags: a lesson, a course, a coaching programme. A shop's does not. */
 export const LEARNING_KINDS: readonly CreatorKind[] = ['educator', 'coach'];
@@ -325,20 +320,16 @@ export function pitchCore(wording: Pick<StudioWording, 'who'>): string {
 }
 
 /**
- * The few-shot examples: the tenant's own (`settings.examples`), at most three. A tenant with none is shown none, and the
- * prompt leaves its "Approved carousels" section out. The one exception, until P14: the OWNER's row holds none yet, so he is
- * shown the three built-ins for his language (`wording.builtInExamples`). Those are `own: false`, the reference wording that is
- * in the prompt today. `own` is true when any shown example is the tenant's own: one without the `reference` flag.
+ * The few-shot examples: the tenant's own (`settings.examples`), at most three, and nothing else (P14 removed the built-in
+ * fallback). A tenant with none is shown none, and the prompt leaves its "Approved carousels" section out. `own` is true when any
+ * shown example is the tenant's own: one without the `reference` flag. The owner's three are in his row with `reference: true`,
+ * so his prompt says "Reference carousels by another creator", as it always has.
  */
-export function examplesFor(settings: StudioSettings, wording: Pick<StudioWording, 'language' | 'builtInExamples'>): { examples: readonly ExampleCarousel[]; own: boolean } {
-    const mine = (Array.isArray(settings?.examples) ? settings.examples : [])
-        .filter((c) => c && typeof c === 'object' && Array.isArray((c as Carousel).slides));
-    if (mine.length) {
-        const examples = mine.slice(0, 3);
-        return { examples, own: examples.some((c) => !c.reference) };
-    }
-    if (wording.builtInExamples) return { examples: builtInExamples(wording.language.code === 'ar' ? 'ar' : 'en').slice(0, 3), own: false };
-    return { examples: [], own: false };
+export function examplesFor(settings: StudioSettings): { examples: readonly ExampleCarousel[]; own: boolean } {
+    const examples = (Array.isArray(settings?.examples) ? settings.examples : [])
+        .filter((c) => c && typeof c === 'object' && Array.isArray((c as Carousel).slides))
+        .slice(0, 3);
+    return { examples, own: examples.some((c) => !c.reference) };
 }
 
 export function buildSystemPrompt(settings: StudioSettings, wording: StudioWording): string {
@@ -349,7 +340,7 @@ export function buildSystemPrompt(settings: StudioSettings, wording: StudioWordi
     const ask = askLine(settings, 'KEYWORD');
     const save = saveLine(settings);
     const tt = tiktokLine(settings);
-    const { examples, own } = examplesFor(settings, wording);
+    const { examples, own } = examplesFor(settings);
     const guide = clip(settings?.voice?.guide, 6000);
 
     const igSteps = [

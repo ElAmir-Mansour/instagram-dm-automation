@@ -25,7 +25,6 @@ import { seoForWriter } from '../growth/settings.js';
 import { inFlightTriggers } from '../monteur/keywords.js';
 import { profileContextOrLegacy, ProfileUnreadableError } from '../profile/context.js';
 import { profileVersionFor } from '../profile/stamp.js';
-import { getPlatformOwnerId } from '../tenant.js';
 import type { Carousel, Slide } from './carouselTypes.js';
 import {
     type Exec, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN, withTransaction,
@@ -403,15 +402,14 @@ export const WRITER_PROFILE_UNREADABLE = 'We couldn\'t read your creator profile
 
 /**
  * Who the writer writes for (P9): the profile's `carousel` context, read once per request (`profileContext`, and the settings
- * reader has usually asked for it already), and whether this tenant is shown the owner's built-in carousels.
+ * reader has usually asked for it already).
  *
  * A profile that cannot be read is `profileContextOrLegacy`'s decision, the same as for the DM bot and the comment replies: the
  * platform owner is written for in today's text (his legacy context, logged), so a database hiccup costs him nothing he had
  * before; any other tenant gets a retryable error (`StudioError` 503), never the owner's Gulf Arabic about courses.
  *
- * The built-in carousels are the owner's, copied from his posts: only the platform owner (`getPlatformOwnerId`) is shown them, and
- * only until they are copied into his own row (`scripts/copy-owner-examples.mts`) and P14 removes the fallback. If the owner
- * cannot be found, nobody is: another tenant must never be handed his carousels because a lookup failed.
+ * The examples are not decided here: they are the tenant's own row's (`examplesFor`). Nobody is handed another's carousels, and
+ * there is no lookup of who the owner is to decide it (P14).
  */
 export async function studioWording(creatorId: string): Promise<StudioWording> {
     let context;
@@ -421,8 +419,7 @@ export async function studioWording(creatorId: string): Promise<StudioWording> {
         if (err instanceof ProfileUnreadableError) throw new StudioError(503, WRITER_PROFILE_UNREADABLE, undefined, 'PROFILE_UNREADABLE');
         throw err;
     }
-    const owner = await getPlatformOwnerId().catch(() => null);
-    return { language: context.language, who: context.who, builtInExamples: owner !== null && owner.toLowerCase() === creatorId.toLowerCase() };
+    return { language: context.language, who: context.who };
 }
 
 /**

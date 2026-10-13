@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { AUDIT_ACTIONS, isAuditAction } from '../services/audit.js';
-import { campaignSeeds, legacyCampaignSeeds } from '../services/profile/campaignSeeds.js';
+import { campaignSeeds, legacyCampaignFallback, legacyCampaignSeeds, neutralCampaignFallback } from '../services/profile/campaignSeeds.js';
 import { resetProfileTableWarning } from '../services/profile/store.js';
 import { installProfileDb, OTHER, OWNER, type ProfileDb, seededState, setPlatformOwner, type State, USER } from '../services/profile/testDb.js';
 import { assertNoOwnerMarkers, richProfile, throughJsonb } from '../services/profile/testSupport.js';
@@ -379,11 +379,12 @@ describe('GET /api/profile/campaign-seeds', () => {
         assert.ok(stack.findIndex((l) => !l.route && l.handle === profileRouter) > stack.findIndex((l) => !l.route && l.handle === resolveTenant));
     });
 
-    it('answers { seeds, source } with the session\'s tenant\'s own seeds, in its offers\' order', async () => {
+    it('answers { seeds, source, fallback } with the session\'s tenant\'s own seeds, in its offers\' order', async () => {
         storeFor(OTHER, { ...richProfile(), offers: [campaignOffer('first'), { ...campaignOffer('second'), id: 'two', primary: false }] });
         const res = await callSeeds({ tenantId: OTHER });
         assert.equal(res.statusCode, 200);
-        assert.deepEqual(Object.keys(res.body), ['seeds', 'source']);
+        assert.deepEqual(Object.keys(res.body), ['seeds', 'source', 'fallback']);
+        assert.deepEqual(Object.keys(res.body.fallback), ['dm_template', 'public_reply_template']);
         assert.equal(res.body.source, 'profile');
         assert.deepEqual(res.body.seeds.map((s: { name_match: string }) => s.name_match), ['first', 'second']);
         assert.deepEqual(res.body.seeds[0], {
@@ -398,6 +399,7 @@ describe('GET /api/profile/campaign-seeds', () => {
         assert.equal(res.body.source, 'legacy');
         assert.deepEqual(res.body.seeds, legacyCampaignSeeds());
         assert.equal(res.body.seeds.length, 9);
+        assert.deepEqual(res.body.fallback, legacyCampaignFallback(), 'and his own wording for the rows no seed names');
     });
 
     it('the platform owner whose offers carry campaigns is answered those, and not the built-in nine', async () => {
@@ -405,20 +407,26 @@ describe('GET /api/profile/campaign-seeds', () => {
         const res = await callSeeds({ tenantId: OWNER });
         assert.equal(res.body.source, 'profile');
         assert.deepEqual(res.body.seeds, campaignSeeds({ offers: [campaignOffer('mine')] }));
+        assert.deepEqual(res.body.fallback, legacyCampaignFallback(), 'his fallback is his, whatever his seeds came from');
     });
 
     it('ANOTHER tenant with no campaigns is answered none: never the owner\'s nine, nor any word of them', async () => {
         storeFor(OTHER, plainProfile());
         const res = await callSeeds({ tenantId: OTHER });
         assert.equal(res.statusCode, 200);
-        assert.deepEqual(res.body, { seeds: [], source: 'profile' });
+        assert.deepEqual(res.body.seeds, []);
+        assert.equal(res.body.source, 'profile');
+        assert.deepEqual(res.body.fallback, neutralCampaignFallback({ code: 'ar', register: 'egyptian' }), 'the neutral text of the language its comment replies speak (richProfile is Egyptian Arabic)');
         assertNoOwnerMarkers(JSON.stringify(res.body), 'another tenant\'s answer');
     });
 
-    it('a tenant with no stored profile and no settings of its own is answered none too', async () => {
+    it('a tenant with no stored profile and no settings of its own is answered no seeds too, and never his fallback', async () => {
         const res = await callSeeds({ tenantId: OTHER });
         assert.equal(res.statusCode, 200);
-        assert.deepEqual(res.body, { seeds: [], source: 'profile' });
+        assert.deepEqual(res.body.seeds, []);
+        assert.equal(res.body.source, 'profile');
+        assert.notDeepEqual(res.body.fallback, legacyCampaignFallback());
+        assertNoOwnerMarkers(JSON.stringify(res.body), 'a tenant with nothing stored');
     });
 
     it('a read writes nothing and audits nothing', async () => {
