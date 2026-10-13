@@ -1296,6 +1296,31 @@ html[dir='rtl'] .toast { animation-name: toastInRtl; }
     align-self: center;
 }
 .login-alt-link:hover { color: var(--text-default); }
+/* "Keep me signed in" and "use the dashboard password instead" belong to the account form only. They follow the email group
+   in the DOM, so while it is hidden (the one-field shared-password form) they are too, and no script keeps the two in step. */
+.login-keep { align-items: center; }
+/* An invite link hides the login card from the first frame (index.html's head script); App.showLogin() lifts the attribute. */
+html[data-invite] #login-screen { display: none; }
+#login-email-group.hidden ~ .login-keep,
+#login-email-group.hidden ~ .login-use-password { display: none; }
+
+/* The invite page (dashboard/js/pages/invite.js): the login card, with its own few parts. One column and 44px targets all the
+   way down to 375px; `.login-card` already centres its text, and the form and the paragraphs below read from the start. */
+.invite-card { overflow-wrap: anywhere; }
+.invite-body { text-align: start; color: var(--text-default); font-size: var(--fs-200); margin-block-end: var(--space-4); }
+.invite-role { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--space-2); margin-block-end: var(--space-4); font-size: var(--fs-200); color: var(--text-muted); }
+.invite-actions { display: flex; flex-direction: column; gap: var(--space-3); }
+.invite-loading { display: flex; justify-content: center; padding-block: var(--space-5); }
+.invite-password { display: flex; align-items: stretch; gap: var(--space-2); }
+.invite-password .field { flex: 1; min-inline-size: 0; }
+.invite-reveal { flex-shrink: 0; }
+.invite-suggest {
+    display: inline-flex; align-items: center; min-block-size: var(--tap-target); padding-inline: var(--space-2);
+    background: none; border: 0; font: inherit; cursor: pointer;
+    color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px;
+}
+.invite-suggest:hover { color: var(--text-strong); }
+.invite-suggested { color: var(--success-text); }
 
 /* Input with a leading icon. The icon is taken out of flow and overlaid on the field. Its
    size AND its position are written on `[data-lucide]`, so the `<i>` placeholder sits in
@@ -2420,6 +2445,30 @@ details[open] > .tiktok-app-summary svg { transform: rotate(180deg); }
 .member-email { font-size: var(--fs-200); color: var(--text-strong); overflow-wrap: anywhere; min-width: 0; }
 .member-tags { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .user-card-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+
+/* Invite links (dashboard/js/pages/invite_card.js): the card a link is handed over in, and a tenant's list of them. */
+.invite-card-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-block-end: var(--space-4); }
+.invite-card-action { flex: 1 1 12rem; justify-content: center; }
+.invite-card-facts { margin-block-end: var(--space-3); }
+.invite-card-footer { flex-wrap: wrap; }
+.invite-section { margin-block-start: var(--space-4); padding-block-start: var(--space-3); border-block-start: 1px solid var(--border-subtle); }
+.subsection-title { margin: 0; font-size: var(--fs-300); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.invite-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.invite-item {
+    display: flex; flex-direction: column; gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-glass);
+}
+.invite-item-main { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.invite-item-for { font-size: var(--fs-200); color: var(--text-strong); overflow-wrap: anywhere; min-inline-size: 0; }
+.invite-item-meta { margin: 0; font-size: var(--fs-100); color: var(--text-muted); }
+.invite-item-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* Settings → Onboarding: the one rule checkbox, in a fieldset so its legend reads as the group's name. */
+.onboarding-rules { border: 0; padding: 0; margin: 0 0 var(--space-4); }
+.onboarding-rules legend { padding: 0; margin-block-end: var(--space-2); }
 
 /* ─── Jobs ──────────────────────────────────────────────────────────────── */
 /* Cards are the phone form of the table; CSS picks one, so there is one data

@@ -152,11 +152,41 @@ const TenantDetailPage = {
 
         UI.icons(container);
         Admin.applyMeters(container);
+        this.mountInvites(name);
         // Nothing said the page's own data had landed — see CLAUDE.md's WCAG
         // 4.1.3 note on the other admin list pages. No natural count here
         // (this is one tenant, not a list), so this mirrors settings.js's
         // no-count announcement instead.
         Motion.announce(`${t('nav.tenant_detail')} — ${t('common.loaded')}`);
+    },
+
+    /** The invite card is its own lazy module: the list is fetched and painted into the section once it has loaded. */
+    async mountInvites(name) {
+        const host = document.getElementById('tenant-invites');
+        if (!host) return;
+        const card = await App.loadPageModule('invite_card');
+        if (!card || !host.isConnected) return;
+        card.mountList(host, { tenantId: this.tenantId, tenantName: name });
+    },
+
+    /** A reset link for one member: nothing changes until they use it, so it is made at once and shown in the card. */
+    async resetLink(btn) {
+        const member = (Array.isArray(Admin.pick(this.tenant, 'members')) ? Admin.pick(this.tenant, 'members') : [])
+            .find((m) => String(Admin.pick(m, 'userId', 'user_id')) === String(btn.dataset.userId));
+        if (!member) return;
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        try {
+            const card = await App.loadPageModule('invite_card');
+            if (!card) throw new Error(t('common.error'));
+            const name = Admin.pick(this.tenant, 'name', 'display_name') || t('tenants.untitled');
+            await card.openReset({
+                tenantId: this.tenantId, tenantName: name,
+                onChange: () => this.mountInvites(name),
+            }, { userId: Admin.pick(member, 'userId', 'user_id') });
+        } finally {
+            restore();
+        }
     },
 
     dayOrDash(value) {
@@ -261,6 +291,8 @@ const TenantDetailPage = {
                             </ul>
                             <p class="form-hint mbs-4">${t('tenantDetail.membersHint')}</p>
                         `}
+                    <!-- The invite links: filled in by the invite card module (invite_card.js) once the page is painted. -->
+                    <div id="tenant-invites" class="invite-section"></div>
                 </div>
             </section>
         `;
@@ -271,6 +303,7 @@ const TenantDetailPage = {
         const isAdmin = Admin.pick(m, 'role') === 'platform_admin';
         const isActive = Admin.pick(m, 'isActive', 'is_active') !== false;
         const membershipRole = Admin.pick(m, 'membershipRole', 'membership_role');
+        const userId = Admin.pick(m, 'userId', 'user_id');
 
         return html`
             <li class="member-item ${isActive ? '' : html.raw('member-item-off')}">
@@ -283,6 +316,10 @@ const TenantDetailPage = {
                         ? html`<span class="role-chip role-admin" title="${t('tenantDetail.adminOverride')}">${t('users.admin')}</span>`
                         : Admin.roleChip(membershipRole)}
                     ${isActive ? '' : html`<span class="chip chip-danger">${t('users.disabledChip')}</span>`}
+                    ${!isAdmin && isActive && userId ? UI.button({
+                        variant: 'ghost', size: 'sm', icon: 'key-round', label: t('invites.resetLink'),
+                        ariaLabel: t('invites.resetLinkFor', { email }), action: 'tenantDetail:resetLink', data: { 'user-id': userId },
+                    }) : ''}
                 </span>
             </li>
         `;
@@ -529,4 +566,5 @@ UI.registerActions('tenantDetail', {
     toggleActive: () => Admin.report(TenantDetailPage.toggleActive()),
     recheckToken: (el) => Admin.report(TenantDetailPage.recheckToken(el)),
     switchInto: () => Admin.report(TenantDetailPage.switchInto()),
+    resetLink: (el) => Admin.report(TenantDetailPage.resetLink(el)),
 });

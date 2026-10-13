@@ -5,8 +5,9 @@ import { pipeline } from 'node:stream/promises';
 import { pool } from '../config/db.js';
 import { isDiagnosticProbe } from '../utils/probe.js';
 import {
-    createLegacySession, createSession, requireAuth, createDownloadToken, consumeDownloadToken
+    createLegacySession, createSession, describeSessionLifetime, requireAuth, createDownloadToken, consumeDownloadToken
 } from '../middleware/auth.js';
+import { getSessionDays } from '../services/onboardingSettings.js';
 import axios from 'axios';
 import {
     sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
@@ -28,6 +29,7 @@ import {
 import { getTenantHealth, isMissingSchema, MIGRATION_HINT } from '../services/health.js';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { passwordProblem } from '../services/adminGuards.js';
+import { clearLoginFailures, clientIp, loginRetryAfter, recordLoginFailure } from '../services/loginThrottle.js';
 import { queryOne } from '../db/query.js';
 import type { ConversationPlatform, MessageSender, UserRow, ScheduledPostRow } from '../db/rows.js';
 import { isKeywordMatchMode, KEYWORD_MATCH_MODES } from '../utils/arabic.js';
@@ -38,6 +40,7 @@ import { getMediaStore, MediaStorageUnavailableError, uploadIdFromSegment } from
 import { StorageApiError } from '../services/supabaseStorage.js';
 import { isTikTokPhotoType, validatePostMedia } from '../services/postMedia.js';
 import adminRouter from './admin.js';
+import invitesRouter from './invites.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import { youtubePublicRouter, youtubeRouter } from './youtube.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
@@ -117,61 +120,6 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
 // ─── Auth ───────────────────────────────────────────────────────────────────
 
 /**
- * Login throttle.
- *
- * Per-instance, so it is a speed bump and not a guarantee: Vercel keeps as many warm lambdas
- * as it likes and each one starts this Map empty, so an attacker spreading attempts across
- * instances multiplies the limit by however many are running. A shared store is the real fix
- * — the same one `rate_limit_counters` would be if it did not require a creator FK.
- */
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const LOGIN_FREE_ATTEMPTS = 5;
-const LOGIN_MAX_DELAY_MS = 5 * 60 * 1000;
-const loginAttempts = new Map<string, { count: number; windowStart: number; last: number }>();
-
-function clientIp(req: Request): string {
-    const forwarded = req.headers['x-forwarded-for'];
-    const first = Array.isArray(forwarded) ? forwarded[0] : forwarded?.split(',')[0];
-    return (first || req.socket.remoteAddress || 'unknown').trim();
-}
-
-/** Seconds this IP must still wait, or 0 when it may try now. */
-function loginRetryAfter(ip: string): number {
-    const record = loginAttempts.get(ip);
-    if (!record) return 0;
-
-    const now = Date.now();
-    if (now - record.windowStart > LOGIN_WINDOW_MS) {
-        loginAttempts.delete(ip);
-        return 0;
-    }
-    if (record.count <= LOGIN_FREE_ATTEMPTS) return 0;
-
-    const delay = Math.min(2 ** (record.count - LOGIN_FREE_ATTEMPTS) * 1000, LOGIN_MAX_DELAY_MS);
-    const remaining = record.last + delay - now;
-    return remaining > 0 ? Math.ceil(remaining / 1000) : 0;
-}
-
-function recordLoginFailure(ip: string): void {
-    const now = Date.now();
-    const record = loginAttempts.get(ip);
-
-    if (record && now - record.windowStart <= LOGIN_WINDOW_MS) {
-        record.count += 1;
-        record.last = now;
-    } else {
-        loginAttempts.set(ip, { count: 1, windowStart: now, last: now });
-    }
-
-    // Sweep stale entries occasionally so a spray across many IPs cannot grow the map forever.
-    if (loginAttempts.size > 1000) {
-        for (const [seen, entry] of loginAttempts) {
-            if (now - entry.windowStart > LOGIN_WINDOW_MS) loginAttempts.delete(seen);
-        }
-    }
-}
-
-/**
  * The tenant a freshly logged-in user starts in.
  *
  * Their first membership, ordered so it is the same one every time. A platform_admin may hold
@@ -196,7 +144,7 @@ router.post('/auth/login', async (req, res) => {
         return;
     }
 
-    const { email, password } = req.body;
+    const { email, password, keepSignedIn } = req.body;
     const dashboardPassword = process.env.DASHBOARD_PASSWORD;
 
     // ── User account login ──────────────────────────────────────────────────
@@ -224,20 +172,25 @@ router.post('/auth/login', async (req, res) => {
                 return;
             }
 
-            loginAttempts.delete(ip);
+            clearLoginFailures(ip);
 
             const tenantId = await initialTenantFor(user.id, user.role);
+            // "Keep me signed in": the operator's setting (Settings → Onboarding, 30 days by default), for a user account only.
+            // A platform admin's session stays at 24 hours whatever the form says: it reaches every tenant.
+            const ttlMs = keepSignedIn === true && user.role !== 'platform_admin'
+                ? (await getSessionDays()) * 24 * 60 * 60 * 1000
+                : undefined;
             const token = createSession({
                 userId: user.id,
                 role: user.role === 'platform_admin' ? 'platform_admin' : 'user',
                 tenantId,
                 tokenVersion: user.token_version,
-            });
+            }, { ttlMs });
 
             await pool.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
 
             // `token` and `expiresIn` are what the dashboard reads; the rest is additive.
-            res.json({ token, expiresIn: '24h', userId: user.id, role: user.role, tenantId });
+            res.json({ token, expiresIn: describeSessionLifetime(ttlMs), userId: user.id, role: user.role, tenantId });
         } catch (err) {
             log('error', 'api.login_failed', describeError(err));
             res.status(500).json({ error: 'Login failed.' });
@@ -257,7 +210,7 @@ router.post('/auth/login', async (req, res) => {
         return;
     }
 
-    loginAttempts.delete(ip);
+    clearLoginFailures(ip);
 
     try {
         // createSession throws when a signing secret is missing rather than falling back to a
@@ -1279,6 +1232,12 @@ router.use('/tiktok', tiktokPublicRouter);
 // Google's OAuth redirect, likewise reached without a session.
 router.use('/youtube', youtubePublicRouter);
 
+// ─── Invite links ───────────────────────────────────────────────────────────
+// `POST /invites/peek` and `/invites/accept` are opened by a person who has no session yet: the token in
+// their link is the credential (src/routes/invites.ts). Above `requireAuth` on purpose, and nothing else is
+// served under /invites, so any other path there falls through to the 401 below.
+router.use('/invites', invitesRouter);
+
 // ─── Carousel Studio worker ─────────────────────────────────────────────────
 // Called by the Mac worker, which has no session: its bearer token resolves its tenant
 // (src/services/studio/worker.ts). Only /studio/worker/* is handled here; every other /studio
@@ -1369,13 +1328,15 @@ router.post('/auth/switch-tenant', async (req, res) => {
             return;
         }
 
+        // A "keep me signed in" session keeps its own expiry: the switch is not a new sign-in, so it never restarts the clock.
         const token = createSession({
             userId: session.userId,
             role: session.role,
             tenantId,
             tokenVersion: session.tokenVersion,
+            ...(session.exp !== undefined ? { exp: session.exp } : {}),
         });
-        res.json({ token, expiresIn: '24h', tenantId });
+        res.json({ token, expiresIn: describeSessionLifetime(session.exp !== undefined ? session.exp - Date.now() : undefined), tenantId });
     } catch (err) {
         log('error', 'api.switch_tenant_failed', describeError(err));
         res.status(500).json({ error: 'Failed to switch tenant.' });
@@ -1472,6 +1433,7 @@ router.post('/auth/password', async (req, res) => {
             role: session.role,
             tenantId: session.tenantId,
             tokenVersion: updated?.token_version ?? user.token_version + 1,
+            ...(session.exp !== undefined ? { exp: session.exp } : {}),
         });
 
         const actor = await actorFromSession(session);
@@ -1485,7 +1447,7 @@ router.post('/auth/password', async (req, res) => {
         res.json({
             message: 'Password updated. Every other session has been signed out.',
             token,
-            expiresIn: '24h',
+            expiresIn: describeSessionLifetime(session.exp !== undefined ? session.exp - Date.now() : undefined),
         });
     } catch (err) {
         log('error', 'api.password_change_failed', describeError(err));

@@ -140,6 +140,16 @@ export const AUDIT_ACTIONS = {
     settingsAiKeyWrite: 'settings.ai_key_write',
     /** AI providers, routes, prices or budgets changed (P20c). `detail` names what changed: providers, routes (provider/model/effort), models priced, budgets. */
     settingsAiConfigWrite: 'settings.ai_config_write',
+    /** A link was made for a tenant (P17): a join invite for a new person, or a reset for an existing member. `detail` names the invite's id, purpose, role and expiry, never the link. */
+    inviteCreate: 'invite.create',
+    /** A link was replaced by a new one for the same person and tenant: the old one stopped working in the same step. */
+    inviteRegenerate: 'invite.regenerate',
+    /** A link was revoked before anybody used it. */
+    inviteRevoke: 'invite.revoke',
+    /** A link was used: an account was created, an existing one was added to the tenant, or a password was reset. Written with the person as the actor. */
+    inviteAccept: 'invite.accept',
+    /** The onboarding settings (invite lifetime, default role, session length, message, default rules) were changed from Settings. */
+    settingsOnboardingWrite: 'settings.onboarding_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

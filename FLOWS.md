@@ -1116,7 +1116,8 @@ so matching it alone would delete slides 2..N before they were published.
 
 **`src/routes/api.ts:157`**. Mounted **above** `requireAuth`, obviously.
 
-**IP throttle first** (**:158-164**). `clientIp` (**:99**) reads the first
+**IP throttle first** (**:158-164**). The throttle now lives in `src/services/loginThrottle.ts` (P17: the invite routes share it); the line
+numbers below are from before it moved, and the function names are right. `clientIp` (**:99**) reads the first
 `x-forwarded-for` entry, falling back to the socket address. `loginRetryAfter` (**:106**):
 
 - no record, or the 15-minute window has passed (`LOGIN_WINDOW_MS`, **:94**) → 0, and the record
@@ -1186,7 +1187,8 @@ A corollary: **changing `DASHBOARD_PASSWORD` invalidates every outstanding sessi
 including ones minted by the email path.
 
 `SessionPayload` (**`src/middleware/auth.ts:54-64`**) carries `userId`, `role`, `tenantId`,
-`tokenVersion`, `iat`. The payload used to be a bare timestamp — every request was "somebody who
+`tokenVersion`, `iat`, and, only on a "keep me signed in" session (P17, §4.8), its own absolute `exp`: `verifySession` then
+refuses the token at `exp` instead of 24 hours after `iat`, and refuses any `exp` further out than 90 days. The payload used to be a bare timestamp — every request was "somebody who
 knew the one password", which is why ~13 call sites had to guess the tenant with
 `SELECT … WHERE is_active = true LIMIT 1`.
 
@@ -1282,7 +1284,7 @@ right up until it served the wrong customer's data.
 2. `assertTenantAccess({ userId, role, tenantId })` — the *requested* tenant, not the session's
    (**:984-986**). Denied → 404 (**:990**).
 3. **`src/routes/api.ts:994-999`** — `createSession` with the new `tenantId`, same `userId`,
-   `role` and `tokenVersion`. Response is a **new token** (**:1000**).
+   `role` and `tokenVersion` (and, for a "keep me signed in" session, the same `exp`: a switch is not a new sign-in). Response is a **new token** (**:1000**).
 
 Nothing server-side is mutated, because there is nothing to mutate: the session is a stateless
 HMAC, so the tenant it carries can only change by issuing a different token. The old token stays
@@ -1398,6 +1400,81 @@ profile described from nothing would be the owner's (`legacy.ts`). `rules` is `o
 `['no_women_imagery']`). The body is a name and a language; the legacy body (a page id and a token) still works and gets
 the same profile. `scripts/backfill-creator-profiles.mts` gives the same neutral default to an EXISTING tenant with no settings
 rows (never the platform owner).
+
+### 4.8 — Invite links: a person gets in without anyone typing their password (P17)
+
+The operator makes a link for a tenant; the person opens it, chooses a password and is in. There is no email
+infrastructure, so the link travels by WhatsApp or Copy. Everything that makes that safe is in
+**`src/services/invites.ts`**; the HTTP half is **`src/routes/invites.ts`** (public) and the operator's routes in
+**`src/routes/admin.ts`**.
+
+**Making one** — `POST /api/admin/tenants/:id/invites` (**`src/routes/admin.ts:1220`**, platform admin only: anything else
+is a 404). Creating a tenant by name returns the first one in the same 201 (**`issueInvite`**, **admin.ts:205**).
+
+1. `createInvite` (**`src/services/invites.ts:244`**) reads the tenant (404 if absent, 409 if switched off), applies the
+   `onboarding.*` settings (default role, 7 days, or 24 h for a reset) and, for a `reset`, checks the account is a member,
+   active and **not a platform admin**.
+2. `insertInvite` draws **32 random bytes** (**:72**) and stores only `sha256(token)` in `invites.token_hash`.
+3. The response carries the link **once**: `…/dashboard#/invite?t=<token>&lang=ar` (`buildInviteUrl`, **:92**). The token is in
+   the URL **fragment**, which no server, log or `Referer` ever sees. Nothing stores it, so a link can never be shown again:
+   *Regenerate* (**admin.ts:1285**, `regenerateInvite` **invites.ts:335**) revokes the old row and makes a new one in one
+   transaction, and *Revoke* (**admin.ts:1316**) stops one at once. Each writes an `invite.*` audit row whose `detail` holds
+   ids and facts, never the link.
+
+**Opening one** — the dashboard (`App.init`, `dashboard/js/app.js`) routes `#/invite` to the invite page **before it looks for a
+session** (`isInviteHash`), moves the token out of the hash into `sessionStorage` and cuts the hash back to `#/invite`
+(`captureInvite`), then calls `POST /api/invites/peek` (**`src/routes/invites.ts:75`**), mounted above `requireAuth`
+(**`src/routes/api.ts:1239`**).
+
+- `peekInvite` (**invites.ts:444**) answers the tenant's name, the role, the address if the link is for one, the expiry and the
+  length of "keep me signed in" — and counts the opening (`open_count`, `first_opened_at`: the operator's "Opened 2h ago").
+  It never consumes the link.
+- **Every way a link can be unusable is the same 410** `INVITE_INVALID`: malformed, unknown, expired, used, revoked, or its
+  tenant switched off. A malformed value is refused without a query; a found row is re-compared with `timingSafeEqual`
+  (**`hashesEqual`, :85**).
+- Both routes share the login's per-IP throttle (**`src/services/loginThrottle.ts`**, moved out of `api.ts` unchanged): a link
+  that does not open is a failed attempt, five are free, then each wait doubles. A good link, a weak password or a taken
+  address never count.
+- A request carrying `Authorization: Bearer …` is told apart from an anonymous one (`readViewer`, **routes/invites.ts:44**): a
+  dead session counts as none, a platform admin's session is refused outright (403 `ADMIN_SESSION`, before the link is touched,
+  so the operator testing his own link does not spend it).
+
+**Using one** — `POST /api/invites/accept` → `acceptInvite` (**invites.ts:553**), in **one transaction**:
+
+1. **`claim`** (**:516**): `UPDATE invites SET used_at = NOW() WHERE token_hash = $1 AND used_at IS NULL AND revoked_at IS NULL
+   AND expires_at > NOW() RETURNING id`. This one statement is what makes a link single-use: two people opening it at once
+   cannot both get in, and a revoke or an expiry that lands between the courtesy check and here still wins. A failure after
+   it rolls the claim back, so a refused attempt never burns the link.
+2. Then, by purpose and by who asks:
+   - **join, anonymous**: create the user (`role 'user'`, password through the existing scrypt) and the membership with the
+     link's role. An address that already has an account is a **409 `EMAIL_EXISTS`**, answered *before* anything is claimed,
+     and no existing `password_hash` is ever overwritten. The link's own address wins over the form's.
+   - **join, signed in**: add the membership to that account (never downgrading one it already has); a link for another
+     address is a 403 `EMAIL_MISMATCH`.
+   - **reset**: replace the password of the account the link was made for and **bump `users.token_version`**, which ends every
+     session it held (`requireLiveSession` compares it on every request). A platform admin's password is never replaced by a
+     link.
+   - A tenant that was `invited` becomes `in_progress`; one that is further on is never moved back.
+3. The answer is a **201 with a session** for that tenant. `keepSignedIn` gives it the operator's "keep me signed in" length
+   (`onboarding.session_days`, 30 by default) as its own `exp` (`createSession`'s `ttlMs`, **`src/middleware/auth.ts:116`**;
+   capped at 90 days by `MAX_SESSION_TTL_MS`, and re-minting through *switch tenant* or *change password* carries the
+   original `exp` instead of restarting it). An ordinary session is the 24 hours it always was. `POST /api/auth/login` takes
+   the same `keepSignedIn` for a user account, never for a platform admin.
+4. `invite.accept` is written with the **person** as the actor, after the commit.
+
+**The settings** (Settings → Onboarding and invites, platform admin, `GET|PUT /api/admin/onboarding-settings`,
+`src/services/onboardingSettings.ts`): `onboarding.invite_ttl_days` (7), `reset_ttl_hours` (24), `default_role` (owner),
+`session_days` (30), `inviter_name`, `whatsapp_text` (must contain `{link}`) and `default_rules`. Read when a link or a
+session is made, so a change never reaches one that already exists; an unreadable saved value falls back to its default.
+
+**What the dashboard remembers**: after a link is used, and after any email sign-in, the address goes to
+`localStorage.login_email` so the login form opens with the email field showing it ("use the dashboard password instead"
+puts the one-field form back). The token is never in `localStorage`, only in `sessionStorage` for the tab.
+
+> **Why the claim carries every predicate.** `loadUsableInvite` already refuses a used, revoked or expired link before the
+> transaction, so each predicate in `claim` looks redundant. It is not: between that read and the claim another request can use
+> or revoke the link, and the SQL is the only place both are decided at once. `src/routes/invites.test.ts` loses that race
+> deterministically (the stand-in reads the predicates out of the SQL it is given), so deleting any one of the three fails.
 
 ---
 

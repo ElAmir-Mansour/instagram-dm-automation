@@ -23,6 +23,16 @@ import type { Request, Response, NextFunction } from 'express';
 
 const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
+/**
+ * The longest a session may live, whatever it asks for: "keep me signed in" (invites, P17) is a setting the operator
+ * edits, and a typo in it must not mint a token that lasts for years. `verifySession` refuses a longer one outright,
+ * so the cap holds even for a token signed with a value this file would no longer issue.
+ */
+export const MAX_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+/** The lifetime of an ordinary session: what every token had before `exp` existed, and what one without it still has. */
+export const DEFAULT_SESSION_TTL_MS = SESSION_TTL;
+
 /** How long a one-shot download token stays valid — long enough for a click, short enough to be worthless in a log. */
 const DOWNLOAD_TOKEN_TTL = 60 * 1000;
 
@@ -61,6 +71,12 @@ export interface SessionPayload {
     tokenVersion: number;
     /** Issued-at, unix ms. */
     iat: number;
+    /**
+     * Absolute expiry, unix ms. Absent on an ordinary session, which then lives 24 hours from `iat` exactly as before.
+     * Present only on a session issued for "keep me signed in" (`createSession`'s `ttlMs`), and carried over, never
+     * extended, when a token is re-minted for the same sign-in (switching tenant, changing the password).
+     */
+    exp?: number;
 }
 
 declare global {
@@ -89,10 +105,28 @@ export function signWithSessionSecret(data: string): string {
     return sign(data);
 }
 
-/** Create a stateless signed token carrying who this is and which tenant they are acting as. */
-export function createSession(payload: Omit<SessionPayload, 'iat'>): string {
-    const body = Buffer.from(JSON.stringify({ ...payload, iat: Date.now() })).toString('base64url');
+/**
+ * Create a stateless signed token carrying who this is and which tenant they are acting as.
+ *
+ * `ttlMs` makes a longer-lived session ("keep me signed in for 30 days"): the token then carries its own `exp`,
+ * clamped to `MAX_SESSION_TTL_MS`. A caller that is re-minting somebody's existing sign-in passes that session's `exp`
+ * in the payload instead, so a switch of tenant never stretches a session that was already running out. Nothing passed
+ * means the 24 hours every session had before, and the token is byte-for-byte what it always was.
+ */
+export function createSession(payload: Omit<SessionPayload, 'iat'>, options: { ttlMs?: number } = {}): string {
+    const iat = Date.now();
+    const { exp: carried, ...rest } = payload;
+    const requested = options.ttlMs;
+    const exp = typeof requested === 'number' && Number.isFinite(requested) && requested > SESSION_TTL
+        ? iat + Math.min(requested, MAX_SESSION_TTL_MS)
+        : carried;
+    const body = Buffer.from(JSON.stringify({ ...rest, iat, ...(typeof exp === 'number' ? { exp } : {}) })).toString('base64url');
     return `${body}.${sign(body)}`;
+}
+
+/** What a token's lifetime reads as in a login response: `24h` for an ordinary session, whole days for a long one. */
+export function describeSessionLifetime(ttlMs?: number): string {
+    return typeof ttlMs === 'number' && ttlMs > SESSION_TTL ? `${Math.round(Math.min(ttlMs, MAX_SESSION_TTL_MS) / SESSION_TTL)}d` : '24h';
 }
 
 /**
@@ -139,8 +173,19 @@ export function verifySession(token: string): SessionPayload | null {
     if (typeof payload?.iat !== 'number') return null;
     // Reject future-dated tokens as well as expired ones. Not forgeable, but a clock skew
     // bug should not mint something that outlives the TTL.
-    const age = Date.now() - payload.iat;
-    if (age > SESSION_TTL || age < -60_000) return null;
+    const now = Date.now();
+    const age = now - payload.iat;
+    if (age < -60_000) return null;
+
+    if (payload.exp !== undefined) {
+        // A session that asked to live longer says so itself, and the signature is what makes that claim trustworthy.
+        // Still bounded: a malformed `exp`, or one further out than the cap, is not a session this file would issue.
+        if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) return null;
+        if (payload.exp - payload.iat > MAX_SESSION_TTL_MS) return null;
+        if (now > payload.exp) return null;
+    } else if (age > SESSION_TTL) {
+        return null;
+    }
 
     return payload;
 }
