@@ -58,7 +58,7 @@ const langOf = () => (document.documentElement.getAttribute('data-lang') === 'en
  * Mount the scene on the hero stage of the language on screen.
  * @param {HTMLElement[]} stages every .hero-stage (one per language article)
  * @param {{lite?: boolean}} options
- * @returns {Promise<{pause(p: boolean): void, dispose(): void, stats(): object}>} resolved after the first frame
+ * @returns {Promise<{dispose(): void, stats(): object}>} resolved after the first frame
  */
 export async function mount(stages, options = {}) {
     const root = document.documentElement;
@@ -317,18 +317,11 @@ export async function mount(stages, options = {}) {
         const peak = (1 + 0.12 * S.grow) * (1 + 0.15 * S.grow) * CAMERA.z / (CAMERA.z - 0.9 * S.grow);
         const gap = 0.04 + 0.13 * S.sway + (fine ? 0.06 : 0) + 0.05;   // its own drift, the pointer's parallax, a little scroll
         const ink = 0.1;                                        // the bubble's text needs this much of it clear of the card
-        // The pause control overhangs the card's corner at the reading end: nothing in the margin may pass under it.
-        const tg = S.stage.querySelector('.stage-toggle')?.getBoundingClientRect();
-        const toggle = tg && tg.width ? [X(tg.left), X(tg.right)] : null;
         const reach = (halfW) => {
             // Where the centre of a bubble of this half-width may be along the card, so it stays inside the canvas
-            // (magnified: halfW * 1.45) and clear of the toggle.
-            let lo = card.L + Math.max(0, halfW * 1.45 + 0.1 - bandL);
-            let hi = card.R - Math.max(0, halfW * 1.45 + 0.1 - bandR);
-            if (toggle) {
-                if (ltr) hi = Math.min(hi, toggle[0] - halfW * 1.45 - 0.08);
-                else lo = Math.max(lo, toggle[1] + halfW * 1.45 + 0.08);
-            }
+            // (magnified: halfW * 1.45).
+            const lo = card.L + Math.max(0, halfW * 1.45 + 0.1 - bandL);
+            const hi = card.R - Math.max(0, halfW * 1.45 + 0.1 - bandR);
             return [lo, Math.max(lo, hi)];
         };
         S.dive = reach(BW / 2);
@@ -447,7 +440,7 @@ export async function mount(stages, options = {}) {
                     p0[2] += 0.5 * grow;
                     const g0 = CAMERA.z / (CAMERA.z - p0[2]);
                     p0[0] *= g0; p0[1] *= g0;
-                    // Down into the card where the margin is clear of the toggle; hidden from there to the bubble itself.
+                    // Down into the card inside the canvas; hidden from there to the bubble itself.
                     const tx = clamp(S.target[0], S.dive[0], S.dive[1]), ty = S.target[1];
                     const dx = tx - p0[0];
                     // A little toward the card (down from a margin above it, up from one below), away from the canvas's edge.
@@ -529,6 +522,8 @@ export async function mount(stages, options = {}) {
     }
 
     // ── The loop ─────────────────────────────────────────────────────────────────────────────────────────────
+    // `paused` is held only by seek(), the debug hook that draws a chosen moment: the visitor has no control over the scene (the
+    // opt-out is prefers-reduced-motion, which keeps it from starting and tears it down if it is switched on).
     const running = () => !S.paused && S.inView && !document.hidden && !S.asleep && !S.dead;
 
     function frame(now) {
@@ -656,11 +651,7 @@ export async function mount(stages, options = {}) {
         renderer.dispose();
         renderer.forceContextLoss();
         canvas.remove();
-        // A scene that is gone has nothing to pause: the poster stays, and so does no control for it.
-        for (const s of stages) {
-            s.classList.remove('is-3d');
-            s.querySelector('.stage-toggle')?.remove();
-        }
+        for (const s of stages) s.classList.remove('is-3d');
         S.dm?.classList.remove('is-delivering');
     }
     function fallback(why) {
@@ -712,10 +703,6 @@ export async function mount(stages, options = {}) {
     }
 
     const api = {
-        pause(p) {
-            S.paused = !!p;
-            if (!p) { poke(); start(); }
-        },
         dispose,
         stats() {
             const i = renderer.info;
@@ -739,6 +726,12 @@ export async function mount(stages, options = {}) {
                 update(T, 0.016);
                 renderer.render(scene, camera);
                 return api.stats();
+            },
+            /** Let a scene held by seek() run again. */
+            resume() {
+                S.paused = false;
+                poke();
+                start();
             },
             state: S,
             camera,

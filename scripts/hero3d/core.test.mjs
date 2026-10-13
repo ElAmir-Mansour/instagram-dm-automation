@@ -407,9 +407,9 @@ describe('hero3d: a failed mount leaves nothing behind, and a finished page lets
         assert.match(src, /listen\(window, 'pagehide', \(e\) => \{ if \(!e\.persisted\) dispose\(\); \}\)/);
     });
 
-    it('dispose removes the listeners, all three observers, the renderer and its context, the canvas, and the toggles', () => {
+    it('dispose removes the listeners, all three observers, the renderer and its context, and the canvas', () => {
         const dispose = /function dispose\(\) \{[\s\S]*?\n    \}\n/.exec(src)[0];
-        for (const part of ['for (const off of on) off();', 'ro.disconnect(); io.disconnect(); mo.disconnect();', 'renderer.dispose();', 'renderer.forceContextLoss();', 'canvas.remove();', "s.querySelector('.stage-toggle')?.remove();", "classList.remove('is-3d')", 'cancelAnimationFrame(S.raf)']) {
+        for (const part of ['for (const off of on) off();', 'ro.disconnect(); io.disconnect(); mo.disconnect();', 'renderer.dispose();', 'renderer.forceContextLoss();', 'canvas.remove();', "classList.remove('is-3d')", 'cancelAnimationFrame(S.raf)']) {
             assert.ok(dispose.includes(part), part);
         }
     });

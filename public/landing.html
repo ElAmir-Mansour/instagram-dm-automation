@@ -1364,44 +1364,6 @@
         .stage-poster .pl { fill: var(--text-muted); opacity: 0.6; }
         .stage-poster use { fill: var(--logo-mono); opacity: 0.7; }
 
-        /* The pause control (WCAG 2.2.2), inserted by the loader only for a visitor who will get the animation.
-           A 44px target that overhangs the card's corner, in the margin the scene leaves free: 24px above the card, so on
-           a phone it clears the button above it by 8px. */
-        .stage-toggle {
-            position: absolute;
-            inset-block-start: calc(var(--space-5) * -1);
-            inset-inline-end: 0;
-            z-index: 2;
-            display: grid;
-            place-items: center;
-            inline-size: var(--tap-target);
-            block-size: var(--tap-target);
-            padding: 0;
-            border: 0;
-            border-radius: var(--radius-pill);
-            background: var(--surface-solid);
-            color: var(--text-default);
-            box-shadow: inset 0 0 0 1px var(--border-strong);
-            cursor: pointer;
-            transition: color var(--lp-t-hover) var(--lp-ease-quad);
-        }
-        .stage-toggle:hover { color: var(--text-strong); }
-        .stage-toggle svg {
-            inline-size: 1.125rem;
-            block-size: 1.125rem;
-            fill: none;
-            stroke: currentColor;
-            stroke-width: 2;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-        }
-        /* One icon at a time: the pause bars while it moves, the triangle while it is paused (the loader sets .is-paused on
-           the stage and swaps the button's name; the state is in the name, so it is not also announced as "pressed"). */
-        .hero-stage.is-paused .i-pause,
-        .hero-stage:not(.is-paused) .i-play { display: none; }
-        /* The page's focus rule squares every button's corners; this one is a circle. */
-        .stage-toggle:focus-visible { border-radius: var(--radius-pill); }
-
         /* The receipt: when the flying bubble arrives (the scene's hero3d:deliver event), the card's own message
            bubble rings once, 0 -> --ring -> 0, in the accent's ring colour. */
         @keyframes hero-receipt {
@@ -1414,8 +1376,7 @@
            the content, and it is solid. */
         @media (forced-colors: active), print {
             .stage-poster,
-            .stage-canvas,
-            .stage-toggle { display: none; }
+            .stage-canvas { display: none; }
         }
 
         /* ─── The loop ─────────────────────────────────────────────────────────
@@ -3524,7 +3485,7 @@
                              loader's gates a WebGL scene (scripts/hero3d/scene.mjs). data-hero3d is the scene's cast: user comments, so
                              colloquial words are fine; no names; p is the platform glyph, Meta only because comment-to-DM is Meta only;
                              kw is a campaign keyword standing alone in its comment. The poster is authored mirrored for Arabic. -->
-                        <div class="hero-stage" id="hero-stage-ar" data-hero3d='{"comments":[{"t":"كم السعر؟ وهل فيه توصيل؟","kw":"السعر","p":"instagram"},{"t":"بكم الاشتراك الشهري؟","kw":"بكم","p":"facebook"},{"t":"أبي الرابط لو سمحت","kw":"الرابط","p":"instagram"},{"t":"عمل رائع، استمر","p":"facebook"},{"t":"كيف أشترك في الدورة؟","kw":"أشترك","p":"instagram"},{"t":"شكراً على الفائدة","p":"instagram"},{"t":"أرسلوا التفاصيل لو سمحتم","kw":"التفاصيل","p":"facebook"},{"t":"مبدع كالعادة","p":"facebook"}]}' data-pause-label="إيقاف الحركة" data-play-label="تشغيل الحركة">
+                        <div class="hero-stage" id="hero-stage-ar" data-hero3d='{"comments":[{"t":"كم السعر؟ وهل فيه توصيل؟","kw":"السعر","p":"instagram"},{"t":"بكم الاشتراك الشهري؟","kw":"بكم","p":"facebook"},{"t":"أبي الرابط لو سمحت","kw":"الرابط","p":"instagram"},{"t":"عمل رائع، استمر","p":"facebook"},{"t":"كيف أشترك في الدورة؟","kw":"أشترك","p":"instagram"},{"t":"شكراً على الفائدة","p":"instagram"},{"t":"أرسلوا التفاصيل لو سمحتم","kw":"التفاصيل","p":"facebook"},{"t":"مبدع كالعادة","p":"facebook"}]}'>
                             <svg class="stage-poster" aria-hidden="true" focusable="false" viewBox="0 0 400 480">
                                 <g opacity="0.5">
                                     <rect class="pb" x="18" y="1" width="132" height="34" rx="12"/>
@@ -4647,7 +4608,7 @@
                              loader's gates a WebGL scene (scripts/hero3d/scene.mjs). data-hero3d is the scene's cast: user comments, so
                              colloquial words are fine; no names; p is the platform glyph, Meta only because comment-to-DM is Meta only;
                              kw is a campaign keyword standing alone in its comment. The poster is authored mirrored for Arabic. -->
-                        <div class="hero-stage" id="hero-stage-en" data-hero3d='{"comments":[{"t":"How much is the price?","kw":"price","p":"instagram"},{"t":"What does it cost?","kw":"cost","p":"facebook"},{"t":"Send me the link please","kw":"link","p":"instagram"},{"t":"Great work, keep going","p":"facebook"},{"t":"How do I join the course?","kw":"join","p":"instagram"},{"t":"Thanks for the tip","p":"instagram"},{"t":"Send the details please","kw":"details","p":"facebook"},{"t":"Brilliant as always","p":"facebook"}]}' data-pause-label="Pause motion" data-play-label="Play motion">
+                        <div class="hero-stage" id="hero-stage-en" data-hero3d='{"comments":[{"t":"How much is the price?","kw":"price","p":"instagram"},{"t":"What does it cost?","kw":"cost","p":"facebook"},{"t":"Send me the link please","kw":"link","p":"instagram"},{"t":"Great work, keep going","p":"facebook"},{"t":"How do I join the course?","kw":"join","p":"instagram"},{"t":"Thanks for the tip","p":"instagram"},{"t":"Send the details please","kw":"details","p":"facebook"},{"t":"Brilliant as always","p":"facebook"}]}'>
                             <svg class="stage-poster" aria-hidden="true" focusable="false" viewBox="0 0 400 480">
                                 <g opacity="0.5">
                                     <rect class="pb" x="250" y="1" width="132" height="34" rx="12"/>
@@ -5886,10 +5847,6 @@
         </footer>
     </div>
 
-    <!-- The pause control (WCAG 2.2.2) that the hero loader, the last script below, adds to each .hero-stage for a visitor who
-         will get the scene. A template, not script: the icons are Lucide 0.577.0's pause and play, and no script carries them. -->
-    <template id="hero-toggle"><button type="button" class="stage-toggle"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g class="i-pause"><rect x="14" y="3" width="5" height="18" rx="1"/><rect x="5" y="3" width="5" height="18" rx="1"/></g><path class="i-play" d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z"/></svg></button></template>
-
     <script>
         /* The switch. Sets the attribute the CSS filters on, keeps <html lang dir>
            honest, and remembers the choice under the same key the dashboard uses
@@ -6091,50 +6048,23 @@
     </script>
     <script>
         /* The hero scene (L10): the loader. When idle after load, a visitor who passes these gates gets
-           /brand/hero3d.<sha8>.js (npm run build:hero3d); any no keeps the poster. Its own script: import() can't parse in old browsers. */
+           /brand/hero3d.<sha8>.js (npm run build:hero3d); any no keeps the poster. Its own script: import() can't parse in old
+           browsers. There is no control for the animation: the visitor's own setting, prefers-reduced-motion, is the opt-out. */
         (function () {
-            var HERO3D = '/brand/hero3d.64a07794.js';
-            var w = window, d = document, n = navigator, stages = d.querySelectorAll('.hero-stage'), api, busy, coarse, paused = false;
-            try { paused = !!localStorage.getItem('hero3d_paused'); } catch (e) {}
+            var HERO3D = '/brand/hero3d.9331bb63.js';
+            var w = window, d = document, n = navigator;
 
             function ok(q) { return w.matchMedia(q).matches; }
-            function each(f) { for (var i = 0; i < stages.length; i++) f(stages[i]); }
-            function label() {
-                each(function (s) {
-                    s.classList.toggle('is-paused', paused);
-                    s.lastElementChild.setAttribute('aria-label', s.getAttribute(paused ? 'data-play-label' : 'data-pause-label'));
-                });
-            }
-            function go() {
-                if (busy || api || paused) return;
-                busy = 1;
-                import(HERO3D).then(function (m) { return m.mount(stages, { lite: coarse }); })
-                    .then(function (a) { api = a; if (paused) a.pause(true); }, function (e) {
-                        each(function (s) { s.lastElementChild.remove(); });
-                        console.info('hero3d: poster', e);
-                    });
-            }
-            function flip() {
-                paused = !paused;
-                try { localStorage[paused ? 'setItem' : 'removeItem']('hero3d_paused', 1); } catch (e) {}
-                label();
-                api ? api.pause(paused) : go();
-            }
             function start() {
-                var c = n.connection || {}, g;
-                coarse = ok('(pointer:coarse)');
+                var c = n.connection || {}, coarse = ok('(pointer:coarse)'), g;
                 if (!HERO3D || n.webdriver || c.saveData || /^(slow-)?[23]g$/.test(c.effectiveType) || n.deviceMemory < 4 ||
                     n.hardwareConcurrency < (coarse ? 6 : 4) || !ok('(prefers-reduced-motion:no-preference)') ||
                     /[?&]3d=0/.test(location.search) || d.getElementById('hero-stage-' + d.documentElement.lang).offsetWidth < 300) return;
                 try { if (sessionStorage.getItem('hero3d_off')) return; } catch (e) {}
                 try { (g = d.createElement('canvas').getContext('webgl2', { failIfMajorPerformanceCaveat: true })).getExtension('WEBGL_lose_context').loseContext(); } catch (e) {}
                 if (!g) return;
-                each(function (s) {
-                    s.appendChild(d.getElementById('hero-toggle').content.cloneNode(true));
-                    s.lastElementChild.onclick = flip;
-                });
-                label();
-                go();
+                import(HERO3D).then(function (m) { return m.mount(d.querySelectorAll('.hero-stage'), { lite: coarse }); })
+                    .catch(function (e) { console.info('hero3d: poster', e); });
             }
             w.addEventListener('load', function () {
                 (w.requestIdleCallback || function (f) { setTimeout(f, 1200); })(start, { timeout: 2000 });
