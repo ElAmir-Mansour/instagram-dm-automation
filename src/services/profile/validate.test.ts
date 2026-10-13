@@ -11,13 +11,14 @@ import {
     DISPLAY_FONTS, defaultStudioSettings, INFOGRAPHIC_SOCIALS, INFOGRAPHIC_THEMES, settingsProblems,
 } from '../studio/settings.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
-import { defaultProfile } from './defaults.js';
+import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
+import { defaultProfile, upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import { richProfile, UPLOAD_A, UPLOAD_B } from './testSupport.js';
 import {
     CONTENT_RULE_PRESETS, FONTS, SOCIALS, THEMES, type CreatorProfile, type Offer,
 } from './types.js';
-import { activationMissing, isHttpsUrl, isTimeZone, PROFILE_LIMITS, profileBytes, UPLOAD_URL, validateProfile, type ListLimit } from './validate.js';
+import { activationMissing, isHttpsUrl, isTimeZone, OFFER_URL, PROFILE_LIMITS, profileBytes, UPLOAD_URL, validateProfile, type ListLimit } from './validate.js';
 
 const clone = <T>(v: T): T => structuredClone(v);
 
@@ -287,14 +288,19 @@ describe('validateProfile: formats', () => {
         assert.equal(isTimeZone(5), false);
     });
 
-    it('web addresses are https, with a host and no spaces: offers and social links', () => {
-        const bad = ['http://example.com/a', 'ftp://example.com', 'https://', 'https:// example.com', 'https://example.com/a b', 'example.com', 'javascript:alert(1)'];
-        for (const url of bad) {
-            refused((p) => { p.offers[1]!.url = url; }, 'offers[1].url', /https:\/\//);
-            refused((p) => { p.socials.links.instagram = url; }, 'socials.links.instagram', /https:\/\//);
+    it('an offer\'s address is http or https, as the Studio\'s product link is, and no other scheme', () => {
+        const bad = ['ftp://example.com', 'https://', 'http://', 'https:// example.com', 'https://example.com/a b', 'example.com', 'javascript:alert(1)', 'file:///etc/passwd', '//example.com'];
+        for (const url of bad) refused((p) => { p.offers[1]!.url = url; }, 'offers[1].url', /starting with http:\/\/ or https:\/\//);
+        for (const url of ['https://www.udemy.com/course/x/?referralCode=ABC', 'http://example.com/course', 'HTTPS://Example.com/a', 'HTTP://example.com']) {
+            accepted((p) => { p.offers[1]!.url = url; });
+            accepted((p) => { p.offers[0]!.url = url; });
         }
-        accepted((p) => { p.offers[1]!.url = 'https://www.udemy.com/course/x/?referralCode=ABC'; });
-        accepted((p) => { p.offers[1]!.url = 'HTTPS://Example.com/a'; });
+    });
+
+    it('a social link is https only, with a host and no spaces: it is new with the profile, so there is no older rule to keep', () => {
+        const bad = ['http://example.com/a', 'ftp://example.com', 'https://', 'https:// example.com', 'https://example.com/a b', 'example.com', 'javascript:alert(1)'];
+        for (const url of bad) refused((p) => { p.socials.links.instagram = url; }, 'socials.links.instagram', /starting with https:\/\//);
+        accepted((p) => { p.socials.links.instagram = 'https://instagram.com/sami.fit'; });
         assert.equal(isHttpsUrl('https://example.com'), true);
         assert.equal(isHttpsUrl('http://example.com'), false);
     });
@@ -605,13 +611,38 @@ describe('the limits are never lower than today\'s, field by field', () => {
         }
     });
 
-    it('the one place the profile is stricter: the Studio accepts an http product link, the profile does not', () => {
-        const s = defaultStudioSettings();
-        s.product = { name: 'Course', url: 'http://example.com/course', facts: [], dmBullets: [] };
-        assert.deepStrictEqual(settingsProblems(s), [], 'today a Studio PUT may save an http link');
-        const out = validateProfile(profileFromLegacy(s));
+    it('an http product link, which the Studio accepts today, makes a valid profile, and so does every other link it accepts', () => {
+        for (const url of ['http://example.com/course', 'https://example.com/course', 'HTTP://Example.com', 'https://?q=1', 'http://x']) {
+            const s = defaultStudioSettings();
+            s.product = { name: 'Course', url, facts: [], dmBullets: [] };
+            assert.deepStrictEqual(settingsProblems(s), [], `today a Studio PUT may save ${url}`);
+            const out = validateProfile(profileFromLegacy(s));
+            assert.ok('profile' in out, `${url}: ${'problems' in out ? out.problems.join('; ') : ''}`);
+        }
+    });
+
+    it('a legacy knowledge base of 60,000 characters round-trips through profileFromLegacy and validates, in Latin and in Arabic', () => {
+        // The agent's knowledge base is an unbounded TEXT column today, so this limit is a ceiling.
+        // Arabic letters are two bytes each, so the Arabic case is the one the 128 KB of the whole profile could refuse.
+        for (const [name, kb] of [['Latin', 'k'.repeat(PROFILE_LIMITS.knowledge)], ['Arabic', 'ك'.repeat(PROFILE_LIMITS.knowledge)]] as const) {
+            assert.equal(kb.length, 60_000);
+            const p = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH, kb);
+            assert.equal(p.dm.knowledge, kb, `${name}: the profile holds the knowledge base unchanged`);
+            const out = validateProfile(p);
+            assert.ok('profile' in out, `${name}: ${'problems' in out ? out.problems.join('; ') : ''}`);
+            assert.equal(upgradeProfile(JSON.parse(JSON.stringify(p))).dm.knowledge, kb, `${name}: and it comes back from storage`);
+            refused((q) => { q.dm.knowledge = `${kb}x`; }, 'dm.knowledge', /the limit is 60000/);
+        }
+    });
+
+    it('the whole-profile cap still applies to a long knowledge base: 60,000 Arabic letters leave room for the rest, a fat profile does not', () => {
+        const p = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH, 'ك'.repeat(PROFILE_LIMITS.knowledge));
+        const room = PROFILE_LIMITS.profileBytes - profileBytes(p);
+        assert.ok(room > 0, `the owner's profile with a 60,000-letter Arabic knowledge base is ${profileBytes(p)} bytes`);
+        p.dm.faq = Array.from({ length: 30 }, () => ({ q: 'ك'.repeat(300), a: 'ك'.repeat(2000) }));
+        const out = validateProfile(p);
         assert.ok('problems' in out);
-        assert.match(out.problems.join('|'), /offers\[0\]\.url must be a web address starting with https/);
+        assert.match(out.problems.join('|'), /the limit is 131072/);
     });
 });
 
@@ -643,6 +674,18 @@ describe('the rules copied from the Studio settings agree with them', () => {
             assert.equal(UPLOAD_URL.test(url), photoOk(url), url);
         }
         assert.equal(photoOk(null), true);
+    });
+
+    it('OFFER_URL accepts and refuses the same addresses as product.url', () => {
+        const productUrlOk = (url: string): boolean => {
+            const s = defaultStudioSettings();
+            s.product.url = url;
+            return !settingsProblems(s).some((m) => m.includes('product.url'));
+        };
+        for (const url of ['https://example.com', 'http://example.com/a', 'HTTPS://EXAMPLE.COM', 'ftp://example.com', 'https://', 'http://', 'example.com',
+            'https://a b', 'https://?q=1', 'javascript:alert(1)', '//example.com', 'https://example.com/\n']) {
+            assert.equal(OFFER_URL.test(url), productUrlOk(url), url);
+        }
     });
 
     it('colours, times and timezones are judged the same way', () => {

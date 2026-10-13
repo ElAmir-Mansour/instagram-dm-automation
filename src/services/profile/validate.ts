@@ -9,7 +9,7 @@
  * mid-sentence costs more than a long field does.
  *
  * Pure: no database and no settings module (importing `studio/settings.ts` would open the pool), so
- * the few rules copied from it (`UPLOAD_URL`, the colour and time patterns) are held equal by tests.
+ * the few rules copied from it (`UPLOAD_URL`, `OFFER_URL`, the colour and time patterns) are held equal by tests.
  */
 import {
     CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, FONTS, KINDS, LANGS, LEVELS, MATCH_MODES, OFFER_KINDS, ON_CAMERA, ORDER_VIA,
@@ -54,7 +54,8 @@ export const PROFILE_LIMITS = {
     handle: 32,
     site: 40,
     link: 500,
-    knowledge: 20_000,
+    /** An agent's knowledge base is unbounded today (a TEXT column), so this is a ceiling, not a floor: the 128 KB of the whole profile still applies. */
+    knowledge: 60_000,
     faq: 30,
     faqQuestion: 300,
     faqAnswer: 2000,
@@ -88,7 +89,13 @@ export function isTimeZone(value: unknown): value is string {
     }
 }
 
-/** An https address with a host. The Studio's own check accepts http too; 01 §1 does not, and the difference is tested. */
+/**
+ * An offer's address: exactly the Studio's rule for `product.url` (`^https?://\S+$`, in studio/settings.ts),
+ * so a link a Studio PUT accepts today never makes an invalid profile. Any other scheme is refused.
+ */
+export const OFFER_URL = /^https?:\/\/\S+$/i;
+
+/** An https address with a host, for the links that are new with the profile (the social links), where there is no older rule to stay above. */
 export function isHttpsUrl(value: string): boolean {
     if (!/^https:\/\/\S+$/i.test(value)) return false;
     try {
@@ -181,6 +188,10 @@ function problemsOf(raw: unknown): string[] {
         text(value, path, max, { required });
         if (typeof value === 'string' && value && !isHttpsUrl(value)) add(`${path} must be a web address starting with https://`);
     };
+    const offerUrl = (value: unknown, path: string, max: number): void => {
+        text(value, path, max);
+        if (typeof value === 'string' && value && !OFFER_URL.test(value)) add(`${path} must be a web address starting with http:// or https://`);
+    };
     const upload = (value: unknown, path: string): void => {
         if (value !== undefined && value !== null && (typeof value !== 'string' || !UPLOAD_URL.test(value))) add(`${path} must be one of your uploads (…/api/uploads/<id>), or null`);
     };
@@ -236,7 +247,7 @@ function problemsOf(raw: unknown): string[] {
         oneOf(o.kind, `${path}.kind`, OFFER_KINDS);
         text(o.name, `${path}.name`, PROFILE_LIMITS.offerName);
         oneOf(o.order_via, `${path}.order_via`, ORDER_VIA);
-        https(o.url, `${path}.url`, PROFILE_LIMITS.offerUrl, false);
+        offerUrl(o.url, `${path}.url`, PROFILE_LIMITS.offerUrl);
         if (o.order_via === 'url' && o.url === '') add(`${path}.url is required when the offer is ordered by link`);
         text(o.price, `${path}.price`, PROFILE_LIMITS.offerPrice);
         texts(o.facts, `${path}.facts`, PROFILE_LIMITS.facts);

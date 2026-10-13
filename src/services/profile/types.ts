@@ -63,7 +63,7 @@ export interface Offer {
     kind: OfferKind;
     name: string;
     order_via: OrderVia;
-    /** Required when `order_via` is 'url'. https only. */
+    /** Required when `order_via` is 'url'. http or https, as the Studio's product link is. */
     url: string;
     price: string;
     facts: string[];
