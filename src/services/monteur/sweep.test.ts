@@ -97,7 +97,7 @@ let previousSink: ReturnType<typeof setLogSink>;
 let previousWaits: readonly number[];
 
 beforeEach(() => {
-    db = installFakeDb();
+    db = installFakeDb({ platformTenant: TENANT });
     source = { id: SOURCE, creator_id: TENANT, name: 'lesson.mp4', path: '/v/lesson.mp4',
         // 20 minutes: long enough for two reels (one per 10 minutes, pick.ts reelsForLength), as these tests cut.
         duration: 1200, words: WORDS, pick: null, attempts: 1 };
@@ -714,6 +714,20 @@ describe('sweepMonteur — Claude on the Mac (monteur.brain = claude_mac)', () =
         assert.equal(result.waiting, 1);
         assert.deepEqual(result.pick, { source_id: 'second-source', outcome: 'rendering', clips: 1 }, 'a Gemini tenant’s source, picked as before');
         assert.deepEqual(calls.map((c) => c.purpose), ['monteur.pick', 'monteur.copy', 'monteur.edit']);
+    });
+
+    it('a tenant the Mac does not work for (G1): its source stops at once with the reason, nothing is queued, Gemini is never reached', async () => {
+        const NEW_TENANT = '22222222-2222-4222-8222-222222222222';
+        brains[NEW_TENANT] = 'claude_mac';
+        sources = [{ ...source!, creator_id: NEW_TENANT }];
+        const reason = 'This tenant\'s AI work can\'t run on the operator\'s Mac; it needs the AI providers layer (coming).';
+        const result = await sweepMonteur(later());
+        assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'failed', error: reason }, 'final on the first attempt: trying again changes nothing');
+        const [stop] = db.ran(/^UPDATE monteur_sources SET status = 'failed', error = \$2/);
+        assert.deepEqual(stop!.params, [SOURCE, reason, 1]);
+        assert.equal(queued().length, 0);
+        assert.equal(released().length, 0);
+        assert.equal(calls.length, 0);
     });
 
     it('parses the answers exactly as Gemini’s, and records Claude’s model and tokens', async () => {

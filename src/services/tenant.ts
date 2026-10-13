@@ -59,6 +59,23 @@ export async function getActiveCreatorId(): Promise<string | null> {
     return cachedId.value;
 }
 
+/** The platform owner's id, cached like `cachedId`: a miss (no creators yet) is not cached, so the first one is seen at once. */
+let cachedOwner: { value: string; at: number } | null = null;
+
+/**
+ * The platform's own tenant, the owner: the first creator ever made, by `created_at` then `id`, whether or not it is
+ * active. Not `getActiveCreatorId`, which is "the first ACTIVE creator": deactivating the owner would make tenant #2
+ * the one it finds, and whatever is reserved for the owner (the Mac's Claude plan, `macBrain.ts`) would pass to
+ * them. Null with no creators at all.
+ */
+export async function getPlatformOwnerId(): Promise<string | null> {
+    if (cachedOwner && Date.now() - cachedOwner.at < CACHE_MS) return cachedOwner.value;
+    const row = await queryOne<Pick<CreatorRow, 'id'>>(`SELECT id FROM creators ORDER BY created_at, id LIMIT 1`);
+    if (!row) return null;
+    cachedOwner = { value: row.id, at: Date.now() };
+    return cachedOwner.value;
+}
+
 /**
  * Every read of a creator row goes through here so that decryption happens in exactly one
  * place. Miss it on a single path and that path sends `enc:v1:...` to Meta as a bearer token,
@@ -134,6 +151,7 @@ export async function getCreatorByPageId(...pageIds: (string | undefined)[]): Pr
 /** Drop the cached id — call after any write that could change which creator is active. */
 export function invalidateTenantCache(): void {
     cachedId = null;
+    cachedOwner = null;
 }
 
 // ─── Tenant context ─────────────────────────────────────────────────────────────────────

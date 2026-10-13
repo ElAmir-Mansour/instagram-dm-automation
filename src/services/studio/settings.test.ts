@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import type { StudioSettings } from '../../db/rows.js';
+import { MacBrainRefused, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
+import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { StudioError } from './common.js';
 import {
     defaultStudioSettings, getMonteurSettings, getStudioSettings, mergeSettings, overDefaults, settingsProblems, updateStudioSettings,
@@ -332,6 +334,69 @@ describe('the monteur section (MONTEUR.md §1)', () => {
             (pool as unknown as { query: unknown }).query = originalQuery;
             (pool as unknown as { connect: unknown }).connect = originalConnect;
         }
+    });
+});
+
+describe('monteur.brain = claude_mac — the Mac is the owner’s (G1)', () => {
+    const NEW_TENANT = '22222222-2222-4222-8222-222222222222';
+    let db: FakeDb;
+    let stored: Record<string, unknown> | null;
+    let saved: string | null;
+
+    beforeEach(() => {
+        db = installFakeDb({ platformTenant: TENANT });
+        stored = null;
+        saved = null;
+        db.routes.push(
+            [/FROM studio_settings/, () => ({ rows: stored ? [stored] : [] })],
+            [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({
+                rows: p[0] === 'studio.mac_brain_tenants' && saved !== null ? [{ value: saved, is_secret: false }] : [],
+            })],
+        );
+    });
+    afterEach(() => db.restore());
+
+    const writes = () => db.ran(/^INSERT INTO studio_settings/);
+    const onClaude = (over: Record<string, unknown> = {}) => ({ ...defaultStudioSettings(), monteur: { ...defaultStudioSettings().monteur, brain: 'claude_mac', ...over } });
+    const refused = (err: unknown) => err instanceof MacBrainRefused && err.status === 400 && err.code === 'NEEDS_API_BRAIN' && err.message === NEEDS_API_BRAIN_MESSAGE;
+
+    it('refuses a tenant that is not on the list with a 400 NEEDS_API_BRAIN, writing nothing', async () => {
+        await assert.rejects(updateStudioSettings(NEW_TENANT, { monteur: { brain: 'claude_mac' } }), refused);
+        assert.equal(writes().length, 0);
+    });
+
+    it('lets the owner switch it on, with nothing configured', async () => {
+        const { settings } = await updateStudioSettings(TENANT, { monteur: { brain: 'claude_mac' } });
+        assert.equal(settings.monteur.brain, 'claude_mac');
+        assert.equal(writes().length, 1);
+    });
+
+    it('lets a listed tenant switch it on, and the owner still can: the list adds to him', async () => {
+        saved = JSON.stringify([NEW_TENANT]);
+        assert.equal((await updateStudioSettings(NEW_TENANT, { monteur: { brain: 'claude_mac' } })).settings.monteur.brain, 'claude_mac');
+        assert.equal((await updateStudioSettings(TENANT, { monteur: { brain: 'claude_mac' } })).settings.monteur.brain, 'claude_mac');
+        await assert.rejects(updateStudioSettings('33333333-3333-4333-8333-333333333333', { monteur: { brain: 'claude_mac' } }), refused);
+        assert.equal(writes().length, 2);
+    });
+
+    it('only the switch is refused: Gemini is anyone’s choice, and so is every other Monteur setting', async () => {
+        assert.equal((await updateStudioSettings(NEW_TENANT, { monteur: { brain: 'gemini' } })).settings.monteur.brain, 'gemini');
+        assert.equal((await updateStudioSettings(NEW_TENANT, { monteur: { mode: 'auto' } })).settings.monteur.mode, 'auto');
+        assert.equal(writes().length, 2);
+    });
+
+    it('a tenant already on the Mac (before the list changed) still saves its other settings: its calls are refused where they are made', async () => {
+        stored = onClaude();
+        const { settings } = await updateStudioSettings(NEW_TENANT, { monteur: { brain: 'claude_mac', mode: 'auto' } });
+        assert.deepEqual([settings.monteur.brain, settings.monteur.mode], ['claude_mac', 'auto']);
+        assert.equal(writes().length, 1);
+    });
+
+    it('a patch that breaks another rule is still that 400, not this one', async () => {
+        await assert.rejects(
+            updateStudioSettings(NEW_TENANT, { monteur: { brain: 'claude_mac', run_at: 'noon' } }),
+            (err: unknown) => err instanceof StudioError && !(err instanceof MacBrainRefused) && err.status === 400 && Boolean(err.problems?.some((p) => /monteur\.run_at/.test(p))),
+        );
     });
 });
 

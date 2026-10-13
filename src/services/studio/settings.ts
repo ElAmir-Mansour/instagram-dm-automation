@@ -20,6 +20,7 @@ import type { CreatorProfile } from '../profile/types.js';
 import type { InfographicPlatform, InfographicSocial, InfographicTheme, MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
 import { type Exec, isPlainObject, lockTenantSettings, problemsError, StudioError, withTransaction } from './common.js';
 import { defaultStudioSettings, mergeSettings, overDefaults, readStudioSettings, STUDIO_SETTINGS_SECTIONS } from './settingsMerge.js';
+import { assertMacBrainAllowed } from '../macBrain.js';
 import { clearProfileCache } from '../profile/cache.js';
 import {
     loadOverlayProfile, loadScheduleTimezone, lockStoredProfile, newerSchemaError, overlayProfile, ProfileError, saveProfile, type SavedProfile,
@@ -322,6 +323,10 @@ async function applyStudioPatch(
     const next = mergeSettings(current, patch, problems);
     problems.push(...settingsProblems(next));
     if (problems.length) throw problemsError(problems.slice(0, MAX_PROBLEMS), 'these settings');
+    // The Mac is the owner's Claude plan: a tenant the Mac is not for cannot switch the Monteur onto it
+    // (G1). Only the switch is refused: a tenant already on it saves its other settings, and its calls are
+    // refused where they are made (think.ts).
+    if (next.monteur.brain === 'claude_mac' && current.monteur.brain !== 'claude_mac') await assertMacBrainAllowed(creatorId, 400);
 
     // What the profile owns and this patch changed. A profile this release cannot fully read takes no write (it would
     // delete what a newer release stored), so an edit that needs it is refused before anything is written; an edit

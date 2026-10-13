@@ -22,6 +22,7 @@ import crypto from 'crypto';
 import { pool } from '../../config/db.js';
 import type { InfographicRow, InfographicSchedule, RenderInfographicPayload, ScheduledPostRow } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
+import { assertMacBrainAllowed } from '../macBrain.js';
 import { insertVideoPost, metaPlatformFor } from '../monteur/clips.js';
 import { THINK_MODEL } from '../monteur/think.js';
 import { clipText, type Exec, isPlainObject, lockTenantPublishing, problemsError, requireId, StudioError, withTransaction } from './common.js';
@@ -144,6 +145,8 @@ export async function createInfographic(creatorId: string, body: unknown): Promi
     if (notes && notes.length > MAX_NOTES) problems.push(`notes are longer than ${MAX_NOTES} characters`);
     if (b.language !== undefined && b.language !== 'ar' && b.language !== 'en') problems.push('language must be ar or en');
     if (problems.length) throw problemsError(problems, 'this infographic');
+    // Claude writes it, on the Mac: only for the owner and the tenants the operator added, and before any row exists (G1).
+    await assertMacBrainAllowed(creatorId);
 
     const settings = await getStudioSettings(creatorId);
     const language = (b.language as 'ar' | 'en' | undefined) ?? settings.infographic.language;
@@ -213,6 +216,9 @@ export async function updateInfographic(creatorId: string, rawId: unknown, body:
 export async function rerenderInfographic(creatorId: string, rawId: unknown, body: unknown): Promise<InfographicView> {
     const id = requireId(rawId, 'infographic');
     const b = isPlainObject(body) ? body : {};
+    // Written again by Claude on the Mac: the same gate as a new one, before the row is locked (G1). A row with no
+    // spec yet is a rewrite whatever the body says, and `enqueueJob` refuses that one. A render alone needs none.
+    if (b.rewrite === true) await assertMacBrainAllowed(creatorId);
     const settings = await getStudioSettings(creatorId);
     return withTransaction(async (client) => {
         const row = await lockRow(client, creatorId, id);

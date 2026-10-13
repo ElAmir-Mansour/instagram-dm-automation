@@ -21,6 +21,7 @@ import type { Request, Response } from 'express';
 import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import { setStorageFetch } from '../services/supabaseStorage.js';
+import { invalidateTenantCache } from '../services/tenant.js';
 import adminRouter from './admin.js';
 
 interface Reply {
@@ -94,6 +95,8 @@ const ROUTES: Array<[string, string, Record<string, unknown>?]> = [
     ['GET', '/media-storage'],
     ['PUT', '/media-storage'],
     ['DELETE', '/media-storage'],
+    ['GET', '/mac-brain-tenants'],
+    ['PUT', '/mac-brain-tenants'],
 ];
 
 describe('the platform_admin gate', () => {
@@ -511,6 +514,153 @@ describe('the Gemini key', () => {
         assert.equal(after.body.source, 'database');
         assert.ok(!JSON.stringify(after.body).includes(KEY));
         assert.ok(!JSON.stringify(after.body).includes('environment-one'));
+    });
+});
+
+/**
+ * GET/PUT /mac-brain-tenants (G1) — who may use the operator's Mac for Claude's work.
+ *
+ * Reaches SQL, so the pool is an in-memory `app_settings` plus the creators it reads. What is pinned: the
+ * owner (the first creator ever made) is always allowed and is reported as `platform_tenant`; the saved list is
+ * `extra_tenants`, which only adds tenants, so `[]` and `null` both leave the owner alone; only existing tenants
+ * can be listed; and each write leaves one `settings.mac_brain_write` audit row saying what changed.
+ */
+describe('the Mac brain tenants', () => {
+    const OWNER = '11111111-1111-4111-8111-111111111111';
+    const SECOND = '22222222-2222-4222-8222-222222222222';
+    const GHOST = '99999999-9999-4999-8999-999999999999';
+    const NAMES: Record<string, string> = { [OWNER]: 'Owner', [SECOND]: 'Second' };
+    const KEY = 'studio.mac_brain_tenants';
+
+    let saved: string | null;
+    let statements: Array<{ sql: string; params: unknown[] }>;
+    const restore: Array<() => void> = [];
+
+    beforeEach(() => {
+        saved = null;
+        statements = [];
+        invalidateTenantCache();
+        const originalQuery = pool.query;
+        const previousSink = setLogSink(() => {});
+        (pool as unknown as { query: unknown }).query = async (sql: string, params: unknown[] = []) => {
+            const flat = sql.replace(/\s+/g, ' ').trim();
+            statements.push({ sql: flat, params });
+            if (/^SELECT value, is_secret FROM app_settings/.test(flat)) {
+                return params[0] === KEY && saved !== null ? { rows: [{ value: saved, is_secret: false }], rowCount: 1 } : { rows: [], rowCount: 0 };
+            }
+            if (/^INSERT INTO app_settings/.test(flat)) { if (params[0] === KEY) saved = String(params[1]); return { rows: [], rowCount: 1 }; }
+            if (/^DELETE FROM app_settings/.test(flat)) { saved = null; return { rows: [], rowCount: 1 }; }
+            // The owner: the first creator ever made, whether or not it is active.
+            if (/^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/.test(flat)) return { rows: [{ id: OWNER }], rowCount: 1 };
+            if (/^SELECT id, name FROM creators WHERE id = ANY/.test(flat)) {
+                const rows = (params[0] as string[]).filter((id) => NAMES[id]).map((id) => ({ id, name: NAMES[id] }));
+                return { rows, rowCount: rows.length };
+            }
+            if (/^SELECT id FROM creators WHERE id = ANY/.test(flat)) {
+                const rows = (params[0] as string[]).filter((id) => NAMES[id]).map((id) => ({ id }));
+                return { rows, rowCount: rows.length };
+            }
+            if (/^INSERT INTO audit_log/.test(flat)) return { rows: [{ id: 'audit-1' }], rowCount: 1 };
+            throw new Error(`no result arranged for SQL: ${flat}`);
+        };
+        restore.push(() => {
+            (pool as unknown as { query: unknown }).query = originalQuery;
+            setLogSink(previousSink);
+            invalidateTenantCache();
+        });
+    });
+    afterEach(() => { while (restore.length) restore.pop()!(); });
+
+    const auditRows = () => statements.filter((st) => /^INSERT INTO audit_log/.test(st.sql));
+    const writes = () => statements.filter((st) => /^(INSERT INTO app_settings|DELETE FROM app_settings)/.test(st.sql));
+    const put = (body: unknown, session: Session = ADMIN) => call('PUT', '/mac-brain-tenants', { session, body });
+
+    it('reports the owner as platform_tenant, and no extra tenants when nothing is saved', async () => {
+        const reply = await call('GET', '/mac-brain-tenants', { session: ADMIN });
+        assert.equal(reply.status, 200);
+        assert.deepEqual(reply.body, {
+            source: 'default',
+            platform_tenant: { id: OWNER, name: 'Owner' },
+            extra_tenants: [],
+        });
+    });
+
+    it('refuses a body that is not a list of creator ids, writing and auditing nothing', async () => {
+        const tooMany = Array.from({ length: 51 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`);
+        for (const body of [undefined, {}, { tenants: 'all' }, { tenants: OWNER }, { tenants: [OWNER, 'nope'] }, { tenants: [42] }, { tenants: tooMany }]) {
+            const reply = await put(body);
+            assert.equal(reply.status, 400, JSON.stringify(body)?.slice(0, 60));
+            assert.match(reply.body.error, /tenants/);
+        }
+        assert.equal(writes().length, 0);
+        assert.equal(auditRows().length, 0);
+    });
+
+    it('404s a tenant that does not exist, naming it: a typo must not add nobody, silently', async () => {
+        const reply = await put({ tenants: [SECOND, GHOST] });
+        assert.equal(reply.status, 404);
+        assert.equal(reply.body.error, `No such tenant: ${GHOST}.`);
+        assert.equal(writes().length, 0);
+        assert.equal(auditRows().length, 0);
+    });
+
+    it('saves the list whole, lower-cased and without repeats, as the session’s user, and reports it as extra_tenants', async () => {
+        const reply = await put({ tenants: [SECOND.toUpperCase(), SECOND] }, { ...ADMIN, userId: 'user-7' });
+        assert.equal(reply.status, 200);
+        assert.equal(saved, JSON.stringify([SECOND]));
+        assert.equal(writes()[0]!.params[3], 'user-7');
+        assert.deepEqual(reply.body, {
+            source: 'database',
+            platform_tenant: { id: OWNER, name: 'Owner' },
+            extra_tenants: [{ id: SECOND, name: 'Second' }],
+        });
+        assert.deepEqual((await call('GET', '/mac-brain-tenants', { session: ADMIN })).body, reply.body, 'the next read agrees');
+    });
+
+    it('audits the save as settings.mac_brain_write, with what it was and what it is', async () => {
+        await put({ tenants: [SECOND] });
+        const [row] = auditRows();
+        assert.equal(auditRows().length, 1);
+        assert.deepEqual([row!.params[2], row!.params[3], row!.params[4]], ['settings.mac_brain_write', 'app', null]);
+        assert.deepEqual(JSON.parse(String(row!.params[5])), {
+            change: 'saved', extra_tenants: [SECOND], previous_extra_tenants: [], previous_source: 'default',
+        });
+    });
+
+    it('null forgets the list: the owner alone, from the default, audited as a reset', async () => {
+        await put({ tenants: [SECOND] });
+        const reply = await put({ tenants: null });
+        assert.equal(reply.status, 200);
+        assert.equal(saved, null);
+        assert.deepEqual(reply.body, { source: 'default', platform_tenant: { id: OWNER, name: 'Owner' }, extra_tenants: [] });
+        const rows = auditRows();
+        assert.equal(rows.length, 2);
+        assert.deepEqual(JSON.parse(String(rows[1]!.params[5])), {
+            change: 'reset', extra_tenants: [], previous_extra_tenants: [SECOND], previous_source: 'database',
+        });
+    });
+
+    it('accepts [] : no extra tenants, the owner still on the Mac', async () => {
+        await put({ tenants: [SECOND] });
+        const reply = await put({ tenants: [] });
+        assert.equal(reply.status, 200);
+        assert.equal(saved, '[]');
+        assert.deepEqual(reply.body, { source: 'database', platform_tenant: { id: OWNER, name: 'Owner' }, extra_tenants: [] });
+        assert.equal(auditRows().length, 2);
+    });
+
+    it('lets the owner be named in the list: saved as given, no harm, no change to who is allowed', async () => {
+        const reply = await put({ tenants: [OWNER, SECOND] });
+        assert.equal(reply.status, 200);
+        assert.deepEqual(reply.body.extra_tenants.map((t: { id: string }) => t.id), [OWNER, SECOND]);
+        assert.deepEqual(reply.body.platform_tenant, { id: OWNER, name: 'Owner' });
+    });
+
+    it('answers a non-admin 404 and writes nothing', async () => {
+        const reply = await put({ tenants: [SECOND] }, NOT_ADMIN);
+        assert.equal(reply.status, 404);
+        assert.equal(writes().length, 0);
+        assert.equal(auditRows().length, 0);
     });
 });
 

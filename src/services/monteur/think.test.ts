@@ -13,6 +13,7 @@ import { setLogSink } from '../../utils/log.js';
 import { ANALYST_PURPOSE, LESSONS_SCHEMA, THINKING_RUN } from './analyst.js';
 import { COPY_SCHEMA } from './copy.js';
 import { EDITOR_SCHEMA } from './editor.js';
+import { MacBrainRefused, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
 import { ask, emptyCost } from './model.js';
 import { PICK_SCHEMA } from './pick.js';
 import { MAX_THINK_OUTPUT_CHARS, parseMonteurThinkResult } from './results.js';
@@ -20,7 +21,7 @@ import { installFakeDb, type FakeDb } from './testDb.js';
 import {
     clipsThinkKey, flattenTurns, lessonsThinkKey, MAX_THINK_TRIES, nextThinkStep, readThinkAnswer, sourceThinkKey,
     THINK_BACKOFF_MINUTES, THINK_ENQUEUE_SQL, THINK_FAILED, THINK_MODEL, THINK_STALE_ERROR, THINK_STALE_MINUTES,
-    ThinkExhausted, thinkRoute, ThinkWaiting, toJsonSchema, type ThinkTry,
+    ThinkExhausted, think, thinkRoute, ThinkWaiting, toJsonSchema, type ThinkTry,
 } from './think.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -201,7 +202,7 @@ describe('think — the queue, from the sweep’s side', () => {
     };
 
     beforeEach(() => {
-        db = installFakeDb();
+        db = installFakeDb({ platformTenant: TENANT });
         tries = [];
         gemini = 0;
         previousCaller = setModelCaller(async () => {
@@ -318,6 +319,88 @@ describe('parseMonteurThinkResult — what completeJob stores', () => {
             { output: 'x'.repeat(MAX_THINK_OUTPUT_CHARS + 1), model: 'm' }]) {
             assert.throws(() => parseMonteurThinkResult(bad), (e: unknown) => (e as { status?: number }).status === 400, JSON.stringify(bad)?.slice(0, 80));
         }
+    });
+});
+
+// ─── The Mac is the owner's (G1) ────────────────────────────────────────────────────────
+
+describe('think — only for the owner and the tenants added in studio.mac_brain_tenants', () => {
+    const NEW_TENANT = '22222222-2222-4222-8222-222222222222';
+    let db: FakeDb;
+    let tries: ThinkTry[];
+    let saved: string | null;
+    let gemini: number;
+    let previousCaller: CallModel;
+    const route = (creatorId: string) => ({ creatorId, request: `source/${SOURCE}/a1/monteur.pick`, step: 'pick' as const });
+    const request = (creatorId: string) => ({
+        purpose: 'monteur.pick', system: 'You pick.', turns: [{ role: 'user' as const, text: 'L1 hello' }], schema: PICK_SCHEMA,
+        temperature: 0.4, thinkingBudget: 1024, maxOutputTokens: 8192, capMs: 120_000, think: route(creatorId),
+    });
+    const queued = () => db.ran(/^INSERT INTO studio_jobs/);
+    const read = () => db.ran(/^SELECT id, status, result, error, \(payload->>'try'\)::int AS try/);
+
+    beforeEach(() => {
+        db = installFakeDb({ platformTenant: TENANT });
+        tries = [];
+        saved = null;
+        gemini = 0;
+        previousCaller = setModelCaller(async () => {
+            gemini += 1;
+            throw new Error('Gemini was reached');
+        });
+        db.routes.push(
+            [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({
+                rows: p[0] === 'studio.mac_brain_tenants' && saved !== null ? [{ value: saved, is_secret: false }] : [],
+            })],
+            [/^SELECT id, status, result, error, \(payload->>'try'\)::int AS try/, () => ({ rows: tries.map((t) => ({ ...t })) })],
+            [/^INSERT INTO studio_jobs \(creator_id, kind, payload\) VALUES \(\$1, 'monteur_think'/, () => ({ rows: [{ id: 'job-new' }] })],
+        );
+    });
+    afterEach(() => {
+        db.restore();
+        setModelCaller(previousCaller);
+    });
+
+    const refused = (err: unknown) => err instanceof MacBrainRefused && err.status === 409 && err.code === 'NEEDS_API_BRAIN' && err.message === NEEDS_API_BRAIN_MESSAGE;
+
+    it('ask() on the Mac route refuses a new tenant: a 409 NEEDS_API_BRAIN, nothing read, nothing queued, no Gemini', async () => {
+        await assert.rejects(ask(request(NEW_TENANT), Date.now() + 100_000, emptyCost()), refused);
+        assert.equal(queued().length, 0);
+        assert.equal(read().length, 0, 'not even its tries are looked at');
+        assert.equal(gemini, 0, 'a refused tenant does not fall back to Gemini either');
+    });
+
+    it('think() itself refuses, so no caller can queue around ask()', async () => {
+        await assert.rejects(think(route(NEW_TENANT), request(NEW_TENANT), emptyCost()), refused);
+        assert.equal(queued().length, 0);
+    });
+
+    it('does not hand a refused tenant an answer a try already holds', async () => {
+        tries = [tryRow({ status: 'done', result: { output: { topic: 't', clips: [] }, model: 'claude-opus-5-5' } })];
+        await assert.rejects(ask(request(NEW_TENANT), Date.now() + 100_000, emptyCost()), refused);
+    });
+
+    it('the owner, with nothing configured, queues as before', async () => {
+        await assert.rejects(ask(request(TENANT), Date.now() + 100_000, emptyCost()), ThinkWaiting);
+        assert.equal(queued().length, 1);
+        assert.equal(queued()[0]!.params[0], TENANT);
+    });
+
+    it('a saved list adds tenants: a second queues, the owner still does, a third is refused', async () => {
+        saved = JSON.stringify([NEW_TENANT]);
+        await assert.rejects(ask(request(NEW_TENANT), Date.now() + 100_000, emptyCost()), ThinkWaiting);
+        await assert.rejects(ask(request(TENANT), Date.now() + 100_000, emptyCost()), ThinkWaiting);
+        assert.deepEqual(queued().map((q) => q.params[0]), [NEW_TENANT, TENANT]);
+
+        await assert.rejects(ask(request('33333333-3333-4333-8333-333333333333'), Date.now() + 100_000, emptyCost()), refused);
+        assert.equal(queued().length, 2, 'the third queued nothing');
+    });
+
+    it('a saved [] is the owner alone: he still queues, nobody else does', async () => {
+        saved = '[]';
+        await assert.rejects(ask(request(TENANT), Date.now() + 100_000, emptyCost()), ThinkWaiting);
+        await assert.rejects(ask(request(NEW_TENANT), Date.now() + 100_000, emptyCost()), refused);
+        assert.equal(queued().length, 1);
     });
 });
 

@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Six flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Seven flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
@@ -24,7 +24,8 @@ bug it was written to fix.
 [3. Scheduled post → publish](#3-scheduled-post--publish) ·
 [4. Login → session → tenant](#4-login--session--tenant) ·
 [5. Job lifecycle](#5-job-lifecycle) ·
-[6. TikTok post → inbox → published](#6-tiktok-post--inbox--published)
+[6. TikTok post → inbox → published](#6-tiktok-post--inbox--published) ·
+[7. Claude on the Mac → who may ask](#7-claude-on-the-mac--who-may-ask)
 
 ---
 
@@ -1681,6 +1682,47 @@ a scheduled row carries them in `scheduled_posts.platform_options` until it publ
 **account** to be private at posting time, or the call fails with
 `unaudited_client_can_only_post_to_private_accounts`.
 
+## 7. Claude on the Mac → who may ask
+
+Two kinds of Studio work are answered by Claude Code on the **owner's Mac, on his personal Claude plan**: a
+`monteur_think` (`monteur.brain: 'claude_mac'`) and a `render_infographic` whose payload has `write`. Anthropic's
+terms forbid routing anyone else's work through that plan, so the server refuses it for every tenant the Mac is not
+for (G1, `src/services/macBrain.ts`).
+
+**The owner is always allowed; the list adds tenants.** The owner is the first creator ever made
+(`getPlatformOwnerId`, `tenant.ts`: `ORDER BY created_at, id`, **no `is_active` filter**, cached 30 s), so
+deactivating him cannot hand the Mac to tenant #2, and no setting can take it from him. The app setting
+`studio.mac_brain_tenants` (a JSON list of creator ids) names the tenants allowed besides him: unset, `null` and `[]`
+all mean "the owner only", so a tenant created tomorrow is refused by default. With no creators at all, nobody is
+allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409** `{ error, code: 'NEEDS_API_BRAIN' }`.
+
+1. **A think is queued** only by `think()` (**`src/services/monteur/think.ts:246`**), which checks first, before a
+   try is read or queued. `ask()`'s Mac route (`model.ts`) is the only way in, so the pick, the Marketer, the Editor
+   and the Analyst are all covered. A refused source stops at once with the reason (`failAttempt`,
+   **`sweep.ts:209`**); a refused Analyst run fails with it; neither falls back to Gemini.
+2. **An infographic is written** by `createInfographic` (**`infographics.ts:149`**) and by `rerenderInfographic` with
+   `rewrite: true` (**`:221`**): before any row is written or locked, so the operator gets the 409 and nothing is left
+   `writing`. A row with no spec yet is a rewrite whatever the body says, and step 3 refuses that one. A render alone
+   (an edit, a copy, the other theme, the second half of "both themes") asks Claude nothing and is never refused.
+3. **The net:** `enqueueJob` (**`studio/jobs.ts:88`**) refuses any `monteur_think` or `render_infographic` with
+   `write` whoever calls it.
+4. **The claim:** a job already queued (before the guard, or for a tenant since taken off the list) is **failed with
+   the same reason instead of being handed to the worker**, in the claim that found it, and the claim goes on to the
+   next job (`claimJob`, **`jobs.ts:300`**, at most 50 refusals per poll). Its infographic goes `failed` with the
+   message; a failed think is one try, and `think()` refuses before another is queued. If the allow-list **cannot be
+   read** after the claim, the job is **released** (`RELEASE_CLAIM_SQL`: `pending`, attempt unspent) before the error
+   goes on, so it is neither handed out unchecked nor left `claimed` for 15 minutes.
+5. **The settings:** a tenant the Mac is not for cannot switch `monteur.brain` to `claude_mac`: 400 with the same
+   message and code (`applyStudioPatch`, **`studio/settings.ts:329`**). Only the switch is refused.
+6. **The operator surface:** platform admin `GET` / `PUT /api/admin/mac-brain-tenants` (**`routes/admin.ts:392`**,
+   **`:405`**). `GET` reports `platform_tenant` (the owner) and `extra_tenants` (the saved list). `PUT { tenants: [ids] }`
+   saves the list (`[]` is allowed; every id must be a creator), `{ tenants: null }` forgets it; each write is one
+   `settings.mac_brain_write` audit row. No dashboard card yet: the AI providers card (P20d) will host it.
+
+> **Fails closed, but never against the owner.** The list is read on every call. A read that errors throws; it is
+> never a yes. A saved value that is not a list of UUIDs is logged (`studio.mac_brain_setting_unreadable`) and
+> ignored, which leaves the owner alone. Tenants get the Monteur and infographics through the AI providers layer.
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -1709,5 +1751,6 @@ error, and several write **no row at all**.
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |
 | 6 | **creator never posts the draft** | *(none)* | row stays `IN_INBOX`; the sweep stops asking after 7 days |
+| 7 | a think or an infographic write for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:300`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
 
 `RUNBOOK.md` works these backwards from the symptom.

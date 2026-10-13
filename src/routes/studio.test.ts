@@ -13,7 +13,9 @@ import express from 'express';
 import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
 import { setMediaStore, SupabaseStorageMediaStore, type MediaStore } from '../services/storage.js';
+import { NEEDS_API_BRAIN_MESSAGE } from '../services/macBrain.js';
 import { setStorageFetch } from '../services/supabaseStorage.js';
+import { invalidateTenantCache } from '../services/tenant.js';
 import { setGeneration } from '../services/studio/drafts.js';
 import { hashWorkerToken, mintWorkerToken } from '../services/studio/worker.js';
 import { MAX_STUDIO_UPLOAD_BYTES, sniffImageType, studioRouter, studioWorkerRouter } from './studio.js';
@@ -539,6 +541,79 @@ describe('POST /worker/claim — the fast lane', () => {
         assert.equal(r.status, 400);
         assert.match(r.body.error, /^kinds must be a list of job kinds/);
         assert.ok(!statements.some((s) => /^WITH picked AS/.test(s.sql)));
+    });
+});
+
+describe('the Mac is the owner’s (G1), over the routes', () => {
+    /** The owner: `getPlatformOwnerId`'s statement. Tenant B is the owner here, so tenant A (the session's and the worker's) is someone else. */
+    const OWNER_SQL = /^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/;
+    const thinkJob = (creatorId: string): FakeJob => ({
+        id: JOB_A, creator_id: creatorId, kind: 'monteur_think', status: 'pending', payload: { request: 'source/x/a1/monteur.pick', try: 1 }, attempts: 0,
+    });
+    beforeEach(() => {
+        invalidateTenantCache();
+        routes.unshift([OWNER_SQL, () => ({ rows: [{ id: TENANT_B }] })]);
+    });
+    afterEach(() => invalidateTenantCache());
+
+    it('POST /infographics answers a tenant that is not on the list with 409 { error, code: NEEDS_API_BRAIN }, writing nothing', async () => {
+        const res = await call('post', '/infographics', { body: { topic: 'RAG vs CAG vs KAG' } });
+        assert.equal(res.statusCode, 409);
+        assert.deepEqual(res.body, { error: NEEDS_API_BRAIN_MESSAGE, code: 'NEEDS_API_BRAIN' });
+        assert.ok(!statements.some((s) => /^INSERT INTO (infographics|studio_jobs)/.test(s.sql)));
+    });
+
+    it('POST /infographics/:id/render with rewrite is the same 409, and a render alone is not', async () => {
+        const id = '22222222-2222-4222-8222-222222222222';
+        const row = { id, creator_id: TENANT_A, topic: 'RAG', notes: null, language: 'en', theme: 'dark', status: 'ready', spec: { columns: [] }, job_id: null };
+        routes.unshift(
+            [/^SELECT \* FROM infographics WHERE id = \$1 AND creator_id = \$2 FOR UPDATE/, () => ({ rows: [row] })],
+            [/^INSERT INTO studio_jobs/, (p) => ({ rows: [{ id: 'job-new', kind: p[1], status: 'pending', payload: JSON.parse(p[2]) }] })],
+        );
+        const rewrite = await call('post', '/infographics/:id/render', { params: { id }, body: { rewrite: true } });
+        assert.equal(rewrite.statusCode, 409);
+        assert.equal(rewrite.body.code, 'NEEDS_API_BRAIN');
+        assert.equal(statements.filter((s) => /^INSERT INTO studio_jobs/.test(s.sql)).length, 0);
+    });
+
+    it('the Studio settings answer a tenant switching the Monteur onto the Mac with 400 { error, code }', async () => {
+        const res = await call('put', '/settings', { body: { monteur: { brain: 'claude_mac' } } });
+        assert.equal(res.statusCode, 400);
+        assert.deepEqual(res.body, { error: NEEDS_API_BRAIN_MESSAGE, code: 'NEEDS_API_BRAIN' });
+        assert.ok(!statements.some((s) => /^INSERT INTO studio_settings/.test(s.sql)));
+    });
+
+    it('a refusal without a code (any other StudioError) still carries none', async () => {
+        const res = await call('post', '/monteur/clips/:id/rerender', { params: { id: 'nope' } });
+        assert.equal(res.statusCode, 404);
+        assert.deepEqual(res.body, { error: 'No such clip.' });
+    });
+
+    it('POST /worker/claim fails a pending think of a tenant that is not on the list instead of handing it out: 204, job failed with the reason', async () => {
+        jobs = [thinkJob(TENANT_A)];
+        const r = await worker('/worker/claim', TOKEN_A);
+        assert.equal(r.status, 204);
+        const [failed] = statements.filter((s) => /^UPDATE studio_jobs SET status = 'failed', error = \$2, progress = NULL/.test(s.sql));
+        assert.deepEqual(failed!.params, [JOB_A, NEEDS_API_BRAIN_MESSAGE]);
+    });
+
+    it('POST /worker/claim hands a tenant the list adds its think, and the owner his own', async () => {
+        routes.unshift([/FROM app_settings/, (p) => ({
+            rows: p[0] === 'studio.mac_brain_tenants' ? [{ value: JSON.stringify([TENANT_A]), is_secret: false }] : [],
+        })]);
+        jobs = [thinkJob(TENANT_A)];
+        const r = await worker('/worker/claim', TOKEN_A);
+        assert.equal(r.status, 200, 'tenant A is listed; tenant B is the owner');
+        assert.equal(r.body.job.kind, 'monteur_think');
+    });
+
+    it('POST /worker/claim hands the owner’s think to his worker, with nothing configured', async () => {
+        routes.unshift([OWNER_SQL, () => ({ rows: [{ id: TENANT_A }] })]);
+        jobs = [thinkJob(TENANT_A)];
+        const r = await worker('/worker/claim', TOKEN_A);
+        assert.equal(r.status, 200);
+        assert.equal(r.body.job.kind, 'monteur_think');
+        assert.ok(!statements.some((s) => /^UPDATE studio_jobs SET status = 'failed', error = \$2, progress = NULL/.test(s.sql)));
     });
 });
 

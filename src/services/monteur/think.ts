@@ -26,6 +26,7 @@ import { pool } from '../../config/db.js';
 import type { MonteurThinkPayload, StudioJobStatus } from '../../db/rows.js';
 import { log } from '../../utils/log.js';
 import { toJsonSchema } from '../llm/geminiSchema.js';
+import { assertMacBrainAllowed } from '../macBrain.js';
 import { isFiniteNumber, isPlainObject } from '../studio/common.js';
 import type { GeminiSchema, ModelTurn } from '../studio/generate.js';
 import type { CallCost } from './model.js';
@@ -236,8 +237,13 @@ async function loadTries(route: ThinkRoute): Promise<ThinkTry[]> {
 /**
  * The call, on the Mac: its answer when a try has one; else it queues or waits and throws
  * `ThinkWaiting`, or throws `ThinkExhausted` once every try has failed. Never calls Gemini.
+ *
+ * Only for a tenant on `studio.mac_brain_tenants`: the Mac is the owner's Claude plan, and anyone else's
+ * work on it is against Anthropic's terms. Anyone else gets a `MacBrainRefused` (409 `NEEDS_API_BRAIN`) before
+ * a try is read or queued, so a source or run of theirs fails with the reason (src/services/macBrain.ts).
  */
 export async function think(route: ThinkRoute, req: ThinkRequest, cost: CallCost): Promise<unknown> {
+    await assertMacBrainAllowed(route.creatorId);
     // A try failed here (stale, or an unusable answer) is decided on again at once: at most twice.
     for (let round = 0; round < 3; round++) {
         const next = nextThinkStep(await loadTries(route));

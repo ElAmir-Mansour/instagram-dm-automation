@@ -96,6 +96,15 @@ export const APP_SETTING_KEYS = {
     siteContactEmail: 'site.contact_email',
     /** `YYYY-MM-DD` — the last day the Eid page's Udemy coupons work. Empty = no campaign. */
     siteEidCouponsExpire: 'site.eid_coupons_expire',
+    /**
+     * JSON `["<creator uuid>", …]`: the tenants whose Claude work (the Monteur's `monteur_think`, an
+     * infographic Claude writes) may run on the operator's Mac, on his personal Claude plan, BESIDES the
+     * owner (the first creator ever made), who is always allowed. Anthropic's terms forbid routing anyone
+     * else's work through it, so anyone else is refused (409 `NEEDS_API_BRAIN`, src/services/macBrain.ts).
+     * Unset and `[]` both mean the owner only: the setting only adds tenants. Not a secret. Written by
+     * `PUT /api/admin/mac-brain-tenants`.
+     */
+    studioMacBrainTenants: 'studio.mac_brain_tenants',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];

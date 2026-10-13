@@ -27,6 +27,7 @@
 import { pool } from '../../config/db.js';
 import type { ClipCopy, ClipDirection, ClipEdit, MonteurSourceRow, SourcePick, StudioSettings, TranscriptWord } from '../../db/rows.js';
 import { describeError, log } from '../../utils/log.js';
+import { MacBrainRefused } from '../macBrain.js';
 import { withTransaction } from '../studio/common.js';
 import { buildGenContext } from '../studio/drafts.js';
 import { toArabicDigits } from '../studio/generate.js';
@@ -198,12 +199,14 @@ async function releaseWaiting(source: ClaimedSource, err: ThinkWaiting): Promise
 /**
  * The attempt failed. Before the third, the claim stays, so the source is retried once it is 10
  * minutes old; the third fails it — and so does a call whose every try on the Mac failed
- * (`ThinkExhausted`), on any attempt: it stops until its Retry. Both are guarded by the attempt
- * number, so a sweep that took too long cannot overwrite a newer attempt's claim.
+ * (`ThinkExhausted`), on any attempt: it stops until its Retry. So does a tenant the Mac is not
+ * for (`MacBrainRefused`, macBrain.ts): trying again changes nothing until the operator does.
+ * Each is guarded by the attempt number, so a sweep that took too long cannot overwrite a newer
+ * attempt's claim.
  */
 async function failAttempt(source: ClaimedSource, err: unknown): Promise<MonteurSweepResult['pick']> {
     const message = errorText(err);
-    const final = source.attempts >= MAX_PICK_ATTEMPTS || err instanceof ThinkExhausted;
+    const final = source.attempts >= MAX_PICK_ATTEMPTS || err instanceof ThinkExhausted || err instanceof MacBrainRefused;
     await pool.query(
         final
             ? `UPDATE monteur_sources SET status = 'failed', error = $2, claimed_at = NULL, updated_at = NOW()
