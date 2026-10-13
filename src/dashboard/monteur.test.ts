@@ -1033,16 +1033,16 @@ describe('Monteur — every string in Arabic and English, and the page wired int
         assert.match(infographicsTabs, /href="#\/infographics"\s+aria-current="page"/);
     });
 
-    it('ships at cache version 12.9: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
+    it('ships at cache version 12.10: ASSET_VERSION, every ?v= in the shell, and the pages that pin the stylesheet', () => {
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const index = readFileSync('dashboard/index.html', 'utf8');
         const version = (app.match(/ASSET_VERSION: '([\d.]+)'/) || [])[1];
-        assert.equal(version, '12.9');
+        assert.equal(version, '12.10');
         const refs = [...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]);
         assert.ok(refs.length >= 11, `${refs.length} refs`);
-        assert.deepEqual([...new Set(refs)], ['12.9']);
+        assert.deepEqual([...new Set(refs)], ['12.10']);
         for (const page of ['public/landing.html', 'public/privacy.html', 'public/data-deletion.html', 'public/pricing.html', 'public/terms.html', 'dashboard/eid.html']) {
-            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.9'], page);
+            assert.deepEqual([...new Set([...readFileSync(page, 'utf8').matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], ['12.10'], page);
         }
     });
 });
@@ -1778,6 +1778,17 @@ describe('Infographics page', () => {
         fields['c1-name'] = 'KAG';
         const changed = s.Page.changes(item, s.Page.readEditor(form, item));
         assert.deepEqual(JSON.parse(JSON.stringify(changed.spec.columns.map((c: Json) => c.name))), ['RAG', 'KAG']);
+    });
+
+    it('shows the likely comments with their replies, each one tap from the clipboard', async () => {
+        const s = loadPage([ready({ review: { objections: [{ comment: 'Resizing happens on demand', reply: 'True for many stacks; the point holds on every cache miss.' }] } })]);
+        await s.Page.render();
+        await settle();
+        const page = s.dom.get('page-container')!.innerHTML;
+        assert.match(page, /Likely comments \(1\) and your replies/);
+        assert.match(page, /“Resizing happens on demand”/);
+        assert.match(page, /the point holds on every cache miss/);
+        assert.match(page, /data-action="infographics:copyReply"/);
     });
 
     it('every string it shows is in Arabic too', async () => {

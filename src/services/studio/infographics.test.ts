@@ -11,7 +11,7 @@ import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { THINK_MODEL } from '../monteur/think.js';
 import { StudioError } from './common.js';
 import {
-    BUDGETS, captionProblems, DIAGRAM_KINDS, headline, parseInfographicResult, specProblems, WRITE_SCHEMA, writeSystemPrompt,
+    BUDGETS, captionProblems, DIAGRAM_KINDS, headline, MAX_OBJECTIONS, parseInfographicResult, parseReview, specProblems, WRITE_SCHEMA, writeSystemPrompt,
     writeUserPrompt, type InfographicSpec,
 } from './infographicSpec.js';
 import {
@@ -173,6 +173,28 @@ describe('what Claude is asked', () => {
     });
 });
 
+describe('the practitioner review', () => {
+    it('asks Claude to read it as a senior engineer would: real setups, no absolutes, the cited trade-offs, then the likely comments', () => {
+        const system = writeSystemPrompt('en');
+        assert.match(system, /Practitioner review, before you answer/);
+        assert.match(system, /resize on upload, or on demand behind a cache/, 'the comment that started this, 2026-10-13');
+        assert.match(system, /No absolutes/);
+        assert.match(system, /If a fair objection is fixable on the page, fix the page/);
+        assert.ok((WRITE_SCHEMA.required as readonly string[]).includes('review'));
+        assert.equal(WRITE_SCHEMA.properties.review.properties.objections.maxItems, MAX_OBJECTIONS);
+    });
+
+    it('keeps up to three comment/reply pairs, trims them, and never fails a render over a bad one', () => {
+        const pair = (n: number) => ({ comment: ` c${n} `, reply: ` r${n} ` });
+        assert.deepEqual(parseReview({ objections: [pair(1), { comment: 'no reply' }, pair(2), pair(3), pair(4)] }),
+            { objections: [{ comment: 'c1', reply: 'r1' }, { comment: 'c2', reply: 'r2' }, { comment: 'c3', reply: 'r3' }] });
+        assert.equal(parseReview(null), null);
+        assert.equal(parseReview({ objections: 'x' }), null);
+        assert.equal(parseReview({ objections: [{ comment: ' ', reply: 'r' }] }), null);
+        assert.equal(parseReview({ objections: [{ comment: 'c'.repeat(900), reply: 'r' }] })!.objections[0]!.comment.length, 700);
+    });
+});
+
 describe('parseInfographicResult', () => {
     const RESULT = { mp4_url: up(1), gif_url: up(2), cover_url: up(3), gif_width: 720, gif_fps: 15 };
 
@@ -322,10 +344,12 @@ describe('updateInfographic, rerenderInfographic, copyInfographic', () => {
     });
 
     it('copies it into the other theme as a row of its own', async () => {
+        row.review = { objections: [{ comment: 'c', reply: 'r' }] };
         await copyInfographic(TENANT, ID, {});
         const insert = db.ran(/^INSERT INTO infographics/)[0]!;
         assert.equal(insert.params[4], 'light', 'dark → light');
         assert.equal(insert.params[6], CAPTION, 'the caption goes with it');
+        assert.deepEqual(JSON.parse(insert.params[7]), row.review, 'and its review');
         assert.deepEqual(jobPayload().spec, SPEC);
     });
 });
@@ -392,6 +416,19 @@ describe('the job: completeJob and failJob', () => {
         db.routes.unshift([/^SELECT job_id, spec, caption, topic, notes, language, pair_theme FROM infographics/, () => ({ rows: [row] })]);
     });
     const applied = () => db.ran(/^UPDATE infographics SET status = 'ready'/)[0]!;
+
+    it('stores the review Claude wrote with it; a re-render keeps the one it had', async () => {
+        const review = { objections: [{ comment: 'On demand, not on upload', reply: 'True; every cache miss is the same CPU work.' }] };
+        await completeJob(TENANT, JOB, { ...RESULT, written: { spec: SPEC, caption: CAPTION, model: 'm', review } });
+        let u = applied();
+        assert.match(u.sql, /review = CASE WHEN \$7::boolean THEN \$8::jsonb ELSE review END/);
+        assert.equal(u.params[6], true);
+        assert.deepEqual(JSON.parse(u.params[7]), review);
+        db.statements.length = 0;
+        await completeJob(TENANT, JOB, RESULT);
+        u = applied();
+        assert.equal(u.params[6], false, 'no write: the stored review stays');
+    });
 
     it('stores what Claude wrote and the worker rendered, with its files', async () => {
         assert.equal(await completeJob(TENANT, JOB, { ...RESULT, written: { spec: SPEC, caption: CAPTION, model: 'claude-opus-5-5' } }), 'applied');
