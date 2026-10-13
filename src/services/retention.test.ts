@@ -18,6 +18,8 @@ import {
     MIN_RETENTION_DAYS,
     PRUNE_BATCH_SIZE,
     pruneOrphanedMedia,
+    previewMediaCleanup,
+    resetProfileTableWarning,
     resolveRetention,
     runRetentionSweep,
 } from './retention.js';
@@ -231,6 +233,8 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
     let params: unknown[][] = [];
     /** What `storage.cleanup_after_publish` holds, as the app_settings read sees it. */
     let cleanupSetting: string | null = null;
+    /** Makes a statement fail, as the database would: the first one this returns an error for. */
+    let failWith: ((sql: string) => Error | null) | null = null;
     const originalQuery = pool.query;
     let restoreSink: (() => void) | undefined;
 
@@ -246,13 +250,17 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         statements = [];
         params = [];
         cleanupSetting = null;
+        failWith = null;
+        resetProfileTableWarning();
         (pool as unknown as { query: unknown }).query = async (sql: string, values: unknown[] = []) => {
             if (/FROM app_settings/.test(sql)) {
                 return { rows: cleanupSetting ? [{ value: cleanupSetting, is_secret: false }] : [], rowCount: 0 };
             }
             statements.push(sql.replace(/\s+/g, ' '));
             params.push(values);
-            return { rows: [], rowCount: 0 };
+            const failure = failWith?.(sql);
+            if (failure) throw failure;
+            return { rows: [], rowCount: 3 };
         };
     });
     afterEach(() => {
@@ -324,14 +332,69 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         assert.match(clause, /NOT EXISTS \( SELECT 1 FROM studio_settings ss WHERE ss\.infographic->>'photo_url' LIKE '%' \|\| m\.id::text \|\| '%'/);
     });
 
+    it('keeps the portrait and the logo a stored Creator Profile names', async () => {
+        // The portrait is mirrored into studio_settings, but the profile is the source of truth and the logo is
+        // held by no setting at all: a swept logo is a broken image on every infographic.
+        const clause = await keepClause();
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM creator_profiles cp WHERE \(COALESCE\(cp\.profile->'brand'->>'portrait_url', ''\) \|\| ' ' \|\| COALESCE\(cp\.profile->'brand'->>'logo_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+    });
+
     it('requires every guard at once: each NOT EXISTS is ANDed, never ORed', async () => {
         // An OR between them would delete anything any single table does not name — a render
         // slide is named by no scheduled post, so it would go.
         await pruneOrphanedMedia();
         const sql = statements[0]!;
-        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 6);
-        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 6);
+        assert.equal((sql.match(/NOT EXISTS/g) ?? []).length, 7);
+        assert.equal((sql.match(/AND NOT EXISTS/g) ?? []).length, 7);
         assert.doesNotMatch(sql, /OR NOT EXISTS/);
+    });
+
+    describe('before migration v33 is applied', () => {
+        const missing = (table: string): Error => Object.assign(new Error(`relation "${table}" does not exist`), { code: '42P01' });
+
+        it('runs again without the profile guard, instead of stopping the whole sweep', async () => {
+            // With no creator_profiles table no profile names a file, so the guard is vacuous: the sweep deletes
+            // what it deleted before the guard existed. Without the retry the query fails whole, the prune reports
+            // an error, and no media is cleaned up until `npm run migrate` runs.
+            failWith = (sql) => (/creator_profiles/.test(sql) ? missing('creator_profiles') : null);
+            const out = await pruneOrphanedMedia();
+            assert.deepEqual(out, { deleted: 3, skipped: false });
+            assert.equal(statements.length, 2);
+            assert.match(statements[0]!, /creator_profiles/);
+            assert.doesNotMatch(statements[1]!, /creator_profiles/);
+            assert.equal((statements[1]!.match(/AND NOT EXISTS/g) ?? []).length, 6, 'every other guard is still there');
+            assert.deepEqual(params[1], params[0], 'with the same window, flag and batch size');
+        });
+
+        it('warns once, not on every sweep', async () => {
+            const lines: string[] = [];
+            const previous = setLogSink((_level, line) => lines.push(line));
+            try {
+                failWith = (sql) => (/creator_profiles/.test(sql) ? missing('creator_profiles') : null);
+                await pruneOrphanedMedia();
+                await pruneOrphanedMedia();
+            } finally {
+                setLogSink(previous);
+            }
+            assert.equal(lines.filter((l) => l.includes('retention.profile_table_missing')).length, 1);
+        });
+
+        it('does not retry a failure about any other table', async () => {
+            // The retry is for the one table this migration adds. An infographics table that is missing is a
+            // different problem, and running the query again without a guard would not fix it.
+            failWith = () => missing('infographics');
+            const out = await pruneOrphanedMedia();
+            assert.deepEqual(out, { deleted: 0, skipped: true, reason: 'error' });
+            assert.equal(statements.length, 1);
+        });
+
+        it('the Clean up now preview falls back the same way', async () => {
+            failWith = (sql) => (/creator_profiles/.test(sql) ? missing('creator_profiles') : null);
+            await previewMediaCleanup();
+            assert.equal(statements.length, 2);
+            assert.match(statements[0]!, /creator_profiles/);
+            assert.doesNotMatch(statements[1]!, /creator_profiles/);
+        });
     });
 
     it('without the setting: MEDIA_RETENTION_DAYS, by age only — a published post’s file waits like any other', async () => {

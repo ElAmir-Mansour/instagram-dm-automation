@@ -11,10 +11,10 @@ import { pool } from '../../config/db.js';
 import type { MonteurConfig, MonteurPlatform, StudioDisplayFont, StudioSettings, StudioSettingsRow } from '../../db/rows.js';
 import type { InfographicPlatform, InfographicSocial, InfographicTheme, MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
 import { type Exec, isPlainObject, problemsError, StudioError } from './common.js';
-import { defaultStudioSettings as writerDefaults } from './settingsTypes.js';
+import { defaultStudioSettings, mergeSettings, overDefaults, STUDIO_SETTINGS_SECTIONS } from './settingsMerge.js';
 
-export const STUDIO_SETTINGS_SECTIONS = ['brand', 'voice', 'product', 'cta', 'schedule', 'library', 'examples', 'monteur', 'infographic'] as const;
-type Section = (typeof STUDIO_SETTINGS_SECTIONS)[number];
+// Read and merged in ./settingsMerge.ts, which imports nothing from here: the profile store reads the stored rows with them.
+export { defaultStudioSettings, mergeSettings, overDefaults, STUDIO_SETTINGS_SECTIONS };
 
 export const DISPLAY_FONTS: readonly StudioDisplayFont[] = ['Cairo', 'Tajawal', 'IBM Plex Sans Arabic', 'Inter'];
 /** Placeholders `cta.dmTemplate` may use; anything else is a typo that would reach a customer. */
@@ -37,58 +37,6 @@ const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 const MAX_PROBLEMS = 20;
 const HEX_COLOUR = /^#[0-9A-Fa-f]{6}$/;
 const LOCAL_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
-
-/**
- * Neutral. Every tenant starts here; nothing in it belongs to any one creator.
- *
- * One definition, owned by the writer's `settingsTypes.ts`: its built-in English example and its
- * rules are written against these exact CTA lines, so a second copy here drifted from them and a
- * default tenant's first generated carousel failed its own checks.
- */
-export function defaultStudioSettings(): StudioSettings {
-    return writerDefaults() as StudioSettings;
-}
-
-/**
- * `patch` merged into `base`: plain objects recursively, everything else (arrays, text, null)
- * replaced. A key `base` does not have is reported rather than kept, so a typo such as
- * `brand.pallete` is a 400 instead of a setting that silently does nothing.
- */
-function mergeInto(base: unknown, patch: unknown, path: string, problems: string[]): unknown {
-    if (!isPlainObject(base) || !isPlainObject(patch)) return patch;
-    const out: Record<string, unknown> = { ...base };
-    for (const [key, value] of Object.entries(patch)) {
-        if (!Object.prototype.hasOwnProperty.call(base, key)) {
-            problems.push(`${path}.${key} is not a setting`);
-            continue;
-        }
-        out[key] = mergeInto(base[key], value, `${path}.${key}`, problems);
-    }
-    return out;
-}
-
-/** A partial update applied to the current settings. Problems are unknown keys only. */
-export function mergeSettings(current: StudioSettings, patch: Record<string, unknown>, problems: string[]): StudioSettings {
-    const next: Record<string, unknown> = { ...current };
-    for (const [key, value] of Object.entries(patch)) {
-        if (!(STUDIO_SETTINGS_SECTIONS as readonly string[]).includes(key)) {
-            problems.push(`"${key}" is not a Studio setting (use ${STUDIO_SETTINGS_SECTIONS.join(', ')})`);
-            continue;
-        }
-        // Examples are a list: replaced whole, never merged slide by slide.
-        next[key] = key === 'examples' ? value : mergeInto(current[key as Section], value, key, problems);
-    }
-    return next as unknown as StudioSettings;
-}
-
-/** A stored row over the defaults. Unknown stored keys are dropped, not reported: nobody is asking. */
-export function overDefaults(stored: Partial<Record<Section, unknown>>): StudioSettings {
-    const patch: Record<string, unknown> = {};
-    for (const section of STUDIO_SETTINGS_SECTIONS) {
-        if (stored[section] !== undefined && (stored[section] !== null || section === 'examples')) patch[section] = stored[section];
-    }
-    return mergeSettings(defaultStudioSettings(), patch, []);
-}
 
 function isTimeZone(value: unknown): boolean {
     if (typeof value !== 'string' || !value) return false;

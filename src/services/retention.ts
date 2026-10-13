@@ -30,6 +30,7 @@ import { queryCount, queryOne } from '../db/query.js';
 import { APP_SETTING_KEYS, getSetting } from './appSettings.js';
 import { getJobQueue } from '../jobs/queue.js';
 import { log } from '../utils/log.js';
+import { isMissingTable } from './health.js';
 import { removeQueuedMediaObjects } from './storage.js';
 
 /** Floor on the configurable window. Below this, debugging a live webhook issue is hopeless. */
@@ -259,9 +260,9 @@ const NAMED_BY_POST = `(
  * An infographic (v31) keeps its GIF for as long as it exists: the GIF is posted by hand, to
  * LinkedIn and the rest, so no post ever names it. Its MP4 and cover are kept until its posting
  * time, as a reel's are; after that they go like any posted file. The portrait its brand shows is
- * kept while the settings name it.
+ * kept while the settings name it, and (v33) while the Creator Profile names it, with the logo.
  */
-export const MEDIA_CANDIDATES_SQL = `
+const MEDIA_CANDIDATES_BASE_SQL = `
                     SELECT m.id
                       FROM media_uploads m
                      WHERE (
@@ -312,6 +313,49 @@ export const MEDIA_CANDIDATES_SQL = `
                             WHERE ss.infographic->>'photo_url' LIKE '%' || m.id::text || '%'
                        )`;
 
+/**
+ * The portrait and logo a stored Creator Profile names (v33). The portrait is mirrored into
+ * `studio_settings.infographic.photo_url`, which the guard above already keeps; this is the guard for the day
+ * the profile is the only thing that names it, and for the logo, which no setting holds. It is the last guard,
+ * so a database without the table can run the rest (`withProfileTable`).
+ */
+const KEPT_BY_PROFILE_SQL = `
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM creator_profiles cp
+                            WHERE (COALESCE(cp.profile->'brand'->>'portrait_url', '') || ' ' || COALESCE(cp.profile->'brand'->>'logo_url', ''))
+                                  LIKE '%' || m.id::text || '%'
+                       )`;
+
+export const MEDIA_CANDIDATES_SQL = MEDIA_CANDIDATES_BASE_SQL + KEPT_BY_PROFILE_SQL;
+
+/** Logged once per process: the daily sweep and the clean-up screen both come here. */
+let profileTableWarned = false;
+
+/**
+ * Runs `run` with the candidate query. A database that has not had v33 applied yet has no `creator_profiles`, and
+ * the query would fail whole, so the media sweep would stop until `npm run migrate` ran. With no table no profile
+ * names a file, so the clause is vacuous and the query runs again without it: what it deletes is what it deleted
+ * before the clause existed. Any other failure, about any other table, is still the caller's.
+ */
+async function withProfileTable<T>(run: (candidatesSql: string) => Promise<T>): Promise<T> {
+    try {
+        return await run(MEDIA_CANDIDATES_SQL);
+    } catch (err) {
+        if (!isMissingTable(err, 'creator_profiles')) throw err;
+        if (!profileTableWarned) {
+            profileTableWarned = true;
+            log('warn', 'retention.profile_table_missing', { fix: 'npm run migrate (migration_v33_creator_profiles.sql)' });
+        }
+        return run(MEDIA_CANDIDATES_BASE_SQL);
+    }
+}
+
+/** Test hook: forget that the missing-v33 warning was logged. */
+export function resetProfileTableWarning(): void {
+    profileTableWarned = false;
+}
+
 export type MediaPruneOutcome =
     | { deleted: number; skipped: false }
     /** Retention is off, or configured below the minimum. Nothing was attempted. */
@@ -334,13 +378,13 @@ export async function pruneOrphanedMedia(policy?: MediaCleanupPolicy): Promise<M
     }
 
     try {
-        const deleted = await queryCount(
+        const deleted = await withProfileTable((candidates) => queryCount(
             `DELETE FROM media_uploads
-              WHERE id IN (${MEDIA_CANDIDATES_SQL}
+              WHERE id IN (${candidates}
                      LIMIT $3
               )`,
             [setting.days, setting.published, PRUNE_BATCH_SIZE]
-        );
+        ));
 
         if (deleted > 0) {
             log('info', 'retention.media_pruned', {
@@ -362,11 +406,11 @@ export const CLEANUP_NOW_POLICY: Extract<MediaCleanupPolicy, { enabled: true }> 
 
 /** What a clean-up would remove now: the files and their bytes. */
 export async function previewMediaCleanup(): Promise<{ files: number; bytes: number }> {
-    const row = await queryOne<{ files: string; bytes: string | null }>(
+    const row = await withProfileTable((candidates) => queryOne<{ files: string; bytes: string | null }>(
         `SELECT count(*) AS files, COALESCE(sum(COALESCE(u.size_bytes, octet_length(u.data))), 0) AS bytes
-           FROM media_uploads u WHERE u.id IN (${MEDIA_CANDIDATES_SQL})`,
+           FROM media_uploads u WHERE u.id IN (${candidates})`,
         [CLEANUP_NOW_POLICY.days, true]
-    );
+    ));
     return { files: Number(row?.files ?? 0), bytes: Number(row?.bytes ?? 0) };
 }
 

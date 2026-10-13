@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { isMissingSchema, newestOf, SHORT_KEYWORD_MAX_LENGTH, STORAGE_TIER_BYTES, toIso } from './health.js';
+import { isMissingSchema, isMissingTable, newestOf, SHORT_KEYWORD_MAX_LENGTH, STORAGE_TIER_BYTES, toIso } from './health.js';
 
 describe('toIso', () => {
     it('passes a Date through as ISO', () => {
@@ -72,6 +72,24 @@ describe('isMissingSchema', () => {
         // sends them to the wrong place entirely.
         for (const err of [{ code: '23505' }, { code: 'ECONNREFUSED' }, new Error('boom'), null, undefined]) {
             assert.equal(isMissingSchema(err), false, JSON.stringify(err));
+        }
+    });
+});
+
+describe('isMissingTable', () => {
+    const missing = (name: string) => ({ code: '42P01', message: `relation "${name}" does not exist` });
+
+    it('recognises a missing table of that name, and the ones named like it', () => {
+        assert.equal(isMissingTable(missing('creator_profiles'), 'creator_profile'), true);
+        assert.equal(isMissingTable(missing('creator_profile_versions'), 'creator_profile'), true);
+    });
+
+    it('does not swallow the same error about another table, or another error about this one', () => {
+        assert.equal(isMissingTable(missing('infographics'), 'creator_profile'), false);
+        assert.equal(isMissingTable(missing('not_creator_profiles'), 'creator_profile'), false, 'a prefix, not a substring');
+        assert.equal(isMissingTable({ code: '42703', message: 'column "creator_profile" does not exist' }, 'creator_profile'), false, 'a column is not a table');
+        for (const err of [{ code: '42P01' }, new Error('relation "creator_profiles" does not exist'), null, undefined]) {
+            assert.equal(isMissingTable(err, 'creator_profile'), false, JSON.stringify(err));
         }
     });
 });

@@ -16,12 +16,14 @@ import { normalizeArabic } from '../../utils/arabic.js';
 import { describeError, log } from '../../utils/log.js';
 import { isMissingSchema } from '../health.js';
 import { GrowthError } from './common.js';
+import { DEFAULT_GOALS, defaultGrowthSettings, fromRow } from './settingsRow.js';
+
+// Defined in ./settingsRow.ts, which imports nothing from here: the profile store reads the stored rows with them.
+export { DEFAULT_GOALS, defaultGrowthSettings };
 
 export const GROWTH_SETTING_KEYS = ['keywords', 'hashtag_sets', 'competitors', 'audience', 'goal_followers', 'goal_views'] as const;
 const GOAL_KEYS = ['goal_followers', 'goal_views'] as const;
 
-/** What a tenant with no row is aiming at (docs/agents/BRIEF.md): 10k followers or 1M views. */
-export const DEFAULT_GOALS = Object.freeze({ goal_followers: 10_000, goal_views: 1_000_000 });
 const AUDIENCE_KEYS = ['countries', 'languages', 'timezone'] as const;
 
 export const GROWTH_LIMITS = {
@@ -46,10 +48,6 @@ const LANGUAGE = /^[a-z]{2,3}$/;
 /** A hashtag: `#` then letters (any script), digits or underscores — no spaces or punctuation. */
 const HASHTAG = /^#[\p{L}\p{M}\p{N}_]+$/u;
 const MAX_PROBLEMS = 20;
-
-export function defaultGrowthSettings(): GrowthSettings {
-    return { keywords: [], hashtag_sets: [], competitors: [], audience: {}, ...DEFAULT_GOALS };
-}
 
 type Loose = Record<string, unknown>;
 const isObj = (v: unknown): v is Loose => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -233,28 +231,6 @@ export function applyGrowthPatch(current: GrowthSettings, patch: unknown): { set
         }
     }
     return { settings: next, problems };
-}
-
-/** A stored row, read defensively: the columns have defaults, but JSONB can hold anything. */
-function fromRow(row: Partial<GrowthSettings> | null): GrowthSettings {
-    if (!row) return defaultGrowthSettings();
-    const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
-    return {
-        keywords: strings(row.keywords),
-        hashtag_sets: (Array.isArray(row.hashtag_sets) ? row.hashtag_sets : [])
-            .filter(isObj)
-            .map((s) => ({ name: typeof s.name === 'string' ? s.name : '', tags: strings(s.tags) })),
-        competitors: strings(row.competitors),
-        audience: isObj(row.audience) ? (row.audience as GrowthAudience) : {},
-        goal_followers: storedGoal(row.goal_followers, DEFAULT_GOALS.goal_followers),
-        goal_views: storedGoal(row.goal_views, DEFAULT_GOALS.goal_views),
-    };
-}
-
-/** `pg` returns BIGINT as a string; a row written before v25 has neither column. */
-function storedGoal(value: unknown, fallback: number): number {
-    const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
-    return Number.isInteger(n) && n >= 1 ? n : fallback;
 }
 
 /** Logged once per process: every Growth route reads the settings, so a warning per call would be noise. */
