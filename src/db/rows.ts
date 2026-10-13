@@ -36,10 +36,15 @@ export type Timestamptz = Date;
 
 export interface CreatorRow {
     id: string;
+    /** Null since v34, with `page_access_token`: no Meta connection. */
     instagram_page_id: string | null;
     facebook_page_id: string | null;
-    /** Stored `enc:v1:...` — always read through `src/services/tenant.ts`, never raw. */
-    page_access_token: string;
+    /**
+     * Stored `enc:v1:...` — always read through `src/services/tenant.ts`, never raw. Null since v34: a tenant created by
+     * name has no Meta connection yet, and every reader treats null as "not connected" (skipped), never as an error.
+     * The database forbids page ids without one (`creators_meta_ids_need_token`).
+     */
+    page_access_token: string | null;
     is_active: boolean;
     name: string | null;
     meta_user_id: string | null;
@@ -47,6 +52,9 @@ export interface CreatorRow {
     token_last_checked_at: Timestamptz | null;
     token_error: string | null;
     webhook_verify_token: string | null;
+    /** v34: the handle and site the operator typed when creating the tenant by name; the draft's inputs. */
+    instagram_username: string | null;
+    website_url: string | null;
     created_at: Timestamptz;
 }
 
@@ -1160,4 +1168,114 @@ export interface CreatorProfileVersionRow {
     source: ProfileSource;
     updated_by: string | null;
     created_at: Timestamptz | null;
+}
+
+// ── Onboarding (v34) ──
+
+/** Where a tenant is in the wizard. A tenant with no `onboarding` row reads as `completed` (D14). */
+export type OnboardingStatus = 'invited' | 'in_progress' | 'completed';
+
+/** One row per tenant; every tenant that existed when v34 was applied was inserted `completed`. */
+export interface OnboardingRow {
+    creator_id: string;
+    status: OnboardingStatus;
+    current_step: string | null;
+    steps: Record<string, unknown>;
+    filled_by: 'tenant' | 'admin' | null;
+    started_at: Timestamptz | null;
+    completed_at: Timestamptz | null;
+}
+
+/** A single-use link: only the sha256 of its 32-byte token is stored. */
+export interface InviteRow {
+    id: string;
+    token_hash: string;
+    creator_id: string;
+    email: string | null;
+    membership_role: 'owner' | 'operator' | 'viewer';
+    purpose: 'join' | 'reset';
+    user_id: string | null;
+    created_by: string | null;
+    created_at: Timestamptz;
+    expires_at: Timestamptz;
+    first_opened_at: Timestamptz | null;
+    open_count: number;
+    used_at: Timestamptz | null;
+    used_by: string | null;
+    revoked_at: Timestamptz | null;
+}
+
+export type ProfileDraftStatus = 'queued' | 'fetching' | 'drafting' | 'ready' | 'failed' | 'superseded';
+
+/** What the AI read about a tenant, awaiting their confirmation. No agent reads this: agents read `creator_profiles`. */
+export interface ProfileDraftRow {
+    id: string;
+    creator_id: string;
+    origin: 'admin_create' | 'wizard' | 'redraft' | null;
+    requested_by: string | null;
+    inputs: unknown;
+    inputs_hash: string;
+    prompt_version: string;
+    status: ProfileDraftStatus;
+    attempts: number;
+    next_attempt_at: Timestamptz | null;
+    lease_until: Timestamptz | null;
+    lease_owner: string | null;
+    sources: unknown;
+    sources_status: unknown;
+    draft: unknown;
+    partial: boolean | null;
+    usage: unknown;
+    error: string | null;
+    error_kind: string | null;
+    created_at: Timestamptz | null;
+    updated_at: Timestamptz | null;
+    finished_at: Timestamptz | null;
+}
+
+export type VoiceExampleKind = 'dm_reply' | 'caption' | 'comment_dm' | 'comment_public';
+
+/** A proof sample: shown (verdict null), then approved, edited or rejected. A rejected one is never used in a prompt. */
+export interface VoiceExampleRow {
+    id: string;
+    creator_id: string;
+    profile_version: number | null;
+    kind: VoiceExampleKind;
+    input: unknown;
+    model_output: string;
+    final_text: string | null;
+    verdict: 'approved' | 'edited' | 'rejected' | null;
+    verdict_by: 'tenant' | 'admin' | null;
+    tenant_confirmed_at: Timestamptz | null;
+    model: string | null;
+    created_at: Timestamptz;
+}
+
+/** The funnel: names, steps and enum props only, never a field's value. */
+export interface OnboardingEventRow {
+    id: string;
+    creator_id: string;
+    user_id: string | null;
+    actor: 'tenant' | 'admin';
+    event: string;
+    step: string | null;
+    props: Record<string, unknown>;
+    at: Timestamptz;
+}
+
+/** One AI provider call. `creator_id` is null for spend that belongs to no tenant (an operator's key test). */
+export interface AiUsageRow {
+    id: string;
+    creator_id: string | null;
+    purpose: string;
+    provider: string;
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    /** NUMERIC: `pg` hands it back as a string. */
+    usd: string;
+    priced: boolean;
+    outcome: string;
+    elapsed_ms: number | null;
+    at: Timestamptz;
 }

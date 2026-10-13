@@ -217,6 +217,16 @@ The page access token is decrypted here (**`src/services/tenant.ts:131`**,
 `withDecryptedToken`) rather than at the call sites, so no path can forget and send
 `enc:v1:...` to Meta as a bearer token.
 
+**A tenant with no Meta connection is never resolved here (v34).** `instagram_page_id` and
+`page_access_token` are nullable: a tenant created by name has neither until it connects. The query
+adds `page_access_token IS NOT NULL`, so such a tenant is simply not a match (the webhook logs
+`comment.no_creator`, as for any page this deployment does not serve), and the type it returns
+(`ConnectedCreator`) says its token is there. The database keeps the ids and the token together
+(`creators_meta_ids_need_token`), so the clause is a second guard, not the only one. Everything else
+that reads those columns treats NULL the same way: skipped, or "not connected", never an error and
+never a `null` sent to Meta. (`attemptPublish` is §3.4; the Growth cron's tenant list, `recheckTenantToken`,
+`GET /settings/token/status`, `/settings/token/extend` and the manual inbox reply each have the check.)
+
 ### 1.10 — Campaign query and `matchCampaign`
 
 **`src/webhook/comments.ts:220-229`** — every active campaign for this creator:
@@ -910,6 +920,12 @@ Callers must claim the row first; `attemptPublish` deliberately does not, becaus
 claim differently — a sweep of every due row versus one row scoped to a tenant. It **does** own
 the terminal write (**`src/routes/api.ts:478-484`**).
 
+**No token, no Meta call (v34).** A Meta row for a tenant with no connection (`page_access_token IS NULL`)
+throws `MetaNotConnectedError` before anything is decrypted or sent: the row is written `FAILED` with
+`NOT_CONNECTED_MESSAGE`, `noteMetaFailure` does not read it as a dead token (it has no Meta code 190),
+and `POST /api/posts/scheduled` answers such a request 409 `META_NOT_CONNECTED` up front instead.
+TikTok and YouTube rows are dispatched before this function and never read the Meta columns.
+
 **The recovery, hop by hop:**
 
 1. **`src/routes/api.ts:492`** — `const already = publishedPlatforms(post.published_post_id);`
@@ -1370,6 +1386,15 @@ mappings that the dashboard carried for the owner. Answers `{ seeds, source }`.
 >
 > **Why a no-op is not a write.** The wizard retries, and a double-click is a second request. Without
 > this each would mint a version and a history row that differ from the last by nothing.
+
+**Creating a tenant stores its first profile (P16).** `POST /api/admin/tenants` (**`src/routes/admin.ts`**) inserts the
+`creators` row, then `createProfile` (**`src/services/profile/store.ts`**) stores `defaultProfile({ lang, rules })` as
+version 1 (history source `admin`) and mirrors it into the settings rows, seeding the Studio's `brand.direction` `rtl` for an
+Arabic tenant, then an `onboarding` row `invited`, all in one transaction: a tenant is never left without a profile, and a
+profile described from nothing would be the owner's (`legacy.ts`). `rules` is `onboarding.default_rules` (default
+`['no_women_imagery']`). The body is a name and a language; the legacy body (a page id and a token) still works and gets
+the same profile. `scripts/backfill-creator-profiles.mts` gives the same neutral default to an EXISTING tenant with no settings
+rows (never the platform owner).
 
 ---
 
@@ -1846,6 +1871,7 @@ error, and several write **no row at all**.
 | 1 | unknown `field` — **`comments.ts:95`** | `comment.unhandled_field` | no |
 | 1 | own comment — **`comments.ts:196`**, **`:212`** | `comment.skipped_self_authored` / `_page_owner` | no |
 | 1 | no creator for `entry.id` — **`comments.ts:205`** | `comment.no_creator` | no |
+| 1 | a tenant with no Meta token (created by name) — `getCreatorByPageId` skips it | `comment.no_creator` | no |
 | 1 | **no campaign matched** — **`comments.ts:237`** | `comment.no_campaign_match` | **no** |
 | 1 | already handled — **`comments.ts:251`** | `comment.duplicate_ignored` | no (row exists, untouched) |
 | 1 | 24h recipient cap — **`comments.ts:265`** | `dm.skipped_recipient_cap` | yes, `FAILED` |
@@ -1858,6 +1884,7 @@ error, and several write **no row at all**.
 | 2 | **no `ai_agents` row** — **`ai.ts:383`** | `ai.unconfigured` (`warn`) | inbound row, `handled_at` set |
 | 2 | agent switched off — **`ai.ts:383`** | `ai.disabled` (`debug`) | same |
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
+| 3 | a Meta post of a tenant with no token — `attemptPublish` | `cron.publish_failed` (`META_NOT_CONNECTED`) | yes, `FAILED` + the "not connected" sentence |
 | 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:152`** | *(none)* | no (200, version unchanged, no audit entry) |
 | 5 | budget spent — **`runner.ts:145`** | `job.drain_complete` (`budgetExhausted: true`) | jobs stay `pending` |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |

@@ -14,23 +14,30 @@
  *                  the lock and assesses them again, so the guard is on the data it writes and not on what a dry run saw
  *                  a minute ago.
  *
- * It never mirrors into `studio_settings` / `growth_settings`: the profile it stores is the view those rows already
- * describe (that is what the lens laws checked), so there is nothing to write back. `activated_at` stays NULL.
+ * It never mirrors into `studio_settings` / `growth_settings` for a tenant that has them: the profile it stores is the view
+ * those rows already describe (that is what the lens laws checked), so there is nothing to write back. `activated_at` stays NULL.
+ *
+ * A tenant with NO settings rows at all and no profile (made before P16, by the old create route, and never opened in the Studio)
+ * is described by nothing of its own, and read as the owner (`legacy.ts`: his role, domain, pronouns). It is given the neutral
+ * `defaultProfile()` instead, in Arabic like everything that route made, with `onboarding.default_rules` pre-ticked: through
+ * `createProfile`, which also mirrors it into the settings rows so they and the profile agree. The platform owner is never given one
+ * (he is the one tenant the legacy description is true of), and a tenant with only one of the two rows is left virtual.
  *
  * Nothing on a request path imports this.
  */
 import { isDeepStrictEqual } from 'node:util';
 import type { GrowthSettings, StudioSettings } from '../../db/rows.js';
 import { clearProfileCache } from './cache.js';
+import { APP_SETTING_KEYS, DEFAULT_ONBOARDING_RULES, parseOnboardingRules } from '../appSettings.js';
 import { readGrowthSettings } from '../growth/settingsRow.js';
 import { type Exec, lockTenantSettings, withTransaction } from '../studio/common.js';
 import { readStudioSettings } from '../studio/settingsMerge.js';
-import { upgradeProfile } from './defaults.js';
+import { defaultProfile, upgradeProfile } from './defaults.js';
 import { describeFailure } from './failure.js';
 import { scramble, throughJsonb } from './jsonb.js';
 import { profileFromLegacy } from './legacy.js';
-import { loadStoredProfile } from './store.js';
-import type { CreatorProfile } from './types.js';
+import { createProfile, loadStoredProfile } from './store.js';
+import type { ContentRulePreset, CreatorProfile } from './types.js';
 import { profileBytes, validateProfile } from './validate.js';
 import { GROWTH_PROFILE_PATHS, growthView, intoProfile, STUDIO_PROFILE_PATHS, studioView } from './views.js';
 
@@ -105,6 +112,8 @@ export interface TenantInput {
     growth: GrowthSettings;
     /** Whether the row exists: a tenant with none is read as the defaults, which says nothing about who it is. */
     rows: { studio: boolean; growth: boolean };
+    /** The platform owner: the first creator ever made, the one tenant the legacy description is true of. Left out, false. */
+    owner?: boolean;
     /** The stored profile, if there is one: its version, what reading it had to repair, whether a newer release wrote it. */
     stored: { version: number; repaired: string[]; newerSchema: boolean } | null;
 }
@@ -123,6 +132,7 @@ export interface TenantAssessment {
     label: string;
     active: boolean;
     rows: TenantInput['rows'];
+    owner: boolean;
     stored: TenantInput['stored'];
     /** Why the profile these rows describe is not a valid one, and anything the stored profile needed repaired. Paths and rules, never values. */
     problems: string[];
@@ -155,6 +165,7 @@ export interface TenantAssessment {
  */
 export function assessTenant(input: TenantInput): TenantAssessment {
     const { id, label, active, rows, stored, studio, growth } = input;
+    const owner = input.owner === true;
     const problems: string[] = [];
     const lens: LensFinding[] = [];
     let bytes: number | null = null;
@@ -205,21 +216,36 @@ export function assessTenant(input: TenantInput): TenantAssessment {
         }
     }
 
-    return { id, label, active, rows, stored, problems, lens, bytes, ok: problems.length === 0 && lens.length === 0, profile };
+    return { id, label, active, rows, owner, stored, problems, lens, bytes, ok: problems.length === 0 && lens.length === 0, profile };
 }
 
 // ─── Deciding ───────────────────────────────────────────────────────────────────────────────
 
-export type ApplyDecision = { action: 'apply' } | { action: 'skip'; reason: string } | { action: 'refuse'; reason: string };
+export type ApplyDecision =
+    | { action: 'apply' }
+    /** Store the neutral `defaultProfile()`: a tenant with no settings at all (see `decideApply`). */
+    | { action: 'default' }
+    | { action: 'skip'; reason: string }
+    | { action: 'refuse'; reason: string };
 
 /**
- * What `--apply` does with a tenant. A stored profile is left alone (the backfill never overwrites one). A tenant with
- * no `studio_settings` row is left virtual: there is nothing to describe, and a profile stored now would freeze the
- * legacy assumptions (`legacy.ts`) onto a tenant that never had them; a new tenant is given the neutral default at
- * creation instead (P16). Anything that did not pass the dry run is refused.
+ * What `--apply` does with a tenant. A stored profile is left alone (the backfill never overwrites one).
+ *
+ * A tenant with NO settings rows has nothing to describe, and a profile described from nothing would freeze the legacy
+ * assumptions (`legacy.ts`: the owner's role, domain and pronouns) onto a tenant that never had them. So it is given the
+ * neutral default instead (`default`), which is what a tenant created today starts with (P16) and says nothing about anyone.
+ * Not the platform owner: he is the one tenant those assumptions are true of, and his own rows (or his own legacy description)
+ * stay what describes him. A tenant with only ONE of the two rows is ambiguous, and stays virtual.
+ *
+ * Anything that did not pass the dry run is refused.
  */
 export function decideApply(a: TenantAssessment): ApplyDecision {
     if (a.stored) return { action: 'skip', reason: `a profile is already stored (version ${a.stored.version})` };
+    if (!a.rows.studio && !a.rows.growth) {
+        return a.owner
+            ? { action: 'skip', reason: 'the platform owner has no settings rows: left virtual' }
+            : { action: 'default' };
+    }
     if (!a.rows.studio) return { action: 'skip', reason: 'no studio_settings row: left virtual' };
     if (!a.ok) {
         const parts = [a.problems.length ? `${a.problems.length} invalid` : '', a.lens.length ? `${a.lens.length} lens law${a.lens.length === 1 ? '' : 's'} broken` : ''].filter(Boolean);
@@ -230,7 +256,7 @@ export function decideApply(a: TenantAssessment): ApplyDecision {
 
 // ─── Reading the tenants ────────────────────────────────────────────────────────────────────
 
-interface TenantListRow { id: string; name: string | null; is_active: boolean | null; has_studio: boolean; has_growth: boolean }
+interface TenantListRow { id: string; name: string | null; is_active: boolean | null; has_studio: boolean; has_growth: boolean; is_owner: boolean }
 
 /**
  * Every tenant (or the one named), with its Studio and Growth rows read as the app reads them and its stored profile.
@@ -238,7 +264,8 @@ interface TenantListRow { id: string; name: string | null; is_active: boolean | 
  */
 export async function readTenants(exec: Exec, only?: string): Promise<TenantInput[]> {
     const { rows } = await exec.query<TenantListRow>(
-        `SELECT c.id, c.name, c.is_active, (s.creator_id IS NOT NULL) AS has_studio, (g.creator_id IS NOT NULL) AS has_growth
+        `SELECT c.id, c.name, c.is_active, (s.creator_id IS NOT NULL) AS has_studio, (g.creator_id IS NOT NULL) AS has_growth,
+                (c.id = (SELECT o.id FROM creators o ORDER BY o.created_at, o.id LIMIT 1)) AS is_owner
            FROM creators c
            LEFT JOIN studio_settings s ON s.creator_id = c.id
            LEFT JOIN growth_settings g ON g.creator_id = c.id
@@ -256,6 +283,7 @@ export async function readTenants(exec: Exec, only?: string): Promise<TenantInpu
             studio: await readStudioSettings(exec, row.id),
             growth: await readGrowthSettings(exec, row.id),
             rows: { studio: row.has_studio, growth: row.has_growth },
+            owner: row.is_owner === true,
             stored: stored ? { version: stored.version, repaired: stored.repaired, newerSchema: stored.newerSchema } : null,
         });
     }
@@ -273,7 +301,8 @@ class BackfillRefused extends Error {
 }
 
 export type BackfillOutcome =
-    | { id: string; status: 'created'; version: 1 }
+    /** `from: 'default'`: the neutral `defaultProfile()` was stored, for a tenant with no settings; otherwise the profile its rows describe. */
+    | { id: string; status: 'created'; version: 1; from?: 'default' }
     | { id: string; status: 'exists'; version: number }
     | { id: string; status: 'skipped' | 'refused'; reason: string; assessment: TenantAssessment };
 
@@ -313,14 +342,23 @@ async function backfillIn(creatorId: string, tx: Exec): Promise<BackfillOutcome>
                 EXISTS (SELECT 1 FROM growth_settings WHERE creator_id = $1) AS growth`,
         [creatorId]
     );
+    // The owner is who `getPlatformOwnerId` finds, asked here under the lock with the same statement and not through its cache.
+    const first = await tx.query<{ id: string }>('SELECT id FROM creators ORDER BY created_at, id LIMIT 1');
     const assessment = assessTenant({
         id: creatorId, label: '', active: true, studio, growth,
-        rows: { studio: present.rows[0]?.studio ?? false, growth: present.rows[0]?.growth ?? false }, stored: null,
+        rows: { studio: present.rows[0]?.studio ?? false, growth: present.rows[0]?.growth ?? false },
+        owner: first.rows[0]?.id?.toLowerCase() === creatorId.toLowerCase(), stored: null,
     });
 
     const decision = decideApply(assessment);
     if (decision.action === 'skip') return { id: creatorId, status: 'skipped', reason: decision.reason, assessment };
     if (decision.action === 'refuse') throw new BackfillRefused(decision.reason, assessment);
+    if (decision.action === 'default') {
+        // No settings to describe: the neutral profile, in Arabic as everything the old create route made, with the platform's
+        // default rules. `createProfile` stores version 1 (source `backfill`, no user), its history row, and the mirror.
+        const saved = await createProfile(creatorId, defaultProfile({ lang: 'ar', rules: await defaultRules(tx) }), { source: 'backfill', userId: null }, tx);
+        return saved ? { id: creatorId, status: 'created', version: 1, from: 'default' } : { id: creatorId, status: 'exists', version: 1 };
+    }
     // `ok` means the rows describe a valid profile, so there is one; this is for the compiler, and for a decision that changes.
     if (!assessment.profile) throw new BackfillRefused('the rows describe no valid profile', assessment);
 
@@ -341,6 +379,13 @@ async function backfillIn(creatorId: string, tx: Exec): Promise<BackfillOutcome>
     return { id: creatorId, status: 'created', version: 1 };
 }
 
+/** `onboarding.default_rules` as a created tenant would read it (`getOnboardingDefaultRules`), through the transaction that is writing. */
+async function defaultRules(tx: Exec): Promise<ContentRulePreset[]> {
+    const { rows } = await tx.query<{ value: string | null }>('SELECT value FROM app_settings WHERE key = $1', [APP_SETTING_KEYS.onboardingDefaultRules]);
+    const raw = rows[0]?.value;
+    return (raw ? parseOnboardingRules(raw) : null) ?? [...DEFAULT_ONBOARDING_RULES];
+}
+
 /**
  * The write loop. The gate is here and not in the script: a tenant is written only when `decideApply` says so of the
  * assessment made for it in THIS run (so one that did not pass the dry run is refused, one with a profile or no settings row
@@ -359,7 +404,7 @@ export async function applyBackfill(
     for (const a of assessments) {
         const decision = decideApply(a);
         let outcome: AppliedOutcome;
-        if (decision.action === 'apply') {
+        if (decision.action === 'apply' || decision.action === 'default') {
             try {
                 outcome = await write(a.id);
             } catch (err) {
@@ -410,12 +455,13 @@ export function formatBackfillReport(assessments: readonly TenantAssessment[], {
         const outcome = outcomeOf(a.id);
         let result: string;
         if (outcome) {
-            result = outcome.status === 'created' ? 'CREATED version 1 (source backfill)'
+            result = outcome.status === 'created' ? (outcome.from === 'default' ? 'CREATED version 1: the neutral default (source backfill)' : 'CREATED version 1 (source backfill)')
                 : outcome.status === 'exists' ? `left alone: a profile exists (version ${outcome.version})`
                 : outcome.status === 'skipped' ? `skipped: ${outcome.reason}`
                 : outcome.status === 'refused' ? `REFUSED: ${outcome.reason}`
                 : `ERROR: ${outcome.reason}`;
         } else if (decision.action === 'apply') result = 'would insert version 1 (source backfill)';
+        else if (decision.action === 'default') result = 'would insert the neutral default as version 1 (Arabic, no owner assumptions; source backfill)';
         else result = decision.action === 'skip' ? `would skip: ${decision.reason}` : `would REFUSE: ${decision.reason}`;
         lines.push(`  result     ${a.ok ? 'ok' : 'PROBLEMS'} · ${result}`, '');
     }
@@ -426,7 +472,7 @@ export function formatBackfillReport(assessments: readonly TenantAssessment[], {
     const refused = outcomes.filter((o) => o.status === 'refused' || o.status === 'error').length;
     lines.push([
         `summary: ${plural(assessments.length, 'tenant')} · ${ok} ok · ${assessments.length - ok} with problems · ${stored} already stored`,
-        ...(mode === 'apply' ? [`${created} created`, `${refused} refused or failed`] : [`${assessments.filter((a) => decideApply(a).action === 'apply').length} would be written`]),
+        ...(mode === 'apply' ? [`${created} created`, `${refused} refused or failed`] : [`${assessments.filter((a) => ['apply', 'default'].includes(decideApply(a).action)).length} would be written`]),
     ].join(' · '));
     return lines.join('\n');
 }

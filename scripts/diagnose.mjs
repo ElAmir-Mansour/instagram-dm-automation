@@ -992,11 +992,15 @@ async function main() {
         if (creators.error) {
             crit('deploy', `cannot read the creators table: ${creators.error}`);
         } else {
-            dbState.creators = creators.rows.filter((c) => c.is_active);
-            const inactive = creators.rows.length - dbState.creators.length;
-            fact('config', `${creators.rows.length} creator row(s), ${dbState.creators.length} active${inactive ? `, ${inactive} inactive (not checked)` : ''}`);
+            const active = creators.rows.filter((c) => c.is_active);
+            // A tenant created by name has no Meta connection yet (v34: a NULL token): there is nothing of Meta's to check for it, and
+            // the webhook never resolves it, so it is counted and left out of the token and event-flow checks instead of failing them.
+            dbState.creators = active.filter((c) => c.page_access_token !== null);
+            const inactive = creators.rows.length - active.length;
+            const unconnected = active.length - dbState.creators.length;
+            fact('config', `${creators.rows.length} creator row(s), ${active.length} active${inactive ? `, ${inactive} inactive (not checked)` : ''}${unconnected ? `, ${unconnected} with no Meta connection yet (not checked)` : ''}`);
             if (!dbState.creators.length) {
-                crit('deploy', 'no active creator — the webhook can resolve no tenant, so every delivery is dropped');
+                crit('deploy', 'no active creator with a Meta connection — the webhook can resolve no tenant, so every delivery is dropped');
             }
         }
 

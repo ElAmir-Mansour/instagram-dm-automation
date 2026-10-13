@@ -4689,6 +4689,9 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .ig-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: 0 var(--space-4); }
 .ig-more { margin-block-end: var(--space-4); }
 .ig-more > summary { cursor: pointer; color: var(--text-muted); font-size: var(--fs-200); margin-block-end: var(--space-3); }
+/* The Tenants screen's create form: the Meta credentials, folded away (D7). */
+.tenant-more { margin-block-end: var(--space-4); }
+.tenant-more > summary { cursor: pointer; color: var(--text-muted); font-size: var(--fs-200); margin-block-end: var(--space-3); }
 .ig-notice {
     display: flex; gap: var(--space-3); align-items: center;
     padding: var(--space-3); margin-block-end: var(--space-4);

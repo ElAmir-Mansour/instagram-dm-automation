@@ -21,7 +21,7 @@ import axios from 'axios';
 import { queryCount, queryOne } from '../db/query.js';
 import { describeError, log } from '../utils/log.js';
 import { isTokenDeathError, metaErrorSubcode } from './http.js';
-import { getTenant } from './tenant.js';
+import { getTenant, NOT_CONNECTED_MESSAGE } from './tenant.js';
 
 /** Why the token is dead, in words an operator can act on. Keyed by Meta's `error_subcode`. */
 const SUBCODE_REASONS: Record<number, string> = {
@@ -330,6 +330,17 @@ export async function recheckTenantToken(creatorId: string): Promise<TokenRechec
     // Already decrypted by getTenant — every creator read goes through one place.
     const token = creator.page_access_token;
 
+    // A tenant created by name (v34) has never had a token: that is "not connected", not a token that went bad, so nothing
+    // is written (its status stays as it was, `unknown`, instead of turning into a red "invalid" the first time anyone
+    // presses Re-check) and Meta is not asked about nothing. An empty string is a token that was stored and lost, and keeps
+    // the answer it always had.
+    if (creator.page_access_token === null) {
+        return recheckResult({
+            status: 'no_token', checkedAt: null, error: NOT_CONNECTED_MESSAGE,
+            type: null, expiresAt: null, dataAccessExpiresAt: null,
+            scopes: [], missingScopes: [...REQUIRED_SCOPES],
+        });
+    }
     if (!token) {
         const reason = 'No access token is stored for this tenant.';
         const checkedAt = await persistInspection(creatorId, 'invalid', reason, null, null);

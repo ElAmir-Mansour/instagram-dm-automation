@@ -134,13 +134,19 @@ describe('the platform_admin gate', () => {
         const reply = await call('POST', '/tenants', { session: ADMIN, body: {} });
 
         assert.equal(reply.status, 400);
-        assert.match(reply.body.error, /instagram_page_id is required/);
+        assert.match(reply.body.error, /name is required/);
     });
 });
 
 describe('tenant validation', () => {
-    it('requires a page id and a token to create one', async () => {
-        assert.match((await call('POST', '/tenants', { session: ADMIN, body: {} })).body.error,
+    it('requires a name to create one, and points at the Meta fields for a tenant that has a connection', async () => {
+        const empty = (await call('POST', '/tenants', { session: ADMIN, body: {} })).body.error;
+        assert.match(empty, /name is required/);
+        assert.match(empty, /instagram_page_id and page_access_token/);
+    });
+
+    it('still requires a page id and a token together once a body carries a Meta connection', async () => {
+        assert.match((await call('POST', '/tenants', { session: ADMIN, body: { name: 'x', page_access_token: 'tok' } })).body.error,
             /instagram_page_id is required/);
 
         assert.match((await call('POST', '/tenants', {

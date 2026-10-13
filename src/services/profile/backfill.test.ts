@@ -16,9 +16,10 @@ import {
     type AppliedOutcome, applyBackfill, assessTenant, backfillTenant, decideApply, diffPaths, differences, formatBackfillReport, hasProblems, readTenants,
     type TenantInput,
 } from './backfill.js';
+import { defaultProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import { saveProfile } from './store.js';
-import { growthRow, installProfileDb, OTHER, OWNER, OWNER_STUDIO, type ProfileDb, seededState, studioRow, type State } from './testDb.js';
+import { growthRow, installProfileDb, OTHER, OWNER, OWNER_STUDIO, type ProfileDb, seededState, setPlatformOwner, studioRow, type State } from './testDb.js';
 import { throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
 
@@ -201,12 +202,28 @@ describe('decideApply', () => {
         assert.equal(decideApply(storedAndBroken).action, 'skip');
     });
 
-    it('leaves a tenant with no studio_settings row virtual: the defaults say nothing about who it is', () => {
+    it('gives a tenant with no settings rows at all the neutral default: described from nothing it would read as the owner (P16)', () => {
         const none = assessTenant(tenant(defaultStudioSettings(), defaultGrowthSettings(), { rows: { studio: false, growth: false } }));
         assert.equal(none.ok, true);
-        assert.deepEqual(decideApply(none), { action: 'skip', reason: 'no studio_settings row: left virtual' });
+        assert.deepEqual(decideApply(none), { action: 'default' });
+    });
+
+    it('never gives the platform owner one: the legacy description is true of him, so he stays virtual', () => {
+        const owner = assessTenant(tenant(defaultStudioSettings(), defaultGrowthSettings(), { rows: { studio: false, growth: false }, owner: true }));
+        assert.equal(owner.owner, true);
+        assert.deepEqual(decideApply(owner), { action: 'skip', reason: 'the platform owner has no settings rows: left virtual' });
+    });
+
+    it('leaves a tenant with only one of the two rows virtual: it is ambiguous', () => {
         const growthOnly = assessTenant(tenant(defaultStudioSettings(), ELAMIR_GROWTH, { rows: { studio: false, growth: true } }));
-        assert.equal(decideApply(growthOnly).action, 'skip');
+        assert.deepEqual(decideApply(growthOnly), { action: 'skip', reason: 'no studio_settings row: left virtual' });
+        const studioOnly = assessTenant(tenant(OWNER_STUDIO, defaultGrowthSettings(), { rows: { studio: true, growth: false } }));
+        assert.equal(decideApply(studioOnly).action, 'apply', 'a studio row is something to describe');
+    });
+
+    it('a stored profile wins over everything: a tenant with no rows and a profile is left alone', () => {
+        const stored = assessTenant(tenant(defaultStudioSettings(), defaultGrowthSettings(), { rows: { studio: false, growth: false }, stored: { version: 1, repaired: [], newerSchema: false } }));
+        assert.equal(decideApply(stored).action, 'skip');
     });
 });
 
@@ -218,6 +235,7 @@ describe('applyBackfill: only a tenant that passed this run\'s dry run is writte
     const invalid = assessTenant(tenant({ ...OWNER_STUDIO, infographic: { ...OWNER_STUDIO.infographic, primary: 'red' } }, ELAMIR_GROWTH, { id: 'tenant-invalid' }));
     const stored = assessTenant(tenant(OWNER_STUDIO, ELAMIR_GROWTH, { id: 'tenant-stored', stored: { version: 2, repaired: [], newerSchema: false } }));
     const noRow = assessTenant(tenant(defaultStudioSettings(), defaultGrowthSettings(), { id: 'tenant-norow', rows: { studio: false, growth: false } }));
+    const growthOnly = assessTenant(tenant(defaultStudioSettings(), ELAMIR_GROWTH, { id: 'tenant-growthonly', rows: { studio: false, growth: true } }));
 
     /** A writer that records who it was asked to write. */
     const recorder = () => {
@@ -225,17 +243,17 @@ describe('applyBackfill: only a tenant that passed this run\'s dry run is writte
         return { asked, write: async (id: string): Promise<{ id: string; status: 'created'; version: 1 }> => { asked.push(id); return { id, status: 'created', version: 1 }; } };
     };
 
-    it('calls the writer for the passing tenant and for no other', async () => {
+    it('calls the writer for the passing tenant and for the one with no settings at all, and for no other', async () => {
         const { asked, write } = recorder();
-        const outcomes = await applyBackfill([broken, passing, invalid, stored, noRow], write);
-        assert.deepEqual(asked, ['tenant-pass']);
+        const outcomes = await applyBackfill([broken, passing, invalid, stored, noRow, growthOnly], write);
+        assert.deepEqual(asked, ['tenant-pass', 'tenant-norow']);
         assert.deepEqual(outcomes.map((o) => [o.id, o.status]), [
-            ['tenant-broken', 'refused'], ['tenant-pass', 'created'], ['tenant-invalid', 'refused'], ['tenant-stored', 'skipped'], ['tenant-norow', 'skipped'],
+            ['tenant-broken', 'refused'], ['tenant-pass', 'created'], ['tenant-invalid', 'refused'], ['tenant-stored', 'skipped'], ['tenant-norow', 'created'], ['tenant-growthonly', 'skipped'],
         ]);
     });
 
     it('says why each was not written, with the assessment that decided it', async () => {
-        const outcomes = await applyBackfill([broken, stored, noRow], recorder().write);
+        const outcomes = await applyBackfill([broken, stored, growthOnly], recorder().write);
         const [b, s, n] = outcomes as Extract<AppliedOutcome, { reason: string; assessment: unknown }>[];
         assert.match(b!.reason, /the dry run does not pass/);
         assert.equal(b!.assessment, broken);
@@ -349,6 +367,15 @@ describe('formatBackfillReport', () => {
         assert.match(text, /would skip: no studio_settings row: left virtual/);
     });
 
+    it('says a tenant with no settings gets the neutral default, and counts it as one that would be written', () => {
+        const a = assessTenant(tenant(defaultStudioSettings(), defaultGrowthSettings(), { rows: { studio: false, growth: false } }));
+        const text = formatBackfillReport([a], { mode: 'dry-run', target: 't' });
+        assert.match(text, /would insert the neutral default as version 1 \(Arabic, no owner assumptions; source backfill\)/);
+        assert.match(text.split('\n').at(-1)!, /· 1 would be written$/);
+        const applied = formatBackfillReport([a], { mode: 'apply', target: 't', outcomes: [{ id: a.id, status: 'created', version: 1, from: 'default' }] });
+        assert.match(applied, /CREATED version 1: the neutral default \(source backfill\)/);
+    });
+
     it('a stored tenant is counted, and left alone', () => {
         const a = assessTenant(tenant(OWNER_STUDIO, ELAMIR_GROWTH, { stored: { version: 4, repaired: [], newerSchema: false } }));
         const text = formatBackfillReport([a], { mode: 'dry-run', target: 't' });
@@ -385,7 +412,7 @@ let state: State;
 let db: ProfileDb;
 let restoreSink: (() => void) | undefined;
 
-const TENANT_LIST = /^SELECT c\.id, c\.name, c\.is_active, \(s\.creator_id IS NOT NULL\) AS has_studio, \(g\.creator_id IS NOT NULL\) AS has_growth FROM creators c LEFT JOIN studio_settings s ON s\.creator_id = c\.id LEFT JOIN growth_settings g ON g\.creator_id = c\.id (WHERE c\.id = \$1 )?ORDER BY c\.created_at, c\.id$/;
+const TENANT_LIST = /^SELECT c\.id, c\.name, c\.is_active, \(s\.creator_id IS NOT NULL\) AS has_studio, \(g\.creator_id IS NOT NULL\) AS has_growth, \(c\.id = \(SELECT o\.id FROM creators o ORDER BY o\.created_at, o\.id LIMIT 1\)\) AS is_owner FROM creators c LEFT JOIN studio_settings s ON s\.creator_id = c\.id LEFT JOIN growth_settings g ON g\.creator_id = c\.id (WHERE c\.id = \$1 )?ORDER BY c\.created_at, c\.id$/;
 const ROWS_PRESENT = /^SELECT EXISTS \(SELECT 1 FROM studio_settings WHERE creator_id = \$1\) AS studio, EXISTS \(SELECT 1 FROM growth_settings WHERE creator_id = \$1\) AS growth$/;
 const LOCK_TIMEOUT = /^SET LOCAL lock_timeout = '5s'$/;
 /** The statement that waits on the lock, which is where a timeout surfaces. */
@@ -403,7 +430,7 @@ beforeEach(() => {
     // The two statements the stand-in does not know: the tenant list, and which settings rows exist.
     db.routes.push([TENANT_LIST, ([only]) => {
         const ids = [...new Set([OWNER, OTHER, ...state.studio.keys(), ...state.growth.keys()])].filter((id) => !only || id === only);
-        return { rows: ids.map((id) => ({ id, name: id === OWNER ? 'Default' : 'Other', is_active: true, has_studio: state.studio.has(id), has_growth: state.growth.has(id) })) };
+        return { rows: ids.map((id) => ({ id, name: id === OWNER ? 'Default' : 'Other', is_active: true, has_studio: state.studio.has(id), has_growth: state.growth.has(id), is_owner: id === OWNER })) };
     }]);
     db.routes.push([ROWS_PRESENT, ([id]) => ({ rows: [{ studio: state.studio.has(id), growth: state.growth.has(id) }] })]);
 });
@@ -420,9 +447,9 @@ const stored = (id = OWNER): CreatorProfile => state.profiles.get(id)!.profile a
 describe('readTenants', () => {
     it('lists the tenants with their rows read as the app reads them, and their stored profile', async () => {
         const tenants = await readTenants(pool as unknown as Exec);
-        assert.deepEqual(tenants.map((t) => [t.id, t.label, t.rows, t.stored]), [
-            [OWNER, 'Default', { studio: true, growth: true }, null],
-            [OTHER, 'Other', { studio: false, growth: false }, null],
+        assert.deepEqual(tenants.map((t) => [t.id, t.label, t.rows, t.stored, t.owner]), [
+            [OWNER, 'Default', { studio: true, growth: true }, null, true],
+            [OTHER, 'Other', { studio: false, growth: false }, null, false],
         ]);
         const owner = tenants[0]!;
         assert.deepStrictEqual(owner.studio.voice, OWNER_STUDIO.voice);
@@ -569,12 +596,85 @@ describe('backfillTenant', () => {
         assert.equal(state.profiles.size, 0);
     });
 
-    it('leaves a tenant with no studio_settings row virtual', async () => {
+    it('leaves a tenant with only a growth_settings row virtual: ambiguous, nothing is stored', async () => {
+        state.growth.set(OTHER, growthRow(ELAMIR_GROWTH));
         const out = await backfillTenant(OTHER);
         assert.equal(out.status, 'skipped');
         assert.ok('reason' in out && out.reason === 'no studio_settings row: left virtual');
         assert.equal(state.profiles.size, 0);
         assert.deepEqual(writes(), []);
+    });
+
+    describe('a tenant with no settings rows at all', () => {
+        it('is given the neutral default, Arabic with the platform\'s default rules: version 1, its history row (source backfill), and no owner anywhere in it', async () => {
+            const out = await backfillTenant(OTHER);
+            assert.deepEqual(out, { id: OTHER, status: 'created', version: 1, from: 'default' });
+            const expected = throughJsonb(defaultProfile({ lang: 'ar', rules: ['no_women_imagery'] }));
+            assert.deepStrictEqual(stored(OTHER), expected);
+            assert.deepEqual(state.versions.map((v) => [v.creator_id, v.version, v.source, v.updated_by]), [[OTHER, 1, 'backfill', null]]);
+            assert.deepStrictEqual(state.versions[0]!.profile, expected, 'the history says the neutral profile too: never the owner\'s legacy description');
+            assert.equal(stored(OTHER).identity.role, '');
+            assert.equal(stored(OTHER).content.domain, 'general');
+            assert.equal(stored(OTHER).presenter, null);
+            assert.equal(state.profiles.get(OTHER)!.activated_at, null);
+            assert.equal(state.profiles.has(OWNER), false, 'nobody else was touched');
+        });
+
+        it('has its two settings rows mirrored from the profile, so they and the profile agree from the start (and leaves the Studio\'s direction alone)', async () => {
+            await backfillTenant(OTHER);
+            assert.ok(state.studio.has(OTHER) && state.growth.has(OTHER));
+            assert.equal((state.studio.get(OTHER)!.brand as { direction: string }).direction, 'ltr', 'a tenant that never chose a direction keeps the default');
+            assert.deepEqual(writes().map((s) => /^INSERT INTO (\w+)/.exec(s)![1]), ['creator_profiles', 'creator_profile_versions', 'studio_settings', 'growth_settings']);
+            // The owner's rows are the ones seededState gave him, untouched.
+            assert.deepStrictEqual(state.studio.get(OWNER), studioRow(OWNER_STUDIO));
+        });
+
+        it('reads the rules from onboarding.default_rules: an empty list is a deliberate "none"; one it cannot read is the default', async () => {
+            let saved: string | null = '[]';
+            db.routes.push([/^SELECT value FROM app_settings WHERE key = \$1$/, ([key]) => {
+                assert.equal(key, 'onboarding.default_rules');
+                return { rows: saved === null ? [] : [{ value: saved }] };
+            }]);
+            await backfillTenant(OTHER);
+            assert.deepEqual(stored(OTHER).content.rules, []);
+
+            db.restore();
+            state = seededState();
+            db = installProfileDb(state);
+            db.routes.push([ROWS_PRESENT, ([id]) => ({ rows: [{ studio: state.studio.has(id), growth: state.growth.has(id) }] })]);
+            saved = '["not_a_rule"]';
+            db.routes.push([/^SELECT value FROM app_settings WHERE key = \$1$/, () => ({ rows: [{ value: saved }] })]);
+            await backfillTenant(OTHER);
+            assert.deepEqual(stored(OTHER).content.rules, ['no_women_imagery']);
+        });
+
+        it('is never the platform owner\'s: he has no rows here and stays virtual, whatever the default would have said', async () => {
+            state.studio.delete(OWNER);
+            state.growth.delete(OWNER);
+            setPlatformOwner(db, OWNER);
+            const out = await backfillTenant(OWNER);
+            assert.equal(out.status, 'skipped');
+            assert.ok('reason' in out && out.reason === 'the platform owner has no settings rows: left virtual');
+            assert.equal(state.profiles.size, 0);
+            assert.deepEqual(writes(), []);
+        });
+
+        it('is idempotent: a second run finds the profile and writes nothing', async () => {
+            await backfillTenant(OTHER);
+            const before = { profiles: structuredClone(state.profiles), versions: structuredClone(state.versions), studio: structuredClone(state.studio) };
+            db.statements.length = 0;
+            assert.deepEqual(await backfillTenant(OTHER), { id: OTHER, status: 'exists', version: 1 });
+            assert.deepEqual(writes(), []);
+            assert.deepStrictEqual({ profiles: state.profiles, versions: state.versions, studio: state.studio }, before);
+        });
+
+        it('rolls the profile back with the mirror: a failure writing the settings leaves no profile behind', async () => {
+            db.failOn = /^INSERT INTO studio_settings /;
+            await assert.rejects(backfillTenant(OTHER), /injected failure/);
+            assert.equal(state.profiles.has(OTHER), false);
+            assert.deepEqual(state.versions, []);
+            assert.equal(state.studio.has(OTHER), false);
+        });
     });
 
     it('rolls everything back when the history row cannot be written, so there is never a profile without its history', async () => {

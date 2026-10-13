@@ -17,7 +17,7 @@ import { profileContextOrLegacy } from '../services/profile/context.js';
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
     assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache,
-    requireTenantRole
+    requireTenantRole, MetaNotConnectedError, NOT_CONNECTED_MESSAGE
 } from '../services/tenant.js';
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from '../config/crypto.js';
 import { pruneRateLimitData } from '../utils/rateLimiter.js';
@@ -542,11 +542,12 @@ type PublishTarget = Pick<
  * The creator fields `attemptPublish` needs to reach Meta. `id` is nullable here — unlike
  * `CreatorRow.id` — because `publishDuePosts()`'s join never selects `creators.id` on its own,
  * only `scheduled_posts.creator_id` (via `s.*`), and that FK is itself nullable in the schema.
- * `page_access_token` is still encrypted; `attemptPublish` is what decrypts it.
+ * `page_access_token` is still encrypted; `attemptPublish` is what decrypts it. Null (v34) is a tenant with no Meta
+ * connection: a Meta row for it fails closed with `NOT_CONNECTED_MESSAGE` instead of reaching Meta with an empty token.
  */
 type PublishCreator = {
     id: string | null;
-    page_access_token: string;
+    page_access_token: string | null;
     instagram_page_id: string | null;
     facebook_page_id: string | null;
 };
@@ -645,6 +646,9 @@ export async function attemptPublish(
         if (slides && slides.length === 0) {
             throw new Error('This carousel has no images — edit the post and add them again.');
         }
+        // No connection, no call: a tenant created by name (v34) has no token, and `decryptSecret(null)` is '', which Meta
+        // would answer with an opaque OAuth error. Said plainly instead, and BEFORE the catch below can read it as a dead token.
+        if (!creator.page_access_token) throw new MetaNotConnectedError();
         const token = decryptSecret(creator.page_access_token);
 
         // 1. Publish to Facebook
@@ -2104,6 +2108,21 @@ router.get('/settings/token/status', async (req, res) => {
         // Already decrypted by getTenant — every creator read goes through one place.
         const token = creator.page_access_token;
 
+        // A tenant created by name (v34) has no token yet: say so, and neither ask Meta about `null` nor record a
+        // red "invalid" against a connection that was never made.
+        if (!token) {
+            res.json({
+                status: 'not_connected',
+                message: NOT_CONNECTED_MESSAGE,
+                expiresAt: null,
+                dataAccessExpiresAt: null,
+                instagramPageId: creator.instagram_page_id,
+                facebookPageId: creator.facebook_page_id,
+                isActive: creator.is_active,
+            });
+            return;
+        }
+
         // Validate token against Meta API
         try {
             const debugRes = await axios.get('https://graph.facebook.com/debug_token', {
@@ -2332,6 +2351,11 @@ router.post('/settings/token/extend', canAdminister, async (req, res) => {
         }
 
         const currentToken = creator.page_access_token;
+        // Nothing to extend: a tenant created by name has no token (v34).
+        if (!currentToken) {
+            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
+            return;
+        }
 
         const extendRes = await axios.get(`https://graph.facebook.com/${API_VERSION}/oauth/access_token`, {
             params: {
@@ -2491,6 +2515,12 @@ router.post('/posts/scheduled', canOperate, async (req, res) => {
         ]);
         if (!creator) {
             res.status(400).json({ error: 'No active creator account found.' });
+            return;
+        }
+        // Said now, to the person scheduling, rather than at publish time in a card nobody is looking at: a tenant created
+        // by name (v34) has no Meta token until it connects, and the sweep would only fail the row.
+        if (isMetaPlatform(platform) && !creator.page_access_token) {
+            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
             return;
         }
 
@@ -3220,6 +3250,12 @@ router.post('/conversations/:id/messages', canOperate, async (req, res) => {
         }
 
         const conv = convRes.rows[0];
+
+        // A thread outlives the connection that made it (v34: a tenant can be disconnected): nothing to send it with.
+        if (!conv.page_access_token) {
+            res.status(409).json({ code: 'META_NOT_CONNECTED', error: NOT_CONNECTED_MESSAGE });
+            return;
+        }
 
         // Send message to Instagram
         // Length, not content: this line used to put the operator's message body — and by

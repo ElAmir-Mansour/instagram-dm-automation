@@ -194,3 +194,97 @@ export function passwordProblem(raw: unknown): string | null {
     }
     return null;
 }
+
+// ─── Creating a tenant by name (v34) ────────────────────────────────────────────────────
+
+/** The languages a tenant can be created in: the profile's own (`Lang`), spelled out so this module imports nothing. */
+export type TenantLang = 'ar' | 'en';
+
+/** What `POST /api/admin/tenants` takes when the operator has no Meta credentials to give: a name, and the rest is optional. */
+export interface NamedTenantInput {
+    name: string;
+    /** The language the tenant's profile starts in (D8: Arabic unless the operator picks English). */
+    lang: TenantLang;
+    /** The handle without the `@`, lower case; null when not given. */
+    instagramUsername: string | null;
+    /** An absolute http(s) URL; null when not given. */
+    websiteUrl: string | null;
+}
+
+/** `creators.name` is VARCHAR(255). */
+const MAX_TENANT_NAME = 255;
+/** Instagram's own rule: letters, digits, dots and underscores, at most 30. */
+const INSTAGRAM_USERNAME_PATTERN = /^[a-z0-9._]{1,30}$/;
+const MAX_WEBSITE_URL = 2048;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
+
+type Read<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/**
+ * An Instagram handle as the operator may have pasted it: `@name`, `name`, or the profile's URL. The handle, lower case,
+ * or null for nothing; a string that is none of those is an error, because the draft reads the account by this name.
+ */
+export function readInstagramUsername(raw: unknown): Read<string | null> {
+    if (raw === undefined || raw === null) return { ok: true, value: null };
+    if (typeof raw !== 'string') return { ok: false, error: 'instagram_username must be text.' };
+    let handle = raw.trim();
+    if (!handle) return { ok: true, value: null };
+    const url = /^(?:https?:\/\/)?(?:www\.)?instagram\.com\/([^/?#\s]+)/i.exec(handle);
+    if (url) handle = url[1]!;
+    handle = handle.replace(/^@/, '').toLowerCase();
+    if (!INSTAGRAM_USERNAME_PATTERN.test(handle)) {
+        return { ok: false, error: 'instagram_username is not an Instagram handle: letters, digits, dots and underscores, up to 30.' };
+    }
+    return { ok: true, value: handle };
+}
+
+/**
+ * A website as the operator may have pasted it: with or without `https://`. An absolute http(s) URL on a real domain name,
+ * or null for nothing. Not an address a person could not open from the internet: no login in the URL, no IP address, no
+ * single-label host (`localhost`, `intranet`). The fetcher that later reads the site (P21) refuses private addresses itself,
+ * when it connects; this is the first of two checks, so a typo is caught here, with a sentence.
+ */
+export function readWebsiteUrl(raw: unknown): Read<string | null> {
+    if (raw === undefined || raw === null) return { ok: true, value: null };
+    if (typeof raw !== 'string') return { ok: false, error: 'website must be text.' };
+    const text = raw.trim();
+    if (!text) return { ok: true, value: null };
+    const problem = { ok: false as const, error: 'website is not a web address: use the site\'s domain, like https://example.com.' };
+    if (text.length > MAX_WEBSITE_URL || CONTROL_CHARACTERS.test(text) || /\s/.test(text)) return problem;
+    let url: URL;
+    try {
+        url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`);
+    } catch {
+        return problem;
+    }
+    const host = url.hostname;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return problem;
+    if (url.username || url.password) return problem;
+    if (!host.includes('.') || host.startsWith('[') || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return problem;
+    return { ok: true, value: url.toString() };
+}
+
+/**
+ * The body of a create-by-name request, read and checked: `{ name, lang?, instagram_username?, website? }` (`website_url`
+ * is accepted too, the column's own name). Everything else in the body is ignored: a body that carries Meta credentials is
+ * not this path (the route decides that before it gets here).
+ */
+export function readNamedTenant(body: Record<string, unknown>): Read<NamedTenantInput> {
+    const rawName = body.name;
+    if (typeof rawName !== 'string' || !rawName.trim()) return { ok: false, error: 'name is required.' };
+    const name = rawName.trim();
+    if (name.length > MAX_TENANT_NAME) return { ok: false, error: `name is too long: at most ${MAX_TENANT_NAME} characters.` };
+    if (CONTROL_CHARACTERS.test(name)) return { ok: false, error: 'name cannot contain line breaks or control characters.' };
+
+    const rawLang = body.lang;
+    const lang: TenantLang | null = rawLang === undefined || rawLang === null || rawLang === '' ? 'ar' : rawLang === 'ar' || rawLang === 'en' ? rawLang : null;
+    if (lang === null) return { ok: false, error: 'lang must be "ar" or "en".' };
+
+    const handle = readInstagramUsername(body.instagram_username);
+    if (!handle.ok) return handle;
+    const site = readWebsiteUrl(body.website !== undefined ? body.website : body.website_url);
+    if (!site.ok) return site;
+
+    return { ok: true, value: { name, lang, instagramUsername: handle.value, websiteUrl: site.value } };
+}

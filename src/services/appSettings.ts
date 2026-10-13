@@ -12,6 +12,8 @@
 import { encryptSecret, decryptSecret } from '../config/crypto.js';
 import { queryOne, queryCount } from '../db/query.js';
 import type { AppSettingRow } from '../db/rows.js';
+import { log } from '../utils/log.js';
+import { CONTENT_RULE_PRESETS, type ContentRulePreset } from './profile/types.js';
 
 /** Every key this codebase reads. A typo becomes a compile error rather than a silent null. */
 export const APP_SETTING_KEYS = {
@@ -105,6 +107,14 @@ export const APP_SETTING_KEYS = {
      * `PUT /api/admin/mac-brain-tenants`.
      */
     studioMacBrainTenants: 'studio.mac_brain_tenants',
+    /**
+     * JSON `["no_women_imagery", …]`: the content rules a tenant created by the operator starts with, pre-ticked on its
+     * profile (D9). Unset means `['no_women_imagery']`, the owner's standard and the platform's default; `[]` is a
+     * deliberate "none". The owner's own profile is not touched by it, and neither is any tenant that already exists:
+     * it is read once, when a tenant is created (`getOnboardingDefaultRules`). Not a secret. Its Settings card ships with the
+     * invite settings (P17); until then the default holds.
+     */
+    onboardingDefaultRules: 'onboarding.default_rules',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -257,6 +267,39 @@ export async function getYouTubeAppConfig(): Promise<YouTubeAppConfig | null> {
 /** Whether Shorts upload public (Settings → YouTube → "Upload Shorts as public"). Off by default. */
 export async function youtubeUploadsPublic(): Promise<boolean> {
     return (await getSetting(APP_SETTING_KEYS.youtubePublicUploads)) === 'true';
+}
+
+/** What a created tenant starts with when `onboarding.default_rules` says nothing usable: D9's pre-ticked rule. */
+export const DEFAULT_ONBOARDING_RULES: readonly ContentRulePreset[] = Object.freeze(['no_women_imagery'] as const);
+
+/**
+ * `onboarding.default_rules` as stored: a JSON array of rule presets this release knows, without repeats. Null when it is
+ * not one (not JSON, not an array, a member that is no preset): a typo must not silently drop the pre-ticked rule, so
+ * the caller falls back to the default instead of to "no rules".
+ */
+export function parseOnboardingRules(raw: string): ContentRulePreset[] | null {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return null;
+    }
+    if (!Array.isArray(parsed) || !parsed.every((rule) => typeof rule === 'string' && (CONTENT_RULE_PRESETS as readonly string[]).includes(rule))) return null;
+    return [...new Set(parsed as ContentRulePreset[])];
+}
+
+/**
+ * The rules a tenant the operator creates starts with. Read on every create (one indexed row). A saved value that cannot
+ * be read is logged and ignored, which gives the default; a database that cannot be read fails the create rather than
+ * guess, because a tenant stored without the rule it was meant to have is exactly what this setting exists to prevent.
+ */
+export async function getOnboardingDefaultRules(): Promise<ContentRulePreset[]> {
+    const raw = await getSetting(APP_SETTING_KEYS.onboardingDefaultRules);
+    if (raw === null) return [...DEFAULT_ONBOARDING_RULES];
+    const rules = parseOnboardingRules(raw);
+    if (rules) return rules;
+    log('warn', 'onboarding.default_rules_unreadable', { setting: APP_SETTING_KEYS.onboardingDefaultRules });
+    return [...DEFAULT_ONBOARDING_RULES];
 }
 
 export interface MediaStorageConfig {

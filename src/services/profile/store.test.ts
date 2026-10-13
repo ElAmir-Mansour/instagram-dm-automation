@@ -17,7 +17,7 @@ import { withProfileCache } from './cache.js';
 import { defaultProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import {
-    loadLegacyProfile, loadProfile, loadStoredProfile, ProfileError, resetProfileTableWarning, saveProfile, type SaveProfileOptions,
+    createProfile, type CreateProfileOptions, loadLegacyProfile, loadProfile, loadStoredProfile, ProfileError, resetProfileTableWarning, saveProfile, type SaveProfileOptions,
 } from './store.js';
 import { richProfile, throughJsonb } from './testSupport.js';
 import {
@@ -729,5 +729,144 @@ describe('the per-request cache, through the store', () => {
             await loadStoredProfile(OWNER);
             assert.equal(reads(), 1);
         });
+    });
+});
+
+// ─── createProfile: a tenant's first profile, at creation (P16) ──────────────────────────────
+
+describe('createProfile', () => {
+    const NEUTRAL = (): CreatorProfile => defaultProfile({ lang: 'ar', rules: ['no_women_imagery'] });
+    const create = (profile: unknown = NEUTRAL(), options: Partial<CreateProfileOptions> = {}, id = OTHER) =>
+        createProfile(id, profile, { source: 'admin', userId: USER, ...options });
+
+    it('stores the profile it is given as version 1, with its history row: not the one the tenant\'s legacy settings describe', async () => {
+        const saved = await create();
+        assert.deepEqual(saved && saved.version, 1);
+        assert.deepStrictEqual(storedProfile(OTHER), throughJsonb(NEUTRAL()));
+        assert.deepEqual(state.versions.map((v) => [v.creator_id, v.version, v.source, v.updated_by]), [[OTHER, 1, 'admin', USER]]);
+        assert.deepStrictEqual(state.versions[0]!.profile, storedProfile(OTHER));
+        const row = state.profiles.get(OTHER)!;
+        assert.deepEqual([row.version, row.activated_at, row.updated_by], [1, null, USER], 'activation is the wizard\'s, not creation\'s');
+        // A tenant with no settings is described as the owner (legacy.ts). That is exactly what must not be its version 1.
+        assert.notDeepEqual(storedProfile(OTHER).identity.role, profileFromLegacy(defaultStudioSettings(), defaultGrowthSettings()).identity.role);
+        assert.equal(storedProfile(OTHER).identity.role, '');
+    });
+
+    it('is exactly one history row: saveProfile on a tenant with no row would have stored the legacy profile as version 1 and this one as version 2', async () => {
+        await create();
+        assert.equal(state.versions.length, 1);
+        db.restore();
+        state = seededState();
+        db = installProfileDb(state);
+        await save(NEUTRAL(), {}, OTHER);
+        assert.equal(state.versions.length, 2, 'two versions: the legacy one first');
+        assert.equal(state.versions[0]!.source, 'backfill');
+    });
+
+    it('mirrors it into the settings rows of a tenant that has none, so the rows and the profile agree', async () => {
+        await create();
+        assert.ok(state.studio.has(OTHER) && state.growth.has(OTHER));
+        const profile = storedProfile(OTHER);
+        const studio = overDefaults(state.studio.get(OTHER) as never);
+        assert.deepStrictEqual(studio.brand.fonts.display, profile.brand.font_display);
+        assert.deepStrictEqual(studio.schedule.timezone, 'UTC', 'an empty timezone reads as UTC, as the view says');
+        assert.deepEqual(writes(db).map((s) => /^INSERT INTO (\w+)/.exec(s)![1]), ['creator_profiles', 'creator_profile_versions', 'studio_settings', 'growth_settings']);
+    });
+
+    it('seeds the Studio\'s direction when told, and leaves the Studio\'s own default when not', async () => {
+        await create(NEUTRAL(), { direction: 'rtl' });
+        assert.equal((state.studio.get(OTHER)!.brand as { direction: string }).direction, 'rtl');
+        db.restore();
+        state = seededState();
+        db = installProfileDb(state);
+        await create();
+        assert.equal((state.studio.get(OTHER)!.brand as { direction: string }).direction, 'ltr');
+    });
+
+    it('keeps what a tenant that already has settings rows has in the columns the profile does not own', async () => {
+        const mine: StudioSettings = { ...OWNER_STUDIO, brand: { ...OWNER_STUDIO.brand, direction: 'ltr' }, schedule: { ...OWNER_STUDIO.schedule, slots: ['07:30', '19:45'] } };
+        state.studio.set(OTHER, studioRow(mine));
+        state.growth.set(OTHER, growthRow(ELAMIR_GROWTH));
+        await create(NEUTRAL(), { direction: 'rtl' });
+        const written = overDefaults(state.studio.get(OTHER) as never);
+        assert.deepEqual(written.schedule.slots, ['07:30', '19:45'], 'the slots are not the profile\'s');
+        assert.equal(written.brand.palette.length, mine.brand.palette.length, 'neither is the palette');
+        assert.equal(written.brand.direction, 'rtl');
+        assert.deepStrictEqual(growthFromRow(state.growth.get(OTHER) as never).keywords, ELAMIR_GROWTH.keywords, 'the keywords are not either');
+    });
+
+    it('never writes over a profile that exists: null, and not a statement after the lock and the insert that found it', async () => {
+        await create();
+        const before = { profile: structuredClone(state.profiles.get(OTHER)), versions: structuredClone(state.versions), studio: structuredClone(state.studio) };
+        db.statements.length = 0;
+        assert.equal(await create(richProfile()), null);
+        assert.deepStrictEqual({ profile: state.profiles.get(OTHER), versions: state.versions, studio: state.studio }, before);
+        assert.deepEqual(writes(db), ['INSERT INTO creator_profiles (creator_id, profile, version, updated_by, updated_at) VALUES ($1, $2::jsonb, 1, $3, NOW()) ON CONFLICT (creator_id) DO NOTHING RETURNING version']);
+    });
+
+    it('refuses a profile that does not validate with every problem, and writes nothing', async () => {
+        const bad = { ...NEUTRAL(), identity: { ...NEUTRAL().identity, timezone: 'Not/AZone' }, brand: { ...NEUTRAL().brand, primary: 'red' } };
+        const err = await refused(() => create(bad), 'PROFILE_INVALID', 400);
+        assert.ok((err.detail.problems ?? []).length >= 2);
+        assert.deepEqual(writes(db), []);
+        assert.equal(state.profiles.size, 0);
+    });
+
+    it('takes the locks in the order everyone does: the tenant, the profile, the Studio row, the Growth row', async () => {
+        await create();
+        const order = [/FOR NO KEY UPDATE$/, /^INSERT INTO creator_profiles /, /^INSERT INTO creator_profile_versions /, /FROM studio_settings WHERE creator_id = \$1 FOR UPDATE$/, /^INSERT INTO studio_settings /, /FROM growth_settings WHERE creator_id = \$1 FOR UPDATE$/, /^INSERT INTO growth_settings /].map((p) => at(db, p));
+        assert.ok(order.every((i) => i >= 0), order.join(','));
+        assert.deepEqual([...order].sort((a, b) => a - b), order);
+        assert.equal(db.statements.filter((s) => s.sql === 'BEGIN').length, 1);
+    });
+
+    it('rolls the profile back when anything after it fails: no profile without its history, no history without its mirror', async () => {
+        for (const failing of [/^INSERT INTO creator_profile_versions /, /^INSERT INTO studio_settings /, /^INSERT INTO growth_settings /]) {
+            db.failOn = failing;
+            await assert.rejects(create(), /injected failure/);
+            assert.equal(state.profiles.has(OTHER), false, String(failing));
+            assert.deepEqual(state.versions, []);
+            assert.equal(state.studio.has(OTHER), false);
+            assert.equal(state.growth.has(OTHER), false);
+        }
+    });
+
+    it('inside a caller\'s transaction it joins it: the caller\'s rollback takes the profile with it, and its commit keeps it', async () => {
+        const client = await pool.connect();
+        await client.query('BEGIN');
+        await createProfile(OTHER, NEUTRAL(), { source: 'admin', userId: USER }, client as never);
+        assert.equal(db.statements.filter((s) => s.sql === 'BEGIN').length, 1, 'no second transaction was opened');
+        await client.query('ROLLBACK');
+        assert.equal(state.profiles.has(OTHER), false);
+    });
+
+    it('does not touch another tenant: the owner\'s rows and history are what they were', async () => {
+        const before = { studio: structuredClone(state.studio.get(OWNER)), growth: structuredClone(state.growth.get(OWNER)) };
+        await create();
+        assert.deepStrictEqual(state.studio.get(OWNER), before.studio);
+        assert.deepStrictEqual(state.growth.get(OWNER), before.growth);
+        assert.equal(state.profiles.has(OWNER), false);
+        assert.deepEqual(db.statements.filter((s) => s.params.includes(OWNER)), []);
+    });
+
+    it('drops the request\'s cached read of the tenant, so what the next reader sees is the profile it just stored', async () => {
+        await withProfileCache(async () => {
+            assert.equal(await loadStoredProfile(OTHER), null, 'cached as none');
+            await create();
+            assert.equal((await loadStoredProfile(OTHER))!.version, 1);
+        });
+    });
+
+    it('is a 503 naming migration v33 on a database that has not had it, and writes nothing', async () => {
+        db.v33 = false;
+        const err = await refused(() => create(), 'PROFILE_STORAGE_MISSING', 503);
+        assert.match(err.message, /migration v33/);
+        assert.equal(state.profiles.size, 0);
+    });
+
+    it('reads a profile the table\'s size cap refuses as an invalid profile (400), however it got past the validator', async () => {
+        db.failOn = /^INSERT INTO creator_profiles /;
+        db.failWith = Object.assign(new Error('new row violates check constraint "creator_profiles_size"'), { code: '23514', constraint: 'creator_profiles_size' });
+        await refused(() => create(), 'PROFILE_INVALID', 400);
     });
 });
