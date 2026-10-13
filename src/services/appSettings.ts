@@ -52,6 +52,13 @@ export const APP_SETTING_KEYS = {
     youtubeClientId: 'youtube.client_id',
     youtubeClientSecret: 'youtube.client_secret',
     /**
+     * A Google API key (not OAuth) for READING public YouTube data: a channel's description and recent titles, for the onboarding
+     * draft of a tenant that has not connected YouTube (docs/onboarding/03 §1). `channels.list` and `playlistItems.list` cost one quota
+     * unit each. Unset means that source is skipped, not failed: the draft is made from the rest. `YOUTUBE_API_KEY` is the fallback. No
+     * Settings field saves it yet.
+     */
+    youtubeApiKey: 'youtube.api_key',
+    /**
      * 'true': Shorts upload public. Off: private. YouTube may lock an unaudited project's uploads
      * private whatever is asked; this owner's were not (2026-10-06: a private test Short could be
      * made public in Studio, and YouTube reported it public), so the owner chose public.
@@ -166,6 +173,13 @@ export const APP_SETTING_KEYS = {
      * contain `{link}`. Unset: the card uses its own text, in the language the link was made for.
      */
     onboardingWhatsappText: 'onboarding.whatsapp_text',
+    /**
+     * The tenant whose connected Instagram account the platform reads OTHER people's public profiles with (Business Discovery, the
+     * main Instagram source of an onboarding draft, 03 §1). A creator id. Unset means the owner's tenant, which is also what a saved
+     * value that is not a tenant id falls back to. That account's rate limit is shared with its Growth competitor checks. Not a
+     * secret. No Settings field edits it yet.
+     */
+    onboardingDiscoveryCreatorId: 'onboarding.discovery_creator_id',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -173,6 +187,7 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
 const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.tiktokClientSecret,
     APP_SETTING_KEYS.youtubeClientSecret,
+    APP_SETTING_KEYS.youtubeApiKey,
     APP_SETTING_KEYS.geminiApiKey,
     APP_SETTING_KEYS.mediaStorageKey,
     APP_SETTING_KEYS.aiProviderKeyAnthropic,
@@ -345,6 +360,24 @@ export async function getYouTubeAppConfig(): Promise<YouTubeAppConfig | null> {
         clientSecret,
         source: { clientId: dbId ? 'database' : 'env', clientSecret: dbSecret ? 'database' : 'env' },
     };
+}
+
+export interface YouTubeApiKey {
+    key: string;
+    /** Which one is answering, so Settings can say so. */
+    source: 'database' | 'env';
+}
+
+/**
+ * The Google API key that reads public YouTube data: the one saved in Settings (`youtube.api_key`), then `YOUTUBE_API_KEY`.
+ * Null when neither is set, and then the onboarding draft skips YouTube as "unavailable" rather than failing. Read on every call,
+ * not cached: a key saved from the dashboard has to reach every warm serverless instance.
+ */
+export async function getYouTubeApiKey(): Promise<YouTubeApiKey | null> {
+    const saved = await getSetting(APP_SETTING_KEYS.youtubeApiKey);
+    if (saved) return { key: saved, source: 'database' };
+    const env = process.env.YOUTUBE_API_KEY?.trim();
+    return env ? { key: env, source: 'env' } : null;
 }
 
 /** Whether Shorts upload public (Settings → YouTube → "Upload Shorts as public"). Off by default. */

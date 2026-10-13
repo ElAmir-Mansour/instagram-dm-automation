@@ -11,7 +11,7 @@ import { throughJsonb } from './profile/jsonb.js';
 import { OWNER, OTHER, emptyState, installProfileDb, setPlatformOwner } from './profile/testDb.js';
 import { KINDS, type CreatorKind, type CreatorProfile } from './profile/types.js';
 import {
-    buildAuthorizeUrl, cutBytes, listVideoStatuses, setThumbnail, isYouTubeReauthError, parseTokenResponse, queryUpload, receivedFromRange, sendBytes,
+    buildAuthorizeUrl, cutBytes, getMyChannel, listVideoStatuses, setThumbnail, isYouTubeReauthError, parseTokenResponse, queryUpload, receivedFromRange, sendBytes,
     shortDescription, shortTitle, startResumableUpload, tagsFrom, toYouTubeError, videoResource, YouTubeApiError, youtubeCategoryId, youtubeHttp,
     EDUCATION_CATEGORY_ID, HOWTO_CATEGORY_ID, PEOPLE_BLOGS_CATEGORY_ID, SCOPE_READONLY, SCOPE_UPLOAD,
 } from './youtube.js';
@@ -329,5 +329,27 @@ describe('publishing a Short files it under the creator\'s category', () => {
     it('still uploads when the profile cannot be read: the owner as an educator, anyone else under YouTube\'s own default', async () => {
         assert.equal(await filedUnder(OWNER, null, true), '27');
         assert.equal(await filedUnder(OTHER, null, true), '22');
+    });
+});
+
+describe('getMyChannel keeps what the answer already carries (docs/onboarding/03 §1)', () => {
+    it('maps the description, the country and the default language: no extra quota, they come with the same `channels.list`', async () => {
+        const seen = stub(() => ({
+            status: 200,
+            data: { items: [{ id: 'UC1', snippet: { title: 'قناتي', customUrl: '@qanati', description: '  قناة لتعليم البرمجة  ', country: 'EG', defaultLanguage: 'ar', thumbnails: { default: { url: 'https://yt3.example/a.jpg' } } } }] },
+        }));
+        const channel = await getMyChannel('tok');
+        assert.equal(channel.description, 'قناة لتعليم البرمجة');
+        assert.equal(channel.country, 'EG');
+        assert.equal(channel.defaultLanguage, 'ar');
+        assert.equal(channel.handle, '@qanati');
+        assert.equal(seen.length, 1);
+        assert.deepEqual(seen[0]!.params, { part: 'snippet', mine: 'true' });
+    });
+
+    it('has null for what the channel left empty', async () => {
+        stub(() => ({ status: 200, data: { items: [{ id: 'UC1', snippet: { title: 'T', description: '   ' } }] } }));
+        const channel = await getMyChannel('tok');
+        assert.deepEqual([channel.description, channel.country, channel.defaultLanguage], [null, null, null]);
     });
 });

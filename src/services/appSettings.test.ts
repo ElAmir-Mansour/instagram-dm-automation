@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
-import { DEFAULT_ONBOARDING_RULES, describeGeminiKey, getGeminiKey, getMediaStorageConfig, getOnboardingDefaultRules, parseOnboardingRules } from './appSettings.js';
+import {
+    APP_SETTING_KEYS, DEFAULT_ONBOARDING_RULES, describeGeminiKey, getGeminiKey, getMediaStorageConfig, getOnboardingDefaultRules, getYouTubeApiKey, isSecretSetting, parseOnboardingRules,
+} from './appSettings.js';
 
 const TEST_ENCRYPTION_KEY = 'cd'.repeat(32);
 const SAVED = 'AIza.fake.saved-on-operations.test';
@@ -215,5 +217,53 @@ describe('onboarding.default_rules: the content rules a tenant created by the op
         assert.deepEqual(parseOnboardingRules('[]'), []);
         assert.deepEqual(parseOnboardingRules('["no_women_imagery"]'), ['no_women_imagery']);
         for (const raw of ['', 'x', 'null', '7', '{}', '["x"]', '[null]']) assert.equal(parseOnboardingRules(raw), null, raw);
+    });
+});
+
+/**
+ * The API key that reads public YouTube data for the onboarding draft (03 §1). It is a secret: stored encrypted, never shown. With
+ * none saved the YouTube source is skipped, so "none" must be an answer and not an error.
+ */
+describe('getYouTubeApiKey', () => {
+    const SAVED_KEY = 'AIzaSyD-saved-in-settings-0123456789abcdefghij';
+    let savedEnv: string | undefined;
+    beforeEach(() => { savedEnv = process.env.YOUTUBE_API_KEY; });
+    afterEach(() => {
+        if (savedEnv === undefined) delete process.env.YOUTUBE_API_KEY;
+        else process.env.YOUTUBE_API_KEY = savedEnv;
+    });
+
+    it('is a secret setting, under its own name', () => {
+        assert.equal(APP_SETTING_KEYS.youtubeApiKey, 'youtube.api_key');
+        assert.equal(isSecretSetting(APP_SETTING_KEYS.youtubeApiKey), true);
+    });
+
+    it('answers with the saved key, decrypted, over YOUTUBE_API_KEY', async () => {
+        process.env.YOUTUBE_API_KEY = 'AIza-the-environment-one';
+        const asked = storeHolds({ value: encryptSecret(SAVED_KEY), is_secret: true });
+        assert.deepEqual(await getYouTubeApiKey(), { key: SAVED_KEY, source: 'database' });
+        assert.deepEqual(asked, ['youtube.api_key']);
+    });
+
+    it('falls back to YOUTUBE_API_KEY, trimmed, while nothing is saved', async () => {
+        process.env.YOUTUBE_API_KEY = '  AIza-the-environment-one \n';
+        storeHolds(null);
+        assert.deepEqual(await getYouTubeApiKey(), { key: 'AIza-the-environment-one', source: 'env' });
+    });
+
+    it('is null when there is no key anywhere, and a blank env var is not a key', async () => {
+        for (const env of [undefined, '', '   ']) {
+            if (env === undefined) delete process.env.YOUTUBE_API_KEY;
+            else process.env.YOUTUBE_API_KEY = env;
+            storeHolds(null);
+            assert.equal(await getYouTubeApiKey(), null, JSON.stringify(env));
+        }
+    });
+});
+
+describe('the discovery account setting', () => {
+    it('is named as docs/onboarding/02 says, and is not a secret: it is a tenant id', () => {
+        assert.equal(APP_SETTING_KEYS.onboardingDiscoveryCreatorId, 'onboarding.discovery_creator_id');
+        assert.equal(isSecretSetting(APP_SETTING_KEYS.onboardingDiscoveryCreatorId), false);
     });
 });
