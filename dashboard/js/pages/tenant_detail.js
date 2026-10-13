@@ -22,6 +22,7 @@ const TenantDetailPage = {
     resetTenantState() {
         this.tenant = null;
         this.tenantId = null;
+        if (typeof TenantProfile !== 'undefined') TenantProfile.unmount();
     },
 
     skeleton() {
@@ -148,6 +149,7 @@ const TenantDetailPage = {
             ${this.renderHealth(row)}
             ${this.renderMembers(row)}
             ${this.renderConnection(row)}
+            ${this.renderProfile(row)}
         `);
 
         UI.icons(container);
@@ -398,6 +400,60 @@ const TenantDetailPage = {
         `;
     },
 
+    /**
+     * The tenant's Creator Profile, filled in on their behalf (P19). The form is its own file (`tenant_profile.js`), loaded and
+     * the profile fetched only when the admin asks for it: most visits to this screen are about health or the connection, and
+     * the profile can be 128 KB.
+     */
+    renderProfile(row) {
+        const name = Admin.pick(row, 'name', 'display_name') || t('tenants.untitled');
+        return html`
+            <section class="section" id="tenant-profile">
+                <h2 class="section-title">${t('tenantProfile.title')}</h2>
+                <div class="surface pad-5" id="tenant-profile-host">
+                    <p class="form-hint mbe-4">${t('tenantProfile.intro', { name })}</p>
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="tenantDetail:openProfile">
+                        <i data-lucide="pencil" aria-hidden="true"></i> ${t('tenantProfile.open')}
+                    </button>
+                </div>
+            </section>
+        `;
+    },
+
+    /** Load `tenant_profile.js` once. Resolves true when `TenantProfile` is there; a failed load is not cached, so a retry fetches again. */
+    ensureProfileModule() {
+        if (typeof TenantProfile !== 'undefined') return Promise.resolve(true);
+        if (!this._profileModule) {
+            this._profileModule = new Promise((done) => {
+                const script = document.createElement('script');
+                const version = typeof App !== 'undefined' && App.ASSET_VERSION ? App.ASSET_VERSION : '';
+                script.src = `/dashboard/js/pages/tenant_profile.js${version ? `?v=${version}` : ''}`;
+                script.onload = () => done(typeof TenantProfile !== 'undefined');
+                script.onerror = () => {
+                    this._profileModule = null;
+                    done(false);
+                };
+                document.head.appendChild(script);
+            });
+        }
+        return this._profileModule;
+    },
+
+    async openProfile(btn) {
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        const host = document.getElementById('tenant-profile-host');
+        const ready = await this.ensureProfileModule();
+        if (!ready || !host) {
+            restore();
+            UI.toast(t('tenantProfile.loadFailed'), 'error');
+            return;
+        }
+        await TenantProfile.mount(host, {
+            id: this.tenantId, name: Admin.pick(this.tenant, 'name', 'display_name') || t('tenants.untitled'),
+        });
+    },
+
     // ─── Actions ─────────────────────────────────────────────────────────────
 
     handleConnection(form, event) {
@@ -564,6 +620,7 @@ UI.registerActions('tenantDetail', {
     showRenameModal: () => TenantDetailPage.showRenameModal(),
     handleRename: (el, e) => Admin.report(TenantDetailPage.handleRename(el, e)),
     toggleActive: () => Admin.report(TenantDetailPage.toggleActive()),
+    openProfile: (el) => Admin.report(TenantDetailPage.openProfile(el)),
     recheckToken: (el) => Admin.report(TenantDetailPage.recheckToken(el)),
     switchInto: () => Admin.report(TenantDetailPage.switchInto()),
     resetLink: (el) => Admin.report(TenantDetailPage.resetLink(el)),

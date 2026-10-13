@@ -76,6 +76,8 @@ const ROUTES: Array<[string, string, Record<string, unknown>?]> = [
     ['GET', `/tenants/${UUID}`],
     ['PATCH', `/tenants/${UUID}`],
     ['POST', `/tenants/${UUID}/recheck-token`],
+    ['GET', `/tenants/${UUID}/profile`],
+    ['PATCH', `/tenants/${UUID}/profile`],
     ['GET', '/users'],
     ['POST', '/users'],
     ['PATCH', `/users/${UUID}`],
@@ -176,6 +178,8 @@ describe('tenant validation', () => {
             ['GET', '/tenants/not-a-uuid'],
             ['PATCH', '/tenants/not-a-uuid'],
             ['POST', '/tenants/not-a-uuid/recheck-token'],
+            ['GET', '/tenants/not-a-uuid/profile'],
+            ['PATCH', '/tenants/not-a-uuid/profile'],
         ] as const) {
             const reply = await call(method, url, { session: ADMIN, body: { name: 'x' } });
             assert.equal(reply.status, 404, `${method} ${url}`);

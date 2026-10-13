@@ -40,7 +40,7 @@ import {
 } from '../services/audit.js';
 import {
     getAllTenantHealth, getOpsSnapshot, getTenantCounts, getTenantHealth, getTenantMembers,
-    isMissingSchema, MIGRATION_HINT, toIso,
+    isMissingSchema, isMissingTable, MIGRATION_HINT, toIso,
 } from '../services/health.js';
 import {
     clampLimit, isPageId, isUserRole, lockoutRefusal, passwordProblem,
@@ -61,9 +61,11 @@ import { dmModelsInUse, starterPersona } from '../services/ai.js';
 import { clearProfileCache } from '../services/profile/cache.js';
 import { contextFor } from '../services/profile/context.js';
 import { defaultProfile } from '../services/profile/defaults.js';
+import { patchProfile, readProfileState } from '../services/profile/patch.js';
 import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
 import aiRouter from './adminAi.js';
+import { profileErrorBody } from './profile.js';
 import {
     buildInviteUrl, createInvite, InviteError, listInvites, readTtl, regenerateInvite, revokeInvite, shareFor, tenantLanguage,
     type AdminInvite, type CreatedInvite, type InvitePurpose,
@@ -1372,6 +1374,107 @@ router.put('/onboarding-settings', async (req, res) => {
         res.json(await describeOnboardingSettings());
     } catch (err) {
         failWith(res, err, 'admin.onboarding_settings_write_failed', 'Failed to save the onboarding settings.');
+    }
+});
+
+// ─── A tenant's Creator Profile, filled in on their behalf (P19) ─────────────
+
+/**
+ * Where a tenant is in the wizard, for the admin's Profile section: `{ status, filledBy }`. A tenant with no row, and a
+ * database that has not had v34 applied, read as completed (D14): the wizard's gates are for tenants made after it.
+ */
+async function readOnboardingState(creatorId: string): Promise<{ status: string; filledBy: string | null }> {
+    try {
+        const { rows } = await pool.query<{ status: string; filled_by: string | null }>(
+            'SELECT status, filled_by FROM onboarding WHERE creator_id = $1', [creatorId]
+        );
+        return rows[0] ? { status: rows[0].status, filledBy: rows[0].filled_by } : { status: 'completed', filledBy: null };
+    } catch (err) {
+        if (isMissingTable(err, 'onboarding')) return { status: 'completed', filledBy: null };
+        throw err;
+    }
+}
+
+/** What both profile routes answer: the profile with its version (`readProfileState`), whether the tenant is the platform owner (his `no_women_imagery` rule is locked), and the onboarding state. */
+async function profileAnswer(creatorId: string, state?: Awaited<ReturnType<typeof readProfileState>>): Promise<Record<string, unknown>> {
+    const [profile, owner, onboarding] = await Promise.all([
+        state ?? readProfileState(creatorId),
+        getPlatformOwnerId(),
+        readOnboardingState(creatorId),
+    ]);
+    return { ...profile, isPlatformOwner: owner !== null && owner.toLowerCase() === creatorId, onboarding };
+}
+
+/** The tenant a route's `:id` names, lower-cased, or null: not a uuid (never sent to the database), or no such tenant. */
+async function knownTenantId(raw: unknown): Promise<string | null> {
+    if (!isUuid(raw)) return null;
+    const id = raw.toLowerCase();
+    const { rows } = await pool.query('SELECT id FROM creators WHERE id = $1', [id]);
+    return rows.length > 0 ? id : null;
+}
+
+/**
+ * `GET /api/admin/tenants/:id/profile`: the tenant's profile and the version a PATCH must send back (`version` is null, and
+ * `stored` false, for a tenant whose profile is still the virtual one its settings describe).
+ */
+router.get('/tenants/:id/profile', async (req, res) => {
+    try {
+        const id = await knownTenantId(req.params.id);
+        if (!id) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+        res.json(await profileAnswer(id));
+    } catch (err) {
+        if (err instanceof ProfileError) {
+            res.status(err.status).json(profileErrorBody(err));
+            return;
+        }
+        failWith(res, err, 'admin.tenant_profile_read_failed', 'Failed to read the profile.');
+    }
+});
+
+/**
+ * `PATCH /api/admin/tenants/:id/profile { version, patch, confirm_remove_owner_rule? }`: the admin fills in the profile for the
+ * tenant. It is `patchProfile`, the very function `PATCH /api/profile` is, so the merge (an object merges, a list is replaced,
+ * `null` removes from the maps keyed by name), the validation, the optimistic version lock (409 `PROFILE_VERSION_CONFLICT`
+ * with `currentVersion`, before anything is merged) and the owner's locked `no_women_imagery` rule (409 `OWNER_RULE_LOCKED`) are
+ * the same, and the answer is the same as GET's, for the profile as it now is. What is different is who it says wrote it:
+ *
+ *   - the history row's source is `admin`;
+ *   - the audit entry is `profile.write` with `{ paths, version, on_behalf: true }`: the sections that changed, never a value;
+ *   - while the tenant's onboarding is not completed, `onboarding.filled_by` becomes `admin`, in the save's own transaction, so
+ *     the wizard can tell the tenant "your admin prepared this: check it" (docs/onboarding/02), and a profile never changes
+ *     without it.
+ *
+ * A patch that changes nothing writes nothing: no version, no history, no audit, and `filled_by` stays.
+ */
+router.patch('/tenants/:id/profile', async (req, res) => {
+    try {
+        const id = await knownTenantId(req.params.id);
+        if (!id) {
+            res.status(404).json({ error: 'Tenant not found.' });
+            return;
+        }
+
+        const { changed, ...state } = await patchProfile(id, req.body, {
+            userId: req.session?.userId ?? null,
+            source: 'admin',
+            onSaved: async (tx) => {
+                await tx.query(`UPDATE onboarding SET filled_by = 'admin' WHERE creator_id = $1 AND status <> 'completed'`, [id]);
+            },
+        });
+        if (changed.length > 0) {
+            // Section names only: what the profile says is never written to the audit trail.
+            await audit(req, AUDIT_ACTIONS.profileWrite, 'creator', id, { paths: changed, version: state.version, on_behalf: true });
+        }
+        res.json(await profileAnswer(id, state));
+    } catch (err) {
+        if (err instanceof ProfileError) {
+            res.status(err.status).json(profileErrorBody(err));
+            return;
+        }
+        failWith(res, err, 'admin.tenant_profile_write_failed', 'Failed to save the profile.');
     }
 });
 
