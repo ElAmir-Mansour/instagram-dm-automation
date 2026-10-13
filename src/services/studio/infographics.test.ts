@@ -104,6 +104,27 @@ describe('specProblems — logos', () => {
     });
 });
 
+describe('specProblems — real examples', () => {
+    const PG = { title: 'PostgreSQL', hex: '#4169E1', path: 'M23.56 14.723a.527.527 0 0 0-.057-.12z' };
+    const AWS = { title: 'AWS Backup', hex: null, path: null };
+    const withExamples = (examples: unknown) => ({ ...SPEC, columns: [{ ...column('RAG'), examples }, column('CAG'), column('KAG')] });
+    it('takes up to three, with a logo or as a name alone', () => {
+        assert.deepEqual(specProblems(withExamples([PG, AWS])), []);
+        assert.deepEqual(specProblems(withExamples([])), []);
+    });
+    it('refuses a fourth, an empty name, or a path that is anything but path data', () => {
+        assert.match(specProblems(withExamples([PG, AWS, PG, AWS])).join(), /Column 1's examples must be up to 3/);
+        assert.match(specProblems(withExamples([{ ...AWS, title: ' ' }])).join(), /Column 1's examples/);
+        assert.match(specProblems(withExamples([{ ...PG, path: '<script>' }])).join(), /Column 1's examples/);
+    });
+    it('asks Claude for them on every column, true and well known', () => {
+        const system = writeSystemPrompt('en');
+        assert.match(system, /Real examples, always: give every column 1–3 `examples`/);
+        assert.match(system, /Only ones a practitioner would agree are true examples/);
+        assert.ok((WRITE_SCHEMA.properties.columns.items.required as readonly string[]).includes('examples'));
+    });
+});
+
 describe('captionProblems — the caption is about the GIF', () => {
     it('passes a caption that names every column, whatever the case', () => {
         assert.deepEqual(captionProblems(CAPTION, SPEC), []);
