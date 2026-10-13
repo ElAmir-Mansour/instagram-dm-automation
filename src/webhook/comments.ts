@@ -9,6 +9,8 @@ import type { CampaignRow as CampaignTableRow, InteractionRow } from '../db/rows
 import { sendPrivateReply, sendPublicReply, sendDirectMessage, likeComment } from '../services/instagram.js';
 import { getCreatorByPageId } from '../services/tenant.js';
 import { matchCampaign } from '../services/matching.js';
+import { profileContextOrLegacy, ProfileUnreadableError } from '../services/profile/context.js';
+import type { ArabicRegister } from '../services/profile/types.js';
 import { checkFairSendQuota, canDmRecipient, recordDmSent } from '../utils/rateLimiter.js';
 import { noteMetaFailure } from '../services/tokenHealth.js';
 import { classifyDmError, dmFallbackReply, shouldPostDmFallback } from './errors.js';
@@ -183,6 +185,32 @@ async function claimInteraction(
     return { id: existing.id, resumed: true };
 }
 
+/**
+ * The register the public fallback reply is written in: the tenant's comment surface's (`profileContextOrLegacy`).
+ *
+ * When the profile cannot be read the owner gets his Gulf wording (that is `profileContextOrLegacy`'s). Any other tenant's
+ * read throws, and what happens next depends on whether a retry is left:
+ *
+ *   - one is: it re-throws, so the job runner backs off and tries again. The caller reads this BEFORE it writes the
+ *     interaction FAILED, so the row is still PENDING and the retry resumes it (`claimInteraction`); read after, the retry
+ *     would find a finished row, ignore it as a duplicate, and the public reply would be lost with nothing to say so;
+ *   - none is (the last attempt, or the inline path with no retry at all): the reply goes out in the neutral wording (no
+ *     register: Arabic reads as MSA, English as English) rather than not at all, and a `comment.fallback_register_unreadable`
+ *     line says so. `neutral` is true then, so the row's note can say it too.
+ */
+async function fallbackRegister(creatorId: string, options: WebhookHandlerOptions): Promise<{ register: ArabicRegister | null; neutral: boolean }> {
+    try {
+        const { language } = await profileContextOrLegacy(creatorId, 'comment_reply');
+        return { register: language.register, neutral: false };
+    } catch (err) {
+        if (!(err instanceof ProfileUnreadableError) || !options.lastAttempt) throw err;
+        log('warn', 'comment.fallback_register_unreadable', {
+            creator_id: creatorId, ...describeError(err), effect: 'no retry is left: the public reply goes out in the neutral wording',
+        });
+        return { register: null, neutral: true };
+    }
+}
+
 async function processComment(
     comment: NormalizedComment,
     entryId: string,
@@ -333,6 +361,22 @@ async function processComment(
             throw dmError;
         }
 
+        // The register of the public reply this failure is about to get, read before anything is written (see
+        // `fallbackRegister`): a tenant whose profile cannot be read leaves the row PENDING and the job retries, instead of a
+        // FAILED row that no retry would reach. Read only here, so a comment whose DM went out costs no profile read.
+        let fallback: { register: ArabicRegister | null; neutral: boolean } | null = null;
+        if (shouldPostDmFallback(dmError)) {
+            try {
+                fallback = await fallbackRegister(creator.id, options);
+            } catch (readErr: any) {
+                await queryCount(
+                    'UPDATE interactions SET status = $1, error_log = $2 WHERE id = $3',
+                    ['PENDING', `Retrying: the tenant's profile could not be read for the public reply. ${classified.error}`, interactionId]
+                );
+                throw readErr;
+            }
+        }
+
         await queryCount(
             'UPDATE interactions SET status = $1, error_log = $2 WHERE id = $3',
             [classified.status, classified.error, interactionId]
@@ -341,15 +385,15 @@ async function processComment(
         // The DM can never arrive. Reply publicly instead, so the person who asked isn't left
         // with nothing; the campaign's own "check your DMs" reply would send them to an empty
         // inbox, so it is skipped with everything else downstream.
-        if (shouldPostDmFallback(dmError)) {
+        if (fallback) {
             try {
                 const posted = await sendPublicReply(
-                    commentId, dmFallbackReply({ dmText, isFacebook: isFacebookComment }), creator.page_access_token, isFacebookComment
+                    commentId, dmFallbackReply({ dmText, isFacebook: isFacebookComment, register: fallback.register }), creator.page_access_token, isFacebookComment
                 );
                 rememberSelfAuthored(posted?.id);
                 log('info', 'dm.fallback_public_reply', { reply_comment_id: posted?.id, platform: isFacebookComment ? 'facebook' : 'instagram' });
                 await queryCount('UPDATE interactions SET error_log = $1 WHERE id = $2',
-                    [`${classified.error} Replied publicly with the link instead.`, interactionId]);
+                    [`${classified.error} Replied publicly with the link instead${fallback.neutral ? ' (in the neutral wording: the tenant\'s profile could not be read)' : ''}.`, interactionId]);
             } catch (fallbackErr: any) {
                 log('warn', 'dm.fallback_public_reply_failed', describeError(fallbackErr));
                 await noteMetaFailure(creator.id, fallbackErr);

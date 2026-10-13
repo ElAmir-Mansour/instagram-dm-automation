@@ -532,6 +532,50 @@ describe('intoProfile', () => {
         assert.deepStrictEqual(p.language.surfaces.infographic, { language: 'ar' });
     });
 
+    describe('the Studio\'s language is not the DM bot\'s (01 §7.7, P8)', () => {
+        const inEnglish = (s: StudioSettings): StudioSettings => ({ ...s, voice: { ...s.voice, language: 'en' } });
+
+        it('a write that moves an Arabic profile off `ar` pins the DM surface to the Arabic and register it spoke', () => {
+            for (const register of ['gulf', 'msa', 'egyptian', 'levantine'] as const) {
+                const arabic: CreatorProfile = { ...defaultProfile({ lang: 'ar' }), language: { ...defaultProfile({ lang: 'ar' }).language, register } };
+                const switched = intoProfile(arabic, inEnglish(ELAMIR_SEED_SETTINGS));
+                assert.equal(switched.language.primary, 'en', register);
+                assert.deepStrictEqual(switched.language.surfaces.dm, { language: 'ar', register }, register);
+                assert.equal(switched.language.register, register, 'the profile\'s own register is kept');
+                assert.ok('profile' in validateProfile(switched), `${register}: still a valid profile`);
+            }
+        });
+
+        it('keeps what a DM surface already says: its register when it names one, and its language when it names one', () => {
+            const arabic = defaultProfile({ lang: 'ar' });
+            const registerOnly: CreatorProfile = { ...arabic, language: { ...arabic.language, register: 'gulf', surfaces: { dm: { register: 'levantine' } } } };
+            assert.deepStrictEqual(intoProfile(registerOnly, inEnglish(ELAMIR_SEED_SETTINGS)).language.surfaces.dm, { register: 'levantine', language: 'ar' });
+            const own: CreatorProfile = { ...arabic, language: { ...arabic.language, surfaces: { dm: { language: 'en' } } } };
+            assert.deepStrictEqual(intoProfile(own, inEnglish(ELAMIR_SEED_SETTINGS)).language.surfaces.dm, { language: 'en' }, 'a DM surface that names its language is the tenant\'s choice');
+        });
+
+        it('does not touch the DM surface when the primary stays Arabic, or when it was not Arabic to begin with', () => {
+            const arabic = defaultProfile({ lang: 'ar' });
+            assert.equal(intoProfile(arabic, ELAMIR_SEED_SETTINGS).language.surfaces.dm, undefined);
+            const english = defaultProfile({ lang: 'en' });
+            assert.equal(intoProfile(english, ENGLISH_SETTINGS).language.surfaces.dm, undefined);
+            assert.equal(intoProfile(english, ELAMIR_SEED_SETTINGS).language.surfaces.dm, undefined, 'English to Arabic: the DM was English and is Arabic now, with nothing to pin');
+        });
+
+        it('going back to Arabic leaves the pin: the DM is Arabic either way, and the lens laws hold at every step', () => {
+            const owner = legacyBase('ar');
+            const english = intoProfile(owner, inEnglish(ELAMIR_SEED_SETTINGS));
+            const back = intoProfile(english, ELAMIR_SEED_SETTINGS);
+            assert.equal(back.language.primary, 'ar');
+            assert.deepStrictEqual(back.language.surfaces.dm, { language: 'ar', register: 'gulf' });
+            for (const [p, s] of [[owner, inEnglish(ELAMIR_SEED_SETTINGS)], [english, ELAMIR_SEED_SETTINGS]] as const) {
+                const into = intoProfile(p, s);
+                assert.deepStrictEqual(studioView(scramble(s, STUDIO_PROFILE_PATHS), into).voice, s.voice, 'law 1: the view of what was written is what was written');
+                assert.deepStrictEqual(changedPaths(into, intoProfile(into, studioView(s, into)), ['language', 'offers']), [], 'law 2: reading the view back changes nothing');
+            }
+        });
+    });
+
     it('gives an Arabic surface it creates a register when the profile has none, and not when it has', () => {
         const arabicInfographic: StudioSettings = { ...ENGLISH_SETTINGS, infographic: { ...ENGLISH_SETTINGS.infographic, language: 'ar' } };
         const english = defaultProfile({ lang: 'en' });

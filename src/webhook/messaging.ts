@@ -7,12 +7,13 @@
 import { queryCount, queryOne } from '../db/query.js';
 import type { ConversationPlatform, ConversationRow, MessageRow } from '../db/rows.js';
 import { generateAiResponse } from '../services/ai.js';
+import { profileContextOrLegacy } from '../services/profile/context.js';
 import { sendDirectMessage } from '../services/instagram.js';
 import { isPermanentMetaError } from '../services/http.js';
 import { noteMetaFailure } from '../services/tokenHealth.js';
 import { getCreatorByPageId, type Creator } from '../services/tenant.js';
 import { checkFairSendQuota } from '../utils/rateLimiter.js';
-import { toMetaMessage, applyDisclosure, type MetaMessagePayload } from './meta-payload.js';
+import { toMetaMessage, applyDisclosure, disclosureLine, type MetaMessagePayload } from './meta-payload.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
 
@@ -364,12 +365,16 @@ async function processDm(
     }
 
     try {
+        // Who the creator is, once for this DM: the model's rules and schema and the disclosure line below are written
+        // from it. A profile that cannot be read is the owner's wording (`profileContextOrLegacy`), never a failed reply.
+        const dmCtx = await profileContextOrLegacy(creator.id, 'dm');
+
         // Query Gemini. Timed, because this is both the dominant marginal cost of the product
         // and the reason the webhook cannot finish inside Meta's timeout.
         const startedAt = Date.now();
         // `dmPromptText(dm)`, not `dm.text || dm.payload` — the same string `claimInbound`
         // stored, so ai.ts's "is this message already in the history" check can succeed.
-        const aiRes = await generateAiResponse(conversationId, dmPromptText(dm), creator.id);
+        const aiRes = await generateAiResponse(conversationId, dmPromptText(dm), creator.id, undefined, dmCtx);
         log('info', 'ai.replied', {
             creator_id: creator.id,
             duration_ms: Date.now() - startedAt,
@@ -425,7 +430,7 @@ async function processDm(
         // after a long gap.
         const discloseNow = needsDisclosure(conversation.ai_disclosed_at);
         if (discloseNow) {
-            const disclosure = applyDisclosure(metaMessagePayload);
+            const disclosure = applyDisclosure(metaMessagePayload, disclosureLine(dmCtx.language.code));
             metaMessagePayload = disclosure.payload;
             if (disclosure.standalone) {
                 log('info', 'dm.disclosure_standalone');

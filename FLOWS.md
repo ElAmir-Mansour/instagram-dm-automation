@@ -432,11 +432,15 @@ Purely best-effort algorithmic boost: a failure is a `warn` (**:382**) and nothi
 
 ### 1.18b — The DM can't be delivered: a public reply instead
 
-**`src/webhook/comments.ts:344`**. On the final-failure path only, after the row is written FAILED:
-when `shouldPostDmFallback(dmError)` (not a dead token, not 10900), it posts
-`dmFallbackReply({ dmText, isFacebook })` (**`src/webhook/errors.ts`**): the first URL in the DM on
-Facebook, "link in bio" on Instagram, in the DM's language. DM code 100 is permanent
-(**`src/webhook/errors.ts:68`**), so this doesn't wait for the ~10-minute backoff. The campaign's own
+**`src/webhook/comments.ts:368`**. On the final-failure path only: when `shouldPostDmFallback(dmError)` (not a dead token,
+not 10900), it posts `dmFallbackReply({ dmText, isFacebook, register })` (**`src/webhook/errors.ts:54`**): the first URL in the
+DM on Facebook, "link in bio" on Instagram. The language is the DM's own (Arabic script or not); the Arabic register is the
+tenant's comment surface, read by `fallbackRegister` (**`comments.ts:201`**, via `profileContextOrLegacy`) **before** the row is
+written FAILED, and the lines are `KITS[register].commentFallback` (**`src/services/profile/kits.ts:104`**,
+`commentFallback` at **`:197`**). A profile that can't be read is the owner's Gulf line for the owner; for any other tenant the
+job is retried with the row still PENDING (a FAILED row would make the retry a duplicate), and on the last attempt the reply goes
+out in the neutral wording with a `comment.fallback_register_unreadable` line. DM code 100 is permanent
+(**`src/webhook/errors.ts`**, `classifyDmError`), so this doesn't wait for the ~10-minute backoff. The campaign's own
 public reply (1.19) is skipped, since it says to check the DMs.
 
 ### 1.19 — Public reply
@@ -607,17 +611,30 @@ bot should have answered after all.
 
 ### 2.7 — Gemini
 
-**`src/webhook/messaging.ts:306`** — `generateAiResponse(conversationId, dm.text || dm.payload,
-creator.id)`, at **`src/services/ai.ts:354`**. Timed and logged as `ai.replied` with
-`duration_ms` (**`src/webhook/messaging.ts:307-311`**), because this is both the dominant
+**`src/webhook/messaging.ts:377`** — `generateAiResponse(conversationId, dmPromptText(dm),
+creator.id, undefined, dmCtx)`, at **`src/services/ai.ts:404`**. Timed and logged as `ai.replied` with
+`duration_ms` (**`src/webhook/messaging.ts:378`**), because this is both the dominant
 marginal cost of the product and the reason the webhook cannot finish inside Meta's timeout.
+
+**The wording is the tenant's** — `dmCtx = profileContextOrLegacy(creator.id, 'dm')` (**`src/webhook/messaging.ts:370`**,
+the function at **`src/services/profile/context.ts:338`**) is read once per DM and handed to `generateAiResponse`, the
+disclosure and (in the sandbox, which reads it itself, **`src/services/ai.ts:413`**) the starter persona. It says the language
+and register the `dm` surface speaks and what the creator sells. A profile that can't be read is logged
+`profile.context_unreadable` and is, for the platform owner (`getPlatformOwnerId`, or anyone when that lookup fails), his
+Gulf/course wording (`legacyContext`, **`context.ts:293`**), never a failed reply; for any other tenant it throws
+`ProfileUnreadableError` (**`context.ts:305`**), which the DM catch re-raises while a retry is left, so the job runner backs off.
+The Studio's language is not the DM's: a settings write that moves an Arabic profile off `ar` pins `surfaces.dm` to the Arabic
+and register it spoke (`intoProfile`, **`src/services/profile/views.ts:171`**), so switching the Studio to English leaves the bot Arabic.
+`dmSystemInstruction(prompt, kb, ctx)` (**`src/services/ai.ts:398`**) writes the persona, the knowledge base and three
+rules from `kitFor(ctx.language)`: the register rule 1 asks for, rule 2's offer noun by `who.offerKind` (courses,
+programs, products, services, else offers), the character limits. Gulf + courses is today's text byte for byte.
 
 **`decideAgent`** — **`src/services/ai.ts:345`**, called at **`src/services/ai.ts:378`**. The
 whole safety rule, and both halves of it have been wrong in production:
 
 | stored row | sandbox? | decision |
 |---|---|---|
-| any | yes (`overrides !== undefined`, **`ai.ts:376`**) | speak, with the row or a fallback persona (**`ai.ts:346-348`**) |
+| any | yes (`overrides !== undefined`) | speak, with the row or the starter persona in the DM language (`starterPersona(lang)`, **`ai.ts:311`**; **`ai.ts:373-376`**) |
 | none | no | **`{ speak: false, reason: 'unconfigured' }`** (**`ai.ts:349`**) |
 | `is_active === false` | no | `{ speak: false, reason: 'disabled' }` (**`ai.ts:350`**) |
 | otherwise | no | speak (**`ai.ts:351`**) |
@@ -644,9 +661,9 @@ entire knowledge base are re-sent verbatim on every call, and Arabic runs ~2-2.5
 per character than English. The current message is appended only if it is not already the last
 row (**:417-423**).
 
-**`responseSchema`** — `RESPONSE_SCHEMA` at **`src/services/ai.ts:133`**, passed with
-`responseMimeType: "application/json"` in `generationConfig`
-(**`src/services/ai.ts:444-448`**). It constrains `message_type` to
+**`responseSchema`** — `dmResponseSchema(ctx)` at **`src/services/ai.ts:146`** (says "written in Arabic|English" and the
+button id `GO_TO_COURSE_1|GO_TO_OFFER_1`), passed with `responseMimeType: "application/json"` in `generationConfig`
+(**`src/services/ai.ts:505`**). It constrains `message_type` to
 `text | quick_reply | carousel` and describes Meta's own limits inline (quick-reply titles ≤ 20
 chars, carousel titles ≤ 80, 2-10 cards).
 
@@ -727,17 +744,18 @@ at enqueue and never becomes a second job.
 talking to an automated service *"at the beginning of any conversation or message thread"*, and
 again after a significant lapse of time.
 
-- `needsDisclosure(conversation.ai_disclosed_at)` at **`src/webhook/messaging.ts:115`**, called
-  at **:360**. True when the column is null (thread start), unparseable, **or** older than
-  `DISCLOSURE_MAX_AGE_MS = 7 days` (**`src/webhook/messaging.ts:24`**). The policy never
+- `needsDisclosure(conversation.ai_disclosed_at)` at **`src/webhook/messaging.ts:177`**, called
+  at **:431**. True when the column is null (thread start), unparseable, **or** older than
+  `DISCLOSURE_MAX_AGE_MS = 7 days` (**`src/webhook/messaging.ts:25`**). The policy never
   quantifies "a significant lapse"; a week is long enough that the thread reads as a new
   conversation to the person on the other end.
-- `applyDisclosure` (**`src/webhook/meta-payload.ts:101`**) prefixes
-  `AI_DISCLOSURE_LINE` (**`src/webhook/meta-payload.ts:87`**, `🤖 رد آلي من المساعد الذكي`) onto
-  the payload's `text`. **A generic template carries no `text` field** — Meta rejects `text`
-  alongside `attachment` — so for a carousel it returns `standalone` instead
-  (**`src/webhook/meta-payload.ts:108`**), and the pipeline sends the line as its own message
-  first (**`src/webhook/messaging.ts:364-372`**, logging `dm.disclosure_standalone`).
+- `applyDisclosure` (**`src/webhook/meta-payload.ts:111`**) prefixes
+  `disclosureLine(dmCtx.language.code)` (**`src/webhook/meta-payload.ts:92`**, called at **`messaging.ts:433`**: in the DM
+  surface's language, `🤖 رد آلي من المساعد الذكي` or `🤖 Automated reply from the AI assistant`; the Arabic one is still
+  `AI_DISCLOSURE_LINE`, **`:97`**) onto the payload's `text`. **A generic template carries no `text` field** — Meta rejects
+  `text` alongside `attachment` — so for a carousel it returns `standalone` instead
+  (**`src/webhook/meta-payload.ts:118`**), and the pipeline sends the line as its own message
+  first (**`src/webhook/messaging.ts:435-443`**, logging `dm.disclosure_standalone`).
 
 **Endpoint selection** — `resolveDmPageId` at **`src/webhook/messaging.ts:108`**, called at
 **:356**. Meta requires `/{page-id}/messages` for Page access tokens; `/me/messages` only
@@ -1277,10 +1295,10 @@ until it has one, the virtual profile its legacy settings describe (`version: nu
 3. **`src/services/studio/settings.ts:265`**, **`src/services/growth/settings.ts:266`** — the settings
    readers overlay the stored profile on their own row (`studioView` / `growthView`). A tenant with
    no stored profile, or one written by a *newer* release, gets its row unchanged.
-4. **`src/services/profile/context.ts:270`** — `profileContext(creatorId, purpose)` is `loadProfile`
-   then the pure `contextFor` (**:243**): a base every purpose shares (`language` resolved for the
+4. **`src/services/profile/context.ts:276`** — `profileContext(creatorId, purpose)` is `loadProfile`
+   then the pure `contextFor` (**:249**): a base every purpose shares (`language` resolved for the
    purpose's surface, `who`, `guard`) plus that purpose's slice. A stored profile written by a *newer*
-   release is passed over exactly as the settings readers pass it over (**:274**): the context is cut
+   release is passed over exactly as the settings readers pass it over (**:280**): the context is cut
    from the legacy rows, `version: null`. Today two readers use it:
    `tenantLanguage` (**`src/services/growth/coach.ts:259`**: the coach's and the keyword finder's
    language) and `tenantTimezone` (**`src/services/growth/overview.ts:416`**: the heatmap, after the

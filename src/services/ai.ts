@@ -3,6 +3,9 @@ import { queryOne, queryRows } from '../db/query.js';
 import type { AiAgentRow, MessageRow } from '../db/rows.js';
 import { log } from '../utils/log.js';
 import { getGeminiKey, MISSING_GEMINI_KEY } from './appSettings.js';
+import { profileContextOrLegacy, type ProfileContext } from './profile/context.js';
+import { kitFor, kitForLang, offerNoun } from './profile/kits.js';
+import type { Lang } from './profile/types.js';
 
 /** The two columns the history window actually needs. */
 type HistoryRow = Pick<MessageRow, 'direction' | 'text'>;
@@ -133,60 +136,69 @@ export interface AiResponse {
 }
 
 /**
+ * What the DM bot's reply is written in, and what it is told to call the offer, depend on who the creator is, so the
+ * schema is a function of the DM context (docs/onboarding/05 §2, P8): `Must be written in Arabic|English`, and a button
+ * payload example of `GO_TO_COURSE_1` for a creator who sells courses and `GO_TO_OFFER_1` for anyone else. The owner's
+ * context (Arabic, courses) gives the schema he has always had, byte for byte (`__golden__/elamir/dm.response-schema.json`).
+ *
  * Interface to match Google Gemini's REST API payload structures.
  */
-export const RESPONSE_SCHEMA = {
-    type: "OBJECT",
-    properties: {
-        message_type: {
-            type: "STRING",
-            enum: ["text", "quick_reply", "carousel"]
-        },
-        text: {
-            type: "STRING",
-            description: "Conversational text response or prompt accompanying the buttons/carousel. Must be written in Arabic if appropriate."
-        },
-        quick_replies: {
-            type: "ARRAY",
-            items: {
-                type: "OBJECT",
-                properties: {
-                    title: { type: "STRING", description: "Label of the button. MAX 20 characters." },
-                    payload: { type: "STRING", description: "Programmatic payload returned on click, e.g., GO_TO_COURSE_1." }
-                },
-                required: ["title", "payload"]
+export function dmResponseSchema(ctx: DmContext) {
+    const language = kitFor(ctx.language).dm.schemaLanguage;
+    const buttonId = `GO_TO_${ctx.who.offerKind === 'course' ? 'COURSE' : 'OFFER'}_1`;
+    return {
+        type: "OBJECT",
+        properties: {
+            message_type: {
+                type: "STRING",
+                enum: ["text", "quick_reply", "carousel"]
             },
-            description: "A list of quick action buttons (maximum 13)."
-        },
-        carousel_elements: {
-            type: "ARRAY",
-            items: {
-                type: "OBJECT",
-                properties: {
-                    title: { type: "STRING", description: "Title of the carousel card. MAX 80 characters." },
-                    subtitle: { type: "STRING", description: "Subtitle of the carousel card. MAX 80 characters." },
-                    image_url: { type: "STRING", description: "Public URL of the image to display." },
-                    buttons: {
-                        type: "ARRAY",
-                        items: {
-                            type: "OBJECT",
-                            properties: {
-                                type: { type: "STRING", enum: ["web_url", "postback"] },
-                                title: { type: "STRING", description: "Button text. MAX 20 characters." },
-                                url: { type: "STRING", description: "URL for web_url buttons." },
-                                payload: { type: "STRING", description: "Payload for postback buttons." }
-                            },
-                            required: ["type", "title"]
+            text: {
+                type: "STRING",
+                description: `Conversational text response or prompt accompanying the buttons/carousel. Must be written in ${language} if appropriate.`
+            },
+            quick_replies: {
+                type: "ARRAY",
+                items: {
+                    type: "OBJECT",
+                    properties: {
+                        title: { type: "STRING", description: "Label of the button. MAX 20 characters." },
+                        payload: { type: "STRING", description: `Programmatic payload returned on click, e.g., ${buttonId}.` }
+                    },
+                    required: ["title", "payload"]
+                },
+                description: "A list of quick action buttons (maximum 13)."
+            },
+            carousel_elements: {
+                type: "ARRAY",
+                items: {
+                    type: "OBJECT",
+                    properties: {
+                        title: { type: "STRING", description: "Title of the carousel card. MAX 80 characters." },
+                        subtitle: { type: "STRING", description: "Subtitle of the carousel card. MAX 80 characters." },
+                        image_url: { type: "STRING", description: "Public URL of the image to display." },
+                        buttons: {
+                            type: "ARRAY",
+                            items: {
+                                type: "OBJECT",
+                                properties: {
+                                    type: { type: "STRING", enum: ["web_url", "postback"] },
+                                    title: { type: "STRING", description: "Button text. MAX 20 characters." },
+                                    url: { type: "STRING", description: "URL for web_url buttons." },
+                                    payload: { type: "STRING", description: "Payload for postback buttons." }
+                                },
+                                required: ["type", "title"]
+                            }
                         }
-                    }
+                    },
+                    required: ["title"]
                 },
-                required: ["title"]
-            },
-            description: "Swipeable cards. Specify between 2 and 10 cards."
-        }
-    },
-    required: ["message_type", "text"]
-};
+                description: "Swipeable cards. Specify between 2 and 10 cards."
+            }
+        },
+        required: ["message_type", "text"]
+    };
+}
 
 /**
  * Force whatever Gemini returned into a payload Meta will actually accept.
@@ -293,9 +305,12 @@ function enforceMetaConstraints(response: AiResponse): AiResponse {
 /**
  * The persona a tenant's agent starts with: the sandbox's fallback here, the disabled `ai_agents`
  * row a new tenant is created with (`POST /api/admin/tenants`), and what `GET /api/settings/ai`
- * shows before any agent is saved.
+ * shows before any agent is saved. In the language the tenant's DM surface speaks
+ * (`context.language.code`), never the owner's by default.
  */
-export const STARTER_PERSONA = 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.';
+export function starterPersona(lang: Lang): string {
+    return kitForLang(lang).starterPersona;
+}
 
 /**
  * Queries Gemini API using the conversation history and configuration details.
@@ -309,13 +324,13 @@ export const STARTER_PERSONA = 'أنت مساعد ذكي يجيب على است�
  * @param overrides Substitutes the stored prompt/knowledge base for this call only, without
  *                  writing to `ai_agents`. Used by the Settings "test" endpoint.
  */
-/** The persona the sandbox runs against when no agent row exists yet. */
-const SANDBOX_FALLBACK_AGENT = {
-    system_prompt: STARTER_PERSONA,
+/** The persona the sandbox runs against when no agent row exists yet, in the language the tenant's DMs speak. */
+const sandboxFallbackAgent = (lang: Lang) => ({
+    system_prompt: starterPersona(lang),
     knowledge_base: '',
     model: DEFAULT_MODEL,
     temperature: DEFAULT_TEMPERATURE as number | null,
-};
+});
 
 /** The fields the generator reads off an agent row. */
 export interface AgentSettings {
@@ -352,11 +367,12 @@ export type AgentDecision =
  * inventing an outbound turn.
  *
  * The sandbox is the one exception, and it has to be: `overrides` means the dashboard's test
- * box, where trying a prompt out *before* configuring an agent is exactly the point.
+ * box, where trying a prompt out *before* configuring an agent is exactly the point. Its starter
+ * persona is in `lang`, the language the tenant's DM surface speaks.
  */
-export function decideAgent(stored: AgentSettings & { is_active?: boolean } | null | undefined, isSandbox: boolean): AgentDecision {
+export function decideAgent(stored: AgentSettings & { is_active?: boolean } | null | undefined, isSandbox: boolean, lang: Lang = 'ar'): AgentDecision {
     if (isSandbox) {
-        return { speak: true, agent: stored ?? SANDBOX_FALLBACK_AGENT };
+        return { speak: true, agent: stored ?? sandboxFallbackAgent(lang) };
     }
     if (!stored) return { speak: false, reason: 'unconfigured' };
     if (stored.is_active === false) return { speak: false, reason: 'disabled' };
@@ -364,20 +380,38 @@ export function decideAgent(stored: AgentSettings & { is_active?: boolean } | nu
 }
 
 /**
+ * What the DM bot's wording depends on: the language and register its surface speaks, and the kind of thing the
+ * creator sells. Both come from the profile (`profileContext(creatorId, 'dm')`); a test or a tool that has no profile
+ * hands a context cut from one (`contextFor`), and the owner's gives today's text.
+ */
+export type DmContext = Pick<ProfileContext<'dm'>, 'language' | 'who'>;
+
+/**
  * The DM bot's system instruction: the agent's persona, its knowledge base, and the fixed rules.
  * Pure, so the golden tests can pin it. `knowledgeBase` may be null because an agent row's is
  * typed so; it is interpolated as it always was.
+ *
+ * The rules come from the language kit (`profile/kits.ts`): the register rule 1 asks for, and the noun rule 2 calls the
+ * offers by (`offerKind`: courses, programs, products, services, else offers). For the owner (Gulf Arabic, courses)
+ * every line is today's, word for word.
  */
-export function dmSystemInstruction(systemPrompt: string, knowledgeBase: string | null): string {
-    return `${systemPrompt}\n\n=== قاعدة المعرفة المتاحة لديك (Knowledge Base) ===\n${knowledgeBase}\n\n=== تعليمات إضافية مهمة ===\n1. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللغة العربية الفصحى أو بلهجة سهلة ومناسبة.\n2. إذا طلب المستخدم كورسات أو معلومات تواصل، استخدم خيار "quick_reply" أو "carousel" لتقديمها بشكل تفاعلي ومنظم بدلاً من مجرد سرد روابط نصية.\n3. التزم تماماً بحدود الحروف: عناوين الأزرار والـ quick replies لا تتجاوز 20 حرفاً. عناوين الكروت لا تتجاوز 80 حرفاً.`;
+export function dmSystemInstruction(systemPrompt: string, knowledgeBase: string | null, ctx: DmContext): string {
+    const kit = kitFor(ctx.language);
+    const noun = offerNoun(kit, ctx.who.offerKind);
+    return `${systemPrompt}\n\n${kit.dm.knowledgeHeader}\n${knowledgeBase}\n\n${kit.dm.rulesHeader}\n1. ${kit.dm.friendly}\n2. ${kit.dm.offers(noun)}\n3. ${kit.dm.limits}`;
 }
 
 export async function generateAiResponse(
     conversationId: string,
     userMessage: string,
     creatorId: string,
-    overrides?: { system_prompt?: string; knowledge_base?: string; model?: string; temperature?: number }
+    overrides?: { system_prompt?: string; knowledge_base?: string; model?: string; temperature?: number },
+    ctx?: DmContext
 ): Promise<AiResponse | null> {
+    // Who the creator is, once: the DM pipeline resolves it for its own disclosure line and hands it in, the dashboard's
+    // sandbox does not and it is read here. A profile that cannot be read is the owner's legacy wording, not a crash.
+    const dmCtx: DmContext = ctx ?? await profileContextOrLegacy(creatorId, 'dm');
+
     // 1. Fetch AI Agent Settings
     //    Deliberately unfiltered by is_active: the filter used to be in the WHERE clause, so a
     //    disabled agent returned zero rows and was indistinguishable from an unconfigured one.
@@ -396,7 +430,7 @@ export async function generateAiResponse(
     // silently makes the tool that helps you decide return nothing.
     const isSandbox = overrides !== undefined;
 
-    const decision = decideAgent(stored, isSandbox);
+    const decision = decideAgent(stored, isSandbox, dmCtx.language.code);
     if (!decision.speak) {
         // `warn` for unconfigured, `debug` for disabled: a tenant that switched their agent
         // off is doing what the toggle is for, while a newly onboarded tenant receiving DMs
@@ -446,7 +480,7 @@ export async function generateAiResponse(
     // 4. Construct System Instruction
     const systemPrompt = overrides?.system_prompt ?? agent.system_prompt;
     const knowledgeBase = overrides?.knowledge_base ?? agent.knowledge_base;
-    const systemInstructionText = dmSystemInstruction(systemPrompt, knowledgeBase);
+    const systemInstructionText = dmSystemInstruction(systemPrompt, knowledgeBase, dmCtx);
 
     // The sandbox may name the model and temperature on screen, so the operator tests what
     // they are about to save rather than what was saved last time.
@@ -468,7 +502,7 @@ export async function generateAiResponse(
             },
             generationConfig: {
                 responseMimeType: "application/json",
-                responseSchema: RESPONSE_SCHEMA,
+                responseSchema: dmResponseSchema(dmCtx),
                 temperature
             }
         };

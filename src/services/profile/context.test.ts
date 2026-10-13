@@ -17,54 +17,21 @@ import { setLogSink } from '../../utils/log.js';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
 import { withProfileCache } from './cache.js';
 import {
-    contextFor, isPurpose, offerKindOf, profileContext, PURPOSES, SURFACE_OF, type Purpose, type ProfileContext,
+    contextFor, isPurpose, legacyContext, offerKindOf, profileContext, profileContextOrLegacy, ProfileUnreadableError, PURPOSES, SURFACE_OF, type Purpose, type ProfileContext,
 } from './context.js';
 import { defaultProfile, upgradeProfile } from './defaults.js';
+import { FITNESS_EN, SHOP_EG } from './fixtures.js';
 import { LEGACY_ASSUMPTIONS, profileFromLegacy } from './legacy.js';
 import { resetProfileTableWarning, resetProfileWarnings } from './store.js';
-import { emptyState, growthRow, installProfileDb, OTHER, OWNER, type ProfileDb, studioRow, type State } from './testDb.js';
+import { emptyState, growthRow, installProfileDb, OTHER, OWNER, PLATFORM_OWNER_SQL, type ProfileDb, setPlatformOwner, studioRow, type State } from './testDb.js';
 import { deepFreeze, richProfile, throughJsonb } from './testSupport.js';
-import type { CreatorProfile, Offer } from './types.js';
+import type { CreatorProfile } from './types.js';
 
 /** A tenant's profile as the database holds it and the readers return it. */
 const storedFrom = (profile: CreatorProfile): CreatorProfile => upgradeProfile(throughJsonb(profile)).profile;
 
 const OWNER_PROFILE = storedFrom(profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH));
 const ENGLISH_LEGACY = storedFrom(profileFromLegacy(ENGLISH_SETTINGS));
-
-const offer = (over: Partial<Offer>): Offer => ({
-    id: 'o', kind: 'other', name: '', order_via: 'dm', url: '', price: '', facts: [], bullets: [], keyword: '', primary: false, ...over,
-});
-
-/** An English fitness coach on a neutral profile: nothing of the owner's in it. */
-const FITNESS_EN: CreatorProfile = {
-    ...defaultProfile({ lang: 'en', rules: [] }),
-    identity: { display_name: { ar: '', en: 'Sami Fitness' }, brand_name: 'Sami Fit', kind: 'coach', role: 'fitness coach', niche: 'Home workouts for busy parents', country: 'GB', timezone: 'Europe/London' },
-    offers: [
-        offer({ id: 'call', kind: 'coaching', name: 'One-to-one call', order_via: 'dm', keyword: 'call' }),
-        offer({ id: 'plan', kind: 'program', name: 'Twelve-week plan', order_via: 'url', url: 'https://samifit.example/plan', keyword: 'plan', primary: true }),
-    ],
-    audience: { description: 'Parents with under an hour a day', level: 'beginner', pains: ['No time'], goals: ['Sleep better'], countries: ['GB'], languages: ['en'] },
-    voice: { guide: 'Warm and direct.', tone: [], samples: [], use_words: [], avoid_words: [], emoji: 'rich', address: 'neutral' },
-    presenter: { name: 'Sami', pronouns: 'they', on_camera: 'face' },
-    content: { domain: 'general', pillars: ['Workouts', 'Food'], never_mention: ['steroids'], rules: [], custom_rules: ['No before-and-after photos'] },
-    socials: { handle: '@sami.fit', site: 'samifit.example', platforms: ['instagram'], links: { instagram: 'https://instagram.com/sami.fit' } },
-    dm: { faq: [{ q: 'How much?', a: '$99' }], handoff: { when: 'A refund', message: 'A person will reply.' }, hours: { days: [1, 2, 3], from: '09:00', to: '17:00' } },
-    goals: { followers: 5000, views: 250_000 },
-};
-
-/** An Egyptian-Arabic shop selling products: no presenter, no educator anywhere. */
-const SHOP_EG: CreatorProfile = {
-    ...defaultProfile({ lang: 'ar', rules: ['no_women_imagery'] }),
-    identity: { display_name: { ar: 'متجر نور', en: 'Nour Shop' }, brand_name: '', kind: 'shop', role: 'online shop', niche: 'Handmade candles', country: 'EG', timezone: 'Africa/Cairo' },
-    language: { primary: 'ar', register: 'egyptian', digits: 'latin', surfaces: {} },
-    offers: [
-        offer({ id: 'candle', kind: 'product', name: 'شمعة لافندر', order_via: 'url', url: 'https://nour.example/candle', keyword: 'شمعة', primary: true }),
-        offer({ id: 'box', kind: 'product', name: 'علبة هدية', order_via: 'dm', keyword: 'علبة' }),
-    ],
-    voice: { guide: '', tone: [], samples: [], use_words: [], avoid_words: [], emoji: 'light', address: 'fem' },
-    content: { domain: 'general', pillars: ['منتجات'], never_mention: [], rules: ['no_women_imagery'], custom_rules: [] },
-};
 
 /** Every string anywhere in `value`, keys included: what a prompt built from the context could end up saying. */
 function strings(value: unknown): string[] {
@@ -433,5 +400,111 @@ describe('profileContext', () => {
         db.failOn = /FROM creator_profiles/;
         db.failWith = new Error('connection refused');
         await assert.rejects(profileContext(OWNER, 'dm'), /connection refused/);
+    });
+
+    it('profileContextOrLegacy is the same context when the profile can be read, and writes nothing and warns nothing', async () => {
+        store(OTHER, FITNESS_EN, 2);
+        assert.deepEqual(await profileContextOrLegacy(OTHER, 'dm'), contextFor(FITNESS_EN, 'dm', 2));
+        assert.deepEqual(await profileContextOrLegacy(OTHER, 'comment_reply'), contextFor(FITNESS_EN, 'comment_reply', 2));
+        assert.equal(events.filter((e) => e === 'profile.context_unreadable').length, 0);
+        assert.equal(db.ran(/INSERT|UPDATE/).length, 0);
+    });
+
+    describe('profileContextOrLegacy, when the profile cannot be read', () => {
+        const unreadable = (): void => {
+            store(OTHER, FITNESS_EN, 2);
+            store(OWNER, richProfile(), 3);
+            db.failOn = /FROM creator_profiles/;
+            db.failWith = new Error('connection refused');
+        };
+        const unreadableLines = (): number => events.filter((e) => e === 'profile.context_unreadable').length;
+
+        it('the OWNER gets the owner-identical legacy context, and a warning: a failed read is never a failed reply for him', async () => {
+            unreadable();
+            setPlatformOwner(db, OWNER);
+            for (const purpose of ['dm', 'comment_reply'] as const) {
+                const ctx = await profileContextOrLegacy(OWNER, purpose);
+                assert.deepEqual(ctx, legacyContext(purpose), purpose);
+                assert.equal(ctx.version, null);
+                assert.deepEqual(ctx.language, { code: 'ar', register: 'gulf', digits: 'arabic-indic', dir: 'rtl' });
+                assert.equal(ctx.who.offerKind, 'course');
+            }
+            assert.equal(unreadableLines(), 2, 'said once per read');
+        });
+
+        it('the owner is found without case: an id the database writes in upper case is still him', async () => {
+            unreadable();
+            setPlatformOwner(db, OWNER.toUpperCase());
+            assert.deepEqual(await profileContextOrLegacy(OWNER, 'dm'), legacyContext('dm'));
+        });
+
+        it('any other tenant gets a ProfileUnreadableError, so the job that asked is retried: never the owner\'s wording', async () => {
+            unreadable();
+            setPlatformOwner(db, OWNER);
+            for (const purpose of ['dm', 'comment_reply'] as const) {
+                await assert.rejects(profileContextOrLegacy(OTHER, purpose), (err: unknown) => {
+                    assert.ok(err instanceof ProfileUnreadableError, 'its own error class: the callers tell it from anything else');
+                    assert.equal(err.name, 'ProfileUnreadableError');
+                    assert.equal(err.creatorId, OTHER);
+                    assert.equal(err.purpose, purpose);
+                    assert.match(err.message, /connection refused/);
+                    assert.equal((err.cause as Error).message, 'connection refused', 'the database error is kept as the cause');
+                    return true;
+                }, purpose);
+            }
+            assert.equal(unreadableLines(), 2);
+        });
+
+        it('says so in the log line: which of the two it was', async () => {
+            unreadable();
+            const lines: Record<string, unknown>[] = [];
+            const previous = setLogSink((_level, line) => { try { lines.push(JSON.parse(line)); } catch { /* not structured */ } });
+            try {
+                setPlatformOwner(db, OWNER);
+                await profileContextOrLegacy(OWNER, 'dm');
+                await assert.rejects(profileContextOrLegacy(OTHER, 'dm'), ProfileUnreadableError);
+            } finally {
+                setLogSink(previous);
+            }
+            const [forOwner, forOther] = lines.filter((l) => l.event === 'profile.context_unreadable');
+            assert.match(String(forOwner!.effect), /legacy wording is used/);
+            assert.match(String(forOther!.effect), /not the owner: the job is retried/);
+        });
+
+        it('when the owner cannot be found, anyone is answered in the legacy wording: the owner is never blocked while there is one tenant', async () => {
+            unreadable();
+            for (const owner of [new Error('lookup down'), null]) {
+                setPlatformOwner(db, owner);
+                for (const id of [OWNER, OTHER]) {
+                    assert.deepEqual(await profileContextOrLegacy(id, 'dm'), legacyContext('dm'), `${id}, owner lookup ${owner === null ? 'finds nobody' : 'fails'}`);
+                }
+            }
+        });
+
+        it('a read that works never asks who the owner is, for any tenant', async () => {
+            store(OTHER, FITNESS_EN, 2);
+            setPlatformOwner(db, OWNER);
+            await profileContextOrLegacy(OTHER, 'dm');
+            assert.equal(db.ran(PLATFORM_OWNER_SQL).length, 0);
+        });
+    });
+
+    it('profileContextOrLegacy still refuses a purpose that does not exist: a programming error is not a database error', async () => {
+        await assert.rejects(profileContextOrLegacy(OWNER, 'nope' as never), /unknown profile context purpose: nope/);
+        assert.throws(() => legacyContext('nope' as never), /unknown profile context purpose: nope/);
+        assert.equal(events.filter((e) => e === 'profile.context_unreadable').length, 0);
+    });
+});
+
+describe('legacyContext', () => {
+    it('says for every purpose what the owner\'s legacy profile says: the language and register, and who he is and what he sells', () => {
+        for (const purpose of PURPOSES) {
+            const legacy = legacyContext(purpose);
+            const owner = contextFor(OWNER_PROFILE, purpose, null);
+            assert.deepEqual(legacy.language, owner.language, purpose);
+            assert.deepEqual(legacy.who, owner.who, purpose);
+            assert.equal(legacy.version, null);
+            assert.equal(legacy.purpose, purpose);
+        }
     });
 });

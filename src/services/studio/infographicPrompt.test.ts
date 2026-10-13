@@ -15,13 +15,13 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { setLogSink } from '../../utils/log.js';
 import { contextFor, type ProfileContext } from '../profile/context.js';
-import { defaultProfile } from '../profile/defaults.js';
+import { FITNESS_EN, SHOP_EG } from '../profile/fixtures.js';
 import { goldenPath } from '../profile/golden.js';
 import { legacyBase } from '../profile/legacy.js';
 import { emptyState, installProfileDb, type ProfileDb, studioRow } from '../profile/testDb.js';
 import { PROFILE_READ } from '../profile/stampSupport.js';
-import { throughJsonb } from '../profile/testSupport.js';
-import type { ArabicRegister, CreatorProfile, Offer } from '../profile/types.js';
+import { assertNoOwnerMarkers, throughJsonb } from '../profile/testSupport.js';
+import type { ArabicRegister, CreatorProfile } from '../profile/types.js';
 import { studioView } from '../profile/views.js';
 import { invalidateTenantCache } from '../tenant.js';
 import { dialectLine, writeSystemPrompt, writeUserPrompt } from './infographicSpec.js';
@@ -31,69 +31,23 @@ import { ENGLISH_SETTINGS } from './testFixtures.js';
 
 // ─── The fixtures ───────────────────────────────────────────────────────────────────────────
 
-// TODO(P8): import these from the shared fixtures module. They are copies of context.test.ts's, which P8 is moving.
-const offer = (over: Partial<Offer>): Offer => ({
-    id: 'o', kind: 'other', name: '', order_via: 'dm', url: '', price: '', facts: [], bullets: [], keyword: '', primary: false, ...over,
-});
-
-/** An English fitness coach on a neutral profile: nothing of the owner's in it. */
-const FITNESS_EN: CreatorProfile = {
-    ...defaultProfile({ lang: 'en', rules: [] }),
-    identity: { display_name: { ar: '', en: 'Sami Fitness' }, brand_name: 'Sami Fit', kind: 'coach', role: 'fitness coach', niche: 'Home workouts for busy parents', country: 'GB', timezone: 'Europe/London' },
-    offers: [
-        offer({ id: 'call', kind: 'coaching', name: 'One-to-one call', order_via: 'dm', keyword: 'call' }),
-        offer({ id: 'plan', kind: 'program', name: 'Twelve-week plan', order_via: 'url', url: 'https://samifit.example/plan', keyword: 'plan', primary: true }),
-    ],
-    audience: { description: 'Parents with under an hour a day', level: 'beginner', pains: ['No time'], goals: ['Sleep better'], countries: ['GB'], languages: ['en'] },
-    voice: { guide: 'Warm and direct.', tone: [], samples: [], use_words: [], avoid_words: [], emoji: 'rich', address: 'neutral' },
-    presenter: { name: 'Sami', pronouns: 'they', on_camera: 'face' },
-    content: { domain: 'general', pillars: ['Workouts', 'Food'], never_mention: ['steroids'], rules: [], custom_rules: ['No before-and-after photos'] },
-    socials: { handle: '@sami.fit', site: 'samifit.example', platforms: ['instagram'], links: { instagram: 'https://instagram.com/sami.fit' } },
-    dm: { faq: [{ q: 'How much?', a: '$99' }], handoff: { when: 'A refund', message: 'A person will reply.' }, hours: { days: [1, 2, 3], from: '09:00', to: '17:00' } },
-    goals: { followers: 5000, views: 250_000 },
-};
-
-/** An Egyptian-Arabic shop selling products: no presenter, no educator anywhere. */
-const SHOP_EG: CreatorProfile = {
-    ...defaultProfile({ lang: 'ar', rules: ['no_women_imagery'] }),
-    identity: { display_name: { ar: 'متجر نور', en: 'Nour Shop' }, brand_name: '', kind: 'shop', role: 'online shop', niche: 'Handmade candles', country: 'EG', timezone: 'Africa/Cairo' },
-    language: { primary: 'ar', register: 'egyptian', digits: 'latin', surfaces: {} },
-    offers: [
-        offer({ id: 'candle', kind: 'product', name: 'شمعة لافندر', order_via: 'url', url: 'https://nour.example/candle', keyword: 'شمعة', primary: true }),
-        offer({ id: 'box', kind: 'product', name: 'علبة هدية', order_via: 'dm', keyword: 'علبة' }),
-    ],
-    voice: { guide: '', tone: [], samples: [], use_words: [], avoid_words: [], emoji: 'light', address: 'fem' },
-    content: { domain: 'general', pillars: ['منتجات'], never_mention: ['خصم'], rules: ['no_women_imagery'], custom_rules: [] },
-};
+/**
+ * The shared fixtures (`profile/fixtures.ts`) are used as they are, except where this file needs a value of its own. Each of
+ * those is a local variant of the shared one, named for what differs:
+ *   SHOP_EG_NO_DISCOUNTS   the shop that must never mention «خصم» (the shared shop has no never-mention list)
+ */
+const SHOP_EG_NO_DISCOUNTS: CreatorProfile = { ...SHOP_EG, content: { ...SHOP_EG.content, never_mention: ['خصم'] } };
 
 /** The same shop in the Levantine register, and in فصحى. */
 const withRegister = (p: CreatorProfile, register: ArabicRegister): CreatorProfile => ({ ...p, language: { ...p.language, register } });
 const SHOP_LEVANTINE = withRegister(SHOP_EG, 'levantine');
 const SHOP_MSA = withRegister(SHOP_EG, 'msa');
 const SHOP_GULF = withRegister(SHOP_EG, 'gulf');
-/** The shop as 05 §3 words it: a perfume shop ("a perfume shop's" reads, "an online shop's" does too). */
-const PERFUME_SHOP: CreatorProfile = { ...SHOP_EG, identity: { ...SHOP_EG.identity, role: 'perfume shop' } };
+/** A local variant of the shared shop, as 05 §3 words it: a perfume shop ("a perfume shop's" reads, "an online shop's" does too). Only its role differs. */
+const SHOP_EG_PERFUME: CreatorProfile = { ...SHOP_EG, identity: { ...SHOP_EG.identity, role: 'perfume shop' } };
 
 const ctxOf = (p: CreatorProfile): ProfileContext<'infographic'> => contextFor(p, 'infographic', 1);
 const OWNER_CTX = contextFor(legacyBase('ar'), 'infographic', null);
-
-// ─── The owner's markers (05 §3) ────────────────────────────────────────────────────────────
-
-/**
- * Everything in the owner's prompts that is the owner's, as 05 §3 lists it. Matched whatever the case, so "Course" and
- * "course", "ElAmir" and "elamir" are each one entry. TODO(P8): P8's shared `assertNoOwnerMarkers` replaces this.
- */
-const OWNER_MARKERS = [
-    'Agentic', 'بالعربي', 'Udemy', 'referralCode', '02A626DDDA3FDAB6AB34', 'ElAmir', 'الأمير', 'منصور', 'MCP', 'Clario', 'tech educator',
-    'senior engineer', 'goroutines', 'n8n', 'ChatGPT', 'الذكاء_الاصطناعي', 'Never a woman', 'Asia/Riyadh', 'course', 'كورس',
-    'Reference carousels', 'الدردشة ماتت', 'Stop asking AI', 'GO_TO_COURSE',
-] as const;
-
-function assertNoOwnerMarkers(label: string, text: string): void {
-    const lower = text.toLowerCase();
-    const found = OWNER_MARKERS.filter((m) => lower.includes(m.toLowerCase()));
-    assert.deepEqual(found, [], `${label} carries the owner's: ${found.join(', ')}`);
-}
 
 /** The stack the owner's block gives as examples: none of it may reach a tenant outside the `tech` domain. */
 const STACK_EXAMPLES = [
@@ -193,7 +147,7 @@ describe('FITNESS_EN: an English tenant in a general domain', () => {
 
     it('has no stack examples, and none of the owner\'s markers', () => {
         assertNoStackExamples(system);
-        assertNoOwnerMarkers('the English prompt', system);
+        assertNoOwnerMarkers(system, 'the English prompt');
     });
 
     it('has no Arabic script at all', () => {
@@ -219,7 +173,7 @@ describe('FITNESS_EN: an English tenant in a general domain', () => {
             'Keep in Latin letters only what practitioners never translate: brand and product names and standard abbreviations, and use them as column names when that is the term. Write every other term in Arabic.',
         ));
         assertNoStackExamples(arabic);
-        assertNoOwnerMarkers('the Arabic prompt of an English tenant', arabic);
+        assertNoOwnerMarkers(arabic, 'the Arabic prompt of an English tenant');
         for (const word of ['عايز', 'إزاي', 'دلوقتي', 'كده', 'هيك', 'شو', 'بدّك', 'هلق']) assert.ok(!arabicWord(word).test(arabic), word);
     });
 });
@@ -250,14 +204,14 @@ describe('SHOP_EG: an Egyptian-Arabic tenant in a general domain', () => {
 
     it('is addressed to "an online shop", and a "perfume shop" is "a perfume shop"', () => {
         assert.match(system, /^You write one animated comparison infographic for an online shop's Instagram/);
-        assert.match(writeSystemPrompt('ar', ctxOf(PERFUME_SHOP)), /^You write one animated comparison infographic for a perfume shop's Instagram/);
-        assert.equal(writeSystemPrompt('ar', ctxOf(PERFUME_SHOP)).split('perfume shop').length - 1, 1, 'the role is named once, in the first line');
+        assert.match(writeSystemPrompt('ar', ctxOf(SHOP_EG_PERFUME)), /^You write one animated comparison infographic for a perfume shop's Instagram/);
+        assert.equal(writeSystemPrompt('ar', ctxOf(SHOP_EG_PERFUME)).split('perfume shop').length - 1, 1, 'the role is named once, in the first line');
     });
 
     it('has no stack examples and none of the owner\'s markers', () => {
         assertNoStackExamples(system);
-        assertNoOwnerMarkers('the Arabic prompt of the Egyptian shop', system);
-        assertNoOwnerMarkers('the English prompt of the Egyptian shop', writeSystemPrompt('en', ctx));
+        assertNoOwnerMarkers(system, 'the Arabic prompt of the Egyptian shop');
+        assertNoOwnerMarkers(writeSystemPrompt('en', ctx), 'the English prompt of the Egyptian shop');
     });
 
     it('asked for an English page, writes plain English: no Arabic script, no dialect line', () => {
@@ -291,7 +245,7 @@ describe('SHOP_LEVANTINE: the same shop in the Levantine register', () => {
     });
 
     it('carries none of the owner\'s markers', () => {
-        assertNoOwnerMarkers('the Levantine prompt', system);
+        assertNoOwnerMarkers(system, 'the Levantine prompt');
     });
 });
 
@@ -301,7 +255,7 @@ describe('SHOP_MSA and SHOP_GULF: the registers that add nothing', () => {
             const system = writeSystemPrompt('ar', ctxOf(shop));
             assert.ok(system.includes(dialectLine('msa')), name);
             for (const word of ['عايز', 'إزاي', 'دلوقتي', 'كده', 'هيك', 'شو', 'بدّك', 'هلق']) assert.ok(!arabicWord(word).test(system), `${name}: ${word}`);
-            assertNoOwnerMarkers(`the ${name} prompt`, system);
+            assertNoOwnerMarkers(system, `the ${name} prompt`);
             assertNoStackExamples(system);
         }
     });
@@ -368,7 +322,7 @@ describe('renderPayload', () => {
         assert.equal(payload.write!.user, writeUserPrompt({ topic: row.topic, notes: null, language: 'en', avoid: ['steroids'] }));
         assert.match(payload.write!.user, /Never use these words or topics: steroids\./);
         assert.match(payload.write!.system, /for a fitness coach's Instagram/);
-        assertNoOwnerMarkers('the whole job a second tenant\'s Mac is handed', JSON.stringify(payload));
+        assertNoOwnerMarkers(JSON.stringify(payload), 'the whole job a second tenant\'s Mac is handed');
     });
 
     it('refuses to write without one, and needs none to render a spec', () => {
@@ -440,12 +394,12 @@ describe('the callers resolve the context through profileContext', () => {
         assert.match(write.system, /Read your page and caption as a senior expert in this topic would/);
         assert.match(write.user, /Never use these words or topics: steroids\./);
         assertNoStackExamples(write.system);
-        assertNoOwnerMarkers('the fitness coach\'s job', JSON.stringify(jobPayload()));
+        assertNoOwnerMarkers(JSON.stringify(jobPayload()), 'the fitness coach\'s job');
         assert.ok(!ARABIC_SCRIPT.test(write.system), 'no Arabic script');
     });
 
     it('createInfographic for the Egyptian shop queues an Arabic job that names the Egyptian words', async () => {
-        tenant(SHOP_EG);
+        tenant(SHOP_EG_NO_DISCOUNTS);
         await createInfographic(TENANT, { topic: 'شمعة الصويا مقابل شمعة الشمع' });
         const { write, language } = jobPayload();
         assert.equal(language, 'ar');
@@ -453,7 +407,7 @@ describe('the callers resolve the context through profileContext', () => {
         for (const word of ['عايز', 'إزاي', 'دلوقتي', 'كده']) assert.ok(write.system.includes(word), `the job names ${word}`);
         assert.match(write.system, /for an online shop's Instagram/);
         assert.match(write.user, /Never use these words or topics: خصم\./);
-        assertNoOwnerMarkers('the shop\'s job', JSON.stringify(jobPayload()));
+        assertNoOwnerMarkers(JSON.stringify(jobPayload()), 'the shop\'s job');
     });
 
     it('a tenant with no stored profile is described by its settings rows, the owner\'s legacy assumptions', async () => {

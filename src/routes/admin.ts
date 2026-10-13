@@ -57,7 +57,8 @@ import { checkMediaStorage, describeMediaStorage, getMediaUsage } from '../servi
 import { cleanUpMediaNow, previewMediaCleanup } from '../services/retention.js';
 import { storageKeyKind, storageKeyProblem } from '../services/supabaseStorage.js';
 import { checkGeminiKey } from '../services/geminiKey.js';
-import { dmModelsInUse, STARTER_PERSONA } from '../services/ai.js';
+import { dmModelsInUse, starterPersona } from '../services/ai.js';
+import { profileContextOrLegacy } from '../services/profile/context.js';
 
 const router = Router();
 
@@ -689,11 +690,14 @@ router.post('/tenants', async (req, res) => {
         // prompt. Best-effort — a tenant is still usable without an agent, and failing the
         // whole create over this would strand the token that was just verified.
         try {
+            // In the language the new tenant's DMs will speak. It has no stored profile yet, so this reads what its
+            // (empty) settings describe, which is Arabic until a profile says otherwise (P16 stores one at create).
+            const { language } = await profileContextOrLegacy(created.id, 'dm');
             await pool.query(
                 `INSERT INTO ai_agents (creator_id, is_active, system_prompt, knowledge_base)
                  VALUES ($1, false, $2, '')
                  ON CONFLICT (creator_id) DO NOTHING`,
-                [created.id, STARTER_PERSONA]
+                [created.id, starterPersona(language.code)]
             );
         } catch (agentErr) {
             log('warn', 'admin.tenant_agent_seed_failed', {

@@ -139,7 +139,7 @@ describe('the output', () => {
 describe('runParity, on the rows of a tenant', () => {
     it('the owner\'s seed settings, read into the profile their rows describe: every builder matches', async () => {
         const report = await runParity({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH, profile: profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH) });
-        assert.equal(report.builders, 28, 'no agent row: no DM instruction');
+        assert.equal(report.builders, 31, 'no agent row: no DM instruction');
         assert.deepEqual(report.rows.filter((r) => !r.match), []);
         assert.equal(report.ok, true);
         assert.equal(parityExitCode(report), 0);
@@ -148,7 +148,7 @@ describe('runParity, on the rows of a tenant', () => {
     it('with the DM agent\'s persona the surface also holds the DM instruction, the same on both paths', async () => {
         const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
         const report = await runParity({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH, profile, agent: ELAMIR_AGENT });
-        assert.equal(report.builders, 29);
+        assert.equal(report.builders, 32);
         const dm = report.rows.find((r) => r.name === 'dm.system-instruction')!;
         assert.equal(dm.match, true);
         assert.ok(dm.a && dm.a === dm.b);

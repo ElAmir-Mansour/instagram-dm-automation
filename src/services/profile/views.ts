@@ -163,6 +163,15 @@ export function intoProfile(p: CreatorProfile, s: StudioSettings, g?: GrowthSett
     next.language.primary = s.voice.language;
     next.language.digits = s.voice.digits;
     if (next.language.primary === 'ar' && next.language.register === null) next.language.register = 'msa';
+    // The Studio's language is the language of what the Studio writes. The DM bot has never followed it: it is Arabic
+    // whatever the Studio speaks (`LEGACY_ASSUMPTIONS.dm`, 01 §7.7), and the DM wording now reads the `dm` surface (P8).
+    // So a write that moves an Arabic profile off `ar` pins the DM surface to the Arabic it spoke, in the register it
+    // spoke it in, unless the profile already names the DM's language: switching the Studio to English must not turn
+    // the bot's rules, schema and disclosure English for the followers it is answering in Arabic.
+    if (p.language.primary === 'ar' && next.language.primary !== 'ar' && next.language.surfaces.dm?.language === undefined) {
+        const dm = next.language.surfaces.dm;
+        next.language.surfaces.dm = { ...dm, language: 'ar', register: dm?.register ?? p.language.register ?? 'msa' };
+    }
     next.voice.guide = s.voice.guide;
     next.content.never_mention = [...(s.voice.avoid ?? [])];
     // The infographic language is a surface override, written only when it differs from the primary.

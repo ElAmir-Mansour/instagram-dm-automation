@@ -137,20 +137,34 @@ describe('an undeliverable DM: the public fallback reply', () => {
         const text = dmFallbackReply({
             dmText: 'أهلاً! رابط الكورس: https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34. بالتوفيق',
             isFacebook: true,
+            register: 'gulf',
         });
         assert.match(text, /ما قدرنا نرسل لك على الخاص/);
         assert.ok(text.endsWith('https://www.udemy.com/course/agentic-ai-arabic/?referralCode=02A626DDDA3FDAB6AB34'), 'no trailing full stop in the URL');
     });
 
     it('on Instagram, points to the bio rather than pasting a link that is not clickable', () => {
-        const text = dmFallbackReply({ dmText: 'رابط الكورس: https://example.com/c', isFacebook: false });
+        const text = dmFallbackReply({ dmText: 'رابط الكورس: https://example.com/c', isFacebook: false, register: 'gulf' });
         assert.match(text, /الرابط في البايو/);
         assert.equal(/https?:/.test(text), false);
     });
 
     it('follows the DM’s language, and still says something useful when the DM has no link', () => {
-        assert.match(dmFallbackReply({ dmText: 'Hi! Here is the course.', isFacebook: true }), /^We couldn't message you privately/);
-        assert.match(dmFallbackReply({ dmText: 'Hi! Here is the course.', isFacebook: true }), /Send us a message/);
-        assert.match(dmFallbackReply({ dmText: 'Here: https://x.test/y', isFacebook: false }), /bio/);
+        assert.match(dmFallbackReply({ dmText: 'Hi! Here is the course.', isFacebook: true, register: 'gulf' }), /^We couldn't message you privately/);
+        assert.match(dmFallbackReply({ dmText: 'Hi! Here is the course.', isFacebook: true, register: 'gulf' }), /Send us a message/);
+        assert.match(dmFallbackReply({ dmText: 'Here: https://x.test/y', isFacebook: false, register: 'gulf' }), /bio/);
+    });
+
+    it('speaks the tenant\'s Arabic register to an Arabic DM (P8), and the same English to an English one whatever the register', () => {
+        const arabic = { dmText: 'هلا! الرابط: https://x.test/y', isFacebook: true } as const;
+        assert.equal(dmFallbackReply({ ...arabic, register: 'gulf' }), 'ما قدرنا نرسل لك على الخاص 🙏 هذا الرابط: https://x.test/y');
+        assert.equal(dmFallbackReply({ ...arabic, register: 'msa' }), 'لم نتمكن من مراسلتك في الخاص 🙏 هذا هو الرابط: https://x.test/y');
+        assert.equal(dmFallbackReply({ ...arabic, register: 'egyptian' }), 'معرفناش نبعتلك على الخاص 🙏 ده اللينك: https://x.test/y');
+        assert.equal(dmFallbackReply({ ...arabic, register: 'levantine' }), 'ما قدرنا نبعتلك عالخاص 🙏 هاد الرابط: https://x.test/y');
+        assert.equal(dmFallbackReply({ ...arabic, register: null }), dmFallbackReply({ ...arabic, register: 'msa' }), 'no register is the neutral one');
+        const english = { dmText: 'Hi! Here: https://x.test/y', isFacebook: true } as const;
+        for (const register of [null, 'gulf', 'msa', 'egyptian', 'levantine'] as const) {
+            assert.equal(dmFallbackReply({ ...english, register }), 'We couldn\'t message you privately 🙏 Here\'s the link: https://x.test/y', String(register));
+        }
     });
 });

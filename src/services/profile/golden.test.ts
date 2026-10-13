@@ -31,8 +31,11 @@
  * script (`scripts/prompt-parity.mts`, docs/onboarding/05 §4) hashes for a real tenant too: the goldens and the live
  * check cannot be calling different builders. This file says what each entry must equal, and holds the constants.
  *
- * The DM instruction has no path (b): its knowledge base is an agent setting, not a profile field, and the
- * DM path reads nothing else from the profile until P8 gives it a profile context.
+ * The DM and comment surfaces (P8) are written from a profile context: the language and register the surface speaks and the
+ * kind of thing the creator sells. The owner's bytes are pinned along the four ways the code can come by that context: the
+ * legacy assumptions (what the code said before P8, and what it falls back to when a profile cannot be read), the context cut
+ * from his stored profile, what the real `profileContext` reads from a stand-in database that holds it, and what
+ * `profileContextOrLegacy` answers when that database fails. All four must write the same bytes into the same goldens.
  *
  * Nothing here depends on the clock or on chance: the builders take their dates as parameters
  * (`runCoach`'s `now`) or embed none, and every input is a fixed fixture.
@@ -47,7 +50,6 @@ import vm from 'node:vm';
 import type { GrowthSettings } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { AI_DISCLOSURE_LINE } from '../../webhook/meta-payload.js';
-import { RESPONSE_SCHEMA, STARTER_PERSONA } from '../ai.js';
 import { COACH_SCHEMA, coachSystemPrompt } from '../growth/coach.js';
 import { KEYWORDS_SCHEMA } from '../growth/keywords.js';
 import { analystUserPrompt, LESSONS_SCHEMA } from '../monteur/analyst.js';
@@ -65,13 +67,13 @@ import {
 import { videoResource } from '../youtube.js';
 import { getStudioSettings } from '../studio/settings.js';
 import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from './golden.js';
-import { contextFor, profileContext, type ProfileContext } from './context.js';
+import { contextFor, legacyContext, profileContext, profileContextOrLegacy, type ProfileContext } from './context.js';
 import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import {
-    dmFallbackSurface, dmInstructionSurface, growthSurface, infographicSurface, SAY, studioSurface, type GrowthRows, type SurfaceEntry,
+    dmContextSurface, dmFallbackSurface, dmInstructionSurface, growthSurface, infographicSurface, SAY, studioSurface, type GrowthRows, type SurfaceEntry,
 } from './promptSurface.js';
-import { emptyState, installProfileDb, OWNER, studioRow } from './testDb.js';
+import { emptyState, installProfileDb, OWNER, setPlatformOwner, studioRow } from './testDb.js';
 import { scramble, throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
 import { GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
@@ -140,6 +142,33 @@ async function infographicContextThroughTheReader(settings: StudioSettings, grow
         db.restore();
     }
 }
+
+/** A tenant's context for `purpose`, as `profileContext` reads it from a stand-in database that holds `stored` (or holds nothing, or fails). */
+async function contextFromTheDatabase<P extends 'dm' | 'comment_reply'>(purpose: P, stored: CreatorProfile | null, fail = false): Promise<ProfileContext<P>> {
+    const state = emptyState();
+    if (stored) state.profiles.set(OWNER, { profile: throughJsonb(stored), version: 1, activated_at: null, updated_by: null });
+    const db = installProfileDb(state);
+    if (fail) { db.failOn = /FROM creator_profiles/; db.failWith = new Error('connection refused'); setPlatformOwner(db, OWNER); }
+    const previousSink = setLogSink(() => {});
+    try {
+        return fail ? await profileContextOrLegacy(OWNER, purpose) : await profileContext(OWNER, purpose);
+    } finally {
+        setLogSink(previousSink);
+        db.restore();
+    }
+}
+
+/**
+ * The owner's DM and comment contexts, the four ways the code comes by one. Each is a different route to the same facts
+ * (Gulf Arabic, courses), and each must write the bytes in the goldens: the new code path IS the proof of the old text.
+ */
+const OWNER_PROFILE = storedProfile(ELAMIR_SETTINGS, ELAMIR_GROWTH);
+const OWNER_CONTEXTS = {
+    'the legacy assumptions': { dm: legacyContext('dm'), comments: legacyContext('comment_reply') },
+    'his stored profile': { dm: contextFor(OWNER_PROFILE, 'dm', 1), comments: contextFor(OWNER_PROFILE, 'comment_reply', 1) },
+    'the real profileContext': { dm: await contextFromTheDatabase('dm', OWNER_PROFILE), comments: await contextFromTheDatabase('comment_reply', OWNER_PROFILE) },
+    'a profile that cannot be read': { dm: await contextFromTheDatabase('dm', null, true), comments: await contextFromTheDatabase('comment_reply', null, true) },
+} as const;
 
 type Variant = {
     slug: 'elamir' | 'seed' | 'english'; settings: StudioSettings; set: GoldenSet; lang: 'ar' | 'en';
@@ -221,25 +250,23 @@ describe('the fixtures hold the owner\'s real values', () => {
 // ─── The DM bot and the comment replies ─────────────────────────────────────────────────────
 
 describe('DM and comment golden prompts', () => {
-    it('dmSystemInstruction: his persona and knowledge base inside the fixed rules', async (t) => {
-        await matchEach(t, dmInstructionSurface(ELAMIR_AGENT));
-    });
+    for (const [via, ctx] of Object.entries(OWNER_CONTEXTS)) {
+        it(`dmSystemInstruction, dmResponseSchema, disclosureLine and starterPersona: his persona and knowledge base inside the fixed rules, the schema, the first line and the starter persona (from ${via})`, async (t) => {
+            await matchEach(t, [...dmInstructionSurface(ELAMIR_AGENT, ctx.dm), ...dmContextSurface(ctx.dm)]);
+        });
+    }
 
-    it('RESPONSE_SCHEMA: what Gemini is asked to answer a DM with', () => {
-        matchGoldenJson('dm.response-schema', RESPONSE_SCHEMA);
-    });
-
-    it('AI_DISCLOSURE_LINE: the first line of an automated DM', () => {
+    it('AI_DISCLOSURE_LINE: the Arabic line, which is what applyDisclosure says when it is handed none', () => {
         matchGolden('dm.disclosure-line', AI_DISCLOSURE_LINE);
     });
 
-    it('STARTER_PERSONA: the persona a new tenant\'s agent row, the sandbox and GET /settings/ai start with', () => {
-        // The owner's agent row holds his own persona (ELAMIR_AGENT): this is what a NEW tenant gets.
-        matchGolden('dm.starter-persona', STARTER_PERSONA, 'control');
-    });
-
-    for (const [via, owner] of [['today', ELAMIR_SETTINGS], ['through the profile', through(ELAMIR_SETTINGS, true)], ['through the real readers', READ.elamir]] as const) it(`dmFallbackReply: the public reply that replaces an undeliverable DM, every variant (${via})`, async (t) => {
-        await matchEach(t, dmFallbackSurface(owner));
+    for (const [via, owner, contexts] of [
+        ['today', ELAMIR_SETTINGS, OWNER_CONTEXTS['the legacy assumptions']],
+        ['through the profile', through(ELAMIR_SETTINGS, true), OWNER_CONTEXTS['his stored profile']],
+        ['through the real readers', READ.elamir, OWNER_CONTEXTS['the real profileContext']],
+        ['a profile that cannot be read', ELAMIR_SETTINGS, OWNER_CONTEXTS['a profile that cannot be read']],
+    ] as const) it(`dmFallbackReply: the public reply that replaces an undeliverable DM, every variant (${via})`, async (t) => {
+        await matchEach(t, dmFallbackSurface(owner, contexts.comments));
     });
 });
 

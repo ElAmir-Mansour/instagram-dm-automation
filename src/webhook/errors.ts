@@ -5,6 +5,8 @@
  * as the inline version wrote them.
  */
 import { isPermanentMetaError, isTokenDeathError, metaErrorCode } from '../services/http.js';
+import { commentFallback, kitFor } from '../services/profile/kits.js';
+import type { ArabicRegister } from '../services/profile/types.js';
 
 export interface DmErrorClassification {
     /** Written to `interactions.status`. */
@@ -40,19 +42,19 @@ export function shouldPostDmFallback(err: any): boolean {
 /**
  * The public reply that replaces an undeliverable DM. Facebook makes links in comments
  * clickable, so it carries the campaign's link (the first URL in its DM). Instagram doesn't,
- * so it points to the bio. Arabic when the DM is Arabic, English otherwise: a product default,
+ * so it points to the bio.
+ *
+ * **Which language** is the DM's own: Arabic when the DM is Arabic, English otherwise, because the person was just sent
+ * (or refused) that text and the reply should speak the same language. **Which Arabic** is the tenant's: `register` is the
+ * register of its comment surface (`profileContext(creatorId, 'comment_reply').language.register`), so a Gulf creator's
+ * line is today's «ما قدرنا نرسل لك على الخاص», an Egyptian shop's is «معرفناش نبعتلك على الخاص», and so on
+ * (`profile/kits.ts`). `null` (an English tenant, which names no register) reads as the neutral `msa`. A product default,
  * not any one tenant's copy.
  */
-export function dmFallbackReply(input: { dmText: string; isFacebook: boolean }): string {
+export function dmFallbackReply(input: { dmText: string; isFacebook: boolean; register: ArabicRegister | null }): string {
     const arabic = /[\u0600-\u06FF]/.test(input.dmText);
     const link = /https?:\/\/[^\s<>"'()]+/.exec(input.dmText)?.[0]?.replace(/[.,،!?؟]+$/u, '');
-    if (!input.isFacebook) {
-        return arabic ? 'ما قدرنا نرسل لك على الخاص 🙏 الرابط في البايو 🔗' : "We couldn't message you privately 🙏 The link is in our bio 🔗";
-    }
-    if (link) {
-        return arabic ? `ما قدرنا نرسل لك على الخاص 🙏 هذا الرابط: ${link}` : `We couldn't message you privately 🙏 Here's the link: ${link}`;
-    }
-    return arabic ? 'ما قدرنا نرسل لك على الخاص 🙏 راسلنا على الخاص ونرسل لك التفاصيل' : "We couldn't message you privately 🙏 Send us a message and we'll share the details.";
+    return commentFallback(kitFor({ code: arabic ? 'ar' : 'en', register: input.register }), { isFacebook: input.isFacebook, link });
 }
 
 export function classifyDmError(err: any): DmErrorClassification {

@@ -25,7 +25,11 @@ import { encryptSecret } from '../config/crypto.js';
 import { DEFAULT_MODEL } from '../services/ai.js';
 import { MISSING_GEMINI_KEY } from '../services/appSettings.js';
 import { metaHttp } from '../services/http.js';
-import type { Creator } from '../services/tenant.js';
+import { ProfileUnreadableError } from '../services/profile/context.js';
+import { FITNESS_EN, SHOP_EG } from '../services/profile/fixtures.js';
+import { throughJsonb } from '../services/profile/testSupport.js';
+import type { CreatorProfile } from '../services/profile/types.js';
+import { invalidateTenantCache, type Creator } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
 import {
     dmPlatform, dmPromptText, handleMessagingEvent, needsDisclosure, normalizeDm, resolveDmPageId,
@@ -266,6 +270,17 @@ interface Scenario {
     savedGeminiKey?: string;
     /** GEMINI_API_KEY for this run; null = unset. Default 'test-key'. */
     envGeminiKey?: string | null;
+    /**
+     * The tenant's stored Creator Profile (P8: the DM's wording is read from it). Absent = the profile read is not arranged,
+     * so it throws like any statement a test did not arrange, and the pipeline falls back to the owner's wording.
+     */
+    profile?: CreatorProfile;
+    /**
+     * Who the platform owner is (`getPlatformOwnerId`: the first creator ever made): an id, or null for no creators at all.
+     * Absent = the lookup is not arranged, so it throws like any statement a test did not arrange. It only matters when the
+     * profile cannot be read: the owner is then answered in his legacy wording, another tenant's job is retried.
+     */
+    owner?: string | null;
 }
 
 /** Any 32 bytes of hex: enough to encrypt and decrypt a saved key inside one run. */
@@ -309,6 +324,8 @@ async function runDm(
         send = async () => ({ data: { message_id: 'sent-1' } }),
         savedGeminiKey,
         envGeminiKey = 'test-key',
+        profile,
+        owner,
     } = scenario;
 
     const executed: Executed[] = [];
@@ -345,6 +362,11 @@ async function runDm(
         [/INSERT INTO rate_limit_counters/, { rows: [{ count: creatorQuotaCount }] }],
         [/INSERT INTO app_rate_limit_counters/, { rows: [{ count: appQuotaCount }] }],
     ];
+    // Read as the database hands it back: JSONB, its keys in Postgres's order.
+    if (profile) routes.unshift([/FROM creator_profiles/, { rows: [{ profile: throughJsonb(profile), version: 3, activated_at: null }] }]);
+    if (owner !== undefined) routes.unshift([/SELECT id FROM creators ORDER BY created_at, id LIMIT 1/, { rows: owner === null ? [] : [{ id: owner }] }]);
+    // The owner lookup is cached in the process for 30 s: one run's answer must not be the next one's.
+    invalidateTenantCache();
 
     const originalQuery = pool.query;
     const originalAxiosPost = axios.post;
@@ -386,6 +408,7 @@ async function runDm(
         else process.env.GEMINI_API_KEY = originalKey;
         if (originalEncryptionKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
         else process.env.TOKEN_ENCRYPTION_KEY = originalEncryptionKey;
+        invalidateTenantCache();
     }
 
     return { executed, sends, geminiCalls, geminiPayloads, geminiUrls, geminiKeys, error };
@@ -592,6 +615,121 @@ describe('handleMessagingEvent — the AI disclosure', () => {
         assert.equal(
             executed.some((e) => /UPDATE conversations SET ai_disclosed_at/.test(e.sql)), false
         );
+    });
+});
+
+/**
+ * P8: what the DM path says is read from the tenant's Creator Profile. The owner's profile (or none that can be read) gives
+ * the text it always had; another tenant's gives its own language, register and noun, in the rules and schema Gemini is
+ * handed and in the first line of the reply the person reads.
+ */
+describe('handleMessagingEvent — the wording is the tenant\'s (P8)', () => {
+    const instruction = (payloads: any[]): string => payloads[0].systemInstruction.parts[0].text;
+    const schema = (payloads: any[]): any => payloads[0].generationConfig.responseSchema;
+
+    it('an English coach: English rules, an English schema and an English disclosure, and not a letter of Arabic in what it was told', async () => {
+        const { sends, geminiPayloads, error } = await runDm(textEvent({ message: { mid: 'mid-1', text: 'How much is it?' } }), {
+            profile: FITNESS_EN,
+            agent: { is_active: true, system_prompt: 'You are Sami\'s assistant.', knowledge_base: 'The plan is $99.', model: DEFAULT_MODEL, temperature: 0.7 },
+            gemini: geminiSaying({ message_type: 'text', text: 'It is $99.' }),
+        });
+
+        assert.equal(error, null);
+        assert.match(instruction(geminiPayloads), /^You are Sami's assistant\.\n\n=== Knowledge base available to you ===\nThe plan is \$99\.\n\n=== Additional important instructions ===\n1\. Your replies must be friendly/);
+        assert.match(instruction(geminiPayloads), /2\. If the user asks for offers or contact details/);
+        assert.doesNotMatch(JSON.stringify([geminiPayloads[0].systemInstruction, schema(geminiPayloads)]), /[\u0600-\u06FF]/, 'no Arabic anywhere in what Gemini was handed');
+        assert.match(schema(geminiPayloads).properties.text.description, /Must be written in English if appropriate\./);
+        assert.match(schema(geminiPayloads).properties.quick_replies.items.properties.payload.description, /GO_TO_OFFER_1/);
+        assert.equal(sends[0]!.body.message.text, '🤖 Automated reply from the AI assistant\nIt is $99.');
+    });
+
+    it('an Egyptian shop: simple Egyptian asked for, «منتجات» for the offers, an Arabic schema and the Arabic disclosure', async () => {
+        const { sends, geminiPayloads, error } = await runDm(textEvent(), { profile: SHOP_EG });
+
+        assert.equal(error, null);
+        assert.match(instruction(geminiPayloads), /1\. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللهجة المصرية البسيطة\./);
+        assert.match(instruction(geminiPayloads), /2\. إذا طلب المستخدم منتجات أو معلومات تواصل/);
+        assert.doesNotMatch(instruction(geminiPayloads), /كورسات/);
+        assert.match(schema(geminiPayloads).properties.text.description, /Must be written in Arabic if appropriate\./);
+        assert.match(schema(geminiPayloads).properties.quick_replies.items.properties.payload.description, /GO_TO_OFFER_1/);
+        assert.match(sends[0]!.body.message.text, /^🤖 رد آلي من المساعد الذكي\n/);
+    });
+
+    it('a carousel from an English tenant gets its disclosure as an English message of its own', async () => {
+        const { sends } = await runDm(textEvent(), {
+            profile: FITNESS_EN,
+            gemini: geminiSaying({ message_type: 'carousel', text: '', carousel_elements: [{ title: 'Twelve-week plan' }] }),
+        });
+
+        assert.equal(sends.length, 2);
+        assert.equal(sends[0]!.body.message.text, '🤖 Automated reply from the AI assistant');
+    });
+
+    it('a profile that cannot be read is the owner\'s wording, and the person is still answered', async () => {
+        // No profile read is arranged, so it throws; the reply must go out in the text the bot always spoke.
+        const { sends, geminiPayloads, error, executed } = await runDm(textEvent());
+
+        assert.equal(error, null);
+        assert.ok(executed.some((e) => /FROM creator_profiles/.test(e.sql)), 'the profile was asked for');
+        assert.match(instruction(geminiPayloads), /1\. يجب أن تكون إجاباتك ودية وتفاعلية ومكتوبة باللغة العربية الفصحى أو بلهجة سهلة ومناسبة\./);
+        assert.match(instruction(geminiPayloads), /2\. إذا طلب المستخدم كورسات أو معلومات تواصل/);
+        assert.match(schema(geminiPayloads).properties.quick_replies.items.properties.payload.description, /GO_TO_COURSE_1/);
+        assert.match(sends[0]!.body.message.text, /^🤖 رد آلي من المساعد الذكي\n/);
+    });
+
+    describe('a profile that cannot be read, for a tenant that is not the owner', () => {
+        /** The log lines of one run, as parsed events. */
+        async function withLog<T>(run: () => Promise<T>): Promise<{ result: T; events: string[] }> {
+            const events: string[] = [];
+            const previous = setLogSink((_level, line) => { try { events.push(JSON.parse(line).event); } catch { /* not structured */ } });
+            try {
+                return { result: await run(), events };
+            } finally {
+                setLogSink(previous);
+            }
+        }
+
+        it('is retried, not answered in the owner\'s wording: the error is re-raised, the claim released, Gemini never asked and nothing sent', async () => {
+            const { result, events } = await withLog(() => runDm(textEvent(), { owner: 'the-owner' }));
+
+            assert.ok(result.error instanceof ProfileUnreadableError, String(result.error));
+            assert.equal(result.geminiCalls, 0);
+            assert.equal(result.sends.length, 0);
+            assert.equal(ranRelease(result.executed), true, 'the claim is released so the retry reaches the work');
+            assert.equal(ranMarkHandled(result.executed), false, 'and the message is not settled');
+            assert.ok(events.includes('profile.context_unreadable'));
+            assert.ok(events.includes('dm.pipeline_failed'), 'the failure is logged where every DM failure is');
+        });
+
+        it('on the last attempt it is settled and logged, not re-raised: the runner would have nothing to retry', async () => {
+            const { result, events } = await withLog(() => runDm(textEvent(), { owner: 'the-owner' }, { lastAttempt: true }));
+
+            assert.equal(result.error, null);
+            assert.equal(result.sends.length, 0, 'nothing is said in the owner\'s wording');
+            assert.equal(ranMarkHandled(result.executed), true);
+            assert.ok(events.includes('dm.pipeline_failed'));
+        });
+
+        it('a retry that can read the profile answers in the tenant\'s own wording', async () => {
+            const { sends, geminiPayloads, error } = await runDm(textEvent(), { owner: 'the-owner', profile: SHOP_EG });
+            assert.equal(error, null);
+            assert.equal(sends.length, 1);
+            assert.match(geminiPayloads[0].systemInstruction.parts[0].text, /باللهجة المصرية البسيطة/);
+        });
+
+        it('is the owner\'s wording when the tenant IS the owner, and when the owner cannot be found (the lookup fails, or finds nobody)', async () => {
+            for (const owner of [CREATOR.id, null, undefined]) {
+                const { sends, geminiPayloads, error } = await runDm(textEvent(), { owner });
+                assert.equal(error, null, String(owner));
+                assert.equal(sends.length, 1, String(owner));
+                assert.match(geminiPayloads[0].systemInstruction.parts[0].text, /2\. إذا طلب المستخدم كورسات أو معلومات تواصل/, String(owner));
+            }
+        });
+    });
+
+    it('asks for the profile once per DM, however many things are read from it', async () => {
+        const { executed } = await runDm(textEvent(), { profile: SHOP_EG });
+        assert.equal(executed.filter((e) => /FROM creator_profiles/.test(e.sql)).length, 1);
     });
 });
 

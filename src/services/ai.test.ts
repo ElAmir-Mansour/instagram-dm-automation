@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { setLogSink } from '../utils/log.js';
-import { coerceAiResponse, decideAgent, DEFAULT_MODEL, resolveModel, SUPPORTED_MODELS } from './ai.js';
+import { coerceAiResponse, decideAgent, DEFAULT_MODEL, dmResponseSchema, dmSystemInstruction, type DmContext, resolveModel, starterPersona, SUPPORTED_MODELS } from './ai.js';
 import { STUDIO_MODELS } from './studio/generate.js';
 import { toMetaMessage } from '../webhook/meta-payload.js';
 
@@ -268,5 +268,57 @@ describe('DEFAULT_MODEL', () => {
         const indexerModels = ['gemini-3.5-flash', 'gemini-3.6-flash', 'gemini-3-flash-preview'];
         assert.ok(!STUDIO_MODELS.includes(DEFAULT_MODEL), `${DEFAULT_MODEL} is in the Studio writer's chain`);
         assert.ok(!indexerModels.includes(DEFAULT_MODEL), `${DEFAULT_MODEL} is in the Studio indexer's chain`);
+    });
+});
+
+/**
+ * P8: the DM bot's wording is the tenant's. The goldens pin the owner's bytes (`profile/golden.test.ts`) and the second
+ * tenants are in `profile/dmComments.test.ts`; this holds what is specific to `ai.ts`: the schema, the persona and the
+ * sandbox fallback are functions of the DM context and nothing else.
+ */
+describe('the DM wording is a function of the DM context', () => {
+    const ctx = (code: 'ar' | 'en', register: 'gulf' | 'msa' | 'egyptian' | 'levantine' | null, offerKind: DmContext['who']['offerKind']): DmContext => ({
+        language: { code, register, digits: code === 'ar' ? 'arabic-indic' : 'latin', dir: code === 'ar' ? 'rtl' : 'ltr' },
+        who: { kind: null, role: '', niche: '', domain: 'general', offerKind },
+    });
+
+    it('dmResponseSchema asks for the language of the surface and names the button for what is sold', () => {
+        const text = (c: DmContext): string => dmResponseSchema(c).properties.text.description;
+        const payload = (c: DmContext): string => dmResponseSchema(c).properties.quick_replies.items.properties.payload.description;
+        assert.match(text(ctx('ar', 'gulf', 'course')), /Must be written in Arabic if appropriate\.$/);
+        assert.match(text(ctx('en', null, 'course')), /Must be written in English if appropriate\.$/);
+        assert.match(payload(ctx('ar', 'gulf', 'course')), /e\.g\., GO_TO_COURSE_1\.$/);
+        for (const kind of ['program', 'product', 'service', 'coaching', 'mixed', null] as const) {
+            assert.match(payload(ctx('en', null, kind)), /e\.g\., GO_TO_OFFER_1\.$/, String(kind));
+        }
+    });
+
+    it('dmResponseSchema changes nothing else: the same structure whatever the context', () => {
+        const strip = (c: DmContext): string => JSON.stringify(dmResponseSchema(c)).replace(/Arabic|English/, 'LANG').replace(/GO_TO_(COURSE|OFFER)_1/, 'GO_TO_X_1');
+        assert.equal(strip(ctx('ar', 'gulf', 'course')), strip(ctx('en', null, 'product')));
+        assert.equal(strip(ctx('ar', 'msa', null)), strip(ctx('ar', 'egyptian', 'service')));
+    });
+
+    it('dmSystemInstruction keeps the persona and the knowledge base as they are, verbatim, in every language', () => {
+        for (const c of [ctx('ar', 'gulf', 'course'), ctx('ar', 'levantine', 'product'), ctx('en', null, 'program')]) {
+            const text = dmSystemInstruction('PERSONA', 'KB\nLINE 2', c);
+            assert.ok(text.startsWith('PERSONA\n\n=== '), c.language.code);
+            assert.ok(text.includes('===\nKB\nLINE 2\n\n=== '), c.language.code);
+            assert.equal(text.split('\n').filter((line) => /^[123]\. /.test(line)).length, 3, 'three rules');
+        }
+        assert.match(dmSystemInstruction('p', null, ctx('en', null, 'program')), /===\nnull\n\n/, 'a null knowledge base is interpolated as it always was');
+    });
+
+    it('starterPersona is in the language asked for', () => {
+        assert.equal(starterPersona('ar'), 'أنت مساعد ذكي يجيب على استفسارات المتابعين باللغة العربية.');
+        assert.equal(starterPersona('en'), 'You are a smart assistant who answers followers\' questions in English.');
+    });
+
+    it('the sandbox\'s starter persona follows the language it is told, Arabic when told nothing; a real customer path never gets one', () => {
+        const persona = (d: ReturnType<typeof decideAgent>): string | undefined => (d.speak ? d.agent.system_prompt : undefined);
+        assert.equal(persona(decideAgent(null, true, 'en')), starterPersona('en'));
+        assert.equal(persona(decideAgent(null, true, 'ar')), starterPersona('ar'));
+        assert.equal(persona(decideAgent(null, true)), starterPersona('ar'));
+        assert.deepEqual(decideAgent(null, false, 'en'), { speak: false, reason: 'unconfigured' });
     });
 });
