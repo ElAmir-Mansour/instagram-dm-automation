@@ -26,7 +26,7 @@ export const LEGACY_ASSUMPTIONS: {
     readonly presenter: Readonly<Presenter>;
     /** `monteur/editor.ts` ended every Editor prompt with "Never a woman or a girl in any picture"; since P10 only a tenant with this rule gets the line. */
     readonly rules: readonly ContentRulePreset[];
-    /** The Gulf asks and fallbacks: `monteur/copy.ts` ASK_POOL, `studio/prompts.ts` language kit, `webhook/errors.ts`. */
+    /** The Gulf asks and fallbacks: `monteur/copy.ts` ASK_POOL (since P11 the `gulf` entry of `REEL_REGISTER_KITS`, `profile/kits.ts`), `studio/prompts.ts` language kit, `webhook/errors.ts`. */
     readonly register: ArabicRegister;
     /** Arabic infographics are written in فصحى whatever the tenant speaks: `studio/infographicSpec.ts`. */
     readonly infographicRegister: ArabicRegister;

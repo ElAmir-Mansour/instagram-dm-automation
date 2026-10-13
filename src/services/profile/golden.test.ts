@@ -59,6 +59,7 @@ import { COACH_SCHEMA, coachSystemPrompt } from '../growth/coach.js';
 import { KEYWORDS_SCHEMA } from '../growth/keywords.js';
 import { analystUserPrompt, LESSONS_SCHEMA } from '../monteur/analyst.js';
 import { ASK_POOL, COPY_SCHEMA } from '../monteur/copy.js';
+import { reelKitsFor, reelKitsFromContexts } from '../monteur/copyKits.js';
 import { editorSchema, humanTouchesPrompt } from '../monteur/editor.js';
 import { PRONOUN_KITS } from '../monteur/editorKits.js';
 import { PICK_SCHEMA } from '../monteur/pick.js';
@@ -70,7 +71,8 @@ import {
     ELAMIR_AGENT, ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS,
     GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_REELS, GOLDEN_UNINDEXED_LESSON,
 } from '../studio/testFixtures.js';
-import { videoResource } from '../youtube.js';
+import { videoResource, youtubeCategoryId } from '../youtube.js';
+import { youtubeCategoryFor } from '../youtubePublish.js';
 import { studioWording } from '../studio/drafts.js';
 import { draftSchema } from '../studio/generate.js';
 import type { StudioWording } from '../studio/prompts.js';
@@ -181,6 +183,41 @@ const OWNER_CONTEXTS = {
     'his stored profile': { dm: contextFor(OWNER_PROFILE, 'dm', 1), comments: contextFor(OWNER_PROFILE, 'comment_reply', 1) },
     'the real profileContext': { dm: await contextFromTheDatabase('dm', OWNER_PROFILE), comments: await contextFromTheDatabase('comment_reply', OWNER_PROFILE) },
     'a profile that cannot be read': { dm: await contextFromTheDatabase('dm', null, true), comments: await contextFromTheDatabase('comment_reply', null, true) },
+} as const;
+
+/**
+ * `body` run against a stand-in database that holds `stored` as the owner's profile, or nothing, or fails every profile read as a
+ * database that is down would (the owner is the platform owner, so he is answered in his own wording). The sink is silenced and
+ * the pool put back.
+ */
+async function withOwnerProfile<T>(stored: CreatorProfile | null, fail: boolean, body: () => Promise<T>): Promise<T> {
+    const state = emptyState();
+    if (stored) state.profiles.set(OWNER, { profile: throughJsonb(stored), version: 1, activated_at: null, updated_by: null });
+    const db = installProfileDb(state);
+    if (fail) { db.failOn = /FROM creator_profiles/; db.failWith = new Error('connection refused'); setPlatformOwner(db, OWNER); }
+    const previousSink = setLogSink(() => {});
+    try {
+        return await body();
+    } finally {
+        setLogSink(previousSink);
+        db.restore();
+    }
+}
+
+/**
+ * The owner's pick and copy kits (P11) and his YouTube category, the four ways the code comes by them: the legacy assumptions, the
+ * contexts cut from his stored profile, what the sweep's `reelKitsFor` (and the publisher's `youtubeCategoryFor`) read from a
+ * stand-in database that holds it, and what they answer when that database fails. Each is a different route to the same facts
+ * (Gulf Arabic, the tech domain, an educator), and each must write the bytes in the goldens.
+ */
+const OWNER_REELS = {
+    'the legacy assumptions': { kits: reelKitsFromContexts(legacyContext('clip_pick'), legacyContext('clip_copy')), category: youtubeCategoryId(legacyContext('clip_copy').who.kind) },
+    'his stored profile': {
+        kits: reelKitsFromContexts(contextFor(OWNER_PROFILE, 'clip_pick', 1), contextFor(OWNER_PROFILE, 'clip_copy', 1)),
+        category: youtubeCategoryId(contextFor(OWNER_PROFILE, 'clip_copy', 1).who.kind),
+    },
+    'the real reelKitsFor and youtubeCategoryFor': await withOwnerProfile(OWNER_PROFILE, false, async () => ({ kits: await reelKitsFor(OWNER), category: await youtubeCategoryFor(OWNER) })),
+    'a profile that cannot be read': await withOwnerProfile(null, true, async () => ({ kits: await reelKitsFor(OWNER), category: await youtubeCategoryFor(OWNER) })),
 } as const;
 
 type Variant = {
@@ -376,8 +413,8 @@ describe('Studio golden prompts', () => {
 // ─── The Monteur ────────────────────────────────────────────────────────────────────────────
 
 describe('Monteur golden prompts', () => {
-    it('ASK_POOL: the built-in asks, Arabic his and English the control\'s', () => {
-        matchGoldenJson('monteur.copy.ask-pool.ar', ASK_POOL.ar);
+    it('ASK_POOL: the built-in asks, the Gulf register\'s his (the file is named for his language) and English the control\'s', () => {
+        matchGoldenJson('monteur.copy.ask-pool.ar', ASK_POOL.gulf);
         matchGoldenJson('monteur.copy.ask-pool.en', ASK_POOL.en, 'control');
     });
 
@@ -401,6 +438,14 @@ describe('Monteur golden prompts', () => {
     for (const v of VARIANTS) {
         it(`pick, copy, Editor, Analyst and render payload (${describeVariant(v)})`, async (t) => {
             await matchEach(t, await studioEntries(v, ['monteur.']));
+        });
+    }
+
+    // The pick and the copy are written from the profile's contexts: his, however the code comes by them, is the text he always had.
+    for (const [via, { kits }] of Object.entries(OWNER_REELS)) {
+        it(`pick and copy: the pick's prompts, the copy's prompts and the clip copy, built from his kits (${via})`, async (t) => {
+            const entries = await studioSurface(ELAMIR_SETTINGS, { lang: 'ar', slug: 'elamir', carousel: wordingOf(OWNER_PROFILE, 1, true), reelKits: kits });
+            await matchEach(t, entries.filter((e) => e.name.startsWith('monteur.pick') || e.name.startsWith('monteur.copy')));
         });
     }
 });
@@ -429,11 +474,13 @@ describe('Infographic golden prompts', () => {
 // ─── YouTube ────────────────────────────────────────────────────────────────────────────────
 
 describe('YouTube golden payloads', () => {
-    it('videoResource: every upload is categorised as Education, and declared not made for kids', () => {
-        matchGoldenJson('youtube.video-resource', videoResource({
-            title: SAY.ar.copy.first_line, description: SAY.ar.copy.body, tags: ['ذكاء_اصطناعي', 'LMStudio'], privacy: 'public', language: 'ar',
-        }));
-    });
+    for (const [via, { category }] of Object.entries(OWNER_REELS)) {
+        it(`videoResource: his uploads are categorised as Education, and declared not made for kids (${via})`, () => {
+            matchGoldenJson('youtube.video-resource', videoResource({
+                title: SAY.ar.copy.first_line, description: SAY.ar.copy.body, tags: ['ذكاء_اصطناعي', 'LMStudio'], privacy: 'public', language: 'ar', categoryId: category,
+            }));
+        });
+    }
 });
 
 // ─── The Growth coach ───────────────────────────────────────────────────────────────────────

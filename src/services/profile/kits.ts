@@ -243,6 +243,119 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
     },
 });
 
+// ─── Block P11: the Monteur's reels (the pick and the Marketer) ──────────────────────────────
+//
+// What the pick prompt and the copy prompt say that depends on how the reel is spoken. Two records, because two things
+// decide it: the *register* chooses the asks (a Gulf reader and an Egyptian one are asked differently), and the *language*
+// alone chooses the examples of a bad opening and the tags that are never used (an English prompt has no Arabic in it).
+// What depends on the creator's *field* (the tools, the hashtags) is the domain kit in `monteur/copyKits.ts`, which also cuts a
+// kit from a profile context. `Record<KitKey, ...>` and `Record<Lang, ...>` will not compile until every register and language
+// has every line.
+//
+// The rest of what the Marketer says in a register is `studio` above, P9's: the "who to send it to" example
+// (`forwardExample`) and the DM's fallback question and pitch. They are written once, there, and the copy kit reads them.
+
+/** What the Marketer says to a reader of one register that no other part of the app says: the question-style asks. */
+export interface ReelRegisterKit {
+    /**
+     * Five question-style asks for when the model's own cannot be used (no `{keyword}`, or too like a recent one). `{keyword}`
+     * is filled with the reel's word. Gulf is today's pool, word for word; the others are drafts for a native speaker (05 §2).
+     * The asks are what `ASK_POOL` (`monteur/copy.ts`) holds per kit.
+     */
+    asks: readonly string[];
+}
+
+/** What the pick prompt and the copy prompt say that depends on the language alone, in the language of the prompt. */
+export interface ReelLanguageKit {
+    /** Pick: an opening that only narrates the screen. A hook 0. */
+    narration: string;
+    /** Pick: first words that are a filler or a connector. Not a 3. */
+    fillers: string;
+    /** Pick: a start that leans on what was said before it, which a reel cannot do. Quoted in «» by the prompt. */
+    callback: string;
+    /** Copy: the tags that ask for reach rather than name a topic. Written in the script of the language. */
+    reachTags: string;
+    /** Copy: ends the hashtag line's description of the topic, with its leading comma (an Arabic reel's tags are mostly Arabic). */
+    hashtagStyle: string;
+    /** Copy: precedes the alt text's length ("neutral MSA, "); empty when the language has no register to name. */
+    altStyle: string;
+    /** Copy: how an alt text opens, quoted as the prompt shows it. */
+    altExample: string;
+}
+
+export const REEL_REGISTER_KITS: Readonly<Record<KitKey, ReelRegisterKit>> = Object.freeze({
+    // Today's pool and example, word for word (the owner's, pinned by __golden__/elamir).
+    gulf: Object.freeze({
+        asks: Object.freeze([
+            'تبي الرابط؟ اكتب «{keyword}» ويوصلك بالخاص 📩',
+            'حاب تطبقها بنفسك؟ علّق «{keyword}» وأرسل لك التفاصيل 📩',
+            'تحتاج الشرح كامل؟ اكتب «{keyword}» ويجيك بالخاص 👇',
+            'ودك بالخطوات؟ علّق «{keyword}» وتوصلك رسالة مني 📩',
+            'تبي تجربها؟ اكتب «{keyword}» بالتعليقات 👇',
+        ]),
+    }),
+    msa: Object.freeze({
+        asks: Object.freeze([
+            'هل تريد الرابط؟ اكتب «{keyword}» وسيصلك في الخاص 📩',
+            'هل تودّ تطبيقها بنفسك؟ علّق بـ«{keyword}» وسأرسل لك التفاصيل 📩',
+            'هل تحتاج الشرح كاملًا؟ اكتب «{keyword}» ويصلك في الخاص 👇',
+            'هل تريد الخطوات؟ علّق بـ«{keyword}» وستصلك رسالة مني 📩',
+            'هل تودّ تجربتها؟ اكتب «{keyword}» في التعليقات 👇',
+        ]),
+    }),
+    egyptian: Object.freeze({
+        asks: Object.freeze([
+            'عايز اللينك؟ اكتب «{keyword}» ويوصلك على الخاص 📩',
+            'حابب تطبّقها بنفسك؟ علّق «{keyword}» وأبعتلك التفاصيل 📩',
+            'محتاج الشرح كله؟ اكتب «{keyword}» وهيوصلك على الخاص 👇',
+            'عايز الخطوات؟ علّق «{keyword}» وهتجيلك رسالة مني 📩',
+            'نفسك تجرّبها؟ اكتب «{keyword}» في الكومنتات 👇',
+        ]),
+    }),
+    levantine: Object.freeze({
+        asks: Object.freeze([
+            'بدّك الرابط؟ اكتب «{keyword}» وبيوصلك عالخاص 📩',
+            'حابب تطبّقها بحالك؟ علّق «{keyword}» وببعتلك التفاصيل 📩',
+            'بدّك الشرح كامل؟ اكتب «{keyword}» وبيجيك عالخاص 👇',
+            'بدّك الخطوات؟ علّق «{keyword}» وبتوصلك رسالة مني 📩',
+            'حابب تجرّبها؟ اكتب «{keyword}» بالتعليقات 👇',
+        ]),
+    }),
+    // English was already a pool of its own before P11, and says the same things in plain English.
+    en: Object.freeze({
+        asks: Object.freeze([
+            'Want the link? Comment «{keyword}» and I\'ll DM it to you 📩',
+            'Want to try it yourself? Comment «{keyword}» 👇',
+            'Need the full walkthrough? Comment «{keyword}» and check your DMs 📩',
+            'Want the steps? Comment «{keyword}» and I\'ll send them 👇',
+            'Should I send you the details? Comment «{keyword}» 📩',
+        ]),
+    }),
+});
+
+export const REEL_LANGUAGE_KITS: Readonly<Record<Lang, ReelLanguageKit>> = Object.freeze({
+    // Today's text, word for word. The fillers are examples of what a speaker says in any Arabic register.
+    ar: Object.freeze({
+        narration: 'هنا جينا، خلينا نفتح، كما نرى',
+        fillers: 'مثلا، يعني، فـ، برضو، أو، ممكن، طيب، ما',
+        callback: 'زي ما قلت / وبعدين / فـ',
+        reachTags: '#اكسبلور #explore #fyp #foryou',
+        hashtagStyle: ', mostly Arabic',
+        altStyle: 'neutral MSA, ',
+        altExample: '«متحدث يشرح …»',
+    }),
+    // An English reel shows an English model English examples, and no Arabic script at all.
+    en: Object.freeze({
+        narration: 'here we go, as you can see',
+        fillers: 'so, like, basically',
+        callback: 'as I said / and then / so',
+        reachTags: '#explore #fyp #foryou',
+        hashtagStyle: '',
+        altStyle: '',
+        altExample: '"A speaker explains …"',
+    }),
+});
+
 // ─── Choosing a kit ──────────────────────────────────────────────────────────────────────────
 
 /**

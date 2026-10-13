@@ -21,6 +21,12 @@
  * under the same request id and goes on from there. When every try of a call has failed, the source
  * stops with "Claude on the Mac didn't answer: …", whatever attempt it is on, until its Retry.
  *
+ * What the Monteur and the Marketer write depends on who the creator is: the register's asks, the field's hashtags, the
+ * language's examples (copyKits.ts), read from the tenant's profile before any model is asked. A profile that cannot be read
+ * is the owner's own text for the owner, and for anyone else the source handed back untouched, like a call still waiting for
+ * the Mac: a database that failed once is not a reason to spend one of a stranger's three attempts, and never a reason to write
+ * their reel in the owner's wording (`releaseUnreadable`).
+ *
  * The sweep is independent of the rest of the drain: it runs last, and api.ts catches what it
  * throws so that nothing here can fail the drain's response.
  */
@@ -28,6 +34,7 @@ import { pool } from '../../config/db.js';
 import type { ClipCopy, ClipDirection, ClipEdit, MonteurSourceRow, SourcePick, StudioSettings, TranscriptWord } from '../../db/rows.js';
 import { describeError, log } from '../../utils/log.js';
 import { MacBrainRefused } from '../macBrain.js';
+import { ProfileUnreadableError } from '../profile/context.js';
 import { profileVersionFor } from '../profile/stamp.js';
 import { withTransaction } from '../studio/common.js';
 import { buildGenContext } from '../studio/drafts.js';
@@ -37,6 +44,7 @@ import { getStudioSettings } from '../studio/settings.js';
 import { currentLessons, runDueAnalyst } from './analyst.js';
 import { autoApproveClips, type AutoApproveResult } from './auto.js';
 import { askOf, writeCopy } from './copy.js';
+import { reelKitsFor } from './copyKits.js';
 import { writeEdits } from './editor.js';
 import { editorKitFor } from './editorKits.js';
 import { inFlightTriggers } from './keywords.js';
@@ -156,7 +164,8 @@ export async function loadPickContext(creatorId: string): Promise<PickContext> {
 /**
  * `rendering`: clips queued. `no_clips`: nothing worth a reel. `retry`: the attempt failed and
  * waits 10 minutes. `failed`: the third did. `lost`: another attempt holds the claim now.
- * `waiting`: a call is with Claude on the Mac, and the source is back as it was, its attempt unspent.
+ * `waiting`: the source is back as it was, its attempt unspent: a call is with Claude on the Mac, or the tenant's profile
+ * could not be read (`releaseUnreadable`), and either way the sweep moves on to the next source.
  */
 export type PickOutcomeKind = 'rendering' | 'no_clips' | 'retry' | 'failed' | 'lost' | 'waiting';
 
@@ -167,7 +176,7 @@ export interface MonteurSweepResult {
     auto: AutoApproveResult & { error?: string };
     /** The last source this sweep worked on. */
     pick: { source_id: string; outcome: PickOutcomeKind; clips?: number; error?: string } | null;
-    /** Sources this sweep found waiting for Claude on the Mac, and moved past. */
+    /** Sources this sweep found waiting for Claude on the Mac (or for a profile it could not read), and moved past. */
     waiting: number;
     analyst: { creator_id: string; status: string } | null;
     /** Why part of the sweep did not run. */
@@ -196,6 +205,31 @@ async function releaseWaiting(source: ClaimedSource, err: ThinkWaiting): Promise
     );
     log('info', 'monteur.think_waiting', { source_id: source.id, creator_id: source.creator_id, attempt: source.attempts, why: err.message });
     return { source_id: source.id, outcome: rowCount ? 'waiting' : 'lost', clips: 0 };
+}
+
+/** What the source's `error` says while it waits for a profile that could not be read. It is cleared at the hand-off. */
+export const PROFILE_UNREADABLE_PICK = 'The creator profile could not be read; this video is tried again on the next sweep.';
+
+/**
+ * The tenant's profile could not be read, and the tenant is not the owner (`reelKitsFor`): the source goes back to `transcribed`
+ * with the claim's attempt given back, exactly as for a call waiting on the Mac, and the next drain's claim takes it up again.
+ * Nothing was asked of a model and nothing was written for the reel, so there is nothing to retry cleanly except the read.
+ *
+ * Why not `failAttempt`: it spends one of three attempts, and the third fails the source until someone presses Retry. A database
+ * that was unreachable for three claims, half an hour apart, would end a stranger's source for a reason that has gone by the
+ * time anyone looks. Why not write it anyway: the only text this code could fall back to is the owner's (Gulf asks, tech
+ * hashtags), and a reel that went out in it would be scheduled and published before anyone saw it. Handing back costs a delay
+ * and nothing else; `updated_at` moves it behind the other sources, so one tenant's unreadable profile holds nobody up, and
+ * `profile.context_unreadable` and `monteur.profile_unreadable` say why in the log on every try.
+ */
+async function releaseUnreadable(source: ClaimedSource, err: ProfileUnreadableError): Promise<MonteurSweepResult['pick']> {
+    const { rowCount } = await pool.query(
+        `UPDATE monteur_sources SET status = 'transcribed', attempts = attempts - 1, claimed_at = NULL, error = $3, updated_at = NOW()
+          WHERE id = $1 AND status = 'picking' AND attempts = $2`,
+        [source.id, source.attempts, PROFILE_UNREADABLE_PICK]
+    );
+    log('warn', 'monteur.profile_unreadable', { source_id: source.id, creator_id: source.creator_id, attempt: source.attempts, why: err.message });
+    return { source_id: source.id, outcome: rowCount ? 'waiting' : 'lost', clips: 0, error: PROFILE_UNREADABLE_PICK };
 }
 
 /**
@@ -353,6 +387,9 @@ export function transientModelError(err: unknown): boolean {
 async function pickSource(source: ClaimedSource, deadline: number): Promise<MonteurSweepResult['pick']> {
     const began = Date.now();
     try {
+        // Who the creator is decides what the prompts say (asks, hashtags, examples). Read before anything else, so a profile that
+        // cannot be read is answered before a model is asked, and before the settings' own read of it can fail the attempt.
+        const kits = await reelKitsFor(source.creator_id);
         const settings = await getStudioSettings(source.creator_id);
         // Read once per drain of this attempt: every clip of the pick carries it (profile/stamp.ts). With the Mac brain an
         // attempt spans several drains, so the stamp is the version at hand-off, which can be newer than the pick's prompt.
@@ -374,7 +411,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
             record = { ...source.pick! };
             log('info', 'monteur.pick_reused', { source_id: source.id, clips: saved.clips.length });
         } else {
-            const fresh = await pickClips({ words, duration: source.duration }, settings, { ...context, lessons }, deadline, think);
+            const fresh = await pickClips({ words, duration: source.duration }, settings, { ...context, lessons, kit: kits.pick }, deadline, think);
             picked = fresh;
             record = {
                 model: fresh.cost.model, tokens_in: fresh.cost.tokens_in, tokens_out: fresh.cost.tokens_out, considered: fresh.considered,
@@ -415,7 +452,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
 
         const ctx = await buildGenContext(source.creator_id, settings);
         const copy = await writeCopy(picked.kept, picked.lines, settings, {
-            activeKeywords: ctx.activeKeywords, seo: ctx.seo, recentAsks: context.recentAsks,
+            kit: kits.copy, activeKeywords: ctx.activeKeywords, seo: ctx.seo, recentAsks: context.recentAsks,
             inFlightKeywords: context.inFlightKeywords, inFlightVariants: context.inFlightVariants,
         }, lessons, deadline, think);
         log('info', 'monteur.copy', {
@@ -439,6 +476,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         return { source_id: source.id, outcome: handed.outcome, clips: handed.clips };
     } catch (err) {
         if (err instanceof ThinkWaiting) return releaseWaiting(source, err);
+        if (err instanceof ProfileUnreadableError) return releaseUnreadable(source, err);
         return failAttempt(source, err);
     }
 }

@@ -149,13 +149,14 @@ describe('the DM and comment wording is the profile\'s', () => {
         assert.deepEqual([...handedIn], [...described]);
     });
 
-    it('a profile that speaks Egyptian about products moves the Studio writer\'s (P9), the Editor\'s (P10), the infographic\'s (P12), the DM and the comment entries, and nothing else the Studio or the Monteur writes', async () => {
+    it('a profile that speaks Egyptian about products moves the Studio writer\'s (P9), the Monteur\'s pick and copy (P11), the Editor\'s (P10), the infographic\'s (P12), the DM and the comment entries, and nothing else the Studio or the Monteur writes', async () => {
         const before = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT }));
         const after = byName(await tenantSurface({ ...rows, agent: ELAMIR_AGENT, profile: SHOP_EG }));
         const moved = [...before.keys()].filter((name) => before.get(name) !== after.get(name));
         // The Editor moves because the shop has no one on camera and speaks of no tech (P10); its two prompts come with the Monteur's entries.
         assert.deepEqual(moved, [
             'studio.system', 'studio.plan-system', 'studio.dm-fallback', 'captions.tiktok',
+            'monteur.pick-system', 'monteur.copy-system', 'monteur.copy-clip-fallbacks',
             'monteur.editor-system.human-on', 'monteur.editor-system.human-off',
             'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'comments.dm-fallback-replies.ar',
         ]);
@@ -165,6 +166,11 @@ describe('the DM and comment wording is the profile\'s', () => {
         assert.match(after.get('studio.dm-fallback')!, /عايز تطبّقها بنفسك خطوة بخطوة/);
         assert.doesNotMatch(after.get('captions.tiktok')!, /LearnOnTikTok/);
         assert.match(before.get('captions.tiktok')!, /LearnOnTikTok/);
+        // The pick's transcript line and the copy's turn say nothing of the register or the field, so they do not move.
+        assert.match(after.get('monteur.copy-system')!, /«ابعتها لصاحبك اللي …»/);
+        assert.doesNotMatch(after.get('monteur.copy-system')!, /ChatGPT|الذكاء_الاصطناعي/, 'a shop is not described by AI tags');
+        assert.doesNotMatch(after.get('monteur.pick-system')!, /Tech terms in Latin script/);
+        assert.match(after.get('monteur.copy-clip-fallbacks')!, /عايز اللينك|حابب تطبّقها بنفسك|محتاج الشرح كله|عايز الخطوات|نفسك تجرّبها/, 'the ask falls back to the Egyptian pool');
         assert.match(after.get('dm.system-instruction')!, /باللهجة المصرية البسيطة/);
         assert.match(after.get('dm.system-instruction')!, /إذا طلب المستخدم منتجات/);
         assert.match(after.get('dm.response-schema')!, /GO_TO_OFFER_1/);
@@ -184,6 +190,7 @@ describe('the DM and comment wording is the profile\'s', () => {
         const failed = entries.filter((e) => e.error !== undefined).map((e) => e.name);
         assert.deepEqual(failed, [
             'studio.system', 'studio.plan-system', 'studio.dm-fallback', 'captions.tiktok',
+            'monteur.pick-system', 'monteur.pick-user', 'monteur.copy-system', 'monteur.copy-clip-fallbacks',
             'monteur.editor-system.human-on', 'monteur.editor-system.human-off',
             'infographic.render-payload.ar', 'infographic.render-payload.en', 'dm.system-instruction', 'dm.response-schema', 'dm.disclosure-line', 'dm.starter-persona',
             'comments.dm-fallback-replies.ar', 'comments.dm-fallback-replies.en',

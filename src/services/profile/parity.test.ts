@@ -180,14 +180,16 @@ describe('runParity, on the rows of a tenant', () => {
 
     it('what the profile says about the presenter, the rules and the domain moves the Editor\'s two prompts and nothing else (P10)', async () => {
         const EDITOR = ['monteur.editor-system.human-on', 'monteur.editor-system.human-off'];
-        // The infographic writer reads the domain from the same profile (P12), so a domain edit moves its payloads too.
+        // The infographic writer reads the domain from the same profile (P12), and so do the pick and the Marketer (P11: the tools, the
+        // hashtags, "Tech terms in Latin script"), so a domain edit moves their prompts too. Not the clip copy: the register and the kind decide that.
         const INFOGRAPHIC = ['infographic.render-payload.ar', 'infographic.render-payload.en'];
+        const REELS = ['monteur.pick-system', 'monteur.copy-system'];
         const edits: [string, (p: ReturnType<typeof profileFromLegacy>) => void, string[]][] = [
             ['a woman on camera', (p) => { p.presenter = { name: '', pronouns: 'she', on_camera: 'face' }; }, EDITOR],
             ['no one on camera', (p) => { p.presenter = null; }, EDITOR],
             ['the no-women rule unticked', (p) => { p.content.rules = []; }, EDITOR],
             ['a rule of its own', (p) => { p.content.custom_rules = ['No gym selfies']; }, EDITOR],
-            ['the general domain', (p) => { p.content.domain = 'general'; }, [...EDITOR, ...INFOGRAPHIC]],
+            ['the general domain', (p) => { p.content.domain = 'general'; }, [...REELS, ...EDITOR, ...INFOGRAPHIC]],
         ];
         for (const [what, edit, moved] of edits) {
             const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
@@ -195,6 +197,24 @@ describe('runParity, on the rows of a tenant', () => {
             const report = await runParity({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH, profile });
             assert.deepEqual(report.rows.filter((r) => !r.match).map((r) => r.name), moved, what);
         }
+    });
+
+    it('the register and the kind in the profile move the Monteur\'s copy (P11) and no other Monteur prompt: the pick reads neither', async () => {
+        const monteurMoved = async (edit: (p: ReturnType<typeof profileFromLegacy>) => void): Promise<string[]> => {
+            const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
+            edit(profile);
+            const report = await runParity({ studio: ELAMIR_SEED_SETTINGS, growth: ELAMIR_GROWTH, profile });
+            return report.rows.filter((r) => !r.match && r.name.startsWith('monteur.')).map((r) => r.name);
+        };
+        // Its own asks move the clip copy (the fallback ask); its own "send it to" example moves the Marketer's prompt too. Egyptian's example
+        // is the Gulf's («ابعتها لصاحبك اللي …», 05 §2), so for Egyptian only the asks move.
+        assert.deepEqual(await monteurMoved((p) => { p.language.register = 'egyptian'; }), ['monteur.copy-clip-fallbacks']);
+        assert.deepEqual(await monteurMoved((p) => { p.language.register = 'levantine'; }), ['monteur.copy-system', 'monteur.copy-clip-fallbacks']);
+        assert.deepEqual(await monteurMoved((p) => { p.language.register = 'msa'; }), ['monteur.copy-system', 'monteur.copy-clip-fallbacks']);
+        // A shop's TikTok caption has no learning-programme tags, and nothing else of the Monteur's changes with the kind.
+        assert.deepEqual(await monteurMoved((p) => { p.identity.kind = 'shop'; }), ['monteur.copy-clip-fallbacks']);
+        // A coach keeps them.
+        assert.deepEqual(await monteurMoved((p) => { p.identity.kind = 'coach'; }), []);
     });
 
     it('another audience in the profile moves the Growth builders and nothing the Studio writes', async () => {

@@ -5,8 +5,13 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { legacyContext } from '../profile/context.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
+import { pickKit } from './copyKits.js';
 import { candidatesWanted, pickSystemPrompt, pickUserPrompt, reelsForLength } from './pick.js';
+
+/** The kit the owner's profile gives (the legacy assumptions: Gulf Arabic, the tech domain): the text these prompts always had. */
+const KIT = pickKit(legacyContext('clip_pick'));
 
 describe('reelsForLength', () => {
     it('one per started 10 minutes, at least one, capped at the setting', () => {
@@ -30,23 +35,23 @@ describe('pickUserPrompt', () => {
     const lines = [{ n: 1, start: 0, end: 5, text: 'سطر', first: 0, last: 0 }] as any;
     const settings = { ...ELAMIR_SETTINGS, monteur: { ...ELAMIR_SETTINGS.monteur, reels_per_video: 3 } };
     it('asks for this video’s count plus the spares, not the setting’s', () => {
-        assert.match(pickUserPrompt({ lines, settings, lessons: [], keep: 1 }), new RegExp(`Pick up to ${candidatesWanted(1)} clips`));
-        assert.match(pickUserPrompt({ lines, settings, lessons: [], keep: 2 }), new RegExp(`Pick up to ${candidatesWanted(2)} clips`));
-        assert.match(pickUserPrompt({ lines, settings, lessons: [] }), new RegExp(`Pick up to ${candidatesWanted(3)} clips`), 'without a count: the setting');
+        assert.match(pickUserPrompt({ lines, settings, lessons: [], keep: 1, kit: KIT }), new RegExp(`Pick up to ${candidatesWanted(1)} clips`));
+        assert.match(pickUserPrompt({ lines, settings, lessons: [], keep: 2, kit: KIT }), new RegExp(`Pick up to ${candidatesWanted(2)} clips`));
+        assert.match(pickUserPrompt({ lines, settings, lessons: [], kit: KIT }), new RegExp(`Pick up to ${candidatesWanted(3)} clips`), 'without a count: the setting');
     });
     it('puts the held and lost openings, with their skip rates, ahead of the transcript', () => {
         const ev = (skipRate: number, title: string) => ({ views: 120, skipRate, title, topic: null, opening: 'o' });
-        const out = pickUserPrompt({ lines, settings, lessons: [], reels: { best: [], worst: [], held: [ev(60, 'HELD')], lost: [ev(99, 'LOST')] } });
+        const out = pickUserPrompt({ lines, settings, lessons: [], kit: KIT, reels: { best: [], worst: [], held: [ev(60, 'HELD')], lost: [ev(99, 'LOST')] } });
         assert.match(out, /opening held viewers[^\n]*\n- 120 views, skipped in 3s 60%: title «HELD»/);
         assert.match(out, /opening lost viewers[^\n]*\n- 120 views, skipped in 3s 99%: title «LOST»/);
         assert.ok(out.indexOf('LOST') < out.indexOf('Transcript'));
-        assert.doesNotMatch(pickUserPrompt({ lines, settings, lessons: [] }), /held viewers|lost viewers/);
+        assert.doesNotMatch(pickUserPrompt({ lines, settings, lessons: [], kit: KIT }), /held viewers|lost viewers/);
     });
 });
 
 describe('pickSystemPrompt', () => {
     it('tells the model a filler or connector start is not a 3, and why', () => {
-        const p = pickSystemPrompt(settings());
+        const p = pickSystemPrompt(settings(), KIT);
         assert.match(p, /first 3 seconds/);
         assert.match(p, /filler or a connector/);
     });

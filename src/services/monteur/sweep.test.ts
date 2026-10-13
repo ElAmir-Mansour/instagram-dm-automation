@@ -8,8 +8,11 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { TranscriptWord } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { withProfileCache } from '../profile/cache.js';
+import { FITNESS_EN } from '../profile/fixtures.js';
+import { throughJsonb } from '../profile/jsonb.js';
 import { profileFromLegacy } from '../profile/legacy.js';
-import { profileReads } from '../profile/stampSupport.js';
+import { PROFILE_READ, profileReads } from '../profile/stampSupport.js';
+import { ARABIC_SCRIPT } from '../profile/testSupport.js';
 import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
 import { ELAMIR_SETTINGS } from '../studio/testFixtures.js';
 import { ASK_POOL } from './copy.js';
@@ -17,7 +20,8 @@ import { EDITOR_MAX_OUTPUT, EDITOR_SCHEMA, EDITOR_THINKING, editorSchema, editor
 import { LEGACY_EDITOR_KIT, PRONOUN_KITS } from './editorKits.js';
 import { PICK_MAX_OUTPUT } from './pick.js';
 import {
-    CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, PROFILE_UNREADABLE, setEditRetryWaits, sweepMonteur,
+    CLAIM_SOURCE_SQL, EXHAUST_SOURCES_SQL, EXHAUSTED_PICK_ERROR, MAX_PICK_ATTEMPTS, PICK_STALE_MINUTES, PROFILE_UNREADABLE, PROFILE_UNREADABLE_PICK, setEditRetryWaits,
+    sweepMonteur,
     transientModelError,
 } from './sweep.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
@@ -612,7 +616,7 @@ describe('sweepMonteur — keywords and asks', () => {
         recentCaptions = [{ caption: 'x\n\nتبي تجربها؟ اكتب «برومبت» 👇\n\n#y', keyword: 'برومبت' }];
         await sweepMonteur(later());
         const caption: string = savedCopy().caption;
-        const used = ASK_POOL.ar.find((a) => caption.includes(a.split('{keyword}').join('دفتر')));
+        const used = ASK_POOL.gulf.find((a) => caption.includes(a.split('{keyword}').join('دفتر')));
         assert.ok(used, caption);
         assert.ok(!caption.includes('بالتعليقات ويوصلك رابط الكورس بالخاص'), 'the tenant’s own caption ask is not the fallback');
         assert.match(calls[1]!.turns[0]!.text, /Recent asks \(don't reuse\):\n- تبي تجربها؟ اكتب «\{keyword\}» 👇/);
@@ -621,7 +625,7 @@ describe('sweepMonteur — keywords and asks', () => {
     it('falls back to the pool when the model’s ask has no {keyword}', async () => {
         answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, ask_line: 'علّق بكلمة دفتر' }] };
         await sweepMonteur(later());
-        assert.ok(ASK_POOL.ar.some((a) => savedCopy().caption.includes(a.split('{keyword}').join('دفتر'))));
+        assert.ok(ASK_POOL.gulf.some((a) => savedCopy().caption.includes(a.split('{keyword}').join('دفتر'))));
     });
 
     it('matches numbered answers by number only, never by position', async () => {
@@ -986,7 +990,7 @@ describe('sweepMonteur — profile_version', () => {
 
     it('still hands the clip off, stamped null, when the version read fails', async () => {
         const { reads, route } = profileReads({ [TENANT]: 7 });
-        reads.failAt = 2; // the first read is the settings' own, the second the stamp's
+        reads.failAt = 4; // reads 1 and 2 are the kits' (P11: the pick's and the copy's, first of all, and with no request scope here nothing is cached), 3 the settings' own, 4 the stamp's
         db.routes.push(route);
         assert.deepEqual((await sweepMonteur(later())).pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 });
         assert.ok(reads.creators.length >= 2, 'the stamp did ask');
@@ -1000,5 +1004,146 @@ describe('sweepMonteur — profile_version', () => {
         await withProfileCache(() => sweepMonteur(later()));
         assert.equal(reads.creators.length, 1, 'one read of the tenant’s profile for the whole pick');
         assert.deepEqual(stamps(), [7]);
+    });
+});
+
+// ─── The creator's profile decides what the pick and the copy say (P11) ─────────────────────
+
+describe('sweepMonteur — the creator\'s profile (P11)', () => {
+    const OTHER = '22222222-2222-4222-8222-222222222222';
+    const released = () => db.ran(/^UPDATE monteur_sources SET status = 'transcribed', attempts = attempts - 1, claimed_at = NULL, error = \$3/);
+    /** A failed attempt that ends the source (`failAttempt`), not the sweep's own housekeeping of stale claims. */
+    const failed = () => db.ran(/^UPDATE monteur_sources SET status = 'failed', error = \$2/);
+    const request = (purpose: string) => calls.find((c) => c.purpose === purpose)!;
+    /** The saved copy's ask: the line of the caption holding the keyword the model's own answer was given. */
+    const poolAsk = (pool: readonly string[]) => pool.some((a) => savedCopy().caption.includes(a.split('{keyword}').join('دفتر')));
+    const down = () => { throw new Error('Connection terminated unexpectedly'); };
+    /** A database that answers the profile read with `profile` for the tenant, after failing the first `failing` reads. */
+    const profileRoute = (profile: unknown, failing = 0) => {
+        const reads = { n: 0 };
+        db.routes.unshift([PROFILE_READ, ([id]) => {
+            reads.n += 1;
+            if (reads.n <= failing) down();
+            return { rows: id === OTHER && profile ? [{ profile: throughJsonb(profile), version: 3, activated_at: null }] : [] };
+        }]);
+        return reads;
+    };
+
+    beforeEach(() => {
+        // The hand-back claims the row it releases: a row this attempt still holds.
+        db.routes.unshift([/^UPDATE monteur_sources SET status = 'transcribed', attempts = attempts - 1/, () => ({ rows: [], rowCount: 1 })]);
+        // The model answers without a usable ask, so the register's pool is what the caption carries.
+        answers['monteur.copy'] = { clips: [{ ...COPY_ITEM, ask_line: 'علّق بكلمة دفتر' }] };
+    });
+
+    describe('a profile that cannot be read', () => {
+        it('is, for the owner, his own text: the pick and the copy are written as ever, and the reel goes out', async () => {
+            // Both kit reads (the pick's, the copy's) fail; the settings' own read, which comes after them, finds the database back.
+            profileRoute(null, 2);
+            const result = await sweepMonteur(later());
+            assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'rendering', clips: 1 });
+            assert.match(request('monteur.pick').system, /\(هنا جينا، خلينا نفتح، كما نرى\)/);
+            assert.match(request('monteur.pick').system, /Tech terms in Latin script/);
+            assert.match(request('monteur.copy').system, /«ابعتها لصاحبك اللي …»/);
+            assert.match(request('monteur.copy').system, /\(Gemini, ChatGPT\) and the subject \(الذكاء_الاصطناعي\)/);
+            assert.ok(poolAsk(ASK_POOL.gulf), 'the Gulf asks, as ever');
+            assert.equal(released().length, 0);
+            const line = logs.find((l) => l.event === 'profile.context_unreadable');
+            assert.ok(line, 'and the failed read is logged');
+            assert.equal(line!.creator_id, TENANT);
+            assert.match(String(line!.effect), /owner-identical legacy wording/);
+        });
+
+        it('is, for anyone else, the source handed back untouched: no model asked, no attempt spent, nothing written for the reel', async () => {
+            source = { ...source, creator_id: OTHER };
+            profileRoute(null, 1000);
+            const result = await sweepMonteur(later());
+            assert.deepEqual(result.pick, { source_id: SOURCE, outcome: 'waiting', clips: 0, error: PROFILE_UNREADABLE_PICK });
+            assert.equal(result.waiting, 1, 'the sweep moves on to the next source');
+            assert.deepEqual(released().map((r) => r.params), [[SOURCE, 1, PROFILE_UNREADABLE_PICK]], 'back to transcribed, the claim\'s attempt given back');
+            assert.equal(calls.length, 0, 'no model was asked, so nothing was spent');
+            assert.equal(failed().length, 0);
+            assert.equal(db.ran(/^INSERT INTO clip_drafts/).length, 0);
+            assert.equal(db.ran(/^INSERT INTO studio_jobs/).length, 0, 'no render');
+            assert.ok(logs.some((l) => l.event === 'monteur.profile_unreadable' && l.creator_id === OTHER && l.source_id === SOURCE));
+            const read = logs.find((l) => l.event === 'profile.context_unreadable');
+            assert.match(String(read!.effect), /not the owner/);
+        });
+
+        it('never fails a stranger\'s source, however often it is tried and on whichever attempt: waiting for the database spends none of the three', async () => {
+            profileRoute(null, 1000);
+            for (const attempts of [1, 2, 3, 3, 3]) {
+                source = { ...source, creator_id: OTHER, attempts };
+                db.statements.length = 0;
+                const result = await sweepMonteur(later());
+                assert.equal(result.pick?.outcome, 'waiting', `attempt ${attempts}`);
+                assert.equal(failed().length, 0, `attempt ${attempts} is not failed`);
+                assert.deepEqual(released().map((r) => r.params[1]), [attempts], 'the attempt it was claimed on is the one given back');
+            }
+            assert.equal(calls.length, 0);
+        });
+
+        it('is not the stamp\'s, the settings\' or any other read\'s to answer: the kits are read first, before the settings, so a failure there is the profile\'s', async () => {
+            source = { ...source, creator_id: OTHER };
+            profileRoute(null, 1000);
+            await sweepMonteur(later());
+            // Between the claim and the hand-back (the Analyst's own reads come after, for a tenant whose lessons are due).
+            const sqls = db.statements.map((st) => st.sql);
+            const between = sqls.slice(sqls.findIndex((sql) => /^WITH picked AS/.test(sql)) + 1, sqls.findIndex((sql) => /^UPDATE monteur_sources SET status = 'transcribed'/.test(sql)));
+            assert.equal(between.filter((sql) => /FROM studio_settings/.test(sql)).length, 0, 'the source\'s settings were never asked for');
+            assert.equal(between.filter((sql) => /FROM creator_profiles/.test(sql)).length, 1, 'one failed read, then the source is released');
+        });
+    });
+
+    describe('a profile that can be read', () => {
+        it('writes the pick and the copy for the tenant: an English coach is asked in English, from the English pool', async () => {
+            source = { ...source, creator_id: OTHER };
+            profileRoute(FITNESS_EN);
+            const result = await sweepMonteur(later());
+            assert.equal(result.pick?.outcome, 'rendering');
+
+            const pick = request('monteur.pick');
+            assert.match(pick.system, /\(here we go, as you can see\)/);
+            assert.match(pick.system, /\(so, like, basically\)/);
+            assert.match(pick.system, /no «as I said \/ and then \/ so»/);
+            assert.match(pick.system, /title: at most 6 words in English/);
+            assert.doesNotMatch(pick.system, ARABIC_SCRIPT, 'an English pick prompt has no Arabic in it');
+            assert.doesNotMatch(pick.system, /Tech terms in Latin script|colleague/, 'a coach is not a tech educator');
+            assert.match(pick.turns[0]!.text, /^Transcript \(English\):$/m);
+
+            const copy = request('monteur.copy');
+            assert.match(copy.system, /who to send it to \("Send this to the friend who …"\)/);
+            assert.match(copy.system, /nor #explore #fyp #foryou\./);
+            assert.doesNotMatch(copy.system, ARABIC_SCRIPT);
+            assert.doesNotMatch(copy.system, /ChatGPT|Gemini/, 'no tool is named: it is not their field');
+
+            assert.ok(poolAsk(ASK_POOL.en), savedCopy().caption);
+            assert.ok(!poolAsk(ASK_POOL.gulf), 'and never a Gulf ask');
+            const [insert] = db.ran(/^INSERT INTO clip_drafts/);
+            assert.equal(insert!.params[16], 3, 'stamped with the version of the profile it was written from');
+        });
+
+        it('asks a Gulf reader and an Egyptian reader differently: the register chooses the pool, and the owner keeps the Gulf one', async () => {
+            const egyptian = { ...FITNESS_EN, language: { ...FITNESS_EN.language, primary: 'ar', register: 'egyptian', digits: 'latin' }, content: { ...FITNESS_EN.content, domain: 'general' } };
+            source = { ...source, creator_id: OTHER };
+            profileRoute(egyptian);
+            await sweepMonteur(later());
+            assert.ok(poolAsk(ASK_POOL.egyptian), savedCopy().caption);
+            assert.ok(!poolAsk(ASK_POOL.gulf));
+            assert.match(request('monteur.copy').system, /«ابعتها لصاحبك اللي …»/);
+            assert.doesNotMatch(request('monteur.pick').system, /Tech terms in Latin script/, 'general: no tech terms, in Arabic too');
+        });
+    });
+
+    it('a transient failure costs a delay and nothing else: the next sweep, with the database back, writes the tenant\'s own reel', async () => {
+        source = { ...source, creator_id: OTHER };
+        profileRoute(FITNESS_EN, 1);
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'waiting');
+        assert.equal(calls.length, 0);
+        db.statements.length = 0;
+        assert.equal((await sweepMonteur(later())).pick?.outcome, 'rendering');
+        assert.match(request('monteur.pick').system, /here we go/);
+        assert.ok(poolAsk(ASK_POOL.en));
+        assert.equal(failed().length, 0);
     });
 });

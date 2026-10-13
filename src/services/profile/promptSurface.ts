@@ -37,6 +37,7 @@ import { coachSystemPrompt, runCoach } from '../growth/coach.js';
 import { keywordsSystemPrompt, suggestKeywords } from '../growth/keywords.js';
 import { analystSystemPrompt } from '../monteur/analyst.js';
 import { copySystemPrompt, copyUserPrompt, toClipCopy, type CopyContext } from '../monteur/copy.js';
+import { reelKitsFromContexts, type ReelKits } from '../monteur/copyKits.js';
 import { editorSystemPrompt } from '../monteur/editor.js';
 import { editorKit } from '../monteur/editorKits.js';
 import { pickSystemPrompt, pickUserPrompt } from '../monteur/pick.js';
@@ -89,6 +90,14 @@ export function entryText(entry: Pick<SurfaceEntry, 'kind' | 'value'> & Partial<
 const named = (base: string, slug: string | undefined): string => (slug ? `${base}.${slug}` : base);
 
 const text = (name: string, set: GoldenSet, value: string): SurfaceEntry => ({ name, kind: 'text', set, value });
+
+/**
+ * The pick and the Marketer's kits for a profile: the contexts its two purposes are given, and the kits those select (P11). The
+ * owner's, here, is what `profileFromLegacy` makes of his rows (path (a)) or what his stored profile says (path (b)), and the
+ * sweep reads the same contexts of the same profile (`reelKitsFor`), so the prompts below are built the way production builds them.
+ */
+export const reelKitsOf = (profile: CreatorProfile): ReelKits =>
+    reelKitsFromContexts(contextFor(profile, 'clip_pick', null), contextFor(profile, 'clip_copy', null));
 
 /** One builder, called: its output, or what it threw. One builder that fails must not hide the rest of the surface. */
 function built(name: string, kind: 'text' | 'json', set: GoldenSet, build: () => unknown): SurfaceEntry {
@@ -200,13 +209,19 @@ export interface StudioSurfaceOptions {
      * prompt is built through the profile path, not around it.
      */
     editor?: Wording<ProfileContext<'clip_edit'>>;
+    /**
+     * The kits the pick's and the Marketer's prompts are written from (P11: `reelKitsOf(profile)`, what the sweep's `reelKitsFor`
+     * returns), or a function that makes them, so a tenant whose profile cannot be described fails those entries by name. Without
+     * them they are the kits of the profile these settings describe (`profileFromLegacy`), as for the Editor.
+     */
+    reelKits?: Wording<ReelKits>;
 }
 
 /**
  * Every builder that reads the Studio settings and nothing else of the tenant: the writer's prompts, the CTA lines,
  * the DM, the caption normalisers, the carousel payload, and the Monteur's pick, copy, Editor, Analyst and render.
  */
-export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor, carousel: wording }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
+export async function studioSurface(settings: StudioSettings, { lang, slug, set = 'elamir', editor, carousel: wording, reelKits }: StudioSurfaceOptions): Promise<SurfaceEntry[]> {
     const say = SAY[lang];
     const out: SurfaceEntry[] = [];
     const t = (base: string, build: () => string): void => { out.push(built(named(base, slug), 'text', set, build)); };
@@ -243,21 +258,24 @@ export async function studioSurface(settings: StudioSettings, { lang, slug, set 
     };
     out.push(await builtAsync(named('studio.carousel-render-payload', slug), 'json', set, () => carouselRenderPayload('creator', 'draft', carousel, {}, settings)));
 
-    // The Monteur.
-    t('monteur.pick-system', () => pickSystemPrompt(settings));
+    // The Monteur. The pick and the Marketer are written from the creator's profile context (P11): his, here, is what his profile says.
+    const reels = lazy(() => wordingOf(reelKits ?? (() => reelKitsOf(profileFromLegacy(settings)))));
+    t('monteur.pick-system', () => pickSystemPrompt(settings, reels().pick));
     t('monteur.pick-user', () => pickUserPrompt({
-        lines: GOLDEN_LINES, settings, lessons: GOLDEN_LESSONS, reels: GOLDEN_REEL_EVIDENCE, keep: 2,
+        lines: GOLDEN_LINES, settings, lessons: GOLDEN_LESSONS, reels: GOLDEN_REEL_EVIDENCE, keep: 2, kit: reels().pick,
     }));
 
-    t('monteur.copy-system', () => copySystemPrompt(settings));
+    t('monteur.copy-system', () => copySystemPrompt(settings, reels().copy));
     t('monteur.copy-user', () => copyUserPrompt({
         clips: GOLDEN_CLIPS, lines: GOLDEN_LINES, settings, lessons: GOLDEN_LESSONS,
         activeKeywords: ['وكيل', 'سياق'], recentAsks: [say.recentAsk], seo: ELAMIR_SEO,
     }));
 
-    const ctx: CopyContext = { activeKeywords: [], seo: ELAMIR_SEO, recentAsks: [] };
     const item = { clip: 1, ask_line: 'no keyword here', question: '', pitch: '', ...say.copy };
-    j('monteur.copy-clip-fallbacks', () => toClipCopy(item, GOLDEN_CLIPS[0]!, settings, ctx, [], [], 0));
+    j('monteur.copy-clip-fallbacks', () => {
+        const ctx: CopyContext = { kit: reels().copy, activeKeywords: [], seo: ELAMIR_SEO, recentAsks: [] };
+        return toClipCopy(item, GOLDEN_CLIPS[0]!, settings, ctx, [], [], 0);
+    });
 
     // The Editor is written from the creator's profile context: his, here, is what `profileFromLegacy` makes of his rows.
     const editorKitOfTenant = lazy(() => editorKit(wordingOf(editor ?? (() => contextFor(profileFromLegacy(settings), 'clip_edit', null)))));
@@ -531,7 +549,7 @@ export async function tenantSurface(rows: TenantRows, options: WithRowsOptions =
     const comments = () => contextFor(profile(), 'comment_reply', null);
     const carousel = (): StudioWording => ({ ...contextFor(profile(), 'carousel', null), builtInExamples: rows.builtInExamples === true });
     return [
-        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null), carousel }),
+        ...await studioSurface(rows.studio, { lang: rows.studio.voice.language, editor: () => contextFor(profile(), 'clip_edit', null), carousel, reelKits: () => reelKitsOf(profile()) }),
         ...infographicSurface(rows.studio, { ctx: () => contextFor(profile(), 'infographic', null) }),
         ...(rows.agent ? dmInstructionSurface(rows.agent, dm) : []),
         ...dmContextSurface(dm),

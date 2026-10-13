@@ -5,13 +5,18 @@
  */
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
+import { setLogSink } from '../utils/log.js';
+import { SHOP_EG } from './profile/fixtures.js';
+import { throughJsonb } from './profile/jsonb.js';
+import { OWNER, OTHER, emptyState, installProfileDb, setPlatformOwner } from './profile/testDb.js';
+import { KINDS, type CreatorKind, type CreatorProfile } from './profile/types.js';
 import {
     buildAuthorizeUrl, cutBytes, listVideoStatuses, setThumbnail, isYouTubeReauthError, parseTokenResponse, queryUpload, receivedFromRange, sendBytes,
-    shortDescription, shortTitle, startResumableUpload, tagsFrom, toYouTubeError, videoResource, YouTubeApiError, youtubeHttp,
-    SCOPE_READONLY, SCOPE_UPLOAD,
+    shortDescription, shortTitle, startResumableUpload, tagsFrom, toYouTubeError, videoResource, YouTubeApiError, youtubeCategoryId, youtubeHttp,
+    EDUCATION_CATEGORY_ID, HOWTO_CATEGORY_ID, PEOPLE_BLOGS_CATEGORY_ID, SCOPE_READONLY, SCOPE_UPLOAD,
 } from './youtube.js';
 import {
-    metadataFor, privacyNote, uploadPrivacy, youtubeOptions,
+    metadataFor, privacyNote, publishYouTubePost, uploadPrivacy, youtubeCategoryFor, youtubeOptions,
 } from './youtubePublish.js';
 
 type Seen = { method: string; url: string; headers: Record<string, string>; data: unknown; params: unknown };
@@ -118,9 +123,11 @@ describe('a Short’s words', () => {
         assert.deepEqual(tagsFrom('x #ai #دفتر_ذكي #AI #Shorts'), ['ai', 'دفتر_ذكي', 'Shorts']);
         assert.deepEqual(tagsFrom(null), []);
     });
-    it('the resource: Education, made-for-kids declared false, the language on video and audio', () => {
-        const r = videoResource({ title: 't', description: 'd', tags: [], privacy: 'private', language: 'ar' }) as any;
+    it('the resource: the category it is given, made-for-kids declared false, the language on video and audio', () => {
+        const r = videoResource({ title: 't', description: 'd', tags: [], privacy: 'private', language: 'ar', categoryId: EDUCATION_CATEGORY_ID }) as any;
         assert.equal(r.snippet.categoryId, '27');
+        const other = videoResource({ title: 't', description: 'd', tags: [], privacy: 'private', categoryId: PEOPLE_BLOGS_CATEGORY_ID }) as any;
+        assert.equal(other.snippet.categoryId, '22', 'not Education for everyone');
         assert.equal(r.snippet.defaultAudioLanguage, 'ar');
         assert.ok(!('tags' in r.snippet));
         assert.deepEqual(r.status, { privacyStatus: 'private', selfDeclaredMadeForKids: false, embeddable: true });
@@ -147,7 +154,8 @@ describe('youtubePublish rules', () => {
         assert.equal(privacyNote('private', 'public', false), null, 'made public on YouTube’s side: nothing to say');
     });
     it('the metadata comes from the row: its title option, its caption', () => {
-        const m = metadataFor({ caption: 'سطر\n#ai' }, { title: 'العنوان', language: 'ar' }, 'private');
+        const m = metadataFor({ caption: 'سطر\n#ai' }, { title: 'العنوان', language: 'ar' }, 'private', HOWTO_CATEGORY_ID);
+        assert.equal(m.categoryId, '26', 'the category the caller chose');
         assert.equal(m.title, 'العنوان #Shorts');
         assert.equal(m.description, 'سطر\n#ai\n\n#Shorts');
         assert.deepEqual(m.tags, ['ai']);
@@ -156,7 +164,7 @@ describe('youtubePublish rules', () => {
 });
 
 describe('the resumable upload', () => {
-    const meta = { title: 't', description: 'd', tags: [], privacy: 'private' as const };
+    const meta = { title: 't', description: 'd', tags: [], privacy: 'private' as const, categoryId: '22' };
 
     it('opens a session with the size and type, and returns its Location', async () => {
         const seen = stub(() => ({ status: 200, headers: { location: 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=U1' } }));
@@ -167,6 +175,7 @@ describe('the resumable upload', () => {
         assert.equal(seen[0]!.headers['x-upload-content-length'], '1234');
         assert.equal(seen[0]!.headers['x-upload-content-type'], 'video/mp4');
         assert.equal(seen[0]!.headers.authorization, 'Bearer tok');
+        assert.equal(JSON.parse(String(seen[0]!.data)).snippet.categoryId, '22', 'the session is opened with the creator\'s category');
     });
 
     it('refuses a session answer with no Location', async () => {
@@ -227,5 +236,98 @@ describe('the resumable upload', () => {
         it('reads Range headers', () => {
         assert.equal(receivedFromRange('bytes=0-999'), 1000);
         assert.equal(receivedFromRange(undefined), 0);
+    });
+});
+
+// ─── The category follows the creator (05 R19) ──────────────────────────────────────────────
+
+describe('the category a Short is filed under', () => {
+    it('follows the creator\'s kind: Education for an educator (the owner\'s), Howto & Style for a coach, People & Blogs for the rest', () => {
+        assert.equal(youtubeCategoryId('educator'), '27');
+        assert.equal(youtubeCategoryId('coach'), '26');
+        for (const kind of ['shop', 'agency', 'creator'] as const) assert.equal(youtubeCategoryId(kind), '22', kind);
+        for (const none of [null, undefined]) assert.equal(youtubeCategoryId(none), '22', 'a profile that has not said who they are');
+    });
+
+    it('is Education for exactly one kind: a fixed category for everyone would be the bug R19 is', () => {
+        assert.deepEqual(KINDS.filter((k) => youtubeCategoryId(k) === EDUCATION_CATEGORY_ID), ['educator']);
+        assert.ok(new Set(KINDS.map((k) => youtubeCategoryId(k))).size > 1, 'the categories are not all one');
+    });
+
+    it('is read from the tenant\'s profile context, for the reels', async () => {
+        const asked: string[] = [];
+        const read = async (_: string, purpose: 'clip_copy') => { asked.push(purpose); return { who: { kind: 'shop' } } as never; };
+        assert.equal(await youtubeCategoryFor('anyone', read), '22');
+        assert.deepEqual(asked, ['clip_copy']);
+        assert.equal(await youtubeCategoryFor('anyone', async () => ({ who: { kind: 'educator' } }) as never), '27');
+    });
+
+    describe('when the profile cannot be read', () => {
+        const unreadable = (platformOwner: string | null) => {
+            const db = installProfileDb(emptyState());
+            db.failOn = /FROM creator_profiles/;
+            db.failWith = new Error('connection refused');
+            setPlatformOwner(db, platformOwner);
+            const sink = setLogSink(() => {});
+            return () => { setLogSink(sink); db.restore(); };
+        };
+
+        it('the owner is filed as he always was: Education', async () => {
+            const done = unreadable(OWNER);
+            try { assert.equal(await youtubeCategoryFor(OWNER), '27'); } finally { done(); }
+        });
+
+        it('anyone else is filed under YouTube\'s own default, and the upload goes ahead: a category is not worth a scheduled slot', async () => {
+            const done = unreadable(OWNER);
+            try { assert.equal(await youtubeCategoryFor(OTHER), '22'); } finally { done(); }
+        });
+    });
+});
+
+describe('publishing a Short files it under the creator\'s category', () => {
+    /** A connected channel with a fresh token and the upload scope, as `platform_connections` holds it. */
+    const CONNECTION = { id: 'conn-1', status: 'active', refresh_token: 'refresh', access_token: 'tok', access_expires_at: new Date(Date.now() + 3_600_000), scopes: [SCOPE_UPLOAD] };
+    const post = (creatorId: string) => ({
+        id: 'post-1', creator_id: creatorId, post_type: 'video' as const, caption: 'سطر\n#ai', media_url: 'https://cdn.example/reel.mp4', external_publish_id: null,
+        platform_options: null, cover_url: null,
+    });
+
+    /** The category the session was opened with, for a creator whose stored profile is `profile` (or whose profile read fails). */
+    async function filedUnder(creatorId: string, profile: CreatorProfile | null, fail = false): Promise<string> {
+        const state = emptyState();
+        if (profile) state.profiles.set(creatorId, { profile: throughJsonb(profile), version: 2, activated_at: null, updated_by: null });
+        const db = installProfileDb(state);
+        db.routes.unshift([/FROM platform_connections WHERE creator_id = \$1 AND platform = 'youtube'/, () => ({ rows: [CONNECTION] })]);
+        if (fail) { db.failOn = /FROM creator_profiles/; db.failWith = new Error('connection refused'); }
+        setPlatformOwner(db, OWNER);
+        const seen = stub((s): { status: number; data?: unknown; headers?: Record<string, string> } => {
+            if (s.method === 'GET') return { status: 200, data: Buffer.from('reel'), headers: { 'content-type': 'video/mp4' } };
+            if (s.method === 'POST') return { status: 200, headers: { location: 'https://www.googleapis.com/upload/youtube/v3/videos?upload_id=U9' } };
+            return { status: 200, data: { id: 'vid9', status: { privacyStatus: 'private' } } };
+        });
+        const sink = setLogSink(() => {});
+        try {
+            assert.equal(await publishYouTubePost(post(creatorId)), 'PUBLISHED', 'the upload goes ahead');
+        } finally {
+            setLogSink(sink);
+            db.restore();
+        }
+        const open = seen.find((s) => s.method === 'POST');
+        assert.ok(open, 'a session was opened');
+        return JSON.parse(String(open!.data)).snippet.categoryId;
+    }
+
+    const as = (kind: CreatorKind | null): CreatorProfile => ({ ...SHOP_EG, identity: { ...SHOP_EG.identity, kind } });
+
+    it('opens the upload session with the category of the creator\'s kind: Education for an educator, Howto & Style for a coach, People & Blogs for a shop', async () => {
+        assert.equal(await filedUnder(OTHER, as('educator')), '27');
+        assert.equal(await filedUnder(OTHER, as('coach')), '26');
+        assert.equal(await filedUnder(OTHER, as('shop')), '22');
+        assert.equal(await filedUnder(OTHER, as(null)), '22');
+    });
+
+    it('still uploads when the profile cannot be read: the owner as an educator, anyone else under YouTube\'s own default', async () => {
+        assert.equal(await filedUnder(OWNER, null, true), '27');
+        assert.equal(await filedUnder(OTHER, null, true), '22');
     });
 });

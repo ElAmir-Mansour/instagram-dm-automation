@@ -21,10 +21,11 @@ import { queryCount } from '../db/query.js';
 import type { ScheduledPostRow } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
 import { youtubeUploadsPublic } from './appSettings.js';
+import { profileContextOrLegacy, type ProfileContext } from './profile/context.js';
 import { getMediaStore, uploadIdFromUrl } from './storage.js';
 import {
     MAX_THUMBNAIL_BYTES, queryUpload, SCOPE_UPLOAD, sendBytes, setThumbnail, shortDescription, shortTitle, startResumableUpload,
-    tagsFrom, THUMBNAIL_MIME_TYPES, youtubeHttp, type UploadState, type VideoMetadata, type YouTubePrivacy,
+    tagsFrom, THUMBNAIL_MIME_TYPES, youtubeCategoryId, youtubeHttp, PEOPLE_BLOGS_CATEGORY_ID, type UploadState, type VideoMetadata, type YouTubePrivacy,
 } from './youtube.js';
 import { getAccessToken, noteYouTubeFailure } from './youtubeConnections.js';
 
@@ -71,14 +72,34 @@ export function privacyNote(asked: YouTubePrivacy, actual: string | null | undef
     return publicOn ? `Uploaded to YouTube as ${is}.` : `Uploaded to YouTube as ${is} (Settings → YouTube → "Upload Shorts as public" is off).`;
 }
 
+/**
+ * The category a creator's Shorts are filed under: their kind's (`youtubeCategoryId`), read from the profile context of the reels
+ * purpose (a Short is a reel; `identity.kind` is in every context's base). The category is metadata YouTube lets anyone change, so
+ * this never fails an upload: a profile that cannot be read is the owner's kind for the owner (`profileContextOrLegacy`: an
+ * educator, '27', what every upload was) and People & Blogs, YouTube's own default, for anyone else (logged, and the one
+ * thing left to correct by hand in YouTube Studio). Failing a scheduled Short over a category would cost the slot. `read` is for tests.
+ */
+export async function youtubeCategoryFor(
+    creatorId: string,
+    read: (creatorId: string, purpose: 'clip_copy') => Promise<ProfileContext<'clip_copy'>> = profileContextOrLegacy,
+): Promise<string> {
+    try {
+        return youtubeCategoryId((await read(creatorId, 'clip_copy')).who.kind);
+    } catch (err) {
+        log('warn', 'youtube.category_profile_unreadable', { creator_id: creatorId, ...describeError(err) });
+        return PEOPLE_BLOGS_CATEGORY_ID;
+    }
+}
+
 export function metadataFor(
-    post: Pick<ScheduledPostRow, 'caption'>, options: YouTubePostOptions, privacy: YouTubePrivacy
+    post: Pick<ScheduledPostRow, 'caption'>, options: YouTubePostOptions, privacy: YouTubePrivacy, categoryId: string
 ): VideoMetadata {
     return {
         title: shortTitle(options.title, post.caption),
         description: shortDescription(post.caption),
         tags: tagsFrom(post.caption),
         privacy,
+        categoryId,
         language: options.language ?? null,
     };
 }
@@ -152,7 +173,9 @@ export async function publishYouTubePost(post: YouTubePublishTarget): Promise<Sc
             if (state.state === 'gone') session = null;
         }
         if (!session) {
-            session = await startResumableUpload(accessToken, metadataFor(post, options, privacy), video.data.length, video.mimeType);
+            // Read only when a session is opened: a resumed upload keeps the category its session was opened with.
+            const categoryId = await youtubeCategoryFor(post.creator_id);
+            session = await startResumableUpload(accessToken, metadataFor(post, options, privacy, categoryId), video.data.length, video.mimeType);
             // Before the first byte, so a crash from here on resumes instead of uploading twice.
             await queryCount(`UPDATE scheduled_posts SET external_publish_id = $2 WHERE id = $1`, [post.id, UPLOAD_SESSION_PREFIX + session]);
             state = { state: 'partial', received: 0 };
