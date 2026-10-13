@@ -67,15 +67,18 @@ import {
 } from '../studio/testFixtures.js';
 import { videoResource } from '../youtube.js';
 import { getStudioSettings } from '../studio/settings.js';
+import { campaignSeeds, legacyCampaignSeeds } from './campaignSeeds.js';
 import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from './golden.js';
 import { contextFor, legacyContext, profileContext, profileContextOrLegacy, type ProfileContext } from './context.js';
 import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
+import { LEGACY_COURSE_MAPPINGS } from './legacyCourseMappings.js';
 import {
     dmContextSurface, dmFallbackSurface, dmInstructionSurface, growthSurface, infographicSurface, SAY, studioSurface, type GrowthRows, type SurfaceEntry,
 } from './promptSurface.js';
+import { planOwnerOffers } from './ownerOffers.js';
 import { emptyState, installProfileDb, OWNER, setPlatformOwner, studioRow } from './testDb.js';
-import { scramble, throughJsonb } from './testSupport.js';
+import { inside, loadCampaignsPage, scramble, throughJsonb } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
 import { GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
 
@@ -415,31 +418,23 @@ describe('Growth coach golden prompts', () => {
 
 describe('Campaign golden seeds', () => {
     /**
-     * The REAL shipped file, run in a bare context. It only declares CampaignsPage and registers its
-     * actions; the stubs are what `showBulkImportModal` touches on the way to filling `pendingImport`
-     * (the modal markup is not pinned: it is chrome, and `showModal` swallows it).
+     * The REAL shipped file, run in a bare context (testSupport.ts). It only declares CampaignsPage and registers its
+     * actions; the stubs are what `showBulkImportModal` touches on the way to filling `pendingImport` (the modal markup is
+     * not pinned: it is chrome, and `showModal` swallows it).
      */
-    const loadCampaignsPage = (): vm.Context => {
-        const file = new URL('../../../dashboard/js/pages/campaigns.js', import.meta.url);
-        const ctx = vm.createContext({
-            UI: { registerActions: () => {}, showModal: () => {}, formatNumber: (n: unknown) => String(n), button: () => '' },
-            html: Object.assign(() => '', { raw: (s: unknown) => s }),
-            t: (key: string) => key,
-        });
-        vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: 'dashboard/js/pages/campaigns.js' });
-        return ctx;
-    };
-    // Serialised inside the context, so what comes out belongs to this realm.
-    const inside = (ctx: vm.Context, expression: string): any => JSON.parse(vm.runInContext(`JSON.stringify(${expression})`, ctx));
+    const page = loadCampaignsPage();
 
-    it('COURSE_MAPPINGS: the DM and replies the bulk import seeds for his nine courses', () => {
-        const mappings = inside(loadCampaignsPage(), 'CampaignsPage.COURSE_MAPPINGS');
-        assert.equal(Object.keys(mappings).length, 9);
-        matchGoldenJson('campaigns.course-mappings', mappings);
+    it('LEGACY_COURSE_MAPPINGS: the DM and replies the bulk import seeded for his nine courses, now held on the server', () => {
+        assert.equal(Object.keys(LEGACY_COURSE_MAPPINGS).length, 9);
+        matchGoldenJson('campaigns.course-mappings', LEGACY_COURSE_MAPPINGS);
     });
 
-    it('showBulkImportModal: what each imported course is seeded with: the first mapping its name contains, else the Arabic fallback', () => {
-        const ctx = loadCampaignsPage();
+    it('the dashboard carries none of them any more: the seeds come from the API', () => {
+        assert.equal(inside(page, 'typeof CampaignsPage.COURSE_MAPPINGS'), 'undefined');
+        assert.equal(inside(page, 'typeof CampaignsPage.seedFor'), 'function');
+    });
+
+    it('showBulkImportModal: what each imported course is seeded with: the first seed its name contains, else the Arabic fallback', () => {
         const course = (id: number, name: string) => ({ id, name, url: `https://www.udemy.com/course/golden-${id}/?couponCode=GOLDEN${id}`, code: `GOLDEN${id}`, redemptions: id * 7 });
         // One per mapping key, in the order of the table, named as the courses are. 'Problem Solving - with C#'
         // contains two keys ('problem solving' and 'c#'): the first in table order wins. The last has none.
@@ -455,11 +450,19 @@ describe('Campaign golden seeds', () => {
             course(9, 'C# For Beginners [in Arabic]'),
             course(10, 'Rust Systems Programming [in Arabic] - Part 1'),
         ];
-        vm.runInContext(`CampaignsPage.showBulkImportModal(${JSON.stringify(courses)})`, ctx);
-        const rows = inside(ctx, 'CampaignsPage.pendingImport');
-        assert.equal(rows.length, courses.length);
-        assert.deepEqual(rows.map((r: { matched: boolean }) => r.matched), [...Array(9).fill(true), false]);
-        matchGoldenJson('campaigns.import-rows', rows);
+        // The seeds are what the API hands the page. Both ways the owner can come by them must write the same rows into the
+        // same golden: his nine as the fallback answers them (`legacyCampaignSeeds`, before his offers carry them), and the
+        // seeds of the profile that has them (`campaignSeeds`, after `scripts/seed-owner-offers.mts`).
+        const fromOffers = campaignSeeds(planOwnerOffers(profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH)).next);
+        assert.deepStrictEqual(fromOffers, legacyCampaignSeeds(), 'his offers give the seeds his fallback gives, in the same order');
+        for (const [label, seeds] of [['the legacy fallback', legacyCampaignSeeds()], ['his offers', fromOffers]] as const) {
+            const ctx = loadCampaignsPage();
+            vm.runInContext(`CampaignsPage.showBulkImportModal(${JSON.stringify(courses)}, ${JSON.stringify(seeds)})`, ctx);
+            const rows = inside(ctx, 'CampaignsPage.pendingImport');
+            assert.equal(rows.length, courses.length, label);
+            assert.deepEqual(rows.map((r: { matched: boolean }) => r.matched), [...Array(9).fill(true), false], label);
+            matchGoldenJson('campaigns.import-rows', rows);
+        }
     });
 });
 

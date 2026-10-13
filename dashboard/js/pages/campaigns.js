@@ -947,7 +947,7 @@ const CampaignsPage = {
         if (!file) return;
 
         const reader = new FileReader();
-        reader.onload = (event) => {
+        reader.onload = async (event) => {
             try {
                 const rows = this.parseCSV(event.target.result);
                 if (rows.length <= 1) {
@@ -990,7 +990,11 @@ const CampaignsPage = {
                     UI.toast(t('campaigns.bulk.rowsSkipped', { count: skippedRows }), 'error');
                 }
 
-                this.showBulkImportModal(uniqueCourses);
+                // The seeds are the tenant's own (their offers' campaigns), so they are asked for per import and
+                // not cached: a tenant switch or a profile edit is then never answered with the last one's.
+                const seeds = await this.loadSeeds();
+                if (seeds === null) return;
+                this.showBulkImportModal(uniqueCourses, seeds);
             } catch (err) {
                 UI.toast(t('campaigns.bulk.parseError', { message: err.message }), 'error');
             }
@@ -1029,74 +1033,50 @@ const CampaignsPage = {
     },
 
     /**
-     * Seed copy for known courses. This is CONTENT, not chrome: it is the
-     * Arabic the creator actually sends, so it is not part of the i18n catalog
-     * and does not change with the interface language.
+     * The wording each imported course starts from: `GET /api/profile/campaign-seeds`, one seed per offer of the
+     * ACTIVE tenant that has a campaign, in the order the import tries them. It used to be a table in this file, nine
+     * entries of one creator's Arabic; it is the tenant's own offers now (docs/onboarding/05, P13).
+     *
+     * Resolves to the list (empty for a tenant with no campaigns yet: every row is then generated), or to null when it
+     * could not be read: the caller stops there, because importing without the seeds would quietly stamp generic text on
+     * courses that have curated copy, and a retry costs one click.
      */
-    COURSE_MAPPINGS: {
-        'agentic ai': {
-            triggerKeywords: 'ذكاء اصطناعي, ايجنتك, عميل ذكي, agentic ai, ai agent',
-            dmTemplate: `أهلاً بك {username}! 👋\nسعيد جداً باهتمامك بدورة "Agentic AI: الدليل العملي لبناء ما تحتاجه بالذكاء الاصطناعي". 🤖🚀\n\nهذا هو رابط التسجيل المجاني المباشر الخاص بك (الكوبون مفعّل تلقائياً):\n🔗 {url}\n\n💡 الكوبون صالح لفترة محدودة ولـ 100 مقعد فقط. سارع بالتسجيل واستمتع بالرحلة التعليمية!\nإذا كان لديك أي استفسار، أنا هنا دائماً لمساعدتك. بالتوفيق! ✨`,
-            publicReplies: 'تم إرسال رابط الدورة والتفاصيل إلى الخاص بك يا {username}! تفقد رسائلك 📩🤖 | أهلاً بك {username}! شيك الخاص أرسلت لك كوبون التسجيل المجاني 🚀✨ | تم الإرسال على الخاص بنجاح! بالتوفيق في رحلتك التعليمية 🎓🌟',
-        },
-        golang: {
-            triggerKeywords: 'جولانج, كورس جو, لغة جو, golang, go lang',
-            dmTemplate: `أهلاً بك {username}! 👋\nسعيد باهتمامك بتعلم لغة Go القوية مع دورة "GoLang Course: Learn Go in Arabic". 🐹🚀\n\nإليك رابط التسجيل المجاني المباشر الخاص بك (الكوبون مفعّل):\n🔗 {url}\n\n💡 الكوبون مخصص لـ 100 طالب وصالح لفترة محدودة. سجل الآن لتبدأ في بناء تطبيقات عالية الأداء!\nأراك داخل الدورة! 🎓✨`,
-            publicReplies: 'شيك الخاص يا {username}! أرسلت لك رابط الدورة المجاني 🐹📩 | تم إرسال كوبون لغة Go إلى الخاص بك بنجاح! بالتوفيق 🚀 | أهلاً {username}، تفقد صندوق الوارد للبدء فوراً! 🎓💡',
-        },
-        swift: {
-            triggerKeywords: 'سويفت, برمجة ايفون, تطبيقات ايفون, swift programming, swift arabic',
-            dmTemplate: `أهلاً بك {username}! 👋\nخطوة رائعة لدخول عالم برمجة تطبيقات الآيفون والآيباد! 📱✨\nإليك رابط التسجيل المجاني المباشر في دورة "Swift Programming Language | in Arabic":\n🔗 {url}\n\n💡 الكوبون متاح لأول 100 مقعد فقط. لا تفوت الفرصة وابدأ الآن!\nبالتوفيق لك في مسيرتك البرمجية! 🚀`,
-            publicReplies: 'أهلاً بك {username}! تم إرسال رابط كورس سويفت على الخاص 📩📱 | شيك الخاص يا {username} لتجد كوبون الدورة المجاني! 🚀✨ | تم الإرسال بنجاح! بالتوفيق في برمجة تطبيقات iOS 🍏💡',
-        },
-        css3: {
-            triggerKeywords: 'سي اس اس, تصميم ويب, css3, web design',
-            dmTemplate: `أهلاً بك {username}! 👋\nهل أنت جاهز لتصميم مواقع ويب احترافية وجذابة؟ 🎨💻\nإليك رابط التسجيل المجاني المباشر في دورة "CSS3 For Beginners [In Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لفترة محدودة ومحدود بـ 100 عملية تسجيل.\nبالتوفيق وسأكون سعيداً برؤية تصميماتك! 🚀✨`,
-            publicReplies: 'تم إرسال كوبون كورس CSS3 إلى الخاص بك يا {username}! 🎨📩 | تفقد الخاص {username} لتجد رابط التسجيل المجاني! 💻✨ | أهلاً بك! تم الإرسال بنجاح، بالتوفيق في مسيرتك في تصميم الويب 🚀🌟',
-        },
-        html5: {
-            triggerKeywords: 'اتش تي ام ال, بناء موقع, html5, html beginners',
-            dmTemplate: `أهلاً بك {username}! 👋\nأول خطوة في تطوير الويب تبدأ من هنا! 🌐💻\nإليك رابط التسجيل المجاني المباشر لدورة "HTML5 For Beginners [In Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لأول 100 طالب مسجل فقط. احجز مقعدك الآن!\nبالتوفيق لك في بدايتك الموفقة! 🚀✨`,
-            publicReplies: 'أرسلت لك رابط كورس HTML5 على الخاص يا {username}! 🌐📩 | تفقد رسائلك {username} للتسجيل في الدورة مجاناً! 🚀 | تم إرسال الكوبون بنجاح! بداية موفقة في تطوير الويب 💻✨',
-        },
-        'problem solving': {
-            triggerKeywords: 'حل مسائل, بروبلم سولفينج, problem solving, c# problem',
-            dmTemplate: `أهلاً بك {username}! 👋\nحل المسائل هو السلاح السري لكل مبرمج محترف! 🧠💻\nإليك رابط التسجيل المجاني في دورة "Problem Solving - with C# [in Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لـ 100 مقعد فقط. سجل الآن وابدأ بتدريب عقلك البرمجي!\nبالتوفيق لك! 🚀✨`,
-            publicReplies: 'تم إرسال رابط كورس حل المسائل على الخاص يا {username}! 🧠📩 | تفقد الخاص {username} لتجد الكوبون المجاني! 🚀✨ | تم الإرسال بنجاح! تمنياتي لك بالتوفيق في صقل مهاراتك المنطقية 💻🌟',
-        },
-        java: {
-            triggerKeywords: 'كورس جافا, جافا, java for beginners, java arabic',
-            dmTemplate: `أهلاً بك {username}! 👋\nتعلم واحدة من أكثر لغات البرمجة طلباً واستخداماً في الشركات! ☕️🚀\nإليك رابط التسجيل المجاني المباشر في دورة "Java for Beginners [in Arabic]":\n🔗 {url}\n\n💡 الكوبون مخصص لـ 100 طالب وصالح لفترة محدودة. سجل الآن لتبني أساساً قوياً!\nبالتوفيق لك! 🎓✨`,
-            publicReplies: 'تم إرسال رابط كورس الجافا على الخاص يا {username}! ☕️📩 | شيك الخاص {username} للحصول على الكوبون المجاني 🚀 | تم الإرسال بنجاح! بالتوفيق في مسيرتك البرمجية 💻✨',
-        },
-        python: {
-            triggerKeywords: 'بايثون, بايثون للمبتدئين, python arabic, python course',
-            dmTemplate: `أهلاً بك {username}! 👋\nالبداية الأسهل والأكثر متعة في عالم البرمجة هي لغة بايثون! 🐍🚀\nإليك رابط التسجيل المجاني لدورة "Python For Beginners [in Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لأول 100 طالب مسجل فقط. احجز مقعدك الآن!\nأتمنى لك رحلة ممتعة وموفقة! ✨`,
-            publicReplies: 'شيك الخاص يا {username}! أرسلت لك رابط كورس بايثون المجاني 🐍📩 | تم إرسال الكوبون إلى الخاص بك بنجاح! بالتوفيق 🚀 | أهلاً {username}، تفقد صندوق الوارد للبدء فوراً! 🎓💡',
-        },
-        'c#': {
-            triggerKeywords: 'سي شارب, كورس سي شارب, csharp, c# beginners',
-            dmTemplate: `أهلاً بك {username}! 👋\nتعلم لغة C# القوية لبناء تطبيقات سطح المكتب، الألعاب، والمواقع! 🎮💻\nإليك رابط التسجيل المجاني المباشر لدورة "C# For Beginners [in Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لـ 100 مقعد فقط ولفترة محدودة. احرص على التسجيل الآن!\nبالتوفيق وسأكون سعيداً بمتابعة تقدمك! 🚀✨`,
-            publicReplies: 'تم إرسال رابط كورس سي شارب على الخاص يا {username}! 💻📩 | تفقد رسائل الخاص {username} لتجد الكوبون المجاني 🚀 | تم الإرسال بنجاح! بالتوفيق في مسيرتك البرمجية 🎓🌟',
-        },
+    async loadSeeds() {
+        try {
+            const answer = await API.getCampaignSeeds();
+            return Array.isArray(answer && answer.seeds) ? answer.seeds : [];
+        } catch (err) {
+            console.error('Campaign seeds error:', err);
+            UI.toast(t('campaigns.bulk.seedsFailed'), 'error');
+            return null;
+        }
     },
 
-    showBulkImportModal(courses) {
+    /**
+     * The seed a course name picks: the first, in order, whose `name_match` the lower-cased name contains. A seed
+     * with no `name_match` picks nothing (an empty string is a substring of every name).
+     */
+    seedFor(courseName, seeds) {
+        const nameLower = String(courseName || '').toLowerCase();
+        for (const seed of seeds) {
+            const key = String((seed && seed.name_match) || '').trim().toLowerCase();
+            if (key && nameLower.includes(key)) return seed;
+        }
+        return null;
+    },
+
+    showBulkImportModal(courses, seeds = []) {
         const campaignData = courses.map((course, index) => {
-            const nameLower = String(course.name || '').toLowerCase();
-            let mapping = null;
-            for (const key in this.COURSE_MAPPINGS) {
-                if (nameLower.includes(key)) { mapping = this.COURSE_MAPPINGS[key]; break; }
-            }
+            const mapping = this.seedFor(course.name, seeds);
 
             let triggerKeywords;
             let dmTemplate;
             let publicReplies;
 
             if (mapping) {
-                triggerKeywords = mapping.triggerKeywords;
-                dmTemplate = mapping.dmTemplate.replace(/{url}/g, course.url);
-                publicReplies = mapping.publicReplies;
+                triggerKeywords = mapping.trigger_keyword;
+                dmTemplate = mapping.dm_template.replace(/{url}/g, course.url);
+                publicReplies = mapping.public_reply_template;
             } else {
                 const cleanName = String(course.name || '').split('[')[0].split('|')[0].split('-')[0].trim();
                 // Only the course's own words. «كورس، كوبون، رابط» used to be stamped on
@@ -1116,6 +1096,9 @@ const CampaignsPage = {
                 dmTemplate,
                 publicReplies,
                 matched: !!mapping,
+                // Only a seed that asks for whole-word matching says so: a substring one is what the server
+                // creates without being told, so its row carries nothing extra.
+                ...(mapping && mapping.match === 'word' ? { matchMode: 'word' } : {}),
             };
         });
 
@@ -1151,9 +1134,9 @@ const CampaignsPage = {
                         </div>
                         <div>
                             <label class="form-label" for="import-dm-${c.index}">${t('campaigns.dmTemplate')}</label>
-                            <!-- Seed copy from COURSE_MAPPINGS: authored Arabic,
-                                 and the operator edits it here before it is sent
-                                 to real customers. -->
+                            <!-- Seed copy from the tenant's offers (campaign seeds):
+                                 authored text, and the operator edits it here
+                                 before it is sent to real customers. -->
                             <textarea class="field-textarea bulk-import-textarea user-content" dir="auto" lang="ar"
                                       id="import-dm-${c.index}">${c.dmTemplate}</textarea>
                         </div>
@@ -1200,6 +1183,8 @@ const CampaignsPage = {
                 dm_template,
                 public_reply_template: public_reply_template || null,
                 post_id: null,
+                // Only when the seed asked for whole-word matching (see showBulkImportModal).
+                ...(original.matchMode === 'word' ? { match_mode: 'word' } : {}),
             });
         }
 

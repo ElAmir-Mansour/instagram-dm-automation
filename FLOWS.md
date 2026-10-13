@@ -1304,13 +1304,33 @@ until it has one, the virtual profile its legacy settings describe (`version: nu
    language) and `tenantTimezone` (**`src/services/growth/overview.ts:416`**: the heatmap, after the
    audience's own override). The DM's knowledge base is *not* in a context: it stays on `ai_agents`.
 
-**`GET /api/profile`** — **`src/routes/profile.ts:61`**, mounted below `resolveTenant`
-(**`src/routes/api.ts:1509`**), operator or owner (**:58**), like every read of the Studio's and Growth's
+**`GET /api/profile`** — **`src/routes/profile.ts:63`**, mounted below `resolveTenant`
+(**`src/routes/api.ts:1509`**), operator or owner (**:60**), like every read of the Studio's and Growth's
 settings: a `viewer` sees the account's numbers, not how it is run (403 otherwise). Answers
 `{ profile, version, stored, activationMissing }` — `stored: false` and `version: null` for the
 virtual profile, `activationMissing` the fields the wizard still needs.
 
-**`PATCH /api/profile { version, patch }`** — **`src/routes/profile.ts:65`**, owner only (**:59**).
+**`GET /api/profile/campaign-seeds`** — **`src/routes/profile.ts:72`**, operator or owner (**:60**). What the
+Campaigns screen's "Import from CSV" starts each imported course from; it replaced a table of nine
+mappings that the dashboard carried for the owner. Answers `{ seeds, source }`.
+
+1. **`src/services/profile/campaignSeeds.ts:108`** — `readCampaignSeeds` loads the session tenant's profile
+   (`loadProfile`) and **`:77`** `campaignSeeds` turns each offer that has a `campaign` and a `name_match` into a
+   seed, in the offers' order: `trigger_keyword` (the keywords joined on `", "`), `dm_template` (as it is, with
+   `{url}` and `{username}`), `public_reply_template` (the replies joined on `" | "`), `match` and `name_match`.
+   An offer with no `name_match` is not a seed: `""` is a substring of every course name.
+2. **The owner's fallback (`:108`–`:112`).** While a profile yields no seed AND the tenant is the platform owner
+   (`getPlatformOwnerId`, found and equal; a lookup that finds nobody is *not* him), the answer is his nine
+   (`legacyCourseMappings.ts`), `source: 'legacy'`. Nobody else is ever answered them: a tenant with no campaign
+   gets `[]`. `scripts/seed-owner-offers.mts --apply` puts the nine on his offers, after which `source` reads
+   `profile` and the fallback is dead code.
+3. **`dashboard/js/pages/campaigns.js:945`** — `handleCSVSelect` asks for the seeds once per import
+   (`loadSeeds`, **:1044**; a failed read stops the import with a toast, it never imports generic text over
+   curated copy) and `showBulkImportModal(courses, seeds)` (**:1068**) gives each course the first seed, in
+   order, whose lower-cased `name_match` its lower-cased name contains (`seedFor`, **:1059**). A course
+   that matches none is generated, as before.
+
+**`PATCH /api/profile { version, patch }`** — **`src/routes/profile.ts:76`**, owner only (**:61**).
 
 1. **`src/services/profile/patch.ts:169`** — `patchProfile` refuses a body that is not
    `{ version, patch }` (400, one problem), and a patch nested deeper than any profile (400).
@@ -1337,7 +1357,7 @@ virtual profile, `activationMissing` the fields the wizard still needs.
    profile on their own (a colour that is no colour) is repaired by a valid merged result, which is
    stored as version 1 (`startFromCaller`); otherwise version 1 is the legacy baseline (source
    `backfill`) and the patch is version 2. The profile cache is cleared after the commit.
-6. **`src/routes/profile.ts:70`** — the audit row `profile.write`: `detail.paths` names the
+6. **`src/routes/profile.ts:81`** — the audit row `profile.write`: `detail.paths` names the
    top-level sections that changed and `detail.version` the new version. **Never a value.**
 
 > **Why the version check comes before the merge.** A patch is a *diff against what its author saw*.

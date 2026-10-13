@@ -3,8 +3,9 @@
  *
  * Mounted BELOW `resolveTenant` in api.ts, so every route acts as the session's tenant.
  *
- *   GET   /     { profile, version, stored, activationMissing }    operator or owner
- *   PATCH /     { version, patch }  →  the same, after the change  owner only
+ *   GET   /                { profile, version, stored, activationMissing }    operator or owner
+ *   GET   /campaign-seeds  { seeds, source }  what the bulk import seeds from  operator or owner
+ *   PATCH /                { version, patch }  →  the same, after the change  owner only
  *
  * `version` is what makes a write safe: a PATCH names the version it was written against and is refused with 409
  * (and `currentVersion` in the body) when the profile has moved on. `stored` is false for a tenant whose profile is
@@ -18,6 +19,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
+import { readCampaignSeeds } from '../services/profile/campaignSeeds.js';
 import { patchProfile, readProfileState } from '../services/profile/patch.js';
 import { ProfileError } from '../services/profile/store.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
@@ -60,6 +62,15 @@ const canEdit = requireTenantRole('owner');
 
 profileRouter.get('/', canOperate, handle('profile.read_failed', 'Failed to read the profile.', async (req, res) => {
     res.json(await readProfileState(getTenantId(req)));
+}));
+
+/**
+ * What the Campaigns screen's bulk import starts each imported course from (`campaignSeeds.ts`, P13): `{ seeds, source }`, one
+ * seed per offer of this tenant that has a campaign. Operator-level like the profile itself, and for the same reason it is
+ * not a `viewer`'s: it is the wording of the replies this account sends. Reads only; nothing here writes or is audited.
+ */
+profileRouter.get('/campaign-seeds', canOperate, handle('profile.campaign_seeds_failed', 'Failed to read the campaign seeds.', async (req, res) => {
+    res.json(await readCampaignSeeds(getTenantId(req)));
 }));
 
 profileRouter.patch('/', canEdit, handle('profile.save_failed', 'Failed to save the profile.', async (req, res) => {

@@ -5,14 +5,18 @@
  * Pinned: who may read (an operator or an owner, like the Studio's and Growth's settings) and who may write (an owner), that the router is mounted below `resolveTenant`,
  * the shape of every answer (success, 409 with the current version, 400 with every problem, 503), and that a change is
  * audited as `profile.write` with the names of the sections it changed and never a value.
+ *
+ * `GET /api/profile/campaign-seeds` (P13) is operator-level like the profile itself; it answers the session's tenant's seeds, the owner's
+ * nine only for the platform owner while his offers carry none, and never to anyone else.
  */
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { AUDIT_ACTIONS, isAuditAction } from '../services/audit.js';
+import { campaignSeeds, legacyCampaignSeeds } from '../services/profile/campaignSeeds.js';
 import { resetProfileTableWarning } from '../services/profile/store.js';
-import { installProfileDb, OWNER, type ProfileDb, seededState, type State, USER } from '../services/profile/testDb.js';
-import { richProfile, throughJsonb } from '../services/profile/testSupport.js';
-import { resolveTenant, type TenantRole } from '../services/tenant.js';
+import { installProfileDb, OTHER, OWNER, type ProfileDb, seededState, setPlatformOwner, type State, USER } from '../services/profile/testDb.js';
+import { assertNoOwnerMarkers, richProfile, throughJsonb } from '../services/profile/testSupport.js';
+import { invalidateTenantCache, resolveTenant, type TenantRole } from '../services/tenant.js';
 import { setLogSink } from '../utils/log.js';
 import apiRouter from './api.js';
 import { profileRouter } from './profile.js';
@@ -79,13 +83,14 @@ describe('the profile router', () => {
         assert.ok(profileAt > tenantAt, 'the profile router comes after resolveTenant');
     });
 
-    it('GET is operator-level and PATCH is owner-only, and there is no other route', () => {
+    it('GET is operator-level, the campaign seeds too, and PATCH is owner-only, and there is no other route', () => {
         const guardOf = (layer: Layer): string | null => layer.route!.stack.map((s) => s.handle?.minimumRole).find((m): m is string => typeof m === 'string') ?? null;
         assert.equal(guardOf(layerFor('get', '/')), 'operator');
+        assert.equal(guardOf(layerFor('get', '/campaign-seeds')), 'operator');
         assert.equal(guardOf(layerFor('patch', '/')), 'owner');
         assert.deepEqual(
             (profileRouter as unknown as { stack: Layer[] }).stack.flatMap((l) => (l.route ? Object.keys(l.route.methods).map((m) => `${m.toUpperCase()} ${l.route!.path}`) : [])).sort(),
-            ['GET /', 'PATCH /'],
+            ['GET /', 'GET /campaign-seeds', 'PATCH /'],
             'no other route: nothing mutating hides without a guard',
         );
     });
@@ -318,5 +323,125 @@ describe('PATCH /api/profile', () => {
         const res = await call('patch', { version: 3, patch: { identity: { niche: 'kept' } } });
         assert.equal(res.statusCode, 200);
         assert.equal((state.profiles.get(OWNER)!.profile as any).identity.niche, 'kept');
+    });
+});
+
+// ─── GET /api/profile/campaign-seeds (P13) ───────────────────────────────────────────────────
+
+describe('GET /api/profile/campaign-seeds', () => {
+    /** `richProfile()` carries a campaign on its program: this is the same tenant with none. */
+    const plainProfile = () => {
+        const p = richProfile();
+        p.offers = p.offers.map(({ campaign: _campaign, ...offer }) => offer);
+        return p;
+    };
+    const seedsLayer = (): Layer => layerFor('get', '/campaign-seeds');
+
+    async function callSeeds(session: Record<string, unknown> = {}) {
+        const res = fakeRes();
+        const handler = seedsLayer().route!.stack.at(-1)!.handle;
+        await handler({ params: {}, query: {}, headers: {}, body: {}, session: { userId: USER, role: 'user', tenantId: OWNER, ...session }, tenantRole: 'operator' }, res, () => {});
+        return res;
+    }
+
+    /** The owner's tenant is the platform owner; the other one is a second tenant. */
+    beforeEach(() => {
+        invalidateTenantCache();
+        setPlatformOwner(db, OWNER);
+    });
+
+    const campaignOffer = (name: string) => ({
+        id: 'plan', kind: 'program' as const, name: 'Plan', order_via: 'dm' as const, url: '', price: '', facts: [], bullets: [], keyword: '', primary: true,
+        campaign: { name_match: name, match: 'substring' as const, keywords: ['plan', 'program'], dm_template: 'Hi {username}: {url}', public_replies: ['Sent!', 'Check your DMs'] },
+    });
+    const storeFor = (creator: string, profile: unknown, version = 1): void => {
+        state.profiles.set(creator, { profile: throughJsonb(profile), version, activated_at: null, updated_by: null });
+    };
+
+    it('the guard refuses a viewer with a 403 and lets an operator and an owner through', async () => {
+        const guard = seedsLayer().route!.stack[0]!.handle;
+        const viewer = fakeRes();
+        let passed = false;
+        await guard({ session: { userId: USER, tenantId: OWNER }, tenantRole: 'viewer', originalUrl: '/api/profile/campaign-seeds' }, viewer, () => { passed = true; });
+        assert.equal(passed, false);
+        assert.equal(viewer.statusCode, 403);
+        assert.equal(viewer.body.code, 'INSUFFICIENT_TENANT_ROLE');
+        assert.equal(viewer.body.requiredRole, 'operator');
+        for (const role of ['operator', 'owner'] as TenantRole[]) {
+            let ok = false;
+            await guard({ session: { userId: USER, tenantId: OWNER }, tenantRole: role, originalUrl: '/api/profile/campaign-seeds' }, fakeRes(), () => { ok = true; });
+            assert.equal(ok, true, role);
+        }
+    });
+
+    it('is mounted below resolveTenant with the rest of the profile router: it acts as the session\'s tenant', () => {
+        const stack = (apiRouter as unknown as { stack: Layer[] }).stack;
+        assert.ok(stack.findIndex((l) => !l.route && l.handle === profileRouter) > stack.findIndex((l) => !l.route && l.handle === resolveTenant));
+    });
+
+    it('answers { seeds, source } with the session\'s tenant\'s own seeds, in its offers\' order', async () => {
+        storeFor(OTHER, { ...richProfile(), offers: [campaignOffer('first'), { ...campaignOffer('second'), id: 'two', primary: false }] });
+        const res = await callSeeds({ tenantId: OTHER });
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(Object.keys(res.body), ['seeds', 'source']);
+        assert.equal(res.body.source, 'profile');
+        assert.deepEqual(res.body.seeds.map((s: { name_match: string }) => s.name_match), ['first', 'second']);
+        assert.deepEqual(res.body.seeds[0], {
+            name_match: 'first', match: 'substring', trigger_keyword: 'plan, program', dm_template: 'Hi {username}: {url}', public_reply_template: 'Sent! | Check your DMs',
+        });
+    });
+
+    it('the platform owner, while his offers carry no campaign, is answered his nine: `source: legacy`', async () => {
+        storeFor(OWNER, plainProfile());
+        const res = await callSeeds({ tenantId: OWNER });
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.source, 'legacy');
+        assert.deepEqual(res.body.seeds, legacyCampaignSeeds());
+        assert.equal(res.body.seeds.length, 9);
+    });
+
+    it('the platform owner whose offers carry campaigns is answered those, and not the built-in nine', async () => {
+        storeFor(OWNER, { ...richProfile(), offers: [campaignOffer('mine')] });
+        const res = await callSeeds({ tenantId: OWNER });
+        assert.equal(res.body.source, 'profile');
+        assert.deepEqual(res.body.seeds, campaignSeeds({ offers: [campaignOffer('mine')] }));
+    });
+
+    it('ANOTHER tenant with no campaigns is answered none: never the owner\'s nine, nor any word of them', async () => {
+        storeFor(OTHER, plainProfile());
+        const res = await callSeeds({ tenantId: OTHER });
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(res.body, { seeds: [], source: 'profile' });
+        assertNoOwnerMarkers(JSON.stringify(res.body), 'another tenant\'s answer');
+    });
+
+    it('a tenant with no stored profile and no settings of its own is answered none too', async () => {
+        const res = await callSeeds({ tenantId: OTHER });
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(res.body, { seeds: [], source: 'profile' });
+    });
+
+    it('a read writes nothing and audits nothing', async () => {
+        storeFor(OWNER, plainProfile());
+        await callSeeds({ tenantId: OWNER });
+        assert.deepEqual(writes(), []);
+        assert.equal(audits().length, 0);
+    });
+
+    it('is a 500 that leaks nothing when the database fails', async () => {
+        db.failOn = /creator_profiles/;
+        db.failWith = new Error('password authentication failed for user "postgres"');
+        const res = await callSeeds({ tenantId: OTHER });
+        assert.equal(res.statusCode, 500);
+        assert.deepEqual(res.body, { error: 'Failed to read the campaign seeds.' });
+        assert.ok(logs.some((l) => l.event === 'profile.campaign_seeds_failed'));
+    });
+
+    it('is a 500, and nothing in his name, when it cannot be told who the owner is', async () => {
+        setPlatformOwner(db, new Error('connection to 10.0.0.1 refused'));
+        storeFor(OTHER, plainProfile());
+        const res = await callSeeds({ tenantId: OTHER });
+        assert.equal(res.statusCode, 500);
+        assert.deepEqual(res.body, { error: 'Failed to read the campaign seeds.' });
     });
 });
