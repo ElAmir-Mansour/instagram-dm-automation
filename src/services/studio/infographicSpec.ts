@@ -94,6 +94,9 @@ export const BUDGETS = {
     caption: 2200,
 } as const;
 const SLACK = 6;
+/** Likely expert comments Claude prepares a reply for. */
+export const MAX_OBJECTIONS = 3;
+const MAX_REVIEW_TEXT = 700;
 
 /** An SVG path's commands and numbers only: it is drawn as a `d` attribute, never as markup. */
 const SVG_PATH = /^[MmLlHhVvCcSsQqTtAaZz0-9.,\s+-]+$/;
@@ -262,9 +265,32 @@ export const WRITE_SCHEMA = {
             },
         },
         caption: { type: 'string', description: 'The post\'s caption, about this infographic.' },
+        review: {
+            type: 'object',
+            description: 'The practitioner review: what experts will most likely comment, and the reply.',
+            properties: {
+                objections: {
+                    type: 'array',
+                    minItems: 2,
+                    maxItems: MAX_OBJECTIONS,
+                    items: {
+                        type: 'object',
+                        properties: {
+                            comment: { type: 'string', description: 'The comment, as an expert would write it.' },
+                            reply: { type: 'string', description: 'A short, friendly reply in the post\'s language.' },
+                        },
+                        required: ['comment', 'reply'],
+                    },
+                },
+            },
+            required: ['objections'],
+        },
     },
-    required: ['subtitle', 'accent', 'columns', 'caption'],
+    required: ['subtitle', 'accent', 'columns', 'caption', 'review'],
 } as const;
+
+/** The comments experts are likely to post under it, each with a reply ready (the owner's ask, 2026-10-13). */
+export type InfographicReview = { objections: { comment: string; reply: string }[] };
 
 export interface WriteRequest {
     topic: string;
@@ -322,6 +348,12 @@ export function writeSystemPrompt(language: 'ar' | 'en'): string {
         '',
         'Be accurate: say only what is true of each technique. If the topic is not something that can be compared, compare the two or three closest ideas it covers.',
         '',
+        'Practitioner review, before you answer. Read your page and caption as a senior engineer who builds this in production today, and who will comment if anything is off:',
+        '- The example must be how real systems do it now. Where teams do it differently (resize on upload, or on demand behind a cache; inline, or in a job queue), word it so it is true either way, or say which setup you assume ("on a cache miss", "in a background worker").',
+        '- No absolutes: not "always", "never", "only", "X is dead". Give the condition each claim depends on.',
+        '- Each trade-off must be the one practitioners actually cite, with its standard fix (e.g. Node.js moves CPU work to worker threads).',
+        '- If a fair objection is fixable on the page, fix the page. Then fill `review.objections` with the 2–3 comments an expert is still most likely to post (a correction, an "it depends", another setup), each with a short, friendly reply that agrees where they are right and shows why the post still holds.',
+        '',
         lang,
     ].join('\n');
 }
@@ -356,8 +388,23 @@ export interface InfographicResult {
     cover_url: string;
     gif_width: number | null;
     gif_fps: number | null;
-    /** Present when the job wrote the infographic: the spec that was rendered, and the caption. */
-    written: { spec: unknown; caption: string; model: string | null } | null;
+    /** Present when the job wrote the infographic: the spec that was rendered, the caption, and the review. */
+    written: { spec: unknown; caption: string; model: string | null; review: InfographicReview | null } | null;
+}
+
+/**
+ * Claude's review as stored: up to MAX_OBJECTIONS comment/reply pairs, each cut to a sane length, or
+ * null. Lenient on purpose: the review helps the owner answer comments, and a malformed one must
+ * never cost the render it came with.
+ */
+export function parseReview(raw: unknown): InfographicReview | null {
+    if (!isPlainObject(raw) || !Array.isArray(raw.objections)) return null;
+    const objections = raw.objections
+        .filter((o: unknown): o is Record<string, unknown> => isPlainObject(o) && typeof o.comment === 'string' && typeof o.reply === 'string')
+        .map((o) => ({ comment: (o.comment as string).trim().slice(0, MAX_REVIEW_TEXT), reply: (o.reply as string).trim().slice(0, MAX_REVIEW_TEXT) }))
+        .filter((o) => o.comment && o.reply)
+        .slice(0, MAX_OBJECTIONS);
+    return objections.length ? { objections } : null;
 }
 
 /** Our own upload URL: `…/api/uploads/<uuid>`, with an optional extension. */
@@ -383,7 +430,9 @@ export function parseInfographicResult(raw: unknown): { ok: true; result: Infogr
         if (!isPlainObject(w) || !isPlainObject(w.spec) || typeof w.caption !== 'string') {
             problems.push('written must be { spec, caption, model }');
         } else {
-            result.written = { spec: w.spec, caption: w.caption, model: typeof w.model === 'string' ? w.model.slice(0, 100) : null };
+            result.written = {
+                spec: w.spec, caption: w.caption, model: typeof w.model === 'string' ? w.model.slice(0, 100) : null, review: parseReview(w.review),
+            };
         }
     }
     return problems.length ? { ok: false, problems } : { ok: true, result };

@@ -302,6 +302,7 @@ const InfographicsPage = {
                         <ul class="ig-problems" aria-label="${t('infographics.problems')}">
                             ${item.problems.map((p) => html`<li dir="auto"><i data-lucide="alert-circle" aria-hidden="true"></i> ${p}</li>`)}
                         </ul>` : ''}
+                    ${this.reviewMarkup(item)}
                     ${when ? html`<p class="ig-when"><i data-lucide="calendar-check" aria-hidden="true"></i>
                         ${t('infographics.scheduledFor', { when: UI.formatDateTime(when) })}
                         <a href="#/posts">${t('infographics.openPosts')}</a></p>` : ''}
@@ -316,6 +317,28 @@ const InfographicsPage = {
                     </div>
                 </div>
             </article>
+        `;
+    },
+
+    /**
+     * The practitioner review (v32): the comments experts are likely to post under it, each with a
+     * reply one tap from the clipboard, so the owner is ready before the first one arrives.
+     */
+    reviewMarkup(item) {
+        const objections = item.review && Array.isArray(item.review.objections) ? item.review.objections : [];
+        if (!objections.length) return '';
+        return html`
+            <details class="ig-review">
+                <summary><i data-lucide="message-square" aria-hidden="true"></i> ${t('infographics.review.title', { n: objections.length })}</summary>
+                <ul>
+                    ${objections.map((o, i) => html`
+                        <li>
+                            <p class="ig-review-comment" dir="auto">“${o.comment}”</p>
+                            <p class="ig-review-reply" dir="auto">${o.reply}</p>
+                            ${UI.button({ variant: 'ghost', size: 'sm', icon: 'copy', label: t('infographics.review.copy'), action: 'infographics:copyReply', data: { id: item.id, index: i } })}
+                        </li>`)}
+                </ul>
+            </details>
         `;
     },
 
@@ -663,6 +686,19 @@ UI.registerActions('infographics', {
             P.showError('ig-new-error', err);
         } finally {
             restore();
+        }
+    },
+
+    async copyReply(el) {
+        const item = InfographicsPage.find(el.dataset.id);
+        const o = item && item.review && item.review.objections ? item.review.objections[Number(el.dataset.index)] : null;
+        if (!o) return;
+        try {
+            await navigator.clipboard.writeText(o.reply);
+            UI.toast(t('infographics.review.copied'));
+        } catch {
+            // No clipboard outside a secure context or in some embedded browsers: say so.
+            UI.toast(t('setup.copyFailed'), 'error');
         }
     },
 

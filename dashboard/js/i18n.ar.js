@@ -3061,6 +3061,9 @@
     'infographics.brand.language': 'اللغة الافتراضية',
     'infographics.brand.save': 'احفظ الهوية',
     'infographics.brand.saved': 'حُفظت الهوية، وتُستخدم في كل إنفوجرافيك جديد.',
+    'infographics.review.title': 'تعليقات متوقعة ({n}) وردودك عليها',
+    'infographics.review.copy': 'انسخ الرد',
+    'infographics.review.copied': 'نُسخ الرد.',
 };
 // Tell a runtime that is already waiting (I18N.ready). Through globalThis, not `I18N`: a
 // top-level `const` is not a global property, and touching it before i18n.js runs would throw.

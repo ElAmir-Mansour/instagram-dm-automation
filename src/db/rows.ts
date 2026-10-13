@@ -1096,6 +1096,8 @@ export interface InfographicRow {
     /** What the template draws (InfographicSpec in infographics.ts). Null until Claude has written it. */
     spec: unknown;
     caption: string | null;
+    /** v32: the comments experts are likely to post, each with a reply (InfographicReview). */
+    review: { objections: { comment: string; reply: string }[] } | null;
     render: InfographicRender | null;
     schedule: InfographicSchedule | null;
     job_id: string | null;

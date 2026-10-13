@@ -4723,3 +4723,12 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .ig-portrait-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .ig-portrait-img { inline-size: 64px; block-size: 64px; border-radius: 50%; object-fit: cover; filter: grayscale(1); border: 2px solid var(--border-subtle); }
 .ig-portrait-empty { display: inline-flex; align-items: center; justify-content: center; color: var(--text-muted); filter: none; }
+
+/* Infographics v32: the likely comments and their replies, under the card's actions. */
+.ig-review { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: var(--space-2) var(--space-3); }
+.ig-review > summary { cursor: pointer; display: flex; align-items: center; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-default); }
+.ig-review > summary [data-lucide] { inline-size: 16px; block-size: 16px; }
+.ig-review ul { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.ig-review li { display: flex; flex-direction: column; gap: var(--space-1); align-items: flex-start; }
+.ig-review-comment { margin: 0; font-size: var(--fs-200); color: var(--text-muted); font-style: italic; }
+.ig-review-reply { margin: 0; font-size: var(--fs-200); color: var(--text-strong); }

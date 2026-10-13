@@ -51,7 +51,7 @@ export type InfographicView = Omit<InfographicRow, 'creator_id'> & {
 };
 
 const VIEW_SQL = `
-    SELECT i.id, i.topic, i.notes, i.language, i.theme, i.pair_theme, i.status, i.spec, i.caption, i.render, i.schedule, i.job_id,
+    SELECT i.id, i.topic, i.notes, i.language, i.theme, i.pair_theme, i.status, i.spec, i.caption, i.review, i.render, i.schedule, i.job_id,
            i.error, i.created_at, i.updated_at, j.status AS job_status, j.progress AS job_progress
       FROM infographics i
       LEFT JOIN studio_jobs j ON j.id = i.job_id
@@ -234,9 +234,10 @@ export async function copyInfographic(creatorId: string, rawId: unknown, body: u
         if (!source.spec) throw new StudioError(409, 'Claude hasn\'t written this infographic yet: wait for it, then copy it.');
         const theme = parseTheme(b.theme, source.theme === 'dark' ? 'light' : 'dark');
         const { rows } = await client.query<{ id: string }>(
-            `INSERT INTO infographics (creator_id, topic, notes, language, theme, status, spec, caption)
-             VALUES ($1, $2, $3, $4, $5, 'rendering', $6::jsonb, $7) RETURNING id`,
-            [creatorId, source.topic, source.notes, source.language, theme, JSON.stringify(source.spec), source.caption]
+            `INSERT INTO infographics (creator_id, topic, notes, language, theme, status, spec, caption, review)
+             VALUES ($1, $2, $3, $4, $5, 'rendering', $6::jsonb, $7, $8::jsonb) RETURNING id`,
+            [creatorId, source.topic, source.notes, source.language, theme, JSON.stringify(source.spec), source.caption,
+                source.review ? JSON.stringify(source.review) : null]
         );
         const copyId = rows[0]!.id;
         await queue(client, creatorId, copyId, renderPayload(copyId, source, theme, settings, source.spec), 'rendering');
