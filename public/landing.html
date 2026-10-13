@@ -41,7 +41,7 @@
   TYPE. The page now carries its own display scale (`--lp-*`, defined below and
   NOT in tokens.css, because the dashboard has no use for a 72px step and
   every file under dashboard/ is version-pinned). H1 is a clamp from 40px to
-  72px. Weight is 500 for Latin display and 600 for Arabic — the two findings
+  72px (36px to 60px since 2026-10-13, when the headline got longer). Weight is 500 for Latin display and 600 for Arabic — the two findings
   point in opposite directions and both are real: Latin display type at 700+
   reads as amateur, Arabic display type at 400 reads as unfinished. IBM Plex
   Sans Arabic, the reference Arabic face, ships no weight above 700 at all, so
@@ -327,8 +327,9 @@
      campaign as the last sentence of the lede rather than the first. Two
      bands follow the Studio's (the Monteur, Infographics), each with a
      CSS-only artifact built from the slide's own parts, plus two rows in
-     "platforms, and what you need". Infographics say, in their own band and
-     row, that they run on the founder's accounts only.
+     "platforms, and what you need". The Monteur and Infographics both say,
+     in their own band and row, that they run on the founder's accounts only
+     (the Monteur's lede also says "on a Mac", not "on your computer").
   4. THE HERO'S EXAMPLE NO LONGER USES A WOMAN'S NAME (owner rule: no women or
      girls in content). The mock commenter is Salem, and our own bubble is in
      formal Arabic; the customer's comment stays colloquial because it is a
@@ -337,6 +338,10 @@
      primary button is WhatsApp while a number is set, and a link to the
      contact block while it is not — the page's own data-when / data-unless
      pattern. The secondary one goes to the real work.
+  6. NOTHING CLAIMS A FEATURE FOR EVERY PLAN THAT CLIENTS CANNOT HAVE. The
+     Monteur and Infographics are founder-only until M8, so "every plan has all
+     the features" became "every plan has everything open to client accounts",
+     here and on /pricing.
   No new colour pair: every new text/ground pair is one the Studio's slides
   already measured (see the 2026-09-25 numbers at the end of this comment).
 
@@ -508,10 +513,13 @@
         CLAUDE.md "YouTube (Shorts)" and "TikTok"; the page's own YouTube and
         TikTok rows, which are unchanged
     "does anything go out without me seeing it": carousel drafts are reviewed
-    in the Studio before they are scheduled, and a campaign's message is sent
-    on its own but is the text the owner wrote
+    in the Studio before they are scheduled; a campaign runs on its own, its
+    private message and public reply are text the owner wrote, and a private
+    message that cannot be delivered gets a short FIXED public reply instead
         src/services/studio/schedule.ts; src/webhook/comments.ts
-        (sendPrivateReply sends `dm_template` as written)
+        (sendPrivateReply sends `dm_template` as written); src/webhook/errors.ts
+        dmFallbackReply (the fixed text: Facebook with the campaign's link,
+        Instagram pointing to the bio)
 
   AND DELIBERATELY NOT CLAIMED, on the same terms as the list further down:
     · NOTHING THAT SAYS AI ANSWERS DIRECT MESSAGES, and nothing that sells the
@@ -522,10 +530,12 @@
       text is kept so the inbox can show it; that is a disclosure of what is
       stored (it matches /privacy), not a claim about replying.
     · NOTHING THAT SAYS ALL THE CODE IS OPEN. Only the server is MIT.
-    · NOT THAT THE MONTEUR IS OPEN TO CLIENT ACCOUNTS. The Monteur band and
-      row describe what it does; the truth table lists Monteur and Infographics
-      for clients as planned (M8). Infographics carry that limit in words; the
-      Monteur does not yet, which the owner should settle.
+    · NOT THAT THE MONTEUR OR INFOGRAPHICS ARE OPEN TO CLIENT ACCOUNTS. The
+      truth table lists both for clients as planned (M8). Both bands and both
+      requirement rows say "running today on the founder's accounts only", and
+      the Monteur's lede says "on a Mac" rather than "on your computer", which
+      read as the reader's own. No sentence says every plan has every feature:
+      it says every feature open to client accounts.
     · No time for a Studio draft. The dashboard says up to two minutes each,
       and that depends on Gemini and on the worker being switched on.
     · Not that the preview is deleted. The worker deletes it best-effort and
@@ -698,7 +708,12 @@
             /* Type. Utopia-style clamps: a fluid ramp with real endpoints
                rather than a media-query step, so 375px and 1440px are both
                designed rather than one being the leftovers of the other. */
-            --lp-display: clamp(2.5rem, 1.7958rem + 3.0047vw, 4.5rem);   /* 40 → 72 */
+            /* One step below the 40 → 72 it used to be. The headline is two
+               sentences now, where it was one clause: at the old step it ran to
+               five lines in English and pushed the buttons onto the fold. This
+               keeps both languages to four lines or fewer (measured at 1280,
+               390 and 320). It is the only thing --lp-display sizes. */
+            --lp-display: clamp(2.25rem, 1.35rem + 3.2vw, 3.75rem);      /* 36 → 60 */
             --lp-h2:      clamp(1.75rem, 1.3538rem + 1.6901vw, 2.875rem);/* 28 → 46 */
             --lp-h3:      clamp(1.125rem, 1.0369rem + 0.3756vw, 1.375rem);/* 18 → 22 */
             --lp-lede:    clamp(1.0625rem, 0.9744rem + 0.3756vw, 1.3125rem);/* 17 → 21 */
@@ -1133,11 +1148,6 @@
 
         /* ─── Hero ─────────────────────────────────────────────────────────── */
         .hero { padding-block: clamp(2.5rem, 6vw, 5rem) 0; }
-        /* The headline is two sentences now, where it was one clause. At the
-           full display step it ran to five lines in English and pushed the
-           buttons onto the fold; one step down keeps both languages to four
-           lines or fewer (measured at 1280, 390 and 320). */
-        .hero h1 { font-size: clamp(2.25rem, 1.35rem + 3.2vw, 3.75rem); }
         .hero-grid {
             display: grid;
             gap: clamp(2rem, 5vw, 3.5rem);
@@ -3345,16 +3355,17 @@
                             <p class="eyebrow"><span class="dot" aria-hidden="true"></span>المونتير</p>
                             <h2 id="monteur-h-ar">من فيديو طويل إلى ريلز جاهزة للاعتماد</h2>
                             <p class="lede">
-                                ضع الفيديو في مجلده، فيستمع إليه المونتير على جهازك، ويختار اللحظات
+                                ضع الفيديو في مجلده، فيستمع إليه المونتير على جهاز ماك، ويختار اللحظات
                                 التي تبدأ بخطّاف في ثوانيها الأولى، ويقصّها بمقاس
-                                <bdi lang="en" dir="ltr">9:16</bdi> بعنوان وترجمة مكتوبة وغلاف. تراجع
-                                كل ريل وتعتمده، فيُجدوَل في أفضل مواعيدك.
+                                <bdi lang="en" dir="ltr">9:16</bdi> مع عنوان وغلاف ونصٍّ مكتوب يتبع
+                                الكلام كلمةً كلمة. تراجع كل ريل وتعتمده، فيُجدوَل في أفضل مواعيدك.
                             </p>
+                            <p class="band-note">يعمل اليوم على حسابات المؤسس وحدها، ويُتاح لحسابات العملاء قريباً.</p>
                         </div>
 
                         <aside class="card artifact studio-art" aria-label="مثال: ريل قصّه المونتير من فيديو طويل">
                             <p class="artifact-label">ريل واحد قبل أن تعتمده</p>
-                            <div class="cut" role="img" aria-label="إطار طولي بمقاس 9:16 لريل: عنوانه في أعلاه، وترجمة مكتوبة في أسفله تُضاء فيها الكلمة الجارية. وإلى جانبه ثلاث لحظات اختارها المونتير من الفيديو الطويل، لكلٍّ منها وقتها.">
+                            <div class="cut" role="img" aria-label="إطار طولي بمقاس 9:16 لريل: عنوانه في أعلاه، ونصٌّ مكتوب في أسفله تُضاء فيه الكلمة الجارية. وإلى جانبه ثلاث لحظات اختارها المونتير من الفيديو الطويل، لكلٍّ منها وقتها.">
                                 <div class="cut-src">
                                     <span class="slide-cap">اللحظات المختارة</span>
                                     <ul class="cut-moments">
@@ -3365,8 +3376,8 @@
                                 </div>
                                 <div class="slide-cell">
                                     <div class="slide slide-tall">
-                                        <span class="cut-title">لماذا يغادر المشاهد في أول ثوانٍ؟</span>
-                                        <span class="cut-words">ابدأ <span class="kw">بسؤال</span> لا بمقدّمة</span>
+                                        <span class="cut-title">لماذا يغادر المشاهد في الثواني الأولى؟</span>
+                                        <span class="cut-words">ابدأ <span class="kw">بسؤال</span>، لا بمقدّمة</span>
                                     </div>
                                     <span class="slide-cap"><bdi lang="en" dir="ltr">9:16</bdi> · بانتظار اعتمادك</span>
                                 </div>
@@ -3374,7 +3385,7 @@
                             <ul class="receipts">
                                 <li>
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
-                                    ينتظر كل ريل اعتمادك
+                                    ينتظر كل ريل اعتمادك افتراضياً
                                 </li>
                                 <li>
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
@@ -3393,7 +3404,7 @@
                             <h2 id="infographics-h-ar">مقارنة واحدة، متحرّكة، بهويّتك</h2>
                             <p class="lede">
                                 اكتب الموضوع — <bdi lang="en" dir="ltr">RAG vs CAG vs KAG</bdi> مثلاً —
-                                فيُكتب الإنفوجرافيك ونصّه معاً، ويُرسم بثيم داكن أو فاتح:
+                                فيُكتب الإنفوجرافيك ونصّه معاً، ويُرسم بتصميم داكن أو فاتح:
                                 <bdi lang="en" dir="ltr">GIF</bdi> لأي منصّة، و<bdi lang="en" dir="ltr">MP4</bdi>
                                 مع غلافه لإنستجرام وفيسبوك ويوتيوب.
                             </p>
@@ -3417,7 +3428,7 @@
                                 </li>
                                 <li>
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
-                                    ثيم داكن أو فاتح
+                                    تصميم داكن أو فاتح
                                 </li>
                                 <li>
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
@@ -3705,8 +3716,9 @@
                             <div>
                                 <p class="req-k">ما يعمل عليه</p>
                                 <p class="req-v">
-                                    يقصّ ريلز بمقاس <bdi lang="en" dir="ltr">9:16</bdi> تنتظر اعتمادك
-                                    واحداً واحداً قبل جدولتها، في الوضع الافتراضي.
+                                    يقصّ ريلز بمقاس <bdi lang="en" dir="ltr">9:16</bdi>، وفي الوضع
+                                    الافتراضي ينتظر كلٌّ منها اعتمادك قبل جدولته. ويعمل اليوم على
+                                    حسابات المؤسس وحدها.
                                 </p>
                             </div>
                         </li>
@@ -3718,7 +3730,7 @@
                             </div>
                             <div>
                                 <p class="req-k">ما يعمل عليه</p>
-                                <p class="req-v">يعمل اليوم على حسابات المؤسس وحدها، ويُتاح لحسابات العملاء قريباً.</p>
+                                <p class="req-v">مقارنات متحرّكة مع نصّها. يعمل اليوم على حسابات المؤسس وحدها، ويُتاح لحسابات العملاء قريباً.</p>
                             </div>
                         </li>
                     </ul>
@@ -3780,7 +3792,7 @@
                     <h2 id="open-ar">ما الذي تدفع مقابله</h2>
                     <div class="card pays">
                         <div>
-                            <p class="pane-label">ما يُباع هنا ليس الكود</p>
+                            <p class="pane-label">خدمة، لا ترخيص</p>
                             <!-- Same sentence as before, split at its own commas:
                                  it already named four things. -->
                             <ul class="sold">
@@ -3813,7 +3825,7 @@
                                 </ul>
                                 <p>
                                     ثلاث باقات، والفرق بينها عدد الحسابات وعدد الأشخاص ومقدار العمل
-                                    الذي نقوم به معك — لا الميزات: في كل باقة كل ما في المنتج.
+                                    الذي نقوم به معك — لا الميزات: في كل باقة كل ما يُتاح لحسابات العملاء.
                                 </p>
                             </div>
                             <a class="btn btn-secondary" href="/pricing">قارن الباقات</a>
@@ -3966,7 +3978,7 @@
                         <details>
                             <summary>هل أستطيع الاشتراك بنفسي الآن؟</summary>
                             <div class="qa-a"><p>
-                                ليس بعد. ميتا تمنح الأذونات التي يحتاجها البرنامج حساباً حساباً،
+                                لا. ميتا تمنح الأذونات التي يحتاجها البرنامج حساباً حساباً،
                                 فيُربط كل حساب يدوياً ومعك. اكتب لنا على
                                 <a data-contact-email href="mailto:{{CONTACT_EMAIL}}"><bdi lang="en" dir="ltr">{{CONTACT_EMAIL}}</bdi></a>،
                                 ونخبرك بما يلزم وبالمدة المتوقعة قبل أي التزام.
@@ -3977,8 +3989,9 @@
                             <div class="qa-a"><p>
                                 في الوضع الافتراضي، لا: ريلز المونتير تنتظر اعتمادك واحداً واحداً،
                                 ومسودّات الكاروسيل تراجعها قبل جدولتها، والإنفوجرافيك لا يُجدوَل حتى
-                                يذكر نصّه كل عمود فيه. أمّا رسالة الحملة فتُرسَل وحدها، لكنها النص
-                                الذي كتبته أنت.
+                                يذكر نصّه كل عمود فيه. أمّا الحملة فتعمل وحدها: الرسالة الخاصة
+                                والردّ العام نصّان كتبتهما أنت، وإن تعذّر إرسال الرسالة الخاصة نُشر
+                                مكانها ردٌّ عامّ قصير بنصٍّ ثابت.
                             </p></div>
                         </details>
                         <details>
@@ -3993,7 +4006,7 @@
                             <summary>كم يكلّف؟</summary>
                             <div class="qa-a"><p>
                                 الباقات الثلاث، وما يتغيّر بينها فعلاً، في
-                                <a href="/pricing">صفحة الأسعار</a>. في كل باقة كل ميزات المنتج؛
+                                <a href="/pricing">صفحة الأسعار</a>. في كل باقة كل الميزات المتاحة لحسابات العملاء؛
                                 والفرق عدد الحسابات وعدد الأشخاص ومقدار العمل الذي نقوم به معك.
                             </p></div>
                         </details>
@@ -4404,11 +4417,12 @@
                             <p class="eyebrow"><span class="dot" aria-hidden="true"></span>The Monteur</p>
                             <h2 id="monteur-h-en">From one long video to reels ready for your approval</h2>
                             <p class="lede">
-                                Drop the video in its folder. The Monteur listens to it on your
-                                computer, picks the moments that open with a hook, and cuts them to
-                                9:16 with a title, word-by-word captions and a cover. You approve
-                                each reel, and it's scheduled into your best slots.
+                                Drop the video in its folder. The Monteur listens to it on a Mac,
+                                picks the moments that open with a hook, and cuts them to 9:16 with
+                                a title, word-by-word captions and a cover. You approve each reel,
+                                and it's scheduled into your best slots.
                             </p>
+                            <p class="band-note">Running today on the founder's accounts only; coming to client accounts.</p>
                         </div>
 
                         <aside class="card artifact studio-art" aria-label="Example: a reel the Monteur cut from a long video">
@@ -4424,7 +4438,7 @@
                                 </div>
                                 <div class="slide-cell">
                                     <div class="slide slide-tall">
-                                        <span class="cut-title">Why viewers leave in the first seconds</span>
+                                        <span class="cut-title">Why do viewers leave in the first seconds?</span>
                                         <span class="cut-words">Open with a <span class="kw">question</span>, not an intro</span>
                                     </div>
                                     <span class="slide-cap">9:16 · waiting for your approval</span>
@@ -4433,7 +4447,7 @@
                             <ul class="receipts">
                                 <li>
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
-                                    Every reel waits for your approval
+                                    Each reel waits for your approval by default
                                 </li>
                                 <li>
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
@@ -4768,7 +4782,8 @@
                                 <p class="req-k">What it does</p>
                                 <p class="req-v">
                                     Cuts reels at 9:16; by default, each one waits for your approval
-                                    before it is scheduled.
+                                    before it is scheduled. Running today on the founder's accounts
+                                    only.
                                 </p>
                             </div>
                         </li>
@@ -4780,7 +4795,7 @@
                             </div>
                             <div>
                                 <p class="req-k">What it does</p>
-                                <p class="req-v">Running today on the founder's accounts only; coming to client accounts.</p>
+                                <p class="req-v">Animated comparisons with their caption. Running today on the founder's accounts only; coming to client accounts.</p>
                             </div>
                         </li>
                     </ul>
@@ -4844,7 +4859,7 @@
                     <h2 id="open-en">What you are paying for</h2>
                     <div class="card pays">
                         <div>
-                            <p class="pane-label">What is sold here is not the code</p>
+                            <p class="pane-label">A service, not a licence</p>
                             <!-- Same sentence as before, split at its own commas:
                                  it already named four things. -->
                             <ul class="sold">
@@ -4878,7 +4893,7 @@
                                 <p>
                                     Three plans, and what differs between them is the number of
                                     accounts, the number of people, and how much of the work we do
-                                    with you — never the features: every plan has all of them.
+                                    with you — never the features: every plan has everything open to client accounts.
                                 </p>
                             </div>
                             <a class="btn btn-secondary" href="/pricing">Compare the plans</a>
@@ -5045,7 +5060,7 @@
                         <details>
                             <summary>Can I sign up on my own?</summary>
                             <div class="qa-a"><p>
-                                Not yet. Meta grants the permissions this needs account by account,
+                                No. Meta grants the permissions this needs account by account,
                                 so every account is connected by hand, with you. Write to
                                 <a data-contact-email href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>
                                 and we tell you what it would take, and how long, before you commit
@@ -5058,8 +5073,9 @@
                                 By default, no: the Monteur's reels wait for your approval one by
                                 one, carousel drafts are yours to review before they're scheduled,
                                 and an infographic can't be scheduled until its caption names every
-                                column. A campaign's message does go out on its own — but it is the
-                                text you wrote.
+                                column. A campaign does run on its own: the private message and the
+                                public reply are text you wrote, and if the private message can't
+                                be delivered, a short fixed public reply goes out instead.
                             </p></div>
                         </details>
                         <details>
@@ -5074,7 +5090,7 @@
                             <summary>How much does it cost?</summary>
                             <div class="qa-a"><p>
                                 The three plans, and what actually changes between them, are on the
-                                <a href="/pricing">pricing page</a>. Every plan has every feature;
+                                <a href="/pricing">pricing page</a>. Every plan has every feature open to client accounts;
                                 they differ in the number of accounts, the number of people, and how
                                 much of the work we do with you.
                             </p></div>

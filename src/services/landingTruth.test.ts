@@ -25,6 +25,14 @@ const pricing = read('public/pricing.html');
 
 const noComments = (html: string) => html.replace(/<!--[\s\S]*?-->/g, '');
 
+/** What a visitor can read: no comments, and none of the page's own CSS or script. */
+const visibleText = (html: string) =>
+    noComments(html)
+        .replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/g, '')
+        .replace(/<\/?(?:bdi|a|span|strong|em|b)\b[^>]*>/g, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ');
+
 /** The two language documents of a bilingual page, comments removed. */
 function articles(html: string): { ar: string; en: string } {
     const clean = noComments(html);
@@ -127,11 +135,14 @@ describe('landing — no claim that AI answers direct messages (P0-1)', () => {
         /Messenger conversations|محادثات ماسنجر/,
         /خدمة آلية/, // the disclosure line belonged to the AI reply path
         /automated service/i,
+        // The broad shapes a reworded claim would take, not just the strings that were removed.
+        /(?:يجيب|يردّ)[^.؟]{0,30}بالذكاء الاصطناعي/,
+        /\bAI\b[^.]{0,40}\b(?:repl|answer|conversation|message)/i,
     ];
 
     for (const [name, html] of [['landing', landing], ['pricing', pricing]] as const) {
         it(`${name}: none of the removed claims is in the visible markup`, () => {
-            const visible = words(noComments(html));
+            const visible = visibleText(html);
             for (const re of CLAIMS) assert.equal(re.test(visible), false, `${name}: ${re}`);
         });
     }
@@ -215,6 +226,11 @@ describe('landing and pricing — no claim that all the code is open (P0-2)', ()
         assert.ok(words(L.ar).includes('الخادم الذي يستقبل التعليقات ويرسل الرسائل وينشر مفتوحٌ برخصة MIT على GitHub؛ أمّا العامل وقوالب المونتير والإنفوجرافيك فليست مفتوحة المصدر'));
         assert.ok(L.en.includes('<summary>Is it open source?</summary>'));
         assert.ok(words(L.en).includes('The server that receives comments, sends messages and publishes is MIT-licensed on GitHub. The worker and the Monteur and infographic templates are not.'));
+    });
+
+    it('landing: what is sold is "a service, not a licence"', () => {
+        assert.ok(L.ar.includes('<p class="pane-label">خدمة، لا ترخيص</p>'));
+        assert.ok(L.en.includes('<p class="pane-label">A service, not a licence</p>'));
     });
 
     it('landing: the licence pane and the closing line are gone', () => {
@@ -339,18 +355,231 @@ describe('landing — the new bands carry no image request and no person', () =>
     });
 });
 
-describe('landing — no horizontal scroll from the new CSS', () => {
-    it('uses logical properties and the existing breakpoints only', () => {
-        const css = /<style>[\s\S]*?<\/style>/.exec(landing)![0];
-        const start = css.indexOf('The Monteur and Infographics');
-        assert.ok(start > 0);
-        const mine = css
-            .slice(start, css.indexOf('The Studio\'s closing detail list', start))
-            .replace(/\/\*[\s\S]*?\*\//g, ''); // the comments say "left-to-right"; only declarations count
-        assert.equal(/\b(?:margin|padding)-(?:left|right)\b|\b(?:left|right):/.test(mine), false, 'physical properties');
+describe('landing — the new CSS: logical properties, existing breakpoints, tokens only', () => {
+    const css = /<style>[\s\S]*?<\/style>/.exec(landing)![0];
+    const comments = /\/\*[\s\S]*?\*\//g;
+
+    /** One rule, from its selector to its closing brace, comments removed. */
+    function rule(selector: string): string {
+        const at = css.indexOf(selector);
+        assert.ok(at >= 0, `${selector} is in the page's CSS`);
+        return css.slice(at, css.indexOf('}', at) + 1).replace(comments, '');
+    }
+    /** Everything from one marker to another (the end marker's text is included). */
+    function between(from: string, to: string): string {
+        const a = css.indexOf(from);
+        const b = css.indexOf(to, a);
+        assert.ok(a >= 0 && b > a, `${from} … ${to}`);
+        return css.slice(a, b + to.length).replace(comments, '');
+    }
+
+    /** Every piece of CSS this change wrote. */
+    const mine = [
+        // the two bands' artifacts, from their opening comment to the next section's
+        css.slice(css.indexOf('The Monteur and Infographics'), css.indexOf("The Studio's closing detail list")).replace(comments, ''),
+        // the capabilities pair left with one card
+        rule('.duo > .card:only-child {'),
+        rule('.duo > .card:only-child p {'),
+        // what you pay for: one pane, the sold list two by two, the plans row across the bottom
+        rule('.pays {'),
+        rule('.pays .sold {'),
+        rule('.pays > .plans {'),
+        // the 320px additions inside the narrow block (the .slide rule they follow is older)
+        between('.cut { grid-template-columns: minmax(0, 1fr) minmax(0, 7.5rem)', '.cmp-col { padding: 0.3rem; }'),
+        // the shared slide / comparison-card look
+        rule('.slide,\n        .cmp {'),
+    ].join('\n');
+
+    const PHYSICAL = [
+        /\b(?:margin|padding)-(?:left|right)\b/,
+        /\bborder-(?:left|right)\b/,
+        /\bborder-(?:top|bottom)-(?:left|right)-radius\b/,
+        /(?<![-\w])(?:left|right)\s*:/,
+        /\bfloat\s*:/,
+        /text-align\s*:\s*(?:left|right)\b/,
+    ];
+
+    it('has no physical left/right, float, or text-align: left|right', () => {
+        for (const re of PHYSICAL) assert.equal(re.test(mine), false, String(re));
+    });
+
+    it('the guard is not blind: every pattern matches the thing it is for, and not its logical twin', () => {
+        const caught = ['margin-left: 1px', 'padding-right: 2px', 'border-left: 1px solid', 'border-top-right-radius: 4px', 'left: 0', 'float: left', 'text-align: right'];
+        for (const sample of caught) assert.ok(PHYSICAL.some((re) => re.test(sample)), sample);
+        for (const ok of ['margin-inline-start: 1px', 'border-inline-end: 1px solid', 'inset-inline-start: 0', 'text-align: start', 'border-end-end-radius: 4px']) {
+            assert.ok(!PHYSICAL.some((re) => re.test(ok)), ok);
+        }
+    });
+
+    it('uses no breakpoint the page does not already have, and no colour literal', () => {
         for (const m of mine.matchAll(/@media \((?:min|max)-width: ([\d.]+)rem\)/g)) {
             assert.ok(['30', '40', '48', '51.999', '52', '62'].includes(m[1]!), `new breakpoint ${m[1]}rem`);
         }
-        assert.equal(/#[0-9a-fA-F]{3,8}\b|rgba?\(/.test(mine), false, 'a colour literal: tokens only');
+        assert.equal(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/.test(mine), false, 'a colour literal: tokens only');
+    });
+
+    it('the hero headline is sized by the display token, not by an override', () => {
+        assert.equal(/\.hero h1\s*\{/.test(css), false, 'no .hero h1 rule');
+        assert.match(css, /--lp-display:\s*clamp\(2\.25rem, 1\.35rem \+ 3\.2vw, 3\.75rem\)/);
+        assert.match(css, /\n {8}h1 \{[^}]*font-size: var\(--lp-display\)/);
+    });
+});
+
+describe('landing and pricing — the Monteur and Infographics are founder-only until M8', () => {
+    const NOTE_AR = '<p class="band-note">يعمل اليوم على حسابات المؤسس وحدها، ويُتاح لحسابات العملاء قريباً.</p>';
+    const NOTE_EN = '<p class="band-note">Running today on the founder\'s accounts only; coming to client accounts.</p>';
+    const band = (doc: string, name: string, s: string) => {
+        const start = doc.indexOf(`id="${name}-${s}"`);
+        return doc.slice(start, doc.indexOf('</section>', start));
+    };
+
+    it('each band carries the note, in both languages', () => {
+        for (const name of ['monteur', 'infographics']) {
+            assert.ok(band(L.ar, name, 'ar').includes(NOTE_AR), `${name}-ar`);
+            assert.ok(band(L.en, name, 'en').includes(NOTE_EN), `${name}-en`);
+        }
+    });
+
+    it('the note comes right after the lede, inside the copy column', () => {
+        for (const [doc, s, note] of [[L.ar, 'ar', NOTE_AR], [L.en, 'en', NOTE_EN]] as const) {
+            for (const name of ['monteur', 'infographics']) {
+                const b = band(doc, name, s);
+                const lede = b.indexOf('</p>', b.indexOf('<p class="lede">')) + '</p>'.length;
+                assert.equal(b.slice(lede).trimStart().startsWith(note), true, `${name}-${s}`);
+            }
+        }
+    });
+
+    it("the Monteur's lede says it runs on a Mac, not on the reader's own computer", () => {
+        assert.ok(words(band(L.ar, 'monteur', 'ar')).includes('فيستمع إليه المونتير على جهاز ماك'));
+        assert.ok(words(band(L.en, 'monteur', 'en')).includes('The Monteur listens to it on a Mac'));
+        assert.equal(/على جهازك/.test(words(band(L.ar, 'monteur', 'ar'))), false);
+        assert.equal(/on your computer/.test(words(band(L.en, 'monteur', 'en'))), false);
+    });
+
+    it('both requirement rows say so too, in the reviewed words', () => {
+        const rows = (doc: string) =>
+            [...doc.matchAll(/<li>\s*<h3>(?:المونتير|الإنفوجرافيك|Monteur|Infographics)<\/h3>[\s\S]*?<\/li>/g)].map((m) => words(m[0]));
+        for (const doc of [L.ar, L.en]) {
+            const found = rows(doc);
+            assert.equal(found.length, 2);
+            for (const row of found) assert.ok(/حسابات المؤسس وحدها|founder's accounts only/.test(row), row);
+        }
+        assert.ok(words(L.ar).includes('يقصّ ريلز بمقاس 9:16، وفي الوضع الافتراضي ينتظر كلٌّ منها اعتمادك قبل جدولته. ويعمل اليوم على حسابات المؤسس وحدها.'));
+        assert.ok(words(L.en).includes("Cuts reels at 9:16; by default, each one waits for your approval before it is scheduled. Running today on the founder's accounts only."));
+        assert.ok(words(L.ar).includes('مقارنات متحرّكة مع نصّها. يعمل اليوم على حسابات المؤسس وحدها'));
+        assert.ok(words(L.en).includes("Animated comparisons with their caption. Running today on the founder's accounts only"));
+    });
+
+    it('the pricing lede does not offer the Monteur', () => {
+        assert.ok(words(P.ar).includes('خدمة مُدارة: نربط حساباتك، ونُعِدّ معك الحملات والاستوديو، ونتابع النشر.'));
+        assert.ok(words(P.en).includes('A managed service: we connect your accounts, set up campaigns and the Studio with you, and watch the publishing.'));
+        const lede = (doc: string) => /<p class="lede">[\s\S]*?<\/p>/.exec(doc)![0];
+        assert.equal(/المونتير|Monteur/.test(lede(P.ar) + lede(P.en)), false);
+    });
+
+    it('the bands use the reviewed wording: "design" not "theme", the reel title and caption, the default-approval receipt', () => {
+        assert.ok(words(L.ar).includes('ويُرسم بتصميم داكن أو فاتح'));
+        assert.ok(words(L.ar).includes('تصميم داكن أو فاتح'));
+        assert.equal(/ثيم/.test(noComments(landing)), false);
+        assert.ok(words(L.ar).includes('مع عنوان وغلاف ونصٍّ مكتوب يتبع الكلام كلمةً كلمة'));
+        assert.ok(L.ar.includes('ونصٌّ مكتوب في أسفله تُضاء فيه الكلمة الجارية'), 'the picture\'s label says "text", not "translation"');
+        assert.ok(words(L.ar).includes('لماذا يغادر المشاهد في الثواني الأولى؟'));
+        assert.ok(words(L.ar).includes('ابدأ بسؤال، لا بمقدّمة'));
+        assert.ok(words(L.en).includes('Why do viewers leave in the first seconds?'));
+        assert.ok(words(L.ar).includes('ينتظر كل ريل اعتمادك افتراضياً'));
+        assert.ok(words(L.en).includes('Each reel waits for your approval by default'));
+    });
+});
+
+describe('landing and pricing — nothing says every plan has every feature', () => {
+    it('tiers and plan lines say "open to client accounts"', () => {
+        const tiers = (doc: string) =>
+            [...doc.matchAll(/<li>(?:كل الميزات المتاحة لحسابات العملاء، بلا استثناء|Every feature open to client accounts, without exception)<\/li>/g)].length;
+        assert.equal(tiers(P.ar), 3);
+        assert.equal(tiers(P.en), 3);
+        assert.ok(words(L.ar).includes('في كل باقة كل ما يُتاح لحسابات العملاء'));
+        assert.ok(words(L.en).includes('every plan has everything open to client accounts'));
+        assert.ok(words(L.ar).includes('في كل باقة كل الميزات المتاحة لحسابات العملاء؛'));
+        assert.ok(words(L.en).includes('Every plan has every feature open to client accounts;'));
+    });
+
+    for (const [name, html] of [['landing', landing], ['pricing', pricing]] as const) {
+        it(`${name}: no unqualified "every feature in the product" in the visible text`, () => {
+            const visible = visibleText(html);
+            for (const re of [/(?:كل|جميع) ميزات المنتج/, /كل ما في المنتج/, /Every feature in the product/i, /every plan has all of them/i, /Every plan has every feature(?! open)/i]) {
+                assert.equal(re.test(visible), false, `${name}: ${re}`);
+            }
+        });
+    }
+
+    it('pricing: no 24-hour reply-window row, and the table note names the rule that remains', () => {
+        for (const doc of [P.ar, P.en]) {
+            assert.equal(/نافذة الردّ|reply window|24 ساعة من آخر تفاعل|24 hours from that person/i.test(words(doc)), false);
+        }
+        assert.ok(words(P.ar).includes('وحدّ الرسالة الواحدة للشخص كل 24 ساعة'));
+        assert.ok(words(P.en).includes('the one-message-per-person-per-24-hours rule'));
+        assert.equal(/نافذة الـ 24|24-hour window/.test(words(P.ar) + words(P.en)), false);
+        // The one-message-per-person row stays: it is enforced (canDmRecipient).
+        assert.ok(P.ar.includes('رسالة آلية واحدة لكل شخص خلال 24 ساعة') && P.en.includes('One automated DM per person per 24 hours'));
+    });
+});
+
+describe('landing and pricing — "does anything go out without me seeing it" tells the whole truth about campaigns', () => {
+    const AR = 'أمّا الحملة فتعمل وحدها: الرسالة الخاصة والردّ العام نصّان كتبتهما أنت، وإن تعذّر إرسال الرسالة الخاصة نُشر مكانها ردٌّ عامّ قصير بنصٍّ ثابت.';
+    const EN = "A campaign does run on its own: the private message and the public reply are text you wrote, and if the private message can't be delivered, a short fixed public reply goes out instead.";
+
+    it('says so on both pages, in both languages, and the old sentence is gone', () => {
+        for (const [doc, text] of [[L.ar, AR], [L.en, EN], [P.ar, AR], [P.en, EN]] as const) {
+            assert.ok(words(doc).includes(text), text.slice(0, 40));
+        }
+        for (const doc of [L.ar, L.en, P.ar, P.en]) {
+            assert.equal(/رسالة الحملة فتُرسَل وحدها|campaign's message does go out/.test(words(doc)), false);
+        }
+    });
+
+    it('the self-serve answer is "No", not "Not yet"', () => {
+        assert.ok(words(L.ar).includes('لا. ميتا تمنح الأذونات التي يحتاجها البرنامج حساباً حساباً'));
+        assert.ok(words(L.en).includes('No. Meta grants the permissions this needs account by account'));
+        assert.equal(/ليس بعد|Not yet/.test(words(L.ar) + words(L.en)), false);
+    });
+});
+
+describe('the six public pages — owner rules', () => {
+    const PAGES = ['landing', 'pricing', 'privacy', 'terms', 'data-deletion', '404'];
+    const FEMALE = /♀|👩|👧|🧕|نورة|Noura/u;
+
+    for (const p of PAGES) {
+        it(`${p}: no woman or girl, no female persona, and no mention of Clario`, () => {
+            const html = read(`public/${p}.html`);
+            assert.equal(FEMALE.test(html), false, `${p}: a female glyph or persona`);
+            assert.equal(/clario/i.test(html), false, `${p}: names Clario`);
+        });
+    }
+
+    it('the scan is not blind: it catches each thing it is meant to', () => {
+        for (const sample of ['♀', '👩', '👧', '🧕', 'نورة', 'Noura']) assert.equal(FEMALE.test(`x ${sample} y`), true, sample);
+        assert.equal(/clario/i.test('ClarioDR'), true);
+    });
+});
+
+describe('landing and pricing — exactly one visible inbox disclosure per language', () => {
+    // The inbox's send path is parked, so no sentence sells it. The one mention left is the
+    // storage disclosure, which matches /privacy: direct-message text is kept so the inbox can
+    // show it. More than one means a claim crept back; none means the disclosure was lost.
+    const count = (doc: string, re: RegExp) => (words(doc).match(re) ?? []).length;
+
+    it('landing: one in Arabic and one in English, and it is about what is stored', () => {
+        assert.equal(count(L.ar, /صندوق/g), 1);
+        assert.equal(count(L.en, /\binbox\b/gi), 1);
+        assert.ok(words(L.ar).includes('نص الرسائل الخاصة يُحفَظ ليظهر في صندوق الوارد'));
+        assert.ok(words(L.en).includes('Direct-message text is stored so it can appear in your inbox'));
+    });
+
+    it('pricing: one in Arabic and one in English, and it is about what is stored', () => {
+        assert.equal(count(P.ar, /صندوق/g), 1);
+        assert.equal(count(P.en, /\binbox\b/gi), 1);
+        assert.ok(words(P.ar).includes('نصّ الرسائل الخاصة يُخزَّن ليظهر لك في صندوق الوارد'));
+        assert.ok(words(P.en).includes('Direct-message text is stored so it can appear in your inbox'));
     });
 });

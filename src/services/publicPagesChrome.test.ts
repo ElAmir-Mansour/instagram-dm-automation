@@ -64,16 +64,30 @@ describe('public pages — the shared chrome is identical on all six', () => {
         });
     }
 
-    it('aria-current is the only difference: each page marks at most one link in its nav and footer', () => {
-        for (const p of PAGES) {
+    /**
+     * The links each page marks as the one you are on, in source order: the nav's and the
+     * footer's. Pinned per page rather than counted, so a copy that marks the wrong link (or
+     * none) is caught, and so is a page that quietly gains a second current link.
+     */
+    const CURRENT: Record<(typeof PAGES)[number], string[]> = {
+        landing: ['/', '/'],             // the wordmark in the bar, the wordmark in the footer
+        pricing: ['/pricing', '/pricing'], // its link in the bar, its link in the footer
+        privacy: ['/privacy'],           // not a destination in the bar: its footer link only
+        terms: ['/terms'],
+        'data-deletion': ['/data-deletion'],
+        '404': [],                       // not a page anyone is "on"
+    };
+
+    for (const p of PAGES) {
+        it(`${p}: marks exactly ${CURRENT[p].length ? CURRENT[p].join(' and ') : 'nothing'} as current, and nothing else differs`, () => {
             const html = read(p);
-            const c = chromeOf(html, p);
             // On a link, not in the comment that explains the attribute.
-            const marked = (html.match(/<a\b[^>]*aria-current="page"/g) ?? []).length;
-            assert.ok(marked <= 2, `${p}: ${marked} links marked current`);
+            const marked = [...html.matchAll(/<a\b[^>]*aria-current="page"[^>]*>/g)].map((m) => /href="([^"]*)"/.exec(m[0])?.[1]);
+            assert.deepEqual(marked, CURRENT[p]);
+            const c = chromeOf(html, p);
             assert.equal(/<a\b[^>]*aria-current/.test(c.nav + c.foot), false, `${p}: a link still carries aria-current after normalising`);
-        }
-    });
+        });
+    }
 });
 
 describe('public pages — the footer says what the product is now (L4)', () => {

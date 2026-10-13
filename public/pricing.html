@@ -58,6 +58,10 @@
       are parked"). The only message the page describes is a campaign's own
       text, sent after a keyword comment.
     · No claim that all the code is open. Only the server is MIT.
+    · No "every feature in the product": the Monteur and Infographics run on
+      the founder's accounts only until M8, so each tier says "every feature
+      open to client accounts". No "24-hour reply window" row either: it
+      described replying inside a conversation, which is parked.
     · No minute-accurate publishing time. The drain runs every ~5-15 minutes
       (.github/workflows/drain.yml says so in its own header) and
       ARCHITECTURE.md §2.4 calls the UI's minute-level promise "a genuine
@@ -1134,7 +1138,7 @@
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>الأسعار</h1>
                 <p class="lede">
-                    خدمة مُدارة: نربط حساباتك، ونُعِدّ معك الحملات والاستوديو والمونتير،
+                    خدمة مُدارة: نربط حساباتك، ونُعِدّ معك الحملات والاستوديو،
                     ونتابع النشر.
                 </p>
 
@@ -1157,7 +1161,7 @@
                         <ul>
                             <li>حساب واحد مربوط (إنستجرام وصفحة فيسبوك المرتبطة به)</li>
                             <li>دخول واحد إلى لوحة التحكم</li>
-                            <li>كل ميزات المنتج، بلا استثناء</li>
+                            <li>كل الميزات المتاحة لحسابات العملاء، بلا استثناء</li>
                             <li>الإعداد والربط بميتا نقوم به عنك</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
@@ -1173,7 +1177,7 @@
                         <ul>
                             <li>حتى ثلاثة حسابات مربوطة</li>
                             <li>حتى ثلاثة مستخدمين، والتنقّل بين الحسابات من دخول واحد</li>
-                            <li>كل ميزات المنتج، بلا استثناء</li>
+                            <li>كل الميزات المتاحة لحسابات العملاء، بلا استثناء</li>
                             <li>مراجعة دورية للحملات معك</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
@@ -1189,7 +1193,7 @@
                         <ul>
                             <li>أكثر من ثلاثة حسابات، والسعر بحسب العدد</li>
                             <li>دخول منفصل لكل عميل، وإلغاؤه عند انتهاء التعاقد</li>
-                            <li>كل ميزات المنتج، بلا استثناء</li>
+                            <li>كل الميزات المتاحة لحسابات العملاء، بلا استثناء</li>
                             <li>تنفيذ طلبات حذف بيانات المتابعين نيابةً عنك</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
@@ -1342,10 +1346,6 @@
                                 <th scope="row">رسالة آلية واحدة لكل شخص خلال 24 ساعة</th>
                                 <td colspan="3"><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مطبَّق في كل الباقات</span></td>
                             </tr>
-                            <tr>
-                                <th scope="row">نافذة الردّ التي تسمح بها ميتا</th>
-                                <td colspan="3">24 ساعة من آخر تفاعل من الشخص</td>
-                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -1353,7 +1353,7 @@
                 <p class="tablenote">
                     أعداد الحسابات والمستخدمين أعلاه <strong>حدود اتفاق، لا حدود يفرضها
                     البرنامج</strong>: نحن مَن ينشئ الحسابات، فنلتزم بما اتفقنا عليه. أمّا سقف
-                    الإرسال ونافذة الـ 24 ساعة فمن ميتا ومن حماية الإرسال داخل التطبيق، وهي
+                    الإرسال وحدّ الرسالة الواحدة للشخص كل 24 ساعة فمن ميتا ومن حماية الإرسال داخل التطبيق، وهي
                     نفسها في كل الباقات ولا تُشترى زيادتها.
                 </p>
 
@@ -1409,8 +1409,9 @@
                         <p>
                             في الوضع الافتراضي، لا: ريلز المونتير تنتظر اعتمادك واحداً واحداً،
                             ومسودّات الكاروسيل تراجعها قبل جدولتها، والإنفوجرافيك لا يُجدوَل حتى
-                            يذكر نصّه كل عمود فيه. أمّا رسالة الحملة فتُرسَل وحدها، لكنها النص
-                            الذي كتبته أنت.
+                            يذكر نصّه كل عمود فيه. أمّا الحملة فتعمل وحدها: الرسالة الخاصة
+                            والردّ العام نصّان كتبتهما أنت، وإن تعذّر إرسال الرسالة الخاصة نُشر
+                            مكانها ردٌّ عامّ قصير بنصٍّ ثابت.
                         </p>
                     </div>
                 </details>
@@ -1489,8 +1490,8 @@
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Pricing</h1>
                 <p class="lede">
-                    A managed service: we connect your accounts, set up campaigns, the Studio
-                    and the Monteur with you, and watch the publishing.
+                    A managed service: we connect your accounts, set up campaigns and the
+                    Studio with you, and watch the publishing.
                 </p>
 
                 <div class="callout">
@@ -1513,7 +1514,7 @@
                         <ul>
                             <li>One connected account (Instagram plus its linked Facebook Page)</li>
                             <li>One dashboard login</li>
-                            <li>Every feature in the product, without exception</li>
+                            <li>Every feature open to client accounts, without exception</li>
                             <li>Setup and the Meta connection done for you</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
@@ -1529,7 +1530,7 @@
                         <ul>
                             <li>Up to three connected accounts</li>
                             <li>Up to three users, switching between accounts from one login</li>
-                            <li>Every feature in the product, without exception</li>
+                            <li>Every feature open to client accounts, without exception</li>
                             <li>A regular review of your campaigns with you</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
@@ -1545,7 +1546,7 @@
                         <ul>
                             <li>More than three accounts, priced by how many</li>
                             <li>A separate login per client, revoked when the contract ends</li>
-                            <li>Every feature in the product, without exception</li>
+                            <li>Every feature open to client accounts, without exception</li>
                             <li>Follower data-deletion requests carried out for you</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
@@ -1699,10 +1700,6 @@
                                 <th scope="row">One automated DM per person per 24 hours</th>
                                 <td colspan="3"><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Enforced on every plan</span></td>
                             </tr>
-                            <tr>
-                                <th scope="row">The reply window Meta allows</th>
-                                <td colspan="3">24 hours from that person's last interaction</td>
-                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -1710,8 +1707,8 @@
                 <p class="tablenote">
                     The account and user counts above are <strong>limits of the agreement, not
                     limits the software enforces</strong>: we create the accounts, so we hold to
-                    what was agreed. The send ceiling and the 24-hour window are different —
-                    they come from Meta and from the app's own send protection, they are the
+                    what was agreed. The send ceiling and the one-message-per-person-per-24-hours rule
+                    are different — they come from Meta and from the app's own send protection, they are the
                     same on every plan, and more of them cannot be bought.
                 </p>
 
@@ -1772,8 +1769,9 @@
                             By default, no: the Monteur's reels wait for your approval one by
                             one, carousel drafts are yours to review before they're scheduled,
                             and an infographic can't be scheduled until its caption names every
-                            column. A campaign's message does go out on its own — but it is the
-                            text you wrote.
+                            column. A campaign does run on its own: the private message and the
+                            public reply are text you wrote, and if the private message can't
+                            be delivered, a short fixed public reply goes out instead.
                         </p>
                     </div>
                 </details>
