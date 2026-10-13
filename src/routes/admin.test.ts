@@ -97,6 +97,13 @@ const ROUTES: Array<[string, string, Record<string, unknown>?]> = [
     ['DELETE', '/media-storage'],
     ['GET', '/mac-brain-tenants'],
     ['PUT', '/mac-brain-tenants'],
+    ['GET', '/ai'],
+    ['PUT', '/ai'],
+    ['PUT', '/ai/keys/anthropic'],
+    ['DELETE', '/ai/keys/anthropic'],
+    ['POST', '/ai/test'],
+    ['GET', '/ai/models/anthropic'],
+    ['GET', '/ai/usage'],
 ];
 
 describe('the platform_admin gate', () => {

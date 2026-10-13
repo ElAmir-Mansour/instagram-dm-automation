@@ -1,0 +1,646 @@
+/**
+ * `/api/admin/ai/*` (P20c): the platform-admin gate, the masking of every key, the check-before-save flow against a fake provider, the
+ * settings changes and their audit rows, the route test, the model list and the usage summary.
+ *
+ * Driven through `admin.ts`'s router (so the mount is covered too) with a plain request object, against the in-memory stand-in for
+ * `app_settings`, `ai_usage` and `audit_log` (services/aiProviders/testDb.ts). The provider is a function that answers by URL, and it is
+ * the only thing that ever sees a key: nothing here reaches the network.
+ *
+ * Every fake key is built at run time (testKeys.ts). The tests that matter most are the ones that look for one: in a response, in the
+ * log, in an audit row, in a usage row, in a stored setting, in what the provider's own error echoed back.
+ */
+import assert from 'node:assert/strict';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import type { Request, Response as ExpressResponse } from 'express';
+import { AUDIT_ACTIONS } from '../services/audit.js';
+import { setProviderFetch } from '../services/aiProviders/generate.js';
+import { AiError } from '../services/llm/errors.js';
+import { setLlmCaller, type GenerateJsonArgs, type GenerateJsonResult } from '../services/llm/generate.js';
+import { installAiDb, type AiDb } from '../services/aiProviders/testDb.js';
+import { jsonResponse } from '../services/llm/testFetch.js';
+import { assertNoKey, FAKE_KEYS } from '../services/aiProviders/testKeys.js';
+import type { FetchLike } from '../services/llm/types.js';
+import { setLogSink } from '../utils/log.js';
+import adminRouter from './admin.js';
+import aiRouter from './adminAi.js';
+
+type Session = { userId: string | null; role: string; tenantId: string | null; tokenVersion: number };
+interface Reply { status: number; body: any; fellThrough?: boolean }
+
+const OWNER = '11111111-1111-4111-8111-111111111111';
+const USER = '22222222-2222-4222-8222-222222222222';
+const ADMIN: Session = { userId: USER, role: 'platform_admin', tenantId: OWNER, tokenVersion: 0 };
+const NOT_ADMIN: Session = { userId: 'u-1', role: 'user', tenantId: OWNER, tokenVersion: 1 };
+
+function call(method: string, url: string, opts: { session?: Session; body?: unknown; query?: Record<string, unknown>; router?: typeof adminRouter } = {}): Promise<Reply> {
+    return new Promise((resolve) => {
+        const req = {
+            method: method.toUpperCase(), url, originalUrl: url, body: opts.body ?? {}, query: opts.query ?? {}, params: {}, headers: {},
+            session: 'session' in opts ? opts.session : ADMIN,
+        } as unknown as Request;
+        const res = {
+            statusCode: 200,
+            status(code: number) { (this as any).statusCode = code; return this; },
+            json(body: unknown) { resolve({ status: (this as any).statusCode, body }); return this; },
+            setHeader() { return this; },
+        } as unknown as ExpressResponse;
+        (opts.router ?? adminRouter)(req, res, () => resolve({ status: 0, body: null, fellThrough: true }));
+    });
+}
+
+const AI_ROUTES: [string, string][] = [
+    ['GET', '/ai'], ['PUT', '/ai'], ['PUT', '/ai/keys/anthropic'], ['DELETE', '/ai/keys/anthropic'], ['POST', '/ai/test'],
+    ['GET', '/ai/models/anthropic'], ['GET', '/ai/usage'],
+];
+
+// ─── The fake provider ───────────────────────────────────────────────────────────────────────
+
+interface Hit { url: string; method: string | undefined; headers: Record<string, string>; raw: string }
+let hits: Hit[];
+/** Answers by URL. The default accepts exactly the fake keys and answers anything else as the provider would: with the key it was sent, in its message. */
+let providerAnswer: (hit: Hit) => Response | Promise<Response>;
+
+const echoes401 = (hit: Hit) => jsonResponse(401, { type: 'error', error: { type: 'authentication_error', message: `invalid x-api-key: ${hit.headers['x-api-key'] ?? hit.headers.authorization ?? ''}` } });
+
+const goodProvider = (hit: Hit): Response => {
+    const u = new URL(hit.url);
+    if (u.host === 'api.anthropic.com' && u.pathname === '/v1/models') {
+        if (hit.headers['x-api-key'] !== FAKE_KEYS.anthropic) return echoes401(hit);
+        return jsonResponse(200, { data: [{ id: 'claude-opus-5-5' }, { id: 'claude-sonnet-5-5' }, { id: 'claude-haiku-5-5' }], has_more: false });
+    }
+    if (u.host === 'openrouter.ai' && u.pathname === '/api/v1/key') {
+        if (hit.headers.authorization !== `Bearer ${FAKE_KEYS.openrouter}`) return echoes401(hit);
+        return jsonResponse(200, { data: { limit_remaining: null } });
+    }
+    if (u.host === 'llm.example.com' && u.pathname === '/v1/models') {
+        return jsonResponse(200, { data: [{ id: 'my-model' }, { id: 'other-model' }] });
+    }
+    return jsonResponse(404, { error: 'nothing here' });
+};
+
+const fakeFetch: FetchLike = async (url, init) => {
+    const hit: Hit = {
+        url, method: init.method, raw: String(init.body ?? ''),
+        headers: Object.fromEntries(Object.entries((init.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v])),
+    };
+    hits.push(hit);
+    return providerAnswer(hit);
+};
+
+// ─── The stand-in for the rest ───────────────────────────────────────────────────────────────
+
+const ENV_NAMES = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'GEMINI_API_KEY'] as const;
+let db: AiDb;
+let savedEnv: Record<string, string | undefined>;
+let logs: string[];
+let restoreSink: (() => void) | undefined;
+let restoreCaller: (() => void) | undefined;
+let generated: GenerateJsonArgs[];
+let generateAnswer: (args: GenerateJsonArgs) => GenerateJsonResult | Promise<GenerateJsonResult>;
+
+before(() => {
+    savedEnv = { TOKEN_ENCRYPTION_KEY: process.env.TOKEN_ENCRYPTION_KEY };
+    process.env.TOKEN_ENCRYPTION_KEY = 'ab'.repeat(32);
+});
+after(() => {
+    if (savedEnv.TOKEN_ENCRYPTION_KEY === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+    else process.env.TOKEN_ENCRYPTION_KEY = savedEnv.TOKEN_ENCRYPTION_KEY;
+});
+
+beforeEach(() => {
+    for (const name of ENV_NAMES) {
+        savedEnv[name] = process.env[name];
+        delete process.env[name];
+    }
+    db = installAiDb({ owner: OWNER });
+    logs = [];
+    const previous = setLogSink((_level, line) => { logs.push(line); });
+    restoreSink = () => setLogSink(previous);
+    hits = [];
+    providerAnswer = goodProvider;
+    setProviderFetch(fakeFetch);
+    generated = [];
+    generateAnswer = () => ({
+        json: { ok: true }, usage: { in: 40, out: 6 }, billed: [{ model: 'claude-opus-5-5', in: 40, out: 6 }],
+        model: 'claude-opus-5-5', provider: 'anthropic', stopReason: 'end_turn', elapsed_ms: 800,
+    });
+    const previousCaller = setLlmCaller(async (args) => { generated.push(args); return generateAnswer(args); });
+    restoreCaller = () => setLlmCaller(previousCaller);
+});
+afterEach(() => {
+    db.restore();
+    restoreSink?.();
+    restoreCaller?.();
+    setProviderFetch(undefined);
+    for (const name of ENV_NAMES) {
+        if (savedEnv[name] === undefined) delete process.env[name];
+        else process.env[name] = savedEnv[name];
+    }
+});
+
+const saveKey = (id: keyof typeof FAKE_KEYS) => db.setSetting(id === 'gemini' ? 'gemini.api_key' : `ai.providers.${id}.api_key`, FAKE_KEYS[id], true);
+const usageOf = (purpose: string) => db.usage.filter((u) => u.purpose === purpose);
+
+// ─── The gate ────────────────────────────────────────────────────────────────────────────────
+
+describe('the platform_admin gate', () => {
+    it('404s every AI route for a non-admin, with the same body as a route that does not exist', async () => {
+        const invented = await call('GET', '/there-is-no-such-endpoint', { session: NOT_ADMIN });
+        for (const [method, url] of AI_ROUTES) {
+            const reply = await call(method, url, { session: NOT_ADMIN });
+            assert.equal(reply.status, 404, `${method} ${url}`);
+            assert.deepEqual(reply.body, invented.body, `${method} ${url}`);
+        }
+    });
+
+    it('404s every AI route when there is no session at all', async () => {
+        for (const [method, url] of AI_ROUTES) assert.equal((await call(method, url, { session: undefined })).status, 404, `${method} ${url}`);
+    });
+
+    it('is checked by the AI router itself, so mounting it somewhere else cannot open it', async () => {
+        for (const [method, url] of AI_ROUTES) {
+            const reply = await call(method, url.replace(/^\/ai/, '') || '/', { session: NOT_ADMIN, router: aiRouter as unknown as typeof adminRouter });
+            assert.equal(reply.status, 404, `${method} ${url}`);
+        }
+    });
+
+    it('does not touch the database, the provider or the settings for a non-admin', async () => {
+        for (const [method, url] of AI_ROUTES) await call(method, url, { session: NOT_ADMIN, body: { apiKey: FAKE_KEYS.anthropic } });
+        assert.equal(db.statements.length, 0);
+        assert.equal(hits.length, 0);
+    });
+
+    it('does not 404 an admin', async () => {
+        assert.equal((await call('GET', '/ai')).status, 200);
+    });
+});
+
+// ─── GET /ai ─────────────────────────────────────────────────────────────────────────────────
+
+describe('GET /ai', () => {
+    it('answers with providers, purposes, prices, budgets, warnings and today\'s spend, and nothing is saved yet', async () => {
+        const { status, body } = await call('GET', '/ai');
+        assert.equal(status, 200);
+        assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'custom']);
+        assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic']);
+        assert.ok(body.prices.some((p: any) => p.model === 'claude-opus-5-5' && p.source === 'default'));
+        assert.equal(body.budgets.unlimited, true);
+        assert.deepEqual(body.warnings.map((w: any) => w.code), ['no_budget']);
+        assert.equal(body.purposes[0].resolved.error.kind, 'no_provider');
+        assert.deepEqual(body.spend.today, { calls: 0, failed: 0, unpriced: 0, usd: 0 });
+        assert.equal(hits.length, 0, 'reading the settings asks no provider anything');
+    });
+
+    it('reports each key as {set, source, last4} and never more, for every provider, whichever way it was set', async () => {
+        saveKey('anthropic');
+        saveKey('gemini');
+        process.env.OPENAI_API_KEY = FAKE_KEYS.openai;
+        db.setSetting('ai.providers.custom.api_key', FAKE_KEYS.custom, true);
+        const { body } = await call('GET', '/ai');
+        const keys = Object.fromEntries(body.providers.map((p: any) => [p.id, p.key]));
+        assert.deepEqual(keys.anthropic, { set: true, source: 'database', last4: 'ant1', envFallback: false });
+        assert.deepEqual(keys.gemini, { set: true, source: 'database', last4: 'gem3', envFallback: false });
+        assert.deepEqual(keys.openai, { set: true, source: 'env', last4: null, envFallback: true });
+        assert.deepEqual(keys.openrouter, { set: false, source: null, last4: null, envFallback: false });
+        assert.deepEqual(keys.custom, { set: true, source: 'database', last4: 'cus5', envFallback: false });
+        assertNoKey(JSON.stringify(body), 'GET /ai');
+    });
+
+    it('shows what each purpose would use, with the route that is saved beside it', async () => {
+        saveKey('anthropic');
+        db.setSetting('ai.routing', JSON.stringify({ tenant_studio: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } }));
+        const { body } = await call('GET', '/ai');
+        const byPurpose = Object.fromEntries(body.purposes.map((p: any) => [p.purpose, p]));
+        assert.deepEqual(byPurpose.tenant_studio.saved, { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' });
+        assert.equal(byPurpose.tenant_studio.resolved.source, 'saved');
+        assert.equal(byPurpose.onboarding_draft.resolved.source, 'default');
+        assert.equal(byPurpose.onboarding_draft.saved, null);
+    });
+
+    it('fails with the migration hint when v34 has not been applied', async () => {
+        db.failOn(/FROM ai_usage/, Object.assign(new Error('relation "ai_usage" does not exist'), { code: '42P01' }));
+        const { status, body } = await call('GET', '/ai');
+        assert.equal(status, 500);
+        assert.equal(body.migrationPending, true);
+        assert.match(body.error, /migration v34/);
+    });
+});
+
+// ─── PUT /ai ─────────────────────────────────────────────────────────────────────────────────
+
+describe('PUT /ai', () => {
+    const patch = {
+        providers: { custom: { baseUrl: 'https://llm.example.com/v1', defaultModel: 'my-model', jsonMode: 'object' } },
+        routing: { onboarding_draft: { provider: 'custom', model: 'my-model', effort: 'medium' } },
+        prices: { 'my-model': { in: 0.4, out: 1.6 } },
+        budgets: { dailyUsd: 12.5, tenantDailyUsd: 2 },
+    };
+
+    it('saves what it was sent, answers with the view it now holds, and audits it with names and no amounts', async () => {
+        const { status, body } = await call('PUT', '/ai', { body: patch });
+        assert.equal(status, 200);
+        assert.deepEqual(JSON.parse(db.settings.get('ai.providers')!.value), { custom: { baseUrl: 'https://llm.example.com/v1', defaultModel: 'my-model', jsonMode: 'object' } });
+        assert.deepEqual(JSON.parse(db.settings.get('ai.routing')!.value), { onboarding_draft: { provider: 'custom', model: 'my-model', effort: 'medium' } });
+        assert.deepEqual(JSON.parse(db.settings.get('ai.prices')!.value), { 'my-model': { in: 0.4, out: 1.6 } });
+        assert.equal(db.settings.get('ai.budget.daily_usd')!.value, '12.5');
+        assert.equal(db.settings.get('ai.budget.tenant_daily_usd')!.value, '2');
+        assert.equal(body.budgets.dailyUsd, 12.5);
+        assert.equal(body.budgets.unlimited, false);
+        assert.equal(body.providers.find((p: any) => p.id === 'custom').baseUrl, 'https://llm.example.com/v1');
+        assert.equal(body.purposes[0].saved.provider, 'custom');
+
+        assert.equal(db.audits.length, 1);
+        const row = db.audits[0]!;
+        assert.equal(row.action, AUDIT_ACTIONS.settingsAiConfigWrite);
+        assert.equal(row.action, 'settings.ai_config_write');
+        assert.equal(row.actor_user_id, USER);
+        assert.equal(row.target_type, 'app');
+        assert.deepEqual(row.detail, {
+            providers: ['custom'], routes: { onboarding_draft: 'custom/my-model/medium' }, prices: ['my-model'], budgets: ['dailyUsd', 'tenantDailyUsd'],
+        });
+    });
+
+    it('merges into what is saved: a second save of one route leaves the other routes alone', async () => {
+        await call('PUT', '/ai', { body: patch });
+        await call('PUT', '/ai', { body: { routing: { onboarding_proof: { provider: 'custom', model: 'other-model' } } } });
+        assert.deepEqual(Object.keys(JSON.parse(db.settings.get('ai.routing')!.value)).sort(), ['onboarding_draft', 'onboarding_proof']);
+        await call('PUT', '/ai', { body: { routing: { onboarding_draft: null }, budgets: { dailyUsd: null } } });
+        assert.deepEqual(Object.keys(JSON.parse(db.settings.get('ai.routing')!.value)), ['onboarding_proof']);
+        assert.equal(db.settings.has('ai.budget.daily_usd'), false);
+    });
+
+    it('refuses the whole body, writing nothing and auditing nothing, when any part of it is invalid', async () => {
+        const { status, body } = await call('PUT', '/ai', { body: { ...patch, routing: { onboarding_draft: { provider: 'mistral' } } } });
+        assert.equal(status, 400);
+        assert.match(body.error, /provider must be one of/);
+        assert.equal(body.problems.length, 1);
+        assert.equal(db.settings.size, 0);
+        assert.equal(db.audits.length, 0);
+    });
+
+    it('answers 400 for an empty change, a base URL that is not public https, and a body that is not an object', async () => {
+        for (const body of [{}, { providers: { custom: { baseUrl: 'http://10.0.0.1' } } }, 'x', null, []]) {
+            const reply = await call('PUT', '/ai', { body });
+            assert.equal(reply.status, 400, JSON.stringify(body));
+        }
+        assert.equal(db.settings.size, 0);
+    });
+
+    it('cannot be used to save a key: there is no key field, and what it refuses it does not repeat', async () => {
+        const reply = await call('PUT', '/ai', { body: { providers: { anthropic: { apiKey: FAKE_KEYS.anthropic } }, keys: { openai: FAKE_KEYS.openai } } });
+        assert.equal(reply.status, 400);
+        assertNoKey(JSON.stringify(reply.body), 'the 400');
+        assert.equal(db.settings.size, 0);
+    });
+});
+
+// ─── Keys ────────────────────────────────────────────────────────────────────────────────────
+
+describe('PUT /ai/keys/:provider: checked with the provider first, saved only if it accepts the key', () => {
+    it('saves a key the provider accepts, encrypted, and answers with its status and no key', async () => {
+        const { status, body } = await call('PUT', '/ai/keys/anthropic', { body: { apiKey: `  ${FAKE_KEYS.anthropic}\n` } });
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'anthropic', key: { set: true, source: 'database', last4: 'ant1', envFallback: false } });
+        const stored = db.settings.get('ai.providers.anthropic.api_key')!;
+        assert.equal(stored.is_secret, true);
+        assert.match(stored.value, /^enc:v1:/);
+        assertNoKey(stored.value, 'the stored value');
+        assert.equal(hits.length, 1);
+        assert.equal(hits[0]!.url, 'https://api.anthropic.com/v1/models?limit=1');
+        assert.equal(hits[0]!.headers['x-api-key'], FAKE_KEYS.anthropic, 'trimmed, and only in the header');
+    });
+
+    it('records the check as a `key_test` row with no tokens, no cost and no tenant, and audits the save without the key', async () => {
+        await call('PUT', '/ai/keys/anthropic', { body: { apiKey: FAKE_KEYS.anthropic } });
+        const rows = usageOf('key_test');
+        assert.equal(rows.length, 1);
+        assert.deepEqual([rows[0]!.provider, rows[0]!.outcome, rows[0]!.creator_id, rows[0]!.input_tokens, rows[0]!.output_tokens, rows[0]!.usd], ['anthropic', 'ok', null, 0, 0, 0]);
+        assert.deepEqual(db.audits.map((a) => [a.action, a.detail]), [['settings.ai_key_write', { provider: 'anthropic', change: 'saved', warning: null }]]);
+        assert.equal(db.audits[0]!.actor_user_id, USER);
+        assertNoKey(JSON.stringify(db.audits), 'the audit row');
+    });
+
+    it('refuses a key the provider refuses with 400 (never 401 or 403), saves nothing, and does not repeat the key its error echoed', async () => {
+        const bad = FAKE_KEYS.anthropic.replace('ant1', 'xxxx');
+        const { status, body } = await call('PUT', '/ai/keys/anthropic', { body: { apiKey: bad } });
+        assert.equal(status, 400);
+        assert.equal(body.kind, 'auth');
+        assert.match(body.error, /^Anthropic refused this key: /);
+        assertNoKey(JSON.stringify(body), 'the refusal', [bad]);
+        assert.ok(!JSON.stringify(body).includes(bad.slice(8, -4)));
+        assert.equal(db.settings.size, 0, 'nothing saved: the key in use keeps answering');
+        assert.equal(db.audits.length, 0);
+        assert.deepEqual(usageOf('key_test').map((u) => u.outcome), ['auth'], 'the failed check is on the record too');
+        assertNoKey(logs.join('\n') + JSON.stringify(db.usage), 'the log and the rows', [bad]);
+    });
+
+    it('answers 502 and saves nothing when the provider could not be reached', async () => {
+        providerAnswer = () => jsonResponse(503, { error: 'overloaded' });
+        const { status, body } = await call('PUT', '/ai/keys/anthropic', { body: { apiKey: FAKE_KEYS.anthropic } });
+        assert.equal(status, 502);
+        assert.match(body.error, /Could not reach Anthropic to check the key.*Nothing was saved; try again\./);
+        assert.equal(body.kind, 'server');
+        assert.equal(db.settings.size, 0);
+        providerAnswer = () => { throw new TypeError('fetch failed'); };
+        assert.equal((await call('PUT', '/ai/keys/anthropic', { body: { apiKey: FAKE_KEYS.anthropic } })).status, 502);
+    });
+
+    it('does not ask the provider about something that is plainly not a key', async () => {
+        for (const apiKey of [undefined, '', '   ', 'short', 'has a space in the middle of it', 42]) {
+            const { status } = await call('PUT', '/ai/keys/anthropic', { body: { apiKey } });
+            assert.equal(status, 400, JSON.stringify(apiKey));
+        }
+        assert.equal(hits.length, 0);
+        assert.equal(db.settings.size, 0);
+    });
+
+    it('checks OpenRouter\'s key against /key, which its public model list would never refuse', async () => {
+        const { status } = await call('PUT', '/ai/keys/openrouter', { body: { apiKey: FAKE_KEYS.openrouter } });
+        assert.equal(status, 200);
+        assert.equal(hits[0]!.url, 'https://openrouter.ai/api/v1/key');
+        assert.equal(hits[0]!.headers.authorization, `Bearer ${FAKE_KEYS.openrouter}`);
+    });
+
+    it('needs Custom\'s base URL to be saved first, then checks the key against that endpoint', async () => {
+        const first = await call('PUT', '/ai/keys/custom', { body: { apiKey: FAKE_KEYS.custom } });
+        assert.equal(first.status, 400);
+        assert.match(first.body.error, /base URL first/);
+        assert.equal(hits.length, 0);
+        await call('PUT', '/ai', { body: { providers: { custom: { baseUrl: 'https://llm.example.com/v1' } } } });
+        const ok = await call('PUT', '/ai/keys/custom', { body: { apiKey: FAKE_KEYS.custom } });
+        assert.equal(ok.status, 200);
+        assert.equal(hits[0]!.url, 'https://llm.example.com/v1/models');
+        assert.equal(ok.body.key.last4, 'cus5');
+    });
+
+    it('saves Custom\'s key with a warning when its endpoint has no model list to prove it with', async () => {
+        await call('PUT', '/ai', { body: { providers: { custom: { baseUrl: 'https://llm.example.com/v1' } } } });
+        providerAnswer = () => jsonResponse(404, { error: 'not found' });
+        const { status, body } = await call('PUT', '/ai/keys/custom', { body: { apiKey: FAKE_KEYS.custom } });
+        assert.equal(status, 200);
+        assert.equal(body.warning, 'no_model_list');
+        assert.ok(db.settings.has('ai.providers.custom.api_key'));
+        assert.equal(db.audits.at(-1)!.detail.warning, 'no_model_list');
+    });
+
+    it('sends Gemini to the existing route, which checks the DM bot\'s models, and touches nothing', async () => {
+        for (const method of ['PUT', 'DELETE']) {
+            const { status, body } = await call(method, '/ai/keys/gemini', { body: { apiKey: FAKE_KEYS.gemini } });
+            assert.equal(status, 400);
+            assert.equal(body.code, 'USE_GEMINI_KEY_ROUTE');
+            assert.match(body.error, /\/api\/admin\/gemini-key/);
+            assertNoKey(JSON.stringify(body), 'the pointer');
+        }
+        assert.equal(hits.length, 0);
+        assert.equal(db.settings.size, 0);
+    });
+
+    it('404s a provider that does not exist', async () => {
+        assert.equal((await call('PUT', '/ai/keys/mistral', { body: { apiKey: FAKE_KEYS.anthropic } })).status, 404);
+        assert.equal((await call('DELETE', '/ai/keys/mistral')).status, 404);
+    });
+});
+
+describe('DELETE /ai/keys/:provider', () => {
+    it('forgets the saved key, says whether the environment answers now, and audits it', async () => {
+        saveKey('anthropic');
+        process.env.ANTHROPIC_API_KEY = FAKE_KEYS.openai;
+        const { status, body } = await call('DELETE', '/ai/keys/anthropic');
+        assert.equal(status, 200);
+        assert.equal(db.settings.has('ai.providers.anthropic.api_key'), false);
+        assert.deepEqual(body, { provider: 'anthropic', key: { set: true, source: 'env', last4: null, envFallback: true } });
+        assert.deepEqual(db.audits.map((a) => [a.action, a.detail]), [['settings.ai_key_write', { provider: 'anthropic', change: 'removed' }]]);
+        assertNoKey(JSON.stringify(body) + JSON.stringify(db.audits), 'the response and audit');
+    });
+
+    it('is allowed when nothing would answer afterwards: revoking a leaked key must not be blocked', async () => {
+        saveKey('openai');
+        const { status, body } = await call('DELETE', '/ai/keys/openai');
+        assert.equal(status, 200);
+        assert.deepEqual(body.key, { set: false, source: null, last4: null, envFallback: false });
+    });
+});
+
+// ─── Test ────────────────────────────────────────────────────────────────────────────────────
+
+describe('POST /ai/test', () => {
+    it('{provider} checks the key in force with the free call and records a `key_test` row', async () => {
+        saveKey('anthropic');
+        const { status, body } = await call('POST', '/ai/test', { body: { provider: 'anthropic' } });
+        assert.equal(status, 200);
+        assert.equal(body.ok, true);
+        assert.equal(body.provider, 'anthropic');
+        assert.ok(body.elapsedMs >= 0);
+        assert.equal(hits[0]!.headers['x-api-key'], FAKE_KEYS.anthropic);
+        assert.deepEqual(usageOf('key_test').map((u) => [u.provider, u.outcome, u.usd]), [['anthropic', 'ok', 0]]);
+        assert.equal(generated.length, 0, 'a key check sends no prompt');
+        assert.equal(db.audits.length, 0, 'it writes no setting');
+    });
+
+    it('answers 200 with ok false and the kind when the provider refuses the saved key, and records that', async () => {
+        db.setSetting('ai.providers.anthropic.api_key', FAKE_KEYS.anthropic.replace('ant1', 'zzzz'), true);
+        const { status, body } = await call('POST', '/ai/test', { body: { provider: 'anthropic' } });
+        assert.equal(status, 200);
+        assert.equal(body.ok, false);
+        assert.equal(body.error.kind, 'auth');
+        assertNoKey(JSON.stringify(body) + logs.join('\n'), 'the answer and the log', [FAKE_KEYS.anthropic.replace('ant1', 'zzzz')]);
+        assert.deepEqual(usageOf('key_test').map((u) => u.outcome), ['auth']);
+    });
+
+    it('with a key from the environment tests that one', async () => {
+        process.env.OPENROUTER_API_KEY = FAKE_KEYS.openrouter;
+        const { body } = await call('POST', '/ai/test', { body: { provider: 'openrouter' } });
+        assert.equal(body.ok, true);
+    });
+
+    it('refuses a provider with no key, Custom with no base URL, an unknown provider, and a body that is neither or both', async () => {
+        assert.match((await call('POST', '/ai/test', { body: { provider: 'openai' } })).body.error, /No API key is saved for OpenAI/);
+        assert.match((await call('POST', '/ai/test', { body: { provider: 'custom' } })).body.error, /has no base URL saved/);
+        for (const body of [{ provider: 'mistral' }, {}, { provider: 'anthropic', purpose: 'onboarding_draft' }, { purpose: 'key_test' }, { purpose: 'nope' }]) {
+            assert.equal((await call('POST', '/ai/test', { body })).status, 400, JSON.stringify(body));
+        }
+        assert.equal(hits.length, 0);
+        assert.equal(db.usage.length, 0);
+    });
+
+    it('{purpose} sends one tiny structured call down that route, as `key_test`, charged to no tenant', async () => {
+        saveKey('anthropic');
+        const { status, body } = await call('POST', '/ai/test', { body: { purpose: 'onboarding_draft' } });
+        assert.equal(status, 200);
+        assert.deepEqual(
+            { ok: body.ok, purpose: body.purpose, provider: body.provider, model: body.model, usage: body.usage, usd: body.usd, priced: body.priced },
+            { ok: true, purpose: 'onboarding_draft', provider: 'anthropic', model: 'claude-opus-5-5', usage: { in: 40, out: 6 }, usd: 0.00028, priced: true }
+        );
+        assert.equal(generated.length, 1);
+        assert.deepEqual(generated[0]!.schema, { type: 'OBJECT', properties: { ok: { type: 'BOOLEAN' } }, required: ['ok'] });
+        assert.equal(generated[0]!.effort, 'low');
+        assert.equal(generated[0]!.user, 'ping');
+        const rows = usageOf('key_test');
+        assert.equal(rows.length, 1);
+        assert.deepEqual([rows[0]!.creator_id, rows[0]!.outcome, rows[0]!.input_tokens, rows[0]!.output_tokens], [null, 'ok', 40, 6]);
+        assert.equal(usageOf('onboarding_draft').length, 0, 'it is a test, not onboarding spend');
+    });
+
+    it('goes through the router: a saved route\'s provider answers, and the Mac guard does not apply (no tenant)', async () => {
+        saveKey('anthropic');
+        db.setSetting('ai.routing', JSON.stringify({ tenant_monteur_think: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } }));
+        const { body } = await call('POST', '/ai/test', { body: { purpose: 'tenant_monteur_think' } });
+        assert.equal(body.ok, true);
+        assert.equal(generated[0]!.model, 'claude-sonnet-5-5');
+    });
+
+    it('reports a failed route test as ok false with the kind, and records what it was billed', async () => {
+        saveKey('anthropic');
+        generateAnswer = () => { throw new AiError({ kind: 'refusal', provider: 'anthropic', model: 'claude-opus-5-5', message: 'declined', usage: { in: 40, out: 0 } }); };
+        const { status, body } = await call('POST', '/ai/test', { body: { purpose: 'onboarding_draft' } });
+        assert.equal(status, 200);
+        assert.equal(body.ok, false);
+        assert.equal(body.error.kind, 'refusal');
+        assert.deepEqual(usageOf('key_test').map((u) => [u.outcome, u.input_tokens]), [['refusal', 40]]);
+    });
+
+    it('is refused by the budget like any call, and says so', async () => {
+        saveKey('anthropic');
+        db.setSetting('ai.budget.daily_usd', '0');
+        const { status, body } = await call('POST', '/ai/test', { body: { purpose: 'onboarding_draft' } });
+        assert.equal(status, 200);
+        assert.equal(body.ok, false);
+        assert.equal(body.error.kind, 'budget');
+        assert.equal(generated.length, 0);
+        assert.deepEqual(usageOf('key_test').map((u) => u.outcome), ['budget']);
+    });
+
+    it('with no provider at all says `no_provider`, and records it', async () => {
+        const { body } = await call('POST', '/ai/test', { body: { purpose: 'onboarding_draft' } });
+        assert.equal(body.ok, false);
+        assert.equal(body.error.kind, 'no_provider');
+        assert.deepEqual(usageOf('key_test').map((u) => u.outcome), ['no_provider']);
+    });
+});
+
+// ─── Models, usage ───────────────────────────────────────────────────────────────────────────
+
+describe('GET /ai/models/:provider', () => {
+    it('lists the provider\'s models with the saved key', async () => {
+        saveKey('anthropic');
+        const { status, body } = await call('GET', '/ai/models/anthropic');
+        assert.equal(status, 200);
+        assert.deepEqual(body, { provider: 'anthropic', models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'], truncated: false });
+        assert.equal(hits[0]!.url, 'https://api.anthropic.com/v1/models?limit=1000');
+        assert.equal(usageOf('key_test').length, 0, 'listing is not a test');
+    });
+
+    it('lists Custom\'s models from its saved base URL', async () => {
+        await call('PUT', '/ai', { body: { providers: { custom: { baseUrl: 'https://llm.example.com/v1' } } } });
+        assert.deepEqual((await call('GET', '/ai/models/custom')).body.models, ['my-model', 'other-model']);
+    });
+
+    it('is 400 with the provider\'s reason when it refuses the key, 502 when it cannot be reached, and never 401', async () => {
+        db.setSetting('ai.providers.anthropic.api_key', FAKE_KEYS.anthropic.replace('ant1', 'zzzz'), true);
+        const refused = await call('GET', '/ai/models/anthropic');
+        assert.equal(refused.status, 400);
+        assert.equal(refused.body.kind, 'auth');
+        assertNoKey(JSON.stringify(refused.body), 'the refusal', [FAKE_KEYS.anthropic.replace('ant1', 'zzzz')]);
+        providerAnswer = () => jsonResponse(500, {});
+        assert.equal((await call('GET', '/ai/models/anthropic')).status, 502);
+    });
+
+    it('is 400 for a provider with no key or no base URL, and 404 for one that does not exist', async () => {
+        assert.equal((await call('GET', '/ai/models/openai')).status, 400);
+        assert.equal((await call('GET', '/ai/models/custom')).status, 400);
+        assert.equal((await call('GET', '/ai/models/mistral')).status, 404);
+        assert.equal(hits.length, 0);
+    });
+
+    it('caps a very long list', async () => {
+        saveKey('anthropic');
+        providerAnswer = () => jsonResponse(200, { data: Array.from({ length: 700 }, (_, i) => ({ id: `model-${i}` })) });
+        const { body } = await call('GET', '/ai/models/anthropic');
+        assert.equal(body.models.length, 500);
+        assert.equal(body.truncated, true);
+    });
+});
+
+describe('GET /ai/usage', () => {
+    it('summarises today and the month, by purpose and tenant', async () => {
+        db.seedUsage({ usd: 0.25, at: new Date(), creator_id: OWNER, purpose: 'onboarding_draft', input_tokens: 100, output_tokens: 50 });
+        const { status, body } = await call('GET', '/ai/usage');
+        assert.equal(status, 200);
+        assert.equal(body.period, 'day');
+        assert.equal(body.today.calls, 1);
+        assert.equal(body.today.usd, 0.25);
+        assert.deepEqual(body.byPurpose.map((p: any) => [p.purpose, p.calls, p.tokensIn, p.tokensOut]), [['onboarding_draft', 1, 100, 50]]);
+        assert.equal(body.byTenant[0].creatorId, OWNER);
+        assert.equal((await call('GET', '/ai/usage', { query: { period: 'month' } })).body.period, 'month');
+        assert.equal((await call('GET', '/ai/usage', { query: { period: 'year' } })).body.period, 'day', 'anything else is the day');
+    });
+});
+
+// ─── Masking, end to end ─────────────────────────────────────────────────────────────────────
+
+describe('masking: no key is ever in a response, a log, an audit row or a usage row', () => {
+    it('after every key has been saved, tested, listed, replaced and removed, and a provider has echoed each back', async () => {
+        providerAnswer = (hit) => {
+            // A provider that repeats whatever credential it was sent in its own error text.
+            const sent = hit.headers['x-api-key'] ?? hit.headers.authorization ?? '';
+            if (sent.includes('wrong')) return jsonResponse(401, { error: { message: `Incorrect API key provided: ${sent}` } });
+            return goodProvider(hit);
+        };
+        const bodies: unknown[] = [];
+        // The status is asserted too: a response the guard withheld is a 500 with no key in it, which would pass a search for a key.
+        const send = async (method: string, url: string, body?: unknown, expected = 200) => {
+            const r = await call(method, url, { body });
+            assert.equal(r.status, expected, `${method} ${url}: ${JSON.stringify(r.body).slice(0, 200)}`);
+            bodies.push(r.body);
+            return r;
+        };
+
+        await send('PUT', '/ai', { providers: { custom: { baseUrl: 'https://llm.example.com/v1' } } });
+        await send('PUT', '/ai/keys/anthropic', { apiKey: FAKE_KEYS.anthropic });
+        await send('PUT', '/ai/keys/openrouter', { apiKey: FAKE_KEYS.openrouter });
+        await send('PUT', '/ai/keys/custom', { apiKey: FAKE_KEYS.custom });
+        await send('PUT', '/ai/keys/anthropic', { apiKey: FAKE_KEYS.anthropic.replace('ant1', 'wrong') }, 400);
+        saveKey('gemini');
+        saveKey('openai');
+        process.env.OPENAI_API_KEY = FAKE_KEYS.openai;
+        await send('GET', '/ai');
+        await send('POST', '/ai/test', { provider: 'anthropic' });
+        await send('POST', '/ai/test', { provider: 'openrouter' });
+        await send('POST', '/ai/test', { purpose: 'onboarding_draft' });
+        await send('GET', '/ai/models/anthropic');
+        await send('GET', '/ai/models/custom');
+        await send('GET', '/ai/usage');
+        await send('PUT', '/ai/keys/gemini', { apiKey: FAKE_KEYS.gemini }, 400);
+        await send('PUT', '/ai', { routing: { tenant_studio: { provider: 'openai', model: 'gpt-6-astra' } }, prices: { 'gpt-6-astra': { in: 2, out: 8 } } });
+        await send('DELETE', '/ai/keys/anthropic');
+        await send('DELETE', '/ai/keys/custom');
+        await send('GET', '/ai');
+
+        const everything = [...Object.values(FAKE_KEYS), FAKE_KEYS.anthropic.replace('ant1', 'wrong')];
+        assert.ok(bodies.length >= 17);
+        assertNoKey(JSON.stringify(bodies), 'a response', everything);
+        assertNoKey(logs.join('\n'), 'the log', everything);
+        assertNoKey(JSON.stringify(db.audits), 'an audit row', everything);
+        assertNoKey(JSON.stringify(db.usage), 'a usage row', everything);
+        // The rows that hold a key hold it encrypted, never as it was pasted.
+        for (const [name, row] of db.settings) assertNoKey(row.value, `setting ${name}`, everything);
+        assert.ok(db.audits.length >= 6, 'and the writes were audited');
+    });
+
+    it('withholds a response that would carry a saved key, instead of sending it (a key typed into a field that is shown back)', async () => {
+        saveKey('anthropic');
+        // A key-shaped string is also a legal model id. Saved as one, it would be shown back by every view.
+        const put = await call('PUT', '/ai', { body: { providers: { anthropic: { defaultModel: FAKE_KEYS.anthropic } } } });
+        assert.equal(put.status, 500);
+        assert.match(put.body.error, /withheld/);
+        assertNoKey(JSON.stringify(put.body), 'the withheld response');
+        assert.ok(logs.some((l) => l.includes('admin.ai_response_blocked')));
+        const get = await call('GET', '/ai');
+        assert.equal(get.status, 500);
+        assertNoKey(JSON.stringify(get.body), 'the next response');
+        // Clearing the field puts the screen back.
+        const clear = await call('PUT', '/ai', { body: { providers: { anthropic: { defaultModel: null } } } });
+        assert.equal(clear.status, 200);
+        assertNoKey(JSON.stringify(clear.body), 'the cleared view');
+    });
+});

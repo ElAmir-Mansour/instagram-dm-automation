@@ -63,6 +63,7 @@ import { contextFor } from '../services/profile/context.js';
 import { defaultProfile } from '../services/profile/defaults.js';
 import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
+import aiRouter from './adminAi.js';
 
 const router = Router();
 
@@ -229,6 +230,14 @@ router.delete('/gemini-key', async (req, res) => {
         failWith(res, err, 'admin.gemini_key_remove_failed', 'Failed to remove the Gemini key.');
     }
 });
+
+// ─── AI providers (P20c) ────────────────────────────────────────────────────
+
+/**
+ * Keys, routes, prices and budgets for the AI providers layer, and the checks and usage beside them (src/routes/adminAi.ts). Mounted
+ * below the platform-admin gate; the sub-router checks the role again.
+ */
+router.use('/ai', aiRouter);
 
 // ─── Media storage ──────────────────────────────────────────────────────────
 

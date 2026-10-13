@@ -10,7 +10,7 @@
  * never returned to a client — `describeSetting` reports whether one is set and a masked hint.
  */
 import { encryptSecret, decryptSecret } from '../config/crypto.js';
-import { queryOne, queryCount } from '../db/query.js';
+import { queryOne, queryCount, queryRows } from '../db/query.js';
 import type { AppSettingRow } from '../db/rows.js';
 import { log } from '../utils/log.js';
 import { CONTENT_RULE_PRESETS, type ContentRulePreset } from './profile/types.js';
@@ -115,6 +115,33 @@ export const APP_SETTING_KEYS = {
      * invite settings (P17); until then the default holds.
      */
     onboardingDefaultRules: 'onboarding.default_rules',
+    /**
+     * The AI providers layer (docs/onboarding/06, `src/services/aiProviders/settings.ts`): the operator's own API keys, one secret row per
+     * provider, each checked with the provider before it is saved. Gemini has no row here: it is `gemini.api_key` above, shared with the
+     * DM bot and the Studio. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY` are the fallbacks; Custom has none.
+     * A key is never returned by any route: the Operations card is told `{set, source, last4}` and nothing else.
+     */
+    aiProviderKeyAnthropic: 'ai.providers.anthropic.api_key',
+    aiProviderKeyOpenai: 'ai.providers.openai.api_key',
+    aiProviderKeyOpenrouter: 'ai.providers.openrouter.api_key',
+    aiProviderKeyCustom: 'ai.providers.custom.api_key',
+    /**
+     * JSON `{ "<provider>": { enabled?, defaultModel?, baseUrl?, jsonMode? } }`: what the operator changed about a provider. `baseUrl` and
+     * `jsonMode` are Custom's alone; `enabled: false` keeps a saved key out of every route and out of the default pick. Not a secret.
+     */
+    aiProviders: 'ai.providers',
+    /** JSON `{ "<purpose>": { provider, model, effort } }`: which provider and model answers each purpose. A purpose with no entry takes the first provider that has a key. Not a secret. */
+    aiRouting: 'ai.routing',
+    /** JSON `{ "<model id>": { in, out } }`: US dollars per million tokens, laid over the table the code ships (`DEFAULT_PRICES`). Not a secret. */
+    aiPrices: 'ai.prices',
+    /**
+     * Spend ceilings in US dollars over `ai_usage`, in UTC: the platform per day and per month, and each tenant per day and per month. Unset
+     * is no limit; `0` refuses every call. A call is refused once the period's spend has reached the figure. Not secrets.
+     */
+    aiBudgetDailyUsd: 'ai.budget.daily_usd',
+    aiBudgetMonthlyUsd: 'ai.budget.monthly_usd',
+    aiBudgetTenantDailyUsd: 'ai.budget.tenant_daily_usd',
+    aiBudgetTenantMonthlyUsd: 'ai.budget.tenant_monthly_usd',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
@@ -124,6 +151,10 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.youtubeClientSecret,
     APP_SETTING_KEYS.geminiApiKey,
     APP_SETTING_KEYS.mediaStorageKey,
+    APP_SETTING_KEYS.aiProviderKeyAnthropic,
+    APP_SETTING_KEYS.aiProviderKeyOpenai,
+    APP_SETTING_KEYS.aiProviderKeyOpenrouter,
+    APP_SETTING_KEYS.aiProviderKeyCustom,
 ]);
 
 export function isSecretSetting(key: AppSettingKey): boolean {
@@ -138,6 +169,25 @@ export async function getSetting(key: AppSettingKey): Promise<string | null> {
     );
     if (!row || row.value === null || row.value === '') return null;
     return row.is_secret ? decryptSecret(row.value) : row.value;
+}
+
+/**
+ * Several settings in one round trip: the decrypted value of each key, or null when unset. A key asked for is always in the map.
+ * The AI layer reads about a dozen rows per call (`src/services/aiProviders/settings.ts`), so one indexed `ANY` read replaces a dozen.
+ */
+export async function getSettings(keys: readonly AppSettingKey[]): Promise<Map<AppSettingKey, string | null>> {
+    const out = new Map<AppSettingKey, string | null>(keys.map((key) => [key, null]));
+    if (keys.length === 0) return out;
+    const rows = await queryRows<Pick<AppSettingRow, 'key' | 'value' | 'is_secret'>>(
+        'SELECT key, value, is_secret FROM app_settings WHERE key = ANY($1::text[])',
+        [keys]
+    );
+    for (const row of rows) {
+        if (!out.has(row.key as AppSettingKey)) continue;
+        if (row.value === null || row.value === '') continue;
+        out.set(row.key as AppSettingKey, row.is_secret ? decryptSecret(row.value) : row.value);
+    }
+    return out;
 }
 
 /**
@@ -168,6 +218,15 @@ export async function setSetting(
 export function maskValue(value: string): string {
     if (value.length <= 6) return '•'.repeat(value.length);
     return `${value.slice(0, 3)}${'•'.repeat(Math.max(value.length - 5, 3))}${value.slice(-2)}`;
+}
+
+/**
+ * The last four characters of a secret, for "which key is this" on the Operations screen: all the card is ever told of a key beside
+ * whether one is set. Null for a value too short for four characters to be a small part of it (a key under 12 characters is a typo,
+ * not a credential, and four of its characters would be a third of it).
+ */
+export function last4(value: string): string | null {
+    return value.length >= 12 ? value.slice(-4) : null;
 }
 
 /** What the DM bot and the Studio fail with when there is no key anywhere. */
