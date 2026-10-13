@@ -9,6 +9,7 @@
  */
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { cachedForRequest, withProfileCache } from '../services/profile/cache.js';
 import { setLogSink } from '../utils/log.js';
 import { backoffSeconds, drainJobs } from './runner.js';
 import type { EnqueueInput, Job, JobHandlerRegistry, JobKind, JobQueue } from './types.js';
@@ -336,5 +337,78 @@ describe('drainJobs', () => {
 
         await drainJobs({ queue, handlers: registry, ...budget });
         assert.deepEqual(calls, ['comment', 'dm']);
+    });
+});
+
+describe('the profile cache is per job, not per drain', () => {
+    /** A profile read that counts how often it really runs. */
+    function reads() {
+        const state = { calls: 0 };
+        const load = async (): Promise<string> => {
+            state.calls++;
+            await Promise.resolve();
+            return `profile #${state.calls}`;
+        };
+        return { state, load };
+    }
+
+    it('a job reads a tenant once however often it asks, and the next job for that tenant reads again', async () => {
+        const { state, load } = reads();
+        const seen: string[] = [];
+        const { registry } = handlersThat(async (j) => {
+            seen.push(await cachedForRequest(j.creator_id!, load));
+            seen.push(await cachedForRequest(j.creator_id!, load));
+        });
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' }), job({ id: 'c', kind: 'dm.process' as JobKind })]]);
+
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 60_000 });
+
+        assert.equal(result.succeeded, 3);
+        assert.equal(state.calls, 3, 'one read per job: a 45 s drain does not share one snapshot');
+        assert.deepEqual(seen, ['profile #1', 'profile #1', 'profile #2', 'profile #2', 'profile #3', 'profile #3']);
+    });
+
+    it('a profile saved between two jobs is seen by the second', async () => {
+        let stored = 'v1';
+        const read = async (): Promise<string> => stored;
+        const { registry } = handlersThat(async (j) => {
+            const got = await cachedForRequest(j.creator_id!, read);
+            if (j.id === 'a') {
+                assert.equal(got, 'v1');
+                stored = 'v2'; // another request saves the profile while the drain is running
+            } else {
+                assert.equal(got, 'v2');
+            }
+        });
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' })]]);
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 60_000 });
+        assert.deepEqual([result.succeeded, result.failed], [2, 0]);
+    });
+
+    it('a drain inside a request does not read the request\'s snapshot, and does not change it', async () => {
+        const { state, load } = reads();
+        const { registry } = handlersThat(async (j) => {
+            assert.equal(await cachedForRequest(j.creator_id!, load), 'profile #2', 'the job read for itself');
+        });
+        const queue = fakeQueue([[job()]]);
+
+        await withProfileCache(async () => {
+            assert.equal(await cachedForRequest('creator-1', load), 'profile #1', 'the request read it first');
+            await drainJobs({ queue, handlers: registry, budgetMs: 60_000 });
+            assert.equal(await cachedForRequest('creator-1', load), 'profile #1', 'and its own entry is still there, untouched');
+        });
+        assert.equal(state.calls, 2);
+    });
+
+    it('a job that fails still gets its own scope, and leaves nothing behind for the next', async () => {
+        const { state, load } = reads();
+        const { registry } = handlersThat(async (j) => {
+            await cachedForRequest(j.creator_id!, load);
+            if (j.id === 'a') throw new Error('boom');
+        });
+        const queue = fakeQueue([[job({ id: 'a' }), job({ id: 'b' })]]);
+        const result = await drainJobs({ queue, handlers: registry, budgetMs: 60_000, random: () => 0.5 });
+        assert.deepEqual([result.succeeded, result.failed], [1, 1]);
+        assert.equal(state.calls, 2);
     });
 });

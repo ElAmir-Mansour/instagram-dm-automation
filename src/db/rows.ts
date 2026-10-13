@@ -1122,3 +1122,40 @@ export interface RenderInfographicPayload {
     spec?: unknown;
     write?: { model: string; purpose: string; system: string; user: string; schema: Record<string, unknown> };
 }
+
+// ── Creator Profile (v33, src/services/profile/) ──
+
+// The profile's own types live next to the code that validates and views them; they are re-exported here
+// so a row type and the shape of its `profile` column are imported from one place.
+export type {
+    Address, ArabicRegister, AudienceLevel, ContentRulePreset, CreatorKind, CreatorProfile, Digits, Domain, EmojiLevel, FaqItem, Lang, MatchMode, Offer,
+    OfferCampaign, OfferKind, OnCamera, OrderVia, Presenter, ProfileTheme, Pronouns, Surface,
+} from '../services/profile/types.js';
+
+/** Who wrote a profile version (the CHECK on `creator_profile_versions.source`). */
+export type ProfileSource = 'backfill' | 'wizard' | 'user' | 'admin';
+
+export interface CreatorProfileRow {
+    creator_id: string;
+    /**
+     * Whatever the JSONB holds, so `unknown`: read through `upgradeProfile`, which merges it over the
+     * defaults, and never trusted as a `CreatorProfile`.
+     */
+    profile: unknown;
+    /** The optimistic lock: a write names the version it read and loses when another got there first. */
+    version: number;
+    /** Set when the profile first held everything activation needs; null until then. */
+    activated_at: Timestamptz | null;
+    updated_by: string | null;
+    updated_at: Timestamptz | null;
+}
+
+/** One row per version ever stored: version 1 is the backfill (or the first save), every save adds one. */
+export interface CreatorProfileVersionRow {
+    creator_id: string;
+    version: number;
+    profile: unknown;
+    source: ProfileSource;
+    updated_by: string | null;
+    created_at: Timestamptz | null;
+}

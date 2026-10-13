@@ -87,7 +87,7 @@ describe('applyGrowthPatch', () => {
 });
 
 describe('updateGrowthSettings and seoForWriter', () => {
-    const original = { query: pool.query };
+    const original = { query: pool.query, connect: pool.connect };
     let writes: { sql: string; params: any[] }[] = [];
     let restoreSink: (() => void) | undefined;
     before(() => {
@@ -101,12 +101,15 @@ describe('updateGrowthSettings and seoForWriter', () => {
             if (/^SELECT keywords/.test(sql.trim())) {
                 return { rows: [{ keywords: ['برومبت'], hashtag_sets: [{ name: 'AI', tags: ['#ai', '#prompt'] }, { name: 'B', tags: ['#ai'] }], competitors: [], audience: {} }] };
             }
-            writes.push({ sql, params });
+            // The write is a transaction now (BEGIN, the tenant lock, the locked read, COMMIT): only the upsert is a write.
+            if (/^INSERT INTO growth_settings/.test(sql.trim())) writes.push({ sql, params });
             return { rows: [], rowCount: 1 };
         };
+        (pool as any).connect = async () => ({ query: (pool as any).query, release() {} });
     });
     afterEach(() => {
         (pool as any).query = original.query;
+        (pool as any).connect = original.connect;
     });
 
     it('writes the whole normalised row, and a 400 lists the problems without writing', async () => {
