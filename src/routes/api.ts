@@ -58,6 +58,7 @@ import { formatPublishedIds, publishedPlatforms } from '../services/publishedIds
 import { droppedLeversNote, reachOptionsFor, sendsMetaOptions, validateMetaOptions } from '../services/metaOptions.js';
 import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
+import { profileRouter } from './profile.js';
 import { syncAllTenants } from '../services/growth/sync.js';
 import { sweepDeadline, sweepMonteur, type MonteurSweepResult } from '../services/monteur/sweep.js';
 
@@ -1503,6 +1504,9 @@ router.use('/studio', studioRouter);
 
 // Growth & SEO hub (GROWTH.md §3) — tenant-scoped, operator role, like the Studio.
 router.use('/growth', growthRouter);
+
+// The Creator Profile (FLOWS.md §4.7) — tenant-scoped. Any member reads it; only an owner changes it (the router carries the guard).
+router.use('/profile', profileRouter);
 
 // ─── In-tenant role guards ──────────────────────────────────────────────────
 //

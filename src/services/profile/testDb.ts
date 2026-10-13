@@ -142,10 +142,11 @@ export function installProfileDb(state: State, options: { v33?: boolean } = {}):
         return { rows: [{ profile_schema: stored?.schema ?? null, identity_timezone: stored?.identity?.timezone ?? null }] };
     });
     route(/^SELECT id FROM creators WHERE id = \$1 FOR NO KEY UPDATE$/, ([id]) => ({ rows: [{ id }] }));
-    route(/^INSERT INTO creator_profiles .* ON CONFLICT \(creator_id\) DO NOTHING RETURNING version$/, ([id, profile]) => {
+    route(/^INSERT INTO creator_profiles .* ON CONFLICT \(creator_id\) DO NOTHING RETURNING version$/, ([id, profile, by]) => {
         db.beforeProfileInsert?.();
         if (state.profiles.has(id)) return { rows: [] };
-        state.profiles.set(id, { profile: JSON.parse(profile), version: 1, activated_at: null, updated_by: null });
+        // `updated_by` is the third parameter: null for the backfill baseline, the caller for a profile that is version 1 itself.
+        state.profiles.set(id, { profile: JSON.parse(profile), version: 1, activated_at: null, updated_by: by ?? null });
         return { rows: [{ version: 1 }] };
     });
     route(/^UPDATE creator_profiles SET profile = \$2::jsonb, version = version \+ 1, updated_by = \$3, updated_at = NOW\(\) WHERE creator_id = \$1 AND version = \$4 RETURNING version$/, ([id, profile, by, expect]) => {

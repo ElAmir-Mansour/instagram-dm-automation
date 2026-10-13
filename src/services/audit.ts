@@ -134,6 +134,8 @@ export const AUDIT_ACTIONS = {
     growthSettingsWrite: 'growth.settings_write',
     /** The tenants allowed to use the operator's Mac besides the owner were set, or reset to none (G1). */
     settingsMacBrainWrite: 'settings.mac_brain_write',
+    /** The Creator Profile was changed by `PATCH /api/profile` (FLOWS.md §4.7). `detail.paths` names the sections that changed, never their values. */
+    profileWrite: 'profile.write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

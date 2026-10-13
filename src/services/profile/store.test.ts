@@ -310,6 +310,65 @@ describe('saveProfile: the legacy profile it inserts as version 1', () => {
     });
 });
 
+describe('saveProfile with startFromCaller: the caller repairs settings that are not a valid profile', () => {
+    const breakLegacy = (): void => {
+        const row = state.studio.get(OWNER)!;
+        row.infographic = { ...(row.infographic as object), primary: 'red' };
+    };
+
+    it('stores the caller\'s valid profile as version 1, with its own source and user, and nothing before it in the history', async () => {
+        breakLegacy();
+        const saved = await save(richProfile(), { startFromCaller: true });
+        assert.equal(saved.version, 1);
+        assert.deepEqual(saved.profile, richProfile());
+        assert.deepEqual(state.profiles.get(OWNER)!.profile, richProfile());
+        assert.equal(state.profiles.get(OWNER)!.version, 1);
+        assert.equal(state.profiles.get(OWNER)!.updated_by, USER);
+        assert.deepEqual(state.versions.map((v) => [v.version, v.source, v.updated_by]), [[1, 'wizard', USER]]);
+        assert.deepEqual(state.versions[0]!.profile, richProfile());
+        assert.equal((state.studio.get(OWNER)!.infographic as { primary: string }).primary, richProfile().brand.primary, 'the mirror writes the repair into the row');
+        assert.equal(at(db, /^UPDATE creator_profiles/), -1, 'there is no second write to bump a version');
+    });
+
+    it('is still a 400 when the caller\'s own profile is not valid, about THAT profile, with nothing stored', async () => {
+        breakLegacy();
+        const err = await refused(() => save({ ...richProfile(), goals: { followers: 0, views: 0 } }, { startFromCaller: true }), 'PROFILE_INVALID', 400);
+        assert.doesNotMatch(err.message, /settings this profile starts from/);
+        assert.ok(err.detail.problems!.some((p) => p.includes('goals')), err.detail.problems!.join(' | '));
+        assert.equal(state.profiles.size, 0);
+        assert.deepEqual(state.versions, []);
+    });
+
+    it('is a conflict for a caller that holds a version: it cannot have read a row that does not exist', async () => {
+        breakLegacy();
+        const err = await refused(() => save(richProfile(), { startFromCaller: true, expectVersion: 2 }), 'PROFILE_VERSION_CONFLICT', 409);
+        assert.equal(err.detail.currentVersion, undefined);
+        assert.equal(state.profiles.size, 0);
+        assert.deepEqual(state.versions, []);
+    });
+
+    it('loses to a save that created the row first (the concurrent first save)', async () => {
+        breakLegacy();
+        db.beforeProfileInsert = () => { state.profiles.set(OWNER, { profile: richProfile(), version: 1, activated_at: null, updated_by: null }); };
+        const err = await refused(() => save(richProfile(), { startFromCaller: true }), 'PROFILE_VERSION_CONFLICT', 409);
+        assert.equal(err.detail.currentVersion, 1);
+        assert.deepEqual(state.versions, [], 'nothing of ours is kept');
+    });
+
+    it('changes nothing when the legacy settings ARE valid: version 1 is still the baseline (backfill), the save is version 2', async () => {
+        const saved = await save(richProfile(), { startFromCaller: true });
+        assert.equal(saved.version, 2);
+        assert.deepEqual(state.versions.map((v) => [v.version, v.source, v.updated_by]), [[1, 'backfill', null], [2, 'wizard', USER]]);
+    });
+
+    it('is off unless asked for: the settings that cannot be version 1 are still a 400 for every other caller', async () => {
+        breakLegacy();
+        const err = await refused(() => save(richProfile()), 'PROFILE_INVALID', 400);
+        assert.match(err.message, /^The settings this profile starts from are not a valid profile yet: /);
+        assert.equal(state.profiles.size, 0);
+    });
+});
+
 describe('saveProfile: a profile the database finds too large', () => {
     const tooLarge = (): Error => Object.assign(
         new Error('new row for relation "creator_profiles" violates check constraint "creator_profiles_size"'),

@@ -311,6 +311,13 @@ export interface SaveProfileOptions {
     source: ProfileSource;
     /** The signed-in user, or null for the system (a script). */
     userId: string | null;
+    /**
+     * For a tenant with no stored profile whose legacy settings are not a valid profile themselves (a colour that is no
+     * colour, say): store the caller's own profile as version 1, if it is valid, instead of refusing. The caller is
+     * repairing exactly that (`patchProfile`), and a baseline that cannot exist is not a reason to refuse the repair.
+     * Left off, the legacy profile must be valid (the default, and what a script that never looked at it wants).
+     */
+    startFromCaller?: boolean;
 }
 
 export interface SavedProfile {
@@ -321,6 +328,9 @@ export interface SavedProfile {
 const json = (value: unknown): string => JSON.stringify(value);
 
 const problemsMessage = (problems: string[]): string => (problems.length === 1 ? problems[0]! : `${problems.length} problems with this profile.`);
+
+/** The refusal for a profile that does not validate: every problem, as one sentence when there is one and a count otherwise. */
+export const invalidProfile = (problems: string[]): ProfileError => new ProfileError('PROFILE_INVALID', 400, problemsMessage(problems), { problems });
 
 /** Postgres `check_violation` on the size cap: the profile is bigger than the table allows, however it got past the validator. */
 const isSizeViolation = (err: unknown): boolean => {
@@ -336,7 +346,9 @@ const isSizeViolation = (err: unknown): boolean => {
  *
  *  0. With no stored row, version 1 is inserted from the legacy settings first (source `backfill`), so a save never
  *     fails on a tenant the backfill has not reached. Those settings must make a valid profile themselves
- *     (`PROFILE_INVALID` if not). If the save is then refused, the insert rolls back with it.
+ *     (`PROFILE_INVALID` if not), unless the caller says `startFromCaller`: then, if they do not, `next` itself is
+ *     stored as version 1 (source and user the caller's, nothing before it in the history) when it is valid, and the
+ *     steps below it are done. If the save is refused, the insert rolls back with it.
  *  1. A stored profile from a newer release is refused (`PROFILE_NEWER_SCHEMA`): it would lose what that release stored.
  *  2. `validateProfile(next)`: every problem, or `PROFILE_INVALID`.
  *  3. `UPDATE … WHERE version = expectVersion`: no row is `PROFILE_VERSION_CONFLICT`.
@@ -360,7 +372,7 @@ export async function saveProfile(creatorId: string, next: unknown, options: Sav
     }
 }
 
-async function write(creatorId: string, next: unknown, { expectVersion, source, userId }: SaveProfileOptions, tx: Exec): Promise<SavedProfile> {
+async function write(creatorId: string, next: unknown, { expectVersion, source, userId, startFromCaller }: SaveProfileOptions, tx: Exec): Promise<SavedProfile> {
     // The mutex first, before any row: a Studio or Growth settings write holds it while it reads, changes and writes
     // its row, so it can neither read before this save's mirror and write after it, nor interleave with it.
     await lockTenantSettings(tx, creatorId);
@@ -377,56 +389,83 @@ async function write(creatorId: string, next: unknown, { expectVersion, source, 
     // the row is read again: `created` is then false, and a caller that read the virtual profile has lost.
     let current = await selectForUpdate(creatorId, tx);
     let created = false;
+    // Set when the caller's own profile was stored as version 1 (`startFromCaller`): there is then nothing to validate,
+    // bump or record again.
+    let first: CreatorProfile | null = null;
     if (!current) {
         const legacy = profileFromLegacy(await studioSettings(), await growthSettings());
         const legacyChecked = validateProfile(legacy);
+        let baseline: CreatorProfile;
+        let own = false;
         if ('problems' in legacyChecked) {
-            // Not the caller's profile: the tenant's present settings, which cannot be stored as version 1. Say so.
-            throw new ProfileError(
-                'PROFILE_INVALID', 400,
-                `The settings this profile starts from are not a valid profile yet: ${problemsMessage(legacyChecked.problems)}`,
-                { problems: legacyChecked.problems }
-            );
+            if (!startFromCaller) {
+                // Not the caller's profile: the tenant's present settings, which cannot be stored as version 1. Say so.
+                throw new ProfileError(
+                    'PROFILE_INVALID', 400,
+                    `The settings this profile starts from are not a valid profile yet: ${problemsMessage(legacyChecked.problems)}`,
+                    { problems: legacyChecked.problems }
+                );
+            }
+            // The caller is repairing those settings: their profile is version 1, if it is valid. A caller that holds a
+            // version cannot have read a row that does not exist.
+            const callers = validateProfile(next);
+            if ('problems' in callers) throw invalidProfile(callers.problems);
+            if (expectVersion !== null) throw versionConflict(null);
+            baseline = callers.profile;
+            own = true;
+        } else {
+            baseline = legacyChecked.profile;
         }
         const { rows } = await tx.query<{ version: number }>(
             `INSERT INTO creator_profiles (creator_id, profile, version, updated_by, updated_at)
-             VALUES ($1, $2::jsonb, 1, NULL, NOW())
+             VALUES ($1, $2::jsonb, 1, $3, NOW())
              ON CONFLICT (creator_id) DO NOTHING
              RETURNING version`,
-            [creatorId, json(legacyChecked.profile)]
+            [creatorId, json(baseline), own ? userId : null]
         );
         created = rows.length > 0;
-        if (created) await insertVersion(creatorId, 1, legacyChecked.profile, 'backfill', null, tx);
+        if (created) {
+            await insertVersion(creatorId, 1, baseline, own ? source : 'backfill', own ? userId : null, tx);
+            if (own) first = baseline;
+        }
         current = await selectForUpdate(creatorId, tx);
         if (!current) throw new Error(`creator_profiles has no row for ${creatorId} after inserting one`);
     }
 
-    // 1. Never write over a profile this release cannot fully read.
-    if (upgradeProfile(current.profile).newerSchema) {
-        throw newerSchemaError(current.version);
+    let profile: CreatorProfile;
+    let version: number;
+    if (first) {
+        profile = first;
+        version = 1;
+    } else {
+        // 1. Never write over a profile this release cannot fully read.
+        if (upgradeProfile(current.profile).newerSchema) {
+            throw newerSchemaError(current.version);
+        }
+
+        // 2. Everything wrong with it, in one answer.
+        const checked = validateProfile(next);
+        if ('problems' in checked) throw invalidProfile(checked.problems);
+        profile = checked.profile;
+
+        // 3. The version the caller read must still be the one stored. A caller that read the virtual profile has no
+        // version, and matches only the row this very save just created from the same settings; a caller that has a
+        // version cannot have read a row that did not exist until now. Either mismatch is a conflict.
+        if ((expectVersion === null) !== created) throw versionConflict(current.version);
+        const { rows } = await tx.query<{ version: number }>(
+            `UPDATE creator_profiles
+                SET profile = $2::jsonb, version = version + 1, updated_by = $3, updated_at = NOW()
+              WHERE creator_id = $1 AND version = $4
+          RETURNING version`,
+            [creatorId, json(profile), userId, expectVersion ?? current.version]
+        );
+        const saved = rows[0];
+        if (!saved) throw versionConflict(current.version);
+        version = saved.version;
+
+        // 4. The history.
+        await insertVersion(creatorId, version, profile, source, userId, tx);
     }
-
-    // 2. Everything wrong with it, in one answer.
-    const checked = validateProfile(next);
-    if ('problems' in checked) throw new ProfileError('PROFILE_INVALID', 400, problemsMessage(checked.problems), { problems: checked.problems });
-    const profile = checked.profile;
-
-    // 3. The version the caller read must still be the one stored. A caller that read the virtual profile has no
-    // version, and matches only the row this very save just created from the same settings; a caller that has a
-    // version cannot have read a row that did not exist until now. Either mismatch is a conflict.
-    if ((expectVersion === null) !== created) throw conflict(current.version);
-    const { rows } = await tx.query<{ version: number }>(
-        `UPDATE creator_profiles
-            SET profile = $2::jsonb, version = version + 1, updated_by = $3, updated_at = NOW()
-          WHERE creator_id = $1 AND version = $4
-      RETURNING version`,
-        [creatorId, json(profile), userId, expectVersion ?? current.version]
-    );
-    const saved = rows[0];
-    if (!saved) throw conflict(current.version);
-
-    // 4. The history.
-    await insertVersion(creatorId, saved.version, profile, source, userId, tx);
 
     // 5. The mirror: the same facts, in the rows the settings readers still read.
     const studio = studioView(await studioSettings(), profile);
@@ -436,12 +475,16 @@ async function write(creatorId: string, next: unknown, { expectVersion, source, 
     const growth = growthView(await growthSettings(), profile);
     await tx.query(MIRROR_GROWTH_SQL, [creatorId, json(growth.audience), growth.goal_followers, growth.goal_views]);
 
-    log('info', 'profile.saved', { creator_id: creatorId, version: saved.version, source, backfilled: created });
-    return { profile, version: saved.version };
+    log('info', 'profile.saved', { creator_id: creatorId, version, source, backfilled: created && first === null });
+    return { profile, version };
 }
 
-const conflict = (currentVersion: number): ProfileError =>
-    new ProfileError('PROFILE_VERSION_CONFLICT', 409, 'The profile changed since you opened it. Reload it and try again.', { currentVersion });
+/**
+ * The refusal for a write that started from a version that is no longer the stored one (`write` step 3, and `patchProfile`'s
+ * early check). `currentVersion` is the one to reload, and is left out when the tenant has no stored profile (null).
+ */
+export const versionConflict = (currentVersion: number | null): ProfileError =>
+    new ProfileError('PROFILE_VERSION_CONFLICT', 409, 'The profile changed since you opened it. Reload it and try again.', currentVersion === null ? {} : { currentVersion });
 
 const storageMissing = (): ProfileError =>
     new ProfileError('PROFILE_STORAGE_MISSING', 503, 'The profile tables are missing: apply migration v33 (npm run migrate).');
