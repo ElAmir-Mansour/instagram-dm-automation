@@ -22,15 +22,12 @@
         keywordMatches + src/services/matching.ts
     per-post or global campaign targeting
         src/services/matching.ts (bySpecificity, post_id)
-    AI DM replies with the tenant's own prompt and knowledge base
-        src/services/ai.ts (system_prompt, knowledge_base, HISTORY_WINDOW = 8)
-    quick replies and carousels
-        src/services/ai.ts (AiResponse.message_type)
-    the automated-service disclosure Meta requires
-        src/webhook/messaging.ts (needsDisclosure / applyDisclosure)
-    inbox, manual reply, pause the bot on one thread
-        src/routes/api.ts /conversations, /conversations/:id/messages,
-        /conversations/:id/toggle-bot
+    (Four entries stood here until 2026-10-13 and are gone, because the page
+    no longer makes the claims: AI DM replies, quick replies and carousels, the
+    automated-service disclosure, and the inbox with manual reply and a pause.
+    The code exists; the path does not work in production until Meta verifies
+    the app, so the matrix has ONE row for it, "after Meta approves the app",
+    and says it is not available today. Put the rows back only when that changes.)
     scheduling to Instagram, Facebook or both
         src/routes/api.ts /posts/scheduled; src/services/instagram.ts
         (publishInstagramPost, publishFacebookPost)
@@ -47,11 +44,24 @@
     erasure of a follower's data on request
         src/routes/admin.ts /erasure/preview, /erasure (audited, in one
         transaction — src/services/audit.ts)
-    open source, MIT
-        LICENSE, README.md
+    the server that receives comments, sends messages and publishes is
+    MIT-licensed on GitHub; the worker and the Monteur and infographic
+    templates are not open source
+        LICENSE and README.md for the server; the worker and the templates
+        live in the private, unlicensed aicourse-studio. The older entry here
+        said the whole product was open, which was false.
 
   THINGS DELIBERATELY NOT CLAIMED, and why — do not "improve" the page by
   adding them back:
+    · No AI replies to direct messages, no inbox, no disclosure line. That
+      path is parked until Meta verifies the app (CLAUDE.md, "AI DM replies
+      are parked"). The only message the page describes is a campaign's own
+      text, sent after a keyword comment.
+    · No claim that all the code is open. Only the server is MIT.
+    · No "every feature in the product": the Monteur and Infographics run on
+      the founder's accounts only until M8, so each tier says "every feature
+      open to client accounts". No "24-hour reply window" row either: it
+      described replying inside a conversation, which is parked.
     · No minute-accurate publishing time. The drain runs every ~5-15 minutes
       (.github/workflows/drain.yml says so in its own header) and
       ARCHITECTURE.md §2.4 calls the UI's minute-level promise "a genuine
@@ -1128,16 +1138,12 @@
             <article class="doc" data-doc-lang="ar" lang="ar" dir="rtl">
                 <h1>الأسعار</h1>
                 <p class="lede">
-                    خدمة مُدارة: نربط حسابك على إنستجرام وفيسبوك، ونُعِدّ الحملات والردود معك،
-                    ونتابع التشغيل. الواجهة عربية واتجاهها من اليمين إلى اليسار بشكل أصلي، لا
-                    ترجمة فوق تصميم إنجليزي.
+                    خدمة مُدارة: نربط حساباتك، ونُعِدّ معك الحملات والاستوديو،
+                    ونتابع النشر.
                 </p>
 
                 <div class="callout">
                     <p>
-                        <strong>البرنامج نفسه مفتوح المصدر برخصة MIT</strong>، ويمكنك تنزيله
-                        وتشغيله على خادمك مجاناً من
-                        <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع العلني</a>.
                         ما تدفع مقابله هنا ليس الكود: هو ربط الحساب بواجهة ميتا، والإعداد،
                         والمتابعة، ووجود مَن يُصلح العطل حين يقع.
                     </p>
@@ -1155,7 +1161,7 @@
                         <ul>
                             <li>حساب واحد مربوط (إنستجرام وصفحة فيسبوك المرتبطة به)</li>
                             <li>دخول واحد إلى لوحة التحكم</li>
-                            <li>كل ميزات المنتج، بلا استثناء</li>
+                            <li>كل الميزات المتاحة لحسابات العملاء، بلا استثناء</li>
                             <li>الإعداد والربط بميتا نقوم به عنك</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
@@ -1171,8 +1177,8 @@
                         <ul>
                             <li>حتى ثلاثة حسابات مربوطة</li>
                             <li>حتى ثلاثة مستخدمين، والتنقّل بين الحسابات من دخول واحد</li>
-                            <li>كل ميزات المنتج، بلا استثناء</li>
-                            <li>مراجعة دورية للحملات ولتوجيه الذكاء الاصطناعي معك</li>
+                            <li>كل الميزات المتاحة لحسابات العملاء، بلا استثناء</li>
+                            <li>مراجعة دورية للحملات معك</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
                         <a class="cta" data-unless="whatsapp" href="#contact-ar">اطلب عرض سعر</a>
@@ -1187,7 +1193,7 @@
                         <ul>
                             <li>أكثر من ثلاثة حسابات، والسعر بحسب العدد</li>
                             <li>دخول منفصل لكل عميل، وإلغاؤه عند انتهاء التعاقد</li>
-                            <li>كل ميزات المنتج، بلا استثناء</li>
+                            <li>كل الميزات المتاحة لحسابات العملاء، بلا استثناء</li>
                             <li>تنفيذ طلبات حذف بيانات المتابعين نيابةً عنك</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">اطلب عرض سعر على واتساب</a>
@@ -1271,28 +1277,8 @@
                         <tbody>
                             <tr><th scope="rowgroup" colspan="4">الرسائل الخاصة</th></tr>
                             <tr>
-                                <th scope="row">ردود بالذكاء الاصطناعي بتوجيهك أنت وقاعدة معرفتك</th>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row">ردود سريعة وبطاقات داخل الرسالة</th>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row">إفصاح «هذه خدمة آلية» كما تشترط ميتا</th>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row">صندوق وارد موحّد، وردّ يدوي، وإيقاف الآلي لمحادثة بعينها</th>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
+                                <th scope="row">الردود الآلية على الرسائل — بعد اعتماد ميتا للتطبيق</th>
+                                <td colspan="3">غير متاحة اليوم</td>
                             </tr>
                         </tbody>
 
@@ -1339,7 +1325,7 @@
                                 <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
                             </tr>
                             <tr>
-                                <th scope="row">مراجعة دورية للحملات وللتوجيه معك</th>
+                                <th scope="row">مراجعة دورية للحملات معك</th>
                                 <td><span class="no" aria-hidden="true">—</span><span class="sr-only">غير مشمول</span></td>
                                 <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
                                 <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مشمول</span></td>
@@ -1360,10 +1346,6 @@
                                 <th scope="row">رسالة آلية واحدة لكل شخص خلال 24 ساعة</th>
                                 <td colspan="3"><span class="yes" aria-hidden="true">✓</span><span class="sr-only">مطبَّق في كل الباقات</span></td>
                             </tr>
-                            <tr>
-                                <th scope="row">نافذة الردّ التي تسمح بها ميتا</th>
-                                <td colspan="3">24 ساعة من آخر تفاعل من الشخص</td>
-                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -1371,7 +1353,7 @@
                 <p class="tablenote">
                     أعداد الحسابات والمستخدمين أعلاه <strong>حدود اتفاق، لا حدود يفرضها
                     البرنامج</strong>: نحن مَن ينشئ الحسابات، فنلتزم بما اتفقنا عليه. أمّا سقف
-                    الإرسال ونافذة الـ 24 ساعة فمن ميتا ومن حماية الإرسال داخل التطبيق، وهي
+                    الإرسال وحدّ الرسالة الواحدة للشخص كل 24 ساعة فمن ميتا ومن حماية الإرسال داخل التطبيق، وهي
                     نفسها في كل الباقات ولا تُشترى زيادتها.
                 </p>
 
@@ -1394,10 +1376,6 @@
                     <li>
                         <strong>لا نَعِد بزمن نشر دقيق للمنشورات المجدولة.</strong> النشر يجري
                         من طابور يعمل على فترات، لا في اللحظة المحددة بالثانية.
-                    </li>
-                    <li>
-                        <strong>الردود يكتبها نموذج لغوي وقد يُخطئ.</strong> لذلك يمكنك إيقاف
-                        الردّ الآلي على أي محادثة والردّ بنفسك من صندوق الوارد.
                     </li>
                 </ul>
 
@@ -1426,12 +1404,14 @@
                 </details>
 
                 <details class="faq">
-                    <summary>هل يعرف المتابع أنه يتحدّث إلى خدمة آلية؟</summary>
+                    <summary>هل يُنشر شيء دون أن أراه؟</summary>
                     <div>
                         <p>
-                            نعم. أول رسالة في المحادثة — ومرة أخرى بعد انقطاع طويل — تُخبره
-                            بذلك، كما تشترط سياسة ميتا. أمّا الردود العامة تحت التعليقات فلا
-                            يكتبها الذكاء الاصطناعي أصلاً؛ هي نصّ تكتبه أنت في الحملة.
+                            في الوضع الافتراضي، لا: ريلز المونتير تنتظر اعتمادك واحداً واحداً،
+                            ومسودّات الكاروسيل تراجعها قبل جدولتها، والإنفوجرافيك لا يُجدوَل حتى
+                            يذكر نصّه كل عمود فيه. أمّا الحملة فتعمل وحدها: الرسالة الخاصة
+                            والردّ العام نصّان كتبتهما أنت، وإن تعذّر إرسال الرسالة الخاصة نُشر
+                            مكانها ردٌّ عامّ قصير بنصٍّ ثابت.
                         </p>
                     </div>
                 </details>
@@ -1443,7 +1423,7 @@
                             نصّ الرسائل الخاصة يُخزَّن ليظهر لك في صندوق الوارد. أمّا التعليق
                             الوارد فيُحفَظ نصّه مؤقتاً في طابور المعالجة إلى أن يُنفَّذ، ولا
                             يُنسَخ إلى سجلّ النشاط — الذي يحفظ اسم صاحب التعليق والمنشور فقط.
-                            التفصيل الكامل — وما يُرسَل إلى جوجل لتوليد الردّ — في
+                            التفصيل الكامل في
                             <a href="/privacy">سياسة الخصوصية</a>، وطريقة الحذف في
                             <a href="/data-deletion">صفحة حذف البيانات</a>.
                         </p>
@@ -1462,13 +1442,13 @@
                 </details>
 
                 <details class="faq">
-                    <summary>هل يمكنني تشغيله بنفسي بدل الاشتراك؟</summary>
+                    <summary>هل البرنامج مفتوح المصدر؟</summary>
                     <div>
                         <p>
-                            نعم. الكود مفتوح المصدر برخصة MIT، وخطوات التشغيل الذاتي في
-                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">المستودع</a>.
-                            ستحتاج حينها إلى تطبيق خاص بك لدى ميتا، وقاعدة بيانات، ومفتاح
-                            Gemini، وإلى متابعة كل ذلك بنفسك.
+                            الخادم الذي يستقبل التعليقات ويرسل الرسائل وينشر مفتوحٌ برخصة
+                            <bdi lang="en" dir="ltr">MIT</bdi> على <bdi lang="en" dir="ltr">GitHub</bdi>؛ أمّا العامل وقوالب المونتير والإنفوجرافيك فليست
+                            مفتوحة المصدر. وإن شغّلت الخادم بنفسك فستحتاج إلى تطبيق خاص بك لدى
+                            ميتا، وقاعدة بيانات، وإلى متابعة كل ذلك بنفسك.
                         </p>
                     </div>
                 </details>
@@ -1510,17 +1490,12 @@
             <article class="doc" data-doc-lang="en" lang="en" dir="ltr">
                 <h1>Pricing</h1>
                 <p class="lede">
-                    A managed service: we connect your Instagram and Facebook account, set up
-                    the campaigns and replies with you, and keep it running. The interface is
-                    Arabic and right-to-left natively — not a translation laid over an English
-                    layout.
+                    A managed service: we connect your accounts, set up campaigns and the
+                    Studio with you, and watch the publishing.
                 </p>
 
                 <div class="callout">
                     <p>
-                        <strong>The software itself is open source under the MIT licence</strong>
-                        and you can run it on your own server for free, from the
-                        <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">public repository</a>.
                         What you pay for here is not the code: it is getting the account
                         connected to Meta's API, the setup, the monitoring, and someone to fix
                         it when it breaks.
@@ -1539,7 +1514,7 @@
                         <ul>
                             <li>One connected account (Instagram plus its linked Facebook Page)</li>
                             <li>One dashboard login</li>
-                            <li>Every feature in the product, without exception</li>
+                            <li>Every feature open to client accounts, without exception</li>
                             <li>Setup and the Meta connection done for you</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
@@ -1555,8 +1530,8 @@
                         <ul>
                             <li>Up to three connected accounts</li>
                             <li>Up to three users, switching between accounts from one login</li>
-                            <li>Every feature in the product, without exception</li>
-                            <li>A regular review of your campaigns and AI instructions with you</li>
+                            <li>Every feature open to client accounts, without exception</li>
+                            <li>A regular review of your campaigns with you</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
                         <a class="cta" data-unless="whatsapp" href="#contact-en">Request a quote</a>
@@ -1571,7 +1546,7 @@
                         <ul>
                             <li>More than three accounts, priced by how many</li>
                             <li>A separate login per client, revoked when the contract ends</li>
-                            <li>Every feature in the product, without exception</li>
+                            <li>Every feature open to client accounts, without exception</li>
                             <li>Follower data-deletion requests carried out for you</li>
                         </ul>
                         <a class="cta" data-when="whatsapp" href="{{WHATSAPP_URL}}" target="_blank" rel="noopener noreferrer">Request a quote on WhatsApp</a>
@@ -1656,28 +1631,8 @@
                         <tbody>
                             <tr><th scope="rowgroup" colspan="4">Direct messages</th></tr>
                             <tr>
-                                <th scope="row">AI replies using your own instructions and knowledge base</th>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row">Quick replies and carousels inside the message</th>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row">The automated-service disclosure Meta requires</th>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row">Shared inbox, manual replies, and pausing the bot on one thread</th>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
-                                <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
+                                <th scope="row">Automated replies to messages — after Meta approves the app</th>
+                                <td colspan="3">Not available today</td>
                             </tr>
                         </tbody>
 
@@ -1724,7 +1679,7 @@
                                 <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
                             </tr>
                             <tr>
-                                <th scope="row">A regular review of campaigns and instructions with you</th>
+                                <th scope="row">A regular review of campaigns with you</th>
                                 <td><span class="no" aria-hidden="true">—</span><span class="sr-only">Not included</span></td>
                                 <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
                                 <td><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Included</span></td>
@@ -1745,10 +1700,6 @@
                                 <th scope="row">One automated DM per person per 24 hours</th>
                                 <td colspan="3"><span class="yes" aria-hidden="true">✓</span><span class="sr-only">Enforced on every plan</span></td>
                             </tr>
-                            <tr>
-                                <th scope="row">The reply window Meta allows</th>
-                                <td colspan="3">24 hours from that person's last interaction</td>
-                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -1756,8 +1707,8 @@
                 <p class="tablenote">
                     The account and user counts above are <strong>limits of the agreement, not
                     limits the software enforces</strong>: we create the accounts, so we hold to
-                    what was agreed. The send ceiling and the 24-hour window are different —
-                    they come from Meta and from the app's own send protection, they are the
+                    what was agreed. The send ceiling and the one-message-per-person-per-24-hours rule
+                    are different — they come from Meta and from the app's own send protection, they are the
                     same on every plan, and more of them cannot be bought.
                 </p>
 
@@ -1782,11 +1733,6 @@
                     <li>
                         <strong>No exact publishing time for scheduled posts.</strong> They
                         publish from a queue that runs at intervals, not on the second.
-                    </li>
-                    <li>
-                        <strong>Replies are written by a language model and can be wrong.</strong>
-                        That is why you can pause the automated reply on any conversation and
-                        answer it yourself from the inbox.
                     </li>
                 </ul>
 
@@ -1817,13 +1763,15 @@
                 </details>
 
                 <details class="faq">
-                    <summary>Does the follower know they are talking to an automated service?</summary>
+                    <summary>Does anything go out without me seeing it?</summary>
                     <div>
                         <p>
-                            Yes. The first message in a thread — and another after a long gap —
-                            says so, as Meta's policy requires. Public replies under comments
-                            are not written by AI at all; they are text you write on the
-                            campaign.
+                            By default, no: the Monteur's reels wait for your approval one by
+                            one, carousel drafts are yours to review before they're scheduled,
+                            and an infographic can't be scheduled until its caption names every
+                            column. A campaign does run on its own: the private message and the
+                            public reply are text you wrote, and if the private message can't
+                            be delivered, a short fixed public reply goes out instead.
                         </p>
                     </div>
                 </details>
@@ -1835,8 +1783,7 @@
                             Direct-message text is stored so it can appear in your inbox. An
                             incoming comment's text is held in the processing queue until the
                             reply is sent, and is not copied into the activity log — which keeps
-                            only who commented and on which post. The full detail — including
-                            what is sent to Google to generate a reply — is in the
+                            only who commented and on which post. The full detail is in the
                             <a href="/privacy">privacy policy</a>, and the deletion procedure is
                             on the <a href="/data-deletion">data deletion page</a>.
                         </p>
@@ -1855,14 +1802,14 @@
                 </details>
 
                 <details class="faq">
-                    <summary>Can I run it myself instead of subscribing?</summary>
+                    <summary>Is it open source?</summary>
                     <div>
                         <p>
-                            Yes. The code is open source under the MIT licence and the
-                            self-hosting steps are in the
-                            <a href="https://github.com/ElAmir-Mansour/instagram-dm-automation" target="_blank" rel="noopener noreferrer">repository</a>.
-                            You would need your own Meta app, a database, a Gemini key, and to
-                            keep an eye on all of it yourself.
+                            The server that receives comments, sends messages and publishes is
+                            MIT-licensed on GitHub. The worker and the Monteur and infographic
+                            templates are not. If you run the server yourself you would need your
+                            own Meta app and a database, and to keep an eye on all of it
+                            yourself.
                         </p>
                     </div>
                 </details>
@@ -1937,8 +1884,8 @@
                     <bdi class="latin" lang="en" dir="ltr">AutoReply Pro</bdi>
                 </a>
                 <p class="foot-what">
-                    <bdi class="t-ar" lang="ar" dir="rtl">من تعليق إلى محادثة خاصة على إنستجرام وفيسبوك، ونشرٌ مجدول يصل تيك توك أيضاً، واستوديو للكاروسيل. بالعربية أولاً.</bdi>
-                    <bdi class="t-en" lang="en" dir="ltr">Comments into private conversations on Instagram and Facebook, scheduled posts that reach TikTok too, and a Carousel Studio. Arabic-first.</bdi>
+                    <bdi class="t-ar" lang="ar" dir="rtl">استوديو نموّ مُدار لصنّاع المحتوى العرب: ريلز وكاروسيل وإنفوجرافيك، ونشرٌ على إنستجرام وفيسبوك وتيك توك ويوتيوب، ومن التعليق إلى الرسالة الخاصة.</bdi>
+                    <bdi class="t-en" lang="en" dir="ltr">A managed growth studio for Arabic creators: reels, carousels and infographics, publishing to Instagram, Facebook, TikTok and YouTube, and comments into private messages.</bdi>
                 </p>
             </div>
 
@@ -1947,6 +1894,8 @@
                     <p class="foot-h" id="foot-h-product"><bdi class="t-ar" lang="ar">المنتج</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Product</bdi></p>
                     <a href="/#features"><bdi class="t-ar" lang="ar">الميزات</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Features</bdi></a>
                     <a href="/#carousel-studio"><bdi class="t-ar" lang="ar">استوديو الكاروسيل</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Carousel Studio</bdi></a>
+                    <a href="/#monteur"><bdi class="t-ar" lang="ar">المونتير</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Monteur</bdi></a>
+                    <a href="/#infographics"><bdi class="t-ar" lang="ar">الإنفوجرافيك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Infographics</bdi></a>
                     <a href="/#tiktok"><bdi class="t-ar" lang="ar">تيك توك</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">TikTok</bdi></a>
                     <a href="/pricing" aria-current="page"><bdi class="t-ar" lang="ar">الأسعار</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Pricing</bdi></a>
                     <a href="/dashboard"><bdi class="t-ar" lang="ar">تسجيل الدخول</bdi><span class="t-sep"> · </span><bdi class="t-en" lang="en" dir="ltr">Sign in</bdi></a>
