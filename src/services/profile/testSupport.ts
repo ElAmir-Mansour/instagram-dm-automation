@@ -1,8 +1,11 @@
 /**
- * What the profile tests share: the scrambler the lens laws need, a path walker, and a fully filled
- * profile whose every value is different from every other, so a field that lands in the wrong place
- * cannot hide behind an equal neighbour. Imported by tests only; production code never reads it.
+ * What the profile tests share: the scrambler the lens laws need, a path walker, the way Postgres
+ * stores a JSON object, the shipped campaigns screen, and a fully filled profile whose every value is
+ * different from every other, so a field that lands in the wrong place cannot hide behind an equal
+ * neighbour. Imported by tests only; production code never reads it.
  */
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 import type { CreatorProfile } from './types.js';
 
 type Loose = Record<string, unknown>;
@@ -57,6 +60,39 @@ export function leafPaths(value: unknown, prefix = ''): string[] {
     return Object.entries(value).flatMap(([key, v]) => leafPaths(v, prefix ? `${prefix}.${key}` : key));
 }
 
+/**
+ * `value` as Postgres hands a jsonb column back: object keys sorted by length, then by their bytes (arrays
+ * keep their order). A profile read from `creator_profiles` has been through this, so a reader that only
+ * works on the key order it was written in is wrong in production and right in every test that skips it.
+ */
+export function jsonbReorder<T>(value: T): T {
+    if (Array.isArray(value)) return value.map(jsonbReorder) as T;
+    if (!isObj(value)) return value;
+    const bytes = (k: string): Buffer => Buffer.from(k, 'utf8');
+    const keys = Object.keys(value).sort((a, b) => bytes(a).length - bytes(b).length || Buffer.compare(bytes(a), bytes(b)));
+    return Object.fromEntries(keys.map((k) => [k, jsonbReorder(value[k])])) as T;
+}
+
+/** `value` as the database stores and returns it: serialised, and its keys reordered the way jsonb does. */
+export const throughJsonb = <T>(value: T): T => jsonbReorder(JSON.parse(JSON.stringify(value)) as T);
+
+/**
+ * The REAL shipped campaigns screen, run in a bare context (the way golden.test.ts runs it): it only declares
+ * CampaignsPage and registers its actions. `inside` reads a value out of it as plain JSON.
+ */
+export function loadCampaignsPage(): vm.Context {
+    const file = new URL('../../../dashboard/js/pages/campaigns.js', import.meta.url);
+    const ctx = vm.createContext({
+        UI: { registerActions: () => {}, showModal: () => {}, formatNumber: (n: unknown) => String(n), button: () => '' },
+        html: Object.assign(() => '', { raw: (s: unknown) => s }),
+        t: (key: string) => key,
+    });
+    vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: 'dashboard/js/pages/campaigns.js' });
+    return ctx;
+}
+
+export const inside = (ctx: vm.Context, expression: string): any => JSON.parse(vm.runInContext(`JSON.stringify(${expression})`, ctx));
+
 /** Freezes `value` all the way down, so a function that mutates its input throws instead of passing. */
 export function deepFreeze<T>(value: T): T {
     if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
@@ -97,7 +133,7 @@ export function richProfile(): CreatorProfile {
             {
                 id: 'main', kind: 'program', name: 'Twelve-week program', order_via: 'url', url: 'https://samifit.example/program?ref=ig', price: '$99',
                 facts: ['12 weeks', 'Video lessons', 'Weekly check-in'], bullets: ['✅ A plan every week', '✅ Replies within a day'], keyword: 'plan', primary: true,
-                campaign: { match: 'word', keywords: ['plan', 'program'], dm_template: 'Hi {username}, the program is here: {url}', public_replies: ['Sent to your DMs!', 'Check your messages'] },
+                campaign: { name_match: 'twelve-week', match: 'word', keywords: ['plan', 'program'], dm_template: 'Hi {username}, the program is here: {url}', public_replies: ['Sent to your DMs!', 'Check your messages'] },
             },
         ],
         audience: {
@@ -106,7 +142,7 @@ export function richProfile(): CreatorProfile {
         },
         voice: {
             guide: 'Warm, direct, never preachy.', tone: ['warm', 'direct'], samples: ['Ten minutes is enough. Start now.'], use_words: ['simple'],
-            avoid_words: ['hack'], emoji: 'rich', address: 'you',
+            avoid_words: ['hack'], emoji: 'rich', address: 'plural',
         },
         presenter: { name: 'Sami', pronouns: 'she', on_camera: 'mixed' },
         content: {
@@ -116,7 +152,6 @@ export function richProfile(): CreatorProfile {
         brand: { primary: '#112233', accent: '#AABBCC', font_display: 'Tajawal', logo_url: UPLOAD_A, portrait_url: UPLOAD_B, theme: 'light' },
         socials: { handle: '@sami.fit', site: 'samifit.example', platforms: ['instagram', 'youtube'], links: { instagram: 'https://instagram.com/sami.fit' } },
         dm: {
-            knowledge: 'Prices: the program is $99. Refunds within 14 days.',
             faq: [{ q: 'How much is it?', a: '$99, once.' }],
             handoff: { when: 'The person asks for a refund', message: 'A person will reply to you soon.' },
             hours: { days: [0, 1, 2, 3, 4], from: '09:00', to: '17:00' },

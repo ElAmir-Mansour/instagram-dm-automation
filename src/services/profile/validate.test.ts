@@ -11,8 +11,7 @@ import {
     DISPLAY_FONTS, defaultStudioSettings, INFOGRAPHIC_SOCIALS, INFOGRAPHIC_THEMES, settingsProblems,
 } from '../studio/settings.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
-import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
-import { defaultProfile, upgradeProfile } from './defaults.js';
+import { defaultProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import { richProfile, UPLOAD_A, UPLOAD_B } from './testSupport.js';
 import {
@@ -145,18 +144,17 @@ describe('validateProfile: every limit in 01 §1, at the limit and one past it',
         ['identity.niche', PROFILE_LIMITS.niche, (p, v) => { p.identity.niche = v; }],
         ['audience.description', PROFILE_LIMITS.audienceDescription, (p, v) => { p.audience.description = v; }],
         ['voice.guide', PROFILE_LIMITS.guide, (p, v) => { p.voice.guide = v; }],
-        ['voice.address', PROFILE_LIMITS.address, (p, v) => { p.voice.address = v; }],
         ['presenter.name', PROFILE_LIMITS.presenterName, (p, v) => { p.presenter!.name = v; }],
         ['offers[1].id', PROFILE_LIMITS.offerId, (p, v) => { p.offers[1]!.id = v; }],
         ['offers[1].name', PROFILE_LIMITS.offerName, (p, v) => { p.offers[1]!.name = v; }],
         ['offers[1].url', PROFILE_LIMITS.offerUrl, (p, v) => { p.offers[1]!.url = `https://example.com/${v.slice(20)}`; }],
         ['offers[1].price', PROFILE_LIMITS.offerPrice, (p, v) => { p.offers[1]!.price = v; }],
         ['offers[1].keyword', PROFILE_LIMITS.offerKeyword, (p, v) => { p.offers[1]!.keyword = v; }],
+        ['offers[1].campaign.name_match', PROFILE_LIMITS.campaignName, (p, v) => { p.offers[1]!.campaign!.name_match = v; }],
         ['offers[1].campaign.dm_template', PROFILE_LIMITS.campaignDm, (p, v) => { p.offers[1]!.campaign!.dm_template = v; }],
         ['socials.handle', PROFILE_LIMITS.handle, (p, v) => { p.socials.handle = v; }],
         ['socials.site', PROFILE_LIMITS.site, (p, v) => { p.socials.site = v; }],
         ['socials.links.instagram', PROFILE_LIMITS.link, (p, v) => { p.socials.links.instagram = `https://example.com/${v.slice(20)}`; }],
-        ['dm.knowledge', PROFILE_LIMITS.knowledge, (p, v) => { p.dm.knowledge = v; }],
         ['dm.faq[0].q', PROFILE_LIMITS.faqQuestion, (p, v) => { p.dm.faq[0]!.q = v; }],
         ['dm.faq[0].a', PROFILE_LIMITS.faqAnswer, (p, v) => { p.dm.faq[0]!.a = v; }],
         ['dm.handoff.when', PROFILE_LIMITS.handoffWhen, (p, v) => { p.dm.handoff!.when = v; }],
@@ -231,7 +229,7 @@ describe('validateProfile: every limit in 01 §1, at the limit and one past it',
             id: `o${i}`, kind: 'program', name: text(200), order_via: 'url', url: `https://example.com/${text(900)}`, price: text(60),
             facts: Array.from({ length: 20 }, () => text(60)), bullets: Array.from({ length: 10 }, () => text(200)), keyword: text(80), primary: i === 0,
             campaign: {
-                match: 'word', keywords: Array.from({ length: 20 }, () => text(80)), dm_template: text(4000),
+                name_match: text(80), match: 'word', keywords: Array.from({ length: 20 }, () => text(80)), dm_template: text(4000),
                 public_replies: Array.from({ length: 10 }, () => text(300)),
             },
         }));
@@ -345,6 +343,7 @@ describe('validateProfile: formats', () => {
             ['offers[1].campaign.match', (p) => { p.offers[1].campaign.match = 'regex'; }],
             ['audience.level', (p) => { p.audience.level = 'expert'; }],
             ['voice.emoji', (p) => { p.voice.emoji = 'many'; }],
+            ['voice.address', (p) => { p.voice.address = 'you'; }],
             ['presenter.pronouns', (p) => { p.presenter.pronouns = 'it'; }],
             ['presenter.on_camera', (p) => { p.presenter.on_camera = 'puppet'; }],
             ['content.domain', (p) => { p.content.domain = 'finance'; }],
@@ -355,6 +354,9 @@ describe('validateProfile: formats', () => {
         ];
         for (const [path, edit] of wrong) refused(edit, path, /must be one of/);
         for (const kind of ['educator', 'coach', 'shop', 'agency', 'creator'] as const) accepted((p) => { p.identity.kind = kind; });
+        for (const address of ['masc', 'fem', 'plural', 'neutral'] as const) accepted((p) => { p.voice.address = address; });
+        // It used to be free text: a sentence that was a valid address then is not one now.
+        refused((p) => { (p.voice as { address: unknown }).address = 7; }, 'voice.address', /must be one of masc, fem, plural, neutral/);
         accepted((p) => { p.identity.kind = null; p.audience.level = null; p.presenter = null; });
     });
 
@@ -423,6 +425,29 @@ describe('validateProfile: the rules that cross fields', () => {
         refused((p) => { p.dm.handoff = { when: '', message: 'x' }; }, 'dm.handoff.when', /is required/);
         refused((p) => { p.dm.handoff = { when: 'x', message: ' ' }; }, 'dm.handoff.message', /is required/);
         accepted((p) => { p.dm.handoff = null; });
+    });
+
+    it('a campaign says which course name it matches, and may match none', () => {
+        refused((p) => { delete (p.offers[1]!.campaign as Partial<NonNullable<CreatorProfile['offers'][number]['campaign']>>).name_match; }, 'offers[1].campaign.name_match', /is required/);
+        refused((p) => { (p.offers[1]!.campaign as { name_match: unknown }).name_match = 5; }, 'offers[1].campaign.name_match', /must be text/);
+        accepted((p) => { p.offers[1]!.campaign!.name_match = ''; });
+        accepted((p) => { p.offers[1]!.campaign!.name_match = 'c#'; });
+    });
+
+    it('a surface that speaks Arabic needs a register, its own or the profile\'s', () => {
+        const english = (p: CreatorProfile): void => { p.language.primary = 'en'; p.language.register = null; p.language.surfaces = {}; };
+        refused((p) => { english(p); p.language.surfaces = { dm: { language: 'ar' } }; }, 'language.surfaces.dm.register', /the surface speaks Arabic and the profile has no register/);
+        refused((p) => { english(p); p.language.surfaces = { infographic: { language: 'ar' }, comments: { language: 'ar', register: 'gulf' } }; }, 'language.surfaces.infographic.register');
+        // Its own register, or the profile's, is enough.
+        accepted((p) => { english(p); p.language.surfaces = { dm: { language: 'ar', register: 'gulf' } }; });
+        accepted((p) => { english(p); p.language.register = 'egyptian'; p.language.surfaces = { dm: { language: 'ar' } }; });
+        // A surface that speaks English, or has only a register, or is not overridden, needs nothing.
+        accepted((p) => { english(p); p.language.surfaces = { dm: { language: 'en' }, carousel: { register: 'msa' }, reels: {} }; });
+        // An Arabic profile has a register already, so its surfaces never lack one; and does not say so twice.
+        accepted((p) => { p.language.surfaces = { dm: { language: 'ar' }, carousel: {} }; });
+        const found = problems((p) => { p.language.register = null; p.language.surfaces = { dm: { language: 'ar' } }; });
+        assert.equal(found.length, 1, found.join(' | '));
+        assert.match(found[0]!, /language\.register is required when the language is Arabic/);
     });
 
     it('a campaign needs a DM, and may have no keywords or replies', () => {
@@ -606,7 +631,7 @@ describe('the limits are never lower than today\'s, field by field', () => {
     it('a Studio and Growth setting at every limit is valid there, and makes a valid profile', () => {
         assert.deepStrictEqual(settingsProblems(maxStudio()), [], 'the probe settings are themselves valid');
         for (const [name, s] of [['English', maxStudio()], ['Arabic', { ...maxStudio(), voice: { ...maxStudio().voice, language: 'ar' as const, digits: 'arabic-indic' as const } }]] as const) {
-            const out = validateProfile(profileFromLegacy(s, maxGrowth(), text(PROFILE_LIMITS.knowledge)));
+            const out = validateProfile(profileFromLegacy(s, maxGrowth()));
             assert.ok('profile' in out, `${name}: ${'problems' in out ? out.problems.join('; ') : ''}`);
         }
     });
@@ -621,28 +646,9 @@ describe('the limits are never lower than today\'s, field by field', () => {
         }
     });
 
-    it('a legacy knowledge base of 60,000 characters round-trips through profileFromLegacy and validates, in Latin and in Arabic', () => {
-        // The agent's knowledge base is an unbounded TEXT column today, so this limit is a ceiling.
-        // Arabic letters are two bytes each, so the Arabic case is the one the 128 KB of the whole profile could refuse.
-        for (const [name, kb] of [['Latin', 'k'.repeat(PROFILE_LIMITS.knowledge)], ['Arabic', 'ك'.repeat(PROFILE_LIMITS.knowledge)]] as const) {
-            assert.equal(kb.length, 60_000);
-            const p = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH, kb);
-            assert.equal(p.dm.knowledge, kb, `${name}: the profile holds the knowledge base unchanged`);
-            const out = validateProfile(p);
-            assert.ok('profile' in out, `${name}: ${'problems' in out ? out.problems.join('; ') : ''}`);
-            assert.equal(upgradeProfile(JSON.parse(JSON.stringify(p))).dm.knowledge, kb, `${name}: and it comes back from storage`);
-            refused((q) => { q.dm.knowledge = `${kb}x`; }, 'dm.knowledge', /the limit is 60000/);
-        }
-    });
-
-    it('the whole-profile cap still applies to a long knowledge base: 60,000 Arabic letters leave room for the rest, a fat profile does not', () => {
-        const p = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH, 'ك'.repeat(PROFILE_LIMITS.knowledge));
-        const room = PROFILE_LIMITS.profileBytes - profileBytes(p);
-        assert.ok(room > 0, `the owner's profile with a 60,000-letter Arabic knowledge base is ${profileBytes(p)} bytes`);
-        p.dm.faq = Array.from({ length: 30 }, () => ({ q: 'ك'.repeat(300), a: 'ك'.repeat(2000) }));
-        const out = validateProfile(p);
-        assert.ok('problems' in out);
-        assert.match(out.problems.join('|'), /the limit is 131072/);
+    it('has no knowledge base to limit: the DM bot\'s stays an agent setting, and a profile that carries one is refused', () => {
+        refused((p) => { (p.dm as unknown as { knowledge: string }).knowledge = 'x'; }, 'dm.knowledge', /is not a profile field/);
+        assert.ok(!('knowledge' in PROFILE_LIMITS));
     });
 });
 

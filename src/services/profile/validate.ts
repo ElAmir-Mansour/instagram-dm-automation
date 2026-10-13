@@ -12,7 +12,7 @@
  * the few rules copied from it (`UPLOAD_URL`, `OFFER_URL`, the colour and time patterns) are held equal by tests.
  */
 import {
-    CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, FONTS, KINDS, LANGS, LEVELS, MATCH_MODES, OFFER_KINDS, ON_CAMERA, ORDER_VIA,
+    ADDRESS, CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, FONTS, KINDS, LANGS, LEVELS, MATCH_MODES, OFFER_KINDS, ON_CAMERA, ORDER_VIA,
     PRONOUNS, PROFILE_SECTIONS, REGISTERS, SOCIALS, SURFACES, THEMES,
     type CreatorProfile, type Offer,
 } from './types.js';
@@ -38,7 +38,6 @@ export const PROFILE_LIMITS = {
     neverMention: { items: 30, each: 80 },
     pillars: { items: 7, each: 60 },
     customRules: { items: 10, each: 200 },
-    address: 80,
     presenterName: 40,
     offers: 10,
     offerId: 40,
@@ -48,14 +47,13 @@ export const PROFILE_LIMITS = {
     facts: { items: 20, each: 60 },
     bullets: { items: 10, each: 200 },
     offerKeyword: 80,
+    campaignName: 80,
     campaignKeywords: { items: 20, each: 80 },
     campaignDm: 4000,
     campaignReplies: { items: 10, each: 300 },
     handle: 32,
     site: 40,
     link: 500,
-    /** An agent's knowledge base is unbounded today (a TEXT column), so this is a ceiling, not a floor: the 128 KB of the whole profile still applies. */
-    knowledge: 60_000,
     faq: 30,
     faqQuestion: 300,
     faqAnswer: 2000,
@@ -235,6 +233,11 @@ function problemsOf(raw: unknown): string[] {
                 if (!o) continue;
                 if (o.language !== undefined) oneOf(o.language, `language.surfaces.${surface}.language`, LANGS);
                 if (o.register !== undefined) oneOf(o.register, `language.surfaces.${surface}.register`, REGISTERS);
+                // A surface that speaks Arabic needs a register, its own or the profile's, as the profile itself does.
+                const speaks = o.language ?? language.primary;
+                if (speaks === 'ar' && o.register === undefined && language.register === null && language.primary !== 'ar') {
+                    add(`language.surfaces.${surface}.register is required: the surface speaks Arabic and the profile has no register`);
+                }
             }
         }
     }
@@ -255,8 +258,9 @@ function problemsOf(raw: unknown): string[] {
         text(o.keyword, `${path}.keyword`, PROFILE_LIMITS.offerKeyword);
         if (typeof o.primary !== 'boolean') add(`${path}.primary must be true or false`);
         if (o.campaign !== undefined) {
-            const c = object(o.campaign, `${path}.campaign`, ['match', 'keywords', 'dm_template', 'public_replies']);
+            const c = object(o.campaign, `${path}.campaign`, ['name_match', 'match', 'keywords', 'dm_template', 'public_replies']);
             if (c) {
+                text(c.name_match, `${path}.campaign.name_match`, PROFILE_LIMITS.campaignName);
                 oneOf(c.match, `${path}.campaign.match`, MATCH_MODES);
                 texts(c.keywords, `${path}.campaign.keywords`, PROFILE_LIMITS.campaignKeywords);
                 text(c.dm_template, `${path}.campaign.dm_template`, PROFILE_LIMITS.campaignDm, { required: true });
@@ -298,7 +302,7 @@ function problemsOf(raw: unknown): string[] {
         texts(voice.use_words, 'voice.use_words', PROFILE_LIMITS.words);
         texts(voice.avoid_words, 'voice.avoid_words', PROFILE_LIMITS.words);
         oneOf(voice.emoji, 'voice.emoji', EMOJI_LEVELS);
-        text(voice.address, 'voice.address', PROFILE_LIMITS.address);
+        oneOf(voice.address, 'voice.address', ADDRESS);
     }
 
     // presenter
@@ -343,9 +347,8 @@ function problemsOf(raw: unknown): string[] {
     }
 
     // dm
-    const dm = object(profile.dm, 'dm', ['knowledge', 'faq', 'handoff', 'hours']);
+    const dm = object(profile.dm, 'dm', ['faq', 'handoff', 'hours']);
     if (dm) {
-        text(dm.knowledge, 'dm.knowledge', PROFILE_LIMITS.knowledge);
         list(dm.faq, 'dm.faq', PROFILE_LIMITS.faq, (v, path) => {
             const item = object(v, path, ['q', 'a']);
             if (!item) return;

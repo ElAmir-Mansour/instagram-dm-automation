@@ -6,10 +6,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { DEFAULT_GOALS, defaultGrowthSettings } from '../growth/settings.js';
 import { defaultStudioSettings } from '../studio/settings.js';
-import { ELAMIR_AGENT, ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
+import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
 import { defaultProfile, upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
-import { richProfile } from './testSupport.js';
+import { richProfile, throughJsonb } from './testSupport.js';
 import type { ContentRulePreset, CreatorProfile } from './types.js';
 import { activationMissing, validateProfile } from './validate.js';
 import { growthView, studioView } from './views.js';
@@ -50,6 +50,15 @@ describe('defaultProfile', () => {
         assert.equal(en.language.register, null);
         assert.equal(en.language.digits, 'latin');
         assert.equal(en.brand.font_display, 'Inter');
+    });
+
+    it('addresses a man in Arabic, as the pools are written, and no one in particular in English', () => {
+        assert.equal(defaultProfile({ lang: 'ar' }).voice.address, 'masc');
+        assert.equal(defaultProfile({ lang: 'en' }).voice.address, 'neutral');
+    });
+
+    it('has no knowledge base: that stays an agent setting, and the DM section is the faq, the handoff and the hours', () => {
+        assert.deepStrictEqual(Object.keys(defaultProfile().dm), ['faq', 'handoff', 'hours']);
     });
 
     it('has no presenter, no offer, no role, a general domain and no kind', () => {
@@ -99,100 +108,278 @@ describe('defaultProfile', () => {
 });
 
 describe('upgradeProfile', () => {
-    it('reads anything that is not an object as the default', () => {
-        for (const raw of [null, undefined, 'x', 7, [], true]) assert.deepStrictEqual(upgradeProfile(raw), defaultProfile());
-        assert.deepStrictEqual(upgradeProfile({}), defaultProfile());
+    /** The profile after storage: serialised, and its keys reordered the way Postgres does. */
+    const stored = (p: CreatorProfile = richProfile()): any => throughJsonb(p);
+    const profileOf = (raw: unknown): CreatorProfile => upgradeProfile(raw).profile;
+
+    it('returns the profile, what it had to repair, and whether the schema is newer than this release', () => {
+        const out = upgradeProfile(richProfile());
+        assert.deepStrictEqual(Object.keys(out).sort(), ['newerSchema', 'profile', 'repaired']);
+        assert.deepStrictEqual(out.repaired, []);
+        assert.equal(out.newerSchema, false);
     });
 
-    it('is the identity on a valid profile, so a stored profile reads as it was written', () => {
-        for (const p of [richProfile(), defaultProfile(), defaultProfile({ lang: 'en' }), defaultProfile({ rules: [] }), profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH, ELAMIR_AGENT.knowledge_base)]) {
-            assert.deepStrictEqual(upgradeProfile(p), p);
-            assert.equal(JSON.stringify(upgradeProfile(p)), JSON.stringify(p));
-            // And through the database: JSONB reorders keys and keeps nothing else.
-            assert.deepStrictEqual(upgradeProfile(JSON.parse(JSON.stringify(p))), p);
+    it('reads nothing, or anything that is not an object, as the default; only a value that was stored is a repair', () => {
+        for (const raw of [null, undefined]) {
+            const out = upgradeProfile(raw);
+            assert.deepStrictEqual(out.profile, defaultProfile());
+            assert.deepStrictEqual(out.repaired, []);
+        }
+        for (const raw of ['x', 7, [], true]) {
+            const out = upgradeProfile(raw);
+            assert.deepStrictEqual(out.profile, defaultProfile());
+            assert.deepStrictEqual(out.repaired, ['profile'], `${JSON.stringify(raw)} was stored, and not kept`);
+        }
+        assert.deepStrictEqual(upgradeProfile({}), { profile: defaultProfile(), repaired: [], newerSchema: false });
+    });
+
+    it('is the identity on a valid profile, through storage, with nothing repaired', () => {
+        for (const p of [richProfile(), defaultProfile(), defaultProfile({ lang: 'en' }), defaultProfile({ rules: [] }), profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH)]) {
+            const out = upgradeProfile(stored(p));
+            assert.deepStrictEqual(out.profile, p);
+            assert.deepStrictEqual(out.repaired, []);
+            assert.equal(out.newerSchema, false);
+            // And before it: serialised, with the keys left in the order they were written.
+            assert.deepStrictEqual(upgradeProfile(JSON.parse(JSON.stringify(p))).profile, p);
         }
     });
 
-    it('fills a field a release added later with its default, section by section', () => {
-        const stored = JSON.parse(JSON.stringify(richProfile()));
-        delete stored.voice.address;
-        delete stored.identity.role;
-        delete stored.dm;
-        stored.brand = { primary: '#010203' };
-        const p = upgradeProfile(stored);
-        assert.equal(p.voice.address, '');
-        assert.equal(p.identity.role, '');
-        assert.deepStrictEqual(p.dm, defaultProfile().dm);
-        assert.equal(p.brand.primary, '#010203');
-        assert.equal(p.brand.accent, defaultProfile().brand.accent);
-        assert.equal(p.identity.niche, richProfile().identity.niche, 'what was stored is kept');
+    it('fills a field a release added later with its default, section by section, and that is not a repair', () => {
+        const raw = stored();
+        delete raw.voice.address;
+        delete raw.identity.role;
+        delete raw.dm;
+        raw.brand = { primary: '#010203' };
+        delete raw.offers[1].campaign.name_match;
+        const out = upgradeProfile(raw);
+        assert.equal(out.profile.voice.address, 'masc');
+        assert.equal(out.profile.identity.role, '');
+        assert.deepStrictEqual(out.profile.dm, defaultProfile().dm);
+        assert.equal(out.profile.brand.primary, '#010203');
+        assert.equal(out.profile.brand.accent, defaultProfile().brand.accent);
+        assert.equal(out.profile.offers[1]!.campaign!.name_match, '', 'a campaign saved before name_match existed matches no course name');
+        assert.equal(out.profile.identity.niche, richProfile().identity.niche, 'what was stored is kept');
+        assert.deepStrictEqual(out.repaired, []);
     });
 
-    it('drops what the profile has no field for, without reporting it', () => {
-        const stored = { ...richProfile(), mystery: 1, identity: { ...richProfile().identity, nickname: 'x' } };
-        assert.deepStrictEqual(upgradeProfile(stored), richProfile());
+    it('drops what the profile has no field for, and says so', () => {
+        const raw = { ...stored(), mystery: 1 };
+        raw.identity.nickname = 'x';
+        raw.offers[0].mystery = true;
+        raw.offers[1].campaign.mystery = true;
+        raw.language.surfaces.mystery = { language: 'en' };
+        raw.language.surfaces.dm.mystery = 'x';
+        raw.socials.links.myspace = 'https://example.com';
+        const out = upgradeProfile(raw);
+        assert.deepStrictEqual(out.profile, richProfile());
+        assert.deepStrictEqual([...out.repaired].sort(), [
+            'identity.nickname', 'language.surfaces.dm.mystery', 'language.surfaces.mystery', 'mystery', 'offers[0].mystery',
+            'offers[1].campaign.mystery', 'socials.links.myspace',
+        ]);
     });
 
     it('keeps the fields the default has no key for: surfaces, links, offers with campaigns, the audience timezone', () => {
-        const p = upgradeProfile(richProfile());
-        assert.deepStrictEqual(p.language.surfaces, richProfile().language.surfaces);
-        assert.deepStrictEqual(p.socials.links, richProfile().socials.links);
-        assert.deepStrictEqual(p.offers, richProfile().offers);
-        assert.equal(p.audience.timezone, 'Asia/Dubai');
+        const out = upgradeProfile(stored());
+        assert.deepStrictEqual(out.profile.language.surfaces, richProfile().language.surfaces);
+        assert.deepStrictEqual(out.profile.socials.links, richProfile().socials.links);
+        assert.deepStrictEqual(out.profile.offers, richProfile().offers);
+        assert.equal(out.profile.audience.timezone, 'Asia/Dubai');
+        const raw = stored();
+        delete raw.audience.timezone;
+        assert.equal('timezone' in profileOf(raw).audience, false);
+        raw.audience.timezone = 5;
+        const bad = upgradeProfile(raw);
+        assert.equal('timezone' in bad.profile.audience, false);
+        assert.deepStrictEqual(bad.repaired, ['audience.timezone']);
     });
 
-    it('reads a profile with no audience timezone without one, and drops surface keys it does not know', () => {
-        const stored = JSON.parse(JSON.stringify(richProfile()));
-        delete stored.audience.timezone;
-        stored.language.surfaces.mystery = { language: 'en' };
-        stored.language.surfaces.dm.mystery = 'x';
-        stored.socials.links.myspace = 'https://example.com';
-        const p = upgradeProfile(stored);
-        assert.equal('timezone' in p.audience, false);
-        assert.equal('mystery' in p.language.surfaces, false);
-        assert.deepStrictEqual(p.language.surfaces.dm, { register: 'levantine' });
-        assert.equal('myspace' in p.socials.links, false);
-    });
-
-    it('fills an offer saved before a field existed from a blank offer', () => {
-        const p = upgradeProfile({ offers: [{ id: 'a', name: 'Old offer', primary: true }] });
-        assert.deepStrictEqual(p.offers, [{ id: 'a', kind: 'other', name: 'Old offer', order_via: 'dm', url: '', price: '', facts: [], bullets: [], keyword: '', primary: true }]);
-    });
-
-    it('builds the default for the stored language, so an English profile does not get an Arabic font or register', () => {
-        const p = upgradeProfile({ language: { primary: 'en' } });
-        assert.equal(p.language.register, null);
-        assert.equal(p.language.digits, 'latin');
-        assert.equal(p.brand.font_display, 'Inter');
-        assert.equal(upgradeProfile({ language: { primary: 'ar' } }).language.register, 'msa');
+    it('builds the default for the stored language, so an English profile does not get an Arabic font, register or address', () => {
+        const en = profileOf({ language: { primary: 'en' } });
+        assert.equal(en.language.register, null);
+        assert.equal(en.language.digits, 'latin');
+        assert.equal(en.brand.font_display, 'Inter');
+        assert.equal(en.voice.address, 'neutral');
+        assert.equal(profileOf({ language: { primary: 'ar' } }).language.register, 'msa');
+        const bad = upgradeProfile({ language: { primary: 'fr' } });
+        assert.equal(bad.profile.language.primary, 'ar');
+        assert.deepStrictEqual(bad.repaired, ['language.primary']);
     });
 
     it('reads a profile with no rules key as the platform default, and one with an empty list as none', () => {
-        const stored = JSON.parse(JSON.stringify(richProfile()));
-        delete stored.content.rules;
-        assert.deepStrictEqual(upgradeProfile(stored).content.rules, ['no_women_imagery'], 'a rule that was never written must not read as a rule that was switched off');
-        stored.content.rules = [];
-        assert.deepStrictEqual(upgradeProfile(stored).content.rules, []);
-        stored.content.rules = ['no_women_imagery', 'a_preset_from_the_future'];
-        assert.deepStrictEqual(upgradeProfile(stored).content.rules, ['no_women_imagery']);
+        const raw = stored();
+        delete raw.content.rules;
+        assert.deepStrictEqual(profileOf(raw).content.rules, ['no_women_imagery'], 'a rule that was never written must not read as a rule that was switched off');
+        assert.deepStrictEqual(upgradeProfile(raw).repaired, [], 'and that is a field added later, not a repair');
+        raw.content.rules = [];
+        assert.deepStrictEqual(upgradeProfile(raw), { profile: { ...richProfile(), content: { ...richProfile().content, rules: [] } }, repaired: [], newerSchema: false });
+        raw.content.rules = ['no_women_imagery', 'a_preset_from_the_future'];
+        const out = upgradeProfile(raw);
+        assert.deepStrictEqual(out.profile.content.rules, ['no_women_imagery']);
+        assert.deepStrictEqual(out.repaired, ['content.rules']);
     });
 
-    it('survives the wrong type in a field, reading it as the default, rather than handing a reader something that throws', () => {
-        const p = upgradeProfile({ identity: 'x', voice: { tone: 'warm', emoji: 5 }, goals: { followers: 'many' }, content: null, offers: 'none', dm: { faq: {} } });
-        assert.deepStrictEqual(p, defaultProfile());
+    describe('what it checks, and names when it resets it', () => {
+        const cases: [string, (raw: any) => void, string, (p: CreatorProfile) => unknown, unknown][] = [
+            // The fields that are null by default, which a stored value of another kind must not replace.
+            ['presenter that is a string', (r) => { r.presenter = 'Sami'; }, 'presenter', (p) => p.presenter, null],
+            ['presenter missing a field', (r) => { delete r.presenter.on_camera; }, 'presenter', (p) => p.presenter, null],
+            ['presenter with a number for a name', (r) => { r.presenter.name = 5; }, 'presenter', (p) => p.presenter, null],
+            ['presenter with a pronoun that is not one', (r) => { r.presenter.pronouns = 'it'; }, 'presenter', (p) => p.presenter, null],
+            ['kind outside its list', (r) => { r.identity.kind = 'wizard'; }, 'identity.kind', (p) => p.identity.kind, null],
+            ['kind that is a number', (r) => { r.identity.kind = 7; }, 'identity.kind', (p) => p.identity.kind, null],
+            ['country that is a number', (r) => { r.identity.country = 7; }, 'identity.country', (p) => p.identity.country, null],
+            ['audience level outside its list', (r) => { r.audience.level = 'expert'; }, 'audience.level', (p) => p.audience.level, null],
+            ['handoff that is a string', (r) => { r.dm.handoff = 'x'; }, 'dm.handoff', (p) => p.dm.handoff, null],
+            ['handoff without a message', (r) => { delete r.dm.handoff.message; }, 'dm.handoff', (p) => p.dm.handoff, null],
+            ['hours whose days are not a list', (r) => { r.dm.hours.days = 'mon'; }, 'dm.hours', (p) => p.dm.hours, null],
+            ['hours whose days are not numbers', (r) => { r.dm.hours.days = ['mon']; }, 'dm.hours', (p) => p.dm.hours, null],
+            ['hours without a time', (r) => { delete r.dm.hours.to; }, 'dm.hours', (p) => p.dm.hours, null],
+            ['portrait that is a number', (r) => { r.brand.portrait_url = 3; }, 'brand.portrait_url', (p) => p.brand.portrait_url, null],
+            ['logo that is a list', (r) => { r.brand.logo_url = []; }, 'brand.logo_url', (p) => p.brand.logo_url, null],
+            // A campaign, which has no default.
+            ['campaign that is a string', (r) => { r.offers[1].campaign = 'x'; }, 'offers[1].campaign', (p) => p.offers[1]!.campaign, undefined],
+            ['campaign with a match mode that is not one', (r) => { r.offers[1].campaign.match = 'regex'; }, 'offers[1].campaign.match', (p) => p.offers[1]!.campaign!.match, 'substring'],
+            ['campaign keywords that are not a list', (r) => { r.offers[1].campaign.keywords = 'a, b'; }, 'offers[1].campaign.keywords', (p) => p.offers[1]!.campaign!.keywords, []],
+            ['campaign name_match that is a number', (r) => { r.offers[1].campaign.name_match = 5; }, 'offers[1].campaign.name_match', (p) => p.offers[1]!.campaign!.name_match, ''],
+            // The rest of the fields, by type and by list.
+            ['a section that is not an object', (r) => { r.identity = 'x'; }, 'identity', (p) => p.identity, defaultProfile().identity],
+            ['a list that is not a list', (r) => { r.voice.tone = 'warm'; }, 'voice.tone', (p) => p.voice.tone, []],
+            ['a text that is a number', (r) => { r.voice.guide = 5; }, 'voice.guide', (p) => p.voice.guide, ''],
+            ['a number that is a string', (r) => { r.goals.followers = 'many'; }, 'goals.followers', (p) => p.goals.followers, 10_000],
+            ['an emoji level outside its list', (r) => { r.voice.emoji = 'many'; }, 'voice.emoji', (p) => p.voice.emoji, 'light'],
+            ['an address outside its list', (r) => { r.voice.address = 'you'; }, 'voice.address', (p) => p.voice.address, 'masc'],
+            ['a register outside its list', (r) => { r.language.register = 'moroccan'; }, 'language.register', (p) => p.language.register, 'msa'],
+            ['an Arabic profile with no register', (r) => { r.language.register = null; }, 'language.register', (p) => p.language.register, 'msa'],
+            ['a font outside its list', (r) => { r.brand.font_display = 'Comic Sans'; }, 'brand.font_display', (p) => p.brand.font_display, 'Cairo'],
+            ['surfaces that are a list', (r) => { r.language.surfaces = []; }, 'language.surfaces', (p) => p.language.surfaces, {}],
+            ['a surface language outside its list', (r) => { r.language.surfaces.dm.language = 'fr'; }, 'language.surfaces.dm.language', (p) => p.language.surfaces.dm, { register: 'levantine' }],
+            ['links that are a string', (r) => { r.socials.links = 'x'; }, 'socials.links', (p) => p.socials.links, {}],
+            ['a link that is a number', (r) => { r.socials.links.instagram = 5; }, 'socials.links.instagram', (p) => p.socials.links, {}],
+            ['offers that are not a list', (r) => { r.offers = {}; }, 'offers', (p) => p.offers, []],
+            ['an offer that is a string', (r) => { r.offers[0] = 'x'; }, 'offers[0]', (p) => p.offers.length, 1],
+            ['an offer kind outside its list', (r) => { r.offers[0].kind = 'subscription'; }, 'offers[0].kind', (p) => p.offers[0]!.kind, 'other'],
+            ['an offer order_via outside its list', (r) => { r.offers[0].order_via = 'phone'; }, 'offers[0].order_via', (p) => p.offers[0]!.order_via, 'dm'],
+        ];
+        for (const [name, edit, path, read, expected] of cases) {
+            it(`${name}: reads as ${JSON.stringify(expected)?.slice(0, 40) ?? 'absent'} and names ${path}`, () => {
+                const raw = stored();
+                edit(raw);
+                const out = upgradeProfile(raw);
+                assert.deepStrictEqual(read(out.profile), expected);
+                assert.ok(out.repaired.includes(path), `repaired is ${JSON.stringify(out.repaired)}`);
+                assert.equal(out.newerSchema, false);
+            });
+        }
+
+        it('drops the entries of a list that are not what the list holds, and names the list', () => {
+            const raw = stored();
+            raw.voice.tone = ['warm', 5, null, 'direct'];
+            raw.dm.faq = [{ q: 'a', a: 'b' }, { q: 'only a question' }, 'x'];
+            raw.socials.platforms = ['instagram', 'myspace', 7];
+            raw.offers[1].facts = ['12 weeks', 12];
+            raw.offers[1].campaign.public_replies = [{}];
+            const out = upgradeProfile(raw);
+            assert.deepStrictEqual(out.profile.voice.tone, ['warm', 'direct']);
+            assert.deepStrictEqual(out.profile.dm.faq, [{ q: 'a', a: 'b' }]);
+            assert.deepStrictEqual(out.profile.socials.platforms, ['instagram']);
+            assert.deepStrictEqual(out.profile.offers[1]!.facts, ['12 weeks']);
+            assert.deepStrictEqual(out.profile.offers[1]!.campaign!.public_replies, []);
+            assert.deepStrictEqual([...out.repaired].sort(), ['dm.faq', 'offers[1].campaign.public_replies', 'offers[1].facts', 'socials.platforms', 'voice.tone']);
+        });
+
+        it('says nothing for a value it checks and keeps, so repaired is never noise', () => {
+            const raw = stored();
+            raw.presenter = { name: 'Sam', pronouns: 'they', on_camera: 'voice' };
+            raw.identity.kind = 'shop';
+            raw.dm.handoff = { when: 'a refund', message: 'A person will reply' };
+            raw.dm.hours = { days: [1, 2], from: '10:00', to: '14:00' };
+            raw.offers[1].campaign.match = 'substring';
+            const out = upgradeProfile(raw);
+            assert.deepStrictEqual(out.repaired, []);
+            assert.deepStrictEqual(out.profile.presenter, raw.presenter);
+            assert.deepStrictEqual(out.profile.dm.hours, raw.dm.hours);
+        });
+
+        it('survives every field being the wrong type at once, with a repair for each section it had to reset', () => {
+            const out = upgradeProfile({ identity: 'x', language: 7, offers: 'none', audience: [], voice: { tone: 'warm', emoji: 5 }, presenter: 1, content: null, brand: 3, socials: 'y', dm: { faq: {} }, goals: { followers: 'many' } });
+            assert.deepStrictEqual(out.profile, defaultProfile());
+            for (const path of ['identity', 'language', 'offers', 'audience', 'voice.tone', 'voice.emoji', 'presenter', 'content', 'brand', 'socials', 'dm.faq', 'goals.followers']) {
+                assert.ok(out.repaired.includes(path), `${path} is named: ${JSON.stringify(out.repaired)}`);
+            }
+        });
+    });
+
+    describe('a schema newer than this release', () => {
+        it('is flagged, and nothing unknown is dropped, so what a newer release stored is still on the profile', () => {
+            const raw = stored();
+            raw.schema = 2;
+            raw.mystery = { from: 'the future' };
+            raw.identity.pronunciation = 'sa-mee';
+            raw.offers[1].campaign.window = 7;
+            raw.offers[0].subscription = { monthly: true };
+            raw.language.surfaces.podcast = { language: 'en' };
+            raw.language.surfaces.dm.tone = 'formal';
+            raw.socials.links.mastodon = 'https://example.social/@sami';
+            raw.audience.age = '25-34';
+            const out = upgradeProfile(raw);
+            assert.equal(out.newerSchema, true);
+            assert.deepStrictEqual(out.repaired, [], 'unknown keys are not repairs when the schema is newer: they are kept');
+            const p = out.profile as unknown as Record<string, any>;
+            assert.deepStrictEqual(p.mystery, { from: 'the future' });
+            assert.equal(p.identity.pronunciation, 'sa-mee');
+            assert.equal(p.offers[1].campaign.window, 7);
+            assert.deepStrictEqual(p.offers[0].subscription, { monthly: true });
+            assert.deepStrictEqual(p.language.surfaces.podcast, { language: 'en' });
+            assert.equal(p.language.surfaces.dm.tone, 'formal');
+            assert.equal(p.socials.links.mastodon, 'https://example.social/@sami');
+            assert.equal(p.audience.age, '25-34');
+            assert.equal(p.schema, 2, 'the stored schema stays as stored');
+        });
+
+        it('cannot be saved by mistake: validateProfile refuses a schema other than 1', () => {
+            const raw = stored();
+            raw.schema = 2;
+            const out = validateProfile(upgradeProfile(raw).profile);
+            assert.ok('problems' in out);
+            assert.match(out.problems.join('|'), /profile\.schema must be 1/);
+        });
+
+        it('still checks the fields it knows, and names them', () => {
+            const raw = stored();
+            raw.schema = 3;
+            raw.presenter = 'x';
+            const out = upgradeProfile(raw);
+            assert.equal(out.newerSchema, true);
+            assert.deepStrictEqual(out.repaired, ['presenter']);
+        });
+
+        it('is only a schema above 1: 1, a missing one, and a garbled one are this release\'s', () => {
+            assert.equal(upgradeProfile(stored()).newerSchema, false);
+            const missing = stored();
+            delete missing.schema;
+            assert.deepStrictEqual(upgradeProfile(missing).repaired, []);
+            for (const bad of [0, 1.5, -1, 'x', null, [], {}]) {
+                const raw = stored();
+                raw.schema = bad;
+                const out = upgradeProfile(raw);
+                assert.equal(out.newerSchema, false, JSON.stringify(bad));
+                assert.equal(out.profile.schema, 1);
+                assert.deepStrictEqual(out.repaired, ['schema'], JSON.stringify(bad));
+            }
+        });
     });
 
     it('does not share anything with what it was given', () => {
-        const stored = richProfile();
-        const p = upgradeProfile(stored);
-        p.voice.tone.push('JUNK');
-        p.offers[1]!.campaign!.keywords.push('JUNK');
-        p.dm.faq[0]!.q = 'JUNK';
-        assert.deepStrictEqual(stored, richProfile());
+        const raw = stored();
+        const out = upgradeProfile(raw);
+        out.profile.voice.tone.push('JUNK');
+        out.profile.offers[1]!.campaign!.keywords.push('JUNK');
+        out.profile.dm.faq[0]!.q = 'JUNK';
+        out.profile.language.surfaces.dm!.register = 'gulf';
+        assert.deepStrictEqual(raw, stored());
     });
 
     it('the result of a valid profile is a valid profile', () => {
-        const out: CreatorProfile = upgradeProfile(JSON.parse(JSON.stringify(richProfile())));
-        assert.ok('profile' in validateProfile(out));
+        assert.ok('profile' in validateProfile(upgradeProfile(stored()).profile));
     });
 });

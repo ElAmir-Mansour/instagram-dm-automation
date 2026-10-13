@@ -11,11 +11,17 @@
  * is meant to change as defaults go neutral.
  *
  * Path (b), "through the profile" (01 §5): every builder that reads the owner's settings is also handed
- * `studioView(scramble(fixture), profileFromLegacy(fixture, growth, kb))`, the stored row with every
- * profile-owned field overwritten by junk and then read back from the owner's virtual profile. It must
- * write the same bytes into the same goldens: that is what lets P4 return the view from the readers
- * without a prompt moving. The dm and growth goldens take their knowledge base, audience and goals the
- * same way. Anything the profile failed to carry would show here as junk in a prompt.
+ * `studioView(scramble(fixture), profile)`, the stored row with every profile-owned field overwritten by
+ * junk and then read back from the owner's profile, `profileFromLegacy(fixture, growth)` after the trip a
+ * stored profile makes: serialised, its keys reordered the way Postgres does, and read through
+ * `upgradeProfile`. It must write the same bytes into the same goldens: that is what lets P4 return the
+ * view from the readers without a prompt moving. The growth goldens take their audience and goals the same
+ * way. Anything the profile failed to carry would show here as junk in a prompt. Under UPDATE_GOLDEN=1 the
+ * two paths must also agree before a file is written (golden.ts refuses to write one file twice with
+ * different bytes), so regenerating cannot hide a disagreement.
+ *
+ * The DM instruction has no path (b): its knowledge base is an agent setting, not a profile field, and the
+ * DM path reads nothing else from the profile until P8 gives it a profile context.
  *
  * Nothing here depends on the clock or on chance: the builders take their dates as parameters
  * (`runCoach`'s `now`) or embed none, and every input is a fixed fixture.
@@ -61,21 +67,34 @@ import {
 } from '../studio/testFixtures.js';
 import { videoResource } from '../youtube.js';
 import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from './golden.js';
+import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
-import { scramble } from './testSupport.js';
-import { growthView, STUDIO_PROFILE_PATHS, studioView, GROWTH_PROFILE_PATHS } from './views.js';
+import { scramble, throughJsonb } from './testSupport.js';
+import type { CreatorProfile } from './types.js';
+import { GROWTH_PROFILE_PATHS, growthView, STUDIO_PROFILE_PATHS, studioView } from './views.js';
 
 // ─── The fixtures under test ────────────────────────────────────────────────────────────────
 
 /**
+ * A tenant's profile as P4 will read it: described from its rows (`profileFromLegacy`), then stored and read
+ * back. JSONB hands the keys back sorted by length and then bytes, whatever order they were written in, so a
+ * reader that only works on the order a profile was built in works here and fails in production.
+ */
+const storedProfile = (settings: StudioSettings, growth?: GrowthSettings): CreatorProfile => {
+    const { profile, repaired, newerSchema } = upgradeProfile(throughJsonb(profileFromLegacy(settings, growth)));
+    assert.deepStrictEqual(repaired, [], 'a profile this release wrote has nothing to repair');
+    assert.equal(newerSchema, false);
+    return profile;
+};
+
+/**
  * Path (b): `settings` as the profile gives them back. The row is scrambled first, so nothing survives
- * from it that the profile does not own, and the profile is the one a tenant with no stored profile has.
- * The owner's fixtures also bring his Growth settings and his agent's knowledge base, the other two
- * rows his profile is read from.
+ * from it that the profile does not own. The owner's fixtures also bring his Growth settings, the other
+ * row his profile is read from.
  */
 const through = (settings: StudioSettings, owner: boolean): StudioSettings => studioView(
     scramble(settings, STUDIO_PROFILE_PATHS),
-    owner ? profileFromLegacy(settings, ELAMIR_GROWTH, ELAMIR_AGENT.knowledge_base) : profileFromLegacy(settings),
+    storedProfile(settings, owner ? ELAMIR_GROWTH : undefined),
 );
 
 type Variant = {
@@ -171,11 +190,6 @@ describe('the fixtures hold the owner\'s real values', () => {
 describe('DM and comment golden prompts', () => {
     it('dmSystemInstruction: his persona and knowledge base inside the fixed rules', () => {
         matchGolden('dm.system-instruction', dmSystemInstruction(ELAMIR_AGENT.system_prompt, ELAMIR_AGENT.knowledge_base));
-    });
-
-    it('dmSystemInstruction through the profile: the knowledge base is his profile\'s dm.knowledge', () => {
-        const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH, ELAMIR_AGENT.knowledge_base);
-        matchGolden('dm.system-instruction', dmSystemInstruction(ELAMIR_AGENT.system_prompt, profile.dm.knowledge));
     });
 
     it('RESPONSE_SCHEMA: what Gemini is asked to answer a DM with', () => {
@@ -444,7 +458,7 @@ describe('Growth coach golden prompts', () => {
      */
     type Rows = { growth: GrowthSettings; studio: StudioSettings };
     const TODAY: Rows = { growth: ELAMIR_GROWTH, studio: ELAMIR_SEED_SETTINGS };
-    const profile = profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH, ELAMIR_AGENT.knowledge_base);
+    const profile = storedProfile(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
     const THROUGH_THE_PROFILE: Rows = {
         growth: growthView(scramble(ELAMIR_GROWTH, GROWTH_PROFILE_PATHS), profile),
         studio: studioView(scramble(ELAMIR_SEED_SETTINGS, STUDIO_PROFILE_PATHS), profile),
@@ -554,6 +568,19 @@ describe('Campaign golden seeds', () => {
 });
 
 // ─── The net itself ─────────────────────────────────────────────────────────────────────────
+
+describe('the owner\'s profile survives storage', () => {
+    it('serialised and reordered like jsonb, it reads back as it was described, with nothing repaired', () => {
+        for (const [settings, growth] of [[ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH], [ELAMIR_SETTINGS, ELAMIR_GROWTH], [ENGLISH_SETTINGS, undefined]] as const) {
+            const described = profileFromLegacy(settings, growth);
+            const stored = throughJsonb(described);
+            assert.notEqual(JSON.stringify(stored), JSON.stringify(described), 'the keys really were reordered');
+            const out = upgradeProfile(stored);
+            assert.deepStrictEqual(out.profile, described);
+            assert.deepStrictEqual(out.repaired, []);
+        }
+    });
+});
 
 describe('the golden files', () => {
     // A name filter skips tests, so their files would look unchecked.

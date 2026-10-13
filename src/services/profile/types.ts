@@ -24,6 +24,8 @@ export const ORDER_VIA = ['url', 'dm'] as const;
 export const MATCH_MODES = ['substring', 'word'] as const;
 export const LEVELS = ['beginner', 'intermediate', 'advanced', 'mixed'] as const;
 export const EMOJI_LEVELS = ['none', 'light', 'rich'] as const;
+/** Who the Arabic lines address: a man, a woman, a group, or no one in particular (the pools are written for one reader). */
+export const ADDRESS = ['masc', 'fem', 'plural', 'neutral'] as const;
 export const PRONOUNS = ['he', 'she', 'they'] as const;
 export const ON_CAMERA = ['face', 'voice', 'mixed'] as const;
 export const DOMAINS = ['tech', 'general'] as const;
@@ -45,13 +47,31 @@ export type OrderVia = (typeof ORDER_VIA)[number];
 export type MatchMode = (typeof MATCH_MODES)[number];
 export type AudienceLevel = (typeof LEVELS)[number];
 export type EmojiLevel = (typeof EMOJI_LEVELS)[number];
+export type Address = (typeof ADDRESS)[number];
 export type Pronouns = (typeof PRONOUNS)[number];
 export type OnCamera = (typeof ON_CAMERA)[number];
 export type Domain = (typeof DOMAINS)[number];
 export type ProfileTheme = InfographicTheme;
 
-/** The comment automation an offer carries: what the owner's nine `COURSE_MAPPINGS` become. */
+/**
+ * The comment automation an offer carries: what the owner's nine `COURSE_MAPPINGS` become
+ * (dashboard/js/pages/campaigns.js), field for field and byte for byte:
+ *
+ * - `name_match`  the mapping's key ('agentic ai', 'c#'): a lower-case substring of the course name.
+ *                 The bulk import tries the keys in order and the first that the name contains wins,
+ *                 so the order of `offers` is the order of the keys. Empty: matched by no course name.
+ * - `keywords`    `triggerKeywords` (the campaign's `trigger_keyword`) split on `", "`, and joined
+ *                 back on `", "`.
+ * - `dm_template` `dmTemplate` as it is, `{url}` and `{username}` still in it.
+ * - `public_replies`  `publicReplies` (the campaign's `public_reply_template`) split on `" | "`, and
+ *                 joined back on `" | "`.
+ * - `match`       the campaign's `match_mode`; the bulk import never sets one, so it is 'substring'.
+ *
+ * A keyword containing `", "` or a reply containing `" | "` would not survive that round trip, so the
+ * text a person types into either list must not hold its own separator.
+ */
 export interface OfferCampaign {
+    name_match: string;
     match: MatchMode;
     keywords: string[];
     dm_template: string;
@@ -127,7 +147,8 @@ export interface CreatorProfile {
         use_words: string[];
         avoid_words: string[];
         emoji: EmojiLevel;
-        address: string;
+        /** Who the Arabic lines address. The owner's pools address one man, so he is 'masc'. */
+        address: Address;
     };
     presenter: Presenter | null;
     content: {
@@ -152,8 +173,11 @@ export interface CreatorProfile {
         platforms: InfographicSocial[];
         links: Partial<Record<InfographicSocial, string>>;
     };
+    /**
+     * The DM bot's own settings. Its knowledge base is not here: it stays where it is, an agent
+     * setting (`ai_agents.knowledge_base`, unbounded), and is not a fact about the creator.
+     */
     dm: {
-        knowledge: string;
         faq: FaqItem[];
         handoff: { when: string; message: string } | null;
         /** `days` are 0 (Sunday) to 6, `from` and `to` are 'HH:MM' in `identity.timezone`. */

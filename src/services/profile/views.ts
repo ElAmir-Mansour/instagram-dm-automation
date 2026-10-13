@@ -8,7 +8,7 @@
  *
  *   studioView(stored, p)        the stored row with the profile-owned fields replaced from `p`
  *   growthView(stored, p)        the same for the Growth settings
- *   intoProfile(p, s, g?, kb?)   the inverse: `p` with the profile-owned fields taken from the settings
+ *   intoProfile(p, s, g?)        the inverse: `p` with the profile-owned fields taken from the settings
  *
  * The two are a lens, and `views.test.ts` holds them to its laws:
  *   studioView(stale, intoProfile(p, s)) ≡ s        `stale` is `s` with every owned field scrambled
@@ -21,12 +21,12 @@
  */
 import type { GrowthSettings } from '../../db/rows.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
-import type { CreatorProfile, Lang, Offer, Surface } from './types.js';
+import type { ArabicRegister, CreatorProfile, Lang, Offer, Surface } from './types.js';
 import { primaryOffer } from './validate.js';
 
 /** The Studio settings the profile owns, so P4's PUT knows which paths to route into `saveProfile` (01 §2). */
 export const STUDIO_PROFILE_PATHS = [
-    'brand.name', 'brand.fonts.display', 'brand.direction',
+    'brand.name', 'brand.fonts.display',
     'voice.language', 'voice.digits', 'voice.guide', 'voice.avoid',
     'product.name', 'product.url', 'product.facts', 'product.dmBullets',
     'schedule.timezone',
@@ -69,7 +69,9 @@ function setList<T extends object, K extends keyof T>(target: T, key: K, list: r
  *
  * `product` is the primary offer. A profile with no offer has no product, and says so: the stored
  * product is not kept, or a tenant who removed their offer would still be selling it.
- * `brand.direction` is derived, not stored: right to left when the carousel speaks Arabic.
+ * `brand.direction` is the stored one: it is a setting of its own (the carousel template's reading
+ * direction, edited in Studio settings), and an Arabic row set left to right, or an English one set right
+ * to left, is a choice the profile must not undo.
  */
 export function studioView(stored: StudioSettings, p: CreatorProfile): StudioSettings {
     const offer = primaryOffer(p.offers);
@@ -81,7 +83,6 @@ export function studioView(stored: StudioSettings, p: CreatorProfile): StudioSet
             ...stored.brand,
             name: brandName(p),
             fonts: { ...stored.brand.fonts, display: p.brand.font_display },
-            direction: surfaceLanguage(p, 'carousel') === 'ar' ? 'rtl' : 'ltr',
         },
         voice,
         product: {
@@ -125,16 +126,17 @@ const hasProduct = (s: StudioSettings): boolean => Boolean(s.product.name || s.p
 
 /**
  * `p` with the profile-owned fields taken from the settings: what the profile is, given what a
- * tenant's rows already say. `g` and `kb` (the agent's knowledge base) are optional; left out, the
- * profile keeps its own audience, goals and knowledge. `null` knowledge is the agent having none.
+ * tenant's rows already say. `g` is optional; left out, the profile keeps its own audience and goals.
+ * (The DM bot's knowledge base is not a profile field: it stays an agent setting.)
  *
  * Where the view of a field is lossy (`brand.name` falls back to the display name, an empty timezone
  * reads as UTC, the infographic language is only an override of the primary), `p` keeps its own
  * value whenever the view of it already equals what the settings say. That keeps the second lens
  * law true for every profile, an empty default included, and a profile is never rewritten into
- * something that merely reads the same.
+ * something that merely reads the same. A tenant that has no profile yet must NOT be read that way:
+ * `profileFromLegacy` copies both of those fields outright.
  */
-export function intoProfile(p: CreatorProfile, s: StudioSettings, g?: GrowthSettings, kb?: string | null): CreatorProfile {
+export function intoProfile(p: CreatorProfile, s: StudioSettings, g?: GrowthSettings): CreatorProfile {
     const next = structuredClone(p);
 
     // Language. An Arabic profile needs a register to be valid, and the Studio's voice.language
@@ -147,7 +149,10 @@ export function intoProfile(p: CreatorProfile, s: StudioSettings, g?: GrowthSett
     // The infographic language is a surface override, written only when it differs from the primary.
     if (s.infographic.language !== surfaceLanguage(next, 'infographic')) {
         const { language: _was, ...rest } = next.language.surfaces.infographic ?? {};
-        const surface = s.infographic.language === next.language.primary ? rest : { ...rest, language: s.infographic.language };
+        let surface: { language?: Lang; register?: ArabicRegister } = s.infographic.language === next.language.primary ? rest : { ...rest, language: s.infographic.language };
+        // An Arabic surface needs a register, its own or the profile's (the validator says so); the Studio
+        // cannot name one, so a surface this creates for Arabic reads as MSA, as the profile's own does.
+        if (surface.language === 'ar' && !surface.register && next.language.register === null) surface = { ...surface, register: 'msa' };
         if (Object.keys(surface).length > 0) next.language.surfaces.infographic = surface;
         else delete next.language.surfaces.infographic;
     }
@@ -169,9 +174,13 @@ export function intoProfile(p: CreatorProfile, s: StudioSettings, g?: GrowthSett
     const fields = { name: s.product.name, url: s.product.url, facts: [...s.product.facts], bullets: [...s.product.dmBullets] };
     const offer = primaryOffer(next.offers);
     if (offer) {
+        const hadLink = offer.url !== '';
         Object.assign(offer, fields);
-        // A link-less offer can only be ordered by message, and an offer that says otherwise is invalid.
+        // A link-less offer can only be ordered by message, and an offer that says otherwise is invalid;
+        // one that was link-less and gets a link is ordered by it again. An offer that already had a
+        // link and says "message me" is the tenant's choice, and stays.
         if (offer.order_via === 'url' && !offer.url) offer.order_via = 'dm';
+        else if (offer.order_via === 'dm' && !hadLink && offer.url) offer.order_via = 'url';
     } else if (hasProduct(s)) {
         const created: Offer = { id: 'main', kind: 'other', ...fields, order_via: fields.url ? 'url' : 'dm', price: '', keyword: '', primary: true };
         next.offers.push(created);
@@ -184,6 +193,5 @@ export function intoProfile(p: CreatorProfile, s: StudioSettings, g?: GrowthSett
         else next.audience.timezone = g.audience.timezone;
         next.goals = { followers: g.goal_followers, views: g.goal_views };
     }
-    if (kb !== undefined) next.dm.knowledge = kb ?? '';
     return next;
 }

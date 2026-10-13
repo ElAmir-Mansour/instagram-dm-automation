@@ -9,18 +9,28 @@ import type { GrowthSettings } from '../../db/rows.js';
 import { defaultGrowthSettings } from '../growth/settings.js';
 import { defaultStudioSettings } from '../studio/settings.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
-import { ELAMIR_AGENT, ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
+import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS } from '../studio/testFixtures.js';
 import { defaultProfile } from './defaults.js';
 import { legacyBase, profileFromLegacy } from './legacy.js';
-import { deepFreeze, getAt, hasAt, leafPaths, richProfile, scramble, UPLOAD_A, UPLOAD_B } from './testSupport.js';
+import { deepFreeze, getAt, hasAt, jsonbReorder, leafPaths, richProfile, scramble, throughJsonb, UPLOAD_A, UPLOAD_B } from './testSupport.js';
 import type { CreatorProfile } from './types.js';
+import { validateProfile } from './validate.js';
 import { GROWTH_PROFILE_PATHS, growthView, intoProfile, STUDIO_PROFILE_PATHS, studioView } from './views.js';
+
+const withBrand = (s: StudioSettings, brand: Partial<StudioSettings['brand']>): StudioSettings => ({ ...s, brand: { ...s.brand, ...brand } });
+const withProductUrl = (s: StudioSettings, url: string): StudioSettings => ({ ...s, product: { ...s.product, url } });
 
 const STUDIOS: readonly [string, StudioSettings][] = [
     ['ELAMIR_SETTINGS', ELAMIR_SETTINGS],
     ['ELAMIR_SEED_SETTINGS', ELAMIR_SEED_SETTINGS],
     ['the neutral English fixture', ENGLISH_SETTINGS],
     ['the Studio defaults', defaultStudioSettings()],
+    // brand.direction is a setting of its own, edited in Studio settings, and it need not agree with the language.
+    ['an Arabic row set left to right', withBrand(ELAMIR_SEED_SETTINGS, { direction: 'ltr' })],
+    ['an English row set right to left', withBrand(ENGLISH_SETTINGS, { direction: 'rtl' })],
+    // The brand name the profile would show anyway when it holds none of its own, and a timezone it would show for none.
+    ['a brand named as the English display name', withBrand(ELAMIR_SEED_SETTINGS, { name: ELAMIR_SEED_SETTINGS.infographic.name.en })],
+    ['a timezone of UTC', { ...ELAMIR_SEED_SETTINGS, schedule: { ...ELAMIR_SEED_SETTINGS.schedule, timezone: 'UTC' } }],
 ];
 
 const GROWTHS: readonly [string, GrowthSettings][] = [
@@ -39,7 +49,7 @@ const basesFor = (s: StudioSettings): readonly [string, CreatorProfile][] => [
 
 /** Settings fields the profile does not own: how the agents work, the carousel template, the CTA words. */
 const STUDIO_KEPT = [
-    'brand.signature', 'brand.palette', 'brand.colors', 'brand.fonts.mono', 'brand.theme', 'cta', 'schedule.slots', 'library', 'examples',
+    'brand.signature', 'brand.palette', 'brand.colors', 'brand.fonts.mono', 'brand.direction', 'brand.theme', 'cta', 'schedule.slots', 'library', 'examples',
     'monteur', 'infographic.platforms',
 ];
 const GROWTH_KEPT = ['keywords', 'hashtag_sets', 'competitors'];
@@ -95,6 +105,26 @@ describe('scramble, which the laws and the golden path (b) rest on', () => {
     });
 });
 
+describe('jsonbReorder, the way golden path (b) stores a profile', () => {
+    it('sorts object keys by their length in bytes and then by the bytes, as jsonb does, and leaves arrays alone', () => {
+        const stored = jsonbReorder({ bb: 1, ا: 2, a: 3, ab: 4, longer: { z: 1, y: [{ ba: 1, c: 2 }, 'x'] } });
+        assert.deepStrictEqual(Object.keys(stored), ['a', 'ab', 'bb', 'ا', 'longer'], '«ا» is two bytes, so it follows the two-letter keys');
+        assert.deepStrictEqual(Object.keys(stored.longer), ['y', 'z']);
+        assert.deepStrictEqual(Object.keys(stored.longer.y[0] as object), ['c', 'ba']);
+        assert.deepStrictEqual(stored.longer.y[1], 'x');
+    });
+
+    it('changes the order of a real profile, and of nothing but the order', () => {
+        const p = richProfile();
+        const stored = throughJsonb(p);
+        assert.notEqual(JSON.stringify(stored), JSON.stringify(p));
+        assert.deepStrictEqual(stored, p, 'deepStrictEqual does not see key order');
+        assert.deepStrictEqual(Object.keys(stored), [
+            'dm', 'brand', 'goals', 'voice', 'offers', 'schema', 'content', 'socials', 'audience', 'identity', 'language', 'presenter',
+        ]);
+    });
+});
+
 describe('lens law 1: studioView(stale, intoProfile(p, s)) ≡ s', () => {
     for (const [name, s] of STUDIOS) {
         for (const [baseName, base] of basesFor(s)) {
@@ -127,8 +157,8 @@ describe('lens law 2: intoProfile(p, studioView(s, p)) ≡ p', () => {
     for (const [name, s] of STUDIOS) {
         for (const [baseName, base] of basesFor(s)) {
             it(`${name}, read into ${baseName}: reading the view back changes nothing`, () => {
-                const p = intoProfile(base, s, ELAMIR_GROWTH, ELAMIR_AGENT.knowledge_base);
-                same(intoProfile(p, studioView(s, p), growthView(ELAMIR_GROWTH, p), p.dm.knowledge), p);
+                const p = intoProfile(base, s, ELAMIR_GROWTH);
+                same(intoProfile(p, studioView(s, p), growthView(ELAMIR_GROWTH, p)), p);
             });
         }
     }
@@ -137,7 +167,7 @@ describe('lens law 2: intoProfile(p, studioView(s, p)) ≡ p', () => {
         const p = richProfile();
         const s = studioView(defaultStudioSettings(), p);
         const g = growthView(defaultGrowthSettings(), p);
-        same(intoProfile(p, s, g, p.dm.knowledge), p);
+        same(intoProfile(p, s, g), p);
     });
 
     it('holds where the view is lossy: an empty brand name, an empty timezone, a redundant language override', () => {
@@ -156,9 +186,19 @@ describe('lens law 2: intoProfile(p, studioView(s, p)) ≡ p', () => {
     it('holds for an empty default, which has no offer, no brand name and no timezone', () => {
         for (const lang of ['ar', 'en'] as const) {
             const p = defaultProfile({ lang });
-            same(intoProfile(p, studioView(defaultStudioSettings(), p), growthView(defaultGrowthSettings(), p), p.dm.knowledge), p);
+            same(intoProfile(p, studioView(defaultStudioSettings(), p), growthView(defaultGrowthSettings(), p)), p);
         }
     });
+});
+
+describe('both laws, for a tenant read into its virtual profile', () => {
+    for (const [name, s] of STUDIOS) {
+        it(`${name}: profileFromLegacy then the view gives the row back, and reading the view back changes nothing`, () => {
+            const p = profileFromLegacy(s, ELAMIR_GROWTH);
+            same(studioView(scramble(s, STUDIO_PROFILE_PATHS), p), s);
+            same(intoProfile(p, studioView(s, p), growthView(ELAMIR_GROWTH, p)), p);
+        });
+    }
 });
 
 describe('the same laws for the Growth settings', () => {
@@ -189,7 +229,7 @@ describe('the map from settings to profile, pinned from the profile side', () =>
     // A lens that maps two fields onto each other consistently, the wrong way round, passes both laws.
     // These say which field is which, with a portrait the seed does not have.
     const s: StudioSettings = { ...ELAMIR_SEED_SETTINGS, infographic: { ...ELAMIR_SEED_SETTINGS.infographic, photo_url: UPLOAD_A } };
-    const p = profileFromLegacy(s, ELAMIR_GROWTH, ELAMIR_AGENT.knowledge_base);
+    const p = profileFromLegacy(s, ELAMIR_GROWTH);
     const offer = p.offers[0]!;
     const table: [string, unknown, unknown][] = [
         ['identity.brand_name ← brand.name', p.identity.brand_name, s.brand.name],
@@ -217,7 +257,6 @@ describe('the map from settings to profile, pinned from the profile side', () =>
         ['audience.timezone ← growth audience.timezone', p.audience.timezone, ELAMIR_GROWTH.audience.timezone],
         ['goals.followers ← goal_followers', p.goals.followers, ELAMIR_GROWTH.goal_followers],
         ['goals.views ← goal_views', p.goals.views, ELAMIR_GROWTH.goal_views],
-        ['dm.knowledge ← the agent\'s knowledge base', p.dm.knowledge, ELAMIR_AGENT.knowledge_base],
     ];
     for (const [label, actual, expected] of table) {
         it(label, () => assert.deepStrictEqual(actual, expected));
@@ -252,18 +291,28 @@ describe('the map from settings to profile, pinned from the profile side', () =>
 });
 
 describe('what a view derives or falls back to', () => {
-    it('brand.direction is derived from the carousel surface\'s language, not stored', () => {
-        const stored = defaultStudioSettings();
-        const p = defaultProfile({ lang: 'ar' });
-        assert.equal(studioView(stored, p).brand.direction, 'rtl');
-        assert.equal(studioView(stored, defaultProfile({ lang: 'en' })).brand.direction, 'ltr');
-        const englishCarousel: CreatorProfile = { ...p, language: { ...p.language, surfaces: { carousel: { language: 'en' } } } };
-        assert.equal(studioView(stored, englishCarousel).brand.direction, 'ltr', 'an Arabic tenant whose carousels are English reads left to right');
-        const arabicCarousel: CreatorProfile = { ...defaultProfile({ lang: 'en' }), language: { ...defaultProfile({ lang: 'en' }).language, surfaces: { carousel: { language: 'ar' } } } };
-        assert.equal(studioView(stored, arabicCarousel).brand.direction, 'rtl');
-        // The other surfaces do not move it.
-        const onlyReels: CreatorProfile = { ...p, language: { ...p.language, surfaces: { reels: { language: 'en' }, infographic: { language: 'en' } } } };
-        assert.equal(studioView(stored, onlyReels).brand.direction, 'rtl');
+    it('brand.direction is the stored setting, whatever the profile\'s languages are', () => {
+        // It is the carousel template's reading direction, edited in Studio settings (studio.js) and validated as
+        // a setting of its own: an Arabic row set left to right, or an English one right to left, is a choice.
+        const ar = defaultProfile({ lang: 'ar' });
+        const en = defaultProfile({ lang: 'en' });
+        const arabicCarousel: CreatorProfile = { ...en, language: { ...en.language, surfaces: { carousel: { language: 'ar' } } } };
+        const englishCarousel: CreatorProfile = { ...ar, language: { ...ar.language, surfaces: { carousel: { language: 'en' } } } };
+        for (const direction of ['rtl', 'ltr'] as const) {
+            const stored = withBrand(defaultStudioSettings(), { direction });
+            for (const p of [ar, en, arabicCarousel, englishCarousel, richProfile()]) {
+                assert.equal(studioView(stored, p).brand.direction, direction);
+            }
+        }
+        assert.ok(!(STUDIO_PROFILE_PATHS as readonly string[]).includes('brand.direction'), 'so a Studio PUT of it is not the profile\'s to route');
+    });
+
+    it('a profile read from settings does not take brand.direction either, and does not put one back', () => {
+        for (const direction of ['rtl', 'ltr'] as const) {
+            const s = withBrand(ELAMIR_SEED_SETTINGS, { direction });
+            assert.equal(studioView(s, profileFromLegacy(s)).brand.direction, direction);
+            assert.equal(studioView(scramble(s, ['brand.direction']), profileFromLegacy(s)).brand.direction, 'JUNK:brand.direction', 'a stale direction stays stale: the profile does not own it');
+        }
     });
 
     it('brand.name falls back to the English display name, then to "My Studio"', () => {
@@ -358,7 +407,7 @@ describe('a view never touches its inputs and never shares what it was given', (
         const p = deepFreeze(richProfile());
         studioView(stored, p);
         growthView(growth, p);
-        intoProfile(p, stored, growth, 'kb');
+        intoProfile(p, stored, growth);
         assert.deepStrictEqual(stored, ELAMIR_SEED_SETTINGS);
         assert.deepStrictEqual(growth, ELAMIR_GROWTH);
         assert.deepStrictEqual(p, richProfile());
@@ -399,16 +448,20 @@ describe('intoProfile', () => {
         assert.deepStrictEqual(p.offers[1]!.campaign, rich.offers[1]!.campaign);
     });
 
-    it('keeps the profile\'s audience, goals and knowledge when none are given, and replaces them when they are', () => {
+    it('keeps the profile\'s audience and goals when no Growth settings are given, and replaces them when they are', () => {
         const rich = richProfile();
         const kept = intoProfile(rich, ELAMIR_SEED_SETTINGS);
         assert.deepStrictEqual(kept.audience, rich.audience);
         assert.deepStrictEqual(kept.goals, rich.goals);
-        assert.equal(kept.dm.knowledge, rich.dm.knowledge);
-        const replaced = intoProfile(rich, ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH, 'a new knowledge base');
+        const replaced = intoProfile(rich, ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH);
         assert.deepStrictEqual(replaced.goals, { followers: 10_000, views: 1_000_000 });
-        assert.equal(replaced.dm.knowledge, 'a new knowledge base');
-        assert.equal(intoProfile(rich, ELAMIR_SEED_SETTINGS, undefined, null).dm.knowledge, '', 'null is an agent with no knowledge base');
+    });
+
+    it('has no knowledge base to carry: the DM bot\'s stays an agent setting, not a profile field', () => {
+        assert.equal('knowledge' in richProfile().dm, false);
+        assert.equal('knowledge' in intoProfile(defaultProfile(), ELAMIR_SEED_SETTINGS).dm, false);
+        assert.equal('knowledge' in profileFromLegacy(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH).dm, false);
+        assert.deepStrictEqual(Object.keys(defaultProfile().dm), ['faq', 'handoff', 'hours']);
     });
 
     it('takes the audience timezone from the Growth settings, or removes it', () => {
@@ -442,6 +495,22 @@ describe('intoProfile', () => {
         assert.equal(intoProfile(dm, ENGLISH_SETTINGS).offers[0]!.order_via, 'dm');
     });
 
+    it('orders an offer by its link again when the link goes from empty to set', () => {
+        const noLink: StudioSettings = { ...ENGLISH_SETTINGS, product: { ...ENGLISH_SETTINGS.product, url: '' } };
+        const away = intoProfile(defaultProfile(), noLink);
+        assert.equal(away.offers[0]!.order_via, 'dm');
+        const back = intoProfile(away, ENGLISH_SETTINGS);
+        assert.equal(back.offers[0]!.url, ENGLISH_SETTINGS.product.url);
+        assert.equal(back.offers[0]!.order_via, 'url', 'the link the Studio has again is how the offer is ordered');
+        // The same through the owner's course shell, which starts without a link.
+        assert.equal(profileFromLegacy(ELAMIR_SEED_SETTINGS).offers[0]!.order_via, 'url');
+        assert.equal(profileFromLegacy(withProductUrl(ELAMIR_SEED_SETTINGS, '')).offers[0]!.order_via, 'dm');
+        // A message-only offer that has had a link all along is the tenant's choice: it stays.
+        const rich = richProfile();
+        const choice: CreatorProfile = { ...rich, offers: [{ ...rich.offers[1]!, order_via: 'dm' }] };
+        assert.equal(intoProfile(choice, ELAMIR_SEED_SETTINGS).offers[0]!.order_via, 'dm');
+    });
+
     it('writes the infographic language as an override only when it differs from the primary, and keeps the surface\'s register', () => {
         const base = legacyBase('ar');
         const english: StudioSettings = { ...ELAMIR_SEED_SETTINGS, infographic: { ...ELAMIR_SEED_SETTINGS.infographic, language: 'en' } };
@@ -461,6 +530,19 @@ describe('intoProfile', () => {
         const p = intoProfile(defaultProfile({ lang: 'ar' }), { ...ELAMIR_SEED_SETTINGS, voice: { ...ELAMIR_SEED_SETTINGS.voice, language: 'en' } });
         assert.equal(p.language.primary, 'en');
         assert.deepStrictEqual(p.language.surfaces.infographic, { language: 'ar' });
+    });
+
+    it('gives an Arabic surface it creates a register when the profile has none, and not when it has', () => {
+        const arabicInfographic: StudioSettings = { ...ENGLISH_SETTINGS, infographic: { ...ENGLISH_SETTINGS.infographic, language: 'ar' } };
+        const english = defaultProfile({ lang: 'en' });
+        assert.equal(english.language.register, null);
+        const made = intoProfile(english, arabicInfographic);
+        assert.deepStrictEqual(made.language.surfaces.infographic, { language: 'ar', register: 'msa' }, 'a surface that speaks Arabic needs a register, and the Studio cannot name one');
+        assert.ok('profile' in validateProfile(made));
+        const withRegister = intoProfile({ ...english, language: { ...english.language, register: 'egyptian' } }, arabicInfographic);
+        assert.deepStrictEqual(withRegister.language.surfaces.infographic, { language: 'ar' }, 'the profile\'s own register already serves it');
+        const own = intoProfile({ ...english, language: { ...english.language, surfaces: { infographic: { register: 'levantine' } } } }, arabicInfographic);
+        assert.deepStrictEqual(own.language.surfaces.infographic, { register: 'levantine', language: 'ar' }, 'and the surface\'s own is kept');
     });
 
     it('gives an Arabic profile the MSA register when the Studio switches an English one to Arabic, and keeps it going back', () => {
