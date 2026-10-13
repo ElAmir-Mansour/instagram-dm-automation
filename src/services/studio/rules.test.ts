@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Carousel, Slide } from './carouselTypes.js';
-import { ARABIC_EXAMPLES, ENGLISH_EXAMPLES, builtInExampleShotNames } from './examples.js';
+import { ARABIC_EXAMPLES, ENGLISH_EXAMPLES, EXAMPLE_SHOT_NAMES } from './exampleFixtures.js';
 import { validateCarousel, usedShotNames, type RuleSettings } from './rules.js';
 import { ELAMIR_SETTINGS as AR, ENGLISH_SETTINGS as EN } from './testFixtures.js';
 
@@ -41,12 +41,12 @@ function slideOf<K extends Slide['kind']>(c: Carousel, kind: K): Extract<Slide, 
     return s as Extract<Slide, { kind: K }>;
 }
 
-describe('validateCarousel: the built-in examples', () => {
+describe('validateCarousel: the example carousels (the owner\'s three references, and the English one)', () => {
     for (const ex of ARABIC_EXAMPLES) {
-        it(`${ex.id} passes with ElAmir's settings`, () => assert.deepEqual(validateCarousel(ex, builtInExampleShotNames, AR), []));
+        it(`${ex.id} passes with ElAmir's settings`, () => assert.deepEqual(validateCarousel(ex, EXAMPLE_SHOT_NAMES, AR), []));
     }
     for (const ex of ENGLISH_EXAMPLES) {
-        it(`${ex.id} passes with the English settings`, () => assert.deepEqual(validateCarousel(ex, builtInExampleShotNames, EN), []));
+        it(`${ex.id} passes with the English settings`, () => assert.deepEqual(validateCarousel(ex, EXAMPLE_SHOT_NAMES, EN), []));
     }
 
     it('the fixture passes, so every failure below is the mutation alone', () => {

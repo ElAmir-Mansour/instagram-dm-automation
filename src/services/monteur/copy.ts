@@ -50,7 +50,7 @@ export const HASHTAG_BLOCKLIST: readonly string[] = ['اكسبلور', 'explore'
  */
 export const GENERIC_HASHTAGS: readonly string[] = ['تقنية', 'تكنولوجيا', 'تطوير', 'برمجة', 'تعلم', 'تعليم', 'tech', 'technology', 'learning', 'education'];
 const MIN_TOPIC_TAGS = 2;
-/** A tool or product named in Latin script, e.g. Gemini, ChatGPT, n8n: a tag people search. */
+/** A tool or product named in Latin script, e.g. Gemini, Notion, Zapier: a tag people search. */
 const LATIN_TERM = /\b[A-Za-z][A-Za-z0-9.+-]{2,24}\b/g;
 /** Words that are Latin but name no topic. */
 const LATIN_STOP = new Set(['the', 'and', 'for', 'with', 'you', 'your', 'how', 'why', 'what', 'from', 'this', 'that', 'agent', 'agents', 'prompt', 'prompts']);
@@ -60,7 +60,7 @@ export function termTags(text: string): string[] {
     const out: string[] = [];
     for (const m of text.matchAll(LATIN_TERM)) {
         const term = m[0].replace(/[.+-]+$/, '');
-        // A tool's name has a capital or a digit (Gemini, ChatGPT, n8n); plain English words don't.
+        // A tool's name has a capital or a digit (Gemini, Notion, Zapier); plain English words don't.
         if (term.length < 3 || LATIN_STOP.has(term.toLowerCase()) || !/[A-Z0-9]/.test(term)) continue;
         if (!out.some((t) => t.toLowerCase() === term.toLowerCase())) out.push(term);
     }

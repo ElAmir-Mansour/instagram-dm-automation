@@ -10,7 +10,7 @@ import type { ExampleCarousel } from './carouselTypes.js';
 export type BrandKit = {
     /** Shown in the UI. */
     name: string;
-    /** The slide sign-off, e.g. "AGENTIC AI" · "بالعربي". */
+    /** The slide sign-off: the brand in Latin letters and in the tenant's own script, e.g. "MY BRAND" · "علامتي". */
     signature: { latin: string; local: string };
     /** Accents to rotate through, `#RRGGBB`. */
     palette: string[];
@@ -27,7 +27,7 @@ export type VoiceProfile = {
     guide: string;
     digits: 'arabic-indic' | 'latin';
     /**
-     * Terms the writer must never use, e.g. a topic the course doesn't cover. Optional, and an
+     * Terms the writer must never use, e.g. a topic the product doesn't cover. Optional, and an
      * addition to §10.2: generated copy that uses one is sent back for repair and, failing that,
      * rejected. An operator's own edits aren't checked against it.
      */
@@ -35,7 +35,7 @@ export type VoiceProfile = {
 };
 
 export type ProductInfo = {
-    /** e.g. "Agentic AI: الدليل العملي". */
+    /** e.g. "Twelve-week plan". */
     name: string;
     /** With the referral code. */
     url: string;
@@ -46,9 +46,9 @@ export type ProductInfo = {
 };
 
 export type CtaConfig = {
-    /** Caption line, with `{keyword}`: 'اكتب "{keyword}" بالتعليقات ويوصلك رابط الكورس بالخاص 📩'. */
+    /** Caption line, with `{keyword}`: 'Comment "{keyword}" and I\'ll DM you the link 📩'. */
     instagramAsk: string;
-    /** Caption line: '📚 الكورس كامل بالعربي — رابطه في البايو 🔗'. */
+    /** Caption line: '🔗 Link in my bio'. */
     tiktokLine: string;
     /** With `{username}` `{question}` `{pitch}` `{url}` `{bullets}`. */
     dmTemplate: string;
@@ -65,7 +65,7 @@ export type CtaConfig = {
     };
 };
 
-/** e.g. `{ timezone: 'Asia/Riyadh', slots: ['13:00', '21:00'] }`. */
+/** e.g. `{ timezone: 'Europe/London', slots: ['12:00', '18:00'] }`. */
 export type ScheduleConfig = { timezone: string; slots: string[] };
 
 /** The folder the worker scans; `null` = not set. */
@@ -132,7 +132,7 @@ export type InfographicTheme = 'dark' | 'light';
 export type InfographicPlatform = 'instagram' | 'facebook' | 'youtube';
 
 /**
- * The personal brand an infographic is drawn in (v31). It is not `brand`, the course's carousel
+ * The personal brand an infographic is drawn in (v31). It is not `brand`, the carousels'
  * kit: an infographic carries the creator's own name, portrait and handles.
  */
 export type InfographicConfig = {
@@ -164,7 +164,7 @@ export type StudioSettings = {
     library: LibraryConfig;
     /**
      * Carousels the tenant approved, used as few-shot examples (a `reference` one is another creator's, shown as a reference);
-     * `null` = none of its own. Until P14 the owner alone is then given the built-in ones, `examplesFor`.
+     * `null` = none of its own, and then the writer is shown none (`examplesFor`): there are no built-in examples.
      */
     examples: ExampleCarousel[] | null;
     monteur: MonteurConfig;
@@ -216,7 +216,10 @@ export const DEFAULT_PALETTE: readonly string[] = [
     '#22C7F0', '#B06AFF', '#A3E635', '#FF5FA2', '#FFB020', '#FF3B5C',
 ];
 
-/** Neutral settings: English, generic copy, the dark-grid theme, the default palette, no product. */
+/**
+ * Neutral settings: English, generic copy, the dark-grid theme, the default palette, no product. The call to action names nothing that
+ * is sold (not "the course": that was the owner's, docs/onboarding/05 R18): a tenant that sells a course says so in its own settings.
+ */
 export function defaultStudioSettings(): StudioSettings {
     return {
         brand: {
@@ -241,13 +244,13 @@ export function defaultStudioSettings(): StudioSettings {
         product: { name: '', url: '', facts: [], dmBullets: [] },
         cta: {
             instagramAsk: 'Comment "{keyword}" and I\'ll DM you the link 📩',
-            tiktokLine: '🔗 The full course is in my bio',
+            tiktokLine: '🔗 Link in my bio',
             dmTemplate: 'Hi {username} 👋\n\n{question}\n\n{pitch}\n\n{url}\n\n{bullets}\n\nAny questions? Just reply to this message.',
             slide: {
                 igAsk: 'Comment below',
                 igSub: 'and I\'ll DM you the link 📩',
                 save: 'Save this post',
-                ttHeadline: 'The full course',
+                ttHeadline: 'Everything in one place',
                 ttPill: 'Link in bio',
                 ttSub: 'Tap the link on my profile 👆',
                 follow: 'Follow for more',

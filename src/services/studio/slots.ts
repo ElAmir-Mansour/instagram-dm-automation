@@ -2,7 +2,7 @@
  * Posting slots (STUDIO.md §4 `/slots`, §10.3): the tenant's local posting times, in its
  * timezone, that no PENDING Meta post already holds.
  *
- * The times are wall-clock times in `schedule.timezone` ("13:00" in Asia/Riyadh is 10:00Z), so
+ * The times are wall-clock times in `schedule.timezone` ("13:00" at UTC+3 is 10:00Z), so
  * they are converted per day rather than once: a timezone with daylight saving moves its UTC
  * offset twice a year, and a slot computed from a fixed offset would drift by an hour.
  */

@@ -65,7 +65,7 @@ profileRouter.get('/', canOperate, handle('profile.read_failed', 'Failed to read
 }));
 
 /**
- * What the Campaigns screen's bulk import starts each imported course from (`campaignSeeds.ts`, P13): `{ seeds, source }`, one
+ * What the Campaigns screen's bulk import starts each imported row from (`campaignSeeds.ts`, P13, P15): `{ seeds, source, fallback }`, one
  * seed per offer of this tenant that has a campaign. Operator-level like the profile itself, and for the same reason it is
  * not a `viewer`'s: it is the wording of the replies this account sends. Reads only; nothing here writes or is audited.
  */

@@ -1328,7 +1328,9 @@ virtual profile, `activationMissing` the fields the wizard still needs.
 
 **`GET /api/profile/campaign-seeds`** — **`src/routes/profile.ts:72`**, operator or owner (**:60**). What the
 Campaigns screen's "Import from CSV" starts each imported course from; it replaced a table of nine
-mappings that the dashboard carried for the owner. Answers `{ seeds, source }`.
+mappings that the dashboard carried for the owner. Answers `{ seeds, source, fallback }`: `fallback` is what a row
+no seed names starts from (P15), the owner's own wording for the platform owner and the neutral text of the language
+its comment replies speak for everyone else (`ImportFallbackLines`, `kits.ts`).
 
 1. **`src/services/profile/campaignSeeds.ts:108`** — `readCampaignSeeds` loads the session tenant's profile
    (`loadProfile`) and **`:77`** `campaignSeeds` turns each offer that has a `campaign` and a `name_match` into a
@@ -1342,9 +1344,10 @@ mappings that the dashboard carried for the owner. Answers `{ seeds, source }`.
    `profile` and the fallback is dead code.
 3. **`dashboard/js/pages/campaigns.js:945`** — `handleCSVSelect` asks for the seeds once per import
    (`loadSeeds`, **:1044**; a failed read stops the import with a toast, it never imports generic text over
-   curated copy) and `showBulkImportModal(courses, seeds)` (**:1068**) gives each course the first seed, in
+   curated copy) and `showBulkImportModal(courses, seeds, fallback)` (**:1068**) gives each course the first seed, in
    order, whose lower-cased `name_match` its lower-cased name contains (`seedFor`, **:1059**). A course
-   that matches none is generated, as before.
+   that matches none starts from the server's `fallback`, its `{name}` and `{url}` filled in (`fillFallback`): the page
+   carries no wording of its own.
 
 **`PATCH /api/profile { version, patch }`** — **`src/routes/profile.ts:76`**, owner only (**:61**).
 

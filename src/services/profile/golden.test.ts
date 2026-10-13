@@ -38,7 +38,8 @@
  * `profileContextOrLegacy` answers when that database fails. All four must write the same bytes into the same goldens.
  *
  * The Studio writer (P9) is written from the `carousel` context of the profile (the language and register it writes in, the kind of
- * creator and what they sell) and shows the owner his three built-in carousels until they are copied into his row (P14). Its
+ * creator and what they sell) and shows a tenant the examples in its own row and no others: the owner's fixtures hold his three
+ * reference carousels, as his row does (P14, which removed the built-in fallback). Its
  * goldens are pinned the same ways, with `studioWording` itself as the fourth: his bytes are what the new code makes of his
  * context, and an unreadable profile is his legacy context, not a failure.
  *
@@ -68,7 +69,7 @@ import { WRITE_SCHEMA, writeSystemPrompt } from '../studio/infographicSpec.js';
 import { buildPlanCatalog, LANGUAGES, planUserPrompt } from '../studio/prompts.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
 import {
-    ELAMIR_AGENT, ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS,
+    ELAMIR_AGENT, ELAMIR_GROWTH, ELAMIR_SEED_SERVED, ELAMIR_SEED_SETTINGS, ELAMIR_SETTINGS, ENGLISH_SETTINGS,
     GOLDEN_LESSON, GOLDEN_LESSONS, GOLDEN_REELS, GOLDEN_UNINDEXED_LESSON,
 } from '../studio/testFixtures.js';
 import { videoResource, youtubeCategoryId } from '../youtube.js';
@@ -77,7 +78,7 @@ import { studioWording } from '../studio/drafts.js';
 import { draftSchema } from '../studio/generate.js';
 import type { StudioWording } from '../studio/prompts.js';
 import { getStudioSettings } from '../studio/settings.js';
-import { campaignSeeds, legacyCampaignSeeds } from './campaignSeeds.js';
+import { campaignSeeds, legacyCampaignFallback, legacyCampaignSeeds } from './campaignSeeds.js';
 import { matchGolden, matchGoldenJson, uncheckedGoldens, type GoldenSet } from './golden.js';
 import { contextFor, legacyContext, profileContext, profileContextOrLegacy, type ProfileContext } from './context.js';
 import { upgradeProfile } from './defaults.js';
@@ -239,7 +240,7 @@ type Variant = {
 };
 const FIXTURES = [
     { slug: 'elamir', settings: ELAMIR_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
-    { slug: 'seed', settings: ELAMIR_SEED_SETTINGS, set: 'elamir', lang: 'ar', owner: true },
+    { slug: 'seed', settings: ELAMIR_SEED_SERVED, set: 'elamir', lang: 'ar', owner: true },
     { slug: 'english', settings: ENGLISH_SETTINGS, set: 'control', lang: 'en', owner: false },
 ] as const;
 /** What the real reader returns for each fixture (path (c)). Read once, before any test: each swaps the one shared pool for a stand-in and puts it back, so one at a time. */
@@ -247,14 +248,15 @@ const READ = {} as Record<(typeof FIXTURES)[number]['slug'], { settings: StudioS
 for (const f of FIXTURES) READ[f.slug] = await throughTheReader(f.settings, f.owner ? ELAMIR_GROWTH : undefined);
 
 /**
- * The Studio writer's wording for a fixture, the four ways the code can come by it. Only the owner is shown the built-in carousels
- * (`builtInExamples`): the English control is a tenant that is not him, so its prompt has no examples section.
+ * The Studio writer's wording for a fixture, the four ways the code can come by it. The examples are not part of it: they are the
+ * fixture's own row's (P14). The owner's fixtures hold his three reference carousels, as his row does; the English control is a tenant
+ * that is not him and holds none, so its prompt has no examples section.
  *   today        described from the rows: `profileFromLegacy` cut to the `carousel` context (the legacy assumptions);
  *   profile      cut from the profile as it comes back from storage;
  *   readers      what the real `studioWording` returns from a stand-in database holding that profile, and who the owner is;
  *   unreadable   the same, when the profile cannot be read: for the owner it is his legacy context.
  */
-const wordingOf = (profile: CreatorProfile, version: number | null, owner: boolean): StudioWording => ({ ...contextFor(profile, 'carousel', version), builtInExamples: owner });
+const wordingOf = (profile: CreatorProfile, version: number | null): StudioWording => contextFor(profile, 'carousel', version);
 
 async function wordingThroughTheReader(settings: StudioSettings, growth: GrowthSettings | undefined, owner: boolean, unreadable = false): Promise<StudioWording> {
     const state = emptyState();
@@ -288,10 +290,10 @@ const VARIANTS: Variant[] = [];
 // One at a time: each reader swaps the one shared pool for a stand-in, and the platform owner is cached for a moment.
 for (const f of FIXTURES) {
     VARIANTS.push(
-        { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today', editor: undefined, wording: wordingOf(profileFromLegacy(f.settings, GROWTH_OF(f.owner)), null, f.owner) },
+        { slug: f.slug, settings: f.settings, set: f.set, lang: f.lang, via: 'today', editor: undefined, wording: wordingOf(profileFromLegacy(f.settings, GROWTH_OF(f.owner)), null) },
         {
             slug: f.slug, settings: through(f.settings, f.owner), set: f.set, lang: f.lang, via: 'profile',
-            editor: contextFor(storedProfile(f.settings, GROWTH_OF(f.owner)), 'clip_edit', 1), wording: wordingOf(storedProfile(f.settings, GROWTH_OF(f.owner)), 1, f.owner),
+            editor: contextFor(storedProfile(f.settings, GROWTH_OF(f.owner)), 'clip_edit', 1), wording: wordingOf(storedProfile(f.settings, GROWTH_OF(f.owner)), 1),
         },
         {
             slug: f.slug, settings: READ[f.slug].settings, set: f.set, lang: f.lang, via: 'readers',
@@ -444,7 +446,7 @@ describe('Monteur golden prompts', () => {
     // The pick and the copy are written from the profile's contexts: his, however the code comes by them, is the text he always had.
     for (const [via, { kits }] of Object.entries(OWNER_REELS)) {
         it(`pick and copy: the pick's prompts, the copy's prompts and the clip copy, built from his kits (${via})`, async (t) => {
-            const entries = await studioSurface(ELAMIR_SETTINGS, { lang: 'ar', slug: 'elamir', carousel: wordingOf(OWNER_PROFILE, 1, true), reelKits: kits });
+            const entries = await studioSurface(ELAMIR_SETTINGS, { lang: 'ar', slug: 'elamir', carousel: wordingOf(OWNER_PROFILE, 1), reelKits: kits });
             await matchEach(t, entries.filter((e) => e.name.startsWith('monteur.pick') || e.name.startsWith('monteur.copy')));
         });
     }
@@ -541,7 +543,7 @@ describe('Campaign golden seeds', () => {
         assert.equal(inside(page, 'typeof CampaignsPage.seedFor'), 'function');
     });
 
-    it('showBulkImportModal: what each imported course is seeded with: the first seed its name contains, else the Arabic fallback', () => {
+    it('showBulkImportModal: what each imported course is seeded with: the first seed its name contains, else his own fallback (the one the server hands him)', () => {
         const course = (id: number, name: string) => ({ id, name, url: `https://www.udemy.com/course/golden-${id}/?couponCode=GOLDEN${id}`, code: `GOLDEN${id}`, redemptions: id * 7 });
         // One per mapping key, in the order of the table, named as the courses are. 'Problem Solving - with C#'
         // contains two keys ('problem solving' and 'c#'): the first in table order wins. The last has none.
@@ -564,7 +566,7 @@ describe('Campaign golden seeds', () => {
         assert.deepStrictEqual(fromOffers, legacyCampaignSeeds(), 'his offers give the seeds his fallback gives, in the same order');
         for (const [label, seeds] of [['the legacy fallback', legacyCampaignSeeds()], ['his offers', fromOffers]] as const) {
             const ctx = loadCampaignsPage();
-            vm.runInContext(`CampaignsPage.showBulkImportModal(${JSON.stringify(courses)}, ${JSON.stringify(seeds)})`, ctx);
+            vm.runInContext(`CampaignsPage.showBulkImportModal(${JSON.stringify(courses)}, ${JSON.stringify(seeds)}, ${JSON.stringify(legacyCampaignFallback())})`, ctx);
             const rows = inside(ctx, 'CampaignsPage.pendingImport');
             assert.equal(rows.length, courses.length, label);
             assert.deepEqual(rows.map((r: { matched: boolean }) => r.matched), [...Array(9).fill(true), false], label);

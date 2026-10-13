@@ -24,14 +24,13 @@ import { starterPersona } from '../services/ai.js';
 import { AUDIT_ACTIONS } from '../services/audit.js';
 import { getGrowthSettings } from '../services/growth/settings.js';
 import { defaultProfile } from '../services/profile/defaults.js';
-import { entryText, SAY, tenantSurface } from '../services/profile/promptSurface.js';
+import { entryText, NEUTRAL_TURN, tenantSurface } from '../services/profile/promptSurface.js';
 import { NO_WOMEN_LINE } from '../services/monteur/editor.js';
 import { loadStoredProfile } from '../services/profile/store.js';
 import { installProfileDb, OWNER, type ProfileDb, seededState, type State, studioRow, USER, OWNER_STUDIO } from '../services/profile/testDb.js';
 import { assertNoOwnerMarkers, throughJsonb } from '../services/profile/testSupport.js';
 import { REQUIRED_SCOPES } from '../services/tokenHealth.js';
 import { getStudioSettings } from '../services/studio/settings.js';
-import { ELAMIR_SEO } from '../services/studio/testFixtures.js';
 import { setLogSink } from '../utils/log.js';
 import adminRouter from './admin.js';
 
@@ -283,36 +282,7 @@ describe('creating a tenant by name', () => {
 
 // ─── Nothing of the owner's reaches the new tenant ───────────────────────────────────────────
 
-/**
- * The surface entries that STILL say the owner's words to any tenant, whoever it is, and the PR that takes each out
- * (docs/TENANT_ONBOARDING_PLAN.md M2). All of them are the default `cta` section of `defaultStudioSettings()` («🔗 The full course is in
- * my bio», «The full course»): the Studio's settings carry it for every tenant, so a tenant created by name has it in its row too, and
- * the wizard seeds `cta` from the language and the offer kind (docs/onboarding/01 §2). It is a ratchet, as the allow-lists in
- * help-labels.test.ts are: an entry listed here must still hold his markers, so the PR that cleans it fails this test until it deletes the
- * line, and nothing that is clean can start leaking again without a test failing.
- */
-const STILL_OWNER_WORDING: Record<string, string> = {
-    'studio.system': 'P15 (neutral defaults: the default cta says "the full course")',
-    'studio.cta-lines': 'P15 (neutral defaults: the default cta)',
-    'captions.tiktok': 'P15 (neutral defaults: the default cta)',
-    'studio.carousel-render-payload': 'P15 (neutral defaults: the default cta)',
-    'monteur.copy-clip-fallbacks': 'P15 (neutral defaults: the default cta)',
-};
-
-/**
- * Lines of the surface that are NOT the tenant's and NOT the builders': the turn `promptSurface.ts` feeds every builder, the owner's own
- * test data (ELAMIR_SEO's keywords and hashtags, the recent posts, the fixture's Arabic TikTok caption). A tenant's own come from its
- * Growth settings and its posts, which are empty here. They are taken out before the markers are looked for, and each entry must still
- * hold them (so an exception that stops being needed fails the test and is deleted, as a ratchet line is).
- */
-const FIXTURE_TURN: Record<string, (lang: 'ar' | 'en') => string[]> = {
-    'studio.draft-user': (lang) => [...ELAMIR_SEO.keywords, ...ELAMIR_SEO.hashtags, ...SAY[lang].recent],
-    'monteur.copy-user': () => [...ELAMIR_SEO.keywords, ...ELAMIR_SEO.hashtags],
-    'captions.tiktok': (lang) => (lang === 'ar' ? ['رابط الكورس'] : []),
-    'studio.carousel-render-payload': (lang) => (lang === 'ar' ? ['رابط الكورس'] : []),
-};
-
-describe('a tenant created by name gets no owner markers in any surface already cleaned of them', () => {
+describe('a tenant created by name gets no owner markers in any surface', () => {
     for (const lang of ['ar', 'en'] as const) {
         it(`${lang}: every prompt and payload built for it, read through the real readers`, async () => {
             await create({ name: lang === 'ar' ? 'متجر نور' : 'Sami Fit', lang });
@@ -322,10 +292,14 @@ describe('a tenant created by name gets no owner markers in any surface already 
             const growth = await getGrowthSettings(NEW);
             const agent = { system_prompt: agents.get(NEW)!.system_prompt, knowledge_base: agents.get(NEW)!.knowledge_base };
 
-            const entries = await tenantSurface({ studio, growth, agent, profile });
+            // The turn the builders are fed is neutral (`NEUTRAL_TURN`): the owner's story, captions and hashtags are what the goldens
+            // were captured with, and a prompt that quotes them holds his markers whatever the builder says. With it there is nothing to
+            // let through but the line of the preset the tenant ticked (P15 emptied the two ratchets that used to stand here: the
+            // default call to action that named what is sold, and the owner's fixture turn).
+            const entries = await tenantSurface({ studio, growth, agent, profile, turn: NEUTRAL_TURN });
             assert.ok(entries.length >= 31, `${entries.length} entries were built`);
             assert.deepEqual(entries.filter((e) => e.error !== undefined).map((e) => `${e.name}: ${e.error}`), [], 'every builder ran');
-            assert.deepEqual(growth.keywords, [], 'the tenant\'s own keywords are none: the ones in the prompts are the fixture\'s');
+            assert.deepEqual(growth.keywords, [], 'the tenant\'s own keywords are none');
 
             for (const entry of entries) {
                 const text = entryText(entry);
@@ -333,21 +307,7 @@ describe('a tenant created by name gets no owner markers in any surface already 
                 // only owner marker it may say. Said once per prompt, and nothing else of his.
                 const ticked = entry.name.startsWith('monteur.editor-system.');
                 if (ticked) assert.equal(text.split(NO_WOMEN_LINE).length - 1, 1, `${entry.name} says the ticked rule's line once`);
-                const fixture = FIXTURE_TURN[entry.name]?.(lang) ?? [];
-                const except = [...(ticked ? [NO_WOMEN_LINE] : []), ...fixture];
-                if (fixture.length > 0) {
-                    assert.throws(() => assertNoOwnerMarkers(text, entry.name, { except: ticked ? [NO_WOMEN_LINE] : [] }), /holds the owner's/,
-                        `${entry.name} no longer carries the fixture's wording: delete it from FIXTURE_TURN`);
-                }
-                const check = () => assertNoOwnerMarkers(text, `${entry.name} (${lang})`, { except });
-                if (entry.name in STILL_OWNER_WORDING) {
-                    assert.throws(check, /holds the owner's/, `${entry.name} is clean now: delete it from STILL_OWNER_WORDING (${STILL_OWNER_WORDING[entry.name]})`);
-                } else {
-                    check();
-                }
-            }
-            for (const name of [...Object.keys(STILL_OWNER_WORDING), ...Object.keys(FIXTURE_TURN)]) {
-                assert.ok(entries.some((e) => e.name === name), `${name} is still a surface entry: delete it from STILL_OWNER_WORDING / FIXTURE_TURN`);
+                assertNoOwnerMarkers(text, `${entry.name} (${lang})`, { except: ticked ? [NO_WOMEN_LINE] : [] });
             }
         });
     }

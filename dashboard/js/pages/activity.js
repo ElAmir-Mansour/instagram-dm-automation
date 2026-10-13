@@ -107,7 +107,7 @@ const ActivityPage = {
 
     /**
      * V2: a campaign in the filter was named by its FIRST keyword only, so two
-     * campaigns that both start with «كورس» were indistinguishable. The first
+     * campaigns that both start with the same word were indistinguishable. The first
      * two, and «…» when there are more.
      */
     campaignOptionLabel(c) {

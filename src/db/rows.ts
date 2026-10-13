@@ -563,7 +563,7 @@ export type StudioDisplayFont = 'Cairo' | 'Tajawal' | 'IBM Plex Sans Arabic' | '
 export interface BrandKit {
     /** Shown in the UI. */
     name: string;
-    /** The slide sign-off, e.g. "AGENTIC AI" · "بالعربي". */
+    /** The slide sign-off: the brand in Latin letters and in the tenant's own script, e.g. "MY BRAND" · "علامتي". */
     signature: { latin: string; local: string };
     /** Accents to rotate through, `#RRGGBB`. */
     palette: string[];
@@ -1013,7 +1013,7 @@ export interface GrowthAudience {
     countries?: string[];
     /** ISO 639-1, lower case, e.g. 'ar'. */
     languages?: string[];
-    /** IANA, e.g. 'Asia/Riyadh'. The best-times heatmap is drawn in it. */
+    /** IANA, e.g. 'Europe/London'. The best-times heatmap is drawn in it. */
     timezone?: string;
 }
 

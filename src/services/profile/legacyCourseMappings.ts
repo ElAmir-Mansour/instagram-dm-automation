@@ -9,8 +9,12 @@
  * import tries them in (the first key the name contains wins, so 'problem solving' beats 'c#'), and a changed character
  * fails there. This file is the one place the nine live in code; the dashboard has none.
  *
- * Delete this file (and the fallback in `campaignSeeds.ts`) once the owner's stored profile carries the same nine and the
- * repo-wide owner-marker guard (P15) no longer needs to allow it.
+ * Also here, and also his: the text an UNMATCHED row of that import started from (`LEGACY_IMPORT_FALLBACK`), which the dashboard
+ * carried beside them until P15 and which is pinned by `__golden__/elamir/campaigns.import-rows.json`. Every other tenant's is its
+ * language kit's, neutral (`ImportFallbackLines`, `kits.ts`).
+ *
+ * Delete this file (and the fallbacks in `campaignSeeds.ts`) once the owner's stored profile carries the same nine and he is content
+ * with the neutral text for the rows no seed names. The repo-wide owner-marker scan (`ownerMarkers.test.ts`) allows this one file.
  */
 
 /** One mapping, in the shape the dashboard's `COURSE_MAPPINGS` had: two joined lists (", " and " | ") and the DM. */
@@ -66,4 +70,14 @@ export const LEGACY_COURSE_MAPPINGS: Readonly<Record<string, Readonly<LegacyCour
         dmTemplate: `أهلاً بك {username}! 👋\nتعلم لغة C# القوية لبناء تطبيقات سطح المكتب، الألعاب، والمواقع! 🎮💻\nإليك رابط التسجيل المجاني المباشر لدورة "C# For Beginners [in Arabic]":\n🔗 {url}\n\n💡 الكوبون صالح لـ 100 مقعد فقط ولفترة محدودة. احرص على التسجيل الآن!\nبالتوفيق وسأكون سعيداً بمتابعة تقدمك! 🚀✨`,
         publicReplies: 'تم إرسال رابط كورس سي شارب على الخاص يا {username}! 💻📩 | تفقد رسائل الخاص {username} لتجد الكوبون المجاني 🚀 | تم الإرسال بنجاح! بالتوفيق في مسيرتك البرمجية 🎓🌟',
     },
+});
+
+/**
+ * What the CSV import started a row from when no mapping named it, in the owner's words (a coupon for a course, in his Gulf Arabic).
+ * The page fills `{name}` (the course's name, cut at the first «[», «|» or «-») and `{url}`; the webhook fills `{username}`.
+ * The bytes are what the dashboard's template literal and string made, pinned by the `campaigns.import-rows` golden.
+ */
+export const LEGACY_IMPORT_FALLBACK: Readonly<{ dmTemplate: string; publicReplies: string }> = Object.freeze({
+    dmTemplate: 'أهلاً بك {username}! 👋\nإليك رابط التسجيل المجاني لكورس "{name}":\n🔗 {url}\n\nسجل الآن قبل نفاد الكوبون! ✨',
+    publicReplies: 'تم إرسال الرابط والتفاصيل على الخاص يا {username}! 📩 | تفقد الخاص {username} للحصول على كوبون الدورة! 🚀',
 });

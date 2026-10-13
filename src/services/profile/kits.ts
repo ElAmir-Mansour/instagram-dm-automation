@@ -14,7 +14,8 @@
  *   - `starterPersona`  the persona a new tenant's agent row starts with;
  *   - `commentFallback` the public reply that replaces an undeliverable DM;
  *   - `studio`          the words the carousel writer checks and falls back on: the time words a TikTok caption must not use,
- *                       the question and pitch a DM falls back to, and the example a reel's "who to send it to" line gives.
+ *                       the question and pitch a DM falls back to, and the example a reel's "who to send it to" line gives;
+ *   - `importFallback`  what the Campaigns screen's CSV import starts a row from when no campaign seed names it (P15, R17).
  *
  * **Extending it (P9-P12).** Add the field to `LanguageKit` and fill it in for all five records: the `Record<KitKey, ...>`
  * will not compile until every register has it, so a register cannot be left speaking another's text by omission. Put the
@@ -71,10 +72,23 @@ export interface StudioLines {
     coursePitch: string;
 }
 
+/**
+ * What the Campaigns screen's CSV import starts an imported row from when no seed (`campaignSeeds.ts`) matches its name (P15, R17):
+ * the link sent to whoever comments, and the public replies. Neutral: it names no course, no coupon and no one's brand, because
+ * what is imported is whatever the tenant sells. The owner's own is `LEGACY_IMPORT_FALLBACK` (`legacyCourseMappings.ts`), not a kit.
+ */
+export interface ImportFallbackLines {
+    /** The DM. `{name}` and `{url}` are filled in by the page (the offer's name and its link), `{username}` when the DM is sent. */
+    dm: string;
+    /** The public replies separated by " | " (what a campaign's `public_reply_template` holds, which the webhook splits on "|"). */
+    replies: string;
+}
+
 export interface LanguageKit {
     key: KitKey;
     lang: Lang;
     studio: StudioLines;
+    importFallback: ImportFallbackLines;
     dm: {
         /** The heading above the agent's knowledge base. */
         knowledgeHeader: string;
@@ -133,10 +147,11 @@ const timeWordsOf = (head: readonly string[], own: readonly string[] = []): Stud
 });
 
 /** The words that make a kit a register: rule 1, the public reply, and what the Studio's writer says and checks. */
-const arabic = (key: ArabicRegister, friendly: string, commentFallback: CommentFallbackLines, studio: StudioLines): LanguageKit => ({
+const arabic = (key: ArabicRegister, friendly: string, commentFallback: CommentFallbackLines, studio: StudioLines, importFallback: ImportFallbackLines): LanguageKit => ({
     key,
     lang: ARABIC.lang,
     studio,
+    importFallback,
     dm: { ...ARABIC.dm, friendly },
     offerNouns: { ...ARABIC.offerNouns },
     disclosure: ARABIC.disclosure,
@@ -161,6 +176,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             forwardExample: '«ابعتها لصاحبك اللي …»',
             fallbackQuestion: 'تبي تطبّقها بنفسك خطوة بخطوة؟ 👀',
             coursePitch: 'شرحتها خطوة بخطوة في الكورس، مع التطبيق العملي.',
+        },
+        {
+            dm: 'هلا {username}! 👋\nهذا رابط "{name}":\n🔗 {url}',
+            replies: 'أرسلت لك الرابط والتفاصيل على الخاص يا {username}! 📩 | شيك على الخاص يا {username}، الرابط وصلك! 🚀',
         }),
 
     msa: arabic('msa',
@@ -177,6 +196,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             forwardExample: '«أرسلها لصديقك الذي …»',
             fallbackQuestion: 'هل تريد تطبيقها بنفسك خطوة بخطوة؟ 👀',
             coursePitch: 'شرحتُها خطوة بخطوة في الدورة، مع التطبيق العملي.',
+        },
+        {
+            dm: 'أهلاً بك {username}! 👋\nإليك رابط "{name}":\n🔗 {url}',
+            replies: 'تم إرسال الرابط والتفاصيل إلى الرسائل الخاصة يا {username}! 📩 | تفقّد رسائلك الخاصة يا {username}، فقد وصلك الرابط! 🚀',
         }),
 
     egyptian: arabic('egyptian',
@@ -192,6 +215,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             forwardExample: '«ابعتها لصاحبك اللي …»',
             fallbackQuestion: 'عايز تطبّقها بنفسك خطوة بخطوة؟ 👀',
             coursePitch: 'شرحتها خطوة بخطوة في الكورس، مع التطبيق العملي.',
+        },
+        {
+            dm: 'أهلاً بيك {username}! 👋\nده لينك "{name}":\n🔗 {url}',
+            replies: 'بعتلك اللينك والتفاصيل على الخاص يا {username}! 📩 | شوف الخاص يا {username}، اللينك وصلك! 🚀',
         }),
 
     levantine: arabic('levantine',
@@ -207,6 +234,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             forwardExample: '«ابعتها لرفيقك اللي …»',
             fallbackQuestion: 'بدّك تطبّقها بحالك خطوة بخطوة؟ 👀',
             coursePitch: 'شرحتها خطوة بخطوة بالكورس، مع التطبيق العملي.',
+        },
+        {
+            dm: 'أهلاً فيك {username}! 👋\nهاد رابط "{name}":\n🔗 {url}',
+            replies: 'بعتلك الرابط والتفاصيل عالخاص يا {username}! 📩 | شوف الخاص يا {username}، الرابط وصلك! 🚀',
         }),
 
     // English has no register, and none of its lines is a translation of the owner's: they say the same thing in plain English.
@@ -221,6 +252,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             forwardExample: '"Send this to the friend who …"',
             fallbackQuestion: 'Want to try this yourself, step by step? 👀',
             coursePitch: 'I walk through it step by step in the course.',
+        },
+        importFallback: {
+            dm: 'Hi {username}! 👋\nHere is the link for "{name}":\n🔗 {url}',
+            replies: 'Link and details sent to your DMs, {username}! 📩 | Check your messages, {username}, the link is there! 🚀',
         },
         dm: {
             knowledgeHeader: '=== Knowledge base available to you ===',

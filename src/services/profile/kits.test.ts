@@ -33,11 +33,14 @@ describe('the kits', () => {
                 kit.disclosure, kit.starterPersona, ...Object.values(kit.offerNouns),
                 kit.commentFallback.lead, kit.commentFallback.bio, kit.commentFallback.link('https://x.test'), kit.commentFallback.none,
                 kit.studio.forwardExample, kit.studio.fallbackQuestion, kit.studio.coursePitch, ...kit.studio.timeWords.head, ...kit.studio.timeWords.all,
+                kit.importFallback.dm, kit.importFallback.replies,
             ];
             assert.equal(kit.studio.timeWords.head.length, 5, `${key}: the prompt names five time words`);
             for (const line of lines) assert.ok(line.trim().length > 0, `${key} has a blank line`);
             assert.ok(kit.dm.offers('NOUN').includes('NOUN'), `${key}: rule 2 says the noun it is given`);
             assert.ok(kit.commentFallback.link('https://x.test/y').endsWith('https://x.test/y'), `${key}: the link comes last`);
+            for (const placeholder of ['{username}', '{name}', '{url}']) assert.ok(kit.importFallback.dm.includes(placeholder), `${key}: the import's DM holds ${placeholder}`);
+            assert.equal(kit.importFallback.replies.split(' | ').length, 2, `${key}: two replies, joined as a campaign stores them`);
         }
     });
 
@@ -229,4 +232,47 @@ describe('the non-Gulf Arabic lines, as 05 §2 drafts them (for a native speaker
             assert.equal(commentFallback(kit, { isFacebook: true, link: undefined }), want.none);
         });
     }
+});
+
+// ─── What the CSV import starts an unmatched row from (P15, R17) ───────────────────────────────
+
+/**
+ * The import fallback of every register (`importFallback`): the DM an imported row with no seed starts from, and its two public replies.
+ * `{name}` and `{url}` are the offer's name and link (the page fills them), `{username}` the commenter (the webhook). Neutral: no course, no
+ * coupon, no one's brand. The Gulf kit's is neutral too: the owner's own words are not a kit, they are `LEGACY_IMPORT_FALLBACK`
+ * (`legacyCourseMappings.ts`) and are served to him alone. Drafts until a native speaker of each dialect has read them.
+ */
+const REVIEW_IMPORT: Record<'gulf' | 'msa' | 'egyptian' | 'levantine' | 'en', { dm: string; replies: string }> = {
+    gulf: {
+        dm: 'هلا {username}! 👋\nهذا رابط "{name}":\n🔗 {url}',
+        replies: 'أرسلت لك الرابط والتفاصيل على الخاص يا {username}! 📩 | شيك على الخاص يا {username}، الرابط وصلك! 🚀',
+    },
+    msa: {
+        dm: 'أهلاً بك {username}! 👋\nإليك رابط "{name}":\n🔗 {url}',
+        replies: 'تم إرسال الرابط والتفاصيل إلى الرسائل الخاصة يا {username}! 📩 | تفقّد رسائلك الخاصة يا {username}، فقد وصلك الرابط! 🚀',
+    },
+    egyptian: {
+        dm: 'أهلاً بيك {username}! 👋\nده لينك "{name}":\n🔗 {url}',
+        replies: 'بعتلك اللينك والتفاصيل على الخاص يا {username}! 📩 | شوف الخاص يا {username}، اللينك وصلك! 🚀',
+    },
+    levantine: {
+        dm: 'أهلاً فيك {username}! 👋\nهاد رابط "{name}":\n🔗 {url}',
+        replies: 'بعتلك الرابط والتفاصيل عالخاص يا {username}! 📩 | شوف الخاص يا {username}، الرابط وصلك! 🚀',
+    },
+    en: {
+        dm: 'Hi {username}! 👋\nHere is the link for "{name}":\n🔗 {url}',
+        replies: 'Link and details sent to your DMs, {username}! 📩 | Check your messages, {username}, the link is there! 🚀',
+    },
+};
+
+describe('the import fallback of every register, as drafted (for a native speaker to read)', () => {
+    for (const key of KIT_KEYS) {
+        it(`${key}: the DM and the two replies an unmatched imported row starts from`, () => {
+            assert.deepEqual({ ...KITS[key].importFallback }, REVIEW_IMPORT[key]);
+        });
+    }
+
+    it('the Gulf kit\'s is not the owner\'s: his coupon-for-a-course text is not in any kit', () => {
+        for (const key of KIT_KEYS) assert.doesNotMatch(JSON.stringify(KITS[key].importFallback), /كوبون|coupon|لكورس|دورة|الدورة/i, key);
+    });
 });

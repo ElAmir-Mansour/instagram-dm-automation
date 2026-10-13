@@ -251,7 +251,7 @@ const API = {
     // Campaigns
     getCampaigns: () => API.request('/campaigns'),
     createCampaign: (data) => API.request('/campaigns', { method: 'POST', body: JSON.stringify(data) }),
-    /** What the CSV import seeds each imported course from: `{ seeds, source }`, the tenant's own offers' campaigns. */
+    /** What the CSV import seeds each imported row from: `{ seeds, source, fallback }`, the tenant's own offers' campaigns and the wording of a row none names. */
     getCampaignSeeds: () => API.request('/profile/campaign-seeds'),
     updateCampaign: (id, data) => API.request(`/campaigns/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteCampaign: (id) => API.request(`/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' }),
