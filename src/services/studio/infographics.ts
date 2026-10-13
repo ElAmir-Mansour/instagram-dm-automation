@@ -106,7 +106,7 @@ function parseTheme(raw: unknown, fallback: InfographicTheme): InfographicTheme 
 }
 
 /** The job: Claude writes first (`write`), or the spec is rendered as it is. */
-function renderPayload(
+export function renderPayload(
     id: string, row: Pick<InfographicRow, 'topic' | 'notes' | 'language'>, theme: InfographicTheme, settings: StudioSettings,
     spec: unknown | null
 ): RenderInfographicPayload {

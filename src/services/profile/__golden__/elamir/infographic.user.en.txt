@@ -1,3 +1,0 @@
-Topic: RAG vs CAG vs KAG
-Never use these words or topics: MCP.
-Language: English.

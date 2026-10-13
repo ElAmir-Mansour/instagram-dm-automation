@@ -7,15 +7,19 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { checkGoldenFile, goldenJsonText, goldenPath } from './golden.js';
+import { checkGoldenFile, goldenJsonText, goldenPath, updating } from './golden.js';
 
 let dir: string;
 let previous: string | undefined;
+let previousCi: string | undefined;
 const stderr = process.stderr.write;
 beforeEach(() => {
     dir = mkdtempSync(path.join(tmpdir(), 'golden-helper-'));
     previous = process.env.UPDATE_GOLDEN;
+    previousCi = process.env.CI;
     delete process.env.UPDATE_GOLDEN;
+    // These tests run on CI, where CI is set: each decides for itself.
+    delete process.env.CI;
     // `golden: wrote …` is for a person regenerating; here it is noise.
     process.stderr.write = (() => true) as typeof process.stderr.write;
 });
@@ -24,6 +28,8 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
     if (previous === undefined) delete process.env.UPDATE_GOLDEN;
     else process.env.UPDATE_GOLDEN = previous;
+    if (previousCi === undefined) delete process.env.CI;
+    else process.env.CI = previousCi;
 });
 
 const message = (fn: () => void): string => {
@@ -110,6 +116,36 @@ describe('UPDATE_GOLDEN=1', () => {
             assert.match(message(() => checkGoldenFile(file, 'changed')), /golden mismatch/, `UPDATE_GOLDEN=${JSON.stringify(v)}`);
         }
         assert.equal(readFileSync(file, 'utf8'), 'kept');
+    });
+});
+
+describe('UPDATE_GOLDEN=1 on CI', () => {
+    it('is an error that writes nothing, so a pipeline can never pass by rewriting the net', () => {
+        const fresh = path.join(dir, 'ci-new.txt');
+        const stale = path.join(dir, 'ci-stale.txt');
+        writeFileSync(stale, 'kept');
+        process.env.UPDATE_GOLDEN = '1';
+        for (const ci of ['true', '1', 'yes']) {
+            process.env.CI = ci;
+            assert.match(message(() => checkGoldenFile(fresh, 'new')), /UPDATE_GOLDEN=1 with CI set/, `CI=${ci}`);
+            assert.match(message(() => checkGoldenFile(stale, 'changed')), /UPDATE_GOLDEN=1 with CI set/, `CI=${ci}`);
+            assert.throws(() => updating(), /never rewritten on CI/);
+        }
+        assert.equal(existsSync(fresh), false);
+        assert.equal(readFileSync(stale, 'utf8'), 'kept');
+    });
+
+    it('still compares normally on CI when UPDATE_GOLDEN is not set, and CI=false or 0 means not CI', () => {
+        const file = path.join(dir, 'ci-ok.txt');
+        writeFileSync(file, 'same');
+        process.env.CI = 'true';
+        checkGoldenFile(file, 'same');
+        assert.match(message(() => checkGoldenFile(file, 'other')), /golden mismatch/);
+        process.env.UPDATE_GOLDEN = '1';
+        for (const ci of ['false', 'FALSE', '0', '']) {
+            process.env.CI = ci;
+            assert.equal(updating(), true, `CI=${JSON.stringify(ci)}`);
+        }
     });
 });
 

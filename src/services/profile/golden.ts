@@ -6,14 +6,15 @@
  * committed files, so a later PR proves it changed nothing by leaving them untouched.
  *
  *   matchGolden('dm.system-instruction', text)        → __golden__/elamir/dm.system-instruction.txt
- *   matchGoldenJson('monteur.copy.ask-pool', value)   → __golden__/elamir/monteur.copy.ask-pool.json
+ *   matchGoldenJson('monteur.copy.ask-pool.ar', value) → __golden__/elamir/monteur.copy.ask-pool.ar.json
  *
  * Two sets, because they have different rules:
- *   - `elamir` (the default) is the owner's tenant: his settings, his persona, his Growth settings.
- *     `git diff -- src/services/profile/__golden__/elamir` must be empty in every refactor PR.
- *   - `control` is the neutral English fixture, kept to see what a tenant with no voice of its own
- *     gets. It is *meant* to change as the defaults become neutral, so it lives apart and the rule
- *     above can stay literal.
+ *   - `elamir` (the default) is the owner's own output: his settings, his persona, his Growth settings,
+ *     in the language he writes. `git diff -- src/services/profile/__golden__/elamir` must be empty in
+ *     every refactor PR.
+ *   - `control` (`control-english/`) is what he never receives: the neutral English fixture, the English
+ *     halves of bilingual builders, and defaults a new tenant starts with. It is *meant* to change as
+ *     defaults go neutral, so it lives apart and the rule above can stay literal.
  *
  * A golden is compared as exact bytes (UTF-8). A missing file is a failure, never created on the
  * fly: a new golden is written only with `UPDATE_GOLDEN=1`, which also rewrites a changed one:
@@ -21,7 +22,7 @@
  *   UPDATE_GOLDEN=1 npx tsx --test src/services/profile/golden.test.ts
  *
  * Do that for the `elamir` set only when the change is meant for the owner; a refactor that moves
- * his text is a bug in the refactor, not in the golden.
+ * his text is a bug in the refactor, not in the golden. It is refused on CI (`updating()`).
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -39,7 +40,18 @@ const WINDOW = 70;
 
 const touched = new Set<string>();
 
-export const updating = (): boolean => process.env.UPDATE_GOLDEN === '1';
+/**
+ * Whether this run rewrites goldens (`UPDATE_GOLDEN=1`). Never on CI: a pipeline that rewrote the net
+ * would pass whatever the builders did, so there the variable is an error, not a no-op.
+ */
+export function updating(): boolean {
+    if (process.env.UPDATE_GOLDEN !== '1') return false;
+    const ci = process.env.CI;
+    if (ci && ci !== '0' && ci.toLowerCase() !== 'false') {
+        throw new Error('UPDATE_GOLDEN=1 with CI set: goldens are never rewritten on CI. Regenerate them locally and commit the files.');
+    }
+    return true;
+}
 
 /** Where a golden lives. Names are lower-case words joined by `.` and `-`, so a path can't be built from one. */
 export function goldenPath(name: string, ext: 'txt' | 'json', set: GoldenSet = 'elamir'): string {

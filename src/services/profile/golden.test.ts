@@ -5,8 +5,10 @@
  *
  * Path (a), "today's path": `builder(fixture)`. The fixtures are `ELAMIR_SETTINGS` (testFixtures.ts)
  * and `ELAMIR_SEED_SETTINGS` (what `scripts/seed-studio-settings.mjs` writes: only it pins the
- * infographic brand), with `.elamir` and `.seed` in the file names. The neutral English fixture
- * is the control, under `__golden__/control-english`: it is meant to change as defaults go neutral.
+ * infographic brand), with `.elamir` and `.seed` in the file names. `__golden__/elamir` is only what
+ * he is served, in Arabic. `__golden__/control-english` holds what he never is: the neutral English
+ * fixture, the English halves of bilingual builders, and the starter defaults a new tenant gets. It
+ * is meant to change as defaults go neutral.
  *
  * Nothing here depends on the clock or on chance: the builders take their dates as parameters
  * (`runCoach`'s `now`) or embed none, and every input is a fixed fixture.
@@ -25,6 +27,7 @@ import { dmFallbackReply } from '../../webhook/errors.js';
 import { AI_DISCLOSURE_LINE } from '../../webhook/meta-payload.js';
 import { dmSystemInstruction, RESPONSE_SCHEMA, STARTER_PERSONA } from '../ai.js';
 import { COACH_SCHEMA, coachSystemPrompt, runCoach } from '../growth/coach.js';
+import { KEYWORDS_SCHEMA, keywordsSystemPrompt, suggestKeywords } from '../growth/keywords.js';
 import { analystSystemPrompt, analystUserPrompt, LESSONS_SCHEMA } from '../monteur/analyst.js';
 import {
     ASK_POOL, COPY_SCHEMA, copySystemPrompt, copyUserPrompt, toClipCopy, type CopyContext,
@@ -37,9 +40,8 @@ import { renderPayload as carouselRenderPayload } from '../studio/drafts.js';
 import {
     DRAFT_SCHEMA, normalizeInstagramCaption, normalizeTiktokCaption, PLAN_SCHEMA, type CallModel, type ModelRequest,
 } from '../studio/generate.js';
-import {
-    payloadBrand, WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt,
-} from '../studio/infographicSpec.js';
+import { payloadBrand, WRITE_SCHEMA, writeSystemPrompt } from '../studio/infographicSpec.js';
+import { renderPayload as infographicRenderPayload } from '../studio/infographics.js';
 import {
     askLine, buildCatalog, buildDm, buildPlanCatalog, buildPlanSystemPrompt, buildSystemPrompt, draftUserPrompt,
     languageKit, LANGUAGES, planUserPrompt, saveLine, tiktokLine,
@@ -122,6 +124,8 @@ describe('the fixtures hold the owner\'s real values', () => {
     it('ELAMIR_SEED_SETTINGS is the STUDIO_SETTINGS scripts/seed-studio-settings.mjs writes', async () => {
         const seed = await import(new URL('../../../scripts/seed-studio-settings.mjs', import.meta.url).href);
         assert.deepStrictEqual(ELAMIR_SEED_SETTINGS, seed.STUDIO_SETTINGS);
+        // The prompts print some of these objects as JSON, so their key order is part of the value.
+        assert.equal(JSON.stringify(ELAMIR_SEED_SETTINGS), JSON.stringify(seed.STUDIO_SETTINGS));
     });
 
     it('the seed pins the infographic brand the other fixture leaves neutral', () => {
@@ -146,7 +150,8 @@ describe('DM and comment golden prompts', () => {
     });
 
     it('STARTER_PERSONA: the persona a new tenant\'s agent row, the sandbox and GET /settings/ai start with', () => {
-        matchGolden('dm.starter-persona', STARTER_PERSONA);
+        // The owner's agent row holds his own persona (ELAMIR_AGENT): this is what a NEW tenant gets.
+        matchGolden('dm.starter-persona', STARTER_PERSONA, 'control');
     });
 
     it('dmFallbackReply: the public reply that replaces an undeliverable DM, every variant', () => {
@@ -163,7 +168,10 @@ describe('DM and comment golden prompts', () => {
             { name: 'english, facebook, the DM holds a link', isFacebook: true, dmText: englishDm },
             { name: 'english, facebook, no link in the DM', isFacebook: true, dmText: 'Hi {username} 👋 Reply to this message for the details' },
         ];
-        matchGoldenJson('comments.dm-fallback-replies', cases.map((c) => ({ ...c, reply: dmFallbackReply(c) })));
+        const replies = cases.map((c) => ({ ...c, reply: dmFallbackReply(c) }));
+        // His DMs are Arabic, so the Arabic replies are his; the English ones go to English-language DMs.
+        matchGoldenJson('comments.dm-fallback-replies.ar', replies.filter((r) => r.name.startsWith('arabic')));
+        matchGoldenJson('comments.dm-fallback-replies.en', replies.filter((r) => r.name.startsWith('english')), 'control');
     });
 });
 
@@ -172,7 +180,7 @@ describe('DM and comment golden prompts', () => {
 describe('Studio golden prompts', () => {
     it('LANGUAGES: the language kits', () => {
         matchGoldenJson('studio.language-kit.ar', LANGUAGES.ar);
-        matchGoldenJson('studio.language-kit.en', LANGUAGES.en);
+        matchGoldenJson('studio.language-kit.en', LANGUAGES.en, 'control');
     });
 
     it('DRAFT_SCHEMA and PLAN_SCHEMA: what the writer and the planner answer with', () => {
@@ -251,8 +259,9 @@ const PLAN: ClipDirection = {
 };
 
 describe('Monteur golden prompts', () => {
-    it('ASK_POOL: the built-in asks, per language', () => {
-        matchGoldenJson('monteur.copy.ask-pool', ASK_POOL);
+    it('ASK_POOL: the built-in asks, Arabic his and English the control\'s', () => {
+        matchGoldenJson('monteur.copy.ask-pool.ar', ASK_POOL.ar);
+        matchGoldenJson('monteur.copy.ask-pool.en', ASK_POOL.en, 'control');
     });
 
     it('the schemas the pick, the copy and the Analyst answer with, and the Editor\'s with touches on and off', () => {
@@ -322,15 +331,20 @@ describe('Monteur golden prompts', () => {
 // ─── Infographics ───────────────────────────────────────────────────────────────────────────
 
 describe('Infographic golden prompts', () => {
-    it('writeSystemPrompt: Arabic (فصحى) and English', () => {
+    it('writeSystemPrompt: Arabic (فصحى) is his; English is the control\'s', () => {
         matchGolden('infographic.system.ar', writeSystemPrompt('ar'));
-        matchGolden('infographic.system.en', writeSystemPrompt('en'));
+        matchGolden('infographic.system.en', writeSystemPrompt('en'), 'control');
     });
 
-    it('writeUserPrompt: with the owner\'s never-use list', () => {
-        const avoid = ELAMIR_SEED_SETTINGS.voice.avoid ?? [];
-        matchGolden('infographic.user.ar', writeUserPrompt({ topic: 'RAG vs CAG vs KAG', notes: 'ركّز على التكلفة وسرعة الاستجابة', language: 'ar', avoid }));
-        matchGolden('infographic.user.en', writeUserPrompt({ topic: 'RAG vs CAG vs KAG', notes: null, language: 'en', avoid }));
+    it('renderPayload: the job the Mac gets in write mode, assembled from his seed settings', () => {
+        // The call site itself, not a copy of it: brand, system prompt, user prompt (with his never-use
+        // list from voice.avoid) and schema. spec = null is write mode, which is how a new one starts.
+        const job = (language: 'ar' | 'en', notes: string | null) => infographicRenderPayload(
+            '00000000-0000-4000-8000-0000000000aa', { topic: 'RAG vs CAG vs KAG', notes, language },
+            ELAMIR_SEED_SETTINGS.infographic.theme, ELAMIR_SEED_SETTINGS, null,
+        );
+        matchGoldenJson('infographic.render-payload.seed.ar', job('ar', 'ركّز على التكلفة وسرعة الاستجابة'));
+        matchGoldenJson('infographic.render-payload.seed.en', job('en', null), 'control');
     });
 
     it('payloadBrand: the personal brand the worker draws, from the seed\'s infographic section', () => {
@@ -385,16 +399,10 @@ describe('Growth coach golden prompts', () => {
         { platform: 'instagram', day: '2026-10-12', metrics: { reach_followers: 300, reach_non_followers: 4100, followers: 8412 } },
     ];
 
-    it('coachSystemPrompt: Arabic and English', () => {
-        matchGolden('growth.coach-system.ar', coachSystemPrompt('ar'));
-        matchGolden('growth.coach-system.en', coachSystemPrompt('en'));
-        matchGoldenJson('growth.coach-schema', COACH_SCHEMA);
-    });
-
-    it('runCoach: the system prompt and the numbers it sends for his Growth settings, timezone and language', async () => {
-        const flat = (sql: string) => sql.replace(/\s+/g, ' ');
+    /** His rows, as the database would hand them to the Growth readers and to the Studio settings behind `tenantLanguage`. */
+    const mockDatabase = (): void => {
         (pool as any).query = async (sql: string) => {
-            const q = flat(sql);
+            const q = sql.replace(/\s+/g, ' ');
             if (/FROM post_insights/.test(q)) return { rows: POSTS };
             if (/DISTINCT ON \(platform\)/.test(q)) return { rows: [{ platform: 'instagram', followers: 8412 }] };
             if (/FROM account_insights_daily/.test(q)) return { rows: DAYS };
@@ -403,6 +411,32 @@ describe('Growth coach golden prompts', () => {
             if (/FROM studio_settings/.test(q)) return { rows: [{ ...ELAMIR_SEED_SETTINGS }] };
             return { rows: [] };
         };
+    };
+
+    it('coachSystemPrompt: Arabic is his; English is the control\'s', () => {
+        matchGolden('growth.coach-system.ar', coachSystemPrompt('ar'));
+        matchGolden('growth.coach-system.en', coachSystemPrompt('en'), 'control');
+        matchGoldenJson('growth.coach-schema', COACH_SCHEMA);
+    });
+
+    it('suggestKeywords: the system prompt and the turn it sends for his Growth settings and language', async () => {
+        mockDatabase();
+        const requests: ModelRequest[] = [];
+        const call: CallModel = async (req) => {
+            requests.push(req);
+            return { keywords: [{ term: 'هندسة البرومبت', why: 'يبحث عنها المبتدئون' }], hashtags: ['#برومبت'] };
+        };
+        const out = await suggestKeywords('creator', { topic: 'هندسة البرومبت للمبتدئين' }, { callModel: call });
+        assert.equal(out.language, 'ar');
+        assert.equal(requests.length, 1);
+        assert.equal(requests[0]!.system, keywordsSystemPrompt('ar'), 'the language comes from his voice.language');
+        matchGolden('growth.keywords-system.ar', requests[0]!.system);
+        matchGolden('growth.keywords-user.elamir', requests[0]!.turns[0]!.text);
+        matchGoldenJson('growth.keywords-schema', KEYWORDS_SCHEMA);
+    });
+
+    it('runCoach: the system prompt and the numbers it sends for his Growth settings, timezone and language', async () => {
+        mockDatabase();
         const requests: ModelRequest[] = [];
         const call: CallModel = async (req) => {
             requests.push(req);
@@ -419,15 +453,52 @@ describe('Growth coach golden prompts', () => {
 // ─── The campaigns screen ───────────────────────────────────────────────────────────────────
 
 describe('Campaign golden seeds', () => {
-    it('COURSE_MAPPINGS: the DM and replies the bulk import seeds for his nine courses', () => {
-        // The REAL shipped file, run in a bare context: it only declares CampaignsPage and registers its actions.
+    /**
+     * The REAL shipped file, run in a bare context. It only declares CampaignsPage and registers its
+     * actions; the stubs are what `showBulkImportModal` touches on the way to filling `pendingImport`
+     * (the modal markup is not pinned: it is chrome, and `showModal` swallows it).
+     */
+    const loadCampaignsPage = (): vm.Context => {
         const file = new URL('../../../dashboard/js/pages/campaigns.js', import.meta.url);
-        const ctx = vm.createContext({ UI: { registerActions: () => {} } });
+        const ctx = vm.createContext({
+            UI: { registerActions: () => {}, showModal: () => {}, formatNumber: (n: unknown) => String(n), button: () => '' },
+            html: Object.assign(() => '', { raw: (s: unknown) => s }),
+            t: (key: string) => key,
+        });
         vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: 'dashboard/js/pages/campaigns.js' });
-        // Serialised inside the context, so the object that comes out belongs to this realm.
-        const mappings = JSON.parse(vm.runInContext('JSON.stringify(CampaignsPage.COURSE_MAPPINGS)', ctx));
+        return ctx;
+    };
+    // Serialised inside the context, so what comes out belongs to this realm.
+    const inside = (ctx: vm.Context, expression: string): any => JSON.parse(vm.runInContext(`JSON.stringify(${expression})`, ctx));
+
+    it('COURSE_MAPPINGS: the DM and replies the bulk import seeds for his nine courses', () => {
+        const mappings = inside(loadCampaignsPage(), 'CampaignsPage.COURSE_MAPPINGS');
         assert.equal(Object.keys(mappings).length, 9);
         matchGoldenJson('campaigns.course-mappings', mappings);
+    });
+
+    it('showBulkImportModal: what each imported course is seeded with: the first mapping its name contains, else the Arabic fallback', () => {
+        const ctx = loadCampaignsPage();
+        const course = (id: number, name: string) => ({ id, name, url: `https://www.udemy.com/course/golden-${id}/?couponCode=GOLDEN${id}`, code: `GOLDEN${id}`, redemptions: id * 7 });
+        // One per mapping key, in the order of the table, named as the courses are. 'Problem Solving - with C#'
+        // contains two keys ('problem solving' and 'c#'): the first in table order wins. The last has none.
+        const courses = [
+            course(1, 'Agentic AI: الدليل العملي لبناء ما تحتاجه بالذكاء الاصطناعي'),
+            course(2, 'GoLang Course: Learn Go in Arabic'),
+            course(3, 'Swift Programming Language | in Arabic'),
+            course(4, 'CSS3 For Beginners [In Arabic]'),
+            course(5, 'HTML5 For Beginners [In Arabic]'),
+            course(6, 'Problem Solving - with C# [in Arabic]'),
+            course(7, 'Java for Beginners [in Arabic]'),
+            course(8, 'Python For Beginners [in Arabic]'),
+            course(9, 'C# For Beginners [in Arabic]'),
+            course(10, 'Rust Systems Programming [in Arabic] - Part 1'),
+        ];
+        vm.runInContext(`CampaignsPage.showBulkImportModal(${JSON.stringify(courses)})`, ctx);
+        const rows = inside(ctx, 'CampaignsPage.pendingImport');
+        assert.equal(rows.length, courses.length);
+        assert.deepEqual(rows.map((r: { matched: boolean }) => r.matched), [...Array(9).fill(true), false]);
+        matchGoldenJson('campaigns.import-rows', rows);
     });
 });
 

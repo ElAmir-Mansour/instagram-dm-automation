@@ -1,5 +1,0 @@
-Topic: RAG vs CAG vs KAG
-Notes from the creator (follow them):
-ركّز على التكلفة وسرعة الاستجابة
-Never use these words or topics: MCP.
-Language: Arabic (Modern Standard Arabic, الفصحى).
