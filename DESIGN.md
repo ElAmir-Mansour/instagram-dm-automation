@@ -101,7 +101,8 @@ label. Cardamom is never a status.
 
 ### Platform colours: data, never decoration
 Instagram and Facebook say which network a row belongs to. TikTok and YouTube are tints only, labelled with
-`--text-strong`. Solid platform colours appear only in `.platform-bar-*`, and `check:contrast` enforces that.
+`--text-strong`. Solid platform colours appear only in `.platform-bar-*`, and `check:contrast` enforces that. Their
+logos are monochrome, never in these colours (§4, Platform logos).
 
 | token | dark | light | role |
 |---|---|---|---|
@@ -322,7 +323,22 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - `.badge-instagram` / `-facebook`: soft tint with `-text`. TikTok and YouTube: soft tint with `--text-strong`.
 - `.platform-tag`: radius 6, the letters IG / FB.
 - Never solid.
-- Footer logos are `currentColor` glyphs and never mirror.
+
+### Platform logos (public pages)
+- **Source.** simple-icons@16.33.0 (CC0 path data; the trademarks stay with their owners), WhatsApp, Instagram, Facebook,
+  TikTok and YouTube, as one inline sprite right after `<body>` on all six public pages (the shared footer uses it too).
+  A path is never edited by hand: `landingLogos.test.ts` compares each to the package, byte for byte.
+- **Monochrome, always.** A platform's colour is data, and each brand's own rules allow black or white (YouTube: white or
+  `#282828`, and never as a play button). The inks are three tokens in the shared chrome of the public pages, not in
+  tokens.css, in tokens.css's three-selector shape:
+  - `--logo-mono`: white in dark, black in light.
+  - `--logo-mono-yt`: white in dark, `#282828` in light (YouTube only).
+  - `--logo-on-accent`: the glyph inside the primary button; black in dark, white in light.
+- **Beside the name, never instead of it.** The WhatsApp glyph (20px) sits at the label's inline-start in each primary
+  WhatsApp button and in the footer's WhatsApp link; a 40px `.ptile` in the platform's `-soft` tint with a 24px glyph leads
+  each platform row; 16px glyphs lead the samples' links and captions; the footer's Follow row has the four accounts. No
+  logo strip, no cluster. Every glyph is `aria-hidden`, and the platform's name is real text beside it.
+- **Never mirrored or transformed.** Arrows mirror in RTL; a logo is not a direction.
 
 ### Mark
 
@@ -549,7 +565,8 @@ the same paragraph as the feature.
 ### The guards
 | check | stops |
 |---|---|
-| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation |
+| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation, or used at all in a public page's CSS (a bare `--brand-*` token, a brand hex); a platform logo under 3:1 on any ground it is painted on (`--logo-mono`, `--logo-mono-yt` and `--logo-on-accent`, read from the public pages' shared chrome) |
+| `landingLogos.test.ts` | a logo path that differs from simple-icons@16.33.0; a `<use>` that points at nothing; a glyph that is not `aria-hidden` or has no platform name beside it; a transform, mirror, colour literal or non-`--logo-*` fill on `.plogo` or `.ptile`; the sprite differing between pages; different glyphs in Arabic and English |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
 | `check:i18n` | an English string with no Arabic translation, a placeholder mismatch, an Arabic-Indic digit outside its allow-list |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
