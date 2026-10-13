@@ -2244,6 +2244,312 @@
             .reqs > li { grid-template-columns: 10rem minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
         }
 
+        /* ─── Diagrams, and the real infographic (L9) ──────────────────────────
+           Four diagrams and one real infographic. The diagrams are HTML and CSS
+           with small inline icons, never one SVG with the words inside: the text
+           reflows at 320px, mirrors in Arabic, and stays readable to a screen
+           reader and to a reviewer who views source. IDENTITY.md §5 sets the look
+           (flat nodes on --surface-solid, radius 12, a 1px --border-strong
+           connector, pill chips; no gradient, no shadow, no people) and §6 the
+           motion.
+
+           ORIENTATION IS ONE NUMBER, --h. 0 is a column, which is the default
+           and the only layout under 48rem; 1 is a row. The hairline, the arrow
+           and the packet are calc()s of it, so they cannot disagree about which
+           way the flow runs, and a breakpoint only has to say --h: 1. The short
+           flow becomes a row at 48rem; the two long ones keep their words
+           readable only from 62rem, and stay a column until then.
+
+           THE PACKET is the 6px --accent dot of "highlight → deliver". It crosses
+           each connector once, 1.2s a hop and one hop after another, so a flow is
+           over inside 5s: WCAG 2.2.2 is met by nothing here lasting longer, and
+           nothing looping. It starts when the page's one IntersectionObserver adds
+           .is-inview, and only under prefers-reduced-motion: no-preference. The
+           finished state is the DEFAULT: without the class, or without the media
+           query, nothing moves and nothing is hidden. The last node answers with
+           the receipt ring, once.
+
+           ARROWS MIRROR AND LOGOS NEVER DO. The chevron is drawn once, pointing
+           along the inline axis, and flipped under :dir(rtl); in a column it
+           points down in both directions. A platform glyph is the L8 sprite in
+           its monochrome ink, beside its name, and no rule here touches its
+           direction. */
+        .flow {
+            --flow-gap: var(--space-5);
+            --flow-pkt: 6px;
+            --flow-sign: 1;
+            --flow-step: 1.2s;
+            margin: var(--space-5) 0 var(--space-6);
+        }
+        .flow:dir(rtl) { --flow-sign: -1; }
+        /* How many connectors each flow has, and how far apart its packets start.
+           landingTruth.test.ts counts the nodes and holds this to them; the
+           monteur's five hops overlap by 0.3s so that its last receipt lands at
+           4.7s with the others, not at 6s. */
+        .flow-dm { --flow-hops: 3; }
+        .flow-studio { --flow-hops: 4; }
+        .flow-monteur { --flow-hops: 5; --flow-step: 0.9s; }
+
+        .flow-steps {
+            --h: 0;
+            --af: row;
+            --ac: auto;
+            --mi: 28rem;
+            --nc: auto minmax(0, 1fr);
+            --nx: 2;
+            --ir: 1 / span 2;
+            --na: start;
+            --hx: calc(var(--h) * var(--flow-sign) * (var(--flow-gap) - var(--flow-pkt)));
+            --hy: calc((1 - var(--h)) * (var(--flow-gap) - var(--flow-pkt)));
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: grid;
+            grid-auto-flow: var(--af);
+            grid-auto-columns: var(--ac);
+            gap: var(--flow-gap);
+            max-inline-size: var(--mi);
+        }
+        .flow-node {
+            position: relative;
+            display: grid;
+            grid-template-columns: var(--nc);
+            align-content: var(--na);
+            align-items: start;
+            gap: var(--space-1) var(--space-3);
+            min-inline-size: 0;
+            padding: var(--space-3) var(--space-4);
+            border-radius: var(--radius-md);
+            background: var(--surface-solid);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-default);
+            font-size: var(--lp-ui);
+            line-height: var(--lp-lh-ui);
+        }
+        .flow-node > * { grid-column: var(--nx); }
+        .flow-node > .flow-ic { grid-column: 1; grid-row: var(--ir); }
+        .flow-node > .flow-arrow { grid-column: auto; }
+        .flow-node > .flow-chips,
+        .flow-node > .flow-fork { grid-column: 1 / -1; }
+
+        .flow-t { color: var(--text-strong); font-weight: var(--fw-semibold); }
+        .flow-s { color: var(--text-muted); }
+        .flow-ic {
+            inline-size: 1.25rem;
+            block-size: 1.25rem;
+            margin-block: 0.1rem calc(var(--h) * var(--space-2));
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            color: var(--text-muted);
+        }
+        .flow-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+        .flow-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-2);
+            padding: 0.1rem var(--space-3);
+            border-radius: var(--radius-pill);
+            background: var(--surface-glass);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-strong);
+            font-weight: var(--fw-medium);
+            white-space: nowrap;
+        }
+        .flow-chip .plogo { --lp-logo: 1rem; }
+        /* The branch at the end of a flow: rows one under another, hairline between. */
+        .flow-fork { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+        .flow-fork > li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+        .flow-fork > li + li { padding-block-start: var(--space-2); border-block-start: 1px solid var(--border-subtle); }
+        .flow-fork .flow-ic { flex: none; inline-size: 1rem; block-size: 1rem; margin: 0; }
+        .flow-fork .flow-s { flex: 1 1 100%; }
+
+        /* The connector, drawn from the second node on: a hairline across the gap
+           before it, a chevron at its end, and the packet at its start. */
+        .flow-node + .flow-node::before,
+        .flow-node + .flow-node::after { content: ''; position: absolute; }
+        .flow-node + .flow-node::before {
+            inset-block-start: calc(var(--h) * 50% - (1 - var(--h)) * var(--flow-gap));
+            inset-inline-start: calc((1 - var(--h)) * (50% - 0.5px) - var(--h) * var(--flow-gap));
+            inline-size: calc(var(--h) * var(--flow-gap) + (1 - var(--h)) * 1px);
+            block-size: calc((1 - var(--h)) * var(--flow-gap) + var(--h) * 1px);
+            background: var(--border-strong);
+        }
+        .flow-node + .flow-node::after {
+            inset-block-start: calc(var(--h) * (50% - var(--flow-pkt) / 2) - (1 - var(--h)) * var(--flow-gap));
+            inset-inline-start: calc((1 - var(--h)) * (50% - var(--flow-pkt) / 2) - var(--h) * var(--flow-gap));
+            inline-size: var(--flow-pkt);
+            block-size: var(--flow-pkt);
+            border-radius: 50%;
+            background: var(--accent);
+            opacity: 0;
+            pointer-events: none;
+        }
+        .flow-arrow {
+            position: absolute;
+            inset-block-start: calc(var(--h) * (50% - 0.5rem) - (1 - var(--h)) * 1rem);
+            inset-inline-start: calc((1 - var(--h)) * (50% - 0.5rem) - var(--h) * 1rem);
+            inline-size: 1rem;
+            block-size: 1rem;
+            fill: none;
+            stroke: var(--text-muted);
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            transform: rotate(90deg);
+        }
+
+        .flow-limits {
+            display: inline-block;
+            margin: var(--space-4) 0 0;
+            padding: var(--space-2) var(--space-4);
+            border-radius: var(--radius-md);
+            background: var(--surface-glass);
+            box-shadow: inset 0 0 0 1px var(--border-subtle);
+            color: var(--text-default);
+            font-size: var(--lp-ui);
+            line-height: var(--lp-lh-ui);
+        }
+        .flow figcaption {
+            margin-block-start: var(--space-3);
+            font-size: var(--lp-ui);
+            line-height: var(--lp-lh-ui);
+            color: var(--text-muted);
+        }
+        .flow-limits + figcaption { margin-block-start: var(--space-2); }
+
+        @keyframes flow-hop {
+            0%   { opacity: 1; transform: translate(0, 0); }
+            75%  { opacity: 1; transform: translate(var(--hx), var(--hy)); }
+            100% { opacity: 0; transform: translate(var(--hx), var(--hy)); }
+        }
+        @keyframes flow-receipt {
+            0%, 100% { box-shadow: inset 0 0 0 1px var(--border-subtle), 0 0 0 0 var(--accent-ring); }
+            50%      { box-shadow: inset 0 0 0 1px var(--border-subtle), 0 0 0 var(--ring) var(--accent-ring); }
+        }
+        /* Every line of motion in this block is in this one media query. */
+        @media (prefers-reduced-motion: no-preference) {
+            .flow.is-inview .flow-node + .flow-node::after { animation: flow-hop 1.2s var(--ease-standard) 1; }
+            .flow.is-inview .flow-node:nth-child(3)::after { animation-delay: var(--flow-step); }
+            .flow.is-inview .flow-node:nth-child(4)::after { animation-delay: calc(var(--flow-step) * 2); }
+            .flow.is-inview .flow-node:nth-child(5)::after { animation-delay: calc(var(--flow-step) * 3); }
+            .flow.is-inview .flow-node:nth-child(6)::after { animation-delay: calc(var(--flow-step) * 4); }
+            .flow.is-inview .flow-node:last-child {
+                animation: flow-receipt var(--motion-base) var(--ease-exit) calc((var(--flow-hops) - 1) * var(--flow-step) + 0.9s) 1;
+            }
+        }
+        @media (min-width: 48rem) {
+            .flow:not(.flow-long) .flow-steps {
+                --h: 1; --af: column; --ac: minmax(0, 1fr); --mi: none;
+                --nc: minmax(0, 1fr); --nx: 1; --ir: auto; --na: center;
+            }
+            .flow:not(.flow-long) .flow-arrow { transform: none; }
+            .flow:not(.flow-long):dir(rtl) .flow-arrow { transform: scaleX(-1); }
+        }
+        @media (min-width: 62rem) {
+            .flow-long .flow-steps {
+                --h: 1; --af: column; --ac: minmax(0, 1fr); --mi: none;
+                --nc: minmax(0, 1fr); --nx: 1; --ir: auto; --na: center;
+            }
+            .flow-long .flow-node { padding-inline: var(--space-3); }
+            .flow-long .flow-arrow { transform: none; }
+            .flow-long:dir(rtl) .flow-arrow { transform: scaleX(-1); }
+        }
+
+        /* D4: the platform map. A real table, so a screen reader gets rows and
+           columns; under 40rem each row is a card and each cell names its own
+           column (td::before reads data-th), because five columns do not fit a
+           phone. The ARIA roles are in the markup for the same reason: a table
+           made display: block loses its semantics in some browsers, and the
+           roles give them back. */
+        .pmap {
+            inline-size: 100%;
+            margin: 0 0 var(--space-5);
+            border-collapse: separate;
+            border-spacing: 0;
+            border-radius: var(--radius-lg);
+            background: var(--surface-raised);
+            box-shadow: var(--lp-elev-card);
+            color: var(--text-default);
+            font-size: var(--lp-ui);
+            line-height: var(--lp-lh-ui);
+        }
+        .pmap caption { caption-side: top; padding: 0 0 var(--space-3); text-align: start; color: var(--text-muted); }
+        .pmap th, .pmap td { padding: var(--space-3) var(--space-4); text-align: center; vertical-align: middle; }
+        .pmap thead th { font-size: var(--lp-micro); font-weight: var(--fw-semibold); color: var(--text-muted); }
+        .pmap tbody > tr > * { border-block-start: 1px solid var(--border-subtle); }
+        .pmap tbody th { text-align: start; white-space: nowrap; font-weight: var(--fw-semibold); color: var(--text-strong); }
+        .pmap th .plogo { --lp-logo: 1rem; margin-inline-end: var(--space-2); vertical-align: middle; }
+        .pmap .x { color: var(--text-muted); }
+        .pm-ic {
+            inline-size: 1rem;
+            block-size: 1rem;
+            vertical-align: middle;
+            fill: none;
+            stroke: var(--accent-text);
+            stroke-width: 2.5;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .pmap .y > span:not(.sr-only) { margin-inline-start: var(--space-1); }
+        @media (max-width: 40rem) {
+            .pmap, .pmap thead, .pmap tbody, .pmap tr, .pmap th, .pmap td { display: block; }
+            .pmap { background: none; box-shadow: none; border-radius: 0; }
+            .pmap thead { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); }
+            .pmap caption { display: block; }
+            .pmap tbody > tr > * { border-block-start: 0; }
+            .pmap tbody > tr {
+                margin-block-end: var(--space-3);
+                padding: var(--space-4);
+                border-radius: var(--radius-lg);
+                background: var(--surface-raised);
+                box-shadow: var(--lp-elev-card);
+            }
+            .pmap tbody th { padding: 0 0 var(--space-2); }
+            .pmap td { display: flex; align-items: center; gap: var(--space-1); padding: var(--space-2) 0; text-align: start; }
+            .pmap td::before { content: attr(data-th); margin-inline-end: auto; padding-inline-end: var(--space-3); color: var(--text-muted); }
+        }
+
+        /* The real infographic: the dark and the light cut, 4:5, in the samples
+           band. The script picks the one that matches the theme and plays it only
+           while at least half of it is on screen; without the script it is the dark
+           one, with controls, and it never plays by itself. */
+        .infovid {
+            display: grid;
+            gap: var(--space-3);
+            margin: 0 0 var(--space-5);
+            padding: clamp(var(--space-4), 3vw, var(--space-6));
+        }
+        .infovid h3 { margin: 0; }
+        .infovid .seq-sub { margin: 0 0 var(--space-2); }
+        .infovid video {
+            display: block;
+            inline-size: 100%;
+            max-inline-size: 22rem;
+            block-size: auto;
+            aspect-ratio: 4 / 5;
+            border-radius: var(--radius-md);
+            background: var(--surface-sunken);
+            box-shadow: 0 0 0 1px var(--border-subtle);
+        }
+        .infovid figcaption { font-size: var(--lp-ui); line-height: var(--lp-lh-ui); color: var(--text-muted); }
+        @media (max-width: 30rem) {
+            .infovid video { max-inline-size: 18rem; }
+        }
+        @media (min-width: 52rem) {
+            .infovid {
+                grid-template-columns: minmax(0, 22rem) minmax(0, 1fr);
+                grid-template-rows: auto auto 1fr;
+                column-gap: var(--space-6);
+                align-items: start;
+            }
+            .infovid > video { grid-column: 1; grid-row: 1 / span 3; }
+            .infovid > :not(video) { grid-column: 2; }
+        }
+        .watch { margin: var(--space-3) 0 0; font-size: var(--lp-ui); font-weight: var(--fw-semibold); line-height: var(--lp-lh-ui); }
+
         /* ─── Security and privacy ─────────────────────────────────────────────
            Four statements, each one a thing the code does, two by two on a
            wide screen with hairlines between them. A raised card with accent
@@ -3181,6 +3487,17 @@
                     <h2 id="how-it-works-ar">ماذا يحدث حين يعلّق أحدهم</h2>
                     <p class="prose lead">ثلاث خطوات على إنستجرام وفيسبوك، والأولى وحدها من العميل. الباقي يجري من تلقاء نفسه:</p>
 
+                    <figure class="flow flow-dm" id="flow-dm-ar" aria-labelledby="flow-dm-cap-ar">
+                        <ol class="flow-steps">
+                            <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg><span class="flow-t">«كم السعر؟»</span><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>إنستجرام</span><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>فيسبوك</span></span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/></svg><span class="flow-t">تطابق كلمة الحملة</span><span class="flow-s"><span class="kw">السعر</span></span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg><span class="flow-t">رسالتك على الخاص</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><ul class="flow-fork"><li><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 18v-2a4 4 0 0 0-4-4H4"/><path d="m9 17-5-5 5-5"/></svg><span class="flow-t">ردّ عام (اختياري)</span></li><li><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg><span class="flow-t">إعجاب (يُحاوَل)</span></li></ul></li>
+                        </ol>
+                        <p class="flow-limits">مرة لكل شخص كل 24 ساعة · 180 في الساعة لكل حساب</p>
+                        <figcaption id="flow-dm-cap-ar">على إنستجرام وفيسبوك وحدهما</figcaption>
+                    </figure>
+
                     <ol class="loop">
                         <li class="beat">
                             <span class="beat-num" aria-hidden="true">1</span>
@@ -3367,6 +3684,17 @@
                     <h2 id="studio-how-ar">كيف يعمل الاستوديو</h2>
                     <p class="prose lead">ثلاث خطوات، الأولى والأخيرة منها لك، والتي بينهما على الذكاء الاصطناعي:</p>
 
+                    <figure class="flow flow-studio flow-long" id="flow-studio-ar" aria-labelledby="flow-studio-cap-ar">
+                        <ol class="flow-steps">
+                            <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg><span class="flow-t">درس</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/></svg><span class="flow-t">ما يشرحه ولقطاته</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m22 11-1.296-1.296a2.4 2.4 0 0 0-3.408 0L11 16"/><path d="M4 8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2"/><circle cx="13" cy="7" r="1" fill="currentColor"/><rect x="8" y="2" width="14" height="14" rx="2"/></svg><span class="flow-t">كاروسيل <bdi dir="ltr">4:5</bdi> و<bdi dir="ltr">9:16</bdi></span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg><span class="flow-t">تراجعه</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><ul class="flow-fork"><li><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>إنستجرام</span><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>فيسبوك</span></span><span class="flow-s">يُجدوَل</span></li><li><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-tiktok"/></svg>تيك توك</span></span><span class="flow-s">يُجدوَل أو ينتظر في طابور حتى موافقة تيك توك</span></li></ul></li>
+                        </ol>
+                        <figcaption id="flow-studio-cap-ar">من الدرس إلى الجدولة، وبينهما مراجعتك</figcaption>
+                    </figure>
+
                     <!-- The loop's rail, reused because this is a sequence too.
                          .studio-steps opts it out of the scroll reveal. -->
                     <ol class="loop studio-steps">
@@ -3478,6 +3806,18 @@
                             </ul>
                         </aside>
                     </div>
+
+                    <figure class="flow flow-monteur flow-long" id="flow-monteur-ar" aria-labelledby="flow-monteur-cap-ar">
+                        <ol class="flow-steps">
+                            <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg><span class="flow-t">فيديو طويل في مجلده</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></svg><span class="flow-t">يستمع إليه على ماك</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></svg><span class="flow-t">لحظات تبدأ بخطّاف</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/></svg><span class="flow-t">ريل <bdi lang="en" dir="ltr">9:16</bdi>: عنوان، نصّ، غلاف</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="flow-t">اعتمادك</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><span class="flow-t">مواعيدك على المنصّات التي تختارها</span><ul class="flow-fork"><li><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>إنستجرام</span><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>فيسبوك</span><span class="flow-chip"><svg class="plogo plogo-yt" aria-hidden="true" focusable="false"><use href="#plogo-youtube"/></svg>يوتيوب</span></span></li><li><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-tiktok"/></svg>تيك توك</span></span><span class="flow-s">مسودّة / أنا فقط</span></li></ul></li>
+                        </ol>
+                        <figcaption id="flow-monteur-cap-ar">من الفيديو الطويل إلى مواعيدك، وفي الوسط اعتمادك. يعمل اليوم على حسابات المؤسس وحدها.</figcaption>
+                    </figure>
                 </section>
 
                 <!-- ─── Infographics ─────────────────────────────────────── -->
@@ -3493,6 +3833,7 @@
                                 مع غلافه لإنستجرام وفيسبوك ويوتيوب.
                             </p>
                             <p class="band-note">يعمل اليوم على حسابات المؤسس وحدها، ويُتاح لحسابات العملاء قريباً.</p>
+                    <p class="watch"><a href="#infographic-real-ar">شاهده متحرّكاً</a></p>
                         </div>
 
                         <aside class="card artifact studio-art" aria-label="مثال: إنفوجرافيك مقارنة من ثلاثة أعمدة">
@@ -3556,6 +3897,13 @@
                             </figure></li>
                         </ol>
                     </div>
+
+                    <figure class="card infovid" id="infographic-real-ar">
+                        <h3>إنفوجرافيك واحد، متحرّكاً</h3>
+                        <p class="seq-sub">«الفرق بين روبوت المحادثة والوكيل الذكي»: عمودان، وثلاث خطوات في كلٍّ منهما، رسمهما قالب الإنفوجرافيك نفسه. ويتبع الفيديو التصميم الداكن أو الفاتح لصفحتك.</p>
+                        <video width="720" height="900" muted loop playsinline preload="none" controls poster="/samples/chat-vs-agent-info-dark.webp" src="/samples/chat-vs-agent-info-dark.mp4" aria-label="إنفوجرافيك متحرّك: روبوت المحادثة ضد الوكيل الذكي. عمودان: روبوت المحادثة يُسأل فيجيب ويبقى التنفيذ عليك، والوكيل يخطّط ويستخدم الأدوات ويراجع حتى ينتهي العمل."></video>
+                        <figcaption><a href="https://www.instagram.com/reel/DeZqk8-D-X3/" target="_blank" rel="noopener noreferrer">كما نُشر على إنستجرام</a></figcaption>
+                    </figure>
 
                     <div class="covers">
                         <h3>أغلفة أخرى، وبمقاس تيك توك</h3>
@@ -3704,6 +4052,18 @@
                 <section class="band" aria-labelledby="platforms-ar">
                     <h2 id="platforms-ar">المنصّات، وما تحتاجه</h2>
                     <p class="prose lead">ما يعمل على كل منصّة، وما يلزمك قبل أن نبدأ:</p>
+                    <table class="pmap" id="pmap-ar" role="table">
+                        <caption>بنظرة واحدة. التفاصيل والشروط في الصفوف التالية.</caption>
+                        <thead>
+                            <tr role="row"><th scope="col" role="columnheader">المنصّة</th><th scope="col" role="columnheader">من التعليق إلى الرسالة</th><th scope="col" role="columnheader">النشر</th><th scope="col" role="columnheader">الكاروسيل</th><th scope="col" role="columnheader">الفيديو</th><th scope="col" role="columnheader">الأداء</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr role="row"><th scope="row" role="rowheader"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>إنستجرام</th><td role="cell" class="y" data-th="من التعليق إلى الرسالة"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="y" data-th="النشر"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="y" data-th="الكاروسيل"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="y" data-th="الفيديو"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="y" data-th="الأداء"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td></tr>
+                            <tr role="row"><th scope="row" role="rowheader"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>فيسبوك</th><td role="cell" class="y" data-th="من التعليق إلى الرسالة"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="y" data-th="النشر"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="y" data-th="الكاروسيل"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="y" data-th="الفيديو"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="x" data-th="الأداء"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td></tr>
+                            <tr role="row"><th scope="row" role="rowheader"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-tiktok"/></svg>تيك توك</th><td role="cell" class="x" data-th="من التعليق إلى الرسالة"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td><td role="cell" class="p" data-th="النشر">أنا فقط / مسودّة</td><td role="cell" class="y" data-th="الكاروسيل"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span>صور</span></td><td role="cell" class="y" data-th="الفيديو"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">نعم</span></td><td role="cell" class="x" data-th="الأداء"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td></tr>
+                            <tr role="row"><th scope="row" role="rowheader"><svg class="plogo plogo-yt" aria-hidden="true" focusable="false"><use href="#plogo-youtube"/></svg>يوتيوب</th><td role="cell" class="x" data-th="من التعليق إلى الرسالة"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td><td role="cell" class="p" data-th="النشر">رفع <bdi lang="en" dir="ltr">Shorts</bdi></td><td role="cell" class="x" data-th="الكاروسيل"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td><td role="cell" class="y" data-th="الفيديو"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span><bdi lang="en" dir="ltr">Shorts</bdi></span></td><td role="cell" class="x" data-th="الأداء"><span aria-hidden="true">—</span><span class="sr-only">لا</span></td></tr>
+                        </tbody>
+                    </table>
                     <ul class="card reqs">
                         <li>
                             <h3><span class="ptile ptile-instagram"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg></span>إنستجرام</h3>
@@ -4220,6 +4580,17 @@
                     <h2 id="how-it-works-en">What happens when someone comments</h2>
                     <p class="prose lead">Three steps on Instagram and Facebook, and the first is the only one the customer does. The rest runs on its own:</p>
 
+                    <figure class="flow flow-dm" id="flow-dm-en" aria-labelledby="flow-dm-cap-en">
+                        <ol class="flow-steps">
+                            <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg><span class="flow-t">“How much is the price?”</span><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>Instagram</span><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>Facebook</span></span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/></svg><span class="flow-t">Campaign keyword matched</span><span class="flow-s"><span class="kw">price</span></span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg><span class="flow-t">Your private message</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><ul class="flow-fork"><li><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 18v-2a4 4 0 0 0-4-4H4"/><path d="m9 17-5-5 5-5"/></svg><span class="flow-t">Public reply (optional)</span></li><li><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg><span class="flow-t">Like (attempted)</span></li></ul></li>
+                        </ol>
+                        <p class="flow-limits">Once per person every 24 hours · 180 an hour per account</p>
+                        <figcaption id="flow-dm-cap-en">On Instagram and Facebook only</figcaption>
+                    </figure>
+
                     <ol class="loop">
                         <li class="beat">
                             <span class="beat-num" aria-hidden="true">1</span>
@@ -4425,6 +4796,17 @@
                     <h2 id="studio-how-en">How the Studio works</h2>
                     <p class="prose lead">Three steps. The first and the last are yours; the one in between is the AI's:</p>
 
+                    <figure class="flow flow-studio flow-long" id="flow-studio-en" aria-labelledby="flow-studio-cap-en">
+                        <ol class="flow-steps">
+                            <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg><span class="flow-t">Lesson</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8h8"/><path d="M7 12h10"/><path d="M7 16h6"/></svg><span class="flow-t">What it teaches, and its frames</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m22 11-1.296-1.296a2.4 2.4 0 0 0-3.408 0L11 16"/><path d="M4 8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2"/><circle cx="13" cy="7" r="1" fill="currentColor"/><rect x="8" y="2" width="14" height="14" rx="2"/></svg><span class="flow-t">Carousel 4:5 and 9:16</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg><span class="flow-t">You review it</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><ul class="flow-fork"><li><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>Instagram</span><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>Facebook</span></span><span class="flow-s">Scheduled</span></li><li><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-tiktok"/></svg>TikTok</span></span><span class="flow-s">Scheduled, or held in a queue until TikTok approves the app</span></li></ul></li>
+                        </ol>
+                        <figcaption id="flow-studio-cap-en">From lesson to schedule, with your review in between</figcaption>
+                    </figure>
+
                     <!-- The loop's rail, reused because this is a sequence too.
                          .studio-steps opts it out of the scroll reveal. -->
                     <ol class="loop studio-steps">
@@ -4540,6 +4922,18 @@
                             </ul>
                         </aside>
                     </div>
+
+                    <figure class="flow flow-monteur flow-long" id="flow-monteur-en" aria-labelledby="flow-monteur-cap-en">
+                        <ol class="flow-steps">
+                            <li class="flow-node"><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></svg><span class="flow-t">A long video in its folder</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></svg><span class="flow-t">Listened to on a Mac</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></svg><span class="flow-t">Moments that open with a hook</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/></svg><span class="flow-t">A 9:16 reel: title, captions, cover</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="flow-t">Your approval</span></li>
+                            <li class="flow-node"><svg class="flow-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 5l7 7-7 7"/></svg><svg class="flow-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/></svg><span class="flow-t">Your slots, on the platforms you choose</span><ul class="flow-fork"><li><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>Instagram</span><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>Facebook</span><span class="flow-chip"><svg class="plogo plogo-yt" aria-hidden="true" focusable="false"><use href="#plogo-youtube"/></svg>YouTube</span></span></li><li><span class="flow-chips"><span class="flow-chip"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-tiktok"/></svg>TikTok</span></span><span class="flow-s">Draft / Only me</span></li></ul></li>
+                        </ol>
+                        <figcaption id="flow-monteur-cap-en">From the long video to your slots, with your approval in the middle. Running today on the founder's accounts only.</figcaption>
+                    </figure>
                 </section>
 
                 <!-- ─── Infographics ─────────────────────────────────────── -->
@@ -4554,6 +4948,7 @@
                                 anywhere, an MP4 with its cover for Instagram, Facebook and YouTube.
                             </p>
                             <p class="band-note">Running today on the founder's accounts only; coming to client accounts.</p>
+                    <p class="watch"><a href="#infographic-real-en">Watch it animated</a></p>
                         </div>
 
                         <aside class="card artifact studio-art" aria-label="Example: a three-column comparison infographic">
@@ -4618,6 +5013,13 @@
                             </figure></li>
                         </ol>
                     </div>
+
+                    <figure class="card infovid" id="infographic-real-en">
+                        <h3>One infographic, animated</h3>
+                        <p class="seq-sub">“Chatbot vs Agent”: two columns of three steps each, drawn by the same infographic template. The video follows your page's dark or light theme.</p>
+                        <video width="720" height="900" muted loop playsinline preload="none" controls poster="/samples/chat-vs-agent-info-dark.webp" src="/samples/chat-vs-agent-info-dark.mp4" aria-label="Animated infographic: Chatbot vs Agent. Two columns: the chatbot is asked, answers, and leaves the doing to you; the agent plans, uses tools, and checks its work until the task is done."></video>
+                        <figcaption><a href="https://www.instagram.com/reel/DeZqk8-D-X3/" target="_blank" rel="noopener noreferrer">As posted on Instagram</a></figcaption>
+                    </figure>
 
                     <div class="covers">
                         <h3>More covers, and the TikTok size</h3>
@@ -4768,6 +5170,18 @@
                 <section class="band" aria-labelledby="platforms-en">
                     <h2 id="platforms-en">Platforms, and what you need</h2>
                     <p class="prose lead">What works on each platform, and what you need before we start:</p>
+                    <table class="pmap" id="pmap-en" role="table">
+                        <caption>At a glance. The details and conditions are in the rows below.</caption>
+                        <thead>
+                            <tr role="row"><th scope="col" role="columnheader">Platform</th><th scope="col" role="columnheader">Comment to DM</th><th scope="col" role="columnheader">Posting</th><th scope="col" role="columnheader">Carousel</th><th scope="col" role="columnheader">Video</th><th scope="col" role="columnheader">Performance</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr role="row"><th scope="row" role="rowheader"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg>Instagram</th><td role="cell" class="y" data-th="Comment to DM"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="y" data-th="Posting"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="y" data-th="Carousel"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="y" data-th="Video"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="y" data-th="Performance"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td></tr>
+                            <tr role="row"><th scope="row" role="rowheader"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-facebook"/></svg>Facebook</th><td role="cell" class="y" data-th="Comment to DM"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="y" data-th="Posting"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="y" data-th="Carousel"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="y" data-th="Video"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="x" data-th="Performance"><span aria-hidden="true">—</span><span class="sr-only">No</span></td></tr>
+                            <tr role="row"><th scope="row" role="rowheader"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-tiktok"/></svg>TikTok</th><td role="cell" class="x" data-th="Comment to DM"><span aria-hidden="true">—</span><span class="sr-only">No</span></td><td role="cell" class="p" data-th="Posting">Only me / draft</td><td role="cell" class="y" data-th="Carousel"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span>photos</span></td><td role="cell" class="y" data-th="Video"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span class="sr-only">Yes</span></td><td role="cell" class="x" data-th="Performance"><span aria-hidden="true">—</span><span class="sr-only">No</span></td></tr>
+                            <tr role="row"><th scope="row" role="rowheader"><svg class="plogo plogo-yt" aria-hidden="true" focusable="false"><use href="#plogo-youtube"/></svg>YouTube</th><td role="cell" class="x" data-th="Comment to DM"><span aria-hidden="true">—</span><span class="sr-only">No</span></td><td role="cell" class="p" data-th="Posting"><bdi lang="en" dir="ltr">Shorts</bdi> upload</td><td role="cell" class="x" data-th="Carousel"><span aria-hidden="true">—</span><span class="sr-only">No</span></td><td role="cell" class="y" data-th="Video"><svg class="pm-ic" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span><bdi lang="en" dir="ltr">Shorts</bdi></span></td><td role="cell" class="x" data-th="Performance"><span aria-hidden="true">—</span><span class="sr-only">No</span></td></tr>
+                        </tbody>
+                    </table>
                     <ul class="card reqs">
                         <li>
                             <h3><span class="ptile ptile-instagram"><svg class="plogo" aria-hidden="true" focusable="false"><use href="#plogo-instagram"/></svg></span>Instagram</h3>
@@ -5414,6 +5828,93 @@
             });
             for (var i = 0; i < buttons.length; i++) buttons[i].addEventListener('click', sync);
             sync();
+        })();
+
+        /* The diagrams and the infographic video (L9). ONE IntersectionObserver
+           serves both, so the page watches its two kinds of moving thing in one
+           place:
+             · a .flow gets .is-inview once at 20% in view, which is what starts its
+               packet (the CSS only animates under prefers-reduced-motion:
+               no-preference, and this does not even observe under reduce);
+             · a video plays while at least half of it is in view and is paused
+               when less is, unless its viewer paused it by hand.
+           Under reduced motion nothing here ever plays or animates by itself: the
+           video keeps its controls, and the diagrams stay in their finished state.
+           The video's theme is picked from the page's: data-theme when something
+           pins one, the operating system's preference otherwise; the dark cut is
+           what the markup carries, so it is also what a browser without this
+           script gets. */
+        (function () {
+            var flows = document.querySelectorAll('.flow');
+            var vids = document.querySelectorAll('.infovid video');
+            var root = document.documentElement;
+            var calm = !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
+            var light = window.matchMedia ? window.matchMedia('(prefers-color-scheme: light)') : null;
+            var TONE = /-(?:dark|light)\./;
+
+            function play(v) {
+                v.muted = true;
+                var p = v.play();
+                if (p && p.catch) p.catch(function () { /* the browser said no: the controls are there */ });
+            }
+            function tone() {
+                var t = root.getAttribute('data-theme');
+                return t === 'dark' || t === 'light' ? t : (light && light.matches ? 'light' : 'dark');
+            }
+            function pick(v) {
+                var want = '-' + tone() + '.';
+                var src = v.getAttribute('src');
+                if (src.indexOf(want) !== -1) return;
+                var at = v.currentTime;
+                var was = !v.paused;
+                v.setAttribute('poster', v.getAttribute('poster').replace(TONE, want));
+                v.setAttribute('src', src.replace(TONE, want));
+                /* A video that was not playing starts over from its new poster. One that
+                   was keeps playing from where it was; preload="none" means the new cut
+                   fetches nothing until play() is asked, so that comes first. */
+                if (!was) return;
+                v.addEventListener('loadedmetadata', function back() {
+                    v.removeEventListener('loadedmetadata', back);
+                    try { v.currentTime = at; } catch (e) { /* not seekable yet */ }
+                });
+                play(v);
+            }
+            function sync() {
+                for (var i = 0; i < vids.length; i++) pick(vids[i]);
+            }
+
+            sync();
+            if (light && light.addEventListener) light.addEventListener('change', sync);
+            if (window.MutationObserver) new MutationObserver(sync).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+
+            if (!calm || !('IntersectionObserver' in window)) return;
+            var io = new IntersectionObserver(function (entries) {
+                entries.forEach(function (e) {
+                    var el = e.target;
+                    if (el.tagName === 'VIDEO') {
+                        if (e.intersectionRatio >= 0.5) {
+                            if (!el.heldByUser) play(el);
+                        } else if (!el.paused) {
+                            el.autoPaused = true;
+                            el.pause();
+                        }
+                    } else if (e.intersectionRatio >= 0.2) {
+                        el.classList.add('is-inview');
+                        io.unobserve(el);
+                    }
+                });
+            }, { threshold: [0.2, 0.5] });
+            for (var i = 0; i < flows.length; i++) io.observe(flows[i]);
+            for (var j = 0; j < vids.length; j++) {
+                (function (v) {
+                    v.addEventListener('pause', function () {
+                        if (v.autoPaused) v.autoPaused = false;
+                        else v.heldByUser = true;
+                    });
+                    v.addEventListener('play', function () { v.heldByUser = false; });
+                    io.observe(v);
+                })(vids[j]);
+            }
         })();
     </script>
 </body>

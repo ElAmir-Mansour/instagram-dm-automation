@@ -248,13 +248,15 @@ describe('platform logos — served the way src/index.ts serves them', () => {
     const uses = (html: string, id = '') => (html.match(new RegExp(`href="#plogo-${id}`, 'g')) ?? []).length;
 
     for (const lang of ['ar', 'en'] as const) {
-        it(`landing (${lang}): 35 glyphs with a WhatsApp number, 30 without, and none of the missing ones is a WhatsApp mark`, () => {
+        it(`landing (${lang}): 61 glyphs with a WhatsApp number, 56 without, and none of the missing ones is a WhatsApp mark`, () => {
             const src = read('landing');
             const full = renderSiteTemplate(src, WITH, lang);
             const bare = renderSiteTemplate(src, WITHOUT, lang);
-            assert.equal(uses(full), 35, 'two languages x 15, plus the footer\'s five');
+            // Each language: 15 (buttons, rows, samples) + 13 in the L9 diagrams (the flow chips: 2 + 3 + 4, and
+            // the platform map's four row heads). Two languages, plus the footer's five.
+            assert.equal(uses(full), 61, 'two languages x 28, plus the footer\'s five');
             assert.equal(uses(full, 'whatsapp'), 5, 'hero and contact in each language, and the footer');
-            assert.equal(uses(bare), 30);
+            assert.equal(uses(bare), 56);
             assert.equal(uses(bare, 'whatsapp'), 0, 'a link that is removed takes its glyph with it');
             assert.equal(bare.includes('class="foot-wa"'), false);
         });
@@ -347,7 +349,7 @@ describe('platform logos — where they sit on the landing page', () => {
         assert.equal(glyphsOf(docs.ar).length, glyphsOf(docs.en).length);
         assert.ok(glyphsOf(docs.ar).length >= 14, 'the buttons, the rows and the samples are all there');
         assert.equal(ar['whatsapp'], 2, 'the hero button and the contact button');
-        assert.equal(ar['youtube'], 1, 'the platform row only: there is no YouTube link in the samples');
+        assert.equal(ar['youtube'], 3, 'the platform row, the Monteur diagram\'s chip and the platform map\'s row: there is still no YouTube link in the samples');
     });
 
     it('the WhatsApp buttons carry the glyph first and keep the word in the label', () => {

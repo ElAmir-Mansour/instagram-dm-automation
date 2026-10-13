@@ -15,7 +15,8 @@
  * so every check on the page's words runs on the markup with its HTML comments removed.
  */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { describe, it } from 'node:test';
 import { renderSiteTemplate } from './publicPages.js';
 
@@ -322,14 +323,14 @@ describe('landing — the hero sells a growth studio (P0-3) and no woman appears
 });
 
 describe('landing — Latin runs inside Arabic are isolated (DESIGN.draft §3)', () => {
-    it('9:16, GIF, MP4, RAG vs CAG vs KAG, MIT, GitHub and the clock times never sit bare in the Arabic document', () => {
+    it('9:16, 4:5, GIF, MP4, RAG vs CAG vs KAG, MIT, GitHub, Shorts and the clock times never sit bare in the Arabic document', () => {
         // Remove each <bdi>…</bdi> run, then every tag (attribute values go with them): what is
         // left is the text a bidi algorithm would have to reorder. The existing page wraps
         // these in <bdi>; so must the new bands.
         const bare = L.ar.replace(/<bdi\b[^>]*>[^<]*<\/bdi>/g, ' ').replace(/<[^>]+>/g, ' ');
         // (04:12 is left out on purpose: the Studio band's screenshot clock has always been bare,
         // pinned left-to-right by its own CSS; the new bands' clocks are 11:40 and 23:05.)
-        for (const token of ['9:16', 'GIF', 'MP4', 'RAG', 'CAG', 'KAG', 'MIT', 'GitHub', '11:40', '23:05']) {
+        for (const token of ['9:16', '4:5', 'GIF', 'MP4', 'RAG', 'CAG', 'KAG', 'MIT', 'GitHub', 'Shorts', '11:40', '23:05']) {
             assert.equal(bare.includes(token), false, `"${token}" is not wrapped in <bdi> in the Arabic document`);
         }
     });
@@ -406,6 +407,9 @@ describe('landing — the new CSS: logical properties, existing breakpoints, tok
         rule('.reel figcaption .nw {'),
         rule('.pagefoot .foot-social .plogo {'),
         rule('.pagefoot .foot-wa .plogo {'),
+        // the diagrams, the platform map and the real infographic (L9): everything between its header and
+        // the next section's
+        between('Diagrams, and the real infographic (L9)', '/* ─── Security and privacy').replace(comments, ''),
     ].join('\n');
 
     const PHYSICAL = [
@@ -599,5 +603,482 @@ describe('landing and pricing — exactly one visible inbox disclosure per langu
         assert.equal(count(P.en, /\binbox\b/gi), 1);
         assert.ok(words(P.ar).includes('نصّ الرسائل الخاصة يُخزَّن ليظهر لك في صندوق الوارد'));
         assert.ok(words(P.en).includes('Direct-message text is stored so it can appear in your inbox'));
+    });
+});
+
+describe('landing — the diagrams and the real infographic (L9)', () => {
+    const rawCss = /<style>[\s\S]*?<\/style>/.exec(landing)![0];
+    const strip = (c: string) => c.replace(/\/\*[\s\S]*?\*\//g, '');
+    /** This change's CSS, from the comment that opens it to the next section's, comments removed. */
+    const L9 = strip(
+        rawCss.slice(
+            rawCss.lastIndexOf('/*', rawCss.indexOf('Diagrams, and the real infographic (L9)')),
+            rawCss.indexOf('/* ─── Security and privacy')
+        )
+    );
+    const SECTIONS = [['ar', L.ar], ['en', L.en]] as const;
+
+    /** The text between a `{` and its matching `}`. */
+    function blockAt(src: string, open: number): string {
+        let depth = 0;
+        for (let i = open; i < src.length; i++) {
+            if (src[i] === '{') depth++;
+            else if (src[i] === '}' && --depth === 0) return src.slice(open + 1, i);
+        }
+        throw new Error('unbalanced braces');
+    }
+    /** The bodies of every `@media <query> { … }` in `src`. */
+    function mediaBlocks(src: string, query: string): string[] {
+        const out: string[] = [];
+        for (let at = src.indexOf(`@media ${query}`); at >= 0; at = src.indexOf(`@media ${query}`, at + 1)) {
+            out.push(blockAt(src, src.indexOf('{', at)));
+        }
+        return out;
+    }
+    /** One element by id, from its opening tag to its closing one. */
+    function element(doc: string, id: string, tag = 'figure'): string {
+        const at = doc.indexOf(`id="${id}"`);
+        assert.ok(at > 0, `#${id} is in the document`);
+        const start = doc.lastIndexOf(`<${tag}`, at);
+        return doc.slice(start, doc.indexOf(`</${tag}>`, at) + tag.length + 3);
+    }
+
+    const FLOWS = { 'flow-dm': 4, 'flow-studio': 5, 'flow-monteur': 6 } as const;
+
+    describe('the ids, the places and the shape', () => {
+        it('every diagram, and the real infographic, is in both languages, once, with a label and a caption', () => {
+            for (const [s, doc] of SECTIONS) {
+                for (const id of ['flow-dm', 'flow-studio', 'flow-monteur', 'pmap', 'infographic-real']) {
+                    assert.equal((doc.match(new RegExp(`\\sid="${id}-${s}"`, 'g')) ?? []).length, 1, `${id}-${s}`);
+                }
+                for (const id of Object.keys(FLOWS)) {
+                    const fig = element(doc, `${id}-${s}`);
+                    assert.ok(fig.startsWith(`<figure class="flow ${id}`), `${id}-${s} is a .flow figure`);
+                    assert.ok(fig.includes(`aria-labelledby="${id}-cap-${s}"`), `${id}-${s} is named by its caption`);
+                    assert.ok(fig.includes(`<figcaption id="${id}-cap-${s}">`), `${id}-${s} has the caption it names`);
+                }
+            }
+            for (const [pat, n] of [[/<figure class="flow /g, 3], [/<table class="pmap"/g, 1], [/<figure class="card infovid"/g, 1]] as const) {
+                assert.equal((L.ar.match(pat) ?? []).length, n, String(pat));
+                assert.equal((L.en.match(pat) ?? []).length, n, String(pat));
+            }
+        });
+
+        it('each sits where the spec puts it, and the Monteur and Infographics bands stay free of images and video', () => {
+            for (const [s, doc] of SECTIONS) {
+                const at = (marker: string, from = 0) => {
+                    const i = doc.indexOf(marker, from);
+                    assert.ok(i >= 0, `${marker} (${s})`);
+                    return i;
+                };
+                // D1 in "what happens when someone comments", before its three beats
+                const how = at(`id="how-it-works-${s}"`);
+                assert.ok(at(`id="flow-dm-${s}"`, how) < at('<ol class="loop">', how), `flow-dm-${s} comes before the loop`);
+                // D2 in "how the Studio works", before its three steps
+                const studio = at(`id="studio-how-${s}"`);
+                assert.ok(at(`id="flow-studio-${s}"`, studio) < at('<ol class="loop studio-steps">', studio), `flow-studio-${s} comes before the steps`);
+                // D3 in the Monteur band, after its grid, inline SVG only
+                const monteur = at(`id="monteur-${s}"`);
+                const d3 = at(`id="flow-monteur-${s}"`, monteur);
+                assert.ok(d3 > at('</aside>', monteur) && d3 < at('</section>', monteur), `flow-monteur-${s} is in the Monteur band, after the grid`);
+                const d3Html = element(doc, `flow-monteur-${s}`);
+                assert.ok(d3Html.includes('<svg') && !/<img\b|url\(/.test(d3Html), `flow-monteur-${s} is inline SVG only`);
+                // D4 in "platforms", before the requirement rows
+                const platforms = at(`id="platforms-${s}"`);
+                assert.ok(at(`id="pmap-${s}"`, platforms) < at('<ul class="card reqs">', platforms), `pmap-${s} comes before the rows`);
+                // the real infographic in the samples band: after the one carousel, before the covers, and NOT in the Infographics band
+                const samples = at(`id="samples-${s}"`);
+                const real = at(`id="infographic-real-${s}"`, samples);
+                assert.ok(real > at('<div class="card seq">', samples) && real < at('<div class="covers">', samples), `infographic-real-${s} sits between the carousel and the covers`);
+                const infographics = at(`id="infographics-${s}"`);
+                assert.ok(!doc.slice(infographics, at('</section>', infographics)).includes('<video'), 'the Infographics band holds no video');
+            }
+        });
+
+        it('a flow has the nodes it names and one arrow before each node but the first, in both languages', () => {
+            for (const [s, doc] of SECTIONS) {
+                for (const [id, nodes] of Object.entries(FLOWS)) {
+                    const fig = element(doc, `${id}-${s}`);
+                    assert.equal((fig.match(/<li class="flow-node">/g) ?? []).length, nodes, `${id}-${s}: nodes`);
+                    assert.equal((fig.match(/<li class="flow-node"><svg class="flow-arrow"/g) ?? []).length, nodes - 1, `${id}-${s}: arrows`);
+                    assert.equal(/<ol class="flow-steps">\s*<li class="flow-node"><svg class="flow-arrow"/.test(fig), false, `${id}-${s}: the first node has none`);
+                }
+            }
+        });
+
+        it('flow-long is on the two long flows and only there: the short one turns into a row earlier', () => {
+            for (const [s, doc] of SECTIONS) {
+                assert.ok(element(doc, `flow-studio-${s}`).startsWith('<figure class="flow flow-studio flow-long"'));
+                assert.ok(element(doc, `flow-monteur-${s}`).startsWith('<figure class="flow flow-monteur flow-long"'));
+                assert.ok(element(doc, `flow-dm-${s}`).startsWith('<figure class="flow flow-dm"'));
+            }
+        });
+    });
+
+    describe('what each diagram says', () => {
+        const AR = {
+            'flow-dm': ['«كم السعر؟»', 'تطابق كلمة الحملة', 'رسالتك على الخاص', 'ردّ عام (اختياري)', 'إعجاب (يُحاوَل)', 'مرة لكل شخص كل 24 ساعة · 180 في الساعة لكل حساب', 'على إنستجرام وفيسبوك وحدهما'],
+            'flow-studio': ['درس', 'ما يشرحه ولقطاته', 'كاروسيل 4:5 و9:16', 'تراجعه', 'يُجدوَل', 'يُجدوَل أو ينتظر في طابور حتى موافقة تيك توك'],
+            'flow-monteur': ['فيديو طويل في مجلده', 'يستمع إليه على ماك', 'لحظات تبدأ بخطّاف', 'ريل 9:16: عنوان، نصّ، غلاف', 'اعتمادك', 'مواعيدك على المنصّات التي تختارها', 'مسودّة / أنا فقط', 'يعمل اليوم على حسابات المؤسس وحدها'],
+        };
+        const EN = {
+            'flow-dm': ['“How much is the price?”', 'Campaign keyword matched', 'Your private message', 'Public reply (optional)', 'Like (attempted)', 'Once per person every 24 hours · 180 an hour per account', 'On Instagram and Facebook only'],
+            'flow-studio': ['Lesson', 'What it teaches, and its frames', 'Carousel 4:5 and 9:16', 'You review it', 'Scheduled', 'Scheduled, or held in a queue until TikTok approves the app'],
+            'flow-monteur': ['A long video in its folder', 'Listened to on a Mac', 'Moments that open with a hook', 'A 9:16 reel: title, captions, cover', 'Your approval', 'Your slots, on the platforms you choose', 'Draft / Only me', "Running today on the founder's accounts only"],
+        };
+
+        it("uses the spec's node texts, in Arabic and in English", () => {
+            for (const [texts, doc, s] of [[AR, L.ar, 'ar'], [EN, L.en, 'en']] as const) {
+                for (const [id, lines] of Object.entries(texts)) {
+                    const said = words(element(doc, `${id}-${s}`));
+                    for (const line of lines) assert.ok(said.includes(line), `${id}-${s}: "${line}"`);
+                }
+            }
+        });
+
+        it('D1: the keyword node lights السعر / price, and the comment it came from contains it, word-delimited', () => {
+            assert.ok(element(L.ar, 'flow-dm-ar').includes('<span class="flow-s"><span class="kw">السعر</span></span>'));
+            assert.ok(element(L.en, 'flow-dm-en').includes('<span class="flow-s"><span class="kw">price</span></span>'));
+            assert.match(words(element(L.ar, 'flow-dm-ar')), /«كم السعر[ ؟?،.]/);
+            assert.match(words(element(L.en, 'flow-dm-en')), /“How much is the price[ ?,.]/);
+            // The highlighter belongs to the keyword node alone: one .kw in the diagram.
+            for (const [s, doc] of SECTIONS) assert.equal((element(doc, `flow-dm-${s}`).match(/class="kw"/g) ?? []).length, 1, s);
+        });
+
+        it('D1: the limits ribbon quotes the two numbers the page states as fixed', () => {
+            for (const [s, doc] of SECTIONS) {
+                const ribbon = /<p class="flow-limits">([^<]*)<\/p>/.exec(element(doc, `flow-dm-${s}`))![1]!;
+                const fixed = [...(/<dl class="figures">[\s\S]*?<\/dl>/.exec(doc)![0]).matchAll(/<dt>([^<]+)<\/dt>/g)].map((m) => m[1]!);
+                assert.deepEqual(fixed.slice().sort(), ['180', '24']);
+                for (const n of fixed) assert.ok(ribbon.includes(n), `${s}: the ribbon says ${n}`);
+            }
+        });
+
+        it('the chips name only the platforms each flow reaches: Meta alone for comment-to-DM, and WhatsApp nowhere', () => {
+            const glyphs = (fig: string) => [...fig.matchAll(/#plogo-([a-z]+)/g)].map((m) => m[1]!);
+            for (const [s, doc] of SECTIONS) {
+                assert.deepEqual(glyphs(element(doc, `flow-dm-${s}`)), ['instagram', 'facebook'], `${s}: comment-to-DM is Instagram and Facebook`);
+                assert.deepEqual(glyphs(element(doc, `flow-studio-${s}`)), ['instagram', 'facebook', 'tiktok'], `${s}: the Studio posts to Instagram, Facebook and TikTok`);
+                assert.deepEqual(glyphs(element(doc, `flow-monteur-${s}`)), ['instagram', 'facebook', 'youtube', 'tiktok'], `${s}: the Monteur's four`);
+                assert.deepEqual(glyphs(element(doc, `pmap-${s}`, 'table')), ['instagram', 'facebook', 'tiktok', 'youtube'], `${s}: the map's four rows`);
+            }
+        });
+
+        it('TikTok is never shown as a plain scheduled post: held, or draft / only me, until TikTok approves the app', () => {
+            for (const [s, doc] of SECTIONS) {
+                const tiktokNote = (fig: string) => /#plogo-tiktok"\/><\/svg>[^<]*<\/span><\/span><span class="flow-s">([^<]*)<\/span>/.exec(fig)![1]!;
+                const studio = tiktokNote(element(doc, `flow-studio-${s}`));
+                const monteur = tiktokNote(element(doc, `flow-monteur-${s}`));
+                assert.ok(s === 'ar' ? studio.includes('حتى موافقة تيك توك') : studio.includes('until TikTok approves the app'), `${s}: ${studio}`);
+                assert.equal(monteur, s === 'ar' ? 'مسودّة / أنا فقط' : 'Draft / Only me');
+            }
+        });
+
+        it('D3 keeps the founder-only note: in the band, and under the diagram', () => {
+            assert.ok(words(element(L.ar, 'flow-monteur-ar')).includes('حسابات المؤسس وحدها'));
+            assert.ok(words(element(L.en, 'flow-monteur-en')).includes("founder's accounts only"));
+            const band = (doc: string, s: string) => doc.slice(doc.indexOf(`id="monteur-${s}"`), doc.indexOf('</section>', doc.indexOf(`id="monteur-${s}"`)));
+            assert.ok(band(L.ar, 'ar').includes('<p class="band-note">'));
+            assert.ok(band(L.en, 'en').includes('<p class="band-note">'));
+        });
+
+        it('says nothing the page forbids: no AI reply, no person, no emoji', () => {
+            for (const [s, doc] of SECTIONS) {
+                for (const id of ['flow-dm', 'flow-studio', 'flow-monteur', 'pmap', 'infographic-real']) {
+                    const text = words(element(doc, `${id}-${s}`, id === 'pmap' ? 'table' : 'figure'));
+                    assert.equal(/\bAI\b|الذكاء الاصطناعي|\p{Extended_Pictographic}/u.test(text), false, `${id}-${s}`);
+                }
+            }
+        });
+    });
+
+    describe('D4: the platform map is a real table, and every ✓ is true', () => {
+        const COLUMNS = ['dm', 'post', 'carousel', 'video', 'insights'] as const;
+        const HEADS = {
+            ar: ['المنصّة', 'من التعليق إلى الرسالة', 'النشر', 'الكاروسيل', 'الفيديو', 'الأداء'],
+            en: ['Platform', 'Comment to DM', 'Posting', 'Carousel', 'Video', 'Performance'],
+        };
+        /** What a platform's "what works there" paragraph must say for a cell to carry a ✓ or a note. */
+        const BACKED: Record<'ar' | 'en', Record<(typeof COLUMNS)[number], Record<string, RegExp[]>>> = {
+            ar: {
+                dm: { instagram: [/من التعليق إلى الرسالة الخاصة/], facebook: [/من تعليقات الصفحة إلى الرسالة الخاصة/] },
+                post: { instagram: [/جدولة/], facebook: [/جدولة/], tiktok: [/النشر وحده/, /أنا فقط/, /مسودّ/], youtube: [/الرفع وحده/] },
+                carousel: { instagram: [/الكاروسيل/], facebook: [/الكاروسيل/], tiktok: [/كاروسيل صور/] },
+                video: { instagram: [/الريلز/], facebook: [/الفيديو/], tiktok: [/فيديو/], youtube: [/Shorts/] },
+                insights: { instagram: [/أداء المنشورات/] },
+            },
+            en: {
+                dm: { instagram: [/Comment-to-DM/], facebook: [/Comment-to-DM/] },
+                post: { instagram: [/scheduled/], facebook: [/scheduled/], tiktok: [/Publishing only/, /Only me/, /drafts/], youtube: [/Uploading only/] },
+                carousel: { instagram: [/carousels/], facebook: [/carousels/], tiktok: [/photo carousels/] },
+                video: { instagram: [/reels/], facebook: [/video/], tiktok: [/video/], youtube: [/Shorts/] },
+                insights: { instagram: [/post performance/] },
+            },
+        };
+        /** What a dash must not find in the row: the column's own subject. (Posting and video have no dash.) */
+        const ABSENT: Record<'ar' | 'en', Partial<Record<(typeof COLUMNS)[number], RegExp>>> = {
+            ar: { dm: /إلى الرسالة الخاصة/, carousel: /كاروسيل/, insights: /أداء المنشورات/ },
+            en: { dm: /Comment-to-DM/, carousel: /carousel/i, insights: /post performance/ },
+        };
+        /** The one ✓ (y), note (p) or dash (x) each cell must be: the spec's table. */
+        const KINDS = { instagram: 'yyyyy', facebook: 'yyyyx', tiktok: 'xpyyx', youtube: 'xpxyx' } as const;
+
+        function parse(doc: string, s: 'ar' | 'en') {
+            const table = element(doc, `pmap-${s}`, 'table');
+            const heads = [...table.matchAll(/<th scope="col" role="columnheader">([^<]*)<\/th>/g)].map((m) => m[1]!);
+            const rows = [...table.matchAll(/<tr role="row"><th scope="row" role="rowheader">([\s\S]*?)<\/th>([\s\S]*?)<\/tr>/g)].map((m) => ({
+                id: /#plogo-([a-z]+)/.exec(m[1]!)![1]!,
+                cells: [...m[2]!.matchAll(/<td role="cell" class="([ypx])" data-th="([^"]*)">([\s\S]*?)<\/td>/g)].map((c) => ({ kind: c[1]!, th: c[2]!, text: words(c[3]!).trim() })),
+            }));
+            return { table, heads, rows };
+        }
+        /** The "what works there" paragraph of one platform's requirements row. */
+        function worksThere(doc: string, id: string): string {
+            const list = /<ul class="card reqs">[\s\S]*?<\/ul>/.exec(doc)![0];
+            const li = [...list.matchAll(/<li[^>]*>\s*<h3>([\s\S]*?)<\/h3>[\s\S]*?<\/li>/g)].find((m) => m[1]!.includes(`#plogo-${id}`));
+            assert.ok(li, `a requirements row for ${id}`);
+            return words([...li[0].matchAll(/<p class="req-v">([\s\S]*?)<\/p>/g)][1]![1]!);
+        }
+
+        for (const [s, doc] of SECTIONS) {
+            it(`${s}: <table> with a caption, a head, four platform rows and five columns, each cell naming its column`, () => {
+                const { table, heads, rows } = parse(doc, s);
+                assert.ok(table.startsWith('<table class="pmap"'));
+                assert.ok(/<caption>[^<]+<\/caption>\s*<thead>[\s\S]*<\/thead>\s*<tbody>[\s\S]*<\/tbody>/.test(table));
+                assert.deepEqual(heads, HEADS[s]);
+                assert.deepEqual(rows.map((r) => r.id), ['instagram', 'facebook', 'tiktok', 'youtube']);
+                for (const row of rows) {
+                    assert.equal(row.cells.length, 5, row.id);
+                    assert.deepEqual(row.cells.map((c) => c.th), HEADS[s].slice(1), `${row.id}: data-th repeats the column head`);
+                    assert.equal(row.cells.map((c) => c.kind).join(''), KINDS[row.id as keyof typeof KINDS], `${row.id}: the spec's table`);
+                }
+                // A ✓ has a word a screen reader says, and so has a dash.
+                assert.equal((table.match(/class="y"[^>]*>[\s\S]*?<\/td>/g) ?? []).every((c) => words(c.replace(/^[^>]*>/, '')).trim().length > 0), true);
+                assert.equal((table.match(/class="x"[^>]*>[\s\S]*?<\/td>/g) ?? []).every((c) => c.includes('aria-hidden="true">—</span><span class="sr-only">')), true);
+            });
+
+            it(`${s}: every ✓ and every note is backed by a phrase in that platform's row, and no dash is`, () => {
+                const { rows } = parse(doc, s);
+                let claims = 0;
+                for (const row of rows) {
+                    const said = worksThere(doc, row.id);
+                    row.cells.forEach((cell, i) => {
+                        const col = COLUMNS[i]!;
+                        if (cell.kind === 'x') {
+                            const subject = ABSENT[s][col];
+                            assert.ok(subject, `${s} ${row.id}/${col}: only dm, carousel and insights have dashes`);
+                            assert.equal(subject.test(said), false, `${s} ${row.id}/${col}: a dash, but the row speaks of it`);
+                        } else {
+                            const phrases = BACKED[s][col][row.id] ?? [];
+                            assert.ok(phrases.length > 0, `${s} ${row.id}/${col}: a ✓ with no phrase to back it`);
+                            for (const re of phrases) assert.match(said, re, `${s} ${row.id}/${col}`);
+                            claims++;
+                        }
+                    });
+                }
+                assert.equal(claims, 14, 'the cells that claim something in the spec: 5 + 4 + 3 + 2');
+            });
+        }
+
+        it('the same ✓, notes and dashes in both languages', () => {
+            assert.deepEqual(parse(L.ar, 'ar').rows.map((r) => r.cells.map((c) => c.kind)), parse(L.en, 'en').rows.map((r) => r.cells.map((c) => c.kind)));
+        });
+
+        it('the guard is not blind: a ✓ the row does not back, and a dash it contradicts, are both caught', () => {
+            const tiktok = 'Publishing only: video and photo carousels. No comments or messages on TikTok.';
+            assert.equal(BACKED.en.dm.instagram![0]!.test(tiktok), false, 'TikTok has no comment-to-DM');
+            assert.equal(BACKED.en.insights.instagram![0]!.test(tiktok), false, 'TikTok has no performance');
+            assert.equal(BACKED.en.carousel.tiktok![0]!.test(tiktok), true);
+            assert.equal(ABSENT.en.dm!.test('Comment-to-DM campaigns, scheduled photos'), true, 'a dash beside that sentence would be caught');
+            assert.equal(ABSENT.ar.insights!.test('وقراءة أداء المنشورات'), true);
+        });
+    });
+
+    describe('the CSS: a column first, the packet only under no-preference, arrows mirrored and logos not', () => {
+        const num = (re: RegExp) => {
+            const m = re.exec(L9);
+            assert.ok(m, String(re));
+            return Number(m[1]);
+        };
+
+        it('every animation is inside prefers-reduced-motion: no-preference, once, and the finished state is the default', () => {
+            const calm = mediaBlocks(L9, '(prefers-reduced-motion: no-preference)');
+            assert.equal(calm.length, 1, 'one block of motion');
+            const outside = L9.replace(calm[0]!, '').replace(/@keyframes [\w-]+\s*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');
+            assert.equal(/animation[\w-]*\s*:/.test(outside), false, 'no animation outside the block');
+            assert.equal(/\.is-inview/.test(outside), false, '.is-inview does nothing outside it');
+            // the shorthand's names, durations and iteration counts
+            const uses = [...calm[0]!.matchAll(/(?<![-\w])animation\s*:\s*([^;]+);/g)].map((m) => m[1]!.trim());
+            assert.equal(uses.length, 2, 'the hop and the receipt');
+            for (const use of uses) assert.ok(Number(/\s(\d+)$/.exec(use)![1]) <= 3, `at most 3 iterations: ${use}`);
+            assert.match(uses[0]!, /^flow-hop 1\.2s var\(--ease-standard\) 1$/);
+            assert.match(uses[1]!, /^flow-receipt var\(--motion-base\) var\(--ease-exit\) calc\(\(var\(--flow-hops\) - 1\) \* var\(--flow-step\) \+ 0\.9s\) 1$/);
+            // the finished state: the packet is invisible until it runs, and nothing else starts hidden
+            const packet = [...outside.matchAll(/\.flow-node \+ \.flow-node::after \{[^}]*\}/g)].map((m) => m[0]).find((r) => r.includes('--flow-pkt'))!;
+            assert.ok(packet, 'the packet rule');
+            assert.match(packet, /opacity:\s*0\b/);
+            assert.match(packet, /background:\s*var\(--accent\)/);
+            assert.match(packet, /inline-size:\s*var\(--flow-pkt\)/);
+            assert.match(packet, /pointer-events:\s*none/);
+            assert.equal(num(/--flow-pkt:\s*(\d+)px/), 6, 'the packet is 6px');
+            assert.equal(/opacity:\s*0\b/.test(outside.replace(packet, '')), false, 'nothing else starts invisible');
+        });
+
+        it("one flow lasts at most 5s, receipt included, and each flow's hop count is its connector count", () => {
+            const stepOf = (id: string) => {
+                const own = new RegExp(`\\.${id} \\{[^}]*--flow-step:\\s*([\\d.]+)s`).exec(L9);
+                return own ? Number(own[1]) : num(/\.flow \{[^}]*--flow-step:\s*([\d.]+)s/);
+            };
+            const HOP = 1.2;
+            for (const [id, nodes] of Object.entries(FLOWS)) {
+                const hops = num(new RegExp(`\\.${id} \\{[^}]*--flow-hops:\\s*(\\d+)`));
+                assert.equal(hops, nodes - 1, `${id}: --flow-hops is the number of connectors`);
+                const step = stepOf(id);
+                const lastLands = (hops - 1) * step + HOP;
+                const receiptEnds = (hops - 1) * step + 0.9 + 0.2; // starts at 0.9s of the last hop, runs 200ms
+                assert.ok(lastLands <= 5, `${id}: the last packet lands at ${lastLands}s`);
+                assert.ok(receiptEnds <= lastLands + 0.001, `${id}: the receipt ends at ${receiptEnds}s, with the last packet`);
+            }
+            // the hops after the first start at multiples of the step
+            for (const [n, k] of [[3, ''], [4, ' * 2'], [5, ' * 3'], [6, ' * 4']] as const) {
+                const want = k ? `calc(var(--flow-step)${k})` : 'var(--flow-step)';
+                assert.ok(L9.includes(`.flow.is-inview .flow-node:nth-child(${n})::after { animation-delay: ${want}; }`), `delay of hop ${n - 1}`);
+            }
+        });
+
+        it('a flow is a column by default; only min-width queries make it a row: 48rem for the short one, 62rem for the long', () => {
+            assert.match(/\.flow-steps \{[^}]*\}/.exec(L9)![0], /--h:\s*0;/);
+            const rows = (query: string) => mediaBlocks(L9, query).filter((b) => /--h:\s*1/.test(b));
+            assert.equal(rows('(min-width: 48rem)').length, 1);
+            assert.ok(/\.flow:not\(\.flow-long\) \.flow-steps/.test(rows('(min-width: 48rem)')[0]!));
+            assert.equal(rows('(min-width: 62rem)').length, 1);
+            assert.ok(/\.flow-long \.flow-steps/.test(rows('(min-width: 62rem)')[0]!));
+            for (const q of ['(max-width: 30rem)', '(max-width: 40rem)']) assert.equal(rows(q).length, 0, `${q} never makes a row`);
+        });
+
+        it('arrows mirror under :dir(rtl) in a row and point down in a column; nothing of this change flips a logo', () => {
+            assert.match(/\n\s*\.flow-arrow \{[^}]*\}/.exec(L9)![0], /transform:\s*rotate\(90deg\)/, 'a column: down, in both directions');
+            for (const sel of ['.flow:not(.flow-long):dir(rtl) .flow-arrow', '.flow-long:dir(rtl) .flow-arrow']) {
+                const at = L9.indexOf(`${sel} {`);
+                assert.ok(at >= 0, sel);
+                assert.match(L9.slice(at, L9.indexOf('}', at)), /transform:\s*scaleX\(-1\)/, sel);
+            }
+            for (const m of L9.matchAll(/([^{}]*\.plogo[^{}]*)\{([^}]*)\}/g)) {
+                assert.equal(/transform|:dir\(|direction/.test(m[1]! + m[2]!), false, m[1]!.trim());
+            }
+        });
+
+        it('the platform map is a card per row under 40rem: block display, a label from data-th, the head out of sight', () => {
+            const [phone] = mediaBlocks(L9, '(max-width: 40rem)');
+            assert.ok(phone, 'a block for 40rem');
+            assert.match(phone, /\.pmap, \.pmap thead, \.pmap tbody, \.pmap tr, \.pmap th, \.pmap td \{ display: block; \}/);
+            assert.match(phone, /\.pmap td::before \{[^}]*content:\s*attr\(data-th\)/);
+            assert.match(phone, /\.pmap thead \{[^}]*clip-path:\s*inset\(50%\)/);
+            assert.match(phone, /\.pmap caption \{ display: block; \}/);
+        });
+
+        it('the video box is 4:5 and 22rem, and 18rem on phones', () => {
+            const box = /\.infovid video \{[^}]*\}/.exec(L9)![0];
+            assert.match(box, /aspect-ratio:\s*4 \/ 5/);
+            assert.match(box, /max-inline-size:\s*22rem/);
+            const [phone] = mediaBlocks(L9, '(max-width: 30rem)');
+            assert.match(phone!, /\.infovid video \{ max-inline-size: 18rem; \}/);
+        });
+    });
+
+    describe('the real infographic: one <video> in the samples band, two cuts, a caption that links to the post', () => {
+        const REEL = 'https://www.instagram.com/reel/DeZqk8-D-X3/';
+        const attrs = (tag: string) => new Map([...tag.matchAll(/\s([\w-]+)(?:="([^"]*)")?/g)].map((m) => [m[1]!, m[2] ?? '']));
+
+        for (const [s, doc] of SECTIONS) {
+            it(`${s}: the video has exactly the attributes the spec lists, the dark cut as the default, and no autoplay`, () => {
+                const fig = element(doc, `infographic-real-${s}`);
+                const a = attrs(/<video\b([^>]*)><\/video>/.exec(fig)![1]!);
+                assert.deepEqual([...a.keys()].sort(), ['aria-label', 'controls', 'height', 'loop', 'muted', 'playsinline', 'poster', 'preload', 'src', 'width']);
+                assert.equal(a.get('width'), '720');
+                assert.equal(a.get('height'), '900');
+                assert.equal(a.get('preload'), 'none');
+                assert.equal(a.get('poster'), '/samples/chat-vs-agent-info-dark.webp');
+                assert.equal(a.get('src'), '/samples/chat-vs-agent-info-dark.mp4');
+                assert.ok(a.get('aria-label')!.length > 60, 'a real description, not a label');
+                assert.equal(/[\u0600-\u06FF]/.test(a.get('aria-label')!), s === 'ar', `${s}: in the page's language`);
+                assert.equal((fig.match(/<video\b/g) ?? []).length, 1, 'one video');
+                assert.equal(/autoplay/i.test(fig), false);
+            });
+
+            it(`${s}: the caption says it was posted on Instagram and links to the reel; the Infographics band links here`, () => {
+                const fig = element(doc, `infographic-real-${s}`);
+                const text = s === 'ar' ? 'كما نُشر على إنستجرام' : 'As posted on Instagram';
+                assert.ok(fig.includes(`<figcaption><a href="${REEL}" target="_blank" rel="noopener noreferrer">${text}</a></figcaption>`));
+                const label = s === 'ar' ? 'شاهده متحرّكاً' : 'Watch it animated';
+                const from = doc.indexOf(`id="infographics-${s}"`);
+                const band = doc.slice(from, doc.indexOf('</section>', from));
+                assert.ok(band.includes(`<p class="watch"><a href="#infographic-real-${s}">${label}</a></p>`));
+            });
+        }
+
+        it('one IntersectionObserver serves the diagrams and the video, and it is never created under reduced motion', () => {
+            const script = [...landing.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!).find((x) => x.includes('is-inview'))!;
+            assert.ok(script, 'the L9 script is in the page');
+            assert.equal((landing.match(/new IntersectionObserver\(/g) ?? []).length, 1, 'one observer on the whole page');
+            const gate = script.indexOf("if (!calm || !('IntersectionObserver' in window)) return;");
+            assert.ok(gate > 0 && gate < script.indexOf('new IntersectionObserver('), 'the gate comes first');
+            assert.match(script, /var calm = !!window\.matchMedia && window\.matchMedia\('\(prefers-reduced-motion: no-preference\)'\)\.matches;/);
+            assert.match(script, /threshold: \[0\.2, 0\.5\]/);
+            assert.match(script, /e\.intersectionRatio >= 0\.5/, 'the video plays from half in view');
+            assert.match(script, /classList\.add\('is-inview'\)/);
+            assert.equal((script.match(/\.play\(\)/g) ?? []).length, 1, 'play() is called from one place, which is only reached past the gate');
+            // the theme: data-theme if something pins one, the OS preference otherwise; dark stays the default
+            assert.match(script, /getAttribute\('data-theme'\)/);
+            assert.match(script, /matchMedia\('\(prefers-color-scheme: light\)'\)/);
+            assert.match(script, /var TONE = \/-\(\?:dark\|light\)\\\.\//);
+        });
+    });
+
+    describe('the files behind it', () => {
+        const KB = 1000;
+        const size = (buf: Buffer) => {
+            const i = buf.indexOf('avc1', buf.indexOf('moov'));
+            return [buf.readUInt16BE(i + 4 + 24), buf.readUInt16BE(i + 4 + 26)];
+        };
+
+        for (const tone of ['dark', 'light']) {
+            it(`chat-vs-agent-info-${tone}: an H.264 MP4 of 720x900 under 600 KB, with no audio and its index up front`, () => {
+                const path = `public/samples/chat-vs-agent-info-${tone}.mp4`;
+                const buf = readFileSync(path);
+                assert.ok(statSync(path).size <= 600 * KB, `${statSync(path).size} bytes`);
+                assert.equal(buf.subarray(4, 8).toString(), 'ftyp');
+                assert.ok(buf.indexOf('moov') > 0 && buf.indexOf('moov') < buf.indexOf('mdat'), 'faststart: moov before mdat');
+                assert.equal(buf.includes('soun'), false, 'no audio track');
+                assert.ok(buf.includes('vide'));
+                assert.deepEqual(size(buf), [720, 900]);
+            });
+
+            it(`chat-vs-agent-info-${tone}: a WebP poster of 720x900 under 45 KB`, () => {
+                const path = `public/samples/chat-vs-agent-info-${tone}.webp`;
+                const buf = readFileSync(path);
+                assert.ok(statSync(path).size <= 45 * KB, `${statSync(path).size} bytes`);
+                assert.equal(buf.subarray(0, 4).toString() + buf.subarray(8, 12).toString(), 'RIFFWEBP');
+                assert.equal(buf.subarray(12, 16).toString(), 'VP8 ', 'a lossy frame, read as VP8');
+                assert.deepEqual([buf.readUInt16LE(26) & 0x3fff, buf.readUInt16LE(28) & 0x3fff], [720, 900]);
+            });
+        }
+
+        it('every file the page names under /samples exists, and the dark cut is the only video the markup names', () => {
+            const named = new Set([...landing.matchAll(/["'](\/samples\/[a-z0-9-]+\.(?:webp|mp4))["']/g)].map((m) => m[1]!));
+            assert.ok(named.size >= 9);
+            for (const f of named) assert.ok(statSync(`public${f}`).isFile(), f);
+            assert.deepEqual([...named].filter((f) => f.endsWith('.mp4')), ['/samples/chat-vs-agent-info-dark.mp4']);
+        });
+
+        it("the diagrams' HTML is under 6 KB gzipped, both languages together", () => {
+            const blocks: string[] = [];
+            for (const [s, doc] of SECTIONS) {
+                for (const id of Object.keys(FLOWS)) blocks.push(element(doc, `${id}-${s}`));
+                blocks.push(element(doc, `pmap-${s}`, 'table'));
+            }
+            const gz = gzipSync(blocks.join('\n'), { level: 9 }).length;
+            assert.ok(gz <= 6 * 1024, `${gz} bytes gzipped`);
+        });
     });
 });
