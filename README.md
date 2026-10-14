@@ -247,7 +247,10 @@ Session token required:
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/auth/me` | Session identity, role, tenant, available tenants |
+| `GET` | `/api/auth/me` | Session identity, role, tenant, available tenants, and `onboarding: { status, step, gated }`: whether this session is sent to the setup wizard |
+| `GET` | `/api/onboarding` | The setup wizard's state: status, where to resume, each step's saved draft, the profile with its `version`, what activation still misses |
+| `PUT` | `/api/onboarding/steps/:step` | Owner. Autosave a step's draft (`{ values }`, never touches the profile), mark it `done`/`skipped`, or note it is on screen |
+| `POST` | `/api/onboarding/complete` | Owner. Finish the wizard (needs the six activation fields); idempotent |
 | `POST` | `/api/auth/switch-tenant` | Act as another tenant |
 | `GET` | `/api/stats`, `/api/stats/daily`, `/api/stats/hourly`, `/api/stats/campaigns` | Dashboard metrics |
 | `GET`/`POST`/`PUT`/`DELETE` | `/api/campaigns` | Campaign CRUD, including `match_mode` |

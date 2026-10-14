@@ -34,8 +34,8 @@
          third-party round trip on the critical path and ~100KB saved. The preconnects to
          fonts.googleapis.com and fonts.gstatic.com went with it - a preconnect to a host
          nothing requests is a wasted DNS lookup and TLS handshake. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.17">
-    <link rel="stylesheet" href="/dashboard/css/styles.css?v=12.17">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.18">
+    <link rel="stylesheet" href="/dashboard/css/styles.css?v=12.18">
 
     <script>
         /* Applied before first paint so a pinned light theme never flashes dark.
@@ -52,8 +52,11 @@
                    on that page (which reloads it) sticks instead of being overruled by the link again. */
                 /* The login card is in the HTML and shown until the scripts hide it; for an invite link that would flash a password
                    form at somebody who has not got one. data-invite hides it from the first frame (App.showLogin() lifts it). */
-                if (/^#\/invite(?:[?\/#]|$)/.test(location.hash || '')) document.documentElement.setAttribute('data-invite', '1');
-                var inviteLang = /^#\/invite\?(?:[^#]*&)?lang=(ar|en)(?:&|$)/.exec(location.hash || '');
+                /* The spec spells the link #/welcome?invite=…, the invite card has made #/invite?t=… since P17: both are an invite
+                   (App.isInviteHash). A bare #/welcome is the wizard, not an invite. */
+                var isInviteLink = /^#\/invite(?:[?\/#]|$)/.test(location.hash || '') || /^#\/welcome\?(?:[^#]*&)?invite=/.test(location.hash || '');
+                if (isInviteLink) document.documentElement.setAttribute('data-invite', '1');
+                var inviteLang = isInviteLink ? /^#\/(?:invite|welcome)\?(?:[^#]*&)?lang=(ar|en)(?:&|$)/.exec(location.hash || '') : null;
                 if (inviteLang) {
                     lang = inviteLang[1];
                     localStorage.setItem('dashboard_lang', lang);
@@ -84,7 +87,7 @@
             try {
                 var dictLang = lang === 'en' ? 'en' : 'ar';
                 var dict = document.createElement('script');
-                dict.src = '/dashboard/js/i18n.' + dictLang + '.js?v=12.17';
+                dict.src = '/dashboard/js/i18n.' + dictLang + '.js?v=12.18';
                 dict.setAttribute('data-i18n-dict', dictLang);
                 dict.onload = function () { dict.setAttribute('data-state', 'loaded'); };
                 dict.onerror = function () { dict.setAttribute('data-state', 'failed'); };
@@ -102,7 +105,7 @@
             try {
                 var PAGES = ['overview', 'campaigns', 'posts', 'studio', 'monteur', 'infographics', 'inbox', 'ai_settings',
                              'analytics', 'growth', 'activity', 'settings', 'help', 'operations', 'tenants',
-                             'tenant_detail', 'users', 'jobs', 'audit', 'erasure', 'invite'];
+                             'tenant_detail', 'users', 'jobs', 'audit', 'erasure', 'invite', 'welcome'];
                 /* The page is the first segment: #/help/worker#security is "help". */
                 var want = (location.hash || '').replace(/^#\/?/, '').split(/[\/?#]/)[0];
                 var page = PAGES.indexOf(want) === -1 ? 'overview' : want;
@@ -113,12 +116,12 @@
                     link.href = href;
                     document.head.appendChild(link);
                 };
-                preload('/dashboard/js/pages/' + page + '.js?v=12.17');
+                preload('/dashboard/js/pages/' + page + '.js?v=12.18');
                 /* The articles live in their own file, which the help page
                    loads before it paints: fetch both at once. */
-                if (page === 'help') preload('/dashboard/js/help-content.js?v=12.17');
+                if (page === 'help') preload('/dashboard/js/help-content.js?v=12.18');
                 /* Operations loads the AI providers card before it paints. */
-                if (page === 'operations') preload('/dashboard/js/pages/ai_providers.js?v=12.17');
+                if (page === 'operations') preload('/dashboard/js/pages/ai_providers.js?v=12.18');
             } catch (e) { /* the module still loads, just a beat later */ }
         }());
     </script>
@@ -188,6 +191,15 @@
         <div class="login-container">
             <div id="invite-card" class="login-card surface invite-card"></div>
         </div>
+    </div>
+
+    <!-- ─── Welcome (the setup wizard) ───────────────────────────────────── -->
+    <!-- Where a tenant that has not finished setting up is sent (dashboard/js/pages/welcome.js, `#/welcome`). Outside #app on
+         purpose, like the invite page: no sidebar, one task, and a sticky bar at the bottom of a phone. App.showWelcome() opens
+         it and the page paints #welcome-root. It reuses the login screen's shell. -->
+    <div id="welcome-screen" class="login-screen welcome-screen hidden">
+        <div class="login-glow" aria-hidden="true"></div>
+        <div id="welcome-root" class="welcome-root"></div>
     </div>
 
     <!-- ─── App ──────────────────────────────────────────────────────────── -->
@@ -391,7 +403,7 @@
          UMD once (same URL, same SRI) instead of rendering blank. It is first among
          the deferred scripts, so it has run by the time app.js boots on
          DOMContentLoaded; CSS reserves the box for every `i[data-lucide]`. -->
-    <script defer src="/dashboard/js/icons.js?v=12.17"></script>
+    <script defer src="/dashboard/js/icons.js?v=12.18"></script>
 
     <!-- Chart.js is gone entirely, not merely deferred. It was ~201KB of UMD from
          a CDN for four charts, it looked generic because it WAS generic, and a
@@ -399,17 +411,17 @@
          pure functions. cdn.jsdelivr.net stays in the CSP only for the icon
          fallback in js/icons.js. -->
 
-    <script defer src="/dashboard/js/i18n.js?v=12.17"></script>
-    <script defer src="/dashboard/js/api.js?v=12.17"></script>
-    <script defer src="/dashboard/js/components.js?v=12.17"></script>
-    <script defer src="/dashboard/js/motion.js?v=12.17"></script>
-    <script defer src="/dashboard/js/charts.js?v=12.17"></script>
+    <script defer src="/dashboard/js/i18n.js?v=12.18"></script>
+    <script defer src="/dashboard/js/api.js?v=12.18"></script>
+    <script defer src="/dashboard/js/components.js?v=12.18"></script>
+    <script defer src="/dashboard/js/motion.js?v=12.18"></script>
+    <script defer src="/dashboard/js/charts.js?v=12.18"></script>
     <!-- Not a page: the administration foundation (Admin.confirm, which replaces
          window.confirm for destructive actions anywhere) plus the health strip,
          which has to be available on a page whose own module does not know
          about it. Small, and needed off the admin screens, so it is eager. -->
-    <script defer src="/dashboard/js/pages/admin_common.js?v=12.17"></script>
-    <script defer src="/dashboard/js/app.js?v=12.17"></script>
+    <script defer src="/dashboard/js/pages/admin_common.js?v=12.18"></script>
+    <script defer src="/dashboard/js/app.js?v=12.18"></script>
 
 </body>
 </html>

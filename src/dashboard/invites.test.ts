@@ -550,7 +550,7 @@ describe('index.html', () => {
     });
 
     it('preloads the invite module for an invite hash, and keeps the two cache versions together', () => {
-        assert.match(index, /'erasure', 'invite'\]/);
+        assert.match(index, /'erasure', 'invite', 'welcome'\]/);
         const app = readFileSync('dashboard/js/app.js', 'utf8');
         const version = /ASSET_VERSION: '([\w.]+)'/.exec(app)![1];
         assert.deepEqual([...new Set([...index.matchAll(/\?v=([\w.]+)/g)].map((m) => m[1]))], [version]);
