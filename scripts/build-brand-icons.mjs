@@ -393,6 +393,8 @@ export function decodeIco(buf) {
 // ─── the build: sources to files ─────────────────────────────────────────────────────────────────────────────────────
 
 const pixelsHash = (img) => sha256(Buffer.from(img.rgba));
+/** How far a committed pixel may sit from a fresh render, per channel: rounding across platforms, never a different mark. */
+const PIXEL_TOLERANCE = 1;
 
 /** Every output as bytes, keyed as OUTPUTS is, with the pixel hash of each image. `read(name)` returns a source's text. */
 export function renderAll(read) {
@@ -567,7 +569,9 @@ export function collectProblems(root = ROOT, overrides = {}) {
             try {
                 const fresh = renderMark(read(want.from), want.size);
                 const actual = decodePng(png);
-                const diff = fresh.rgba.findIndex((v, j) => v !== actual.rgba[j]);
+                // ±1 level per channel: the coverage arithmetic rounds one antialiased edge pixel differently on CI's Linux than on the Mac
+                // (seen at 181,16 on the 192 tile's corner arc). Any real change to the mark moves pixels by far more than one level.
+                const diff = fresh.rgba.findIndex((v, j) => Math.abs(v - actual.rgba[j]) > PIXEL_TOLERANCE);
                 if (diff >= 0) problems.push(`${rec.file}: image ${i} differs from ${want.from} rendered at ${want.size}px at pixel ${Math.floor(diff / 4) % want.size},${Math.floor(diff / 4 / want.size)} (channel ${diff % 4}): re-render with node scripts/build-brand-icons.mjs`);
             } catch (e) {
                 problems.push(`${rec.file}: image ${i} could not be compared (${e.message})`);
