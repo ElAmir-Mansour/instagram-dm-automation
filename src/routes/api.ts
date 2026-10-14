@@ -43,6 +43,8 @@ import adminRouter from './admin.js';
 import invitesRouter from './invites.js';
 import { tiktokPublicRouter, tiktokRouter } from './tiktok.js';
 import { youtubePublicRouter, youtubeRouter } from './youtube.js';
+import { metaPublicRouter, metaRouter } from './meta.js';
+import { purgeOAuthStates } from '../services/oauthState.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
 import { refreshAllYouTubeConnections } from '../services/youtubeConnections.js';
 import { checkYouTubeVisibility } from '../services/youtubeVisibility.js';
@@ -942,6 +944,15 @@ router.get('/cron/publish', async (req, res) => {
 
         const publishSweep = await publishDuePosts();
 
+        // OAuth states: clear the payload of every one that is spent or expired (a Page pick nobody finished holds Page tokens),
+        // and delete the ones that expired over a day ago. Cannot throw into the sweeps below.
+        try {
+            const oauth = await purgeOAuthStates();
+            if (oauth.scrubbed > 0 || oauth.deleted > 0) log('info', 'cron.oauth_states_purged', { ...oauth });
+        } catch (oauthErr) {
+            log('warn', 'cron.oauth_states_purge_failed', describeError(oauthErr));
+        }
+
         // TikTok housekeeping: refresh every connection (a daily health check — a revoked
         // account is found here instead of by the next post), then settle any uploads TikTok
         // has not reported on. Neither can throw.
@@ -1231,6 +1242,8 @@ router.get('/interactions/export', async (req, res) => {
 router.use('/tiktok', tiktokPublicRouter);
 // Google's OAuth redirect, likewise reached without a session.
 router.use('/youtube', youtubePublicRouter);
+// Meta's Login redirect (src/routes/meta.ts), likewise: the single-use state and its cookie are the only credential.
+router.use('/meta', metaPublicRouter);
 
 // ─── Invite links ───────────────────────────────────────────────────────────
 // `POST /invites/peek` and `/invites/accept` are opened by a person who has no session yet: the token in
@@ -1465,6 +1478,8 @@ router.use(resolveTenant);
 // TikTok connection management — tenant-scoped, so below resolveTenant.
 router.use('/tiktok', tiktokRouter);
 router.use('/youtube', youtubeRouter);
+// Connecting a tenant's own Facebook Page and Instagram account: every mutating route is owner-only (it carries its own guards).
+router.use('/meta', metaRouter);
 
 // Carousel Studio (STUDIO.md) — tenant-scoped, operator role; carries its own guards.
 router.use('/studio', studioRouter);

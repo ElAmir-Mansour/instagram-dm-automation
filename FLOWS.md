@@ -5,7 +5,7 @@ explains why each piece is shaped as it is, `RUNBOOK.md` walks backwards from a 
 `VERIFYING.md` is one end-to-end procedure you run by hand. None of them answers *"a comment
 arrives — then what happens, in what order, in which file?"*
 
-That is what this is. Seven flows, each one a numbered list of hops with a `file:line` citation
+That is what this is. Eight flows, each one a numbered list of hops with a `file:line` citation
 at every step. Written for someone who has never opened this codebase.
 
 **Line numbers drift.** Every citation names the enclosing function too, so when a number is
@@ -25,7 +25,8 @@ bug it was written to fix.
 [4. Login → session → tenant](#4-login--session--tenant) ·
 [5. Job lifecycle](#5-job-lifecycle) ·
 [6. TikTok post → inbox → published](#6-tiktok-post--inbox--published) ·
-[7. Claude on the Mac → who may ask](#7-claude-on-the-mac--who-may-ask)
+[7. Claude on the Mac → who may ask](#7-claude-on-the-mac--who-may-ask) ·
+[8. Meta login → a connected Page](#8-meta-login--a-connected-page)
 
 ---
 
@@ -225,7 +226,8 @@ adds `page_access_token IS NOT NULL`, so such a tenant is simply not a match (th
 (`creators_meta_ids_need_token`), so the clause is a second guard, not the only one. Everything else
 that reads those columns treats NULL the same way: skipped, or "not connected", never an error and
 never a `null` sent to Meta. (`attemptPublish` is §3.4; the Growth cron's tenant list, `recheckTenantToken`,
-`GET /settings/token/status`, `/settings/token/extend` and the manual inbox reply each have the check.)
+`GET /settings/token/status`, `/settings/token/extend` and the manual inbox reply each have the check.) How a tenant
+acquires a token with clicks instead of a pasted one is [§8](#8-meta-login--a-connected-page).
 
 ### 1.10 — Campaign query and `matchCampaign`
 
@@ -1970,6 +1972,112 @@ allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409*
 > never a yes. A saved value that is not a list of UUIDs is logged (`studio.mac_brain_setting_unreadable`) and
 > ignored, which leaves the owner alone. Tenants get the Monteur and infographics through the AI providers layer.
 
+## 8. Meta login → a connected Page
+
+A tenant connects its own Facebook Page and Instagram account with Facebook Login for Business instead of the operator
+pasting a token (P26, P27; migration v35; `docs/onboarding/04`). The result is the same row a pasted token fills
+(`creators`: the ids, an encrypted PAGE token, the `token_*` columns) plus what v35 added, so everything after the connection
+(§1, §2, §3) is unchanged. **It is off until the operator switches it on** (`meta.login_enabled`), and nothing here touches a tenant
+that is already connected unless its owner asks.
+
+The state mechanism is shared with TikTok and YouTube (**`src/services/oauthState.ts`**); §6.1 is the same flow for TikTok.
+
+### 8.1 — Starting: `POST /api/meta/connect`
+
+1. **`src/routes/meta.ts:199`** — owner only (`canAdminister`). Body `{ returnTo?: 'settings' | 'welcome', reconnect?, authType? }`.
+   `loginAvailability` (**`src/services/metaLogin.ts`**) answers three things or the route answers 409 with a code:
+   `META_LOGIN_DISABLED` (the switch is off, the default), `NOT_CONFIGURED` (`META_APP_ID` / `META_APP_SECRET`) and
+   `NO_BASE_URL`. The redirect URI is `app.public_base_url` + `/api/meta/callback` and **never** the request's Host (`metaRedirectUri`;
+   TikTok's and YouTube's fall back to it as a last resort, this one does not).
+2. `mayConnect` (**`metaLogin.ts:505`**) refuses a tenant that already has a token unless the body says `reconnect: true`:
+   409 `ALREADY_CONNECTED`, and no state is minted. This is the first of two checks (§8.3 makes the second).
+3. `createOAuthState` (**`oauthState.ts:72`**) inserts a 32-byte nonce, purpose `meta`, with the tenant, the user, `return_to` and an
+   **encrypted** payload `{ v: 1, reconnect }`; 10-minute TTL. The route sets the nonce as an HttpOnly, `Secure`, `SameSite=Lax`
+   cookie with `Path=/api/meta/callback` and returns `buildLoginUrl`: `https://www.facebook.com/v26.0/dialog/oauth` with
+   `client_id`, `redirect_uri`, `state`, `response_type=code` and, with the `meta.login_config_id` setting, `config_id` (and
+   `override_default_response_type=true`, which makes a Business Login configuration return a code). With no id it sends
+   `scope=` instead (`LOGIN_SCOPES`: `REQUIRED_SCOPES` plus the two insights). A reconnect adds `auth_type=rerequest|reauthorize`.
+
+### 8.2 — The callback: `GET /api/meta/callback`
+
+On `metaPublicRouter`, mounted above `requireAuth` (**`src/routes/api.ts:1246`**, before the `requireAuth` line below it). Every way
+out clears the cookie and redirects to `/dashboard#/settings` or `#/welcome` (the state's `return_to`) with `meta=connected|error|pick`,
+`reason=…` and `warn=…` in the **hash** query, where `App.hashParam` reads them.
+
+1. **`error=` from Meta** (`access_denied`, or any other): spend the state if cookie and state agree (that is how the callback
+   learns `return_to`), then `reason=denied` or `meta_error`. No `state` or no `code`: `missing_code`.
+2. **cookie == state, before anything is spent** (**`meta.ts:114`**). A state lifted from a log and replayed elsewhere fails here
+   without burning the legitimate one: `state_mismatch`, no database call.
+3. `consumeOAuthState(state, 'meta')` (**`oauthState.ts:134`**): one `UPDATE … WHERE nonce = $1 AND platform = $2 AND used_at IS NULL
+   AND expires_at > NOW() RETURNING`. Spent, expired, unknown, or minted for another flow (a TikTok state, a Page pick): `state_expired`.
+   **Single-use is that clause**: a replay finds nothing and asks Meta nothing.
+4. The switch is re-read (`disabled`) and the redirect URI rebuilt (`no_base_url`); then `finishLogin` (**`metaLogin.ts:773`**):
+   - `mayConnect` again, **before the code is spent**: a connected tenant whose state carries no `reconnect` ends here with
+     `already_connected`, Meta never called, the row untouched. `reconnect` comes only from the state's encrypted payload, never
+     from the query string.
+   - `exchangeCode` (not retried: a code is single-use) then `extendUserToken` (`fb_exchange_token`), then `/me`, `/me/permissions`
+     and `/me/accounts?fields=id,name,access_token,tasks,instagram_business_account{id,username}` in parallel. Tokens travel in the
+     `Authorization` header; paging follows the cursor, never `paging.next` (a URL with the token in it).
+   - Nothing granted → `not_tester` (the person holds no role on the app: **unverified**, docs/onboarding/04 §4). A core permission
+     declined (`CORE_SCOPES`) → `permissions_missing`. No Page → `no_pages`.
+   - `planPages`: **exactly one usable Page with an Instagram account** (usable = `MANAGE`, or `CREATE_CONTENT` + `MODERATE`) connects
+     at once (§8.3). Anything else (two Pages, a Page with no Instagram account, nothing usable, or a reconnect that would **replace**
+     the connected Page) is stored for the picker: `createOAuthState({ purpose: 'meta_pick', payload })`, the Pages and their tokens
+     encrypted, a token kept only for a Page the user can run. Redirect to `#/connect-meta?meta=pick&pick=…`.
+5. **The user token exists only inside `finishLogin`.** It is not stored and not passed on; only Page tokens are, encrypted.
+
+### 8.3 — `completeMetaConnection` (**`metaLogin.ts:619`**): the one place a connection is written
+
+1. `assertMayConnect` again (the second check), and `replacesConnection`: a reconnect to **different** ids needs
+   `confirmPageChange` (409 `page_change_unconfirmed`); gaining an id the tenant lacked, or the same ids again, is not a change.
+2. `validateSuppliedToken` (moved here from `routes/admin.ts`): `debug_token` must say type PAGE, the check a pasted token gets.
+3. `assertPageFree` → `pageIdConflict` (also moved): a Page or Instagram account **another tenant holds** is 409 `page_in_use`
+   before Meta is asked to subscribe it. The other tenant is never named. (The unique indexes are the second line: a `23505`
+   at the write is the same answer.)
+4. `subscribePage`: `POST /{page}/subscribed_apps` with `subscribed_fields=feed,messages,messaging_postbacks` and the Page token,
+   then `GET` the edge to confirm. A failure is a **warning** (`subscribe_failed` / `subscribe_unconfirmed`); the connection is still saved.
+5. **One `UPDATE`**: ids, encrypted token, `token_*` columns, `meta_user_id`, `meta_page_name`, the verified Instagram username,
+   `meta_connected_at`, `meta_webhook_subscribed_at`. Its `WHERE` is `id = $1 AND ($13 OR page_access_token IS NULL)`, so a
+   connection made by another request in the meantime is not overwritten. Then `invalidateTenantCache()` and a `meta.connect` audit row
+   (ids and facts, never a token).
+
+### 8.4 — The Page pick: `GET /candidates?pick=` and `POST /select`
+
+Owner only. The pick is read for the tenant **and** the user who made it, else 404 (a legacy shared-password session, whose user is
+NULL, matches only itself). `candidates` returns names, ids, why a Page is disabled and whether choosing it would replace the connection;
+never a token. `select` validates **before anything is spent** (a Page with no role, no Instagram account without `facebookOnly`, a
+missing confirmation, a Page another tenant holds: each leaves the pick standing), then `consumePick` (**`oauthState.ts:193`**) spends
+the row **and sets its `payload` to NULL in the same statement**: the Page tokens leave the table at the moment of the choice. Only
+a failure that comes from Meta after that point (a token that is not a PAGE token) costs the person a second pass through the dialog.
+A pick nobody finishes is cleared by the next Meta state minted and by the daily cron (`purgeOAuthStates`, `api.ts:950`).
+
+### 8.5 — Disconnect: `POST /api/meta/disconnect`
+
+Owner only, and only with `{ "confirm": true }` (400 `CONFIRMATION_REQUIRED` otherwise). `disconnectMeta` (**`metaLogin.ts:899`**):
+an unsubscribe of the Page from the webhook (best effort: a dead token cannot be unsubscribed and must not trap the tenant), then one
+`UPDATE` clears the ids, the token and the `meta_*` columns; campaigns and posts stay. The user's permissions are **not** revoked,
+which would cut off every other tenant the same person connected. Audit `meta.disconnect`.
+
+### 8.6 — The operator's settings
+
+`GET` / `POST /api/meta/app-settings`, platform admin only (anyone else gets 404). `meta.login_enabled` (`'true'`, **default off**) and
+`meta.login_config_id` (digits; `META_LOGIN_CONFIG_ID` is the fallback) live in `app_settings`; the app id and secret stay in
+`META_APP_ID` / `META_APP_SECRET`. `GET` reports what to register in Meta's dashboard (`redirectUri`) and what the dialog asks for.
+Each save is one `settings.meta_login_write` audit row naming the fields. No dashboard card yet: P28 builds the UI.
+
+> **Why a state in the DB, a cookie and a nonce in the callback's URL.** The dashboard's session is a Bearer token in
+> localStorage, so Meta's redirect carries none. The nonce binds the returned code to a tenant; the cookie binds the nonce to the
+> browser that began the flow; spending it in one `UPDATE` makes it single-use. All three are §6.1's, generalised.
+
+> **Why the second check at the callback.** The first (`POST /connect`) can be minutes old: the tenant may have been connected by
+> an operator in between. A state is not a licence to overwrite whatever is there now; the state's own payload says whether the owner
+> asked for a reconnect, and nothing else can.
+
+> **What is unverified (docs/onboarding/04).** That app 847772258381375 is a Business-type app, which Facebook Login for Business
+> requires; that a Tester role-holder gets comment webhooks as the owner (an Admin) does; `override_default_response_type`
+> on a manually built dialog; what a non-role-holder sees (the `not_tester` reason is inferred from "nothing granted"). The first real
+> Tester connecting is the test (plan P27, live check).
+
 ## Where each flow can silently do nothing
 
 A quick index for the "it just isn't working" case. Every one of these is a normal return, not an
@@ -2002,5 +2110,11 @@ error, and several write **no row at all**.
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |
 | 6 | **creator never posts the draft** | *(none)* | row stays `IN_INBOX`; the sweep stops asking after 7 days |
 | 7 | a think or an infographic write for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:300`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
+| 8 | a callback with no cookie, or one that does not equal `state` — **`meta.ts:114`** | `meta.oauth_state_mismatch` | no (before the DB) |
+| 8 | a replayed, expired or foreign `state` — **`oauthState.ts:134`** | *(none: `reason=state_expired` in the redirect)* | no (the UPDATE matched nothing) |
+| 8 | a tenant that is connected and did not ask for a reconnect — `mayConnect` | `meta.oauth_callback_failed` (`reason: already_connected`) | no, and Meta is never called |
+| 8 | Connect with Facebook is off (`meta.login_enabled`) | *(none: `reason=disabled`)* | the state is spent, nothing else |
+| 8 | the webhook could not be subscribed — `subscribePage` | `meta.subscribe_failed` / `_incomplete` / `_unread` (`warn`) | yes: connected, `meta_webhook_subscribed_at` NULL, `warn=` in the redirect |
+| 8 | a pick nobody finishes | *(none)* | `meta_pick` row, payload cleared after 10 min by the next Meta state or the daily cron |
 
 `RUNBOOK.md` works these backwards from the symptom.

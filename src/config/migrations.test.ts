@@ -433,3 +433,84 @@ describe('migration v34: onboarding', () => {
         for (const m of sql.matchAll(/REFERENCES (\w+)\(/g)) assert.ok(existing.has(m[1]!), `${m[1]} is created before v34`);
     });
 });
+
+// ─── v35: Meta login ───────────────────────────────────────────────────────────────────────────
+
+describe('migration v35: meta login', () => {
+    const FILE = 'migration_v35_meta_login.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+    /** The same without string literals (the COMMENT texts and the ILIKE pattern), so words inside them are not read as SQL. */
+    const code = sql.replace(/'(?:[^']|'')*'/g, "''");
+
+    it('is registered, right after v34, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.equal(i, EXPECTED_MIGRATIONS.indexOf('migration_v34_onboarding.sql') + 1);
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, as its first statement (it locks creators, the webhook\'s hot table)', () => {
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('creates no table, so there is nothing for RLS to miss, and the generic scan still finds every table covered', () => {
+        assert.deepEqual(createdTables(sql), []);
+        assert.deepEqual(tablesWithoutRls(allMigrationFiles()), []);
+    });
+
+    it('adds exactly the three creators columns and the two oauth_states columns, each nullable and only if absent', () => {
+        const added = [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([A-Z]+(?:\(\d+\))?(?: WITH TIME ZONE)?);/g)].map((m) => `${m[1]}.${m[2]} ${m[3]}`);
+        assert.deepEqual(added.sort(), [
+            'creators.meta_connected_at TIMESTAMP WITH TIME ZONE',
+            'creators.meta_page_name TEXT',
+            'creators.meta_webhook_subscribed_at TIMESTAMP WITH TIME ZONE',
+            'oauth_states.payload TEXT',
+            'oauth_states.return_to VARCHAR(20)',
+        ]);
+        assert.equal((code.match(/ADD COLUMN/g) ?? []).length, 5, 'and no other column is added');
+        for (const statement of code.split(';').filter((st) => /ADD COLUMN/.test(st))) {
+            assert.doesNotMatch(statement, /NOT NULL|DEFAULT/, 'nothing that would rewrite or reject an existing row');
+        }
+    });
+
+    it('turns the UNIQUE meta_user_id index into a plain one: dropped first, and only while it is still unique, then recreated non-unique', () => {
+        // IF NOT EXISTS matches on the NAME, not the definition (migration v15): a bare CREATE INDEX would silently keep the unique one.
+        const dropAt = sql.indexOf('DROP INDEX idx_creators_meta_user');
+        const createAt = sql.indexOf('CREATE INDEX IF NOT EXISTS idx_creators_meta_user');
+        assert.ok(dropAt > 0 && createAt > dropAt, 'the DROP comes before the CREATE');
+        assert.match(sql, /indexname = 'idx_creators_meta_user' AND indexdef ILIKE 'CREATE UNIQUE INDEX%'/, 'the drop is conditional on it being unique');
+        assert.doesNotMatch(code, /CREATE UNIQUE INDEX/, 'nothing unique is created');
+        assert.match(sql, /CREATE INDEX IF NOT EXISTS idx_creators_meta_user ON creators \(meta_user_id\) WHERE meta_user_id IS NOT NULL;/);
+        // v12 made it unique; this file is what makes one person connecting two tenants possible.
+        assert.match(readFileSync(path.join(CONFIG_DIR, 'migration_v12_tenancy.sql'), 'utf8'), /CREATE UNIQUE INDEX IF NOT EXISTS idx_creators_meta_user/);
+    });
+
+    it('does not change a row: no INSERT, UPDATE or DELETE, so the owner\'s tenant keeps its ids and its token exactly', () => {
+        assert.doesNotMatch(code, /\b(INSERT|UPDATE|DELETE)\b/i);
+        assert.doesNotMatch(code, /\bDROP (TABLE|COLUMN|CONSTRAINT)\b/i);
+    });
+
+    it('is idempotent: every column and index is created only if absent, and the one DROP is guarded', () => {
+        assert.equal((code.match(/ADD COLUMN/g) ?? []).length, (code.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+        assert.equal((code.match(/CREATE (UNIQUE )?INDEX/g) ?? []).length, (code.match(/CREATE (UNIQUE )?INDEX IF NOT EXISTS/g) ?? []).length);
+        assert.equal((code.match(/DROP INDEX/g) ?? []).length, 1);
+        assert.match(code, /IF EXISTS \( SELECT 1 FROM pg_indexes [^;]*\) THEN DROP INDEX idx_creators_meta_user; END IF;/);
+    });
+
+    it('every table it alters exists by the time it runs', () => {
+        const before = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
+        for (const m of sql.matchAll(/ALTER TABLE (\w+) ADD/g)) assert.ok(existing.has(m[1]!), `${m[1]} is created before v35`);
+        assert.ok(existing.has('oauth_states') && existing.has('creators'));
+    });
+
+    it('every column the application reads or writes for a Meta connection is one a migration adds', () => {
+        const all = allMigrationFiles().map((f) => f.sql).join('\n');
+        for (const column of ['meta_user_id', 'meta_page_name', 'meta_connected_at', 'meta_webhook_subscribed_at', 'instagram_username']) {
+            assert.match(all, new RegExp(`creators ADD COLUMN IF NOT EXISTS ${column}\\b`), column);
+        }
+        for (const column of ['payload', 'return_to']) assert.match(all, new RegExp(`oauth_states ADD COLUMN IF NOT EXISTS ${column}\\b`), column);
+    });
+});

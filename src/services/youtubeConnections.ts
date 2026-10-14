@@ -12,12 +12,12 @@
  * The daily cron refreshes every connection and re-reads its channel, which also keeps the name and
  * picture we store no older than a day, as YouTube's developer policies ask of stored API data.
  */
-import crypto from 'crypto';
 import { encryptSecret, decryptSecret } from '../config/crypto.js';
 import { queryCount, queryOne, queryRows } from '../db/query.js';
 import type { PlatformConnectionRow } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
 import { getYouTubeAppConfig } from './appSettings.js';
+import { consumeOAuthState as consumeState, createOAuthState as createState, OAUTH_STATE_TTL_MS as STATE_TTL_MS } from './oauthState.js';
 import {
     exchangeCode, getMyChannel, isYouTubeReauthError, refreshAccessToken, revokeToken,
     SCOPE_READONLY, SCOPE_UPLOAD, type GoogleTokenSet,
@@ -25,7 +25,7 @@ import {
 
 /** Refresh an access token this close to its hour being up. */
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
-export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+export const OAUTH_STATE_TTL_MS = STATE_TTL_MS;
 
 export class YouTubeNotConnectedError extends Error {
     constructor(message = 'YouTube is not connected for this account — connect it in Settings.') {
@@ -43,28 +43,18 @@ export class YouTubeChannelInUseError extends Error {
 
 // ─── OAuth state ────────────────────────────────────────────────────────────────────────
 
-/** A single-use state for one tenant + user, dead after ten minutes. */
+/**
+ * A single-use state for one tenant + user, dead after ten minutes. The mechanism is shared with TikTok and Meta
+ * (`oauthState.ts`); this is its YouTube-shaped door, and touches no v35 column.
+ */
 export async function createOAuthState(creatorId: string, userId: string | null): Promise<string> {
-    const nonce = crypto.randomBytes(32).toString('base64url');
-    await queryCount(`DELETE FROM oauth_states WHERE expires_at < NOW() - INTERVAL '1 day'`);
-    await queryCount(
-        `INSERT INTO oauth_states (nonce, platform, creator_id, user_id, expires_at)
-         VALUES ($1, 'youtube', $2, $3, $4)`,
-        [nonce, creatorId, userId, new Date(Date.now() + OAUTH_STATE_TTL_MS)]
-    );
-    return nonce;
+    return createState({ purpose: 'youtube', creatorId, userId });
 }
 
 /** Consume a state: at most once, before it expires, and only one minted for YouTube. */
 export async function consumeOAuthState(nonce: string): Promise<{ creatorId: string; userId: string | null } | null> {
-    const row = await queryOne<{ creator_id: string; user_id: string | null }>(
-        `UPDATE oauth_states
-            SET used_at = NOW()
-          WHERE nonce = $1 AND platform = 'youtube' AND used_at IS NULL AND expires_at > NOW()
-      RETURNING creator_id, user_id`,
-        [nonce]
-    );
-    return row ? { creatorId: row.creator_id, userId: row.user_id } : null;
+    const claim = await consumeState(nonce, 'youtube');
+    return claim ? { creatorId: claim.creatorId, userId: claim.userId } : null;
 }
 
 // ─── Reading ────────────────────────────────────────────────────────────────────────────

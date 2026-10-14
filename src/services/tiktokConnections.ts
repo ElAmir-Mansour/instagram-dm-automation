@@ -14,12 +14,12 @@
  * to reconnect. TikTok does not document whether a rotated-out refresh token keeps working
  * for a grace period, so only one refresh may run at a time (`refresh_claimed_at`).
  */
-import crypto from 'crypto';
 import { encryptSecret, decryptSecret } from '../config/crypto.js';
 import { queryCount, queryOne, queryRows } from '../db/query.js';
 import type { PlatformConnectionRow } from '../db/rows.js';
 import { describeError, log } from '../utils/log.js';
 import { getTikTokAppConfig } from './appSettings.js';
+import { consumeOAuthState as consumeState, createOAuthState as createState, OAUTH_STATE_TTL_MS as STATE_TTL_MS } from './oauthState.js';
 import {
     exchangeCode, getUserInfo, isTikTokReauthError, refreshTokens, revokeToken,
     TikTokApiError, type TikTokTokenSet,
@@ -30,7 +30,7 @@ const REFRESH_MARGIN_MS = 10 * 60 * 1000;
 /** A refresh claim older than this belongs to an invocation that died. */
 const REFRESH_CLAIM_STALE_MS = 2 * 60 * 1000;
 /** How long an OAuth round trip may take. */
-export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+export const OAUTH_STATE_TTL_MS = STATE_TTL_MS;
 
 /** Raised when there is no usable connection: never connected, revoked, or refused on refresh. */
 export class TikTokNotConnectedError extends Error {
@@ -44,17 +44,11 @@ export class TikTokNotConnectedError extends Error {
 
 /**
  * Mint a single-use state for one tenant + user. Also sweeps states that expired over a day
- * ago, so the table never needs a job of its own.
+ * ago, so the table never needs a job of its own. The mechanism is shared with YouTube and
+ * Meta (`oauthState.ts`); this is its TikTok-shaped door, and touches no v35 column.
  */
 export async function createOAuthState(creatorId: string, userId: string | null): Promise<string> {
-    const nonce = crypto.randomBytes(32).toString('base64url');
-    await queryCount(`DELETE FROM oauth_states WHERE expires_at < NOW() - INTERVAL '1 day'`);
-    await queryCount(
-        `INSERT INTO oauth_states (nonce, platform, creator_id, user_id, expires_at)
-         VALUES ($1, 'tiktok', $2, $3, $4)`,
-        [nonce, creatorId, userId, new Date(Date.now() + OAUTH_STATE_TTL_MS)]
-    );
-    return nonce;
+    return createState({ purpose: 'tiktok', creatorId, userId });
 }
 
 /**
@@ -64,14 +58,8 @@ export async function createOAuthState(creatorId: string, userId: string | null)
 export async function consumeOAuthState(
     nonce: string
 ): Promise<{ creatorId: string; userId: string | null } | null> {
-    const row = await queryOne<{ creator_id: string; user_id: string | null }>(
-        `UPDATE oauth_states
-            SET used_at = NOW()
-          WHERE nonce = $1 AND platform = 'tiktok' AND used_at IS NULL AND expires_at > NOW()
-      RETURNING creator_id, user_id`,
-        [nonce]
-    );
-    return row ? { creatorId: row.creator_id, userId: row.user_id } : null;
+    const claim = await consumeState(nonce, 'tiktok');
+    return claim ? { creatorId: claim.creatorId, userId: claim.userId } : null;
 }
 
 // ─── Reading ────────────────────────────────────────────────────────────────────────────

@@ -32,7 +32,11 @@ import {
     OAUTH_STATE_TTL_MS, summariseConnection, TikTokAccountInUseError, TikTokNotConnectedError,
 } from '../services/tiktokConnections.js';
 import { applyWebhookEvent, MAX_PENDING_INBOX_SHARES, pendingInboxShares } from '../services/tiktokPublish.js';
+import { readCookie, stateCookie as buildStateCookie } from '../services/oauthState.js';
 import { describeError, log } from '../utils/log.js';
+
+// Moved to the shared OAuth-state module with the cookie code; kept exported from here for its importers.
+export { readCookie };
 
 /** Carries the state through TikTok's round trip so it can only complete in the browser that began it. */
 export const STATE_COOKIE = 'tiktok_oauth_state';
@@ -50,27 +54,10 @@ export async function redirectUriFor(req: Request): Promise<string | null> {
     return base ? `${base}${CALLBACK_PATH}` : null;
 }
 
-/** A single cookie from the header, without pulling in cookie-parser for one value. */
-export function readCookie(header: string | undefined, name: string): string | null {
-    if (!header) return null;
-    for (const part of header.split(';')) {
-        const i = part.indexOf('=');
-        if (i === -1) continue;
-        if (part.slice(0, i).trim() === name) {
-            try {
-                return decodeURIComponent(part.slice(i + 1).trim());
-            } catch {
-                return null;
-            }
-        }
-    }
-    return null;
-}
-
 function stateCookie(value: string, maxAgeSeconds: number): string {
     // Path-scoped to the callback: no other route ever sees it. Lax, because the callback is a
     // top-level navigation from tiktok.com — Strict would drop it on exactly that request.
-    return `${STATE_COOKIE}=${encodeURIComponent(value)}; Path=${CALLBACK_PATH}; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=Lax`;
+    return buildStateCookie(STATE_COOKIE, CALLBACK_PATH, value, maxAgeSeconds);
 }
 
 /**

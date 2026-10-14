@@ -11,7 +11,8 @@ import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
 import { setLogSink } from '../utils/log.js';
 import {
-    APP_SETTING_KEYS, DEFAULT_ONBOARDING_RULES, describeGeminiKey, getGeminiKey, getMediaStorageConfig, getOnboardingDefaultRules, getYouTubeApiKey, isSecretSetting, parseOnboardingRules,
+    APP_SETTING_KEYS, DEFAULT_ONBOARDING_RULES, describeGeminiKey, getGeminiKey, getMediaStorageConfig, getMetaLoginSettings, getOnboardingDefaultRules, getYouTubeApiKey,
+    isSecretSetting, META_CONFIG_ID_PATTERN, parseOnboardingRules,
 } from './appSettings.js';
 
 const TEST_ENCRYPTION_KEY = 'cd'.repeat(32);
@@ -265,5 +266,68 @@ describe('the discovery account setting', () => {
     it('is named as docs/onboarding/02 says, and is not a secret: it is a tenant id', () => {
         assert.equal(APP_SETTING_KEYS.onboardingDiscoveryCreatorId, 'onboarding.discovery_creator_id');
         assert.equal(isSecretSetting(APP_SETTING_KEYS.onboardingDiscoveryCreatorId), false);
+    });
+});
+
+
+describe('the Meta login settings (P26)', () => {
+    /** Answer `app_settings` reads from a map of plain values. */
+    function settingsHold(values: Record<string, string>): void {
+        (pool as unknown as { query: unknown }).query = async (_sql: string, params: unknown[] = []) => {
+            const value = values[String(params[0])];
+            return { rows: value === undefined ? [] : [{ value, is_secret: false }], rowCount: value === undefined ? 0 : 1 };
+        };
+    }
+    let envBefore: string | undefined;
+    beforeEach(() => { envBefore = process.env.META_LOGIN_CONFIG_ID; delete process.env.META_LOGIN_CONFIG_ID; });
+    afterEach(() => {
+        if (envBefore === undefined) delete process.env.META_LOGIN_CONFIG_ID;
+        else process.env.META_LOGIN_CONFIG_ID = envBefore;
+    });
+
+    it('are two keys, neither of them a secret: the switch and the configuration id', () => {
+        assert.equal(APP_SETTING_KEYS.metaLoginEnabled, 'meta.login_enabled');
+        assert.equal(APP_SETTING_KEYS.metaLoginConfigId, 'meta.login_config_id');
+        assert.equal(isSecretSetting(APP_SETTING_KEYS.metaLoginEnabled), false);
+        assert.equal(isSecretSetting(APP_SETTING_KEYS.metaLoginConfigId), false);
+    });
+
+    it('are OFF by default: nothing saved means a tenant cannot start a connection', async () => {
+        settingsHold({});
+        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: null, configIdSource: null });
+    });
+
+    it('turn on only for the exact value "true"', async () => {
+        for (const value of ['1', 'yes', 'TRUE', 'on', '']) {
+            settingsHold({ 'meta.login_enabled': value });
+            assert.equal((await getMetaLoginSettings()).enabled, false, JSON.stringify(value));
+        }
+        settingsHold({ 'meta.login_enabled': 'true' });
+        assert.equal((await getMetaLoginSettings()).enabled, true);
+    });
+
+    it('read the configuration id from the database first, then META_LOGIN_CONFIG_ID, and say which', async () => {
+        process.env.META_LOGIN_CONFIG_ID = '111111111111111';
+        settingsHold({});
+        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: '111111111111111', configIdSource: 'env' });
+        settingsHold({ 'meta.login_config_id': '222222222222222' });
+        assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: '222222222222222', configIdSource: 'database' });
+    });
+
+    it('ignore a configuration id that is not one, with a log line, instead of sending it to Meta', async () => {
+        const lines: string[] = [];
+        const previous = setLogSink((_level, line) => { lines.push(line); });
+        try {
+            settingsHold({ 'meta.login_config_id': 'not-a-number' });
+            assert.deepEqual(await getMetaLoginSettings(), { enabled: false, configId: null, configIdSource: null });
+            assert.ok(lines.some((l) => /meta\.login_config_id_unreadable/.test(l)));
+        } finally {
+            setLogSink(previous);
+        }
+    });
+
+    it('accept a configuration id of 6 to 30 digits and nothing else', () => {
+        for (const ok of ['123456', '987654321098765', '1'.repeat(30)]) assert.ok(META_CONFIG_ID_PATTERN.test(ok), ok);
+        for (const bad of ['', '12345', '1'.repeat(31), 'abc123456', '123 456', '123456\n', '-123456']) assert.equal(META_CONFIG_ID_PATTERN.test(bad), false, JSON.stringify(bad));
     });
 });
