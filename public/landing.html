@@ -753,7 +753,7 @@
          Keep this ?v= pinned to ASSET_VERSION in dashboard/js/app.js —
          scripts/check-asset-version.mjs enforces it, and public/landing.html
          is in its SHARED_ASSET_PAGES list. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.38">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.39">
 
     <style>
         /* ═══════════════════════════════════════════════════════════════════
@@ -1328,20 +1328,9 @@
             line-height: var(--lp-lh-ui);
             color: var(--text-strong);
         }
-        /* The keyword, lit inside the comment so the reader can see the thing
-           that actually fired the campaign. The negative inline margin very
-           nearly cancels the padding: the padded version pushed the question
-           mark visibly away from the word it belongs to — "السعر ؟" and
-           "price ?" — in both languages at once. */
-        .kw {
-            border-radius: var(--radius-sm);
-            background: var(--accent-soft);
-            box-shadow: inset 0 0 0 1px var(--accent-ring);
-            color: var(--accent-text);
-            padding: 0.1em 0.3em;
-            margin-inline: -0.2em;
-            font-weight: var(--fw-semibold);
-        }
+        /* `.kw`, `.kw-display` and Rows are defined in tokens.css (B2): the keyword, lit inside the comment so the reader can
+           see the thing that actually fired the campaign. Here: the CTA's Rows sit under the band's text, not over it. */
+        .cta .rows { z-index: -1; }
 
         /* Shrink-wrapped and pushed to the inline END, which is where an
            OUTGOING message sits in both directions — left in RTL, right in
@@ -3544,6 +3533,8 @@
         <symbol id="plogo-tiktok" viewBox="0 0 24 24"><path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z"/></symbol>
         <symbol id="plogo-youtube" viewBox="0 0 24 24"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></symbol>
     </svg>
+    <!-- Rows «سطور» (IDENTITY.md section 3): the pattern the CTA band paints, inked by --pattern-ink. The same markup is in dashboard/index.html. -->
+    <svg id="rows-ink" width="0" height="0" style="position:absolute;color:var(--pattern-ink)" aria-hidden="true" focusable="false"><pattern id="rows" width="576" height="192" patternUnits="userSpaceOnUse"><path d="M4 12h40m16 0h16m16 0h56m16 0h24m16 0h8m16 0h40m16 0h56m16 0h16M4 36h24m16 0h56m16 0h16m16 0h40m16 0h8m16 0h24m16 0h56m16 0h40m16 0h16M36 60h16m16 0h40m16 0h24m16 0h8M4 84h56m16 0h8m16 0h24m16 0h40m16 0h16m16 0h56m16 0h24m16 0h8m16 0h40m16 0h16M4 108h16m16 0h40m16 0h56m16 0h24m16 0h8m16 0h40m16 0h16M36 132h40m16 0h16m16 0h56m16 0h8m16 0h24M4 156h24m16 0h56m16 0h8m16 0h40m16 0h16m16 0h24m16 0h56m16 0h40M4 180h8m16 0h40m16 0h16m16 0h56m16 0h24m16 0h8m16 0h40m16 0h16m16 0h24m16 0h56" fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round"/></pattern></svg>
     <div class="ambient" aria-hidden="true"></div>
 
 
@@ -3613,7 +3604,7 @@
                     <div class="hero-grid">
                         <div>
                             <p class="eyebrow"><span class="dot" aria-hidden="true"></span>استوديو نموّ مُدار لصنّاع المحتوى العرب</p>
-                            <h1 id="hero-ar">فيديوهاتك تصير منشورات، وتعليقاتهم تصير محادثات</h1>
+                            <h1 id="hero-ar">فيديوهاتك تصير منشورات، وتعليقاتهم تصير <span class="kw kw-display is-sweeping">محادثات</span></h1>
                             <p class="lede">
                                 <a href="#monteur-ar">المونتير</a> يقصّ من فيديوهاتك الطويلة ريلز،
                                 و<a href="#carousel-studio-ar">الاستوديو</a> يكتب من دروسك كاروسيلاً،
@@ -4714,8 +4705,9 @@
                 <!-- ─── The close ────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="cta-ar">
                     <div class="cta">
+                        <svg class="rows" aria-hidden="true"><rect width="100%" height="100%" fill="url(#rows)"/><rect class="lit" x="70%" y="12" width="63" height="7" rx="3.5"/></svg>
                         <div class="cta-copy">
-                            <h2 id="cta-ar">ابدأ من تعليق واحد</h2>
+                            <h2 id="cta-ar">ابدأ من <span class="kw kw-display">تعليق</span> واحد</h2>
                             <p class="lede">
                                 الباقات الثلاث وما يتغيّر بينها فعلاً على صفحة الأسعار. ولمن حسابه
                                 مربوط بالفعل، لوحة التحكم من هنا.
@@ -4739,7 +4731,7 @@
                     <div class="hero-grid">
                         <div>
                             <p class="eyebrow"><span class="dot" aria-hidden="true"></span>A managed growth studio for Arabic creators</p>
-                            <h1 id="hero-en">Your videos become posts. Their comments become conversations.</h1>
+                            <h1 id="hero-en">Your videos become posts. Their comments become <span class="kw kw-display is-sweeping">conversations</span>.</h1>
                             <p class="lede">
                                 The <a href="#monteur-en">Monteur</a> cuts reels from your long videos
                                 and the <a href="#carousel-studio-en">Studio</a> writes carousels from
@@ -5881,8 +5873,9 @@
                 <!-- ─── The close ────────────────────────────────────────── -->
                 <section class="band" aria-labelledby="cta-en">
                     <div class="cta">
+                        <svg class="rows" aria-hidden="true"><rect width="100%" height="100%" fill="url(#rows)"/><rect class="lit" x="70%" y="12" width="63" height="7" rx="3.5"/></svg>
                         <div class="cta-copy">
-                            <h2 id="cta-en">Start with one comment</h2>
+                            <h2 id="cta-en">Start with one <span class="kw kw-display">comment</span></h2>
                             <p class="lede">
                                 The three plans, and what actually changes between them, are on the
                                 pricing page. If your account is already connected, the dashboard is
@@ -6127,7 +6120,7 @@
            what the markup carries, so it is also what a browser without this
            script gets. */
         (function () {
-            var flows = document.querySelectorAll('.flow');
+            var flows = document.querySelectorAll('.flow, .cta');
             var vids = document.querySelectorAll('.infovid video');
             var root = document.documentElement;
             var calm = !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
@@ -6164,7 +6157,6 @@
             function sync() {
                 for (var i = 0; i < vids.length; i++) pick(vids[i]);
             }
-
             sync();
             if (light && light.addEventListener) light.addEventListener('change', sync);
             if (window.MutationObserver) new MutationObserver(sync).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
@@ -6181,6 +6173,7 @@
                             el.pause();
                         }
                     } else if (e.intersectionRatio >= 0.2) {
+                        if (el.className === 'cta') el.querySelector('.kw').classList.add('is-sweeping');
                         el.classList.add('is-inview');
                         io.unobserve(el);
                     }

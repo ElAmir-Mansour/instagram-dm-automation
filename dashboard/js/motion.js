@@ -7,7 +7,7 @@
  * `Motion.reduced()` before animating in JS, so the OS setting is honoured in
  * exactly one place instead of thirty.
  *
- * Five things live here:
+ * Six things live here:
  *
  * 1.  VIEW TRANSITIONS. `Motion.transition(update)` runs a DOM mutation inside
  *     `document.startViewTransition()` where the browser has it (same-document
@@ -42,6 +42,12 @@
  *     where it exists (Chrome 133+) so focus survives the move, and nothing
  *     ever replaces a scroll container's `innerHTML`. This is what makes the
  *     inbox's 5-second poll invisible.
+ *
+ * 6.  THE SIGNATURE. `Motion.highlightDeliver(src, target)` is IDENTITY.md section 6: a keyword is
+ *     lit, held, and a 6px packet carries the answer to its target, which shows its ring once.
+ *     Its durations are the `--kw-*` tokens and its look is tokens.css's `.kw`, `.is-sweeping`,
+ *     `.kw-packet` and `.is-receipt`, so under reduced motion every step is 1ms and no packet is
+ *     drawn. Only `transform` and `opacity` ever move.
  */
 const Motion = {
 
@@ -501,6 +507,69 @@ const Motion = {
             return row;
         }
         return row.querySelector('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    },
+
+    // ─── The signature: highlight, then deliver ─────────────────────────────
+    /**
+     * A `--kw-*` motion token in milliseconds. 1 when it cannot be read: tokens.css sets
+     * them all to 1ms under reduced motion, and a missing token should never stall a step.
+     */
+    _kwMs(name) {
+        let raw = '';
+        try { raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); } catch { /* 1ms */ }
+        const n = parseFloat(raw);
+        if (!(n > 0)) return 1;
+        return /[^m]s$/.test(raw) ? n * 1000 : n;
+    },
+
+    /**
+     * Notice, then answer. `src` (a `.kw`) sweeps in, a short hold, a 6px packet flies from its
+     * centre to the centre of `target`, and the target shows its ring once (`.is-receipt`).
+     * 960ms by default. Call it only for something that has actually happened (a row that
+     * arrived after the page loaded, a button whose request succeeded), never to decorate a
+     * screen. Resolves true once the receipt has shown, false when either element has left
+     * the page. It never throws.
+     *
+     * The flight is CSS (`.kw-packet`); this sets where it starts and ends, as viewport
+     * pixels. Under reduced motion no packet is drawn: the steps still run, each 1ms.
+     */
+    highlightDeliver(src, target) {
+        const live = (el) => !!el && el.isConnected !== false;
+        if (!live(src) || !live(target)) return Promise.resolve(false);
+        const reduced = Motion.reduced();
+        return new Promise((resolve) => {
+            let shown = false;
+            const receipt = () => {
+                if (shown) return;
+                shown = true;
+                if (!live(target)) { resolve(false); return; }
+                target.classList.remove('is-receipt');
+                void target.offsetWidth; // a receipt still on show restarts instead of being swallowed
+                target.classList.add('is-receipt');
+                setTimeout(() => { target.classList.remove('is-receipt'); resolve(true); }, Motion._kwMs('--kw-receipt'));
+            };
+
+            src.classList.remove('is-sweeping');
+            void src.offsetWidth;
+            src.classList.add('is-sweeping');
+
+            setTimeout(() => {
+                if (!live(src) || !live(target)) { resolve(false); return; }
+                if (reduced) { receipt(); return; }
+                const a = src.getBoundingClientRect();
+                const b = target.getBoundingClientRect();
+                const packet = document.createElement('i');
+                packet.className = 'kw-packet';
+                packet.setAttribute('aria-hidden', 'true');
+                packet.style.cssText = `--x0:${a.left + a.width / 2};--y0:${a.top + a.height / 2};--x1:${b.left + b.width / 2};--y1:${b.top + b.height / 2}`;
+                const land = () => { packet.remove(); receipt(); };
+                // The packet has two animations and fires animationend for each; the timer is for a tab that is
+                // hidden, where animations are not run and the event never comes.
+                packet.addEventListener('animationend', land, { once: true });
+                setTimeout(land, Motion._kwMs('--kw-deliver') + 120);
+                document.body.appendChild(packet);
+            }, Motion._kwMs('--kw-sweep') + Motion._kwMs('--kw-hold'));
+        });
     },
 
     // ─── Optimistic mutations ───────────────────────────────────────────────

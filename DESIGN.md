@@ -130,6 +130,13 @@ series takes the deep olive instead. It falls back to `currentColor`, never to a
 | `--chart-positive` | `#2DD4A7` | `#248A3D` | up |
 | `--chart-negative` | `#F87171` | `#D70015` | down |
 
+### The Rows ink
+One token: the ink of the Rows pattern «سطور» (§4, Rows). It is texture, so it is held *under* a ceiling, not over a floor.
+
+| token | dark | light | role |
+|---|---|---|---|
+| `--pattern-ink` | `rgba(255,255,255,0.06)` | `rgba(24,26,16,0.06)` | the bars of Rows, within 1.25:1 of the ground they are drawn on; never behind body text |
+
 ### The logo mark: Kufi «رد»
 Two tokens, per theme: the tile and the glyph. The dashboard's mark (`.logo-mark`, `.login-mark`) and the inline marks on the
 public pages paint them, through `.mark-tile` and `.mark-glyph`, and nothing else does. Dark UI is the Cardamom colourway and
@@ -144,7 +151,8 @@ the manifest's PNGs are the Cardamom files at every size (§4, Mark).
 ### Measured (the guard's arithmetic: glass composited down to the canvas)
 `npm run check:contrast` reports these; the design-md test fails if this section stops matching its output.
 - **Worst text pair:** 5.05:1 dark (`--text-muted` on `--surface-glass-hover` over `--surface-raised`) and 4.76:1
-  light (`--success-text` on `--surface-glass-hover` over `--surface-page`). 220 text pairs are measured.
+  light (`--success-text` on `--surface-glass-hover` over `--surface-page`). 268 text pairs are measured, 48 of them over the
+  Rows ink.
 - **The accent as a fill:** `--text-on-accent` on `--accent`, `--accent-hover`, `--accent-active` and on every stop
   of `--gradient-brand`, at 4.5:1. Dark ink on the fill is 12.0:1; light white on ink is 17.2:1.
 - **The accent as a shape, vs the grounds it sits on (3:1):** 10.9:1 dark, 15.6:1 light, at the tightest. The
@@ -155,6 +163,8 @@ the manifest's PNGs are the Cardamom files at every size (§4, Mark).
 - **`--accent-text` on `--accent-soft` over a card:** 8.03:1 dark, 7.16:1 light.
 - **The mark:** the glyph on its tile is 12.00:1 dark and 11.32:1 light, and the tile as a shape against its tightest
   ground (the card) is 10.91:1 dark and 15.58:1 light. `check:contrast` holds the glyph to 4.5:1 and the tile to 3:1.
+- **The Rows ink (ceiling 1.25:1, floor 1.05:1):** the loudest ground is 1.18:1 dark and 1.13:1 light, so a bar never reads as
+  content; every text token is also measured on the canvas, on a card laid over the bars and on the band with the bars over it.
 - **Hue (≥ 25° apart, enforced):** the accent is 78.5° dark and 77.1° light, against danger 3.2°, warning 36.5° and
   success 135.1°.
 
@@ -323,7 +333,30 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 ### Keyword highlight `.kw` (the signature)
 - `--accent-soft` background, `inset 0 0 0 1px var(--accent-ring)`, `--accent-text`, radius 8, padding .1em .3em,
   semibold.
-- Only on the matched keyword, or on the one word that matters in a block.
+- Only on the matched keyword, or on the one word that matters in a block. Never on a status, the brand name or a number.
+- **One definition, in `tokens.css`** (with `.kw-display`, `.is-sweeping`, `.is-receipt`, `.kw-packet`, Rows and the `--kw-*`
+  tokens), because the public pages load tokens.css and not styles.css, and the landing is on a served-bytes budget.
+- **`.kw-display`** is the headline variant: radius .18em, padding .02em .16em, a 1px ring, `margin-inline: -.1em`; one word of
+  an h1 or h2. It and a sweeping `.kw` are painted by `::before`, so the highlight can grow as a transform (`scaleX` 0→1 from
+  the inline-start, mirrored in RTL); at rest it is the same pixels as `.kw`. `.is-sweeping` plays that sweep once: written in
+  the markup it plays on first view (the landing h1), added from script it replays.
+- **`.is-receipt`** puts the target's ring (`--ring`, `--accent-ring`) on its `::after` and moves only its opacity, 0→1→0.
+- **`highlightDeliver(src, target)`** is `Motion.highlightDeliver` in `dashboard/js/motion.js`: sweep, hold, a 6px packet
+  (`.kw-packet`, flown by CSS) to the target, then the receipt. Call it only for something that happened (a row that arrived
+  after the page loaded, a request that succeeded). The landing plays the first half (the sweep) on its h1 and, once in view, on
+  the closing band's word: the packet's JS does not fit the page's served-bytes budget.
+- **`data-i18n-kw="key"`** (dashboard markup) lights the word that dictionary key holds inside the element's own translated
+  text, so a sentence stays one string. The login's subtitle uses it, with `login.subtitleKw`.
+
+### Rows «سطور» (the pattern)
+- **A comment thread with one word lit.** Tile 576×192: 8 rows every 24px, 8px pills with 8px gaps, lengths from
+  {16, 24, 32, 48, 64}, aligned to the inline-start and ragged at the end. Rows 3 and 6 are short replies, indented 32px.
+- **`<pattern id="rows">`** in an inline `<svg id="rows-ink">` per page (`dashboard/index.html`, `public/landing.html`: the same
+  bytes), inked by `--pattern-ink`. A page paints it with `<svg class="rows">`: a rect filled `url(#rows)` and one `.lit` bar in
+  `--accent-soft` with a 1px `--accent-ring`, in the reading-end third. RTL mirrors the whole svg, lit bar included, and a mask
+  lets the pattern arrive from the reading end.
+- **Where:** the login background (it replaces the glow there) and the landing's closing band, once per page. OG cards draw their
+  own copy (`scripts/build-og.mjs`). **Never** behind body text, in the dashboard workspace, or more than once on a page.
 
 ### Eyebrow
 - Pill with `--accent-soft`, an accent-ring inset and `--accent-text`; 14px semibold; a 6px dot in
@@ -511,6 +544,11 @@ is wrong; extend the scale.
 - Durations: 120 / 200 / 320ms. On public pages, press is 90ms and hover 160ms.
 - One scroll-reveal moment per page.
 - Everything collapses to 1ms under `prefers-reduced-motion`.
+- **Highlight, then deliver** (IDENTITY.md §6), four tokens in tokens.css: `--kw-sweep` 320ms (the highlight grows from the
+  inline-start), `--kw-hold` 120ms, `--kw-deliver` 320ms (a 6px packet travels to its target and fades over its last 25%),
+  `--kw-receipt` 200ms (the target's ring, once). 960ms in all; under reduced motion each is 1ms, the CSS animations are off and
+  no packet is drawn. Only `transform` and `opacity` move. No bounce, overshoot, shimmer, confetti or typing dots. There is no
+  pause control: the visitor's own setting is the opt-out.
 
 **Stacking (z):** header 10 · drawer 50 · modal 100 · toast 200 · skip link 300.
 
@@ -614,7 +652,8 @@ the same paragraph as the feature.
 ### The guards
 | check | stops |
 |---|---|
-| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation, or used at all in a public page's CSS (a bare `--brand-*` token, a brand hex); a platform logo under 3:1 on any ground it is painted on (`--logo-mono`, `--logo-mono-yt` and `--logo-on-accent`, read from the public pages' shared chrome) |
+| `check:contrast` | a text/ground pair under 4.5:1 in either theme (glass composited down to the canvas, the accent's highlighter stacks included); the label on the accent fill, on its hover and press steps and on every gradient stop under 4.5:1; the accent and the chart accent as shapes under 3:1 against their grounds; the quick-reply pill and the timestamp under 4.5:1 on the outgoing bubble (and a stylesheet that no longer says what that model assumes); two semantic colours (including accent vs success) within 25° of hue; a platform colour used as a solid fill outside data visualisation, or used at all in a public page's CSS (a bare `--brand-*` token, a brand hex); a platform logo under 3:1 on any ground it is painted on (`--logo-mono`, `--logo-mono-yt` and `--logo-on-accent`, read from the public pages' shared chrome); the Rows ink above 1.25:1 of a ground it is drawn on, or invisible |
+| `brandMotif.test.ts` | the motif tokens, `.kw`, `.kw-display`, `.is-receipt` or the `#rows` pattern missing or drifting (the pattern's geometry, its two copies); the reduced-motion guard gone, or anything animated that is not `transform` or `opacity`; the landing h1, the closing band, the login or `Motion.highlightDeliver` not using them; the landing over its served-bytes budget |
 | `landingLogos.test.ts` | a logo path that differs from simple-icons@16.33.0; a `<use>` that points at nothing; a glyph that is not `aria-hidden` or has no platform name beside it; a transform, mirror, colour literal or non-`--logo-*` fill on `.plogo` or `.ptile`; the sprite differing between pages; different glyphs in Arabic and English |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
 | `check:i18n` | an English string with no Arabic translation, a placeholder mismatch, an Arabic-Indic digit outside its allow-list |

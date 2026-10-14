@@ -123,12 +123,26 @@ const I18N = {
 
     /**
      * Translate static markup in index.html: `data-i18n` sets textContent,
-     * `data-i18n-attr="aria-label:key,title:key"` sets attributes.
+     * `data-i18n-attr="aria-label:key,title:key"` sets attributes, and
+     * `data-i18n-kw="key"` lights one word of the text with the keyword highlighter.
      */
     applyStatic(root) {
         const scope = root || document;
         scope.querySelectorAll('[data-i18n]').forEach((el) => {
             el.textContent = I18N.t(el.getAttribute('data-i18n'));
+        });
+        // `data-i18n-kw="key"` on the same element: the word `key` holds is lit with `.kw` inside the text just written. The
+        // string stays one sentence in the dictionary, so word order is the translator's; a word that is not in it lights nothing.
+        scope.querySelectorAll('[data-i18n-kw]').forEach((el) => {
+            const word = I18N.t(el.getAttribute('data-i18n-kw'));
+            const text = el.textContent;
+            const at = text.indexOf(word);
+            if (!word || at < 0) return;
+            const kw = document.createElement('span');
+            kw.className = 'kw';
+            kw.textContent = word;
+            el.textContent = '';
+            el.append(text.slice(0, at), kw, text.slice(at + word.length));
         });
         scope.querySelectorAll('[data-i18n-attr]').forEach((el) => {
             el.getAttribute('data-i18n-attr').split(',').forEach((pair) => {
