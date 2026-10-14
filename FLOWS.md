@@ -113,7 +113,8 @@ Each planned job goes through `queue.enqueue` (**`src/jobs/queue.ts:39`**), whos
 dropped enqueue returns `null` and is logged at `debug` (**`src/jobs/queue.ts:65`**) — on a
 busy account it is the most frequent thing that happens.
 
-**`src/index.ts:250`** — `res.sendStatus(200)`.
+**`src/index.ts:413`** — `void acknowledgeThenRun(res, …)`, which sends the 200 first
+(**`src/webhook/ack.ts:32`**) and only then starts the work (§1.5).
 
 > **Why this order — the 200 goes out before the work.**
 > Meta's webhook timeout is ~20 seconds and this pipeline contains a 2-8s Gemini round trip plus
@@ -131,7 +132,8 @@ and `messages.meta_message_id` are UNIQUE, so the second pass claims nothing.
 
 ### 1.5 — `drainInline()` picks the job back up
 
-**`src/index.ts:253`** — `await drainInline()`, defined at **`src/jobs/drain.ts:38`**. It reaps
+**`src/index.ts:413-416`** — the work `acknowledgeThenRun` starts after the 200 is `drainInline()`,
+defined at **`src/jobs/drain.ts:38`**. It reaps
 stale claims first (**`src/jobs/drain.ts:54`**), then calls `drainJobs`
 (**`src/jobs/runner.ts:129`**) with a deliberately short budget: 8 s default
 (**`src/jobs/drain.ts:21-24`**, `JOB_INLINE_BUDGET_MS`), `batchSize: 3`, `maxJobs: 10`
@@ -141,6 +143,19 @@ anything it does not finish stays `pending` and costs nothing. Full mechanics in
 
 The claim itself is **`src/jobs/queue.ts:77`**, `PostgresJobQueue.claim`. The handler lookup and
 dispatch is **`src/jobs/runner.ts:89`**.
+
+> **The drain runs under `waitUntil`, and nothing awaits it after the 200.**
+> `acknowledgeThenRun` (**`src/webhook/ack.ts:31`**) starts the work as one promise that never
+> rejects (a throw is logged as `webhook.pipeline_error`) and hands it to `waitUntil` from
+> `@vercel/functions` (**`src/webhook/ack.ts:45`**, through the seam in
+> **`src/utils/waitUntil.ts:60`**), so Vercel keeps the invocation alive until the drain settles.
+> Before, the route sent the 200 and then awaited the drain, and an invocation can be frozen as
+> soon as the response is out: an inline-claimed job stayed `running` until the instance thawed
+> (the next request, the Heroku worker's 60 s poll: about 70 s) or until `reapStale` (300 s)
+> returned it to `pending`. Measured over 7 days that was `dm.process` p50 125 s and p90 362 s.
+> `waitUntil` does nothing without a Vercel request context (dev, tests), so the work is started
+> before it is handed over; on Vercel without one the seam logs `runtime.wait_until_unavailable`
+> once per instance.
 
 ### 1.6 — The handler adapter
 

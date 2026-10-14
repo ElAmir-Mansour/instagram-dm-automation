@@ -463,6 +463,19 @@ The same `curl` above. Budgets, if you need to tune them:
 
 Lower `JOB_INLINE_BUDGET_MS` if webhook invocations are being killed on duration.
 
+**Is the inline drain being kept alive after the 200?** The webhook drains under `waitUntil`
+(`src/webhook/ack.ts`). Read the median created-to-done time per job kind (run it read-only,
+through `connectReadOnly()` as in §2.1); after the deploy it should sit in seconds, where it was
+`dm.process` p50 125 s and `comment.process` p90 28 s:
+
+```sql
+SELECT kind, percentile_cont(0.5) within group (order by extract(epoch from (updated_at-created_at)))
+FROM jobs WHERE status='done' AND created_at > now()-interval '1 day' GROUP BY 1
+```
+
+A median back near 70 s means the instance is being frozen again. Look for
+`runtime.wait_until_unavailable` in the logs (the platform gave the request no `waitUntil`).
+
 > **Unverified:** `vercel.json` sets no `maxDuration` for the function, so the 45s worker
 > budget is not provably inside the platform's limit for this plan. If `/api/jobs/drain`
 > returns a platform timeout rather than JSON, lower `JOB_WORKER_BUDGET_MS` first.
