@@ -13,7 +13,7 @@
  */
 import {
     ADDRESS, CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, FONTS, KINDS, LANGS, LEVELS, MATCH_MODES, OFFER_KINDS, ON_CAMERA, ORDER_VIA,
-    PRONOUNS, PROFILE_SECTIONS, REGISTERS, SOCIALS, SURFACES, THEMES,
+    PRONOUNS, PROFILE_SECTIONS, PROOF_KINDS, REGISTERS, SALES_LEVELS, SOCIALS, SURFACES, THEMES,
     type CreatorProfile, type Offer,
 } from './types.js';
 
@@ -51,6 +51,22 @@ export const PROFILE_LIMITS = {
     campaignKeywords: { items: 20, each: 80 },
     campaignDm: 4000,
     campaignReplies: { items: 10, each: 300 },
+    /**
+     * `Offer.sales` (docs/DM_SALES_PLAN.md §5). All new, so none has an older limit to stay above; sized for what a person writes about
+     * one offer. Every list is capped in items too, since the bot reads all of it on every message: a limit here is also a prompt budget.
+     */
+    salesForWhom: 300,
+    salesOutcomes: { items: 8, each: 160 },
+    salesFaqs: 15,
+    salesFaqQuestion: 200,
+    salesFaqAnswer: 600,
+    salesObjections: 10,
+    salesObjection: 160,
+    salesObjectionAnswer: 600,
+    salesProof: 8,
+    salesProofText: 300,
+    salesProofSource: 120,
+    salesPriceNote: 200,
     handle: 32,
     site: 40,
     link: 500,
@@ -85,6 +101,33 @@ export function isTimeZone(value: unknown): value is string {
     } catch {
         return false;
     }
+}
+
+/** `YYYY-MM-DD` that is a day on the calendar: 2026-02-30 is not one, though it looks like one. */
+export function isCalendarDate(value: unknown): value is string {
+    if (typeof value !== 'string') return false;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!m) return false;
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const at = new Date(Date.UTC(y, mo - 1, d));
+    return at.getUTCFullYear() === y && at.getUTCMonth() === mo - 1 && at.getUTCDate() === d;
+}
+
+let currencyCodes: ReadonlySet<string> | undefined;
+/**
+ * An ISO 4217 code: three capital letters that the runtime's own currency list (`Intl.supportedValuesOf`, ICU's copy of the
+ * standard) knows, so 'SAR' and 'USD' pass and 'SAU' does not. A runtime without that list falls back to the shape alone.
+ */
+export function isCurrencyCode(value: unknown): value is string {
+    if (typeof value !== 'string' || !/^[A-Z]{3}$/.test(value)) return false;
+    if (!currencyCodes) {
+        try {
+            currencyCodes = new Set(Intl.supportedValuesOf('currency'));
+        } catch {
+            currencyCodes = new Set();
+        }
+    }
+    return currencyCodes.size === 0 || currencyCodes.has(value);
 }
 
 /**
@@ -244,7 +287,7 @@ function problemsOf(raw: unknown): string[] {
 
     // offers
     const offers = list(profile.offers, 'offers', PROFILE_LIMITS.offers, (v, path) => {
-        const o = object(v, path, ['id', 'kind', 'name', 'order_via', 'url', 'price', 'facts', 'bullets', 'keyword', 'primary'], ['campaign']);
+        const o = object(v, path, ['id', 'kind', 'name', 'order_via', 'url', 'price', 'facts', 'bullets', 'keyword', 'primary'], ['campaign', 'sales']);
         if (!o) return;
         text(o.id, `${path}.id`, PROFILE_LIMITS.offerId, { required: true });
         oneOf(o.kind, `${path}.kind`, OFFER_KINDS);
@@ -265,6 +308,47 @@ function problemsOf(raw: unknown): string[] {
                 texts(c.keywords, `${path}.campaign.keywords`, PROFILE_LIMITS.campaignKeywords);
                 text(c.dm_template, `${path}.campaign.dm_template`, PROFILE_LIMITS.campaignDm, { required: true });
                 texts(c.public_replies, `${path}.campaign.public_replies`, PROFILE_LIMITS.campaignReplies);
+            }
+        }
+        if (o.sales !== undefined) {
+            const sp = `${path}.sales`;
+            const s = object(o.sales, sp, ['for_whom', 'level', 'outcomes', 'faqs', 'objections', 'proof', 'price_note', 'price_valid_until', 'currency', 'image_url']);
+            if (s) {
+                text(s.for_whom, `${sp}.for_whom`, PROFILE_LIMITS.salesForWhom);
+                oneOf(s.level, `${sp}.level`, SALES_LEVELS);
+                texts(s.outcomes, `${sp}.outcomes`, PROFILE_LIMITS.salesOutcomes, { line: true });
+                list(s.faqs, `${sp}.faqs`, PROFILE_LIMITS.salesFaqs, (f, p) => {
+                    const item = object(f, p, ['q', 'a']);
+                    if (!item) return;
+                    text(item.q, `${p}.q`, PROFILE_LIMITS.salesFaqQuestion, { required: true, line: true });
+                    text(item.a, `${p}.a`, PROFILE_LIMITS.salesFaqAnswer, { required: true });
+                });
+                list(s.objections, `${sp}.objections`, PROFILE_LIMITS.salesObjections, (f, p) => {
+                    const item = object(f, p, ['objection', 'answer']);
+                    if (!item) return;
+                    text(item.objection, `${p}.objection`, PROFILE_LIMITS.salesObjection, { required: true, line: true });
+                    text(item.answer, `${p}.answer`, PROFILE_LIMITS.salesObjectionAnswer, { required: true });
+                });
+                // Proof is only ever real: it needs its words and where they come from, so nothing in it is anonymous.
+                list(s.proof, `${sp}.proof`, PROFILE_LIMITS.salesProof, (f, p) => {
+                    const item = object(f, p, ['kind', 'text', 'source']);
+                    if (!item) return;
+                    oneOf(item.kind, `${p}.kind`, PROOF_KINDS);
+                    text(item.text, `${p}.text`, PROFILE_LIMITS.salesProofText, { required: true });
+                    text(item.source, `${p}.source`, PROFILE_LIMITS.salesProofSource, { required: true, line: true });
+                });
+                text(s.price_note, `${sp}.price_note`, PROFILE_LIMITS.salesPriceNote);
+                // '' is "no date", which is also "the bot states no price" (see `OfferSales`); a date must be one on the calendar.
+                if (s.price_valid_until !== undefined) {
+                    if (typeof s.price_valid_until !== 'string') add(`${sp}.price_valid_until must be text`);
+                    else if (s.price_valid_until !== '' && !isCalendarDate(s.price_valid_until)) add(`${sp}.price_valid_until must be a date like 2026-12-31, or empty`);
+                }
+                if (s.currency !== undefined) {
+                    if (typeof s.currency !== 'string') add(`${sp}.currency must be text`);
+                    else if (s.currency !== '' && !isCurrencyCode(s.currency)) add(`${sp}.currency must be a currency code like USD or SAR, or empty`);
+                }
+                text(s.image_url, `${sp}.image_url`, PROFILE_LIMITS.offerUrl);
+                if (typeof s.image_url === 'string' && s.image_url !== '') upload(s.image_url, `${sp}.image_url`);
             }
         }
     });

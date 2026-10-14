@@ -1,0 +1,116 @@
+{
+  "type": "OBJECT",
+  "properties": {
+    "intent": {
+      "type": "STRING",
+      "enum": [
+        "greeting",
+        "info",
+        "price",
+        "level_fit",
+        "objection_price",
+        "objection_time",
+        "objection_trust",
+        "ready_to_buy",
+        "support",
+        "refund_or_complaint",
+        "wants_human",
+        "off_topic",
+        "abuse",
+        "opt_out",
+        "other"
+      ],
+      "description": "What the person is doing in their last message."
+    },
+    "stage": {
+      "type": "STRING",
+      "enum": [
+        "new",
+        "qualify",
+        "recommend",
+        "objection",
+        "link",
+        "follow_up",
+        "handoff",
+        "closed"
+      ],
+      "description": "The stage the conversation should be in after your reply: new, qualify, recommend, objection, link, follow_up, handoff or closed."
+    },
+    "next_action": {
+      "type": "STRING",
+      "enum": [
+        "reply",
+        "ask_qualifier",
+        "recommend",
+        "send_link",
+        "handoff",
+        "close"
+      ],
+      "description": "What the system should do with this reply. send_link is the only way a link is sent: the system adds it. handoff passes the conversation to a person."
+    },
+    "offer_id": {
+      "type": "STRING",
+      "enum": [
+        "none",
+        "main",
+        "course-golang",
+        "course-swift",
+        "course-css3",
+        "course-html5",
+        "course-problem-solving",
+        "course-java",
+        "course-python",
+        "course-c-sharp"
+      ],
+      "description": "The id of the one offer this reply is about, or none. Required for recommend and send_link."
+    },
+    "handoff_reason": {
+      "type": "STRING",
+      "enum": [
+        "none",
+        "unsure",
+        "refund",
+        "complaint",
+        "wants_human",
+        "hot_lead",
+        "abuse"
+      ],
+      "description": "Why a person must take over. none unless next_action is handoff."
+    },
+    "text": {
+      "type": "STRING",
+      "description": "The reply to send, in the language the person writes in. Plain text, at most three short sentences and one question. No URLs, no prices, no numbers that were not given to you."
+    },
+    "quick_replies": {
+      "type": "ARRAY",
+      "maxItems": 3,
+      "items": {
+        "type": "OBJECT",
+        "properties": {
+          "title": {
+            "type": "STRING",
+            "description": "The button's label. At most 20 characters."
+          },
+          "payload": {
+            "type": "STRING",
+            "description": "A short code for the button, capital letters and underscores only, like ASK_LEVEL."
+          }
+        },
+        "required": [
+          "title",
+          "payload"
+        ]
+      },
+      "description": "Up to 3 buttons, only when they help. An empty list otherwise."
+    }
+  },
+  "required": [
+    "intent",
+    "stage",
+    "next_action",
+    "offer_id",
+    "handoff_reason",
+    "text",
+    "quick_replies"
+  ]
+}

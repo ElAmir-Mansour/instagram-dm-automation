@@ -79,6 +79,15 @@ export function richProfile(): CreatorProfile {
                 id: 'main', kind: 'program', name: 'Twelve-week program', order_via: 'url', url: 'https://samifit.example/program?ref=ig', price: '$99',
                 facts: ['12 weeks', 'Video lessons', 'Weekly check-in'], bullets: ['✅ A plan every week', '✅ Replies within a day'], keyword: 'plan', primary: true,
                 campaign: { name_match: 'twelve-week', match: 'word', keywords: ['plan', 'program'], dm_template: 'Hi {username}, the program is here: {url}', public_replies: ['Sent to your DMs!', 'Check your messages'] },
+                // What the DM bot may say when it sells this offer (S4): filled everywhere, so every round trip carries it.
+                sales: {
+                    for_whom: 'Parents with under an hour a day. Not for athletes in training.', level: 'beginner',
+                    outcomes: ['Train three times a week at home', 'Sleep better'],
+                    faqs: [{ q: 'Do I need equipment?', a: 'No. A mat is enough.' }, { q: 'How long is a session?', a: 'Twenty minutes.\nSome are ten.' }],
+                    objections: [{ objection: 'I have no time', answer: 'Sessions are twenty minutes.' }],
+                    proof: [{ kind: 'stat', text: '4.8 out of 5 from 312 reviews', source: 'the program page' }, { kind: 'testimonial', text: 'I sleep better now.', source: 'a client who agreed to be quoted' }],
+                    price_note: 'The price moves with promotions; the page shows today\'s.', price_valid_until: '2026-12-31', currency: 'USD', image_url: UPLOAD_B,
+                },
             },
         ],
         audience: {

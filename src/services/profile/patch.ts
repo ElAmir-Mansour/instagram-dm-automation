@@ -72,8 +72,8 @@ type Loose = Record<string, unknown>;
 const isObj = (v: unknown): v is Loose => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
- * How deep a patch may nest. The deepest thing a profile holds is `offers[].campaign.keywords[]`, five levels down
- * from the patch's own object; this leaves room and stops a body built to overflow the stack.
+ * How deep a patch may nest. The deepest things a profile holds are `offers[].campaign.keywords[]` and `offers[].sales.faqs[]`,
+ * five levels down from the patch's own object; this leaves room and stops a body built to overflow the stack.
  */
 export const MAX_PATCH_DEPTH = 8;
 

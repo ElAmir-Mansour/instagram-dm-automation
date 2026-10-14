@@ -9,8 +9,10 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { commentFallback, KIT_KEYS, KITS, kitFor, kitForLang, offerNoun, type LanguageKit } from './kits.js';
-import { OFFER_KINDS, REGISTERS } from './types.js';
+import { guardReply } from '../dmSales/guard.js';
+import { commentFallback, KIT_KEYS, KITS, kitFor, kitForLang, offerNoun, type KitKey, type LanguageKit } from './kits.js';
+import { assertNoGulfInEgyptianOrMsa } from './testSupport.js';
+import { OFFER_KINDS, PROOF_KINDS, REGISTERS, SALES_LEVELS } from './types.js';
 
 describe('the kits', () => {
     it('are one per Arabic register plus English, in the profile\'s own register names', () => {
@@ -274,5 +276,146 @@ describe('the import fallback of every register, as drafted (for a native speake
 
     it('the Gulf kit\'s is not the owner\'s: his coupon-for-a-course text is not in any kit', () => {
         for (const key of KIT_KEYS) assert.doesNotMatch(JSON.stringify(KITS[key].importFallback), /كوبون|coupon|لكورس|دورة|الدورة/i, key);
+    });
+});
+
+// ─── The DM sales prompt (docs/DM_SALES_PLAN.md §3, S5) ──────────────────────────────────────
+
+/**
+ * The four lines a customer is sent WITHOUT a model reading their message (or after the guard refused its answer), in every register, as
+ * drafted. `NAME` stands for how the creator is called. None names anyone, none addresses the reader by gender, and none holds a link or
+ * a number. The Gulf column is the plan's own wording made generic; the other three are drafts for a native speaker to read (05 §2),
+ * and the owner reads this table before the lines are merged.
+ */
+const REVIEW_SALES: Record<KitKey, { handoff: string; unsure: string; optOut: string; calm: string }> = {
+    gulf: {
+        handoff: 'أبلغت NAME برسالتك، والرد عليك راح يكون قريب إن شاء الله 🙏',
+        unsure: 'هالمعلومة ما عندي فيها تأكيد، راح أسأل NAME وأرجع لك 🙏',
+        optOut: 'تمام، ما راح نرسل لك رسائل ثانية. شكراً لوقتك 🙏',
+        calm: 'نقدّر لو نتكلم بأسلوب محترم، ولو عندك أي سؤال يسعدنا نساعدك 🙏',
+    },
+    msa: {
+        handoff: 'أبلغتُ NAME برسالتك، وسيصلك الرد قريباً بإذن الله 🙏',
+        unsure: 'لا أملك تأكيداً لهذه المعلومة، وسأسأل NAME وأعود إليك 🙏',
+        optOut: 'حسناً، لن نرسل إليك رسائل أخرى. شكراً لوقتك 🙏',
+        calm: 'نقدّر الحوار المحترم، وإن كان لديك أي سؤال فيسعدنا أن نساعدك 🙏',
+    },
+    egyptian: {
+        handoff: 'بلّغت NAME برسالتك، والرد هيوصلك قريب إن شاء الله 🙏',
+        unsure: 'مش عندي تأكيد للمعلومة دي، هسأل NAME وأرجعلك 🙏',
+        optOut: 'تمام، مش هنبعتلك رسايل تانية. شكراً لوقتك 🙏',
+        calm: 'يا ريت نتكلم بأسلوب محترم، ولو عندك أي سؤال يسعدنا نساعدك 🙏',
+    },
+    levantine: {
+        handoff: 'بلّغت NAME برسالتك، والرد رح يوصلك قريباً إن شاء الله 🙏',
+        unsure: 'ما عندي تأكيد لهالمعلومة، رح اسأل NAME وبرجعلك 🙏',
+        optOut: 'تمام، ما رح نبعتلك رسائل تانية. شكراً لوقتك 🙏',
+        calm: 'منقدّر لو نحكي بأسلوب محترم، ولو عندك أي سؤال بيسعدنا نساعدك 🙏',
+    },
+    en: {
+        handoff: 'I\'ve passed your message to NAME, and you\'ll hear back soon 🙏',
+        unsure: 'I can\'t confirm that yet. I\'ll check with NAME and get back to you 🙏',
+        optOut: 'Understood, we won\'t message you again. Thanks for your time 🙏',
+        calm: 'Let\'s keep this respectful. If you have a question, I\'m glad to help 🙏',
+    },
+};
+
+describe('the DM sales kit: what a customer is sent without a model, as drafted (for a native speaker to read)', () => {
+    for (const key of KIT_KEYS) {
+        it(`${key}: the hand-off, the "I can't confirm", the opt-out confirmation and the calm line`, () => {
+            const lines = KITS[key].sales.lines;
+            const want = REVIEW_SALES[key];
+            assert.equal(lines.handoff('NAME'), want.handoff);
+            assert.equal(lines.unsure('NAME'), want.unsure);
+            assert.equal(lines.optOut, want.optOut);
+            assert.equal(lines.calm, want.calm);
+        });
+
+        it(`${key}: names nobody but the creator it is given, and holds no link and no number: the guard has nothing to refuse in it`, () => {
+            const lines = KITS[key].sales.lines;
+            for (const text of [lines.handoff('الاسم'), lines.unsure('Sami'), lines.optOut, lines.calm]) {
+                const g = guardReply(text, { texts: ['الاسم', 'Sami'], prices: [] });
+                assert.deepEqual(g.violations, [], text);
+                assert.deepEqual(g.linksRemoved, [], text);
+                assert.equal(g.womenEmojiRemoved, 0, text);
+            }
+            // The creator's name is the only thing the two named lines vary with.
+            assert.equal(lines.handoff('A').replace('A', 'B'), lines.handoff('B'));
+            assert.equal(lines.unsure('A').replace('A', 'B'), lines.unsure('B'));
+        });
+    }
+
+    it('an Egyptian or MSA customer is told none of the Gulf words', () => {
+        for (const key of ['egyptian', 'msa'] as const) {
+            const lines = KITS[key].sales.lines;
+            for (const text of [lines.handoff('X'), lines.unsure('X'), lines.optOut, lines.calm]) assertNoGulfInEgyptianOrMsa(text, `${key} sales line`);
+        }
+    });
+
+    it('every register has a line of each, in its own words: no register is left speaking another\'s', () => {
+        for (const key of ['msa', 'egyptian', 'levantine', 'en'] as const) {
+            for (const line of ['handoff', 'unsure', 'optOut', 'calm'] as const) {
+                const text = (k: KitKey): string => { const l = KITS[k].sales.lines[line]; return typeof l === 'function' ? l('X') : l; };
+                assert.notEqual(text(key), text('gulf'), `${key} ${line}`);
+            }
+        }
+    });
+});
+
+/** Every string the sales prompt takes from a kit and says to the model, each function called with example words. */
+function modelFacing(k: LanguageKit['sales']): string[] {
+    return [
+        k.ownerFallback, ...Object.values(k.headers), k.identity('N', 'role', 'niche'), k.noLink('Name', 'id', 'N'), k.noOffers('N'),
+        ...Object.values(k.emoji), ...k.hours.days, k.hours.line('N', 'd', '09:00', '17:00', 'UTC'), k.hours.handoff('when'),
+        ...k.rules('N'), k.conversation.stage('new'), k.conversation.qualifiers(1, 2), k.conversation.qualifiers(2, 2), k.conversation.linkSent('o'),
+        k.conversation.linkNotSent, k.conversation.comment('kw', 'o'), k.conversation.comment('kw', null),
+        k.offer.id('x'), k.offer.primary, k.offer.link, k.offer.priceLive('49', '2026-12-31'), k.offer.priceNone, k.offer.priceNote, k.offer.forWhom, k.offer.level,
+        ...SALES_LEVELS.map((l) => k.offer.levels[l]), k.offer.outcomes, k.offer.facts, k.offer.includes, k.offer.faqs, k.offer.objection, k.offer.answer,
+        k.offer.proof, ...PROOF_KINDS.map((p) => k.offer.proofKinds[p]), k.offer.source,
+    ];
+}
+
+describe('the DM sales kit: what the prompt tells the model', () => {
+    it('has every word of the prompt in every register, and none is blank', () => {
+        for (const key of KIT_KEYS) {
+            const k = KITS[key].sales;
+            for (const line of modelFacing(k)) assert.ok(line.trim().length > 0, `${key} has a blank line`);
+            assert.equal(k.hours.days.length, 7, `${key}: seven days`);
+            assert.equal(k.rules('N').length, 12, `${key}: twelve rules`);
+            assert.deepEqual(Object.keys(k.emoji).sort(), ['light', 'none', 'rich']);
+        }
+    });
+
+    it('the four Arabic registers share what is said to the model; only the customer lines are dialect', () => {
+        for (const key of ['msa', 'egyptian', 'levantine'] as const) {
+            assert.deepEqual(modelFacing(KITS[key].sales), modelFacing(KITS.gulf.sales), key);
+        }
+        assert.notDeepEqual(modelFacing(KITS.en.sales), modelFacing(KITS.gulf.sales), 'English has its own');
+    });
+
+    it('names the creator in the rules that need a person: an unanswerable question, an offer with no link', () => {
+        for (const key of KIT_KEYS) {
+            const rules = KITS[key].sales.rules('CREATOR');
+            assert.ok(rules[2]!.includes('CREATOR'), `${key}: rule 3`);
+            assert.ok(rules[6]!.includes('CREATOR'), `${key}: rule 7`);
+        }
+    });
+
+    it('writes the model\'s own fields as the schema spells them, in every register: a renamed value would leave a rule that names nothing', () => {
+        for (const key of KIT_KEYS) {
+            const text = KITS[key].sales.rules('X').join('\n');
+            for (const token of ['next_action', 'send_link', 'handoff', 'handoff_reason', 'unsure', 'close', 'offer_id', 'quick_replies', 'intent', 'stage']) {
+                assert.ok(text.includes(token), `${key}: "${token}"`);
+            }
+        }
+    });
+
+    it('asks for no emoji that shows a woman or a girl, at every level that allows emoji', () => {
+        for (const key of KIT_KEYS) {
+            const { light, rich, none } = KITS[key].sales.emoji;
+            assert.ok(/woman or a girl|امرأة أو فتاة/.test(light), `${key} light`);
+            assert.ok(/woman or a girl|امرأة أو فتاة/.test(rich), `${key} rich`);
+            assert.ok(/no emoji|أي إيموجي/i.test(none), `${key} none`);
+        }
     });
 });

@@ -7,7 +7,7 @@ import { describe, it } from 'node:test';
 import { DEFAULT_GOALS, defaultGrowthSettings } from '../growth/settings.js';
 import { defaultStudioSettings } from '../studio/settings.js';
 import { ELAMIR_GROWTH, ELAMIR_SEED_SETTINGS } from '../studio/testFixtures.js';
-import { defaultProfile, upgradeProfile } from './defaults.js';
+import { blankSales, defaultProfile, upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import { richProfile, throughJsonb } from './testSupport.js';
 import type { ContentRulePreset, CreatorProfile } from './types.js';
@@ -381,5 +381,128 @@ describe('upgradeProfile', () => {
 
     it('the result of a valid profile is a valid profile', () => {
         assert.ok('profile' in validateProfile(upgradeProfile(stored()).profile));
+    });
+});
+
+/**
+ * `Offer.sales` as a stored profile is read (docs/DM_SALES_PLAN.md §5, S4). The block is JSONB inside `creator_profiles`, so there is no
+ * migration, and the reader is what makes it safe: a reader that did not know the key would read it as an unknown field, name it in
+ * `repaired` and drop it, and the next save would erase what the owner typed. These pin that it survives, and that a bad one is
+ * repaired the way every other field is.
+ */
+describe('upgradeProfile: Offer.sales', () => {
+    const stored = (p: CreatorProfile = richProfile()): any => throughJsonb(p);
+    const main = (p: CreatorProfile): NonNullable<CreatorProfile['offers'][number]['sales']> => p.offers[1]!.sales!;
+
+    it('reads a stored sales block as it was written, keys reordered by the database, with nothing repaired', () => {
+        const raw = stored();
+        assert.notEqual(JSON.stringify(raw.offers[1].sales), JSON.stringify(richProfile().offers[1]!.sales), 'the keys really were reordered');
+        const out = upgradeProfile(raw);
+        assert.deepStrictEqual(out.repaired, []);
+        assert.deepStrictEqual(out.profile.offers[1]!.sales, richProfile().offers[1]!.sales);
+        assert.deepStrictEqual(out.profile, richProfile());
+    });
+
+    it('leaves an offer with no block without one: an absent key stays absent', () => {
+        const out = upgradeProfile(stored());
+        assert.equal('sales' in out.profile.offers[0]!, false);
+        assert.deepStrictEqual(out.repaired, []);
+    });
+
+    it('fills a field a release added later from the blank block, section by section, and that is not a repair', () => {
+        const raw = stored();
+        delete raw.offers[1].sales.currency;
+        delete raw.offers[1].sales.proof;
+        delete raw.offers[1].sales.level;
+        const out = upgradeProfile(raw);
+        assert.equal(main(out.profile).currency, '');
+        assert.deepStrictEqual(main(out.profile).proof, []);
+        assert.equal(main(out.profile).level, 'any');
+        assert.equal(main(out.profile).for_whom, richProfile().offers[1]!.sales!.for_whom, 'what was stored is kept');
+        assert.deepStrictEqual(out.repaired, []);
+    });
+
+    it('reads an empty block as the blank one: it states no price and pitches at no one', () => {
+        const raw = stored();
+        raw.offers[1].sales = {};
+        const out = upgradeProfile(raw);
+        assert.deepStrictEqual(main(out.profile), blankSales());
+        assert.equal(main(out.profile).price_valid_until, '');
+        assert.deepStrictEqual(out.repaired, []);
+        assert.ok('profile' in validateProfile(out.profile));
+    });
+
+    it('drops a key the block has no field for, and says so', () => {
+        const raw = stored();
+        raw.offers[1].sales.mystery = 1;
+        const out = upgradeProfile(raw);
+        assert.deepStrictEqual(out.profile, richProfile());
+        assert.deepStrictEqual(out.repaired, ['offers[1].sales.mystery']);
+    });
+
+    it('resets what is stored in the wrong shape to the blank value, and names the path', () => {
+        const cases: [string, (raw: any) => void, string, unknown][] = [
+            ['a block that is a string', (r) => { r.offers[1].sales = 'x'; }, 'offers[1].sales', undefined],
+            ['a block that is a list', (r) => { r.offers[1].sales = []; }, 'offers[1].sales', undefined],
+            ['a level outside its list', (r) => { r.offers[1].sales.level = 'expert'; }, 'offers[1].sales.level', 'any'],
+            ['a level that is a number', (r) => { r.offers[1].sales.level = 3; }, 'offers[1].sales.level', 'any'],
+            ['for_whom that is a number', (r) => { r.offers[1].sales.for_whom = 5; }, 'offers[1].sales.for_whom', ''],
+            ['outcomes that are not a list', (r) => { r.offers[1].sales.outcomes = 'a, b'; }, 'offers[1].sales.outcomes', []],
+            ['a price date that is a number', (r) => { r.offers[1].sales.price_valid_until = 20261231; }, 'offers[1].sales.price_valid_until', ''],
+            ['a currency that is a list', (r) => { r.offers[1].sales.currency = ['USD']; }, 'offers[1].sales.currency', ''],
+            ['an image that is a number', (r) => { r.offers[1].sales.image_url = 1; }, 'offers[1].sales.image_url', ''],
+        ];
+        for (const [what, edit, path, value] of cases) {
+            const raw = stored();
+            edit(raw);
+            const out = upgradeProfile(raw);
+            assert.deepStrictEqual(out.repaired, [path], what);
+            const read = path === 'offers[1].sales' ? out.profile.offers[1]!.sales : (main(out.profile) as unknown as Record<string, unknown>)[path.split('.').pop()!];
+            assert.deepStrictEqual(read, value, what);
+        }
+    });
+
+    it('drops a list entry that is not what its list holds, and keeps the others', () => {
+        const raw = stored();
+        raw.offers[1].sales.faqs = [{ q: 'ok', a: 'fine' }, { q: 'no answer' }, 'x', { q: 5, a: 'a' }];
+        raw.offers[1].sales.objections = [{ objection: 'o', answer: 'a' }, { objection: 'o' }];
+        raw.offers[1].sales.outcomes = ['one', 2, null, 'three'];
+        raw.offers[1].sales.proof = [
+            { kind: 'stat', text: 't', source: 's' }, { kind: 'rumour', text: 't', source: 's' }, { kind: 'stat', text: 't' }, { text: 't', source: 's' },
+        ];
+        const out = upgradeProfile(raw);
+        assert.deepStrictEqual(main(out.profile).faqs, [{ q: 'ok', a: 'fine' }]);
+        assert.deepStrictEqual(main(out.profile).objections, [{ objection: 'o', answer: 'a' }]);
+        assert.deepStrictEqual(main(out.profile).outcomes, ['one', 'three']);
+        assert.deepStrictEqual(main(out.profile).proof, [{ kind: 'stat', text: 't', source: 's' }]);
+        assert.deepStrictEqual([...out.repaired].sort(), ['offers[1].sales.faqs', 'offers[1].sales.objections', 'offers[1].sales.outcomes', 'offers[1].sales.proof']);
+    });
+
+    it('with a schema newer than this release, keeps what a newer release added to the block', () => {
+        const raw = stored();
+        raw.schema = 2;
+        raw.offers[1].sales.guarantee = { days: 30 };
+        const out = upgradeProfile(raw);
+        assert.equal(out.newerSchema, true);
+        assert.deepStrictEqual(out.repaired, []);
+        assert.deepStrictEqual((main(out.profile) as unknown as Record<string, unknown>).guarantee, { days: 30 });
+    });
+
+    it('does not share anything with what it was given', () => {
+        const raw = stored();
+        const out = upgradeProfile(raw);
+        main(out.profile).outcomes.push('JUNK');
+        main(out.profile).faqs[0]!.q = 'JUNK';
+        main(out.profile).proof[0]!.text = 'JUNK';
+        assert.deepStrictEqual(raw, stored());
+    });
+
+    it('blankSales() is a block of its own each time, and a valid one when it sits on an offer', () => {
+        const a = blankSales();
+        a.outcomes.push('x');
+        assert.deepStrictEqual(blankSales().outcomes, []);
+        const p = richProfile();
+        p.offers[1]!.sales = blankSales();
+        assert.ok('profile' in validateProfile(p));
     });
 });

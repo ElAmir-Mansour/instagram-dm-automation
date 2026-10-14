@@ -332,11 +332,12 @@ describe('pruneOrphanedMedia — what still counts as in use', () => {
         assert.match(clause, /NOT EXISTS \( SELECT 1 FROM studio_settings ss WHERE ss\.infographic->>'photo_url' LIKE '%' \|\| m\.id::text \|\| '%'/);
     });
 
-    it('keeps the portrait and the logo a stored Creator Profile names', async () => {
+    it('keeps the portrait and the logo a stored Creator Profile names, and the cover an offer\'s sales block names', async () => {
         // The portrait is mirrored into studio_settings, but the profile is the source of truth and the logo is
-        // held by no setting at all: a swept logo is a broken image on every infographic.
+        // held by no setting at all: a swept logo is a broken image on every infographic. An offer's sales cover
+        // (`offers[].sales.image_url`) lives in a list, so the offers are read whole: an upload's id anywhere in them keeps it.
         const clause = await keepClause();
-        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM creator_profiles cp WHERE \(COALESCE\(cp\.profile->'brand'->>'portrait_url', ''\) \|\| ' ' \|\| COALESCE\(cp\.profile->'brand'->>'logo_url', ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
+        assert.match(clause, /NOT EXISTS \( SELECT 1 FROM creator_profiles cp WHERE \(COALESCE\(cp\.profile->'brand'->>'portrait_url', ''\) \|\| ' ' \|\| COALESCE\(cp\.profile->'brand'->>'logo_url', ''\) \|\| ' ' \|\| COALESCE\(\(cp\.profile->'offers'\)::text, ''\)\) LIKE '%' \|\| m\.id::text \|\| '%'/);
     });
 
     it('requires every guard at once: each NOT EXISTS is ANDed, never ORed', async () => {

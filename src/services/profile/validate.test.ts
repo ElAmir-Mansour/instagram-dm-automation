@@ -11,11 +11,12 @@ import {
     DISPLAY_FONTS, defaultStudioSettings, INFOGRAPHIC_SOCIALS, INFOGRAPHIC_THEMES, settingsProblems,
 } from '../studio/settings.js';
 import type { StudioSettings } from '../studio/settingsTypes.js';
-import { defaultProfile } from './defaults.js';
+import { SALES_AR, SALES_EN } from '../dmSales/testFixtures.js';
+import { blankSales, defaultProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import { richProfile, UPLOAD_A, UPLOAD_B } from './testSupport.js';
 import {
-    CONTENT_RULE_PRESETS, FONTS, SOCIALS, THEMES, type CreatorProfile, type Offer,
+    CONTENT_RULE_PRESETS, FONTS, PROOF_KINDS, SALES_LEVELS, SOCIALS, THEMES, type CreatorProfile, type Offer, type OfferSales,
 } from './types.js';
 import { activationMissing, isHttpsUrl, isTimeZone, OFFER_URL, PROFILE_LIMITS, profileBytes, UPLOAD_URL, validateProfile, type ListLimit } from './validate.js';
 
@@ -458,6 +459,157 @@ describe('validateProfile: the rules that cross fields', () => {
     it('a presenter may be absent, and may have no name', () => {
         accepted((p) => { p.presenter = null; });
         accepted((p) => { p.presenter = { name: '', pronouns: 'he', on_camera: 'face' }; });
+    });
+});
+
+/**
+ * `Offer.sales` (docs/DM_SALES_PLAN.md §5, S4): the owner's own words about one offer, which the DM bot sells from. Optional on an offer,
+ * every field required once it is there; all limits are new, so none has an older floor. The block rides on the second offer, the one
+ * with a campaign, so a test that passes also shows the two optional blocks live side by side.
+ */
+describe('validateProfile: Offer.sales', () => {
+    /** The profile with `sales` on `offers[1]`, `edit` applied to it. Starts from a full block. */
+    const withSales = (edit: (s: OfferSales) => void = () => {}) => (p: CreatorProfile): void => {
+        p.offers[1]!.sales = clone(SALES_EN);
+        edit(p.offers[1]!.sales);
+    };
+    const sets = (path: string, edit: (s: OfferSales, v: any) => void, good: unknown, bad: unknown, pattern: RegExp): void => {
+        accepted(withSales((s) => edit(s, good)));
+        refused(withSales((s) => edit(s, bad)), `offers[1].sales.${path}`, pattern);
+    };
+
+    it('is optional: an offer without one, with a blank one and with a full one (in either language) are all fine', () => {
+        accepted((p) => { delete p.offers[1]!.sales; });
+        accepted(withSales(() => {}));
+        accepted((p) => { p.offers[1]!.sales = blankSales(); });
+        accepted((p) => { p.offers[1]!.sales = clone(SALES_AR); });
+        accepted((p) => { p.offers.forEach((o) => { o.sales = clone(SALES_EN); }); });
+    });
+
+    it('needs every field of it once it is there, and has no other', () => {
+        for (const key of Object.keys(blankSales())) {
+            refused((p) => { p.offers[1]!.sales = blankSales(); delete (p.offers[1]!.sales as Partial<OfferSales>)[key as keyof OfferSales]; }, `offers[1].sales.${key}`, /is required/);
+        }
+        refused((p) => { p.offers[1]!.sales = { ...blankSales(), mystery: 1 } as OfferSales; }, 'offers[1].sales.mystery', /is not a profile field/);
+        refused((p) => { (p.offers[1] as { sales: unknown }).sales = 'text'; }, 'offers[1].sales', /must be an object/);
+        refused((p) => { (p.offers[1] as { sales: unknown }).sales = null; }, 'offers[1].sales', /must be an object/);
+        refused((p) => { (p.offers[1] as { sales: unknown }).sales = []; }, 'offers[1].sales', /must be an object/);
+    });
+
+    const textLimits: [string, number, (s: OfferSales, v: string) => void][] = [
+        ['for_whom', PROFILE_LIMITS.salesForWhom, (s, v) => { s.for_whom = v; }],
+        ['price_note', PROFILE_LIMITS.salesPriceNote, (s, v) => { s.price_note = v; }],
+        ['faqs[0].q', PROFILE_LIMITS.salesFaqQuestion, (s, v) => { s.faqs[0]!.q = v; }],
+        ['faqs[0].a', PROFILE_LIMITS.salesFaqAnswer, (s, v) => { s.faqs[0]!.a = v; }],
+        ['objections[0].objection', PROFILE_LIMITS.salesObjection, (s, v) => { s.objections[0]!.objection = v; }],
+        ['objections[0].answer', PROFILE_LIMITS.salesObjectionAnswer, (s, v) => { s.objections[0]!.answer = v; }],
+        ['proof[0].text', PROFILE_LIMITS.salesProofText, (s, v) => { s.proof[0]!.text = v; }],
+        ['proof[0].source', PROFILE_LIMITS.salesProofSource, (s, v) => { s.proof[0]!.source = v; }],
+    ];
+    for (const [path, max, set] of textLimits) {
+        it(`sales.${path}: ${max} characters`, () => {
+            accepted(withSales((s) => set(s, text(max))));
+            refused(withSales((s) => set(s, text(max + 1))), `offers[1].sales.${path}`, new RegExp(`the limit is ${max}`));
+        });
+    }
+
+    it('has the limits the plan names: 300, 8 × 160, 15 × (200, 600), 10 × (160, 600), 8 × (300, 120), 200', () => {
+        assert.deepEqual(
+            [PROFILE_LIMITS.salesForWhom, PROFILE_LIMITS.salesOutcomes, PROFILE_LIMITS.salesFaqs, PROFILE_LIMITS.salesFaqQuestion, PROFILE_LIMITS.salesFaqAnswer,
+                PROFILE_LIMITS.salesObjections, PROFILE_LIMITS.salesObjection, PROFILE_LIMITS.salesObjectionAnswer, PROFILE_LIMITS.salesProof,
+                PROFILE_LIMITS.salesProofText, PROFILE_LIMITS.salesProofSource, PROFILE_LIMITS.salesPriceNote],
+            [300, { items: 8, each: 160 }, 15, 200, 600, 10, 160, 600, 8, 300, 120, 200],
+        );
+    });
+
+    it('outcomes: eight lines of 160, each one line and each there', () => {
+        accepted(withSales((s) => { s.outcomes = Array.from({ length: 8 }, () => text(160)); }));
+        refused(withSales((s) => { s.outcomes = Array.from({ length: 9 }, () => 'x'); }), 'offers[1].sales.outcomes', /holds at most 8/);
+        refused(withSales((s) => { s.outcomes = [text(161)]; }), 'offers[1].sales.outcomes[0]', /the limit is 160/);
+        refused(withSales((s) => { s.outcomes = ['one\ntwo']; }), 'offers[1].sales.outcomes[0]', /must be one line/);
+        refused(withSales((s) => { s.outcomes = ['ok', '  ']; }), 'offers[1].sales.outcomes[1]', /is required/);
+        refused(withSales((s) => { s.outcomes = 'text' as unknown as string[]; }), 'offers[1].sales.outcomes', /must be a list/);
+    });
+
+    it('faqs, objections and proof: their own counts, and each entry whole', () => {
+        accepted(withSales((s) => { s.faqs = Array.from({ length: 15 }, () => ({ q: 'q', a: 'a' })); }));
+        refused(withSales((s) => { s.faqs = Array.from({ length: 16 }, () => ({ q: 'q', a: 'a' })); }), 'offers[1].sales.faqs', /holds at most 15/);
+        accepted(withSales((s) => { s.objections = Array.from({ length: 10 }, () => ({ objection: 'o', answer: 'a' })); }));
+        refused(withSales((s) => { s.objections = Array.from({ length: 11 }, () => ({ objection: 'o', answer: 'a' })); }), 'offers[1].sales.objections', /holds at most 10/);
+        accepted(withSales((s) => { s.proof = Array.from({ length: 8 }, () => ({ kind: 'stat' as const, text: 't', source: 's' })); }));
+        refused(withSales((s) => { s.proof = Array.from({ length: 9 }, () => ({ kind: 'stat' as const, text: 't', source: 's' })); }), 'offers[1].sales.proof', /holds at most 8/);
+
+        refused(withSales((s) => { s.faqs = [{ q: '', a: 'a' }]; }), 'offers[1].sales.faqs[0].q', /is required/);
+        refused(withSales((s) => { s.faqs = [{ q: 'q', a: '  ' }]; }), 'offers[1].sales.faqs[0].a', /is required/);
+        refused(withSales((s) => { s.faqs = [{ q: 'two\nlines', a: 'a' }]; }), 'offers[1].sales.faqs[0].q', /must be one line/);
+        accepted(withSales((s) => { s.faqs = [{ q: 'q', a: 'an answer\nover two lines' }]; }));
+        refused(withSales((s) => { s.faqs = [{ q: 'q' } as never]; }), 'offers[1].sales.faqs[0].a', /is required/);
+        refused(withSales((s) => { s.faqs = [{ q: 'q', a: 'a', extra: 1 } as never]; }), 'offers[1].sales.faqs[0].extra', /is not a profile field/);
+        refused(withSales((s) => { s.objections = [{ objection: '', answer: 'a' }]; }), 'offers[1].sales.objections[0].objection', /is required/);
+        refused(withSales((s) => { s.objections = [{ objection: 'o', answer: '' }]; }), 'offers[1].sales.objections[0].answer', /is required/);
+        refused(withSales((s) => { s.faqs = 'text' as never; }), 'offers[1].sales.faqs', /must be a list/);
+        refused(withSales((s) => { s.faqs = ['text'] as never; }), 'offers[1].sales.faqs[0]', /must be an object/);
+    });
+
+    it('proof: of a known kind, with its words and where they come from: nothing in it is anonymous', () => {
+        for (const kind of PROOF_KINDS) accepted(withSales((s) => { s.proof = [{ kind, text: 'real', source: 'the offer page' }]; }));
+        refused(withSales((s) => { s.proof = [{ kind: 'rumour' as never, text: 't', source: 's' }]; }), 'offers[1].sales.proof[0].kind', /must be one of stat, testimonial/);
+        refused(withSales((s) => { s.proof = [{ kind: 'stat', text: 't', source: '' }]; }), 'offers[1].sales.proof[0].source', /is required/);
+        refused(withSales((s) => { s.proof = [{ kind: 'stat', text: 't', source: '   ' }]; }), 'offers[1].sales.proof[0].source', /is required/);
+        refused(withSales((s) => { s.proof = [{ kind: 'stat', text: '', source: 's' }]; }), 'offers[1].sales.proof[0].text', /is required/);
+        refused(withSales((s) => { s.proof = [{ kind: 'stat', text: 't', source: 'a\nb' }]; }), 'offers[1].sales.proof[0].source', /must be one line/);
+        refused(withSales((s) => { s.proof = [{ kind: 'stat', text: 't' } as never]; }), 'offers[1].sales.proof[0].source', /is required/);
+    });
+
+    it('level: one of beginner, intermediate, advanced, any', () => {
+        for (const level of SALES_LEVELS) accepted(withSales((s) => { s.level = level; }));
+        sets('level', (s, v) => { s.level = v; }, 'any', 'mixed', /must be one of beginner, intermediate, advanced, any/);
+        sets('level', (s, v) => { s.level = v; }, 'advanced', '', /must be one of/);
+    });
+
+    it('currency: an ISO 4217 code the runtime knows, or empty', () => {
+        for (const good of ['', 'USD', 'SAR', 'EGP', 'AED', 'EUR', 'KWD']) accepted(withSales((s) => { s.currency = good; }));
+        for (const bad of ['usd', 'US', 'USDD', 'SAU', 'ZZZ', 'U$D', ' USD', '$']) {
+            refused(withSales((s) => { s.currency = bad; }), 'offers[1].sales.currency', /must be a currency code like USD or SAR, or empty/);
+        }
+        refused(withSales((s) => { s.currency = 5 as unknown as string; }), 'offers[1].sales.currency', /must be text/);
+        refused(withSales((s) => { s.currency = null as unknown as string; }), 'offers[1].sales.currency', /must be text/);
+    });
+
+    it('price_valid_until: a day on the calendar as YYYY-MM-DD, or empty, and a date in the past is still data', () => {
+        for (const good of ['', '2026-12-31', '2024-02-29', '2020-01-01', '2999-12-31']) accepted(withSales((s) => { s.price_valid_until = good; }));
+        for (const bad of ['2026-02-30', '2026-13-01', '2026-00-10', '2026-12-32', '2025-02-29', '31-12-2026', '2026-1-1', '2026/12/31', '20261231', 'soon', '2026-12-31T00:00:00Z', ' 2026-12-31']) {
+            refused(withSales((s) => { s.price_valid_until = bad; }), 'offers[1].sales.price_valid_until', /must be a date like 2026-12-31, or empty/);
+        }
+        refused(withSales((s) => { s.price_valid_until = 20261231 as unknown as string; }), 'offers[1].sales.price_valid_until', /must be text/);
+        refused(withSales((s) => { s.price_valid_until = null as unknown as string; }), 'offers[1].sales.price_valid_until', /must be text/);
+    });
+
+    it('image_url: one of the owner\'s own uploads, or empty: never a link to somewhere else, never null', () => {
+        accepted(withSales((s) => { s.image_url = ''; }));
+        accepted(withSales((s) => { s.image_url = UPLOAD_A; }));
+        accepted(withSales((s) => { s.image_url = UPLOAD_B; }));
+        for (const bad of ['https://example.com/cover.jpg', 'http://x.test/api/uploads/00000000-0000-4000-8000-000000000001', `${UPLOAD_A}?x=1`, '/api/uploads/1', 'cover.jpg']) {
+            refused(withSales((s) => { s.image_url = bad; }), 'offers[1].sales.image_url', /must be one of your uploads/);
+        }
+        refused(withSales((s) => { s.image_url = null as unknown as string; }), 'offers[1].sales.image_url', /must be text/);
+    });
+
+    it('reports one problem for one mistake, with the offer it is in', () => {
+        const found = problems((p) => { p.offers[0]!.sales = { ...blankSales(), currency: 'nope' }; p.offers[1]!.sales = clone(SALES_EN); });
+        assert.deepEqual(found, ['offers[0].sales.currency must be a currency code like USD or SAR, or empty']);
+    });
+
+    it('is held to the whole profile\'s 128 KB like everything else: three offers with every field full do not fit, one does', () => {
+        const full = (): OfferSales => ({
+            for_whom: 'ك'.repeat(300), level: 'beginner', outcomes: Array.from({ length: 8 }, () => 'ك'.repeat(160)),
+            faqs: Array.from({ length: 15 }, () => ({ q: 'ك'.repeat(200), a: 'ك'.repeat(600) })),
+            objections: Array.from({ length: 10 }, () => ({ objection: 'ك'.repeat(160), answer: 'ك'.repeat(600) })),
+            proof: Array.from({ length: 8 }, () => ({ kind: 'stat' as const, text: 'ك'.repeat(300), source: 'ك'.repeat(120) })),
+            price_note: 'ك'.repeat(200), price_valid_until: '2026-12-31', currency: 'USD', image_url: UPLOAD_A,
+        });
+        accepted((p) => { p.offers[1]!.sales = full(); });
+        refused((p) => { p.offers.forEach((o) => { o.sales = full(); }); p.offers.push({ ...clone(p.offers[0]!), id: 'third', sales: full() }); }, 'the profile is', /the limit is 131072/);
     });
 });
 

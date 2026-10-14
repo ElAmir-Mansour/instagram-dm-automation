@@ -320,6 +320,10 @@ const MEDIA_CANDIDATES_BASE_SQL = `
  * the profile is the only thing that names it, and for the logo, which no setting holds. It is the last guard,
  * so a database without the table can run the rest (`withProfileTable`).
  *
+ * The offers are read whole (`offers` as text), because an offer's `sales.image_url` (the cover the owner picked for the DM
+ * bot, docs/DM_SALES_PLAN.md §5) sits in a list, and a file a profile names must outlive the sweep. A match on an upload's
+ * id anywhere in the offers is a reason to keep it: it can only make the sweep delete fewer files.
+ *
  * Only the CURRENT profile is read. Media named solely by an old `creator_profile_versions` row is not protected: a
  * superseded portrait or logo goes with the rest once nothing current names it, so restoring an old version (there
  * is no such feature yet) would show a broken image. Keeping every version's files forever would keep every
@@ -329,7 +333,8 @@ const KEPT_BY_PROFILE_SQL = `
                        AND NOT EXISTS (
                            SELECT 1
                              FROM creator_profiles cp
-                            WHERE (COALESCE(cp.profile->'brand'->>'portrait_url', '') || ' ' || COALESCE(cp.profile->'brand'->>'logo_url', ''))
+                            WHERE (COALESCE(cp.profile->'brand'->>'portrait_url', '') || ' ' || COALESCE(cp.profile->'brand'->>'logo_url', '')
+                                   || ' ' || COALESCE((cp.profile->'offers')::text, ''))
                                   LIKE '%' || m.id::text || '%'
                        )`;
 

@@ -23,6 +23,10 @@ export const OFFER_KINDS = ['course', 'coaching', 'program', 'product', 'service
 export const ORDER_VIA = ['url', 'dm'] as const;
 export const MATCH_MODES = ['substring', 'word'] as const;
 export const LEVELS = ['beginner', 'intermediate', 'advanced', 'mixed'] as const;
+/** Who an offer is pitched at (`Offer.sales.level`): 'any' when it asks for no prior experience and the owner assumes none. */
+export const SALES_LEVELS = ['beginner', 'intermediate', 'advanced', 'any'] as const;
+/** A piece of proof is a number the owner can point to, or something a named person said. */
+export const PROOF_KINDS = ['stat', 'testimonial'] as const;
 export const EMOJI_LEVELS = ['none', 'light', 'rich'] as const;
 /** Who the Arabic lines address: a man, a woman, a group, or no one in particular (the pools are written for one reader). */
 export const ADDRESS = ['masc', 'fem', 'plural', 'neutral'] as const;
@@ -46,6 +50,8 @@ export type OfferKind = (typeof OFFER_KINDS)[number];
 export type OrderVia = (typeof ORDER_VIA)[number];
 export type MatchMode = (typeof MATCH_MODES)[number];
 export type AudienceLevel = (typeof LEVELS)[number];
+export type SalesLevel = (typeof SALES_LEVELS)[number];
+export type ProofKind = (typeof PROOF_KINDS)[number];
 export type EmojiLevel = (typeof EMOJI_LEVELS)[number];
 export type Address = (typeof ADDRESS)[number];
 export type Pronouns = (typeof PRONOUNS)[number];
@@ -78,6 +84,57 @@ export interface OfferCampaign {
     public_replies: string[];
 }
 
+export interface OfferSalesFaq {
+    q: string;
+    a: string;
+}
+
+export interface OfferSalesObjection {
+    objection: string;
+    answer: string;
+}
+
+export interface OfferSalesProof {
+    kind: ProofKind;
+    text: string;
+    /** Where it comes from: the offer's own page, or a named person who agreed to be quoted. Required, so nothing is anonymous. */
+    source: string;
+}
+
+/**
+ * What the DM bot may say when it sells an offer (docs/DM_SALES_PLAN.md §5): the owner's own words about who the offer is for, what
+ * it gives, the questions and objections people raise, and the proof he can point to. A person typed all of it; the bot quotes it and
+ * invents nothing, and a field left empty is a fact the bot does not have.
+ *
+ *   for_whom            who it fits, and who it does not
+ *   level               'any' until the owner says otherwise
+ *   outcomes            what a person can do afterwards, one short line each
+ *   faqs                questions about THIS offer (`dm.faq` holds the general ones)
+ *   objections          what people say against it ("too expensive", "no time") and the owner's answer to each
+ *   proof               real student counts, ratings and testimonials only, each with where it comes from
+ *   price_note          one sentence on how the price behaves ("it moves with sales; the page shows today's")
+ *   price_valid_until   'YYYY-MM-DD', or '' for none. **The bot states `Offer.price` only while this date has not passed**, and it
+ *                       is the only thing that lets the bot say a price will end: no date, no number, no urgency
+ *   currency            ISO 4217 ('USD', 'SAR'), or '' when the price text says it already
+ *   image_url           a cover from the owner's own uploads, or ''. The model never picks an image
+ *
+ * Optional on an offer; once it is there every field is required (a reader fills a stored block's gaps from `blankSales()`, as it
+ * does for a campaign). It is JSONB inside `creator_profiles`, so there is no migration. A reader older than this field would refuse
+ * a profile that carries it, so the reader and the editor ship together and nothing writes it before they are live.
+ */
+export interface OfferSales {
+    for_whom: string;
+    level: SalesLevel;
+    outcomes: string[];
+    faqs: OfferSalesFaq[];
+    objections: OfferSalesObjection[];
+    proof: OfferSalesProof[];
+    price_note: string;
+    price_valid_until: string;
+    currency: string;
+    image_url: string;
+}
+
 export interface Offer {
     id: string;
     kind: OfferKind;
@@ -91,6 +148,8 @@ export interface Offer {
     keyword: string;
     primary: boolean;
     campaign?: OfferCampaign;
+    /** What the DM bot may say when it sells this offer. Absent until the owner writes some. */
+    sales?: OfferSales;
 }
 
 export interface Presenter {

@@ -448,6 +448,24 @@ describe('intoProfile', () => {
         assert.deepStrictEqual(p.offers[1]!.campaign, rich.offers[1]!.campaign);
     });
 
+    it('keeps an offer\'s sales block, the primary\'s included: the Studio\'s product is a name, a link, facts and bullets, so a Studio write never erases what the DM bot sells from', () => {
+        const rich = richProfile();
+        assert.ok(rich.offers[1]!.primary && rich.offers[1]!.sales, 'the fixture\'s primary offer has one');
+        // A Studio write that changes the product the primary offer is read as.
+        const edited = { ...ELAMIR_SEED_SETTINGS, product: { ...ELAMIR_SEED_SETTINGS.product, name: 'Renamed in the Studio', facts: ['one fact'] } };
+        const p = intoProfile(rich, edited);
+        assert.equal(p.offers[1]!.name, 'Renamed in the Studio', 'the write did land on the primary offer');
+        assert.deepStrictEqual(p.offers[1]!.sales, rich.offers[1]!.sales);
+        assert.deepStrictEqual(p.offers[0], rich.offers[0]);
+    });
+
+    it('does not show a sales block to the Studio: the view of the product is the same with it and without it', () => {
+        const rich = richProfile();
+        const bare = structuredClone(rich);
+        for (const o of bare.offers) delete o.sales;
+        assert.deepStrictEqual(studioView(ELAMIR_SEED_SETTINGS, rich), studioView(ELAMIR_SEED_SETTINGS, bare), 'no prompt builder that reads the settings can see it');
+    });
+
     it('keeps the profile\'s audience and goals when no Growth settings are given, and replaces them when they are', () => {
         const rich = richProfile();
         const kept = intoProfile(rich, ELAMIR_SEED_SETTINGS);
