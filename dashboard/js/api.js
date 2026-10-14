@@ -150,6 +150,13 @@ const API = {
         method: 'PUT', body: JSON.stringify(body),
     }),
     completeOnboarding: () => API.request('/onboarding/complete', { method: 'POST', body: '{}' }),
+    // The proof samples, W5 (P25). `startProof` makes the cards that are missing (once; a reload is free) and can take half a minute; `getProof` only
+    // reads. A verdict is `{ verdict: 'approved' | 'edited' | 'rejected', edited_text?, reasons? }`; `proofRegenerate` writes a card again with a hint
+    // (a chip's code or the person's own words). The answers are `{ state, cards, failure, limits }`, `{ card }` and `{ state, card?, failure, limits }`.
+    getProof: () => API.request('/onboarding/proof'),
+    startProof: () => API.request('/onboarding/proof', { method: 'POST', body: '{}' }),
+    proofVerdict: (id, body) => API.request(`/onboarding/proof/${encodeURIComponent(id)}/verdict`, { method: 'POST', body: JSON.stringify(body) }),
+    proofRegenerate: (id, body) => API.request(`/onboarding/proof/${encodeURIComponent(id)}/regenerate`, { method: 'POST', body: JSON.stringify(body) }),
     patchProfile: (version, patch) => API.request('/profile', { method: 'PATCH', body: JSON.stringify({ version, patch }) }),
     /** The profile and the version a patch must send back (the one-field sheet, `ProfileAsk`). */
     getProfile: () => API.request('/profile'),

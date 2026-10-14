@@ -98,10 +98,10 @@ describe('the registry with the flags applied', () => {
         assert.deepEqual(stepsFor(), WIZARD_STEPS.map((s) => ({ ...s })));
         assert.deepEqual(stepsFor(NO_FLAGS), WIZARD_STEPS.map((s) => ({ ...s })));
         const raised = stepsFor({ connect: true });
-        assert.deepEqual(orderOf(raised), ['about', 'voice', 'brand', 'connect', 'done']);
+        assert.deepEqual(orderOf(raised), ['about', 'voice', 'brand', 'connect', 'proof', 'done']);
         assert.deepEqual(
             raised.filter((s, i) => s.enabled !== WIZARD_STEPS[i]!.enabled).map((s) => s.id), ['connect'],
-            'nothing else moves: the proof step stays off until its own PR'
+            'nothing else moves: the proof step is on in the registry itself, and a flag cannot switch it off'
         );
         assert.equal(raised.find((s) => s.id === 'connect')!.required, false, 'and it is optional');
     });
@@ -112,13 +112,13 @@ describe('the registry with the flags applied', () => {
     });
 
     it('puts W4 after W3 for Continue, and settles on it before the last screen', () => {
-        assert.equal(nextStepAfter('brand'), 'done');
+        assert.equal(nextStepAfter('brand'), 'proof');
         assert.equal(nextStepAfter('brand', { connect: true }), 'connect');
-        assert.equal(nextStepAfter('connect', { connect: true }), 'done');
+        assert.equal(nextStepAfter('connect', { connect: true }), 'proof', 'and from W4 to the proof samples');
     });
 
     it('holds nobody back with it off, and holds exactly the unsettled W4 open with it on', () => {
-        const steps = { about: done, voice: done, brand: done };
+        const steps = { about: done, voice: done, brand: done, proof: done };
         assert.equal(firstOpenStep(steps), 'done');
         assert.equal(firstOpenStep(steps, { connect: true }), 'connect');
         assert.equal(firstOpenStep({ ...steps, connect: { status: 'skipped' } }, { connect: true }), 'done');
@@ -126,7 +126,7 @@ describe('the registry with the flags applied', () => {
     });
 
     it('resumes on W4 only when it is on, and falls back when it is switched off again', () => {
-        const state = { status: 'in_progress' as const, current_step: 'connect', steps: { about: done, voice: done, brand: done } };
+        const state = { status: 'in_progress' as const, current_step: 'connect', steps: { about: done, voice: done, brand: done, proof: done } };
         assert.equal(resumeStep(state, { connect: true }), 'connect');
         assert.equal(resumeStep(state), 'done', 'a step that is switched off is not a place to resume');
         assert.equal(resumeStep({ ...state, status: 'completed' }, { connect: true }), 'done');
@@ -151,7 +151,7 @@ describe('reading what the operator switched on', () => {
         world.db.failOn = /app_settings/;
         assert.deepEqual(await readWizardFlags(), { connect: false });
         const { body } = await getState();
-        assert.deepEqual(orderOf(body.order), ['about', 'voice', 'brand', 'done']);
+        assert.deepEqual(orderOf(body.order), ['about', 'voice', 'brand', 'proof', 'done']);
     });
 });
 
@@ -160,13 +160,13 @@ describe('reading what the operator switched on', () => {
 describe('with "Connect with Facebook" off (the default)', () => {
     it('lists W4 as switched off, and resumes past it', async () => {
         const { body } = await getState();
-        assert.deepEqual(orderOf(body.order), ['about', 'voice', 'brand', 'done']);
+        assert.deepEqual(orderOf(body.order), ['about', 'voice', 'brand', 'proof', 'done']);
         assert.equal(body.order.find((s: { id: string }) => s.id === 'connect').enabled, false);
         await putStep('about', { status: 'done' });
         await putStep('voice', { status: 'done' });
         const reply = await putStep('brand', { status: 'done' });
-        assert.equal(reply.body.step, 'done', 'Continue on W3 leads to the last screen');
-        assert.equal(row().current_step, 'done');
+        assert.equal(reply.body.step, 'proof', 'Continue on W3 leads past W4 to the proof samples');
+        assert.equal(row().current_step, 'proof');
     });
 
     it('refuses every write to the step, as it always did', async () => {
@@ -191,12 +191,12 @@ describe('with "Connect with Facebook" on', () => {
 
     it('lists W4 as a step after W3, optional', async () => {
         const { body } = await getState();
-        assert.deepEqual(orderOf(body.order), ['about', 'voice', 'brand', 'connect', 'done']);
+        assert.deepEqual(orderOf(body.order), ['about', 'voice', 'brand', 'connect', 'proof', 'done']);
         const connect = body.order.find((s: { id: string }) => s.id === 'connect');
         assert.deepEqual({ code: connect.code, required: connect.required, enabled: connect.enabled }, { code: 'W4', required: false, enabled: true });
     });
 
-    it('leads from W3 to W4, and from W4 to the last screen, whether it is finished or skipped', async () => {
+    it('leads from W3 to W4, and from W4 to the proof samples, whether it is finished or skipped', async () => {
         await putStep('about', { status: 'done' });
         await putStep('voice', { status: 'done' });
         const afterBrand = await putStep('brand', { status: 'done' });
@@ -205,7 +205,7 @@ describe('with "Connect with Facebook" on', () => {
 
         const skipped = await putStep('connect', { status: 'skipped' });
         assert.equal(skipped.status, 200, 'it is not required');
-        assert.equal(skipped.body.step, 'done');
+        assert.equal(skipped.body.step, 'proof');
         assert.equal((row().steps.connect as StepEntry).status, 'skipped');
 
         const again = await putStep('connect', { status: 'done' });
@@ -266,7 +266,7 @@ describe('a tenant that has finished', () => {
         assert.deepEqual(brief, { status: 'completed', step: 'done', gated: false });
         assert.equal(reads(), before, 'the owner\'s page load issues no extra query');
         const view = await describeWizard(OWNER, { tenantRole: 'owner' });
-        assert.deepEqual(orderOf(view.order), ['about', 'voice', 'brand', 'done']);
+        assert.deepEqual(orderOf(view.order), ['about', 'voice', 'brand', 'proof', 'done']);
         assert.equal(view.step, 'done');
         assert.equal(reads(), before, 'nor does the wizard\'s own read, for a tenant that is done');
     });

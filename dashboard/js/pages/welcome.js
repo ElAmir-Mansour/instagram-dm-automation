@@ -7,13 +7,13 @@
  * (`App.mustOnboard`) sends people to it, and `App.leaveWelcome()` is how it ends. W0 (choosing a password) is the invite page
  * (`invite.js`), before there is a session; this is W1 to W6.
  *
- * ─── Manual mode ────────────────────────────────────────────────────────────
- * The proof samples (P25) are not built, so W5 is switched off on the server (`order[i].enabled`); W1, W2 and W3 are forms with
- * sensible defaults (the draft assist of P24 fills them on request), and W6 says plainly what is waiting. W4 (P28, connecting
- * accounts) is built and is on only when the operator has switched "Connect with Facebook" on: until then the server leaves it out
- * of the order and the wizard is exactly what it was. Each is a seam: `WelcomePage.register(id, def)` adds a step, and the server
- * enabling it is all the shell needs; progress, Back and Next, autosave, resume and the 409 path are the shell's and a step does
- * not rewrite them.
+ * ─── The steps ──────────────────────────────────────────────────────────────
+ * W1, W2 and W3 are forms with sensible defaults (the draft assist of P24 fills them on request). W4 (P28, connecting accounts) is on
+ * only when the operator has switched "Connect with Facebook" on: until then the server leaves it out of the order. W5 (P25, the proof
+ * samples) is `welcome_proof.js`: two samples written by the production builders for the person to judge, which says plainly when there
+ * is no AI key and never stands in the way of finishing. W6 says what is on and what is waiting. Each is a seam:
+ * `WelcomePage.register(id, def)` adds a step, and the server enabling it is all the shell needs; progress, Back and Next, autosave,
+ * resume and the 409 path are the shell's and a step does not rewrite them.
  *
  * ─── Two kinds of save, which never meet ────────────────────────────────────
  *   - **Autosave** (800 ms after typing, and on blur): what was typed goes to `onboarding.steps[step].values`
@@ -109,6 +109,10 @@ const WelcomePage = {
             tenantId: '',
             /** The connect step (P28): the three connections and the test comment. Null until the step is shown. */
             connect: null,
+            /** The proof step (P25): the cards, and what is in flight on each. Null until the step is shown; `welcome_proof.js` owns it. */
+            proof: null,
+            /** The first comment campaign `complete` made (P25), or null: the last screen says so. */
+            firstCampaign: null,
             /** What a return from a provider's consent screen said (`meta`, `reason`, `warn`, `pick`, `tiktok`, `youtube`): read from the address before the first paint rewrites it, used once. */
             returned: null,
         };
@@ -864,6 +868,21 @@ const WelcomePage = {
         `;
     },
 
+    /** The sample replies on the last screen: ready when the person went through them, waiting (and honest about it) when they skipped. */
+    doneProofItem(onb) {
+        const entry = onb && onb.steps ? onb.steps.proof : null;
+        const done = !!(entry && entry.status === 'done');
+        return html`
+            <li class="welcome-done-item ${done ? html.raw('is-ready') : html.raw('is-waiting')}">
+                <i data-lucide="${done ? 'check-circle' : 'hourglass'}" aria-hidden="true"></i>
+                <div>
+                    <strong>${t('welcome.done.proofTitle')}</strong>
+                    <p>${done ? t('welcome.done.proofDone') : t('welcome.done.proofSkipped')}</p>
+                </div>
+            </li>
+        `;
+    },
+
     /** The last screen: what is ready, what is waiting, and the content rules in plain words. */
     doneFields(state) {
         const onb = state.onb || {};
@@ -887,13 +906,24 @@ const WelcomePage = {
                         <p>${this.stepOrder(onb).includes('connect') ? t('welcome.done.connectSettings') : t('welcome.done.connect')}</p>
                     </div>
                 </li>
-                <li class="welcome-done-item is-waiting">
-                    <i data-lucide="hourglass" aria-hidden="true"></i>
-                    <div>
-                        <strong>${t('welcome.done.proofTitle')}</strong>
-                        <p>${t('welcome.done.proof')}</p>
-                    </div>
-                </li>
+                ${this.stepOrder(onb).includes('proof') ? this.doneProofItem(onb) : html`
+                    <li class="welcome-done-item is-waiting">
+                        <i data-lucide="hourglass" aria-hidden="true"></i>
+                        <div>
+                            <strong>${t('welcome.done.proofTitle')}</strong>
+                            <p>${t('welcome.done.proof')}</p>
+                        </div>
+                    </li>
+                `}
+                ${state.firstCampaign ? html`
+                    <li class="welcome-done-item is-ready">
+                        <i data-lucide="check-circle" aria-hidden="true"></i>
+                        <div>
+                            <strong>${t('welcome.done.campaignTitle')}</strong>
+                            <p>${t('welcome.done.campaign')}</p>
+                        </div>
+                    </li>
+                ` : ''}
             </ul>
 
             <section class="welcome-rules" aria-labelledby="welcome-rules-title">
@@ -995,6 +1025,17 @@ const WelcomePage = {
             problems: () => [],
             patch: () => ({}),
             fields: (state) => P.connectFields(state),
+        });
+        // W5 (P25): the proof samples. Nothing to send to the profile: a verdict is its own write (`welcome_proof.js`), and Continue and Skip only
+        // mark the step. With no AI key, a failed round or the day's limit it says so and still lets the person carry on.
+        this.register('proof', {
+            code: 'W5', required: false, skippable: true,
+            title: () => t('welcome.proof.title'), lead: () => t('welcome.proof.lead'), next: 'welcome.proof.next',
+            initial: () => ({}),
+            read: () => ({}),
+            problems: () => [],
+            patch: () => ({}),
+            fields: (state) => P.proofFields(state),
         });
         // The last screen has no form and nothing to send: it finishes the setup (`enterDone`) and says what is waiting.
         this.register('done', {
@@ -1387,6 +1428,27 @@ const WelcomePage = {
         try {
             if (typeof App !== 'undefined' && App.loadPageModule) await App.loadPageModule('welcome_draft');
         } catch { /* the plain form */ }
+        try {
+            if (typeof App !== 'undefined' && App.loadPageModule) await App.loadPageModule('welcome_proof');
+        } catch { /* the proof step then says the samples are not available, and the person carries on */ }
+    },
+
+    // ─── The proof step, W5 (P25): `welcome_proof.js` draws and runs it ──────
+
+    /** The step's fields: the module's, or the plain "not available" when it could not be loaded. */
+    proofFields(state) {
+        if (typeof WelcomeProof !== 'undefined') return WelcomeProof.fields(state);
+        return html`
+            <section class="proof-message">
+                <h2 class="welcome-subtitle">${t('welcome.proof.unavailableTitle')}</h2>
+                <p class="welcome-lead">${t('welcome.proof.unavailable')}</p>
+            </section>
+        `;
+    },
+
+    async enterProof() {
+        if (typeof WelcomeProof === 'undefined') return;
+        await WelcomeProof.enter(this);
     },
 
     // ─── Rendering the screen (pure) ─────────────────────────────────────────
@@ -1617,6 +1679,7 @@ const WelcomePage = {
         this.stopCheck();
         if (typeof MetaConnect !== 'undefined' && MetaConnect.afterChange) MetaConnect.afterChange = null;
         if (typeof WelcomeDraft !== 'undefined') WelcomeDraft.stop();
+        if (typeof WelcomeProof !== 'undefined') WelcomeProof.stop();
         const root = this.root();
         if (root && this._onFocusOut) root.removeEventListener('focusout', this._onFocusOut);
         if (root && this._onKeyDown) root.removeEventListener('keydown', this._onKeyDown);
@@ -1712,6 +1775,8 @@ const WelcomePage = {
         }
         // The connect step reads the three connections as it opens (and says what a return trip said). Never fatal: it paints its own failure.
         if (target === 'connect') this.enterConnect().catch(() => {});
+        // The proof step asks for its samples as it opens (once: a round that finds both there is free). Never fatal: it paints its own failure.
+        if (target === 'proof') this.enterProof().catch(() => {});
         // Fire and forget: a missed note about where the person is costs nothing but the resume point.
         if (onb.status !== 'completed') API.saveOnboardingStep(target, { viewed: true }).catch(() => {});
     },
@@ -1926,7 +1991,9 @@ const WelcomePage = {
         this.state.finishing = true;
         this.paint(false);
         try {
-            await API.completeOnboarding();
+            const finished = await API.completeOnboarding();
+            // The campaign Finish created (switched off), when it made one: the last screen says so.
+            this.state.firstCampaign = finished && finished.campaign && finished.campaign.created ? finished.campaign : null;
             onb.status = 'completed';
             this.state.finishing = false;
             this.paint(false);
@@ -2010,6 +2077,8 @@ const WelcomePage = {
             this.paintTone();
         }
         if (this.state.step === 'brand') this.applyPreview();
+        // The proof step has no form values: what is typed in its edit box is a draft of a verdict, kept by `welcome_proof.js`.
+        if (this.state.step === 'proof') return;
         this.scheduleSave();
         this.setSave('idle');
     },

@@ -223,7 +223,7 @@ describe('the wizard escapes a payload in every field it shows', () => {
         };
         ctx.globalThis = ctx;
         vm.createContext(ctx);
-        for (const file of ['dashboard/js/components.js', 'dashboard/js/pages/welcome.js']) vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });
+        for (const file of ['dashboard/js/components.js', 'dashboard/js/pages/welcome.js', 'dashboard/js/pages/welcome_proof.js']) vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });
         return { P: vm.runInContext('WelcomePage', ctx) };
     }
 
@@ -241,14 +241,25 @@ describe('the wizard escapes a payload in every field it shows', () => {
         brand: { primary: PAYLOAD, accent: BREAKOUT, font_display: PAYLOAD, logo_url: PAYLOAD, portrait_url: 'javascript:alert(1)', theme: PAYLOAD },
         socials: { handle: PAYLOAD, site: BREAKOUT, platforms: [PAYLOAD], links: { instagram: PAYLOAD } },
     };
-    const order = ['about', 'voice', 'brand', 'connect', 'proof', 'done'].map((id, i) => ({ id, code: `W${i + 1}`, required: i < 2, enabled: id !== 'connect' && id !== 'proof' }));
+    const order = ['about', 'voice', 'brand', 'connect', 'proof', 'done'].map((id, i) => ({ id, code: `W${i + 1}`, required: i < 2, enabled: id !== 'connect' }));
     const onb = {
         status: 'in_progress', step: 'about', order, profile, version: 7, missing: [PAYLOAD],
         steps: { about: { values: everyValue }, voice: { values: everyValue }, brand: { values: everyValue } },
         hints: { name: PAYLOAD, instagramUsername: BREAKOUT, websiteUrl: PAYLOAD }, canEdit: true,
     };
 
-    for (const step of ['about', 'voice', 'brand', 'done']) {
+    // The proof step's cards (P25): a model's words and the person's own posts, with a payload in every one, and an edit box holding a payload too.
+    const sample = (card: string, over: Record<string, unknown>) => ({
+        id: PAYLOAD, card, kind: card === 'caption' ? 'caption' : 'comment_dm', text: PAYLOAD, written: BREAKOUT, original: BREAKOUT, keyword: PAYLOAD, publicReplies: [PAYLOAD, BREAKOUT],
+        verdict: 'rejected', verdictBy: 'admin', confirmed: false, waiting: true, reasons: [PAYLOAD], attempt: 2, canRegenerate: true, ...over,
+    });
+    const proof = {
+        phase: 'failed', failure: PAYLOAD, limits: { roundsPerDay: 3, regenerations: 3 },
+        cards: [sample('caption', {}), sample('comment', {})],
+        ui: { caption: { why: true, editing: true, draft: `${PAYLOAD}</textarea>${BREAKOUT}`, notice: PAYLOAD }, comment: { why: true, notice: '' } },
+    };
+
+    for (const step of ['about', 'voice', 'brand', 'proof', 'done']) {
         it(`${step}: nothing is a live tag, handler or address, and the text is there as text`, () => {
             const state = P.freshState();
             state.phase = 'ready';
@@ -260,6 +271,7 @@ describe('the wizard escapes a payload in every field it shows', () => {
             state.tenants = [{ id: PAYLOAD, name: PAYLOAD }, { id: BREAKOUT, name: BREAKOUT }];
             state.tenantId = BREAKOUT;
             state.rulesOpen = true;
+            if (step === 'proof') state.proof = proof;
             const out = String(P.view(state));
             assert.ok(!out.includes('<img src=x'), 'no live img tag');
             assert.ok(!out.includes('<script'), 'no live script tag');

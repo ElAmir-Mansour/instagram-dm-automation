@@ -1770,15 +1770,16 @@ its `version` and what activation still misses, the operator's hints (the name a
   on a refusal.
 
 **Finishing** — the last screen calls `POST /api/onboarding/complete` as it opens (`enterDone`, **welcome.js:1508**) →
-`completeOnboarding` (**onboardingWizard.ts:461**). It is **idempotent**: a tenant already `completed` (or with no row) answers
+`completeOnboarding` (**onboardingWizard.ts:502**). It is **idempotent**: a tenant already `completed` (or with no row) answers
 `alreadyCompleted: true` and writes nothing, and the `UPDATE` itself carries `status <> 'completed'`, so a second Finish that
 raced the first moves neither `completed_at` nor the funnel. The first needs `activationMissing` empty (name, kind, niche, language
 and register, time zone, one offer) and otherwise answers `409 ONBOARDING_INCOMPLETE` with `missing` and `fixStep`, which the page
-turns into "back to the step that fixes it". It writes **only the status**: the first campaign and the DM persona belong to the
-proof step (P25).
+turns into "back to the step that fixes it". It writes the status **and the tenant's first comment campaign, switched off, in one
+transaction** ([4.11](#411--the-proof-samples-and-the-first-campaign-p25)); the DM persona is not compiled (the DM bot is parked).
 
-**The seam.** `WIZARD_STEPS` (**onboardingWizard.ts:54**) lists W1 to W6; **W5 (proof, P25) is listed and switched off**, so the page
-leaves it out of the order and the progress count and says on the last screen what is waiting. **W4 (connect, P28) is built and is
+**The seam.** `WIZARD_STEPS` (**onboardingWizard.ts:54**) lists W1 to W6; **W5 (proof, P25) is on** for every tenant that has not
+finished ([4.11](#411--the-proof-samples-and-the-first-campaign-p25)): it is optional, and with no AI key it says so and lets the
+tenant carry on. **W4 (connect, P28) is built and is
 on only when the operator has switched "Connect with Facebook" on** (`meta.login_enabled`, default off): `stepsFor(flags)`
 (**onboardingWizard.ts:79**) applies `readWizardFlags` (**:87**, fail-closed) to the registry, and `firstOpenStep`, `resumeStep`,
 `nextStepAfter`, `describeWizard`, `describeOnboardingBrief` and `saveStep` (**:409**) all take the flags, so with the switch off
@@ -1862,6 +1863,74 @@ hold their membership), and the raw text a settled draft fetched (`sources`, set
 answers and its cost stay, and a draft still being made is never touched). Three statements, three tables, nothing else; each cutoff
 is computed in TypeScript and sent as a parameter, so a row exactly as old as the limit is kept. The draft statement lives in
 `draftStore.ts`, the one module that names `profile_drafts`.
+
+### 4.11 — The proof samples and the first campaign (P25)
+
+W5 ("Does this sound like you?") shows two samples written by the production builders from the **confirmed** profile, lets the tenant
+judge them, and turns what they confirm into examples for their writer and the wording of their first campaign. Routes
+(**`routes/onboarding.ts:102`** and below, owner only): `GET /api/onboarding/proof`, `POST /api/onboarding/proof`,
+`POST /proof/:id/verdict`, `POST /proof/:id/regenerate`. The logic is **`services/onboarding/proof.ts`**.
+
+**Who may, and when.** Only while the wizard is open: `assertOpen` (**proof.ts:179**) answers `409 ONBOARDING_COMPLETED` for a tenant
+whose onboarding is `completed`, or has no row (D14). The owner's tenant is `completed` since v34, so the proof can neither spend his
+key nor write him a row; `proof.test.ts` drives every route as him. An operator or a viewer is refused by the owner-only guard.
+
+**A round.** `startProof` (**proof.ts:380**):
+
+1. The cards that exist are the newest `voice_examples` row of each kind (`currentCards`); with both there it answers them and spends,
+   counts and calls nothing, so a reload or a second tab is free.
+2. **No provider** (`resolveRoute('onboarding_proof')` throws `no_provider`) answers `state: 'needs_ai_key'` BEFORE counting: W5 says
+   samples need an AI key, and Continue and Finish still work.
+3. The round is **counted**, atomically, at most **three a UTC day** (**proofRules.ts:35**, `PROOFS_PER_DAY`; **proofStore.ts:56**,
+   `COUNT_ROUND_SQL`: the counter is raised only `WHERE count < $2`, so a refused tenant's counter stops at the limit). The fourth is
+   `429 PROOF_LIMIT`.
+4. Each missing card is asked for in parallel, on the `onboarding_proof` route (`generate`, so the operator's route, key and budgets
+   apply). A card whose answer breaks a rule gets ONE repair call with the problem stated (`askChecked`, **proof.ts:249**, within a
+   120 s deadline); a card that still fails is left out and the answer says `state: 'failed'` with the failure's KIND, never a provider's
+   words. The card that did come back is kept.
+
+**Which builders.** The caption (**`makeCaption`, proof.ts:273**) is written under the Studio writer's own prompt pieces
+(`buildCaptionSystemPrompt`, **studio/prompts.ts:463**: its kit, voice guide, facts, never-mention list, and the very caption steps
+`igCaptionSteps`, **:328**, with the tenant's own save line and keyword ask) beside one of the tenant's own confirmed sample posts, and
+finished by the writer's own `normalizeInstagramCaption`. The comment card (**`makeComment`, proof.ts:321**) is written from the
+profile's `comment_reply` context and the register's own campaign wording (`kit.importFallback`); `readCommentAnswer`
+(**proofRules.ts:167**) puts the offer's link in for `{url}` (a model never writes a link), refuses a link in a public reply, a
+placeholder nothing fills in, a message over Meta's 1,000 bytes, and a public reply over 140 characters. Both read the confirmed profile
+and nothing else (never `profile_drafts`); everything a person typed reaches a model through `sanitizeSourceText`.
+
+**A verdict.** `recordVerdict` (**proof.ts:437**) writes `approved`, `edited` (with `edited_text`; an edit that changes nothing is an
+approval) or `rejected`, merging the chips the person chose into `input.reasons`. The **tenant's** verdict sets `verdict_by = 'tenant'`
+and `tenant_confirmed_at`; an **admin's** (filling in for them) sets `verdict_by = 'admin'` and leaves it empty (`VERDICT_SQL`,
+**proofStore.ts:44**), so it waits for the tenant's own tap. A sample that was replaced, or is another tenant's, cannot be judged.
+
+**Regenerate.** `regenerateProof` (**proof.ts:479**) writes one card again with a hint (a chip's code, or up to 200 characters of the
+tenant's own words, cleaned and fenced): the call first, then, in one transaction, the old sample becomes `rejected` and the new one is
+inserted, so a failed call leaves the card as it was. Three regenerations a card (`REGENERATIONS_PER_CARD`; the fourth is
+`429 REGENERATE_LIMIT`); they are not rounds and do not touch the day's three.
+
+**What a confirmed sample becomes.**
+
+- **In the writer's prompt.** `voiceExamplesFor` (**profile/voiceExamplesStore.ts:40**) returns the newest `approved` or `edited` rows the
+  TENANT confirmed, edited first, at most three, as "you wrote → they changed it to" pairs. `buildGenContext` (**studio/drafts.ts:437**)
+  adds them to the context only when there are some, and `buildSystemPrompt` appends one section (`captionExamplesSection`,
+  **studio/prompts.ts:345**). **The owner's prompts do not move**: nothing can write him a row (above), the read also requires
+  `onboarding.filled_by IS NOT NULL` (v34 inserted his row without one), it never throws, and a prompt with no examples is
+  byte-identical to the golden (`profile/voiceExamples.test.ts`; live parity is unchanged).
+- **In the first campaign.** `completeOnboarding` plans it (`planFirstCampaign`, **proofCampaign.ts:88**) from the comment sample the
+  tenant confirmed (`confirmedComment`, **:67**), else from the register's own wording with the main offer's name and link, and inserts it
+  (`FIRST_CAMPAIGN_SQL`, **:125**) **inactive** (`is_active = false`), on every post, in `word` mode when the keyword sits inside a longer
+  word in their own captions. It runs in the SAME transaction as the status change that only one caller can win, behind the tenant's
+  publishing lock, and creates nothing when the tenant already has a campaign on that keyword, so a double tap, a retry or two tabs make
+  one campaign, and a campaign that cannot be written leaves the setup open to be finished again. A tenant with no keyword, or an offer
+  ordered by DM with nothing confirmed to say how, has none, and the answer says why (`campaign: { created: false, reason }`).
+
+**The funnel.** `proof_verdict { kind, verdict, reason }` and `proof_regenerated { kind, attempt }` join the closed list of events
+(enums and numbers only).
+
+**The page.** `dashboard/js/pages/welcome_proof.js` (loaded by the wizard when it starts; `WelcomeProof.enter`, **:213**, is called by
+`WelcomePage.enterProof`, **welcome.js:1449**) draws the cards, the two answers, the chips and the editor, in both languages, at 375 px.
+A module that did not load is a step that says the samples are unavailable; the last screen (`doneProofItem`, **welcome.js:872**) says
+whether they were reviewed and whether a first campaign was made.
 
 ---
 

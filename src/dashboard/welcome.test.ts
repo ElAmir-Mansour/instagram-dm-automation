@@ -109,7 +109,7 @@ function load(options: { lang?: 'ar' | 'en'; hash?: string; userAgent?: string; 
     ctx.globalThis = ctx;
     vm.createContext(ctx);
     for (const file of [
-        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/pages/welcome.js', 'dashboard/js/app.js',
+        'dashboard/js/i18n.js', `dashboard/js/i18n.${lang}.js`, 'dashboard/js/components.js', 'dashboard/js/pages/welcome.js', 'dashboard/js/pages/welcome_proof.js', 'dashboard/js/app.js',
     ]) {
         vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });
     }
@@ -185,28 +185,28 @@ describe('the wizard\'s sequence follows the server and skips what is not built'
     const P = s.WelcomePage;
 
     it('shows the steps the server switched on that this page can draw, and nothing else', () => {
-        assert.deepEqual(plain(P.stepOrder(onboarding())), ['about', 'voice', 'brand', 'done']);
-        assert.deepEqual(plain(P.formSteps(onboarding())), ['about', 'voice', 'brand']);
+        assert.deepEqual(plain(P.stepOrder(onboarding())), ['about', 'voice', 'brand', 'proof', 'done']);
+        assert.deepEqual(plain(P.formSteps(onboarding())), ['about', 'voice', 'brand', 'proof']);
         // The server is ahead of the page (a step enabled that has no renderer): it is left out, never drawn blank.
-        const ahead = onboarding({ order: [...ORDER, { id: 'future', code: 'W9', required: false, enabled: true }].map((x) => (x.id === 'proof' ? { ...x, enabled: true } : x)) });
-        assert.deepEqual(plain(P.stepOrder(ahead)), ['about', 'voice', 'brand', 'done'], 'proof has no renderer yet, and nor does an invented step');
-        // W4 does have one (P28): switched on by the server, it is in the sequence, after W3.
+        const ahead = onboarding({ order: [...ORDER, { id: 'future', code: 'W9', required: false, enabled: true }] });
+        assert.deepEqual(plain(P.stepOrder(ahead)), ['about', 'voice', 'brand', 'proof', 'done'], 'an invented step has no renderer, and the proof step (W5) does');
+        // W4 does have one (P28): switched on by the server, it is in the sequence, after W3 and before the samples.
         const connect = onboarding({ order: ORDER.map((x) => (x.id === 'connect' ? { ...x, enabled: true } : x)) });
-        assert.deepEqual(plain(P.stepOrder(connect)), ['about', 'voice', 'brand', 'connect', 'done']);
+        assert.deepEqual(plain(P.stepOrder(connect)), ['about', 'voice', 'brand', 'connect', 'proof', 'done']);
     });
 
     it('is a seam: registering a step puts it in the sequence, in the server\'s place', () => {
         const t = load();
         t.WelcomePage.register('connect', { code: 'W4', required: false, skippable: true, title: () => 'c', lead: () => 'c', next: 'welcome.next', initial: () => ({}), read: () => ({}), problems: () => [], patch: () => ({}), fields: () => '' });
         const enabled = onboarding({ order: ORDER.map((x) => (x.id === 'connect' ? { ...x, enabled: true } : x)) });
-        assert.deepEqual(plain(t.WelcomePage.stepOrder(enabled)), ['about', 'voice', 'brand', 'connect', 'done']);
-        assert.deepEqual(plain(t.WelcomePage.progress(enabled, 'connect')), { index: 4, total: 4 }, 'and the count follows');
+        assert.deepEqual(plain(t.WelcomePage.stepOrder(enabled)), ['about', 'voice', 'brand', 'connect', 'proof', 'done']);
+        assert.deepEqual(plain(t.WelcomePage.progress(enabled, 'connect')), { index: 4, total: 5 }, 'and the count follows');
     });
 
     it('counts only the steps with something to fill in, and nothing on the last screen', () => {
-        assert.deepEqual(plain(P.progress(onboarding(), 'about')), { index: 1, total: 3 });
-        assert.deepEqual(plain(P.progress(onboarding(), 'brand')), { index: 3, total: 3 });
-        assert.deepEqual(plain(P.progress(onboarding(), 'done')), { index: 0, total: 3 });
+        assert.deepEqual(plain(P.progress(onboarding(), 'about')), { index: 1, total: 4 });
+        assert.deepEqual(plain(P.progress(onboarding(), 'proof')), { index: 4, total: 4 });
+        assert.deepEqual(plain(P.progress(onboarding(), 'done')), { index: 0, total: 4 });
     });
 
     it('never lets a required step be passed over by the address', () => {
@@ -221,8 +221,9 @@ describe('the wizard\'s sequence follows the server and skips what is not built'
         assert.equal(P.reachable(half, 'about'), true, 'going back is allowed');
         assert.equal(P.reachable(half, 'voice'), true);
         assert.equal(P.reachable(half, 'brand'), false);
-        const skipped = onboarding({ steps: { about: { status: 'done' }, voice: { status: 'done' }, brand: { status: 'skipped' } } });
+        const skipped = onboarding({ steps: { about: { status: 'done' }, voice: { status: 'done' }, brand: { status: 'skipped' }, proof: { status: 'skipped' } } });
         assert.equal(P.firstOpen(skipped), 'done');
+        assert.equal(P.firstOpen(onboarding({ steps: { about: { status: 'done' }, voice: { status: 'done' }, brand: { status: 'skipped' } } })), 'proof', 'the samples are a step, and optional');
         assert.equal(P.reachable(skipped, 'done'), true);
         assert.equal(P.reachable(onboarding({ status: 'completed' }), 'done'), true);
     });
@@ -231,12 +232,13 @@ describe('the wizard\'s sequence follows the server and skips what is not built'
         const o = onboarding();
         assert.equal(P.previousStep(o, 'about'), null);
         assert.equal(P.previousStep(o, 'voice'), 'about');
-        assert.equal(P.nextStep(o, 'brand'), 'done');
+        assert.equal(P.nextStep(o, 'brand'), 'proof');
+        assert.equal(P.nextStep(o, 'proof'), 'done');
         assert.equal(P.nextStep(o, 'done'), 'done');
     });
 
     it('agrees with the server about what follows each step', () => {
-        for (const id of ['about', 'voice', 'brand'] as const) {
+        for (const id of ['about', 'voice', 'brand', 'proof'] as const) {
             assert.equal(P.nextStep(onboarding(), id), nextStepAfter(id), id);
         }
     });
@@ -553,7 +555,7 @@ describe('the screen is one column with one heading, a progress list, and a stic
         assert.match(markup, /<h1 class="welcome-title" id="welcome-title" tabindex="-1">Tell us about you<\/h1>/);
         assert.equal((markup.match(/aria-current="step"/g) ?? []).length, 1);
         assert.match(markup, /<ol class="welcome-steps">/);
-        assert.match(markup, /Step 1 of 3/);
+        assert.match(markup, /Step 1 of 4/);
         assert.match(markup, /<button type="submit" form="welcome-form" class="btn btn-primary btn-full" id="welcome-next">/);
         assert.equal((markup.match(/btn-primary/g) ?? []).length, 1, 'one primary action');
         assert.match(markup, /id="welcome-save" role="status" aria-live="polite"/, 'the save state is a live region');
@@ -918,15 +920,15 @@ describe('Continue, the 409 path, Skip and Finish', () => {
 
     it('Skip marks the step skipped and moves on, and the last screen finishes the setup', async () => {
         const fx = fixture({
-            step: 'brand',
-            onb: onboarding({ steps: { about: { status: 'done' }, voice: { status: 'done' } } }),
+            step: 'proof',
+            onb: onboarding({ steps: { about: { status: 'done' }, voice: { status: 'done' }, brand: { status: 'done' } } }),
             api: {
-                saveOnboardingStep: (_s: string, body: any) => Promise.resolve({ status: 'in_progress', step: 'done', steps: body.status ? { brand: { status: 'skipped' } } : {} }),
+                saveOnboardingStep: (_s: string, body: any) => Promise.resolve({ status: 'in_progress', step: 'done', steps: body.status ? { proof: { status: 'skipped' } } : {} }),
                 completeOnboarding: () => Promise.resolve({ status: 'completed', alreadyCompleted: false, step: 'done' }),
             },
         });
         await fx.P.skip(element());
-        assert.deepEqual(fx.s.calls.map((c) => [c.fn, c.args[0], (c.args[1] as any)?.status]), [['saveOnboardingStep', 'brand', 'skipped'], ['completeOnboarding', undefined, undefined]]);
+        assert.deepEqual(fx.s.calls.map((c) => [c.fn, c.args[0], (c.args[1] as any)?.status]), [['saveOnboardingStep', 'proof', 'skipped'], ['completeOnboarding', undefined, undefined]]);
         assert.equal(fx.P.state.step, 'done');
         assert.equal(fx.P.state.onb.status, 'completed');
         assert.equal(fx.P.state.finishing, false);
@@ -1002,7 +1004,7 @@ describe('Continue, the 409 path, Skip and Finish', () => {
 // ─── The copy and the stylesheet ─────────────────────────────────────────────────────────────────
 
 describe('the copy: every key exists in both languages with the same placeholders', () => {
-    const source = readFileSync('dashboard/js/pages/welcome.js', 'utf8') + readFileSync('dashboard/js/components.js', 'utf8');
+    const source = readFileSync('dashboard/js/pages/welcome.js', 'utf8') + readFileSync('dashboard/js/pages/welcome_proof.js', 'utf8') + readFileSync('dashboard/js/components.js', 'utf8');
     const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     const code = strip(source);
 
@@ -1021,7 +1023,9 @@ describe('the copy: every key exists in both languages with the same placeholder
     const families = [
         ...['educator', 'coach', 'shop', 'agency', 'creator'].flatMap((k) => [`welcome.kind.${k}`, `welcome.kind.${k}.hint`]),
         ...['msa', 'gulf', 'egyptian', 'levantine', 'en'].map((r) => `welcome.register.${r}`),
-        ...['about', 'voice', 'brand', 'done'].map((x) => `welcome.step.${x}`),
+        ...['about', 'voice', 'brand', 'proof', 'done'].map((x) => `welcome.step.${x}`),
+        ...['too_formal', 'too_long', 'wrong_info', 'edit_myself'].map((x) => `welcome.proof.chip.${x}`),
+        ...['caption', 'comment'].map((x) => `welcome.proof.card.${x}`),
         ...['instagram', 'facebook', 'whatsapp'].map((a) => `inapp.app.${a}`),
     ];
 

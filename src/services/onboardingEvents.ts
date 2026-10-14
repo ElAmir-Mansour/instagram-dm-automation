@@ -19,6 +19,7 @@
  *   invite_accepted  the link was used                                     tenant  services/invites.ts `acceptInvite`
  *   step_viewed / step_completed / step_skipped / wizard_completed          services/onboardingWizard.ts (P18)
  *   draft_started / draft_ready / draft_failed   `recordDraftEvent`: the draft state machine (P24) calls it
+ *   proof_verdict / proof_regenerated   the proof samples (P25): a tenant's (or an admin's) verdict on a card, and a card written again
  *
  * A reset link is not onboarding and writes nothing here: the funnel counts people getting in, not people changing a password.
  */
@@ -29,6 +30,7 @@ export const ONBOARDING_EVENTS = [
     'invite_created', 'invite_opened', 'invite_accepted',
     'step_viewed', 'step_completed', 'step_skipped',
     'draft_started', 'draft_ready', 'draft_failed',
+    'proof_verdict', 'proof_regenerated',
     'wizard_completed',
 ] as const;
 export type OnboardingEvent = (typeof ONBOARDING_EVENTS)[number];
@@ -59,6 +61,9 @@ export const EVENT_PROPS: Readonly<Record<OnboardingEvent, Readonly<Record<strin
     draft_started: { origin: 'word' },
     draft_ready: { ms: 'n', partial: 'n' },
     draft_failed: { ms: 'n', code: 'word' },
+    // `kind` is the card (caption, comment), `verdict` approved/edited/rejected, `reason` the first chip the person chose (too_formal…).
+    proof_verdict: { kind: 'word', verdict: 'word', reason: 'word' },
+    proof_regenerated: { kind: 'word', attempt: 'n' },
     wizard_completed: { by: 'word', total_ms: 'n' },
 });
 

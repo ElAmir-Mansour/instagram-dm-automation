@@ -98,6 +98,9 @@ const App = {
         draft_client: { src: 'draft_client', page: () => DraftClient, routable: false },
         // The draft assist on the wizard's first step ("Fill it for me"): loaded by the wizard when it starts, optional.
         welcome_draft: { src: 'welcome_draft', page: () => WelcomeDraft, routable: false },
+        // The wizard's proof step, W5 (P25): two samples written in the person's voice for them to judge. Loaded by the wizard when it starts, optional: a
+        // page that cannot fetch it shows the step as "samples not available" and lets the person carry on.
+        welcome_proof: { src: 'welcome_proof', page: () => WelcomeProof, routable: false },
         // Connecting Instagram and Facebook (P28): the status words, the Page picker and the Connect / Disconnect actions that the Settings card and the
         // wizard's connect step share. Loaded on first use by whichever of the two needs it, and reset with the other modules when the tenant changes.
         meta_connect: { src: 'meta_connect', page: () => MetaConnect, routable: false },
@@ -107,7 +110,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.33',
+    ASSET_VERSION: '12.34',
 
     _modules: Object.create(null),
 

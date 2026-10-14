@@ -165,10 +165,10 @@ describe('GET /api/onboarding', () => {
         }
     });
 
-    it('carries the registry, with the steps nobody has built yet switched off', async () => {
+    it('carries the registry: W4 is off until the operator switches it on, and W5 (the proof samples) is on', async () => {
         const { body } = await getState();
         assert.deepEqual(body.order.map((s: any) => [s.id, s.code, s.enabled]), [
-            ['about', 'W1', true], ['voice', 'W2', true], ['brand', 'W3', true], ['connect', 'W4', false], ['proof', 'W5', false], ['done', 'W6', true],
+            ['about', 'W1', true], ['voice', 'W2', true], ['brand', 'W3', true], ['connect', 'W4', false], ['proof', 'W5', true], ['done', 'W6', true],
         ]);
         assert.deepEqual(body.order.filter((s: any) => s.required).map((s: any) => s.id), ['about', 'voice'], 'the activation fields live on W1 and W2');
     });
@@ -279,7 +279,7 @@ describe('PUT /api/onboarding/steps/:step: autosave', () => {
 
 describe('PUT /api/onboarding/steps/:step: what it refuses', () => {
     it('refuses a step that does not exist, one that is switched off, and the last screen', async () => {
-        for (const step of ['nope', 'connect', 'proof', 'done', '__proto__', 'ABOUT']) {
+        for (const step of ['nope', 'connect', 'done', '__proto__', 'ABOUT']) {
             const reply = await putStep(step, { values: { a: 1 } });
             assert.equal(reply.status, 404, step);
             assert.equal(reply.body.code, 'UNKNOWN_STEP', step);
@@ -352,14 +352,17 @@ describe('PUT /api/onboarding/steps/:step: viewing and Continue', () => {
         assert.equal(row().current_step, 'voice');
     });
 
-    it('skips past the steps nobody has built: after Brand comes the last screen', async () => {
+    it('skips past the step that is switched off: after Brand comes the proof samples, and after them the last screen', async () => {
         await putStep('about', { status: 'done' });
         await putStep('voice', { status: 'done' });
         const reply = await putStep('brand', { status: 'skipped' });
         assert.equal(reply.status, 200);
-        assert.equal(reply.body.step, 'done', 'connect and proof are switched off');
+        assert.equal(reply.body.step, 'proof', 'connect is switched off, proof is on');
         assert.equal((row().steps.brand as any).status, 'skipped');
-        assert.equal(nextStepAfter('brand'), 'done');
+        assert.equal(nextStepAfter('brand'), 'proof');
+        const proof = await putStep('proof', { status: 'skipped' });
+        assert.equal(proof.body.step, 'done');
+        assert.equal(nextStepAfter('proof'), 'done');
     });
 
     it('records enums and numbers only, never what was typed', async () => {
@@ -453,7 +456,7 @@ describe('POST /api/onboarding/complete', () => {
         await putStep('about', { viewed: true });
         const reply = await finish();
         assert.equal(reply.status, 200);
-        assert.deepEqual(reply.body, { status: 'completed', alreadyCompleted: false, step: 'done' });
+        assert.deepEqual(reply.body, { status: 'completed', alreadyCompleted: false, step: 'done', campaign: { created: false, reason: 'no_keyword' } });
         assert.equal(row().status, 'completed');
         assert.equal(row().current_step, 'done');
         assert.ok(row().completed_at);
@@ -531,8 +534,9 @@ describe('where the wizard opens', () => {
         assert.equal(firstOpenStep({}), 'about');
         assert.equal(firstOpenStep({ about: done }), 'voice');
         assert.equal(firstOpenStep({ about: done, voice: done }), 'brand');
-        assert.equal(firstOpenStep({ about: done, voice: done, brand: { status: 'skipped' } }), 'done');
-        assert.equal(firstOpenStep({ about: done, voice: done, brand: done }), 'done', 'connect and proof are not built: they never hold anyone back');
+        assert.equal(firstOpenStep({ about: done, voice: done, brand: { status: 'skipped' } }), 'proof', 'the proof samples are a step, and optional');
+        assert.equal(firstOpenStep({ about: done, voice: done, brand: { status: 'skipped' }, proof: { status: 'skipped' } }), 'done');
+        assert.equal(firstOpenStep({ about: done, voice: done, brand: done, proof: done }), 'done', 'connect is switched off: it never holds anyone back');
     });
 
     it('resumes at the saved step, bounded by the first open one, and at the end once completed', () => {

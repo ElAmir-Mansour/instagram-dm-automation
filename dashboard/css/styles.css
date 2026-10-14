@@ -1578,6 +1578,39 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
 .welcome-suggest-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-3); }
 .welcome-suggest-actions .btn { min-block-size: var(--tap-target); flex: 1 1 100%; }
 
+/* The proof step, W5 (welcome_proof.js): two sample cards, each with the sample as text, the two answers, and, after "Not quite", the question. One column
+   at 375px; every button is at least `--tap-target` tall (the `.btn` itself, the two answers and the chips), and the text of a sample keeps its line breaks and
+   wraps, so a long caption or a long word never widens the card. Tokens and logical properties only, so the same rules are right in Arabic and English. */
+.proof-list { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.proof-card { display: flex; flex-direction: column; gap: var(--space-3); min-inline-size: 0; padding: var(--space-4); overflow-wrap: anywhere; }
+.proof-card-title { margin: 0; font-size: var(--fs-300); color: var(--text-strong); }
+.proof-block { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
+.proof-label { margin: 0; font-size: var(--fs-100); color: var(--text-muted); }
+.proof-text {
+    padding: var(--space-3); min-inline-size: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+    font-size: var(--fs-200); line-height: var(--lh-normal); color: var(--text-strong);
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+}
+.proof-block.is-quote .proof-text { color: var(--text-default); border-inline-start: 3px solid var(--border-strong); }
+.proof-when { margin: 0; font-size: var(--fs-200); color: var(--text-default); }
+.proof-keyword { display: inline-block; padding-inline: var(--space-2); border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-text); font-weight: var(--fw-semibold); }
+.proof-verdict { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.proof-btn { min-block-size: var(--tap-target); min-inline-size: 0; justify-content: center; }
+.proof-btn.is-on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+.proof-why { display: flex; flex-direction: column; gap: var(--space-2); padding-block-start: var(--space-3); border-block-start: 1px dashed var(--border-subtle); min-inline-size: 0; }
+.proof-chips { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.proof-chip { min-block-size: var(--tap-target); padding-inline: var(--space-4); }
+.proof-chip:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+.proof-edit { display: flex; flex-direction: column; gap: var(--space-2); min-inline-size: 0; }
+.proof-edit-box { min-block-size: 8rem; resize: vertical; }
+.proof-edit-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.proof-edit-actions .btn { min-block-size: var(--tap-target); flex: 1 1 8rem; }
+.proof-status { margin: 0; min-block-size: 1.25em; font-size: var(--fs-100); color: var(--text-muted); }
+.proof-try { font-variant-numeric: tabular-nums; }
+.proof-message { margin-block-end: var(--space-4); }
+.proof-message .welcome-lead { margin-block-end: var(--space-3); }
+.proof-footnote { margin-block-start: 0; }
+
 /* The bar sticks to the bottom of the screen and sits at the end of the column when the form is short. It is hidden while the
    on-screen keyboard is open (welcome.js reads `visualViewport`), so it never covers the field being typed in. */
 .welcome-bar {
