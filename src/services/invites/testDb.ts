@@ -31,6 +31,9 @@ export interface AuditRec {
     detail: Record<string, unknown>;
 }
 
+/** One row of `onboarding_events`, as the funnel stores it (P31). */
+export interface EventRec { creator_id: string; user_id: string | null; actor: string; event: string; step: string | null; props: Record<string, unknown> }
+
 export interface InviteWorld {
     db: FakeDb;
     creators: Map<string, CreatorRec>;
@@ -42,6 +45,8 @@ export interface InviteWorld {
     /** The language each tenant's stored profile says it writes in (`creator_profiles.profile.language.primary`); none: no profile. */
     profileLanguage: Map<string, string>;
     audits: AuditRec[];
+    /** Every funnel row written (`onboarding_events`): what an opened, accepted or created link recorded. */
+    events: EventRec[];
     /** Throws on the next statement that matches, once: the way a dropped connection or a duplicate key would. */
     failNext: { pattern: RegExp; error: Error } | null;
     /**
@@ -69,6 +74,7 @@ export function installInviteWorld(): InviteWorld {
         settings: {},
         profileLanguage: new Map(),
         audits: [],
+        events: [],
         failNext: null,
         before: [],
         addCreator(n, name, extra = {}) {
@@ -240,9 +246,15 @@ export function installInviteWorld(): InviteWorld {
         const user = r.user_id ? world.users.get(r.user_id) : undefined;
         return { rows: [{ ...r, tenant_name: creator?.name ?? null, tenant_active: creator?.is_active ?? false, user_email: user?.email ?? null }] };
     });
-    route(/^UPDATE invites SET first_opened_at = COALESCE\(first_opened_at, NOW\(\)\), open_count = open_count \+ 1 WHERE id = \$1$/, ([id]) => {
+    route(/^UPDATE invites SET first_opened_at = COALESCE\(first_opened_at, NOW\(\)\), open_count = open_count \+ 1 WHERE id = \$1 RETURNING open_count, created_at$/, ([id]) => {
         const r = byId(id);
-        if (r) { r.first_opened_at = r.first_opened_at ?? new Date(); r.open_count += 1; }
+        if (!r) return { rows: [] };
+        r.first_opened_at = r.first_opened_at ?? new Date();
+        r.open_count += 1;
+        return { rows: [{ open_count: r.open_count, created_at: r.created_at }] };
+    });
+    route(/^INSERT INTO onboarding_events \(creator_id, user_id, actor, event, step, props\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6::jsonb\)$/, ([creator_id, user_id, actor, event, step, props]) => {
+        world.events.push({ creator_id, user_id, actor, event, step, props: JSON.parse(props) });
         return { rows: [] };
     });
     route(/^UPDATE invites SET used_at = NOW\(\) WHERE token_hash = \$1/, ([hash], sql) => {
@@ -253,7 +265,7 @@ export function installInviteWorld(): InviteWorld {
         if (sql.includes('revoked_at IS NULL') && r.revoked_at) return { rows: [] };
         if (sql.includes('expires_at > NOW()') && !(r.expires_at.getTime() > Date.now())) return { rows: [] };
         r.used_at = new Date();
-        return { rows: [{ id: r.id }] };
+        return { rows: [{ id: r.id, created_at: r.created_at }] };
     });
     route(/^UPDATE invites SET used_by = \$2 WHERE id = \$1$/, ([id, userId]) => {
         const r = byId(id);

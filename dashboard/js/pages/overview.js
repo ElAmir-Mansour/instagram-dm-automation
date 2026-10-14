@@ -33,6 +33,13 @@
  *
  * Only the core stats call is still fatal: without it there is no page.
  *
+ * ─── The profile card (P30) ─────────────────────────────────────────────────
+ * Above the briefing: how complete the creator's profile is and the next three things worth doing, each with where to do it
+ * (`GET /api/profile/progress`, which carries ids, paths and numbers; the words are here, in both languages). It is a region like
+ * the others and fills when its own request lands. It is also the one region that can never hurt the page: if the answer does not
+ * come, or is not what was expected, the region stays empty. A tenant that predates profiles (the owner) is measured only on what
+ * his setup can hold, so a finished card for him is one line.
+ *
  * ─── A screen left open all day ─────────────────────────────────────────────
  * The briefing says when it was computed ("as of 14:05") and has a Refresh.
  * Coming back to the tab after more than `STALE_MS` re-renders it in place:
@@ -117,6 +124,7 @@ const OverviewPage = {
      */
     skeleton() {
         return html`
+            <div data-region="profile"></div>
             <div data-region="briefing">${this.briefingSkeleton()}</div>
             <div data-region="growth">${this.canSeeGrowth() ? this.growthSkeleton() : ''}</div>
             <div data-region="stats">${Motion.statsGrid(4)}</div>
@@ -223,6 +231,12 @@ const OverviewPage = {
         const dailyP = this._settle(API.getDailyStats(7));
         const growth = this.canSeeGrowth();
         const growthP = growth ? this._settle(API.getGrowthOverview(this.GROWTH_DAYS)) : null;
+        // The profile card: for an operator or an owner (a viewer's answer is a 403 and the region stays empty).
+        if (growth) {
+            this._settle(API.getProfileProgress()).then((progressRes) => {
+                if (live()) this.fillProfile(progressRes);
+            });
+        }
         const goalsP = growth ? this._settle(API.getGrowthSettings()) : null;
 
         // ── The fatal one ───────────────────────────────────────────────────
@@ -384,6 +398,127 @@ const OverviewPage = {
             if (!live()) return;
             this.fillRecent(recentRes);
         });
+    },
+
+    // ─── The profile card (P30) ──────────────────────────────────────────────
+
+    /** The lucide icon of each action, by id: names the icon subset already carries. */
+    PROFILE_ICONS: Object.assign(Object.create(null), {
+        finish_setup: 'rocket', connect_meta: 'instagram', voice_samples: 'sparkles', dm_handoff: 'message-square', presenter: 'film',
+        portrait: 'image-plus', audience: 'target', connect_tiktok: 'music-2', connect_youtube: 'youtube',
+    }),
+
+    /** Which agent each "add" action is for, so the sheet opens with that agent's own line. */
+    PROFILE_AGENTS: Object.assign(Object.create(null), { voice_samples: 'studio', presenter: 'monteur', dm_handoff: 'dm', audience: 'coach' }),
+
+    /** How many posts "add posts you're proud of" asks for (`SAMPLES_ENOUGH` in completeness.ts). */
+    PROFILE_SAMPLES: 3,
+
+    /** Fills the region from a settled `getProfileProgress()`. Anything but a well-formed answer leaves it empty. */
+    fillProfile(progressRes) {
+        const host = this.region('profile');
+        if (!host) return;
+        const value = progressRes && progressRes.status === 'fulfilled' ? progressRes.value : null;
+        if (!value || typeof value !== 'object' || !Number.isFinite(Number(value.percent))) {
+            host.innerHTML = '';
+            return;
+        }
+        host.innerHTML = esc(this.renderProfileCard(value));
+        UI.icons(host);
+    },
+
+    /** The percentage the server sent, kept to a whole number from 0 to 100. */
+    profilePercent(progress) {
+        const n = Math.round(Number(progress && progress.percent));
+        return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+    },
+
+    renderProfileCard(progress) {
+        const actions = (Array.isArray(progress.actions) ? progress.actions : []).filter((a) => a && typeof a.id === 'string' && this.PROFILE_ICONS[a.id]);
+        const percent = this.profilePercent(progress);
+        if (progress.complete === true && actions.length === 0) {
+            return html`
+                <section class="profile-card profile-card--done surface" aria-label="${t('profileCard.done')}">
+                    <span class="alert-icon profile-done-icon"><i data-lucide="check-circle" aria-hidden="true"></i></span>
+                    <div>
+                        <h2 class="profile-card-title">${t('profileCard.done')}</h2>
+                        <p>${t('profileCard.doneBody')}</p>
+                    </div>
+                </section>
+            `;
+        }
+        // A left-to-right isolate (U+2066 ... U+2069, as `signed()` does): in an Arabic sentence a bare "46%" shows as "%46".
+        const shown = `\u2066${UI.formatPercent(percent)}\u2069`;
+        return html`
+            <section class="profile-card surface" aria-labelledby="profile-card-title">
+                <div class="profile-card-head">
+                    <h2 class="profile-card-title" id="profile-card-title">${t('profileCard.title', { pct: shown })}</h2>
+                    <progress class="studio-meter profile-card-meter" max="100" value="${percent}" aria-label="${t('profileCard.meter', { pct: shown })}"></progress>
+                </div>
+                ${actions.length > 0 ? html`
+                    <h3 class="sr-only">${t('profileCard.actionsLabel')}</h3>
+                    <ul class="profile-actions">${actions.map((action) => this.renderProfileAction(action, progress.canEdit === true))}</ul>
+                ` : html`<p class="form-hint">${t('profileCard.noActions')}</p>`}
+            </section>
+        `;
+    },
+
+    /** Is `target` a screen of this dashboard a person may open? A name from a response never reaches `data-target` unchecked. */
+    isOpenablePage(target) {
+        if (typeof target !== 'string' || typeof App === 'undefined' || !App.pages) return false;
+        const entry = Object.prototype.hasOwnProperty.call(App.pages, target) ? App.pages[target] : null;
+        return !!entry && entry.routable !== false && !entry.adminOnly;
+    },
+
+    renderProfileAction(action, canEdit) {
+        const link = action.link && typeof action.link === 'object' ? action.link : {};
+        const icon = this.PROFILE_ICONS[action.id];
+        const title = action.id === 'voice_samples'
+            ? t(`profileCard.action.${action.id}`, { n: UI.formatNumber(this.PROFILE_SAMPLES) })
+            : t(`profileCard.action.${action.id}`);
+        return html`
+            <li class="profile-action" data-action-id="${action.id}">
+                <span class="alert-icon profile-action-icon"><i data-lucide="${icon}" aria-hidden="true"></i></span>
+                <div class="profile-action-body">
+                    <h4 class="profile-action-title">${title}</h4>
+                    <p class="profile-action-why">${t(`profileCard.action.${action.id}.why`)}</p>
+                </div>
+                ${this.renderProfileDoer(action, link, canEdit)}
+            </li>
+        `;
+    },
+
+    /** The button (or the sentence that stands in for one) of an action, by where it is carried out. */
+    renderProfileDoer(action, link, canEdit) {
+        if (link.kind === 'ask') {
+            // The sheet writes the profile, which is the owner's: anyone else is told who to ask.
+            if (!canEdit) return html`<span class="profile-action-note">${t('profileCard.ownerOnly')}</span>`;
+            const fields = (Array.isArray(link.fields) ? link.fields : []).filter((f) => typeof f === 'string').join(',');
+            return html`<button type="button" class="btn btn-secondary btn-sm" data-action="overview:ask" data-fields="${fields}" data-agent="${action.id}">${t('profileCard.do.ask')}</button>`;
+        }
+        if (link.kind === 'wizard') {
+            // Only the platform admin can open a tenant's setup from here (`#/welcome?mode=behalf`); the tenant is sent there by the gate.
+            if (typeof App === 'undefined' || typeof App.isAdmin !== 'function' || !App.isAdmin()) return '';
+            return html`<button type="button" class="btn btn-secondary btn-sm" data-action="overview:wizard">${t('profileCard.do.wizard')}</button>`;
+        }
+        if (link.kind === 'page' && this.isOpenablePage(link.target)) {
+            const connect = typeof action.id === 'string' && action.id.startsWith('connect_');
+            return html`<button type="button" class="btn btn-secondary btn-sm" data-action="app:navigate" data-target="${link.target}">${connect ? t('profileCard.do.connect') : t('profileCard.do.open')}</button>`;
+        }
+        return '';
+    },
+
+    /** An "add" button: the sheet for the fields, then the card again from the server, so the percentage is the server's. */
+    async askProfile(el) {
+        const fields = String(el.dataset.fields || '').split(',').filter(Boolean);
+        const saved = await ProfileAsk.require(fields, { agent: this.PROFILE_AGENTS[el.dataset.agent] || '' });
+        if (!saved) return;
+        const res = await this._settle(API.getProfileProgress());
+        this.fillProfile(res);
+    },
+
+    openWizard() {
+        location.hash = '#/welcome?mode=behalf';
     },
 
     // ─── Shared readings ─────────────────────────────────────────────────────
@@ -946,4 +1081,6 @@ const OverviewPage = {
 
 UI.registerActions('overview', {
     refresh: () => OverviewPage.render(),
+    ask: (el) => OverviewPage.askProfile(el),
+    wizard: () => OverviewPage.openWizard(),
 });

@@ -1704,6 +1704,48 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
 .alert-link:hover { text-decoration: underline; }
 .alert-link [data-lucide] { inline-size: var(--icon-sm); block-size: var(--icon-sm); }
 
+/* ─── Profile card (Overview, P30) ───────────────────────────────────────── */
+/* How complete the profile is, and the next three things to do. Above the briefing, so it is the first thing a new tenant reads and
+   (for a finished profile) one quiet line for everybody else. The meter is the Studio's native <progress>. */
+.profile-card { display: grid; gap: var(--space-3); padding: var(--space-4); margin-block-end: var(--space-5); }
+.profile-card-head { display: grid; gap: var(--space-2); }
+.profile-card-title { font-size: var(--fs-400); }
+.profile-card--done { display: flex; align-items: center; gap: var(--space-3); padding-block: var(--space-3); }
+.profile-card--done p { margin: 0; font-size: var(--fs-100); color: var(--text-muted); }
+.profile-done-icon { background: var(--success-soft); color: var(--success-text); }
+.profile-done-icon [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); }
+.profile-actions { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.profile-action {
+    display: flex; align-items: center; gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    background: var(--surface-glass);
+}
+.profile-action-icon { width: 34px; height: 34px; flex-shrink: 0; border-radius: var(--radius-xs); display: flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent-text); }
+.profile-action-icon [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); }
+.profile-action-body { flex: 1 1 auto; min-inline-size: 0; }
+.profile-action-title { font-size: var(--fs-200); font-weight: var(--fw-semibold); }
+.profile-action-why { margin: 0; font-size: var(--fs-100); color: var(--text-muted); }
+.profile-action .btn { flex-shrink: 0; }
+.profile-action-note { flex-shrink: 0; font-size: var(--fs-100); color: var(--text-muted); }
+.profile-ask-lead { margin-block: 0 var(--space-3); }
+@media (max-width: 480px) {
+    .profile-action { flex-wrap: wrap; }
+    .profile-action .btn { inline-size: 100%; min-block-size: var(--tap-target); }
+}
+
+/* ─── Onboarding funnel (Operations, P31) ────────────────────────────────── */
+.funnel-window { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.funnel-window .btn[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.funnel-stages { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.funnel-stage { display: grid; grid-template-columns: minmax(8rem, 12rem) 1fr auto; align-items: center; gap: var(--space-3); }
+.funnel-stage-label { font-size: var(--fs-200); }
+.funnel-stage-count { font-size: var(--fs-100); color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 480px) {
+    .funnel-stage { grid-template-columns: 1fr auto; }
+    .funnel-stage .studio-meter { grid-column: 1 / -1; grid-row: 2; }
+}
+
 /* ─── Charts ─────────────────────────────────────────────────────────────── */
 .chart-grid { display: grid; grid-template-columns: 2fr 1fr; gap: var(--space-4); margin-block-end: var(--space-5); }
 .chart-grid--even { grid-template-columns: 1fr 1fr; }

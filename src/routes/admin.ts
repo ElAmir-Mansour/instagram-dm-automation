@@ -61,12 +61,14 @@ import { storageKeyKind, storageKeyProblem } from '../services/supabaseStorage.j
 import { checkGeminiKey } from '../services/geminiKey.js';
 import { dmModelsInUse, starterPersona } from '../services/ai.js';
 import { clearProfileCache } from '../services/profile/cache.js';
+import { recordEvent } from '../services/onboardingEvents.js';
 import { contextFor } from '../services/profile/context.js';
 import { defaultProfile } from '../services/profile/defaults.js';
 import { patchProfile, readProfileState } from '../services/profile/patch.js';
 import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
 import aiRouter from './adminAi.js';
+import onboardingFunnelRouter from './adminOnboarding.js';
 import { profileErrorBody } from './profile.js';
 import { adminActor, advanceDraftFor, getDraftFor, guard as draftGuard, startDraftFor } from './onboardingDrafts.js';
 import {
@@ -227,6 +229,8 @@ async function issueInvite(
         createdBy: req.session?.userId ?? null,
     }, settings);
     await audit(req, AUDIT_ACTIONS.inviteCreate, 'invite', created.invite.id, inviteAuditDetail(created.invite, { language: input.lang, ...extra }));
+    // The funnel's first stage (P31). A password reset is not onboarding, so only a join link counts.
+    if (input.purpose !== 'reset') await recordEvent({ creatorId: input.creatorId, userId: req.session?.userId ?? null, actor: 'admin' }, 'invite_created');
     return shareable(created, base, input.lang, settings);
 }
 
@@ -327,6 +331,11 @@ router.delete('/gemini-key', async (req, res) => {
  * below the platform-admin gate; the sub-router checks the role again.
  */
 router.use('/ai', aiRouter);
+
+// ─── Onboarding funnel (P31) ────────────────────────────────────────────────
+
+/** The funnel from invite to a finished setup, for Operations (src/routes/adminOnboarding.ts). Counts and durations only. */
+router.use('/onboarding', onboardingFunnelRouter);
 
 // ─── Media storage ──────────────────────────────────────────────────────────
 
@@ -1280,6 +1289,9 @@ router.post('/invites/:id/regenerate', async (req, res) => {
         await audit(req, AUDIT_ACTIONS.inviteRegenerate, 'invite', regenerated.invite.id, inviteAuditDetail(regenerated.invite, {
             previous_invite_id: regenerated.previousId, language: lang,
         }));
+        if (regenerated.invite.purpose === 'join') {
+            await recordEvent({ creatorId: regenerated.invite.creator_id, userId: req.session?.userId ?? null, actor: 'admin' }, 'invite_created');
+        }
         res.status(201).json({ invite: shareable(regenerated, base, lang, settings), previous_invite_id: regenerated.previousId });
     } catch (err) {
         answerInviteFailure(res, err, 'admin.invite_regenerate_failed', 'Failed to regenerate the invite.');

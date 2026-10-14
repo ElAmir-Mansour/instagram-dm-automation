@@ -15,6 +15,7 @@ import {
 } from '../services/instagram.js';
 import { DEFAULT_MODEL, generateAiResponse, resolveModel, starterPersona, SUPPORTED_MODELS } from '../services/ai.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
+import { assertDmSwitchOn, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import {
     getActiveCreatorId, getTenant, getTenantId, resolveTenant, requireLiveSession,
     assertTenantAccess, listTenantsForSession, interactionsOwnedBy, invalidateTenantCache,
@@ -957,7 +958,8 @@ router.get('/cron/publish', async (req, res) => {
         // cannot throw — a retention failure must not stop the publishes below it.
         const sweep = await runRetentionSweep();
         if (sweep.rawPayloadsCleared > 0 || sweep.jobsDeleted > 0 || sweep.mediaDeleted > 0
-            || sweep.mediaObjectsRemoved > 0 || sweep.moreRemaining) {
+            || sweep.mediaObjectsRemoved > 0 || sweep.moreRemaining
+            || sweep.onboarding.eventsDeleted > 0 || sweep.onboarding.invitesDeleted > 0 || sweep.onboarding.draftSourcesCleared > 0) {
             log('info', 'cron.retention_sweep', { ...sweep });
         }
 
@@ -3395,6 +3397,10 @@ router.post('/settings/ai', canOperate, async (req, res) => {
         const parsedTemperature = Number.parseFloat(temperature);
         const finalTemperature = Number.isFinite(parsedTemperature) ? parsedTemperature : 0.7;
 
+        // Switching the bot ON asks for what it answers from: a hand-off rule, on top of the six activation fields (P30). Only the
+        // switch: saving a prompt on a bot that is already on, or off, never asks (`assertDmSwitchOn`).
+        if (is_active !== false) await assertDmSwitchOn(creatorId);
+
         const result = await pool.query(
             `INSERT INTO ai_agents (creator_id, system_prompt, knowledge_base, model, temperature, is_active)
              VALUES ($1, $2, $3, $4, $5, $6)
@@ -3420,6 +3426,10 @@ router.post('/settings/ai', canOperate, async (req, res) => {
 
         res.json(result.rows[0]);
     } catch (err) {
+        if (err instanceof ProfileIncomplete) {
+            res.status(err.status).json(profileIncompleteBody(err));
+            return;
+        }
         log('error', 'api.ai_settings_update_failed', describeError(err));
         res.status(500).json({ error: 'Failed to update AI settings.' });
     }

@@ -96,6 +96,8 @@ const UI = {
     _lastFocus: null,
     _lastFocusKey: null,
     _onModalKeydown: null,
+    /** Called once when the open modal is closed or replaced (`ProfileAsk` resolves "not answered" from it). Cleared when it runs. */
+    _afterClose: null,
     _actions: Object.create(null),
     _guardBaseline: null,
 
@@ -713,6 +715,8 @@ const UI = {
         const overlay = document.getElementById('modal-overlay');
         const content = document.getElementById('modal-content');
         if (!overlay || !content) return;
+        // A modal that is replaced is closed as far as whoever opened it is concerned.
+        UI._runAfterClose();
 
         if (overlay.classList.contains('hidden')) {
             UI._lastFocus = document.activeElement;
@@ -786,6 +790,7 @@ const UI = {
     closeModal() {
         const overlay = document.getElementById('modal-overlay');
         if (!overlay) return;
+        UI._runAfterClose();
         overlay.classList.add('hidden');
         overlay.onclick = null;
         if (UI._onModalKeydown) {
@@ -803,6 +808,14 @@ const UI = {
             return;
         }
         UI.restoreFocus(key ? { key, start: null, end: null } : {}, null);
+    },
+
+    _runAfterClose() {
+        const done = UI._afterClose;
+        UI._afterClose = null;
+        if (typeof done === 'function') {
+            try { done(); } catch (err) { console.error('afterClose failed:', err); }
+        }
     },
 
     // ─── Unsaved-work guard ─────────────────────────────────────────────────
@@ -1286,6 +1299,288 @@ document.addEventListener('click', (e) => UI._dispatch(e, 'data-action'));
 document.addEventListener('change', (e) => UI._dispatch(e, 'data-change'));
 document.addEventListener('input', (e) => UI._dispatch(e, 'data-input'));
 document.addEventListener('submit', (e) => UI._dispatch(e, 'data-submit'));
+
+// ─── ProfileAsk: the one-field sheet an agent opens when it lacks something it writes from (P30) ─────────────
+
+/**
+ * An agent asks for what it needs the FIRST time it is switched on, and never before (docs/onboarding/02 §4). The server agrees: a
+ * switch-on route answers `409 PROFILE_INCOMPLETE` with the `missing` profile paths (`api.js` catches that, opens this sheet, and sends
+ * the same request again once it is answered). A person who finished the wizard is never asked for what it already collected: the sheet
+ * holds only the fields that are missing and that have no step of their own in the wizard.
+ *
+ *   ProfileAsk.require(['presenter'], { agent: 'monteur' })   →  Promise<boolean>   true: saved, false: closed, or nothing it can ask
+ *
+ * It writes the profile the way the wizard does, `PATCH /api/profile { version, patch }`, so a 409 from somebody else's write in between
+ * reloads the sheet with what is there now instead of overwriting it. Only the owner writes the profile, so anyone else is told to ask them.
+ * Everything typed is rendered through `html` (escaped), and every request is built from the form's own named fields.
+ */
+const ProfileAsk = {
+    /** What this sheet can ask for: the paths `agentGate.ts` names that the wizard has no step for. */
+    FIELDS: ['voice.samples', 'dm.handoff', 'presenter', 'audience.description'],
+    /** How many sample boxes there are, and how long one may be (`PROFILE_LIMITS`: 5 samples of 2200). */
+    SAMPLE_SLOTS: 3,
+    SAMPLES_KEPT: 5,
+    SAMPLE_MAX: 2200,
+    /** The profile's own limits (`PROFILE_LIMITS`: handoffWhen, handoffMessage, audienceDescription, presenterName); a test holds them equal. */
+    HANDOFF_WHEN_MAX: 300,
+    HANDOFF_MESSAGE_MAX: 1000,
+    AUDIENCE_MAX: 600,
+    NAME_MAX: 40,
+    PRONOUNS: ['he', 'she', 'they'],
+    ON_CAMERA: ['face', 'voice', 'mixed'],
+    /** Which words introduce the sheet, by agent: a fixed table, so a name from a response never builds a key. */
+    LEAD: Object.assign(Object.create(null), {
+        studio: 'profileAsk.lead.studio', monteur: 'profileAsk.lead.monteur', coach: 'profileAsk.lead.coach', dm: 'profileAsk.lead.dm',
+    }),
+
+    /** The one sheet that is open, if any: `{ asks, agent, profile, version, note, error, promise, resolve }`. */
+    _open: null,
+
+    askable(fields) {
+        return (Array.isArray(fields) ? fields : []).filter((path) => this.FIELDS.includes(path));
+    },
+
+    /** The shared answer while a sheet is open: two requests refused at once ask once. */
+    require(fields, options) {
+        if (this._open) return this._open.promise;
+        const asks = this.askable(fields);
+        if (asks.length === 0) return Promise.resolve(false);
+        if (typeof App !== 'undefined' && typeof App.canAdminister === 'function' && !App.canAdminister()) {
+            UI.toast(t('profileAsk.ownerOnly'), 'error');
+            return Promise.resolve(false);
+        }
+        const agent = options && typeof options.agent === 'string' ? options.agent : '';
+        const state = { asks, agent, profile: {}, version: null, note: '', error: '', promise: null, resolve: null };
+        state.promise = new Promise((resolve) => { state.resolve = resolve; });
+        this._open = state;
+        this._load(state, false).then((ok) => {
+            if (!ok) this._finish(state, false);
+        });
+        return state.promise;
+    },
+
+    /** Read the profile (and the version a save must send back), then draw the sheet. False when it could not be read. */
+    async _load(state, reloaded) {
+        try {
+            const read = await API.getProfile();
+            state.profile = (read && read.profile) || {};
+            state.version = read && read.version !== undefined ? read.version : null;
+        } catch (err) {
+            UI.toast((err && err.message) || t('profileAsk.loadFailed'), 'error');
+            return false;
+        }
+        if (this._open !== state) return false;
+        state.note = reloaded ? t('profileAsk.changed') : '';
+        // Drawing this same sheet again is not closing it: its own close hook must not run.
+        if (reloaded) UI._afterClose = null;
+        UI.showModal(this.sheet(state));
+        // `showModal` runs the previous modal's close hook: this one's is set after it.
+        UI._afterClose = () => this._finish(state, false);
+        return true;
+    },
+
+    _finish(state, saved) {
+        if (this._open !== state) return;
+        this._open = null;
+        state.resolve(saved);
+    },
+
+    // ─── The sheet ───────────────────────────────────────────────────────
+
+    sheet(state) {
+        const lead = this.LEAD[state.agent];
+        return html`
+            <div class="modal-header">
+                <h2 class="modal-title">${t('profileAsk.title')}</h2>
+                <button type="button" class="modal-close" data-action="ui:closeModal" aria-label="${t('common.closeDialog')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+            <form id="profile-ask-form" data-submit="profileAsk:save" novalidate>
+                <p class="form-hint profile-ask-lead">${lead ? t(lead) : t('profileAsk.lead')}</p>
+                ${state.note ? UI.errorStrip(state.note, '', 'profile-ask-note') : ''}
+                ${state.asks.map((path) => this.fieldset(path, state.profile))}
+                ${state.error ? UI.errorStrip(state.error, '', 'profile-ask-error') : ''}
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" data-action="ui:closeModal">${t('common.cancel')}</button>
+                    <button type="submit" class="btn btn-primary"><i data-lucide="check" aria-hidden="true"></i> ${t('profileAsk.save')}</button>
+                </div>
+            </form>
+        `;
+    },
+
+    fieldset(path, profile) {
+        const p = profile || {};
+        const text = (v) => (typeof v === 'string' ? v : '');
+        if (path === 'voice.samples') {
+            const have = Array.isArray(p.voice && p.voice.samples) ? p.voice.samples : [];
+            return html`
+                <fieldset class="fieldset-plain form-group">
+                    <legend class="form-label">${t('profileAsk.samples.label')}</legend>
+                    <p class="form-hint">${t('profileAsk.samples.hint')}</p>
+                    ${Array.from({ length: this.SAMPLE_SLOTS }, (_, i) => html`
+                        <label class="sr-only" for="ask-sample-${i}">${t('profileAsk.samples.n', { n: i + 1 })}</label>
+                        <textarea class="field-textarea user-content" id="ask-sample-${i}" name="sample${i}" dir="auto" rows="4"
+                                  maxlength="${this.SAMPLE_MAX}" placeholder="${t('profileAsk.samples.n', { n: i + 1 })}">${text(have[i])}</textarea>
+                    `)}
+                </fieldset>
+            `;
+        }
+        if (path === 'dm.handoff') {
+            const handoff = (p.dm && p.dm.handoff) || {};
+            return html`
+                <fieldset class="fieldset-plain form-group">
+                    <legend class="form-label">${t('profileAsk.handoff.label')}</legend>
+                    <label class="form-label" for="ask-handoff-when">${t('profileAsk.handoff.when')}</label>
+                    <textarea class="field-textarea user-content" id="ask-handoff-when" name="handoffWhen" dir="auto" rows="3"
+                              maxlength="${this.HANDOFF_WHEN_MAX}" placeholder="${t('profileAsk.handoff.whenPlaceholder')}">${text(handoff.when)}</textarea>
+                    <label class="form-label" for="ask-handoff-message">${t('profileAsk.handoff.message')}</label>
+                    <textarea class="field-textarea user-content" id="ask-handoff-message" name="handoffMessage" dir="auto" rows="3"
+                              maxlength="${this.HANDOFF_MESSAGE_MAX}" placeholder="${t('profileAsk.handoff.messagePlaceholder')}">${text(handoff.message)}</textarea>
+                </fieldset>
+            `;
+        }
+        if (path === 'presenter') {
+            const who = p.presenter || {};
+            const pronouns = this.PRONOUNS.includes(who.pronouns) ? who.pronouns : 'they';
+            const camera = this.ON_CAMERA.includes(who.on_camera) ? who.on_camera : 'face';
+            return html`
+                <fieldset class="fieldset-plain form-group">
+                    <legend class="form-label">${t('profileAsk.presenter.label')}</legend>
+                    <p class="form-hint">${t('profileAsk.presenter.hint')}</p>
+                    <label class="form-label" for="ask-presenter-name">${t('profileAsk.presenter.name')} <span class="label-optional">${t('common.optional')}</span></label>
+                    <input class="field" id="ask-presenter-name" name="presenterName" dir="auto" autocomplete="off"
+                           maxlength="${this.NAME_MAX}" value="${text(who.name)}">
+                    <label class="form-label" for="ask-presenter-pronouns">${t('profileAsk.presenter.pronouns')}</label>
+                    <select class="select" id="ask-presenter-pronouns" name="presenterPronouns">
+                        ${this.PRONOUNS.map((v) => html`<option value="${v}" ${v === pronouns ? html.raw('selected') : ''}>${t(`profileAsk.pronouns.${v}`)}</option>`)}
+                    </select>
+                    <label class="form-label" for="ask-presenter-camera">${t('profileAsk.presenter.camera')}</label>
+                    <select class="select" id="ask-presenter-camera" name="presenterCamera">
+                        ${this.ON_CAMERA.map((v) => html`<option value="${v}" ${v === camera ? html.raw('selected') : ''}>${t(`profileAsk.camera.${v}`)}</option>`)}
+                    </select>
+                </fieldset>
+            `;
+        }
+        // audience.description
+        return html`
+            <div class="form-group">
+                <label class="form-label" for="ask-audience">${t('profileAsk.audience.label')}</label>
+                <textarea class="field-textarea user-content" id="ask-audience" name="audience" dir="auto" rows="3"
+                          maxlength="${this.AUDIENCE_MAX}" placeholder="${t('profileAsk.audience.placeholder')}">${text(p.audience && p.audience.description)}</textarea>
+                <p class="form-hint">${t('profileAsk.audience.hint')}</p>
+            </div>
+        `;
+    },
+
+    // ─── What a save sends ───────────────────────────────────────────────
+
+    /**
+     * The patch for what the form holds, or the key of the first thing wrong with it. Pure (it reads `values`, the form's own named
+     * fields) so a test can hold every patch it builds against the real profile validator.
+     */
+    buildPatch(asks, values, profile) {
+        const v = values || {};
+        const clean = (key, max) => String(v[key] === undefined || v[key] === null ? '' : v[key]).trim().slice(0, max);
+        const patch = {};
+        for (const path of asks) {
+            if (path === 'voice.samples') {
+                const typed = [];
+                for (let i = 0; i < this.SAMPLE_SLOTS; i++) {
+                    const sample = clean(`sample${i}`, this.SAMPLE_MAX);
+                    if (sample) typed.push(sample);
+                }
+                if (typed.length === 0) return { error: 'profileAsk.err.samples' };
+                // What was already beyond the boxes stays: the sheet shows three, the profile holds up to five.
+                const have = Array.isArray(profile && profile.voice && profile.voice.samples) ? profile.voice.samples : [];
+                patch.voice = { samples: typed.concat(have.slice(this.SAMPLE_SLOTS)).slice(0, this.SAMPLES_KEPT) };
+            } else if (path === 'dm.handoff') {
+                const when = clean('handoffWhen', this.HANDOFF_WHEN_MAX);
+                const message = clean('handoffMessage', this.HANDOFF_MESSAGE_MAX);
+                if (!when || !message) return { error: 'profileAsk.err.handoff' };
+                patch.dm = { handoff: { when, message } };
+            } else if (path === 'presenter') {
+                const pronouns = this.PRONOUNS.includes(v.presenterPronouns) ? v.presenterPronouns : '';
+                const camera = this.ON_CAMERA.includes(v.presenterCamera) ? v.presenterCamera : '';
+                if (!pronouns || !camera) return { error: 'profileAsk.err.presenter' };
+                patch.presenter = { name: clean('presenterName', this.NAME_MAX), pronouns, on_camera: camera };
+            } else if (path === 'audience.description') {
+                const description = clean('audience', this.AUDIENCE_MAX);
+                if (!description) return { error: 'profileAsk.err.audience' };
+                patch.audience = { description };
+            }
+        }
+        return { patch };
+    },
+
+    async save(form, event) {
+        if (event && event.preventDefault) event.preventDefault();
+        const state = this._open;
+        if (!state) return;
+        const values = this._read(form);
+        const built = this.buildPatch(state.asks, values, state.profile);
+        if (built.error) {
+            state.error = t(built.error);
+            this._redraw(state, values);
+            return;
+        }
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (restore === null) return;
+        try {
+            await API.patchProfile(state.version, built.patch);
+        } catch (err) {
+            restore();
+            const body = err && err.body;
+            if (body && body.code === 'PROFILE_VERSION_CONFLICT') {
+                // Somebody wrote in between: show what is there now, and say so.
+                state.error = '';
+                await this._load(state, true);
+                return;
+            }
+            const problems = body && Array.isArray(body.problems) && body.problems.length ? body.problems.slice(0, 3).join(' ') : '';
+            state.error = problems || (err && err.message) || t('profileAsk.saveFailed');
+            this._redraw(state, values);
+            return;
+        }
+        UI.toast(t('profileAsk.saved'));
+        this._finish(state, true);
+        UI._afterClose = null;
+        UI.closeModal();
+    },
+
+    _read(form) {
+        const values = {};
+        new FormData(form).forEach((value, key) => { values[key] = value; });
+        return values;
+    },
+
+    /** Redraw in place with what the person typed kept: the error is the only thing that changes. */
+    _redraw(state, typed) {
+        const merged = JSON.parse(JSON.stringify(state.profile || {}));
+        if (state.asks.includes('voice.samples')) {
+            merged.voice = merged.voice || {};
+            merged.voice.samples = [0, 1, 2].map((i) => String(typed[`sample${i}`] || ''));
+        }
+        if (state.asks.includes('dm.handoff')) {
+            merged.dm = merged.dm || {};
+            merged.dm.handoff = { when: String(typed.handoffWhen || ''), message: String(typed.handoffMessage || '') };
+        }
+        if (state.asks.includes('presenter')) {
+            merged.presenter = { name: String(typed.presenterName || ''), pronouns: typed.presenterPronouns, on_camera: typed.presenterCamera };
+        }
+        if (state.asks.includes('audience.description')) {
+            merged.audience = merged.audience || {};
+            merged.audience.description = String(typed.audience || '');
+        }
+        UI._afterClose = null;
+        UI.showModal(this.sheet({ ...state, profile: merged }));
+        UI._afterClose = () => this._finish(state, false);
+    },
+};
+
+UI.registerActions('profileAsk', {
+    save: (form, event) => ProfileAsk.save(form, event),
+});
 
 // ─── Backwards-compat alias ──────────────────────────────────────────────────
 const Components = {

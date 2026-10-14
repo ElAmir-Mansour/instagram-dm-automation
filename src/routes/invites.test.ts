@@ -1153,3 +1153,109 @@ describe('a session that was kept 30 days keeps its expiry across the routes tha
         assert.equal(reply.body.expiresIn, '24h');
     });
 });
+
+// ─── The funnel (P31) ────────────────────────────────────────────────────────────────────────────
+
+describe('the funnel\'s invite events', () => {
+    const regenerate = (id: string) => call(adminRouter, 'POST', `/invites/${id}/regenerate`, { session: ADMIN_SESSION });
+    const named = (event: string) => world.events.filter((e) => e.event === event);
+
+    it('invite_created is written when the operator makes a join link: his, with no user of the tenant\'s and nothing typed', async () => {
+        await makeInvite({ email: 'nour@example.com' });
+        assert.deepEqual(world.events, [{ creator_id: TENANT, user_id: uuid(1), actor: 'admin', event: 'invite_created', step: null, props: {} }]);
+        assert.equal(JSON.stringify(world.events).includes('nour@example.com'), false, 'the address the link is for is not in the funnel');
+    });
+
+    it('writes none for a reset link: that is a person changing a password, not getting in', async () => {
+        await makeInvite({ purpose: 'reset', user_id: uuid(2) });
+        assert.deepEqual(world.events, []);
+    });
+
+    it('is written again when a join link is regenerated, and not for a reset one', async () => {
+        const made = await makeInvite();
+        assert.equal((await regenerate(made.id)).status, 201);
+        assert.equal(named('invite_created').length, 2);
+        const reset = await makeInvite({ purpose: 'reset', user_id: uuid(2) });
+        assert.equal((await regenerate(reset.id)).status, 201);
+        assert.equal(named('invite_created').length, 2, 'a regenerated reset link is still a reset link');
+    });
+
+    it('invite_opened is written on the FIRST opening only, with how long the link had waited', async () => {
+        const made = await makeInvite();
+        assert.equal(named('invite_opened').length, 0, 'making a link is not opening it');
+        assert.equal((await peek(made.token)).status, 200);
+        assert.equal((await peek(made.token)).status, 200);
+        assert.equal((await peek(made.token)).status, 200);
+        const opened = named('invite_opened');
+        assert.equal(opened.length, 1, 'three openings, one event: the funnel counts people, not page loads');
+        assert.deepEqual([opened[0]!.creator_id, opened[0]!.user_id, opened[0]!.actor, opened[0]!.step], [TENANT, null, 'tenant', null]);
+        assert.equal(Object.keys(opened[0]!.props).join(), 'ms_since_created');
+        assert.ok(Number.isInteger(opened[0]!.props.ms_since_created) && (opened[0]!.props.ms_since_created as number) >= 0);
+    });
+
+    it('writes none for a reset link, or for a link that does not open', async () => {
+        const reset = await makeInvite({ purpose: 'reset', user_id: uuid(2) });
+        await peek(reset.token);
+        const dead = await makeInvite();
+        await call(adminRouter, 'DELETE', `/invites/${dead.id}`, { session: ADMIN_SESSION });
+        assert.equal((await peek(dead.token, { ip: '198.51.100.7' })).status, 410);
+        assert.equal((await peek('x'.repeat(43), { ip: '198.51.100.8' })).status, 410);
+        assert.deepEqual(named('invite_opened'), []);
+    });
+
+    it('invite_accepted is written when a person gets in, as that person, with how long the link took', async () => {
+        const made = await makeInvite();
+        const reply = await join(made.token, 'nour@example.com');
+        assert.equal(reply.status, 201, JSON.stringify(reply.body));
+        const accepted = named('invite_accepted');
+        assert.equal(accepted.length, 1);
+        assert.deepEqual([accepted[0]!.creator_id, accepted[0]!.user_id, accepted[0]!.actor, accepted[0]!.step], [TENANT, reply.body.userId, 'tenant', null]);
+        assert.equal(Object.keys(accepted[0]!.props).join(), 'ms_since_created');
+        assert.equal(JSON.stringify(world.events).includes('nour@example.com'), false);
+    });
+
+    it('is written when somebody who is signed in adds the tenant to their account', async () => {
+        const made = await makeInvite({}, OTHER_TENANT);
+        const mine = createSession({ userId: uuid(2), role: 'user', tenantId: TENANT, tokenVersion: 1 });
+        assert.equal((await accept({ token: made.token }, { bearer: mine })).status, 201);
+        const accepted = named('invite_accepted');
+        assert.equal(accepted.length, 1);
+        assert.deepEqual([accepted[0]!.creator_id, accepted[0]!.user_id], [OTHER_TENANT, uuid(2)]);
+    });
+
+    it('is not written for an attempt that failed: a weak password, an address with an account, a second use, a reset', async () => {
+        const made = await makeInvite();
+        assert.equal((await accept({ token: made.token, email: 'nour@example.com', password: 'short' })).status, 400);
+        assert.equal((await join(made.token, 'owner-of-a@example.com')).status, 409);
+        assert.deepEqual(named('invite_accepted'), [], 'the link was not spent');
+        assert.equal((await join(made.token)).status, 201);
+        assert.equal((await join(made.token, 'second@example.com', {})).status, 410);
+        assert.equal(named('invite_accepted').length, 1, 'once');
+
+        const reset = await makeInvite({ purpose: 'reset', user_id: uuid(2), lang: 'en' });
+        assert.equal((await accept({ token: reset.token, password: 'a-brand-new-password' })).status, 201);
+        assert.equal(named('invite_accepted').length, 1, 'a reset is not an onboarding');
+    });
+
+    it('never fails the person: a funnel that cannot be written is a log line, and the link still opens and still works', async () => {
+        const made = await makeInvite();
+        world.db.routes.unshift([/^INSERT INTO onboarding_events /, () => { throw new Error('connection lost'); }]);
+        assert.equal((await peek(made.token)).status, 200);
+        const reply = await join(made.token);
+        assert.equal(reply.status, 201);
+        assert.equal(usersNamed('nour@example.com').length, 1);
+        assert.ok(logs.some((line) => line.includes('onboarding.event_failed')));
+    });
+
+    it('holds no token, no address and no name, in any event of the whole journey', async () => {
+        const made = await makeInvite({ email: 'person@example.com' });
+        await peek(made.token);
+        await join(made.token, 'person@example.com');
+        const text = JSON.stringify(world.events);
+        assert.equal(text.includes(made.token), false);
+        assert.equal(text.includes(hashInviteToken(made.token)), false);
+        assert.equal(text.includes('person@example.com'), false);
+        assert.equal(text.includes('Nour Shop'), false);
+        assert.deepEqual(world.events.map((e) => e.event), ['invite_created', 'invite_opened', 'invite_accepted']);
+    });
+});

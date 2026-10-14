@@ -5,6 +5,7 @@
  *
  *   GET   /                { profile, version, stored, activationMissing }    operator or owner
  *   GET   /campaign-seeds  { seeds, source }  what the bulk import seeds from  operator or owner
+ *   GET   /progress        { percent, complete, legacy, dm, connections, actions, missing, canEdit }  the Overview card (P30)   operator or owner
  *   PATCH /                { version, patch }  →  the same, after the change  owner only
  *
  * `version` is what makes a write safe: a PATCH names the version it was written against and is refused with 409
@@ -22,8 +23,9 @@ import type { Request, Response } from 'express';
 import { actorFromSession, AUDIT_ACTIONS, writeAudit } from '../services/audit.js';
 import { readCampaignSeeds } from '../services/profile/campaignSeeds.js';
 import { patchProfile, readProfileState } from '../services/profile/patch.js';
+import { describeProgress } from '../services/profile/progress.js';
 import { ProfileError } from '../services/profile/store.js';
-import { getTenantId, requireTenantRole } from '../services/tenant.js';
+import { getTenantId, requireTenantRole, type TenantRole } from '../services/tenant.js';
 import { describeError, log } from '../utils/log.js';
 
 type Handler = (req: Request, res: Response) => Promise<void>;
@@ -71,6 +73,16 @@ const canEdit = requireTenantRole('owner');
 
 profileRouter.get('/', canOperate, handle('profile.read_failed', 'Failed to read the profile.', async (req, res) => {
     res.json(await readProfileState(getTenantId(req)));
+}));
+
+/**
+ * How complete the profile is and the next three things to do (`services/profile/progress.ts`). Operator-level like the profile it
+ * describes; `canEdit` says whether this session may carry the actions out, since the sheets that fill a field in write the
+ * profile, which is the owner's.
+ */
+profileRouter.get('/progress', canOperate, handle('profile.progress_failed', 'Failed to read the profile\'s progress.', async (req, res) => {
+    const role: TenantRole | null = req.tenantRole ?? null;
+    res.json({ ...(await describeProgress(getTenantId(req))), canEdit: role === 'owner' });
 }));
 
 /**

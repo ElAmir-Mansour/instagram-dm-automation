@@ -35,6 +35,7 @@ import { createSession, DEFAULT_SESSION_TTL_MS, describeSessionLifetime } from '
 import type { InviteRow, OnboardingStatus } from '../db/rows.js';
 import { passwordProblem } from './adminGuards.js';
 import { APP_SETTING_KEYS, getSetting } from './appSettings.js';
+import { msSince, recordEvent } from './onboardingEvents.js';
 import {
     getOnboardingSettings, getSessionDays, isInviteRole, ONBOARDING_LIMITS, renderWhatsappText, type InviteLang, type InviteRole, type OnboardingSettings,
 } from './onboardingSettings.js';
@@ -446,10 +447,16 @@ export async function peekInvite(token: unknown, exec: Exec = pool as unknown as
     if (!invite) return null;
 
     // "Opened 2h ago" is the operator's only sign the link reached anyone. A failure to count must not fail the page.
-    await exec.query(
-        'UPDATE invites SET first_opened_at = COALESCE(first_opened_at, NOW()), open_count = open_count + 1 WHERE id = $1',
+    const counted = await exec.query<{ open_count: number; created_at: Date | string | null }>(
+        'UPDATE invites SET first_opened_at = COALESCE(first_opened_at, NOW()), open_count = open_count + 1 WHERE id = $1 RETURNING open_count, created_at',
         [invite.id]
     ).catch(() => undefined);
+    // The funnel's `invite_opened` is the FIRST opening of a join link (open_count is 1 only once, even for two simultaneous
+    // opens). A reset link is somebody changing a password, not somebody getting in. Best-effort, and what it records is a number.
+    const opening = counted?.rows[0];
+    if (invite.purpose === 'join' && opening && Number(opening.open_count) === 1) {
+        await recordEvent({ creatorId: invite.creatorId, userId: null, actor: 'tenant' }, 'invite_opened', null, { ms_since_created: msSince(opening.created_at) ?? undefined });
+    }
 
     let inviter: string | null = null;
     let sessionDays: number = ONBOARDING_LIMITS.sessionDays.fallback;
@@ -513,11 +520,11 @@ export interface Accepted {
 const PG_UNIQUE_VIOLATION = '23505';
 
 /** The statement that makes a link single-use. Everything after it in the transaction runs only for the one request that won. */
-async function claim(tx: Exec, token: string): Promise<{ id: string }> {
-    const claimed = await tx.query<{ id: string }>(
+async function claim(tx: Exec, token: string): Promise<{ id: string; created_at: Date | string | null }> {
+    const claimed = await tx.query<{ id: string; created_at: Date | string | null }>(
         `UPDATE invites SET used_at = NOW()
           WHERE token_hash = $1 AND used_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()
-      RETURNING id`,
+      RETURNING id, created_at`,
         [hashInviteToken(token)]
     );
     const row = claimed.rows[0];
@@ -604,8 +611,9 @@ export async function acceptInvite(request: AcceptRequest): Promise<Accepted> {
         if (invite.email && invite.email.toLowerCase() !== viewer.email.toLowerCase()) {
             throw new InviteError(403, 'EMAIL_MISMATCH', 'This invitation is for a different email address than the account you are signed in with.');
         }
+        let attachedCreatedAt: Date | string | null = null;
         const attached = await withTransaction(async (tx) => {
-            await claim(tx, token);
+            attachedCreatedAt = (await claim(tx, token)).created_at;
             const added = await tx.query<{ user_id: string }>(
                 `INSERT INTO memberships (user_id, creator_id, role) VALUES ($1, $2, $3)
                  ON CONFLICT (user_id, creator_id) DO NOTHING RETURNING user_id`,
@@ -615,6 +623,7 @@ export async function acceptInvite(request: AcceptRequest): Promise<Accepted> {
             const status = await openOnboarding(tx, invite.creatorId);
             return { alreadyMember: added.rows.length === 0, status };
         });
+        await recordEvent({ creatorId: invite.creatorId, userId: viewer.userId, actor: 'tenant' }, 'invite_accepted', null, { ms_since_created: msSince(attachedCreatedAt) ?? undefined });
         // The same sign-in, pointed at the new tenant: its expiry is carried, never restarted.
         const minted = {
             session: createSession({ userId: viewer.userId, role: 'user', tenantId: invite.creatorId, tokenVersion: viewer.tokenVersion, ...(viewer.exp !== undefined ? { exp: viewer.exp } : {}) }),
@@ -641,9 +650,10 @@ export async function acceptInvite(request: AcceptRequest): Promise<Accepted> {
 
     const passwordHash = await hashPassword(request.password as string);
     let created: { id: string; email: string; token_version: number; status: OnboardingStatus };
+    let createdAt: Date | string | null = null;
     try {
         created = await withTransaction(async (tx) => {
-            await claim(tx, token);
+            createdAt = (await claim(tx, token)).created_at;
             const inserted = await tx.query<{ id: string; email: string; token_version: number }>(
                 `INSERT INTO users (email, password_hash, role, last_login_at) VALUES (lower($1), $2, 'user', NOW())
                  RETURNING id, email, token_version`,
@@ -660,6 +670,7 @@ export async function acceptInvite(request: AcceptRequest): Promise<Accepted> {
         if ((err as { code?: string })?.code === PG_UNIQUE_VIOLATION) throw existsError();
         throw err;
     }
+    await recordEvent({ creatorId: invite.creatorId, userId: created.id, actor: 'tenant' }, 'invite_accepted', null, { ms_since_created: msSince(createdAt) ?? undefined });
     return {
         ...(await freshSession(created.id, created.token_version)),
         inviteId: invite.id, userId: created.id, email: created.email, tenantId: invite.creatorId, tenantName: invite.tenantName,
