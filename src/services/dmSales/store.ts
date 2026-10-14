@@ -12,6 +12,7 @@
  */
 import { queryOne, queryRows } from '../../db/query.js';
 import type { AiAgentRow, MessageRow } from '../../db/rows.js';
+import { ATTACHMENT_ACK_TYPE, WORDLESS_MESSAGE_TYPES } from '../../webhook/attachments.js';
 import { STAGES, type HandoffReason, type Intent, type Stage } from './types.js';
 
 export interface SalesState {
@@ -81,16 +82,24 @@ export async function loadSalesState(conversationId: string): Promise<SalesState
  *     each; the newest answers all of them (the model reads the whole burst in its history), and this one stands down.
  *   - `answered`: somebody (this bot on an earlier attempt, a person from the inbox) has already replied after it. Answering again is a
  *     second reply to one message; it is what a job resumed after a crash between the send and the bookkeeping would do.
+ *
+ * **Neither counts what has no words.** A photo (or any other word-less message, `webhook/attachments.ts`) is never answered by this turn:
+ * the ack that follows it is a fixed line from the kit (`webhook/attachmentAck.ts`). So a photo sent right after a question must not make
+ * the question's turn stand down as "a later message is waiting" (nobody would answer the words), and an ack sent after a question (for a
+ * photo that came in meanwhile) must not make a retry of that question look "already answered": the ack was not an answer to it. Both are
+ * read off `message_type`, the contract that `WORDLESS_MESSAGE_TYPES` and `ATTACHMENT_ACK_TYPE` name.
  */
 export async function supersession(conversationId: string, messageId: string): Promise<{ newerUnhandled: boolean; answered: boolean }> {
     const row = await queryOne<{ newer_unhandled: boolean; answered: boolean }>(
         `SELECT EXISTS (SELECT 1 FROM messages n
                          WHERE n.conversation_id = $1 AND n.direction = 'inbound' AND n.id <> $2 AND n.handled_at IS NULL
-                           AND n.created_at > (SELECT created_at FROM messages WHERE id = $2)) AS newer_unhandled,
+                           AND n.created_at > (SELECT created_at FROM messages WHERE id = $2)
+                           AND COALESCE(n.message_type, 'text') <> ALL($3::text[])) AS newer_unhandled,
                 EXISTS (SELECT 1 FROM messages o
                          WHERE o.conversation_id = $1 AND o.direction = 'outbound'
-                           AND o.created_at > (SELECT created_at FROM messages WHERE id = $2)) AS answered`,
-        [conversationId, messageId]
+                           AND o.created_at > (SELECT created_at FROM messages WHERE id = $2)
+                           AND COALESCE(o.message_type, '') <> $4) AS answered`,
+        [conversationId, messageId, WORDLESS_MESSAGE_TYPES, ATTACHMENT_ACK_TYPE]
     );
     return { newerUnhandled: row?.newer_unhandled === true, answered: row?.answered === true };
 }

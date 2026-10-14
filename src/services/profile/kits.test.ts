@@ -35,7 +35,7 @@ describe('the kits', () => {
                 kit.disclosure, kit.starterPersona, ...Object.values(kit.offerNouns),
                 kit.commentFallback.lead, kit.commentFallback.bio, kit.commentFallback.link('https://x.test'), kit.commentFallback.none,
                 kit.studio.forwardExample, kit.studio.fallbackQuestion, kit.studio.coursePitch, ...kit.studio.timeWords.head, ...kit.studio.timeWords.all,
-                kit.importFallback.dm, kit.importFallback.replies,
+                kit.importFallback.dm, kit.importFallback.replies, kit.attachments.media, kit.attachments.mention,
             ];
             assert.equal(kit.studio.timeWords.head.length, 5, `${key}: the prompt names five time words`);
             for (const line of lines) assert.ok(line.trim().length > 0, `${key} has a blank line`);
@@ -364,6 +364,63 @@ describe('the DM sales kit: what a customer is sent without a model, as drafted 
                 const text = (k: KitKey): string => { const l = KITS[k].sales.lines[line]; return typeof l === 'function' ? l('X') : l; };
                 assert.notEqual(text(key), text('gulf'), `${key} ${line}`);
             }
+        }
+    });
+});
+
+/**
+ * The two lines a customer is sent for a message with NO WORDS (a photo, a voice note, a mention in a story: `src/webhook/attachments.ts`),
+ * in every register, as drafted. Sent without a model, in every `sales_mode`. None addresses the reader by gender, and none holds a link, a
+ * number or a name. The Gulf column is the owner's wording; the other three are drafts for a native speaker to read (05 §2).
+ */
+const REVIEW_ATTACHMENTS: Record<KitKey, { media: string; mention: string }> = {
+    gulf: {
+        media: 'وصلني مرفقك 🙏 بس ما أقدر أفتح الصور والصوتيات والمقاطع هنا. يا ليت يكون سؤالك مكتوب، وأساعدك على طول.',
+        mention: 'شكراً على الإشارة في قصتك 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
+    },
+    msa: {
+        media: 'وصلني مرفقك 🙏 لكنني لا أستطيع فتح الصور والرسائل الصوتية والمقاطع هنا. يسعدني أن أساعدك إذا وصلني سؤالك مكتوباً.',
+        mention: 'شكراً على الإشارة في قصتك 🙏 وإن كان لديك أي سؤال فيسعدني أن أساعدك.',
+    },
+    egyptian: {
+        media: 'وصلني المرفق 🙏 بس مش هقدر أفتح الصور والفويسات والفيديوهات هنا. يا ريت السؤال يكون مكتوب وأنا أساعدك على طول.',
+        mention: 'شكراً على المنشن في الستوري 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
+    },
+    levantine: {
+        media: 'وصلني المرفق 🙏 بس ما بقدر افتح الصور والفويسات والفيديوهات هون. يا ريت يكون سؤالك مكتوب، وبساعدك فوراً.',
+        mention: 'شكراً على المنشن بالستوري 🙏 ولو عندك أي سؤال بيسعدني ساعدك.',
+    },
+    en: {
+        media: 'Got your attachment 🙏 I can\'t open photos, voice notes or videos here. If you type your question, I\'ll help right away.',
+        mention: 'Thanks for the mention in your story 🙏 If you have a question, I\'m glad to help.',
+    },
+};
+
+describe('the attachment lines: what a customer is sent for a message with no words, as drafted (for a native speaker to read)', () => {
+    for (const key of KIT_KEYS) {
+        it(`${key}: the "I can't open it" line and the story-mention thanks`, () => {
+            assert.deepEqual({ ...KITS[key].attachments }, REVIEW_ATTACHMENTS[key]);
+        });
+
+        it(`${key}: holds no link, no number and no name: the guard has nothing to refuse in it`, () => {
+            for (const text of Object.values(KITS[key].attachments)) {
+                const g = guardReply(text, { texts: [], prices: [] });
+                assert.deepEqual(g.violations, [], text);
+                assert.deepEqual(g.linksRemoved, [], text);
+                assert.equal(g.womenEmojiRemoved, 0, text);
+            }
+        });
+    }
+
+    it('an Egyptian or MSA customer is told none of the Gulf words', () => {
+        for (const key of ['egyptian', 'msa'] as const) {
+            for (const [name, text] of Object.entries(KITS[key].attachments)) assertNoGulfInEgyptianOrMsa(text, `${key} attachment line ${name}`);
+        }
+    });
+
+    it('every register has its own words: no register is left speaking another\'s', () => {
+        for (const key of ['msa', 'egyptian', 'levantine', 'en'] as const) {
+            for (const line of ['media', 'mention'] as const) assert.notEqual(KITS[key].attachments[line], KITS.gulf.attachments[line], `${key} ${line}`);
         }
     });
 });

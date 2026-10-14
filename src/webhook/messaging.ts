@@ -16,6 +16,8 @@ import { PROFILE_WAIT_MS, refreshSenderProfile, settleWithin } from '../services
 import { noteMetaFailure } from '../services/tokenHealth.js';
 import { getCreatorByPageId, type Creator } from '../services/tenant.js';
 import { checkFairSendQuota } from '../utils/rateLimiter.js';
+import { acknowledgeWordless } from './attachmentAck.js';
+import { describeWordless, WORDLESS_PLACEHOLDERS, type Wordless } from './attachments.js';
 import { toMetaMessage, applyDisclosure, disclosureLine, type MetaMessagePayload } from './meta-payload.js';
 import { FINAL_ATTEMPT, type WebhookHandlerOptions } from './options.js';
 import { describeError, log, withLogContext } from '../utils/log.js';
@@ -42,12 +44,18 @@ export interface NormalizedDm {
     text: string;
     payload: string;
     isStoryMention: boolean;
+    /**
+     * What the message is when it has no words: no text and no quick-reply payload, but a photo, a voice note, a shared reel, a story mention,
+     * a reply to a story or a message Instagram could not show (src/webhook/attachments.ts). Null for anything with words. A message with
+     * words is answered by a model; one without is stored as its kind and acknowledged with a fixed line, never answered by a model.
+     */
+    wordless: Wordless | null;
     /** Meta's message id — the dedupe key. Null for events that carry none. */
     metaMessageId: string | null;
 }
 
-/** What a story mention says, in the absence of any text the person actually typed. */
-export const STORY_MENTION_TEXT = '[Story Mention]';
+/** What a story mention says, in the absence of any text the person actually typed: the placeholder it has always been stored as. */
+export const STORY_MENTION_TEXT = WORDLESS_PLACEHOLDERS.story_mention;
 
 /**
  * The one string that stands for "what this person said", for BOTH the stored row and the
@@ -66,21 +74,28 @@ export const STORY_MENTION_TEXT = '[Story Mention]';
  * stored `''` while the payload went to Gemini — so the payload is folded in here too and the
  * inbox stops showing an empty bubble for a button somebody pressed.
  *
+ * The last resort is the word-less placeholder (`[photo]`, `[Story Mention]`): it is what is STORED for a message with no words, and so
+ * what a later model turn sees in the history, as the customer's earlier message. The model is never asked to answer it: a word-less
+ * message is acknowledged with a fixed line (`attachmentAck.ts`) before any model is reached, in every `sales_mode`.
+ *
  * Exported so the test can assert the two call sites cannot drift apart again.
  */
 export function dmPromptText(dm: NormalizedDm): string {
-    return dm.text || dm.payload || (dm.isStoryMention ? STORY_MENTION_TEXT : '');
+    return dm.text || dm.payload || dm.wordless?.placeholder || '';
 }
 
 /**
- * Flatten the three shapes a messaging event arrives in (plain message, quick reply,
- * postback) into one. Returns null for events with nothing to reply to.
+ * Flatten the shapes a messaging event arrives in (plain message, quick reply, postback, and a message with no words: an attachment, a
+ * reply to a story, an unsupported message) into one. Returns null for events with nothing to reply to or to store.
  *
  * Exported for src/webhook/messaging.test.ts. It is pure, and the alternative is a test that
  * reaches it only through the whole database-and-Gemini pipeline.
  */
 export function normalizeDm(event: any): NormalizedDm | null {
     const senderId = event?.sender?.id;
+
+    // An unsend (`message.is_deleted`) is not a new message, even one that still lists attachments: nothing to store and nobody to answer.
+    if (event?.message?.is_deleted) return skippedEmpty(event);
 
     let text: string = event?.message?.text || '';
     let payload = '';
@@ -98,35 +113,43 @@ export function normalizeDm(event: any): NormalizedDm | null {
 
     let isStoryMention = false;
     if (Array.isArray(event?.message?.attachments)) {
-        const storyMention = event.message.attachments.find((att: any) => att.type === 'story_mention');
+        const storyMention = event.message.attachments.find((att: any) => att?.type === 'story_mention');
         if (storyMention) {
             isStoryMention = true;
             log('debug', 'dm.story_mention', { sender_id: senderId });
         }
     }
 
-    if (!senderId || (!text && !payload && !isStoryMention)) {
-        // Reached by read watermarks, delivery receipts, reactions, referrals — and by a real
-        // message whose only content is an attachment this pipeline cannot describe to Gemini
-        // (an image, a voice note, a shared reel). The second case is a person waiting for an
-        // answer, so it is logged with enough to tell the two apart.
-        log('debug', 'dm.skipped_empty', {
-            has_message: Boolean(event?.message),
-            attachment_types: Array.isArray(event?.message?.attachments)
-                ? event.message.attachments.map((att: any) => att?.type ?? 'unknown')
-                : [],
-            event_keys: event && typeof event === 'object' ? Object.keys(event) : [],
-        });
-        return null;
-    }
+    // A message with no words, and only then: a caption, a typed line or a tapped button is words, and is answered as it always was.
+    const wordless = !text && !payload ? describeWordless(event?.message) : null;
+
+    if (!senderId || (!text && !payload && !wordless)) return skippedEmpty(event);
 
     return {
         senderId,
         text,
         payload,
         isStoryMention,
+        wordless,
         metaMessageId: event?.message?.mid ?? event?.postback?.mid ?? null,
     };
+}
+
+/**
+ * `normalizeDm`'s "nothing to reply to or to store": read watermarks, delivery receipts, reactions, referrals and an unsend. A message with
+ * only an attachment is NOT here any more (it is a word-less message, `describeWordless`), so what lands here is not a person waiting;
+ * the log says what the event held all the same.
+ */
+function skippedEmpty(event: any): null {
+    log('debug', 'dm.skipped_empty', {
+        has_message: Boolean(event?.message),
+        is_deleted: Boolean(event?.message?.is_deleted),
+        attachment_types: Array.isArray(event?.message?.attachments)
+            ? event.message.attachments.map((att: any) => att?.type ?? 'unknown')
+            : [],
+        event_keys: event && typeof event === 'object' ? Object.keys(event) : [],
+    });
+    return null;
 }
 
 /**
@@ -245,7 +268,9 @@ async function claimInbound(
         [
             conversationId,
             creatorId,
-            dm.isStoryMention ? 'story_mention' : 'text',
+            // `message_type` is one of the word-less kinds exactly when the message has no words (`WORDLESS_MESSAGE_TYPES`): the sales
+            // turn's `supersession` and the acknowledgement's claim tell the two apart in SQL by it.
+            dm.wordless ? dm.wordless.kind : 'text',
             dmPromptText(dm),
             dm.payload || null,
             JSON.stringify(event),
@@ -332,7 +357,7 @@ async function answerDm(
     options: WebhookHandlerOptions,
     side: DmSideTasks
 ): Promise<void> {
-    log('info', 'dm.received', { is_story_mention: dm.isStoryMention, has_payload: Boolean(dm.payload) });
+    log('info', 'dm.received', { is_story_mention: dm.isStoryMention, has_payload: Boolean(dm.payload), wordless_kind: dm.wordless?.kind ?? null });
 
     // Whether this attempt may leave work for another one.
     //
@@ -404,6 +429,26 @@ async function answerDm(
     }
 
     try {
+        // A message with no words never reaches a brain, in any `sales_mode`: not Gemini, not the providers engine, not the sales turn. It is
+        // already stored (as its kind); what is left is one fixed line from the kit, or nothing for a sticker (src/webhook/attachmentAck.ts).
+        // First in the `try` so the catch below keeps its meaning for it: a transient send failure is retried, a permanent Meta error is final.
+        // Always terminal otherwise: a refused quota or a claim that found an answer already on its way is not retried for an acknowledgement.
+        if (dm.wordless) {
+            const dmCtx = await profileContextOrLegacy(creator.id, 'dm');
+            const ack = await acknowledgeWordless({
+                creator: { id: creator.id, page_access_token: creator.page_access_token },
+                pageId: resolveDmPageId(creator, [recipientId, entryId]),
+                conversation: { id: conversationId },
+                inbound: { id: claim.id, senderId: dm.senderId },
+                wordless: dm.wordless,
+                ctx: dmCtx,
+                disclosure: { needed: needsDisclosure(conversation.ai_disclosed_at), line: disclosureLine(dmCtx.language.code) },
+            });
+            log('info', 'dm.wordless_handled', { wordless_kind: dm.wordless.kind, ack });
+            await markHandled(claim.id);
+            return;
+        }
+
         // Which brain answers (`ai_agents.sales_mode`, DM plan S6): `off`, the default, is everything below exactly as it was; `test`
         // sends the sales turn only the listed test senders and everyone else down the old path; `on` sends it everyone. The read fails
         // toward `off` (a database that is behind, an error): a DM is never answered by an experiment because the lookup broke.

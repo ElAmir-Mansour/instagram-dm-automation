@@ -19,6 +19,8 @@
  *   - `sales`           the DM sales prompt (docs/DM_SALES_PLAN.md §3, S5): what it tells the model (shared by the four Arabic registers, as
  *                       `dm` is) and the four lines a customer is sent without a model (`lines`), which are dialect and so differ.
  *                       The lines are drafts for the three non-Gulf registers until a native speaker has read them: `kits.test.ts` lists them.
+ *   - `attachments`     the two lines a customer is sent for a message with no words (a photo, a voice note, a mention of the account in a
+ *                       story), without a model, in every `sales_mode` (src/webhook/attachmentAck.ts). Drafts as well, in the same table.
  *
  * **Extending it (P9-P12).** Add the field to `LanguageKit` and fill it in for all five records: the `Record<KitKey, ...>`
  * will not compile until every register has it, so a register cannot be left speaking another's text by omission. Put the
@@ -108,6 +110,18 @@ export interface SalesLines {
     nudge: string;
 }
 
+/**
+ * What a customer is sent for a message with NO WORDS (src/webhook/attachments.ts), without a model: a model asked to answer "[photo]"
+ * invents what is in it. Sent in every `sales_mode`, at most once per burst, and never in place of a real answer
+ * (src/webhook/attachmentAck.ts). Like `SalesLines`, written to be true of anyone: no gender, no number, no link, no name.
+ */
+export interface AttachmentLines {
+    /** A photo, a video, a voice note, a file, a shared post, reel or story, a message Instagram could not show: "I can't open it here; write your question". */
+    media: string;
+    /** They mentioned the account in their story: thanks, and an offer to help. */
+    mention: string;
+}
+
 /** Words of one offer's block in the sales prompt, and of the conversation's last block. */
 export interface SalesOfferLabels {
     /** Heading of an offer: its id, in the form the model must answer with. */
@@ -167,6 +181,7 @@ export interface LanguageKit {
     studio: StudioLines;
     importFallback: ImportFallbackLines;
     sales: SalesKit;
+    attachments: AttachmentLines;
     dm: {
         /** The heading above the agent's knowledge base. */
         knowledgeHeader: string;
@@ -303,12 +318,14 @@ const timeWordsOf = (head: readonly string[], own: readonly string[] = []): Stud
 /** The words that make a kit a register: rule 1, the public reply, and what the Studio's writer says and checks. */
 const arabic = (
     key: ArabicRegister, friendly: string, commentFallback: CommentFallbackLines, studio: StudioLines, importFallback: ImportFallbackLines, salesLines: SalesLines,
+    attachments: AttachmentLines,
 ): LanguageKit => ({
     key,
     lang: ARABIC.lang,
     studio,
     importFallback,
     sales: { ...ARABIC_SALES_TEXT, lines: salesLines },
+    attachments,
     dm: { ...ARABIC.dm, friendly },
     offerNouns: { ...ARABIC.offerNouns },
     disclosure: ARABIC.disclosure,
@@ -344,6 +361,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             optOut: 'تمام، ما راح نرسل لك رسائل ثانية. شكراً لوقتك 🙏',
             calm: 'نقدّر لو نتكلم بأسلوب محترم، ولو عندك أي سؤال يسعدنا نساعدك 🙏',
             nudge: 'لو عندك أي سؤال عن الرابط اللي أرسلناه لك، يسعدنا نساعدك 🙏',
+        },
+        {
+            media: 'وصلني مرفقك 🙏 بس ما أقدر أفتح الصور والصوتيات والمقاطع هنا. يا ليت يكون سؤالك مكتوب، وأساعدك على طول.',
+            mention: 'شكراً على الإشارة في قصتك 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
         }),
 
     msa: arabic('msa',
@@ -371,6 +392,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             optOut: 'حسناً، لن نرسل إليك رسائل أخرى. شكراً لوقتك 🙏',
             calm: 'نقدّر الحوار المحترم، وإن كان لديك أي سؤال فيسعدنا أن نساعدك 🙏',
             nudge: 'إن كان لديك أي سؤال حول الرابط الذي أرسلناه إليك، فيسعدنا أن نساعدك 🙏',
+        },
+        {
+            media: 'وصلني مرفقك 🙏 لكنني لا أستطيع فتح الصور والرسائل الصوتية والمقاطع هنا. يسعدني أن أساعدك إذا وصلني سؤالك مكتوباً.',
+            mention: 'شكراً على الإشارة في قصتك 🙏 وإن كان لديك أي سؤال فيسعدني أن أساعدك.',
         }),
 
     egyptian: arabic('egyptian',
@@ -397,6 +422,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             optOut: 'تمام، مش هنبعتلك رسايل تانية. شكراً لوقتك 🙏',
             calm: 'يا ريت نتكلم بأسلوب محترم، ولو عندك أي سؤال يسعدنا نساعدك 🙏',
             nudge: 'لو عندك أي سؤال عن الرابط اللي بعتناه ليك، يسعدنا نساعدك 🙏',
+        },
+        {
+            media: 'وصلني المرفق 🙏 بس مش هقدر أفتح الصور والفويسات والفيديوهات هنا. يا ريت السؤال يكون مكتوب وأنا أساعدك على طول.',
+            mention: 'شكراً على المنشن في الستوري 🙏 ولو عندك أي سؤال يسعدني أساعدك.',
         }),
 
     levantine: arabic('levantine',
@@ -423,6 +452,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             optOut: 'تمام، ما رح نبعتلك رسائل تانية. شكراً لوقتك 🙏',
             calm: 'منقدّر لو نحكي بأسلوب محترم، ولو عندك أي سؤال بيسعدنا نساعدك 🙏',
             nudge: 'إذا عندك أي سؤال عن الرابط اللي بعتناه إلك، بيسعدنا نساعدك 🙏',
+        },
+        {
+            media: 'وصلني المرفق 🙏 بس ما بقدر افتح الصور والفويسات والفيديوهات هون. يا ريت يكون سؤالك مكتوب، وبساعدك فوراً.',
+            mention: 'شكراً على المنشن بالستوري 🙏 ولو عندك أي سؤال بيسعدني ساعدك.',
         }),
 
     // English has no register, and none of its lines is a translation of the owner's: they say the same thing in plain English.
@@ -441,6 +474,10 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
         importFallback: {
             dm: 'Hi {username}! 👋\nHere is the link for "{name}":\n🔗 {url}',
             replies: 'Link and details sent to your DMs, {username}! 📩 | Check your messages, {username}, the link is there! 🚀',
+        },
+        attachments: {
+            media: 'Got your attachment 🙏 I can\'t open photos, voice notes or videos here. If you type your question, I\'ll help right away.',
+            mention: 'Thanks for the mention in your story 🙏 If you have a question, I\'m glad to help.',
         },
         sales: {
             ownerFallback: 'the account owner',
