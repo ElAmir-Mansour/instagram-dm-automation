@@ -25,12 +25,16 @@
  * Events (`onboarding_events`) are enums and numbers only, never a field's value (02 §6). They are best-effort: a failed
  * insert is logged and never fails the request that caused it.
  */
+import { pool } from '../config/db.js';
 import type { OnboardingStatus } from '../db/rows.js';
 import { queryOne } from '../db/query.js';
 import { describeError, log } from '../utils/log.js';
 import { APP_SETTING_KEYS, getSetting } from './appSettings.js';
 import { recordEvent, type Actor, type EventContext } from './onboardingEvents.js';
+import { confirmedComment, insertFirstCampaign, planFirstCampaign, type FirstCampaignOutcome, type FirstCampaignPlan } from './onboarding/proofCampaign.js';
+import { loadConfirmedComment } from './onboarding/proofStore.js';
 import { readProfileState, type ProfileState } from './profile/patch.js';
+import { lockTenantPublishing, withTransaction } from './studio/common.js';
 import type { TenantRole } from './tenant.js';
 
 // ─── The registry ────────────────────────────────────────────────────────────────────────────
@@ -49,15 +53,16 @@ export interface WizardStep {
 }
 
 /**
- * W0 (the invite page) is before there is a session and is not here. W4 (connect, P28) and W5 (proof, P25) are listed and
- * disabled: when their PRs land, enabling the entry is all the server needs, and the page registers the renderer.
+ * W0 (the invite page) is before there is a session and is not here. W4 (connect, P28) is listed and off until the operator switches
+ * "Connect with Facebook" on (`stepsFor`). W5 (proof, P25) is on: the page draws it (`welcome_proof.js`), and with no AI key it says so
+ * and lets the tenant carry on, so nothing about it can stop anyone finishing.
  */
 export const WIZARD_STEPS: readonly WizardStep[] = Object.freeze([
     { id: 'about', code: 'W1', required: true, enabled: true },
     { id: 'voice', code: 'W2', required: true, enabled: true },
     { id: 'brand', code: 'W3', required: false, enabled: true },
     { id: 'connect', code: 'W4', required: false, enabled: false },
-    { id: 'proof', code: 'W5', required: false, enabled: false },
+    { id: 'proof', code: 'W5', required: false, enabled: true },
     { id: 'done', code: 'W6', required: false, enabled: true },
 ]);
 
@@ -476,6 +481,11 @@ export interface Completion {
     /** True when this call changed nothing: it was completed before (or there is no row to complete). */
     alreadyCompleted: boolean;
     step: 'done';
+    /**
+     * The first comment campaign this call created (OFF), or why there is none. Present only on the call that finished the setup: a repeat
+     * (`alreadyCompleted`) made nothing and says nothing about it.
+     */
+    campaign?: FirstCampaignOutcome;
 }
 
 /**
@@ -483,7 +493,11 @@ export interface Completion {
  * records nothing. The first needs the six activation fields (`activationMissing`) and says which are missing and which step
  * holds each, so the page can take the person back to it instead of showing an error.
  *
- * Creating the first campaign and compiling the DM persona belong to the proof step (P25), not to this one.
+ * It also creates the tenant's FIRST COMMENT CAMPAIGN, switched off (P25, D11): from the comment sample the tenant confirmed in W5, else
+ * from the register's own wording and the main offer (`planFirstCampaign`). It is created in the SAME TRANSACTION as the status change
+ * that only one caller can win (`WHERE status <> 'completed'`), so a double tap, a retry or two tabs make one campaign, never two, and a
+ * campaign that cannot be written leaves the setup open to be finished again. A tenant with no keyword or nothing to send simply has no
+ * campaign, and the answer says why. Compiling the DM persona is not done here: the DM bot is parked.
  */
 export async function completeOnboarding(creatorId: string, actor: StepActor, now: number = Date.now()): Promise<Completion> {
     const current = await loadOnboarding(creatorId);
@@ -498,20 +512,52 @@ export async function completeOnboarding(creatorId: string, actor: StepActor, no
         });
     }
 
-    const done = await queryOne<{ started_at: Date | string | null; completed_at: Date | string | null; filled_by: Actor | null }>(
-        `UPDATE onboarding
+    const plan = await planCampaign(creatorId, profile.profile);
+    const done = await withTransaction(async (tx) => {
+        const { rows } = await tx.query<{ started_at: Date | string | null; completed_at: Date | string | null; filled_by: Actor | null }>(
+            `UPDATE onboarding
             SET status = 'completed', completed_at = NOW(), current_step = 'done',
                 started_at = COALESCE(started_at, NOW()),
                 filled_by = CASE WHEN $2::text = 'admin' THEN 'admin' ELSE COALESCE(filled_by, $2::text) END
           WHERE creator_id = $1 AND status <> 'completed'
       RETURNING started_at, completed_at, filled_by`,
-        [creatorId, actor.by]
-    );
+            [creatorId, actor.by]
+        );
+        const row = rows[0];
+        // Somebody else finished it first: they made the campaign, and this call makes nothing.
+        if (!row) return null;
+        let campaign: FirstCampaignOutcome;
+        if (plan.ok) {
+            // The Studio's schedule and the Monteur's approve take this lock before they plan a campaign on a keyword.
+            await lockTenantPublishing(tx, creatorId);
+            campaign = await insertFirstCampaign(tx, creatorId, plan.seed);
+        } else {
+            campaign = { created: false, reason: plan.reason };
+        }
+        return { row, campaign };
+    });
     if (!done) return { status: 'completed', alreadyCompleted: true, step: 'done' };
 
-    const startedAt = done.started_at ? new Date(done.started_at).getTime() : NaN;
-    const props: Record<string, number | string> = { by: done.filled_by ?? actor.by };
+    const startedAt = done.row.started_at ? new Date(done.row.started_at).getTime() : NaN;
+    const props: Record<string, number | string> = { by: done.row.filled_by ?? actor.by };
     if (!Number.isNaN(startedAt)) props.total_ms = Math.max(0, now - startedAt);
     await recordEvent({ creatorId, userId: actor.userId, actor: actor.by }, 'wizard_completed', null, props);
-    return { status: 'completed', alreadyCompleted: false, step: 'done' };
+    if (done.campaign.created) log('info', 'onboarding.first_campaign_created', { creator_id: creatorId, campaign_id: done.campaign.id, source: done.campaign.source });
+    else log('info', 'onboarding.first_campaign_skipped', { creator_id: creatorId, reason: done.campaign.reason });
+    return { status: 'completed', alreadyCompleted: false, step: 'done', campaign: done.campaign };
+}
+
+/**
+ * What the first campaign will be: the comment sample the TENANT confirmed (when it can be read), else the register's own wording. The
+ * sample is read before the transaction, so a failed read (v34 missing, a database blip) only costs the tenant's wording, never the
+ * finishing: the campaign is then the register's own, which the tenant reviews in Campaigns like any other.
+ */
+async function planCampaign(creatorId: string, profile: ProfileState['profile']): Promise<FirstCampaignPlan> {
+    let sample = null;
+    try {
+        sample = confirmedComment(await loadConfirmedComment(pool, creatorId));
+    } catch (err) {
+        log('warn', 'onboarding.first_campaign_sample_unreadable', { creator_id: creatorId, ...describeError(err) });
+    }
+    return planFirstCampaign(profile, sample);
 }

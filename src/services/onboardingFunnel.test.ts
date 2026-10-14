@@ -100,8 +100,8 @@ describe('the stages', () => {
         assert.deepEqual(completedOnly.stages.map((s) => s.reached), [1, 1, 1, 1, 1, 1, 1], 'completing is reaching every stage on the way');
     });
 
-    it('follow the wizard\'s registry: a step that is switched on appears by itself, and a step nobody built does not', () => {
-        assert.deepEqual(funnelSteps(), ['about', 'voice', 'brand']);
+    it('follow the wizard\'s registry: a step that is switched on appears by itself, and a step the operator has not switched on (W4) does not', () => {
+        assert.deepEqual(funnelSteps(), ['about', 'voice', 'brand', 'proof']);
         const withConnect = buildFunnel(rows, [], { days: 30, now: NOW, steps: ['about', 'voice', 'brand', 'connect'] });
         assert.deepEqual(withConnect.stages.map((s) => s.id), ['invited', 'opened', 'accepted', 'about', 'voice', 'brand', 'connect', 'completed']);
         assert.equal(withConnect.stages.find((s) => s.id === 'connect')!.reached, 1, 'the tenant that completed is past it');

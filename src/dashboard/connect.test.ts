@@ -854,9 +854,9 @@ describe('W4: the three cards', () => {
         const s = load();
         const P = s.WelcomePage;
         const off = { ...withConnect(), order: ORDER };
-        assert.deepEqual(plain(P.stepOrder(off)), ['about', 'voice', 'brand', 'done']);
-        assert.deepEqual(plain(P.stepOrder(withConnect())), ['about', 'voice', 'brand', 'connect', 'done']);
-        assert.deepEqual(plain(P.progress(withConnect(), 'connect')), { index: 4, total: 4 });
+        assert.deepEqual(plain(P.stepOrder(off)), ['about', 'voice', 'brand', 'proof', 'done']);
+        assert.deepEqual(plain(P.stepOrder(withConnect())), ['about', 'voice', 'brand', 'connect', 'proof', 'done']);
+        assert.deepEqual(plain(P.progress(withConnect(), 'connect')), { index: 4, total: 5 });
         assert.equal(P.STEPS.connect.required, false);
         assert.equal(P.STEPS.connect.skippable, true);
         assert.equal(P.STEPS.connect.code, 'W4');
@@ -1247,19 +1247,19 @@ describe('W4 never blocks the wizard', () => {
         return { s, P };
     }
 
-    it('Continue with nothing connected sends nothing to the profile, marks the step done, and goes to the last screen', async () => {
+    it('Continue with nothing connected sends nothing to the profile, marks the step done, and goes to the proof samples', async () => {
         const { s, P } = fixture();
         await P.submit();
         assert.ok(!s.calls.some((c) => c.fn === 'patchProfile'), 'nothing to confirm: the profile is not written');
         assert.deepEqual(plain(s.calls[0]!.args), ['connect', { status: 'done' }]);
-        assert.equal(P.state.step, 'done');
+        assert.equal(P.state.step, 'proof');
     });
 
     it('Skip marks the step skipped, whatever is or is not connected', async () => {
         const { s, P } = fixture();
         await P.skip({ disabled: false });
         assert.deepEqual(plain(s.calls[0]!.args), ['connect', { status: 'skipped' }]);
-        assert.equal(P.state.step, 'done');
+        assert.equal(P.state.step, 'proof');
     });
 
     it('offers Skip on the bar, and Back to the step before it', () => {
@@ -1283,7 +1283,7 @@ describe('W4 never blocks the wizard', () => {
         const { s, P } = fixture();
         const markup = String(P.progressView(P.state));
         assert.ok(markup.includes(s.t('welcome.step.connect')));
-        assert.ok(markup.includes(s.t('welcome.progress.count', { n: 4, total: 4 })));
+        assert.ok(markup.includes(s.t('welcome.progress.count', { n: 4, total: 5 })));
     });
 });
 

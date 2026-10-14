@@ -5,7 +5,14 @@
  *
  *   GET  /                 { status, step, order, steps, profile, version, missing, hints, canEdit, … }   operator or owner
  *   PUT  /steps/:step      { values } | { status: 'done'|'skipped' } | { viewed: true }   →  { status, step, steps }   owner only
- *   POST /complete         →  { status: 'completed', alreadyCompleted, step }    owner only, idempotent
+ *   POST /complete         →  { status: 'completed', alreadyCompleted, step, campaign? }    owner only, idempotent; creates the first campaign, OFF
+ *
+ *   The proof samples, W5 (P25; `services/onboarding/proof.ts`), owner only and only while the wizard is open (a completed tenant is a 409):
+ *   GET  /proof                       { state, cards, failure, limits }   the cards that exist; writes nothing, calls no model
+ *   POST /proof                       the same, after one round that makes the cards that are missing (3 rounds a UTC day: 429 PROOF_LIMIT)
+ *   POST /proof/:id/verdict           { verdict: approved|edited|rejected, reasons?, edited_text? }   →  { card }
+ *   POST /proof/:id/regenerate        { hint? }   →  { state, card?, failure, limits }   a card written again (3 tries a card: 429 REGENERATE_LIMIT)
+ *   With no AI provider every proof answer says `state: 'needs_ai_key'`, nothing is spent, and `POST /complete` still works.
  *
  * W4 (connect your accounts, P28) is a step only when the operator has switched "Connect with Facebook" on (`meta.login_enabled`):
  * `GET /` lists it as enabled, `PUT /steps/connect` works, and Continue from W3 leads to it. With the switch off (the default) or
@@ -24,6 +31,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { completeOnboarding, describeWizard, readWizardFlags, resumeStep, saveStep, WizardError, type StepActor } from '../services/onboardingWizard.js';
+import { ProofError, readProof, recordVerdict, regenerateProof, startProof } from '../services/onboarding/proof.js';
 import { ProfileError } from '../services/profile/store.js';
 import { getTenantId, requireTenantRole, type TenantRole } from '../services/tenant.js';
 import { describeError, log } from '../utils/log.js';
@@ -37,6 +45,10 @@ function handle(event: string, fallback: string, fn: Handler) {
             await fn(req, res);
         } catch (err) {
             if (err instanceof WizardError) {
+                res.status(err.status).json({ error: err.message, code: err.code, ...err.extra });
+                return;
+            }
+            if (err instanceof ProofError) {
                 res.status(err.status).json({ error: err.message, code: err.code, ...err.extra });
                 return;
             }
@@ -81,4 +93,24 @@ onboardingRouter.put('/steps/:step', canEdit, handle('onboarding.step_failed', '
 
 onboardingRouter.post('/complete', canEdit, handle('onboarding.complete_failed', 'Failed to finish the setup.', async (req, res) => {
     res.json(await completeOnboarding(getTenantId(req), actorOf(req)));
+}));
+
+// ─── The proof samples (W5, P25) ─────────────────────────────────────────────────────────────
+
+const bodyOf = (req: Request): Record<string, unknown> => (req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body as Record<string, unknown> : {});
+
+onboardingRouter.get('/proof', canEdit, handle('onboarding.proof_read_failed', 'Failed to read the sample replies.', async (req, res) => {
+    res.json(await readProof(getTenantId(req)));
+}));
+
+onboardingRouter.post('/proof', canEdit, handle('onboarding.proof_failed', 'Failed to write the sample replies.', async (req, res) => {
+    res.json(await startProof(getTenantId(req), actorOf(req)));
+}));
+
+onboardingRouter.post('/proof/:id/verdict', canEdit, handle('onboarding.proof_verdict_failed', 'Failed to save your answer.', async (req, res) => {
+    res.json(await recordVerdict(getTenantId(req), req.params.id, bodyOf(req), actorOf(req)));
+}));
+
+onboardingRouter.post('/proof/:id/regenerate', canEdit, handle('onboarding.proof_regenerate_failed', 'Failed to write that sample again.', async (req, res) => {
+    res.json(await regenerateProof(getTenantId(req), req.params.id, bodyOf(req), actorOf(req)));
 }));

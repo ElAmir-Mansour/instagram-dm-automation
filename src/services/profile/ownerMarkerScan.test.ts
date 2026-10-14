@@ -184,6 +184,7 @@ const ALLOWED: readonly Allowed[] = [
         'src/services/profile/store.test.ts',
         'src/services/profile/validate.test.ts',
         'src/services/profile/views.test.ts',
+        'src/services/profile/voiceExamples.test.ts',
         'src/services/profile/writers.test.ts',
         'src/services/publicPagesChrome.test.ts',
         'src/services/publicPagesSeo.test.ts',

@@ -25,6 +25,7 @@ import { seoForWriter } from '../growth/settings.js';
 import { inFlightTriggers } from '../monteur/keywords.js';
 import { profileContextOrLegacy, ProfileUnreadableError } from '../profile/context.js';
 import { profileVersionFor } from '../profile/stamp.js';
+import { voiceExamplesFor } from '../profile/voiceExamplesStore.js';
 import type { Carousel, Slide } from './carouselTypes.js';
 import {
     type Exec, isFiniteNumber, isPlainObject, problemsError, StudioError, unique, UUID_PATTERN, withTransaction,
@@ -430,9 +431,11 @@ export async function studioWording(creatorId: string): Promise<StudioWording> {
  *   - palette: the tenant's brand palette
  *   - seo: the Growth settings' search keywords and hashtags (GROWTH.md §4); empty when unset
  *   - wording: who the writer writes for, from the profile (`studioWording`)
+ *   - voiceExamples: the captions the tenant confirmed during onboarding (`voiceExamplesFor`, P25). Present only when there are some: the
+ *     owner has none (nothing can write one for him), so his writer's prompt is the one the goldens pin. No lookup of who the owner is.
  */
 export async function buildGenContext(creatorId: string, settings?: StudioSettings): Promise<GenContext> {
-    const [studio, drafts, captions, accents, campaigns, seo, reels, wording] = await Promise.all([
+    const [studio, drafts, captions, accents, campaigns, seo, reels, wording, voiceExamples] = await Promise.all([
         settings ?? getStudioSettings(creatorId),
         queryRows<{ title: string | null; idea: string | null }>(
             `SELECT carousel->'slides'->0->>'title' AS title, input->>'idea' AS idea
@@ -462,6 +465,8 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
         // same. Fail-soft: before migration v24 there are none.
         inFlightTriggers(pool, creatorId).catch(() => ({ keywords: [], variants: [] })),
         studioWording(creatorId),
+        // Never throws, and is empty for a tenant that confirmed nothing (the owner is one): written for exactly as before.
+        voiceExamplesFor(creatorId, 'caption'),
     ]);
     const topics = [
         ...drafts.map((d) => d.title?.trim() || d.idea?.trim() || null),
@@ -476,6 +481,7 @@ export async function buildGenContext(creatorId: string, settings?: StudioSettin
         settings: studio,
         wording,
         seo,
+        ...(voiceExamples.length > 0 ? { voiceExamples } : {}),
     };
 }
 

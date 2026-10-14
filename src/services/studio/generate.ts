@@ -23,6 +23,7 @@
 import axios from 'axios';
 import { withoutArrayBounds, type GeminiSchema } from '../llm/geminiSchema.js';
 import { getGeminiKey, MISSING_GEMINI_KEY } from '../appSettings.js';
+import type { VoiceExample } from '../profile/voiceExamples.js';
 import type { Carousel, ShotRef, Slide } from './carouselTypes.js';
 import {
     buildCatalog,
@@ -141,6 +142,11 @@ export type GenContext = {
      * line and the slides where they fit, and the hashtags to choose the caption's from.
      */
     seo?: { keywords: string[]; hashtags: string[] };
+    /**
+     * The captions this tenant confirmed during onboarding (`voiceExamplesFor`, P25), shown to the writer as "you wrote, they changed it to".
+     * ABSENT, not empty, when there are none, and always absent for the owner: his prompt is then the one the goldens pin, byte for byte.
+     */
+    voiceExamples?: readonly VoiceExample[];
 };
 
 export type Campaign = { keyword: string; variants: string[]; dm: string; create: boolean };
@@ -1216,7 +1222,7 @@ export async function generateDraft(input: DraftInput, sources: GenSource[], ctx
         active: ctx.activeKeywords ?? [],
         target: slideTarget(input.slides),
     };
-    const system = buildSystemPrompt(settings, ctx.wording);
+    const system = buildSystemPrompt(settings, ctx.wording, ctx.voiceExamples);
     const schema = draftSchema(ctx.wording);
     const turns: ModelTurn[] = [{
         role: 'user',
@@ -1320,7 +1326,7 @@ export async function rewriteSlide(
         return problems;
     };
 
-    const system = buildSystemPrompt(settings, ctx.wording);
+    const system = buildSystemPrompt(settings, ctx.wording, ctx.voiceExamples);
     const turns: ModelTurn[] = [{
         role: 'user',
         text: rewriteUserPrompt({ carousel, index, instruction, allowedKinds, allowedMoments, catalog }),
