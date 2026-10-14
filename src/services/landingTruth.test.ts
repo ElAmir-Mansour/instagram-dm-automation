@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, statSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { describe, it } from 'node:test';
-import { renderSiteTemplate } from './publicPages.js';
+import { compactPublicPage, renderSiteTemplate } from './publicPages.js';
 
 const read = (p: string) => readFileSync(p, 'utf8');
 const landing = read('public/landing.html');
@@ -193,6 +193,29 @@ describe('landing — no claim that AI answers direct messages (P0-1)', () => {
         assert.ok(meta('ar').length <= 155, String(meta('ar').length));
         for (const lang of ['ar', 'en']) {
             assert.equal(/الذكاء الاصطناعي|\bAI\b|answers the conversation/.test(meta(lang)), false, lang);
+        }
+    });
+
+    it('the whole share surface says nothing the page does not: titles, og/twitter text, image alt and JSON-LD, in both languages (L5)', () => {
+        // What a crawler or a link preview reads is a claim like any other. Same four rules the body is held to: no AI reply (the DM bot is
+        // parked), no price or "free" (every plan is a quote; the JSON-LD carries no `offers`), no superlative, and no other company.
+        const banned = /الذكاء الاصطناعي|\bAI\b|answers the conversation|مجان|\bfree\b|\bprice\b|\bbest\b|الأفضل|#1|\bguarantee|clario/i;
+        for (const lang of ['ar', 'en'] as const) {
+            const page = renderSiteTemplate(compactPublicPage(landing), ALL, lang);
+            const surface = page.slice(0, page.indexOf('</head>'));
+            const texts = [
+                ...[...surface.matchAll(/<title\b[^>]*>([^<]*)<\/title>/g)].map((m) => m[1]!),
+                ...[...surface.matchAll(/<meta (?:name|property)="(?:description|og:[a-z:]+|twitter:[a-z:]+)"[^>]*content="([^"]*)"/g)]
+                    .filter((m) => !/^(?:https?:|image\/|\d+$|summary_large_image|website|[a-z]{2}_[A-Z]{2}$)/.test(m[1]!))
+                    .map((m) => m[1]!),
+                ...[...surface.matchAll(/<script type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/g)].flatMap((m) => {
+                    const strings: string[] = [];
+                    JSON.stringify(JSON.parse(m[1]!), (_k, v) => (typeof v === 'string' && !v.startsWith('http') ? (strings.push(v), v) : v));
+                    return strings;
+                }),
+            ];
+            assert.ok(texts.length >= 14, `${lang}: ${texts.length} strings were read, so the filter found the surface`);
+            for (const t of texts) assert.equal(banned.test(t), false, `${lang}: "${t}"`);
         }
     });
 

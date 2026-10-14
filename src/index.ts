@@ -15,8 +15,9 @@ import { currentRequestId, describeError, log, newRequestId, withLogContext } fr
 import { profileCacheScope } from './services/profile/cache.js';
 import apiRouter, { securityHeaders } from './routes/api.js';
 import { createLinksRouter } from './routes/links.js';
-import { getSiteSettings, getVerificationFiles, siteSettingsFromEnv } from './services/appSettings.js';
-import { pageLangFromQuery, renderSiteTemplate, type PageLang } from './services/publicPages.js';
+import { getSiteOrigin, getSiteSettings, getVerificationFiles, siteSettingsFromEnv } from './services/appSettings.js';
+import { compactPublicPage, pageLangFromQuery, renderSiteTemplate, type PageLang } from './services/publicPages.js';
+import { createSeoRouter } from './routes/seo.js';
 
 
 // ─── Startup ────────────────────────────────────────────────────────────────
@@ -120,12 +121,15 @@ type PublicPage = keyof typeof PUBLIC_PAGES;
 /** Written in Arabic only: `?lang=en` must not flip them to left-to-right. */
 const ARABIC_ONLY_PAGES: ReadonlySet<PublicPage> = new Set<PublicPage>(['eid']);
 
+// What is cached is the page AFTER `compactPublicPage` (L6): every HTML and CSS comment and the source's indentation gone, once per
+// page per warm instance. The files are annotated heavily on purpose, and the landing alone was 423 KB of which about 130 KB was prose
+// no visitor reads. Per request there is still only the cheap part: the tokens, the `data-when` elements and the language.
 const publicPageSource = new Map<PublicPage, Promise<string>>();
 
 async function renderPublicPage(page: PublicPage, lang: PageLang): Promise<string> {
     let source = publicPageSource.get(page);
     if (!source) {
-        source = readFile(PUBLIC_PAGES[page], 'utf8');
+        source = readFile(PUBLIC_PAGES[page], 'utf8').then(compactPublicPage);
         publicPageSource.set(page, source);
         // A read that failed must not be cached as a permanent failure.
         source.catch(() => publicPageSource.delete(page));
@@ -137,7 +141,9 @@ async function renderPublicPage(page: PublicPage, lang: PageLang): Promise<strin
         log('error', 'public.site_settings_read_failed', describeError(err));
         site = siteSettingsFromEnv();
     }
-    return renderSiteTemplate(await source, site, lang);
+    // `{{SITE_ORIGIN}}`: the saved app.public_base_url, never the Host header (a preview deployment is not canonical). Never throws.
+    const origin = await getSiteOrigin();
+    return renderSiteTemplate(await source, site, lang, origin);
 }
 
 async function sendPublicPage(
@@ -272,6 +278,8 @@ app.get('/site.webmanifest', (_req, res) => {
     res.type('application/manifest+json');
     res.sendFile(path.join(__dirname, '../public/site.webmanifest'), { maxAge: ROOT_ASSET_MAX_AGE });
 });
+// `/robots.txt` and `/sitemap.xml`, built from the site's origin (L5). vercel.json's catch-all already sends both paths here.
+app.use(createSeoRouter({ getOrigin: getSiteOrigin }));
 // Google Search Console's ownership file for this domain (the YouTube upload app's OAuth branding).
 // Exactly this one name: a route answering any google<token>.html would let anyone claim the domain.
 app.get('/google9fa1db13cbba5ece.html', (_req, res) => {
