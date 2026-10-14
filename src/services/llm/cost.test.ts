@@ -4,7 +4,9 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { costOf, DEFAULT_PRICES, priceFor, totalUsage, usdFor, type PriceTable } from './cost.js';
+import {
+    billedFromUsage, CACHE_WRITE_MULTIPLIER, cacheReadMultiplier, costOf, DEFAULT_CACHE_READ_MULTIPLIER, DEFAULT_PRICES, priceFor, totalUsage, usdFor, type PriceTable,
+} from './cost.js';
 import { PROVIDERS } from './registry.js';
 
 describe('DEFAULT_PRICES', () => {
@@ -227,5 +229,144 @@ describe('a figure the provider reports', () => {
         assert.equal(second.priced, false);
         assert.equal(second.usd, 30);
         assert.deepEqual(costOf(second.billed, DEFAULT_PRICES), second);
+    });
+});
+
+// ─── Prompt-cache tokens (S2 of the DM plan) ──────────────────────────────────────────────────
+//
+// Priced off the model's own input price: a read is a fraction of it, a write into the 5-minute cache is 1.25x. Checked against
+// platform.claude.com/docs/en/about-claude/pricing on 2026-10-14: "Cache hits and refreshes on Claude Opus 5.5 and Claude Sonnet 5.5 are
+// priced at 0.05x the base input price" ($0.20 and $0.10), Haiku 5.5 reads at $0.01 and writes at $0.125, and every other Claude model
+// reads at a tenth.
+
+describe('cache multipliers', () => {
+    it('writes cost 1.25x the input price, and an unlisted model reads at a tenth', () => {
+        assert.equal(CACHE_WRITE_MULTIPLIER, 1.25);
+        assert.equal(DEFAULT_CACHE_READ_MULTIPLIER, 0.1);
+    });
+
+    it('reads at 0.05x on Opus 5.5 and Sonnet 5.5, 0.025x on Fable 5.1 and Mythos 5.1, and a tenth on every other model', () => {
+        assert.equal(cacheReadMultiplier('claude-opus-5-5'), 0.05);
+        assert.equal(cacheReadMultiplier('claude-sonnet-5-5'), 0.05);
+        assert.equal(cacheReadMultiplier('claude-fable-5-1'), 0.025);
+        assert.equal(cacheReadMultiplier('claude-mythos-5-1'), 0.025);
+        for (const model of ['claude-haiku-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-fable-5', 'gemini-3.8-flash', 'mystery/model-9', '']) {
+            assert.equal(cacheReadMultiplier(model), 0.1, model);
+        }
+    });
+
+    it('gives a dated snapshot its alias\'s multiplier, ignoring case and space, and does not mistake a longer name for the alias', () => {
+        assert.equal(cacheReadMultiplier('claude-opus-5-5-20261001'), 0.05);
+        assert.equal(cacheReadMultiplier('  Claude-Sonnet-5-5-latest '), 0.05);
+        assert.equal(cacheReadMultiplier('claude-opus-5-50'), 0.1);
+        assert.equal(cacheReadMultiplier('claude-opus-5-5x'), 0.1);
+    });
+});
+
+describe('usdFor with cached input', () => {
+    const M = 1_000_000;
+
+    it('reads a million cached tokens at $0.20 on Opus 5.5 (0.05x of $4), $0.10 on Sonnet 5.5 and $0.01 on Haiku 5.5 (0.1x of $0.10)', () => {
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheRead: M }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 0.2, priced: true });
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheRead: M }, 'claude-sonnet-5-5', DEFAULT_PRICES), { usd: 0.1, priced: true });
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheRead: M }, 'claude-haiku-5-5', DEFAULT_PRICES), { usd: 0.01, priced: true });
+    });
+
+    it('reads at a tenth where the model has no better rate: Opus 4.8 and Sonnet 5 at $0.50 and $0.20 a million', () => {
+        assert.equal(usdFor({ in: 0, out: 0, cacheRead: M }, 'claude-opus-4-8', DEFAULT_PRICES).usd, 0.5);
+        assert.equal(usdFor({ in: 0, out: 0, cacheRead: M }, 'claude-sonnet-5', DEFAULT_PRICES).usd, 0.2);
+    });
+
+    it('writes a million tokens into the cache at 1.25x the input price: $5 on Opus 5.5, $2.50 on Sonnet 5.5, $0.125 on Haiku 5.5', () => {
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheWrite: M }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 5, priced: true });
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheWrite: M }, 'claude-sonnet-5-5', DEFAULT_PRICES), { usd: 2.5, priced: true });
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheWrite: M }, 'claude-haiku-5-5', DEFAULT_PRICES), { usd: 0.125, priced: true });
+        assert.equal(usdFor({ in: 0, out: 0, cacheWrite: M }, 'claude-opus-4-8', DEFAULT_PRICES).usd, 6.25);
+    });
+
+    it('adds the three kinds of input and the output: they are separate, so cached tokens are never inside `in`', () => {
+        // Sonnet 5.5, $2 in / $10 out: 1,000 uncached, 4,000 read, 500 written, 600 out.
+        // 1000 * 2 + 4000 * 0.1 + 500 * 2.5 + 600 * 10 = 2000 + 400 + 1250 + 6000 = 9650, per million.
+        assert.equal(usdFor({ in: 1000, out: 600, cacheRead: 4000, cacheWrite: 500 }, 'claude-sonnet-5-5', DEFAULT_PRICES).usd, 0.00965);
+        // Without the cache the same 5,500 input tokens would have been 5500 * 2 + 600 * 10 = 17000.
+        assert.equal(usdFor({ in: 5500, out: 600 }, 'claude-sonnet-5-5', DEFAULT_PRICES).usd, 0.017);
+    });
+
+    it('is cheaper to read than to send, dearer to write than to send, and pays back on the first read at 5-minute lifetime', () => {
+        const send = usdFor({ in: 5000, out: 0 }, 'claude-opus-5-5', DEFAULT_PRICES).usd;
+        const write = usdFor({ in: 0, out: 0, cacheWrite: 5000 }, 'claude-opus-5-5', DEFAULT_PRICES).usd;
+        const read = usdFor({ in: 0, out: 0, cacheRead: 5000 }, 'claude-opus-5-5', DEFAULT_PRICES).usd;
+        assert.ok(read < send && send < write);
+        assert.ok(write + read < 2 * send, 'one write and one read cost less than sending it twice');
+    });
+
+    it('prices the cache off the price the operator saved: their input price moves the cached rates with it', () => {
+        const prices: PriceTable = { 'claude-opus-5-5': { in: 8, out: 40 } };
+        assert.equal(usdFor({ in: 0, out: 0, cacheRead: M }, 'claude-opus-5-5', prices).usd, 0.4);
+        assert.equal(usdFor({ in: 0, out: 0, cacheWrite: M }, 'claude-opus-5-5', prices).usd, 10);
+    });
+
+    it('charges an unpriced model\'s cache tokens at the ceiling and flags it, so a cache cannot make an unknown model free', () => {
+        // The ceiling input price in the defaults is $5 (Opus 5 and 4.8).
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheRead: M }, 'mystery/model-9', DEFAULT_PRICES), { usd: 0.5, priced: false });
+        assert.deepEqual(usdFor({ in: 0, out: 0, cacheWrite: M }, 'mystery/model-9', DEFAULT_PRICES), { usd: 6.25, priced: false });
+    });
+
+    it('treats cache tokens that are not positive numbers as none, as it does the others', () => {
+        for (const bad of [-5, Number.NaN, Number.POSITIVE_INFINITY, undefined]) {
+            assert.deepEqual(usdFor({ in: 0, out: 0, cacheRead: bad as number, cacheWrite: bad as number }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 0, priced: true }, String(bad));
+        }
+    });
+
+    it('prices a usage with no cache fields exactly as it always did', () => {
+        assert.deepEqual(usdFor({ in: 2000, out: 800 }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 0.024, priced: true });
+        assert.deepEqual(usdFor({ in: 2000, out: 800, cacheRead: 0, cacheWrite: 0 }, 'claude-opus-5-5', DEFAULT_PRICES), { usd: 0.024, priced: true });
+    });
+});
+
+describe('cache tokens in totalUsage, billedFromUsage and costOf', () => {
+    it('totalUsage adds the cache counts of every entry, and leaves the keys out when there were none', () => {
+        const entries = [
+            { model: 'claude-opus-5-5', in: 35, out: 0, cacheWrite: 500 },
+            { model: 'claude-opus-4-8', in: 412, out: 264, cacheRead: 500 },
+            { model: 'claude-opus-4-8', in: 1, out: 1, cacheRead: 250 },
+        ];
+        assert.deepEqual(totalUsage(entries), { in: 448, out: 265, cacheRead: 750, cacheWrite: 500 });
+        assert.deepEqual(totalUsage([{ model: 'm', in: 5, out: 2, cacheRead: 0, cacheWrite: 0 }]), { in: 5, out: 2 });
+        assert.deepEqual(Object.keys(totalUsage([{ model: 'm', in: 5, out: 2, cacheRead: 9 }])), ['in', 'out', 'cacheRead']);
+    });
+
+    it('billedFromUsage makes the entry for one model, keeping the cache counts only when there are some', () => {
+        assert.deepEqual(billedFromUsage('claude-opus-5-5', { in: 10, out: 5 }), { model: 'claude-opus-5-5', in: 10, out: 5 });
+        assert.deepEqual(billedFromUsage('claude-opus-5-5', { in: 10, out: 5, cacheRead: 0, cacheWrite: 0 }), { model: 'claude-opus-5-5', in: 10, out: 5 });
+        assert.deepEqual(billedFromUsage('claude-opus-5-5', { in: 10, out: 5, cacheRead: 7, cacheWrite: 3 }), { model: 'claude-opus-5-5', in: 10, out: 5, cacheRead: 7, cacheWrite: 3 });
+    });
+
+    it('costOf prices each model\'s cache tokens at its own multiple, and keeps them on the entries it returns', () => {
+        const cost = costOf([
+            { model: 'claude-opus-5-5', in: 0, out: 0, cacheRead: 1_000_000 },
+            { model: 'claude-opus-4-8', in: 0, out: 0, cacheRead: 1_000_000, cacheWrite: 1_000_000 },
+        ], DEFAULT_PRICES);
+        assert.deepEqual(cost.billed.map((b) => b.usd), [0.2, 6.75]);
+        assert.equal(cost.usd, 6.95);
+        assert.deepEqual(cost.billed.map((b) => [b.cacheRead, b.cacheWrite]), [[1_000_000, undefined], [1_000_000, 1_000_000]]);
+    });
+
+    it('a provider\'s own figure still beats the table: cache tokens on an entry the provider priced add nothing', () => {
+        const cost = costOf([{ model: 'x/y', in: 5, out: 5, cacheRead: 1_000_000, usd: 0.0123, source: 'provider' }], DEFAULT_PRICES);
+        assert.equal(cost.usd, 0.0123);
+        assert.equal(cost.billed[0]!.source, 'provider');
+    });
+
+    it('costs the same when the result is priced again, cache tokens included', () => {
+        const first = costOf([{ model: 'claude-sonnet-5-5', in: 1000, out: 600, cacheRead: 4000, cacheWrite: 500 }], DEFAULT_PRICES);
+        assert.equal(first.usd, 0.00965);
+        assert.deepEqual(costOf(first.billed, DEFAULT_PRICES), first);
+    });
+
+    it('does not modify the entries it was given', () => {
+        const entries = [{ model: 'claude-opus-5-5', in: 10, out: 10, cacheRead: 10, cacheWrite: 10 }];
+        costOf(entries, DEFAULT_PRICES);
+        assert.deepEqual(entries, [{ model: 'claude-opus-5-5', in: 10, out: 10, cacheRead: 10, cacheWrite: 10 }]);
     });
 });

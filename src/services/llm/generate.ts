@@ -50,6 +50,11 @@ export interface GenerateJsonArgs {
     timeoutMs: number;
     /** Default medium. */
     effort?: Effort;
+    /**
+     * Cache the system prompt (Anthropic only: `cache_control` on the system block, 5-minute lifetime; every other provider ignores it).
+     * Off unless a caller sets it: a cache write costs 1.25x the input price, so it is for a prompt sent again within minutes.
+     */
+    cacheSystem?: boolean;
     /** For tests. */
     fetchImpl?: FetchLike;
 }
@@ -159,6 +164,8 @@ export async function callLlm(args: GenerateJsonArgs, adapters: FamilyAdapters =
         answer = await family.generate({
             provider: args.provider, apiKey: key, baseUrl, jsonMode, model: args.model, system: args.system, user: args.user,
             schema: args.schema, maxTokens: args.maxTokens, effort,
+            // Present only when asked for, so an adapter sees exactly the arguments it always did.
+            ...(args.cacheSystem === true ? { cacheSystem: true } : {}),
             // One deadline for the call, however many awaits the adapter makes.
             signal: AbortSignal.timeout(timeoutMs), fetchImpl: args.fetchImpl,
         });

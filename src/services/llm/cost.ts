@@ -11,6 +11,12 @@
  * it is, `priced: true`. Everything `costOf` computes itself comes back `source: 'table'`, which it
  * will not trust if it is handed the result again.
  *
+ * **Cached input** (Anthropic's prompt cache, S2 of the DM plan) is priced from the model's own input
+ * price, not from a second table: a read costs a fraction of it (`cacheReadMultiplier`) and a write
+ * into the 5-minute cache costs `CACHE_WRITE_MULTIPLIER` times it. So an operator's `ai.prices`
+ * entry for a model moves its cached rates with it, and a model with no price is charged its cache
+ * tokens at the ceiling's multiples.
+ *
  * A model neither table knows is charged at the highest rate in the merged table and marked
  * `priced: false`. Over-charging an unknown model is the safe side of a daily budget: the
  * alternative, charging nothing, lets an unpriced expensive model spend without limit, and the
@@ -46,6 +52,30 @@ export const DEFAULT_PRICES: PriceTable = {
     'gemini-3.1-pro-preview': { in: 2, out: 12 },
 };
 
+/**
+ * What a write into the 5-minute prompt cache costs, as a multiple of the model's input price. The
+ * 1-hour lifetime is 2x; this library never asks for it, so there is one multiplier.
+ */
+export const CACHE_WRITE_MULTIPLIER = 1.25;
+
+/** What a cache read costs, as a multiple of the input price, for a model the table below does not list. */
+export const DEFAULT_CACHE_READ_MULTIPLIER = 0.1;
+
+/**
+ * The models whose cache reads are cheaper than a tenth of the input price. Checked against
+ * platform.claude.com/docs/en/about-claude/pricing on 2026-10-14: "Cache hits and refreshes on Claude
+ * Opus 5.5 and Claude Sonnet 5.5 are priced at 0.05x the base input price" ($0.20 and $0.10 per
+ * million), and Fable 5.1 and Mythos 5.1 at 0.025x. Every other Claude model, Haiku 5.5 included,
+ * is a tenth. (The `claude-api` skill's cached copy says $0.20 for Sonnet 5.5, which is the tenth;
+ * the pricing page is the newer of the two and says 0.05x.)
+ */
+const CACHE_READ_MULTIPLIERS: Readonly<Record<string, number>> = {
+    'claude-opus-5-5': 0.05,
+    'claude-sonnet-5-5': 0.05,
+    'claude-fable-5-1': 0.025,
+    'claude-mythos-5-1': 0.025,
+};
+
 const valid = (p: unknown): p is Price =>
     !!p && typeof p === 'object' && Number.isFinite((p as Price).in) && (p as Price).in >= 0 && Number.isFinite((p as Price).out) && (p as Price).out >= 0;
 
@@ -59,17 +89,22 @@ function merged(prices: PriceTable): Record<string, Price> {
 /** A dated snapshot (`claude-opus-5-5-20261001`) costs what its alias does. */
 const SNAPSHOT_SUFFIX = /^-(?:\d{6,8}|latest)$/;
 
-function lookup(model: string, table: Record<string, Price>): Price | undefined {
+function lookup<T>(model: string, table: Readonly<Record<string, T>>): T | undefined {
     const id = model.trim().toLowerCase();
-    let best: { length: number; price: Price } | undefined;
-    for (const [key, price] of Object.entries(table)) {
+    let best: { length: number; value: T } | undefined;
+    for (const [key, value] of Object.entries(table)) {
         const k = key.trim().toLowerCase();
         const matches = id === k || (id.startsWith(k) && SNAPSHOT_SUFFIX.test(id.slice(k.length)));
         // The longest key wins, so `claude-opus-5-5` is never mistaken for a shorter alias; on a
         // tie the later entry, which is the operator's, wins.
-        if (matches && (!best || k.length >= best.length)) best = { length: k.length, price };
+        if (matches && (!best || k.length >= best.length)) best = { length: k.length, value };
     }
-    return best?.price;
+    return best?.value;
+}
+
+/** What a read from the prompt cache costs on this model, as a multiple of its input price. A dated snapshot costs what its alias does. */
+export function cacheReadMultiplier(model: string): number {
+    return lookup(model, CACHE_READ_MULTIPLIERS) ?? DEFAULT_CACHE_READ_MULTIPLIER;
 }
 
 /** The price of a model, or the highest of each rate in the table (`priced: false`) when it has none. */
@@ -81,22 +116,40 @@ export function priceFor(model: string, prices: PriceTable): Price & { priced: b
     return { in: Math.max(...all.map((p) => p.in)), out: Math.max(...all.map((p) => p.out)), priced: false };
 }
 
-const tokens = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);
+const tokens = (n: number | undefined): number => (n !== undefined && Number.isFinite(n) && n > 0 ? n : 0);
 const round = (usd: number): number => Math.round(usd * 1e9) / 1e9;
 
 /**
  * Dollars, to the billionth: only floating-point noise is rounded away (`0.024000000000000004`).
  * That is fine enough that Haiku's $0.10 per million (a ten-millionth of a dollar a token) is
  * kept exactly, which matters when `ai_usage` adds up thousands of tiny calls.
+ *
+ * `usage.in` is the input at the full price; `cacheRead` and `cacheWrite` are the cached input at
+ * the model's read multiple and 1.25x (see the file comment), neither of them inside `in`.
  */
 export function usdFor(usage: Usage, model: string, prices: PriceTable): { usd: number; priced: boolean } {
     const price = priceFor(model, prices);
-    return { usd: round((tokens(usage.in) * price.in + tokens(usage.out) * price.out) / 1_000_000), priced: price.priced };
+    const input =
+        tokens(usage.in) * price.in +
+        tokens(usage.cacheRead) * price.in * cacheReadMultiplier(model) +
+        tokens(usage.cacheWrite) * price.in * CACHE_WRITE_MULTIPLIER;
+    return { usd: round((input + tokens(usage.out) * price.out) / 1_000_000), priced: price.priced };
 }
 
-/** The tokens of every entry, added up. */
+/** A `Billed` entry for one model's `Usage`, the cache fields kept only when there were some. */
+export function billedFromUsage(model: string, usage: Usage): Billed {
+    const cacheRead = tokens(usage.cacheRead);
+    const cacheWrite = tokens(usage.cacheWrite);
+    return { model, in: usage.in, out: usage.out, ...(cacheRead ? { cacheRead } : {}), ...(cacheWrite ? { cacheWrite } : {}) };
+}
+
+/** The tokens of every entry, added up. The cache fields are there only when some entry had cached input. */
 export function totalUsage(billed: readonly Billed[]): Usage {
-    return billed.reduce<Usage>((sum, b) => ({ in: sum.in + tokens(b.in), out: sum.out + tokens(b.out) }), { in: 0, out: 0 });
+    const sum = billed.reduce(
+        (acc, b) => ({ in: acc.in + tokens(b.in), out: acc.out + tokens(b.out), cacheRead: acc.cacheRead + tokens(b.cacheRead), cacheWrite: acc.cacheWrite + tokens(b.cacheWrite) }),
+        { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }
+    );
+    return { in: sum.in, out: sum.out, ...(sum.cacheRead ? { cacheRead: sum.cacheRead } : {}), ...(sum.cacheWrite ? { cacheWrite: sum.cacheWrite } : {}) };
 }
 
 /**

@@ -551,6 +551,21 @@ for (const fx of [anthropic, openai, gemini, openrouter, custom]) {
                 assert.ok(calls[0]!.url.startsWith('https://'));
             });
 
+            it('treats cacheSystem as Anthropic\'s alone: every other provider\'s request is the one it would have been, and says nothing of a cache', async () => {
+                const plain = stubFetch(fx.text(JSON.stringify(ANSWER)));
+                await call(fx, plain.fetchImpl);
+                const asked = stubFetch(fx.text(JSON.stringify(ANSWER)));
+                await call(fx, asked.fetchImpl, { cacheSystem: true });
+                if (fx.provider === 'anthropic') {
+                    assert.notEqual(asked.calls[0]!.raw, plain.calls[0]!.raw);
+                    assert.ok(asked.calls[0]!.raw.includes('cache_control'));
+                } else {
+                    assert.equal(asked.calls[0]!.raw, plain.calls[0]!.raw);
+                    assert.ok(!asked.calls[0]!.raw.includes('cache_control'));
+                }
+                assert.ok(!plain.calls[0]!.raw.includes('cache_control'), 'and nobody sends one that was not asked for');
+            });
+
             it('passes the system prompt, the user\'s words and the token limit on', async () => {
                 const { fetchImpl, calls } = stubFetch(fx.text(JSON.stringify(ANSWER)));
                 await call(fx, fetchImpl, { system: 'Be brief.', user: 'Say hello.', maxTokens: 777 });
@@ -572,6 +587,41 @@ describe('generateJson (anthropic specifics)', () => {
         const second = stubFetch(anthropic.text(JSON.stringify(ANSWER)));
         await call(anthropic, second.fetchImpl, { effort: 'low' });
         assert.equal(second.calls[0]!.body.output_config.effort, 'low');
+    });
+
+    it('caches the system prompt when told to, and bills what the answer says it wrote and read, apart from the uncached input', async () => {
+        const answer = (usage: Record<string, number>) => jsonResponse(200, {
+            id: 'msg_05', type: 'message', role: 'assistant', model: 'claude-opus-5-5', stop_reason: 'end_turn', stop_details: null,
+            content: [{ type: 'text', text: JSON.stringify(ANSWER) }],
+            usage: { input_tokens: 150, output_tokens: 40, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...usage },
+        });
+        const { fetchImpl, calls } = stubFetch(answer({ cache_creation_input_tokens: 2000 }), answer({ cache_read_input_tokens: 2000 }), answer({}));
+        const first = await call(anthropic, fetchImpl, { cacheSystem: true });
+        const second = await call(anthropic, fetchImpl, { cacheSystem: true });
+        const third = await call(anthropic, fetchImpl);
+
+        assert.deepEqual(calls[0]!.body.system, [{ type: 'text', text: 'You answer in JSON.', cache_control: { type: 'ephemeral' } }]);
+        assert.deepEqual(calls[1]!.body.system, calls[0]!.body.system, 'the same bytes, so the second request can read the first\'s entry');
+        assert.equal(calls[2]!.body.system, 'You answer in JSON.');
+        assert.deepEqual(first.usage, { in: 150, out: 40, cacheWrite: 2000 });
+        assert.deepEqual(second.usage, { in: 150, out: 40, cacheRead: 2000 });
+        assert.deepEqual(third.usage, { in: 150, out: 40 });
+        assert.deepEqual(second.billed, [{ model: 'claude-opus-5-5', in: 150, out: 40, cacheRead: 2000 }]);
+        // $4 in, $20 out, a write at $5 and a read at $0.20 a million.
+        assert.equal(costOf(first.billed, DEFAULT_PRICES).usd, (150 * 4 + 2000 * 5 + 40 * 20) / 1e6);
+        assert.equal(costOf(second.billed, DEFAULT_PRICES).usd, (150 * 4 + 2000 * 0.2 + 40 * 20) / 1e6);
+    });
+
+    it('bills the cache tokens of an answer that then fails: a refusal or a cut-off carries them on the error', async () => {
+        const { fetchImpl } = stubFetch(jsonResponse(200, {
+            id: 'msg_06', type: 'message', role: 'assistant', model: 'claude-opus-5-5', stop_reason: 'max_tokens', stop_details: null,
+            content: [{ type: 'text', text: '{"reply":' }],
+            usage: { input_tokens: 100, output_tokens: 1000, cache_creation_input_tokens: 0, cache_read_input_tokens: 1800 },
+        }));
+        const err = await rejection(call(anthropic, fetchImpl, { cacheSystem: true }));
+        assert.equal(err.kind, 'max_tokens');
+        assert.deepEqual(err.usage, { in: 100, out: 1000, cacheRead: 1800 });
+        assert.deepEqual(err.billed, [{ model: 'claude-opus-5-5', in: 100, out: 1000, cacheRead: 1800 }]);
     });
 
     // Opus 5.5 declined and Opus 4.8 answered. The top-level usage is the last attempt only.
@@ -1297,6 +1347,33 @@ describe('callLlm with an adapter of its own', () => {
             await rejection(callLlm({ ...custom, baseUrl: 'http://llm.example.com/v1' }, { chat_completions: { generate } }));
             await rejection(callLlm({ ...custom, baseUrl: 'https://10.0.0.5/v1' }, { chat_completions: { generate } }));
             assert.equal(seen.length, 1);
+        });
+    });
+
+    describe('cacheSystem, the flag the adapter is handed', () => {
+        const seenArgs = () => {
+            const seen: Array<Record<string, unknown>> = [];
+            const generate: FamilyAdapter['generate'] = async (a) => {
+                seen.push({ ...a });
+                return answering('{"reply":"hi"}');
+            };
+            return { seen, generate };
+        };
+
+        it('is passed on as true when the caller asked, and is not a key of the adapter\'s arguments when it did not', async () => {
+            const { seen, generate } = seenArgs();
+            await callLlm({ ...args }, { anthropic: { generate } });
+            await callLlm({ ...args, cacheSystem: false }, { anthropic: { generate } });
+            await callLlm({ ...args, cacheSystem: undefined }, { anthropic: { generate } });
+            await callLlm({ ...args, cacheSystem: true }, { anthropic: { generate } });
+            assert.deepEqual(seen.map((a) => 'cacheSystem' in a), [false, false, false, true]);
+            assert.equal(seen[3]!.cacheSystem, true);
+        });
+
+        it('only a boolean true counts: a truthy string or a number does not ask for a cache', async () => {
+            const { seen, generate } = seenArgs();
+            for (const cacheSystem of ['true', 1, {}]) await callLlm({ ...args, cacheSystem: cacheSystem as unknown as boolean }, { anthropic: { generate } });
+            assert.deepEqual(seen.map((a) => 'cacheSystem' in a), [false, false, false]);
         });
     });
 

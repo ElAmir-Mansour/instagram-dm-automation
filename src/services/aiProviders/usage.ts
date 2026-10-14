@@ -25,6 +25,7 @@ import { queryOne, queryRows } from '../../db/query.js';
 import { describeError, log } from '../../utils/log.js';
 import type { Budgets } from './settings.js';
 import { AiError, type AiErrorKind } from '../llm/errors.js';
+import { billedFromUsage } from '../llm/cost.js';
 import type { Billed } from '../llm/types.js';
 import type { ProviderId } from '../llm/registry.js';
 import { KEY_TEST, type UsagePurpose } from './purposes.js';
@@ -168,9 +169,12 @@ export interface Outcome {
     outcome: 'ok' | AiErrorKind;
     provider: string;
     model: string;
-    /** What the call used, summed over `billed`. */
+    /** What the call used, summed over `billed`. `tokensIn` is the input billed at the full price: Anthropic's cached input is counted apart. */
     tokensIn: number;
     tokensOut: number;
+    /** Input served from, and written to, Anthropic's prompt cache (S2): `ai_usage.cache_read_tokens` and `cache_write_tokens`. Zero when absent. */
+    cacheRead?: number;
+    cacheWrite?: number;
     usd: number;
     priced: boolean;
     elapsedMs: number | null;
@@ -184,9 +188,13 @@ export async function settleCall(reservation: Reservation, o: Outcome): Promise<
     try {
         await pool.query(
             `UPDATE ai_usage
-                SET provider = $2, model = $3, input_tokens = $4, output_tokens = $5, usd = $6, priced = $7, outcome = $8, elapsed_ms = $9
+                SET provider = $2, model = $3, input_tokens = $4, output_tokens = $5, usd = $6, priced = $7, outcome = $8, elapsed_ms = $9,
+                    cache_read_tokens = $10, cache_write_tokens = $11
               WHERE id = $1`,
-            [reservation.id, o.provider, o.model, int(o.tokensIn), int(o.tokensOut), o.usd, o.priced, o.outcome, o.elapsedMs === null ? null : int(o.elapsedMs)]
+            [
+                reservation.id, o.provider, o.model, int(o.tokensIn), int(o.tokensOut), o.usd, o.priced, o.outcome, o.elapsedMs === null ? null : int(o.elapsedMs),
+                int(o.cacheRead ?? 0), int(o.cacheWrite ?? 0),
+            ]
         );
         return true;
     } catch (err) {
@@ -221,7 +229,7 @@ export function recordKeyCheck(provider: string, model: string, outcome: Outcome
 /** What a failed call was billed for: an answer that was refused, cut off or malformed was still paid for. */
 export function billedOfError(err: AiError): Billed[] {
     if (err.billed?.length) return err.billed;
-    return err.usage ? [{ model: err.model, in: err.usage.in, out: err.usage.out }] : [];
+    return err.usage ? [billedFromUsage(err.model, err.usage)] : [];
 }
 
 // ─── The summary ─────────────────────────────────────────────────────────────────────────────
