@@ -14,6 +14,7 @@ import { drainInline } from './jobs/drain.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
 import { profileCacheScope } from './services/profile/cache.js';
 import apiRouter, { securityHeaders } from './routes/api.js';
+import { createLinksRouter } from './routes/links.js';
 import { getSiteSettings, getVerificationFiles, siteSettingsFromEnv } from './services/appSettings.js';
 import { pageLangFromQuery, renderSiteTemplate, type PageLang } from './services/publicPages.js';
 
@@ -139,12 +140,18 @@ async function renderPublicPage(page: PublicPage, lang: PageLang): Promise<strin
     return renderSiteTemplate(await source, site, lang);
 }
 
-async function sendPublicPage(req: express.Request, res: express.Response, page: PublicPage, status = 200): Promise<void> {
+async function sendPublicPage(
+    req: express.Request,
+    res: express.Response,
+    page: PublicPage,
+    status = 200,
+    cacheControl = PUBLIC_PAGE_CACHE_CONTROL,
+): Promise<void> {
     try {
         const lang = ARABIC_ONLY_PAGES.has(page) ? 'ar' : pageLangFromQuery(req.query.lang);
         const html = await renderPublicPage(page, lang);
         res.status(status);
-        res.setHeader('Cache-Control', PUBLIC_PAGE_CACHE_CONTROL);
+        res.setHeader('Cache-Control', cacheControl);
         res.type('html').send(html);
     } catch (err) {
         log('error', 'public.page_render_failed', { page, ...describeError(err) });
@@ -182,6 +189,14 @@ if (!process.env.VERCEL) {
 
 // ─── API Routes ─────────────────────────────────────────────────────────────
 app.use('/api', apiRouter);
+
+// ─── Tracked links ──────────────────────────────────────────────────────────
+// `GET /r/:code`, the short link a sales DM carries (docs/DM_SALES_PLAN.md S7): 302 to the stored address exactly as stored, and a count.
+// Public and ahead of every page route. vercel.json sends /r/* to this function explicitly (a test pins it). An unknown code is the site's
+// own 404 page for a browser, with no-store: `sendPublicPage` would otherwise let the CDN keep the miss for five minutes.
+app.use('/r', createLinksRouter({
+    sendNotFoundPage: (req, res) => { void sendPublicPage(req, res, 'notFound', 404, 'no-store'); },
+}));
 
 // ─── Static Pages ───────────────────────────────────────────────────────────
 
