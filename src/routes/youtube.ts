@@ -23,7 +23,7 @@ import {
     completeConnection, consumeOAuthState, createOAuthState, disconnect, getConnection, OAUTH_STATE_TTL_MS,
     summariseConnection, YouTubeChannelInUseError,
 } from '../services/youtubeConnections.js';
-import { readCookie } from './tiktok.js';
+import { readCookie, stateCookie as buildStateCookie } from '../services/oauthState.js';
 import { visibilitySummary } from '../services/youtubeVisibility.js';
 import { describeError, log } from '../utils/log.js';
 
@@ -47,7 +47,7 @@ export async function redirectUriFor(req: Request): Promise<string | null> {
 
 function stateCookie(value: string, maxAgeSeconds: number): string {
     // Lax: the callback is a top-level navigation from accounts.google.com.
-    return `${STATE_COOKIE}=${encodeURIComponent(value)}; Path=${CALLBACK_PATH}; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=Lax`;
+    return buildStateCookie(STATE_COOKIE, CALLBACK_PATH, value, maxAgeSeconds);
 }
 
 /** Back to Settings with an outcome in the HASH query, where the dashboard's router reads it. */

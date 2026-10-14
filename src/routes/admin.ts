@@ -47,8 +47,10 @@ import {
     readInstagramUsername, readNamedTenant, readPageIdField, readVerifyTokenField, readWebsiteUrl, type FieldUpdate,
 } from '../services/adminGuards.js';
 import {
-    inspectionStatus, inspectToken, recheckTenantToken, type TokenInspection,
+    inspectionStatus, recheckTenantToken, type TokenInspection,
 } from '../services/tokenHealth.js';
+// Moved to the Meta login service (P26): the paste-a-token routes below and the Login flow owe a stored token the same check.
+import { pageIdConflict, validateSuppliedToken } from '../services/metaLogin.js';
 import {
     commitErasure, executeErasure, previewErasure, rollbackErasure,
 } from '../services/erasure.js';
@@ -627,67 +629,6 @@ router.get('/tenants', async (_req, res) => {
         failWith(res, err, 'admin.tenants_list_failed', 'Failed to fetch tenants.');
     }
 });
-
-/**
- * Validate a supplied Meta token before it is ever stored.
- *
- * Storing an unverified token means the first evidence that it is wrong is a customer's DM
- * silently failing. `debug_token` answers in one round-trip, and the two things it catches are
- * the two mistakes people actually make: pasting a USER token (which cannot post private
- * replies or publish at all) and pasting one that has already expired.
- */
-async function validateSuppliedToken(
-    token: string
-): Promise<{ ok: true; inspection: TokenInspection } | { ok: false; error: string }> {
-    let inspection: TokenInspection;
-    try {
-        inspection = await inspectToken(token);
-    } catch (err: any) {
-        const metaMessage = err?.response?.data?.error?.message;
-        log('warn', 'admin.token_check_failed', describeError(err));
-        return {
-            ok: false,
-            error: typeof metaMessage === 'string'
-                ? `Meta could not verify that token: ${metaMessage}`
-                : 'Meta could not be reached to verify that token — nothing was saved.',
-        };
-    }
-
-    if (!inspection.isValid) {
-        return { ok: false, error: inspection.error ?? 'Meta rejected that token.' };
-    }
-    if (inspection.type !== 'PAGE') {
-        return {
-            ok: false,
-            error: `Wrong token type: "${inspection.type ?? 'unknown'}". You need a PAGE access token — `
-                + 'a USER token cannot post private replies or publish.',
-        };
-    }
-    return { ok: true, inspection };
-}
-
-/**
- * Refuse a page id already claimed by another creator.
- *
- * Checked explicitly rather than relying on the unique indexes, for a reason worth recording:
- * `instagram_page_id` has a real UNIQUE constraint from schema.sql, but
- * `idx_creators_facebook_page` was created as a PLAIN index by v3 and v10's
- * `CREATE UNIQUE INDEX IF NOT EXISTS` matched the name and silently did nothing — verified
- * against the live database. Migration v15 repairs it, but a route that only catches
- * `23505` would have been wrong on every deployment where it had not run yet. A pre-check is
- * also the only way to say *which* tenant holds the id, which is what the operator needs.
- */
-async function pageIdConflict(
-    column: 'instagram_page_id' | 'facebook_page_id',
-    value: string,
-    excludingCreatorId: string
-): Promise<{ id: string; name: string | null } | null> {
-    const { rows } = await pool.query(
-        `SELECT id, name FROM creators WHERE ${column} = $1 AND id <> $2 LIMIT 1`,
-        [value, excludingCreatorId]
-    );
-    return rows[0] ?? null;
-}
 
 /** Never return the token itself. A masked preview says whether it is the one you think. */
 function maskToken(value: string | null): { configured: boolean; preview: string | null; length: number } {

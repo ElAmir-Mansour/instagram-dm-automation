@@ -55,6 +55,12 @@ export interface CreatorRow {
     /** v34: the handle and site the operator typed when creating the tenant by name; the draft's inputs. */
     instagram_username: string | null;
     website_url: string | null;
+    /** v35: the Facebook Page's name when it was connected by Login. NULL for a connection made by pasting a token. */
+    meta_page_name: string | null;
+    /** v35: when Login made the connection (the wizard's comment test counts events after it). */
+    meta_connected_at: Timestamptz | null;
+    /** v35: when the Page was subscribed to the webhook and the subscription read back. NULL: not subscribed, or not confirmed. */
+    meta_webhook_subscribed_at: Timestamptz | null;
     created_at: Timestamptz;
 }
 

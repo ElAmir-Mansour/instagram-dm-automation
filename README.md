@@ -235,6 +235,7 @@ Unauthenticated:
 | `POST` | `/api/auth/login` | Login — returns an HMAC session token |
 | `POST` | `/api/invites/peek` | What an invite link is for (tenant, role, expiry); never uses the link up. The token is in the body, never the URL |
 | `POST` | `/api/invites/accept` | Use a link: create the account (or add a signed-in one, or reset a password) and answer a session. Single-use, one atomic claim |
+| `GET` | `/api/meta/callback` | Facebook Login for Business redirect target. Trusts only a single-use `state` that equals the cookie set by `POST /api/meta/connect`; answers with a redirect to the dashboard, never a token |
 
 Bearer `CRON_SECRET`:
 
@@ -264,6 +265,10 @@ Session token required:
 | `GET`/`POST` | `/api/settings/token`, `/api/settings/token/status` | Token status and rotation |
 | `GET`/`POST` | `/api/settings/ai` | AI agent configuration |
 | `GET`/`POST` | `/api/settings/webhook-token` | Change the verify token with no redeploy |
+| `GET` | `/api/meta/connection` | Is Connect with Facebook on, is the app set up, and this tenant's Meta connection (never a token) |
+| `POST` | `/api/meta/connect` | Owner: mint a state and a cookie, return the Login dialog URL (`{ returnTo?, reconnect?, authType? }`). Refuses a tenant that is connected unless `reconnect` is true |
+| `GET`/`POST` | `/api/meta/candidates`, `/api/meta/select` | Owner: the Pages waiting for a choice (names and ids, never a token) / choose one. The choice spends the pick and nulls its stored tokens |
+| `POST` | `/api/meta/disconnect` | Owner: unsubscribe the Page from the webhook and delete the ids and the token. Needs `{ "confirm": true }` |
 
 Platform admin only (returns **404** to everyone else — the surface does not announce itself):
 
@@ -278,6 +283,7 @@ Platform admin only (returns **404** to everyone else — the surface does not a
 | `POST` | `/api/admin/invites/:id/regenerate` | A new link for the same person; the old one stops working in the same step |
 | `DELETE` | `/api/admin/invites/:id` | Revoke a link |
 | `GET`/`PUT` | `/api/admin/onboarding-settings` | Invite lifetime, default role, "keep me signed in" length, sender name, WhatsApp text, default content rules |
+| `GET`/`POST` | `/api/meta/app-settings` | Connect with Facebook: the on/off switch (default off) and the Login for Business configuration id, and what to register in Meta's dashboard |
 
 ---
 

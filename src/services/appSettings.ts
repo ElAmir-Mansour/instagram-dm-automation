@@ -59,6 +59,20 @@ export const APP_SETTING_KEYS = {
      */
     youtubeApiKey: 'youtube.api_key',
     /**
+     * 'true': tenants may connect their own Facebook Page and Instagram account with Facebook Login for Business
+     * (`POST /api/meta/connect`, src/routes/meta.ts). Off by default, and off means every Meta connect route answers 409 and the
+     * callback refuses: nothing about the owner's connection or the paste-a-token path depends on it. Not a secret. Edited by a
+     * platform admin through `POST /api/meta/app-settings`.
+     */
+    metaLoginEnabled: 'meta.login_enabled',
+    /**
+     * The Facebook Login for Business configuration id, which the operator creates in Meta's App Dashboard and pastes
+     * (docs/onboarding/04 §2). The configuration carries the permissions, so the dialog is built from this id alone. Not a secret.
+     * `META_LOGIN_CONFIG_ID` is the fallback. Unset, the dialog falls back to a plain `scope=` list, which works for people with a
+     * role on the app. The app id and secret stay in `META_APP_ID` / `META_APP_SECRET` (the webhook is signed with the same ones).
+     */
+    metaLoginConfigId: 'meta.login_config_id',
+    /**
      * 'true': Shorts upload public. Off: private. YouTube may lock an unaudited project's uploads
      * private whatever is asked; this owner's were not (2026-10-06: a private test Short could be
      * made public in Studio, and YouTube reported it public), so the owner chose public.
@@ -378,6 +392,38 @@ export async function getYouTubeApiKey(): Promise<YouTubeApiKey | null> {
     if (saved) return { key: saved, source: 'database' };
     const env = process.env.YOUTUBE_API_KEY?.trim();
     return env ? { key: env, source: 'env' } : null;
+}
+
+export interface MetaLoginSettings {
+    /** Whether tenants may use Connect with Facebook. Default false. */
+    enabled: boolean;
+    /** The Facebook Login for Business configuration id, or null (the dialog then asks for `scope=` instead). */
+    configId: string | null;
+    /** Where the id came from, so the card can say "set in the environment". */
+    configIdSource: 'database' | 'env' | null;
+}
+
+/** A Login for Business configuration id is a number: Meta's own are 15 or 16 digits, and nothing shorter than 6 or longer than 30 is one. */
+export const META_CONFIG_ID_PATTERN = /^[0-9]{6,30}$/;
+
+/**
+ * The operator's two Meta login settings: the switch (database only, default off) and the configuration id (database first, then
+ * `META_LOGIN_CONFIG_ID`). A saved or env value that is not a configuration id is ignored with a log line, never sent to Meta.
+ */
+export async function getMetaLoginSettings(): Promise<MetaLoginSettings> {
+    const [enabled, dbConfig] = await Promise.all([
+        getSetting(APP_SETTING_KEYS.metaLoginEnabled),
+        getSetting(APP_SETTING_KEYS.metaLoginConfigId),
+    ]);
+    const envConfig = process.env.META_LOGIN_CONFIG_ID?.trim() || null;
+    const candidate = dbConfig ?? envConfig;
+    const configId = candidate && META_CONFIG_ID_PATTERN.test(candidate) ? candidate : null;
+    if (candidate && !configId) log('warn', 'meta.login_config_id_unreadable', { source: dbConfig ? 'database' : 'env' });
+    return {
+        enabled: enabled === 'true',
+        configId,
+        configIdSource: configId ? (dbConfig ? 'database' : 'env') : null,
+    };
 }
 
 /** Whether Shorts upload public (Settings → YouTube → "Upload Shorts as public"). Off by default. */

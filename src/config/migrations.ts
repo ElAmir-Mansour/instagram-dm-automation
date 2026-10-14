@@ -51,6 +51,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v32_infographic_review.sql',
     'migration_v33_creator_profiles.sql',
     'migration_v34_onboarding.sql',
+    'migration_v35_meta_login.sql',
 ] as const;
 
 export interface SchemaState {
