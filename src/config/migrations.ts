@@ -53,6 +53,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v34_onboarding.sql',
     'migration_v35_meta_login.sql',
     'migration_v36_ai_usage_cache.sql',
+    'migration_v37_dm_engine.sql',
 ] as const;
 
 export interface SchemaState {

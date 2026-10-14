@@ -644,6 +644,17 @@ creator.id, undefined, dmCtx)`, at **`src/services/ai.ts:404`**. Timed and logge
 `duration_ms` (**`src/webhook/messaging.ts:378`**), because this is both the dominant
 marginal cost of the product and the reason the webhook cannot finish inside Meta's timeout.
 
+**Which engine answers (v37, DM plan S3)** — the call above is now `generateDmReply` (**`src/services/dmEngine.ts`**), which reads
+`ai_agents.engine` and dispatches. `gemini` (the default, and what a row from before v37 or a failed read means) is
+`generateAiResponse` exactly as it was: the same request, pinned byte for byte by `ai.test.ts`. `providers` is `generateDmViaLayer`:
+the same `dmSystemInstruction` text, history window and `enforceMetaConstraints`, written through the AI providers layer
+(`generate`, purpose `dm`, system prompt cached, the `dm` route and budgets from Operations). A `providers` failure of any kind (no key,
+no route, 5xx, timeout, a refused budget, an empty answer) is answered by Gemini once when `ai_agents.gemini_fallback` is on, logged
+`dm.engine_fallback`. With the fallback off, or Gemini failing too, the result is a **handoff stub**: `dm.engine_failed`, nothing sent,
+no canned apology, and the pipeline `markHandled`s the message (terminal, not retried; S8's handoff will pick it up). An agent that is
+switched off is `null` for either engine, as below. The sandbox runs the engine on screen (`POST /api/settings/ai/test`, `engine` and
+`gemini_fallback` in the body), labels the layer's spend `eval`, and answers 502 with the reason when nothing could answer.
+
 **The wording is the tenant's** — `dmCtx = profileContextOrLegacy(creator.id, 'dm')` (**`src/webhook/messaging.ts:370`**,
 the function at **`src/services/profile/context.ts:338`**) is read once per DM and handed to `generateAiResponse`, the
 disclosure and (in the sandbox, which reads it itself, **`src/services/ai.ts:413`**) the starter persona. It says the language

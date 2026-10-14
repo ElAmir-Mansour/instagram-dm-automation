@@ -592,6 +592,110 @@ describe('/settings/ai — the model shown and saved', () => {
         const insert = statements.find((st) => /INSERT INTO ai_agents/.test(st.sql));
         assert.equal(insert?.params[3], 'gemini-3.5-flash');
     });
+
+    // ── The reply engine (v37, DM plan S3) ────────────────────────────────────────────────────
+
+    const insertOf = (statements: Array<{ sql: string; params: unknown[] }>) => statements.find((st) => /INSERT INTO ai_agents/.test(st.sql));
+    const squash = (sql: string) => sql.replace(/\s+/g, ' ').trim();
+
+    it('shows a tenant with no agent row the engine it will have: gemini, with the fallback on', async () => {
+        const { res } = await call('get', null);
+        assert.equal(res.body.engine, 'gemini');
+        assert.equal(res.body.gemini_fallback, true);
+    });
+
+    it('passes the stored engine and fallback through as they are', async () => {
+        const { res } = await call('get', { ...row, model: DEFAULT_MODEL, engine: 'providers', gemini_fallback: false });
+        assert.equal(res.body.engine, 'providers');
+        assert.equal(res.body.gemini_fallback, false);
+    });
+
+    it('a save that names neither is the statement it always was: no engine column, six values', async () => {
+        const { res, statements } = await call('post', null, { system_prompt: 'p', model: DEFAULT_MODEL });
+        const insert = insertOf(statements)!;
+        assert.equal(res.statusCode, 200);
+        assert.equal(insert.params.length, 6);
+        assert.ok(!/engine|gemini_fallback/.test(insert.sql), insert.sql);
+        assert.match(squash(insert.sql), /^INSERT INTO ai_agents \(creator_id, system_prompt, knowledge_base, model, temperature, is_active\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6\) ON CONFLICT \(creator_id\) DO UPDATE SET system_prompt = EXCLUDED\.system_prompt, knowledge_base = EXCLUDED\.knowledge_base, model = EXCLUDED\.model, temperature = EXCLUDED\.temperature, is_active = EXCLUDED\.is_active RETURNING \*$/);
+    });
+
+    it('saves the engine and the fallback switch when the form sends them, after the six it always sends', async () => {
+        const { res, statements } = await call('post', null, { system_prompt: 'p', model: DEFAULT_MODEL, engine: 'providers', gemini_fallback: false });
+        const insert = insertOf(statements)!;
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(insert.params.slice(6), ['providers', false]);
+        assert.match(squash(insert.sql), /\(creator_id, system_prompt, knowledge_base, model, temperature, is_active, engine, gemini_fallback\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8\)/);
+        assert.match(squash(insert.sql), /engine = EXCLUDED\.engine, gemini_fallback = EXCLUDED\.gemini_fallback RETURNING \*$/);
+    });
+
+    it('saves one of them without touching the other, and an update leaves a column the form did not name as it is', async () => {
+        const onlyEngine = insertOf((await call('post', null, { system_prompt: 'p', engine: 'gemini' })).statements)!;
+        assert.deepEqual(onlyEngine.params.slice(6), ['gemini']);
+        assert.ok(!/gemini_fallback/.test(onlyEngine.sql));
+        const onlyFallback = insertOf((await call('post', null, { system_prompt: 'p', gemini_fallback: true })).statements)!;
+        assert.deepEqual(onlyFallback.params.slice(6), [true]);
+        assert.ok(!/engine/.test(onlyFallback.sql));
+    });
+
+    it('treats a missing, null or empty engine as "not sent", not as a choice', async () => {
+        for (const body of [{ engine: null }, { engine: '' }, { engine: undefined }, { gemini_fallback: null }]) {
+            const { res, statements } = await call('post', null, { system_prompt: 'p', ...body });
+            assert.equal(res.statusCode, 200, JSON.stringify(body));
+            assert.equal(insertOf(statements)!.params.length, 6, JSON.stringify(body));
+        }
+    });
+
+    it('refuses an engine it does not run, and a fallback that is not a boolean, before writing anything', async () => {
+        for (const body of [
+            { engine: 'claude' }, { engine: 'Providers' }, { engine: 'gemini ' }, { engine: 7 }, { engine: true }, { engine: ['providers'] },
+            { gemini_fallback: 'false' }, { gemini_fallback: 0 }, { gemini_fallback: 'yes' }, { gemini_fallback: {} },
+        ]) {
+            const { res, statements } = await call('post', null, { system_prompt: 'p', ...body });
+            assert.equal(res.statusCode, 400, JSON.stringify(body));
+            assert.match(res.body.error, /engine|gemini_fallback/, JSON.stringify(body));
+            assert.equal(insertOf(statements), undefined, `${JSON.stringify(body)} wrote nothing`);
+        }
+    });
+
+    it('still asks for the system prompt first, and a bad engine is no reason to save a prompt', async () => {
+        const { res } = await call('post', null, { engine: 'claude' });
+        assert.equal(res.statusCode, 400);
+        assert.match(res.body.error, /System prompt is required/);
+    });
+
+    it('says which migration to apply when the engine columns are not there yet, and not "Failed"', async () => {
+        // The statement is rebuilt here as the stub for this one call: Postgres's own error for a column that does not exist.
+        const original = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string) => {
+            if (/INSERT INTO ai_agents/.test(sql)) throw Object.assign(new Error('column "engine" of relation "ai_agents" does not exist'), { code: '42703' });
+            throw new Error(`no result arranged for SQL: ${sql}`);
+        };
+        const res = { statusCode: 200, body: null as any, status(code: number) { this.statusCode = code; return this; }, json(payload: unknown) { this.body = payload; return this; } };
+        try {
+            await handlerFor('post', '/settings/ai')({ params: {}, body: { system_prompt: 'p', engine: 'providers' }, session: { userId: 'u-1', role: 'user', tenantId: TENANT_A } }, res, () => {});
+        } finally {
+            (pool as unknown as { query: unknown }).query = original;
+        }
+        assert.equal(res.statusCode, 500);
+        assert.match(res.body.error, /migration v37/);
+        assert.equal(res.body.migrationPending, true);
+    });
+
+    it('does not mistake another missing column for this one', async () => {
+        const original = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string) => {
+            if (/INSERT INTO ai_agents/.test(sql)) throw Object.assign(new Error('column "something_else" does not exist'), { code: '42703' });
+            throw new Error(`no result arranged for SQL: ${sql}`);
+        };
+        const res = { statusCode: 200, body: null as any, status(code: number) { this.statusCode = code; return this; }, json(payload: unknown) { this.body = payload; return this; } };
+        try {
+            await handlerFor('post', '/settings/ai')({ params: {}, body: { system_prompt: 'p' }, session: { userId: 'u-1', role: 'user', tenantId: TENANT_A } }, res, () => {});
+        } finally {
+            (pool as unknown as { query: unknown }).query = original;
+        }
+        assert.equal(res.statusCode, 500);
+        assert.equal(res.body.error, 'Failed to update AI settings.');
+    });
 });
 
 /**
