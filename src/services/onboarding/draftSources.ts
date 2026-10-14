@@ -8,6 +8,8 @@
  *               token once it is. A failure that says the road is closed (`no_access`, `not_configured`) falls back to the other.
  *   Website     `gatherWebsite`: robots.txt, the home page, up to four pages its navigation names, the manifest, stylesheets.
  *   YouTube     the typed channel, by the platform's API key; or the tenant's own connection, which costs no extra quota.
+ *   TikTok      the profile fields (bio, username, link, verified) a connected account's `user.info.profile` scope returned at connect time
+ *               and the connection kept (P33). Read from the database, never from TikTok: no request leaves for it.
  *   Typed       text the tenant pasted ("paste your About text" when the site refuses).
  *
  * A source that fails is one line of `sources_status` and the others still land: an Instagram `not_found` beside a readable
@@ -21,6 +23,7 @@ import { describeError, log } from '../../utils/log.js';
 import { queryRows } from '../../db/query.js';
 import { getTenant } from '../tenant.js';
 import { getAccessToken, getConnection as getYouTubeConnection, YouTubeNotConnectedError } from '../youtubeConnections.js';
+import { getConnection as getTikTokConnection, readStoredProfile } from '../tiktokConnections.js';
 import { getMyChannel } from '../youtube.js';
 import { resolveDiscoveryAccount, type DiscoveryAccount } from './discoveryAccount.js';
 import { computeSignals, type SampleCandidate } from './draftSignals.js';
@@ -33,6 +36,7 @@ import { instagramSources, type IgProfile } from './igMap.js';
 import { scrubSecrets, sourceOk, type SourceError, type SourceResult } from './sourceError.js';
 import { gatherWebsite, type GatheredPage, type Website } from './website.js';
 import { fetchYouTubeChannel } from './ytSource.js';
+import { hasProfileText, safeProfileLink, tiktokSources, type TikTokProfileData } from './ttMap.js';
 import { classifyYouTubeFailure, fromMyChannel, youtubeFailureOf, youtubeSources, type YouTubeChannelData } from './ytMap.js';
 
 // ─── What is kept ───────────────────────────────────────────────────────────────────────────
@@ -57,6 +61,8 @@ export interface SourceDeps {
     youtube: (ref: string, signal: AbortSignal) => Promise<SourceResult<YouTubeChannelData>>;
     /** The tenant's own connection; null when there is none. */
     connectedYouTube: (creatorId: string) => Promise<SourceResult<YouTubeChannelData> | null>;
+    /** The tenant's TikTok connection as the profile it kept: null when TikTok is not connected, `profile: null` when it holds no `user.info.profile` fields. */
+    tiktokProfile: (creatorId: string) => Promise<{ profile: TikTokProfileData | null } | null>;
     website: (input: string, signal: AbortSignal) => Promise<Website>;
     keywordsInUse: (creatorId: string) => Promise<string[]>;
     now: () => number;
@@ -80,6 +86,24 @@ async function connectedYouTube(creatorId: string): Promise<SourceResult<YouTube
     }
 }
 
+/**
+ * What the tenant's TikTok connection kept of `user.info.profile`. A database read of the connection row, the same one the Settings card
+ * reads: a row read before v44 has no `profile`, which is "no fields", not an error. A revoked or invalid connection still has what it
+ * kept; the draft is about who the creator is, not about whether the token works.
+ */
+async function tiktokProfile(creatorId: string): Promise<{ profile: TikTokProfileData | null } | null> {
+    const row = await getTikTokConnection(creatorId);
+    if (!row) return null;
+    const stored = readStoredProfile(row.profile);
+    if (!stored) return { profile: null };
+    return {
+        profile: {
+            displayName: row.display_name, username: stored.username, bio: stored.bio, profileLink: stored.profileLink,
+            verified: stored.verified, fetchedAt: stored.fetchedAt || null,
+        },
+    };
+}
+
 /** The trigger words of the tenant's own campaigns: one cell may hold several, separated by a comma. */
 async function keywordsInUse(creatorId: string): Promise<string[]> {
     const rows = await queryRows<{ trigger_keyword: string | null }>('SELECT trigger_keyword FROM campaigns WHERE creator_id = $1 LIMIT 200', [creatorId]);
@@ -94,6 +118,7 @@ export const DEFAULT_SOURCE_DEPS: SourceDeps = {
     ownInstagram: fetchOwnInstagram,
     youtube: (ref, signal) => fetchYouTubeChannel(ref, { signal }),
     connectedYouTube,
+    tiktokProfile,
     website: (input, signal) => gatherWebsite(input, { signal }),
     keywordsInUse,
     now: Date.now,
@@ -201,6 +226,7 @@ function rank(source: DraftSource): number {
     switch (source.kind) {
         case 'typed': return 0;
         case 'ig_bio': return 1;
+        case 'tt_bio': return 1;
         case 'site_page':
         case 'link_hub': return 2;
         case 'yt_description': return source.id === 'yt_about' ? 3 : 5;
@@ -302,10 +328,31 @@ export async function fetchDraftSources(
         }, fail);
     };
 
-    const [ig, web, yt, keywords] = await Promise.all([
+    // ── TikTok ──
+    // From the connection row, so there is no deadline to race and nothing to fail but the read. Silent for a tenant with no TikTok
+    // connection: no line in the status at all, so a draft is exactly what it was.
+    const readTikTok = async (): Promise<{ report: SourceReport | null; profile: TikTokProfileData | null }> => {
+        const t0 = deps.now();
+        const fail = (kind: 'timeout' | 'internal', message: string) => ({ report: report('failed', 'connected', deps.now() - t0, { kind, retryable: true, message }), profile: null });
+        return within(phaseMs, async () => {
+            const connection = await deps.tiktokProfile(creatorId);
+            if (!connection) return { report: null, profile: null };
+            const profile = connection.profile;
+            if (!profile || !hasProfileText(profile)) {
+                return { report: skipped('not_configured', 'TikTok is connected without profile access: the profile scope is off in Settings, or the account has not reconnected since it was switched on.', 'connected'), profile: null };
+            }
+            return {
+                report: report('ok', 'connected', deps.now() - t0, { counts: { fields: [profile.username, profile.bio, safeProfileLink(profile.profileLink)].filter(Boolean).length } }),
+                profile,
+            };
+        }, fail);
+    };
+
+    const [ig, web, yt, tt, keywords] = await Promise.all([
         readInstagram(),
         readWebsite(),
         readYouTube(),
+        readTikTok(),
         deps.keywordsInUse(creatorId).catch((err: unknown) => {
             // The campaigns could not be read: the draft is made without the collision check, which a person still does on the way in.
             log('warn', 'onboarding.draft_keywords_unreadable', { creator_id: creatorId, ...describeError(err) });
@@ -315,7 +362,7 @@ export async function fetchDraftSources(
 
     // ── Put it together ──
     const typed: SourceReport = inputs.about ? report('ok', 'typed', 0, { counts: { chars: Array.from(inputs.about).length } }) : skipped('no_input', 'No text was pasted.');
-    const status: SourcesStatus = { instagram: ig.report, website: web.report, youtube: yt.report, typed };
+    const status: SourcesStatus = { instagram: ig.report, website: web.report, youtube: yt.report, typed, ...(tt.report ? { tiktok: tt.report } : {}) };
 
     const raw: DraftSource[] = [];
     let candidates: SampleCandidate[] = [];
@@ -331,6 +378,7 @@ export async function fetchDraftSources(
     }
     if (web.site) raw.push(...websiteSources(web.site));
     if (yt.channel) raw.push(...youtubeSources(yt.channel));
+    if (tt.profile) raw.push(...tiktokSources(tt.profile));
     const sources = prepareSources(raw.map((s, i) => ({ s, i })).sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i).map((x) => x.s));
     const kept = new Set(sources.map((s) => s.id));
     candidates = candidates.filter((c) => kept.has(c.id));
@@ -351,7 +399,7 @@ export async function fetchDraftSources(
         logos: web.site ? web.site.logos.candidates.slice(0, 5) : [],
         socialLinks: web.site ? { ...web.site.merged.socials } : {},
         youtube: yt.channel ? { id: yt.channel.id, title: yt.channel.title, handle: yt.channel.handle, country: yt.channel.country, subscribers: yt.channel.subscribers, via: yt.channel.via } : null,
-        knownUrls: unique([...known.urls, ig.profile?.website]),
+        knownUrls: unique([...known.urls, ig.profile?.website, tt.profile ? safeProfileLink(tt.profile.profileLink) : null]),
         knownEmails: known.emails,
         knownPhones: known.phones,
         keywordsInUse: keywords,
@@ -369,6 +417,7 @@ export async function fetchDraftSources(
         creator_id: creatorId, elapsed_ms: since(), sources: sources.length,
         instagram: ig.report.state, instagram_kind: ig.report.kind, website: web.report.state, website_kind: web.report.kind,
         youtube: yt.report.state, youtube_kind: yt.report.kind, typed: typed.state,
+        tiktok: tt.report?.state ?? null, tiktok_kind: tt.report?.kind ?? null,
     });
     return outcome;
 }

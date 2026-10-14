@@ -2208,6 +2208,16 @@ the audit rejects own-account tools (**`src/services/tiktok.ts:9-14`**).
    that cannot trust the browser or the state (no cookie, a different one, a spent or expired state) cannot know where the flow began
    and goes to Settings.
 
+7. **The profile scope (P33), off unless the operator says the portal approved it.** `POST /connect` asks `tiktokScopes(directPost, audited,
+   profileScope)` (`tiktok.ts`) for the list, and `profileScope` is `getTikTokProfileScopeEnabled()`: the setting `tiktok.profile_scope_enabled`
+   (`'true'` only; anything else, or a settings table that cannot be read, is off). **Off, the list and the authorise URL are exactly what they
+   were**: pinned by a literal in `tiktokProfileScope.test.ts`. On, `user.info.profile` follows `user.info.basic`. After the exchange,
+   `completeConnection` asks for the profile fields in a **second** `GET /v2/user/info/` (`getProfileInfo`: `username`, `bio_description`,
+   `profile_deep_link`, `is_verified`) **only if the granted scope list contains `user.info.profile`**; the first call is unchanged. The fields go to
+   `platform_connections.profile` (v44) in a statement of their own after the INSERT (`saveProfile`), so a database without v44 still connects, and a
+   reconnect that reads none clears a profile the previous connection left (another account's bio never stays). Follower counts are
+   `user.info.stats`, a scope not requested. The profile is deleted with the row (Disconnect, `authorization.removed`).
+
 > **Why the state lives in the DB *and* a cookie.** Dashboard sessions are Bearer tokens in
 > localStorage, so TikTok's redirect back carries no session at all. The nonce is the only thing
 > binding the returned code to a tenant; the cookie means a state lifted from a log or a referrer
@@ -2621,6 +2631,31 @@ transient verdict leaves every row exactly as it was, **the owner's included**. 
 > on a manually built dialog; what a non-role-holder sees (the `not_tester` reason is inferred from "nothing granted"). The first real
 > Tester connecting is the test (plan P27, live check).
 
+### 8.9 — Deauthorize: Meta says a person removed the app (P33)
+
+`POST /api/meta/deauthorize`, on `metaPublicRouter` (above `requireAuth`: Meta sends no session). Register it in Meta's dashboard as the
+**Deauthorize Callback URL**; the operator's card shows it (`register.deauthorizeUrl`). Meta posts a **form** with `signed_request`, which the
+app-wide JSON parser does not read, so the route parses it itself (`express.urlencoded`, 16 KB).
+
+1. `parseSignedRequest` (`metaDeauth.ts`): shape (`<signature>.<payload>`, base64), the signature (HMAC-SHA256 of the **encoded** payload
+   with **each** of `META_APP_SECRET` and `INSTAGRAM_APP_SECRET`, `timingSafeEqual`), and only then the payload: `algorithm` must be
+   HMAC-SHA256 if present, `issued_at` within a day (and not from the future), `expires` not past, `user_id` a string (a JSON number is refused: past
+   2^53 it is rounded to somebody else's id). 400 for a request that is not one or is stale, **403 for a signature that is not ours**, 503 with no
+   secret to check against. The rejection line logs the reason and `app_keys_tried`, never the request.
+2. `disconnectMetaUser`: `SELECT id FROM creators WHERE meta_user_id = $1`, a parameterised `=` on a non-empty id. **The owner's pasted-token
+   connection has `meta_user_id` NULL and so matches no id**; if his row carries one (he reconnected through Login), only that exact id is his.
+3. Per tenant, `removeMetaConnection` (the code `disconnectMeta` runs too): unsubscribe the Page (best effort: the person's tokens are already
+   dead), then clear the ids, the token and the `meta_*` columns in one `UPDATE … AND ($2::text IS NULL OR meta_user_id = $2)`: a tenant that
+   somebody else reconnected between the lookup and the write is left as it is. Audit `meta.deauthorize`, by `system:meta-deauthorize`, naming the
+   Pages and the outcome and **not the person**. Campaigns and posts stay; the person's permissions are not revoked.
+4. 200 `{ received: true }` whether anything matched or not (an id nobody connected is not a failure Meta should retry); 500 if a database error
+   left a tenant uncleared, and the retry finds only what is left. Idempotent: a cleared tenant no longer matches.
+
+The format is Meta's signed-request format as the Data Deletion callback guide documents it
+(<https://developers.facebook.com/docs/development/create-an-app/app-dashboard/data-deletion-callback>); the Facebook Login guide that introduces the Deauthorize
+Callback (<https://developers.facebook.com/docs/facebook-login/guides/advanced/manual-flow>, "Detecting When People Uninstall Apps") points to it and
+does not repeat the payload. **Not yet seen against a live delivery**: the callback's Test button in the App Dashboard is the check.
+
 ## 9. A tenant's profile draft: read, ask, check, wait
 
 `profile_drafts` (migration v34) reads what a tenant gave (an Instagram handle, a website, a YouTube channel, some pasted text), asks a
@@ -2695,6 +2730,9 @@ queued ─claim→ fetching ─sources saved→ drafting ─answers checked→ r
    - **Website:** `gatherWebsite` (every request through `safeFetch`: SSRF guard, robots.txt, 25 s phase).
    - **YouTube:** the typed channel by the platform's API key (`youtube.api_key`; none saved = skipped, not failed) or the tenant's own
      connection.
+   - **TikTok (P33):** a tenant with a TikTok connection gives the profile fields the connection kept (`tt_about`, kind `tt_bio`): read from
+     `platform_connections.profile` (`ttMap.ts`), never from TikTok. Present in `sources_status` as `tiktok` only for a tenant with a connection:
+     `ok` with the fields, or `skipped` (`not_configured`) when it holds none (the setting is off, or the account has not reconnected since).
    - **Typed:** the text the tenant pasted.
 2. **A source that fails is one line of `sources_status`**; the others still land. IG `not_found` plus a readable website still drafts from
    the website. Each line has a state, the road, the failure kind, whether a retry could help, `ms`, counts and `needsPaste`: **no text.**
@@ -2792,6 +2830,7 @@ error, and several write **no row at all**.
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |
 | 6 | **creator never posts the draft** | *(none)* | row stays `IN_INBOX`; the sweep stops asking after 7 days |
+| 6 | the profile scope is on but TikTok refuses the profile fields, or v44 is not applied — `completeConnection` | `tiktok.profile_info_failed` / `tiktok.profile_save_failed` (`warn`) | yes: the connection, its name and avatar; **no profile** |
 | 7 | a think, or an infographic job with `write`, for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:300`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
 | 7 | a tenant's AI call the layer cannot answer (no provider key, a budget spent, the provider down) — `generate`, **`tenantAi.ts:50`** | `ai.call_refused` / `ai.call_failed` (`warn`), an `ai_usage` row with the outcome | an infographic: no row, no job (409 / 429 / 503 / 502); a Monteur call: the attempt fails with the layer's words (Editor: the reel goes on without edits); a Studio draft: `failed` with them. **Never the Mac, never Gemini** |
 | 7 | the owner (or a listed tenant) with `monteur.brain: 'api'` stored — **`brain.ts:20`** | *(none)* | no: the call is the Mac's, as `claude_mac` is |
@@ -2805,9 +2844,11 @@ error, and several write **no row at all**.
 | 8 | the daily recheck cannot reach Meta, or Meta's answer is not an inspection — `classifyDebugToken` | `token.recheck_transient` (`warn`) | **no** (not even `token_last_checked_at`); the tenant is first in line tomorrow |
 | 8 | a token that cannot be decrypted (a rotated key) — `recheckOneMetaToken` | `token.recheck_unreadable` (`warn`) | no |
 | 8 | a connection that needs renewing or that Meta rejects — the recheck | `token.reconnect_due` (`warn` / `error`) | yes: the health columns; "reconnect due" on the card and on Overview |
+| 8 | a deauthorize request with no valid signature, a stale one, or one for a person no tenant was connected by — **`routes/meta.ts`** `/deauthorize` | `meta.deauthorize_rejected` (`warn`) / `meta.deauthorize_handled` (`matched: 0`) | no (the rejection precedes the database; an unmatched id changes nothing and answers 200) |
 | 8 | a TikTok or YouTube flow the wizard began, whose return address could not be saved (no v35 column) | `tiktok.return_to_unsaved` / `youtube.return_to_unsaved` (`warn`) | the state without `return_to`: it returns to Settings, and still connects |
 | 9 | **no AI provider has a key** — `draftStep` / `generate` (`no_provider`) | `ai.call_refused`, `onboarding.draft_failed` (`error_kind: no_provider`) | yes: `failed`, `needsAiKey`, the prefill kept; **no draft, no retry** |
 | 9 | one source unreadable (private Instagram, a site that refuses, no YouTube key) — `fetchDraftSources` | `onboarding.ig_source_failed`, `onboarding.yt_source_skipped`, `onboarding.draft_fetched` | yes: the draft is made from the rest, the failure is a line of `sources_status` |
+| 9 | TikTok connected but its profile fields were never stored (the profile scope is off, or not reconnected since) — `readTikTok` | `onboarding.draft_fetched` (`tiktok: skipped`) | yes: `sources_status.tiktok` `skipped`, no TikTok source |
 | 9 | **nothing at all readable** — `decideAfterFetch` | `onboarding.draft_step` (`outcome: fail`), `onboarding.draft_failed` | yes: `failed`, `no_source` (the wizard asks for the About text) |
 | 9 | a second caller on a draft being worked on — `CLAIM_SQL` | `onboarding.draft_advance` (`outcome: busy`) | no change |
 | 9 | **a draft nobody advances** (no wizard open, worker not running): it stays `queued` | *(none)* until the sweep runs: `onboarding.sweep` | row untouched; ended `expired` by whoever finds it after 30 minutes |

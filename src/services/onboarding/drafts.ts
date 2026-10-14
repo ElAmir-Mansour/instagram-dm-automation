@@ -44,7 +44,7 @@ import {
     markStatus, releaseDraft, saveFetched, saveRetry, supersedeDrafts, type DraftOrigin, type DraftRow,
 } from './draftStore.js';
 import { hasAnyInput, inputsHash, type DraftInputs } from './draftInputs.js';
-import { emptyUsage, type AnswersColumn, type CallLog, type DraftCode, type DraftFacts, type FetchedBundle, type ResultColumn, type UsageLog } from './draftTypes.js';
+import { emptyUsage, type AnswersColumn, type CallLog, type DraftCode, type DraftFacts, type FetchedBundle, type ResultColumn, type SourceReport, type UsageLog } from './draftTypes.js';
 import { readAnswers, readBundle, readUsage, stepRowOf } from './draftView.js';
 import { scrubSecrets } from './sourceError.js';
 import { validateDraft, type Draft, type DraftContext } from './validateDraft.js';
@@ -286,8 +286,9 @@ export async function advanceDraft(draftId: string, options: AdvanceOptions = {}
 // ─── The fetch step ─────────────────────────────────────────────────────────────────────────
 
 const summarize = (outcome: FetchOutcome): string => {
-    const parts = (Object.entries(outcome.status) as Array<[string, FetchOutcome['status'][keyof FetchOutcome['status']]]>)
-        .filter(([, r]) => r.state !== 'ok')
+    // `tiktok` is optional in the status (only a tenant with a TikTok connection has it), so an entry may be undefined.
+    const parts = (Object.entries(outcome.status) as Array<[string, SourceReport | undefined]>)
+        .filter((entry): entry is [string, SourceReport] => entry[1] !== undefined && entry[1].state !== 'ok')
         .map(([name, r]) => `${name} ${r.state}${r.kind ? ` (${r.kind})` : ''}`);
     return parts.length ? `Nothing could be read: ${parts.join('; ')}.` : 'Nothing could be read.';
 };

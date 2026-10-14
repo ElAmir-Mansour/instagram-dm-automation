@@ -43,6 +43,12 @@
       audited) ask for all three. AFTER THE AUDIT tiktokScopes() stops asking
       for video.upload, and "three scopes" becomes an over-statement: change
       section 1 to user.info.basic + video.publish when Audited is ticked;
+    · a fourth scope, user.info.profile, ONLY while the setting
+      tiktok.profile_scope_enabled is on (P33; off by default, and the portal
+      must have approved it first): section 1 says so, and lists what it stores
+      (bio, username, link, verified: platform_connections.profile, v44), which
+      is deleted with the connection. Follower counts are user.info.stats and
+      are not requested;
     · the profile stored — open_id, display name, avatar URL:
       completeConnection(), src/services/tiktokConnections.ts:142-204;
     · creator_info read live and NEVER STORED: queryCreatorInfo(),
@@ -188,7 +194,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.35">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.36">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1153,10 +1159,12 @@
 
                 <h3>عندما يربط صاحب الحساب تيك توك</h3>
                 <p>
-                    هذا الجزء يخصّ بيانات صاحب الحساب نفسه. تطلب الأداة من تيك توك ثلاث صلاحيات، لا
-                    غير: <span class="code" lang="en" dir="ltr">user.info.basic</span>
+                    هذا الجزء يخصّ بيانات صاحب الحساب نفسه. تطلب الأداة من تيك توك ثلاث صلاحيات:
+                    <span class="code" lang="en" dir="ltr">user.info.basic</span>
                     و<span class="code" lang="en" dir="ltr">video.upload</span>
-                    و<span class="code" lang="en" dir="ltr">video.publish</span>. ولا تسمح أيٌّ منها
+                    و<span class="code" lang="en" dir="ltr">video.publish</span>. ولا تطلب رابعةً هي
+                    <span class="code" lang="en" dir="ltr">user.info.profile</span> إلا إذا شغّلها المشغّل
+                    بعد أن اعتمدتها تيك توك للتطبيق، ولا تطلب غير ذلك. ولا تسمح أيٌّ منها
                     بقراءة التعليقات أو الرسائل أو أي حساب آخر، فلا تصلنا أي بيانات عن مشاهدي تيك توك
                     إطلاقاً.
                 </p>
@@ -1166,6 +1174,15 @@
                         تيك توك (صلاحية <span class="code" lang="en" dir="ltr">user.info.basic</span>):</strong>
                         معرّف الحساب <span class="code" lang="en" dir="ltr">open_id</span> — وهو معرّف
                         يمنحه تيك توك للحساب خاصاً بهذا التطبيق — والاسم المعروض، ورابط الصورة الرمزية.
+                    </li>
+                    <li>
+                        <strong>يُخزَّن، إن منح صاحب الحساب صلاحية
+                        <span class="code" lang="en" dir="ltr">user.info.profile</span>:</strong> نبذة
+                        الحساب واسم المستخدم ورابط الملف، وهل تعرضه تيك توك حساباً موثّقاً. تُقرأ مرة واحدة
+                        عند ربط الحساب، وتُستخدم للمساعدة في كتابة مسودّة ملف صاحب الحساب في هذه الأداة
+                        (ومزوّدو الذكاء الاصطناعي أدناه يقرؤون مصادر تلك المسودّة). وتُحذف مع الاتصال.
+                        أعداد المتابعين صلاحية أخرى هي
+                        <span class="code" lang="en" dir="ltr">user.info.stats</span> ولا يطلبها التطبيق.
                     </li>
                     <li>
                         <strong>يُخزَّن مشفّراً:</strong> رمزا الوصول والتحديث
@@ -1326,7 +1343,8 @@
                     </li>
                     <li>
                         <strong>اتصال تيك توك</strong> — معرّف <span class="code" lang="en" dir="ltr">open_id</span>
-                        والاسم المعروض ورابط الصورة الرمزية والرمزان: يبقى ما دام تيك توك مربوطاً،
+                        والاسم المعروض ورابط الصورة الرمزية وحقول الملف إن مُنحت (النبذة واسم المستخدم
+                        والرابط وحالة التوثيق) والرمزان: يبقى ما دام تيك توك مربوطاً،
                         ويُحذف عندما يفصله صاحب الحساب، سواء من الإعدادات في لوحة التحكم أو من «إدارة
                         أذونات التطبيقات» في تيك توك نفسه. لكن سجلّ التدقيق في الأداة — وهو سجلّ
                         للإجراءات الإدارية لا تحذف الأداة منه شيئاً — يحتفظ بقيد لكل مرة رُبط فيها تيك
@@ -1623,11 +1641,13 @@
                 <h3>When the account owner connects TikTok</h3>
                 <p>
                     This part is about the account owner's own data. The app asks TikTok for three
-                    scopes and no others: <span class="code">user.info.basic</span>,
+                    scopes: <span class="code">user.info.basic</span>,
                     <span class="code">video.upload</span> and
-                    <span class="code">video.publish</span>. None of them lets it read comments,
-                    messages, or anyone else's account, so no TikTok viewer's data reaches us at
-                    all.
+                    <span class="code">video.publish</span>. Only if the operator has switched it on,
+                    after TikTok approved it for the app, it also asks for a fourth,
+                    <span class="code">user.info.profile</span>; it asks for no others. None of them
+                    lets it read comments, messages, or anyone else's account, so no TikTok viewer's
+                    data reaches us at all.
                 </p>
                 <ul>
                     <li>
@@ -1635,6 +1655,15 @@
                         (<span class="code">user.info.basic</span>):</strong> the account's
                         <span class="code">open_id</span> — TikTok's identifier for the account,
                         specific to this app — its display name, and its avatar URL.
+                    </li>
+                    <li>
+                        <strong>Stored, only if the account owner granted
+                        <span class="code">user.info.profile</span>:</strong> the account's bio, username,
+                        profile link, and whether TikTok shows it as verified. They are read once, when
+                        the account is connected, and used to help write the draft of the owner's profile
+                        in this tool (the AI providers below read that draft's sources). They are deleted
+                        with the connection. Follower counts are a different scope,
+                        <span class="code">user.info.stats</span>, which the app does not request.
                     </li>
                     <li>
                         <strong>Stored, encrypted:</strong> the OAuth access token and refresh
@@ -1805,7 +1834,8 @@
                     </li>
                     <li>
                         <strong>The TikTok connection</strong> — the <span class="code">open_id</span>,
-                        display name, avatar URL, and both tokens: kept while TikTok is connected,
+                        display name, avatar URL, the profile fields if they were granted (bio, username,
+                        link, verified status), and both tokens: kept while TikTok is connected,
                         and deleted when the owner disconnects it, either from Settings in the
                         dashboard or from "Manage app permissions" in TikTok itself. The app's audit
                         log, though — a record of administrative actions that the app never clears —

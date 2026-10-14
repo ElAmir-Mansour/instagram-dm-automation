@@ -796,7 +796,6 @@ describe('migration v42: conversations.sales_variant (the DM sales turn\'s A/B a
         const i = EXPECTED_MIGRATIONS.indexOf(FILE);
         assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
         assert.equal(EXPECTED_MIGRATIONS[i - 1], 'migration_v41_interaction_recipient.sql');
-        assert.equal(i, EXPECTED_MIGRATIONS.length - 1, 'the newest');
         assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
     });
 
@@ -827,6 +826,53 @@ describe('migration v42: conversations.sales_variant (the DM sales turn\'s A/B a
         const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
         assert.deepEqual([...new Set([...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!))], ['conversations']);
         assert.ok(existing.has('conversations'));
+    });
+
+    it('does not change a row: no UPDATE, no DELETE, no INSERT', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b/i);
+    });
+});
+
+// ─── v44: the profile a TikTok connection keeps ────────────────────────────────────────────────
+
+describe('migration v44: platform_connections.profile (TikTok user.info.profile, P33)', () => {
+    const FILE = 'migration_v44_tiktok_profile.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered after v42 (v43 may be taken by other work and land between), and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.ok(i > EXPECTED_MIGRATIONS.indexOf('migration_v42_dm_variant.sql'));
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line and first statement (it locks platform_connections, which the token refresh writes)', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('adds exactly one column to platform_connections: JSONB, nullable, no default, only if absent', () => {
+        const added = [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([A-Z]+(?:\(\d+\))?)([^;]*);/g)];
+        assert.equal(added.length, 1);
+        assert.deepEqual([added[0]![1], added[0]![2], added[0]![3]], ['platform_connections', 'profile', 'JSONB']);
+        assert.equal(added[0]![4]!.trim(), '', 'nothing after the type: no NOT NULL, no DEFAULT, so no row is rewritten');
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, 1);
+    });
+
+    it('is idempotent, creates no table and no index, and so has nothing to enable row level security on (platform_connections has it since v18)', () => {
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, (sql.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+        assert.deepEqual(createdTables(sql), []);
+        assert.doesNotMatch(sql, /CREATE (UNIQUE )?INDEX/);
+        assert.match(readFileSync(path.join(CONFIG_DIR, 'migration_v18_tiktok.sql'), 'utf8'), /ALTER TABLE platform_connections\s+ENABLE ROW LEVEL SECURITY/);
+    });
+
+    it('alters a table that exists by the time it runs, and touches no other', () => {
+        const before = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
+        assert.deepEqual([...new Set([...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!))], ['platform_connections']);
+        assert.ok(existing.has('platform_connections'));
     });
 
     it('does not change a row: no UPDATE, no DELETE, no INSERT', () => {

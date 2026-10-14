@@ -225,9 +225,21 @@ export class FakeDb {
             c.meta_webhook_subscribed_at = params[11] as Date | null;
             return result([{ id: c.id }]);
         }
+        // The deauthorize callback: who connected this tenant. A parameterised `=`, so a NULL column is never equal to anything, as in SQL.
+        if (/^SELECT id FROM creators WHERE meta_user_id = \$1 ORDER BY id LIMIT \$2$/.test(sql)) {
+            const rows = [...this.creators.values()]
+                .filter((c) => params[0] !== null && params[0] !== undefined && c.meta_user_id !== null && c.meta_user_id === params[0])
+                .sort((a, b) => a.id.localeCompare(b.id))
+                .slice(0, Number(params[1]))
+                .map((c) => ({ id: c.id }));
+            return result(rows);
+        }
         if (/^UPDATE creators SET instagram_page_id = NULL, facebook_page_id = NULL, page_access_token = NULL, /.test(sql)) {
             const c = this.creators.get(String(params[0]));
             if (!c) return result([], 0);
+            // The condition applies only if it is IN the SQL: delete `meta_user_id = $2` from the statement and a tenant somebody else
+            // connected meanwhile is cleared again, and the test that depended on it fails.
+            if (/meta_user_id = \$2/.test(sql) && params[1] !== null && params[1] !== undefined && c.meta_user_id !== params[1]) return result([], 0);
             Object.assign(c, {
                 instagram_page_id: null, facebook_page_id: null, page_access_token: null, token_status: 'unknown', token_error: null,
                 token_last_checked_at: null, token_expires_at: null, token_data_access_expires_at: null,

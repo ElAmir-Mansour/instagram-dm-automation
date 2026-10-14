@@ -49,14 +49,21 @@ export const APP_SETTING_KEYS = {
      * direct post to SELF_ONLY and requires the account itself to be private.
      */
     tiktokAudited: 'tiktok.audited',
+    /**
+     * 'true' once the TikTok portal has approved the `user.info.profile` scope for the app (P33). It decides whether Connect asks for it:
+     * the scope returns the creator's bio, profile link, username and verified flag, which the onboarding draft reads
+     * (docs/onboarding/03 §1, "TikTok"). Asking for a scope the app does not have fails the WHOLE authorisation, so this defaults OFF and
+     * OFF means the request is exactly the one made before the scope existed, like `tiktok.direct_post_enabled`. Not a secret.
+     */
+    tiktokProfileScopeEnabled: 'tiktok.profile_scope_enabled',
     /** The Google OAuth client (type "Web application") the YouTube connection uses. */
     youtubeClientId: 'youtube.client_id',
     youtubeClientSecret: 'youtube.client_secret',
     /**
      * A Google API key (not OAuth) for READING public YouTube data: a channel's description and recent titles, for the onboarding
      * draft of a tenant that has not connected YouTube (docs/onboarding/03 §1). `channels.list` and `playlistItems.list` cost one quota
-     * unit each. Unset means that source is skipped, not failed: the draft is made from the rest. `YOUTUBE_API_KEY` is the fallback. No
-     * Settings field saves it yet.
+     * unit each. Unset means that source is skipped, not failed: the draft is made from the rest. `YOUTUBE_API_KEY` is the fallback.
+     * Operations → Onboarding saves it (src/services/onboardingSettings.ts), encrypted.
      */
     youtubeApiKey: 'youtube.api_key',
     /**
@@ -615,6 +622,19 @@ export async function getTikTokPostingFlags(): Promise<TikTokPostingFlags> {
         getSetting(APP_SETTING_KEYS.tiktokAudited),
     ]);
     return { directPostEnabled: direct === 'true', audited: audited === 'true' };
+}
+
+/**
+ * Whether the operator has said the TikTok portal approved `user.info.profile`. Off unless saved as 'true', and a settings table that
+ * cannot be read answers off: the safe answer is the request the portal has always accepted.
+ */
+export async function getTikTokProfileScopeEnabled(): Promise<boolean> {
+    try {
+        return (await getSetting(APP_SETTING_KEYS.tiktokProfileScopeEnabled)) === 'true';
+    } catch (err) {
+        log('warn', 'tiktok.profile_scope_flag_unreadable', { message: err instanceof Error ? err.message : String(err) });
+        return false;
+    }
 }
 
 export interface VerificationFile { filename: string; content: string }

@@ -330,6 +330,11 @@ export interface PlatformConnectionRow {
     last_refreshed_at: Timestamptz | null;
     refresh_claimed_at: Timestamptz | null;
     connected_by_user_id: string | null;
+    /**
+     * TikTok only, v44: the `user.info.profile` fields read at connect time (`StoredTikTokProfile` in tiktokConnections.ts), or null.
+     * Absent on a row read before v44 is applied, which is why it is optional: nothing may depend on the column being there.
+     */
+    profile?: unknown;
     created_at: Timestamptz;
     updated_at: Timestamptz;
 }

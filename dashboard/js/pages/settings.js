@@ -1052,6 +1052,21 @@ const SettingsPage = {
                         <p class="form-hint text-warning" id="tiktok-direct-consequence" aria-live="polite"></p>
                         <p class="form-hint">${t('settings.tiktok.app.directPostHint')}</p>
                     </fieldset>
+                    <!-- A third fact only the admin can know, because it lives in
+                         TikTok's portal: whether user.info.profile is approved. Off
+                         keeps the authorise request exactly as it was. -->
+                    <fieldset class="form-group fieldset-plain">
+                        <legend class="form-label">${t('settings.tiktok.app.profileTitle')}</legend>
+                        <div class="check-row">
+                            <input type="checkbox" id="tiktok-profile-scope" name="profileScopeEnabled"
+                                   aria-describedby="tiktok-profile-hint"
+                                   ${app.profileScopeEnabled === true ? html.raw('checked') : ''}>
+                            <span class="check-text">
+                                <label class="check-label" for="tiktok-profile-scope">${t('settings.tiktok.app.profileScopeEnabled')}</label>
+                            </span>
+                        </div>
+                        <p class="form-hint" id="tiktok-profile-hint">${t('settings.tiktok.app.profileHint')}</p>
+                    </fieldset>
                     <div class="form-actions">
                         ${UI.button({
                             variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
@@ -1973,6 +1988,7 @@ const SettingsPage = {
             // FormData would otherwise omit it.
             directPostEnabled: data.get('directPostEnabled') === 'on',
             audited: data.get('audited') === 'on',
+            profileScopeEnabled: data.get('profileScopeEnabled') === 'on',
         };
         // A blank secret means "leave it", not "clear it" — it is never sent
         // back to the page, so the field is always blank on load.

@@ -139,7 +139,7 @@ describe('fenceSource and fenceSources', () => {
             const body = fenceSource(source('p1', 'ا'.repeat(10_000), kind)).split('\n')[1]!;
             assert.equal(Array.from(body).length, SOURCE_CAPS[kind], kind);
         }
-        assert.deepEqual(SOURCE_CAPS, { ig_bio: 600, ig_caption: 2200, site_page: 3000, link_hub: 3000, yt_description: 5000, yt_title: 200, typed: 4000 });
+        assert.deepEqual(SOURCE_CAPS, { ig_bio: 600, ig_caption: 2200, site_page: 3000, link_hub: 3000, yt_description: 5000, yt_title: 200, tt_bio: 600, typed: 4000 });
     });
 });
 

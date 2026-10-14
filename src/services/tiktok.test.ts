@@ -17,6 +17,7 @@ import {
     refreshTokens, SPLIT_CHUNK_BYTES, TIKTOK_API_BASE, TikTokApiError, tiktokHttp, toTikTokError,
     uploadChunks, verifyTikTokSignature, queryCreatorInfo, initDirectVideoPost, mp4DurationSeconds, tiktokScopes,
     initPhotoPost, photoTitle, truncateUtf16, MAX_PHOTO_TITLE_UTF16, MAX_PHOTO_DESCRIPTION_UTF16,
+    getProfileInfo, getUserInfo, mapProfileFields, PROFILE_FIELDS, TIKTOK_PROFILE_SCOPE, TIKTOK_AUTHORIZE_URL,
 } from './tiktok.js';
 
 const MB = 1024 * 1024;
@@ -537,5 +538,100 @@ describe('photo titles', () => {
         assert.equal(truncateUtf16('ab😀', 3), 'ab');
         assert.equal(truncateUtf16('ab😀', 4), 'ab😀');
         assert.equal(truncateUtf16('short', 90), 'short');
+    });
+});
+
+// ─── user.info.profile (P33): behind a setting that defaults OFF, and OFF changes nothing ───────
+
+describe('the profile scope: off, the authorisation request is exactly what it was', () => {
+    // The request the TikTok portal already accepts, written out as a literal. If any of these moves, a connection made with the scope off is
+    // no longer the connection it was, and the portal may refuse the whole authorisation.
+    const AUTHORIZE_OFF = 'https://www.tiktok.com/v2/auth/authorize/?client_key=awkey123&response_type=code&scope=user.info.basic%2Cvideo.upload&redirect_uri=https%3A%2F%2Fapp.example%2Fapi%2Ftiktok%2Fcallback&state=st-1';
+
+    it('asks for the same scopes with the switch off, in all three Direct Post states', () => {
+        assert.deepEqual(tiktokScopes(false), ['user.info.basic', 'video.upload']);
+        assert.deepEqual(tiktokScopes(false, false, false), ['user.info.basic', 'video.upload']);
+        assert.deepEqual(tiktokScopes(true, false, false), ['user.info.basic', 'video.upload', 'video.publish']);
+        assert.deepEqual(tiktokScopes(true, true, false), ['user.info.basic', 'video.publish']);
+    });
+
+    it('builds a byte-identical authorise URL with the switch off: the literal, not a rebuilt copy', () => {
+        const url = buildAuthorizeUrl({
+            clientKey: 'awkey123', redirectUri: 'https://app.example/api/tiktok/callback', state: 'st-1', scopes: tiktokScopes(false, false, false),
+        });
+        assert.equal(url, AUTHORIZE_OFF);
+        assert.equal(buildAuthorizeUrl({ clientKey: 'awkey123', redirectUri: 'https://app.example/api/tiktok/callback', state: 'st-1' }), AUTHORIZE_OFF, 'and with no scopes passed at all');
+        assert.ok(!url.includes('profile'));
+    });
+
+    it('adds user.info.profile, and only that, with the switch on', () => {
+        assert.deepEqual(tiktokScopes(false, false, true), ['user.info.basic', 'user.info.profile', 'video.upload']);
+        assert.deepEqual(tiktokScopes(true, false, true), ['user.info.basic', 'user.info.profile', 'video.upload', 'video.publish']);
+        assert.deepEqual(tiktokScopes(true, true, true), ['user.info.basic', 'user.info.profile', 'video.publish']);
+        for (const direct of [false, true]) {
+            for (const audited of [false, true]) {
+                const off = tiktokScopes(direct, audited, false);
+                const on = tiktokScopes(direct, audited, true);
+                assert.deepEqual(on.filter((s) => s !== TIKTOK_PROFILE_SCOPE), off, `${direct}/${audited}: nothing else moves`);
+                assert.equal(on.length, off.length + 1);
+            }
+        }
+    });
+
+    it('never asks for the stats scope: follower and following counts need user.info.stats, which the app does not request', () => {
+        for (const direct of [false, true]) for (const audited of [false, true]) {
+            assert.ok(!tiktokScopes(direct, audited, true).includes('user.info.stats'));
+        }
+        assert.ok(!PROFILE_FIELDS.split(',').some((f) => /count/.test(f)), 'and so no count field is requested');
+    });
+
+    it('puts the profile scope in the authorise URL as one more comma-separated value', () => {
+        const url = new URL(buildAuthorizeUrl({ clientKey: 'k', redirectUri: 'https://a/cb', state: 's', scopes: tiktokScopes(false, false, true) }));
+        assert.equal(url.origin + url.pathname, TIKTOK_AUTHORIZE_URL);
+        assert.equal(url.searchParams.get('scope'), 'user.info.basic,user.info.profile,video.upload');
+    });
+});
+
+describe('getUserInfo is the request it has always been; the profile fields are a second request', () => {
+    it('asks for open_id, avatar_url and display_name, with the bearer token, and nothing else', async () => {
+        onGet = async () => ({ status: 200, data: { data: { user: { open_id: 'open-1', display_name: 'Nour', avatar_url: 'https://p16.example/a.jpg' } }, error: { code: 'ok' } } });
+        const profile = await getUserInfo('act.1');
+        assert.deepEqual(calls.map((c) => [c.method, c.url, c.config.params, c.config.headers]), [
+            ['get', `${TIKTOK_API_BASE}/v2/user/info/`, { fields: 'open_id,avatar_url,display_name' }, { Authorization: 'Bearer act.1' }],
+        ]);
+        assert.deepEqual(profile, { openId: 'open-1', displayName: 'Nour', avatarUrl: 'https://p16.example/a.jpg' });
+    });
+
+    it('asks the profile endpoint for the profile fields only, with the bearer token', async () => {
+        onGet = async () => ({
+            status: 200,
+            data: { data: { user: { open_id: 'open-1', username: 'nour.perfumes', bio_description: 'عطور شرقية ✨', profile_deep_link: 'https://www.tiktok.com/@nour.perfumes', is_verified: false } }, error: { code: 'ok' } },
+        });
+        const fields = await getProfileInfo('act.1');
+        assert.deepEqual(calls.map((c) => [c.method, c.url, c.config.params, c.config.headers]), [
+            ['get', `${TIKTOK_API_BASE}/v2/user/info/`, { fields: 'open_id,username,bio_description,profile_deep_link,is_verified' }, { Authorization: 'Bearer act.1' }],
+        ]);
+        assert.deepEqual(fields, { username: 'nour.perfumes', bio: 'عطور شرقية ✨', profileLink: 'https://www.tiktok.com/@nour.perfumes', verified: false });
+    });
+
+    it('turns a refusal (the portal does not have the scope after all) into an error the caller can treat as decoration', async () => {
+        onGet = async () => { throw apiError(403, 'scope_not_authorized', 'The user did not authorize the scope'); };
+        const err = await getProfileInfo('act.1').then(() => null, (e) => e);
+        assert.ok(err instanceof TikTokApiError);
+        assert.equal(err.code, 'scope_not_authorized');
+        assert.equal(calls.length, 1, 'a refusal is not retried');
+    });
+});
+
+describe('mapProfileFields', () => {
+    it('keeps what TikTok returned, trimmed, and nothing it did not', () => {
+        assert.deepEqual(mapProfileFields({ username: ' nour ', bio_description: '  hello  ', profile_deep_link: 'https://www.tiktok.com/@nour', is_verified: true }),
+            { username: 'nour', bio: 'hello', profileLink: 'https://www.tiktok.com/@nour', verified: true });
+    });
+
+    it('reads a missing, empty or wrongly typed field as null: an empty bio is not a bio, and "false" is not guessed', () => {
+        assert.deepEqual(mapProfileFields({}), { username: null, bio: null, profileLink: null, verified: null });
+        assert.deepEqual(mapProfileFields({ username: '', bio_description: '   ', profile_deep_link: 5, is_verified: 'yes' }), { username: null, bio: null, profileLink: null, verified: null });
+        for (const v of [null, undefined, 'x', 7, []]) assert.deepEqual(mapProfileFields(v), { username: null, bio: null, profileLink: null, verified: null });
     });
 });

@@ -814,14 +814,14 @@ describe('GET and POST /api/meta/app-settings', () => {
         assert.equal((await api('GET', '/app-settings', { session: null })).status, 404);
     });
 
-    it('reports the switch, the configuration id, the redirect URI to register and the scopes, with no secret', async () => {
+    it('reports the switch, the configuration id, the redirect URI and the Deauthorize Callback URL to register, and the scopes, with no secret', async () => {
         db.settings.set(APP_SETTING_KEYS.metaLoginConfigId, '987654321098765');
         const r = await api('GET', '/app-settings', { session: ADMIN_SESSION });
         assert.equal(r.status, 200);
         assert.equal(r.json.enabled, true);
         assert.deepEqual(r.json.configId, { set: true, source: 'database', value: '987654321098765' });
         assert.equal(r.json.mode, 'configuration');
-        assert.deepEqual(r.json.register, { redirectUri: `${BASE}/api/meta/callback` });
+        assert.deepEqual(r.json.register, { redirectUri: `${BASE}/api/meta/callback`, deauthorizeUrl: `${BASE}/api/meta/deauthorize` });
         assert.deepEqual(r.json.scopes, [...LOGIN_SCOPES]);
         assert.deepEqual(r.json.webhookFields, ['feed', 'messages', 'messaging_postbacks']);
         assert.deepEqual(r.json.app, { idSet: true, secretSet: true });

@@ -254,7 +254,11 @@ const MetaConnect = {
                 <p class="form-hint mbe-3">${t('meta.app.hint')}</p>
                 ${app.register ? html`
                     <p class="form-label">${t('meta.app.register')}</p>
-                    <ul class="tiktok-register mbe-4">${row(t('meta.app.redirectUri'), app.register.redirectUri)}</ul>
+                    <ul class="tiktok-register mbe-2">
+                        ${row(t('meta.app.redirectUri'), app.register.redirectUri)}
+                        ${app.register.deauthorizeUrl ? row(t('meta.app.deauthorizeUrl'), app.register.deauthorizeUrl) : ''}
+                    </ul>
+                    ${app.register.deauthorizeUrl ? html`<p class="form-hint mbe-4">${t('meta.app.deauthorizeHint')}</p>` : ''}
                 ` : html`<p class="form-hint text-warning mbe-4">${t('meta.app.noBaseUrl')}</p>`}
                 ${app.app && app.app.idSet && app.app.secretSet ? '' : html`<p class="form-hint text-warning mbe-4">${t('meta.app.noApp')}</p>`}
                 <form id="meta-app-form" data-submit="metaconnect:saveApp" novalidate>

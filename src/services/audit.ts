@@ -114,6 +114,11 @@ export const AUDIT_ACTIONS = {
     metaConnect: 'meta.connect',
     /** A tenant's Meta connection was removed: the Page unsubscribed from the webhook and the ids and token deleted. */
     metaDisconnect: 'meta.disconnect',
+    /**
+     * Meta told us (its Deauthorize Callback, P33) that the person who connected a tenant removed the app: the connection was removed with
+     * no dashboard session behind it. The actor is `META_DEAUTHORIZE_ACTOR_EMAIL`. `detail` names the ids and the outcome, never the person.
+     */
+    metaDeauthorize: 'meta.deauthorize',
     /** The Meta login settings (the switch, the configuration id) were changed by a platform admin. */
     settingsMetaLoginWrite: 'settings.meta_login_write',
     /** The platform's Gemini key was saved (after Google accepted it) or removed, from Operations. */

@@ -25,7 +25,7 @@
 import { randomBytes } from 'node:crypto';
 import { stripInvisible, truncateChars } from './textClean.js';
 
-export const SOURCE_KINDS = ['ig_bio', 'ig_caption', 'site_page', 'link_hub', 'yt_description', 'yt_title', 'typed'] as const;
+export const SOURCE_KINDS = ['ig_bio', 'ig_caption', 'site_page', 'link_hub', 'yt_description', 'yt_title', 'tt_bio', 'typed'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];
 
 /** One piece of text the draft is made from. `id` and `kind` are made by code; `text` is not. */
@@ -43,6 +43,7 @@ export const SOURCE_CAPS: Readonly<Record<SourceKind, number>> = {
     link_hub: 3000,
     yt_description: 5000,
     yt_title: 200,
+    tt_bio: 600,
     typed: 4000,
 };
 

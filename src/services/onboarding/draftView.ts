@@ -65,7 +65,10 @@ export function readSourcesStatus(value: unknown): SourcesStatus | null {
 export function forTenant(status: SourcesStatus | null): SourcesStatus | null {
     if (!status) return null;
     const one = (r: SourcesStatus['instagram']): SourcesStatus['instagram'] => ({ ...r, message: null });
-    return { instagram: one(status.instagram), website: one(status.website), youtube: one(status.youtube), typed: one(status.typed) };
+    return {
+        instagram: one(status.instagram), website: one(status.website), youtube: one(status.youtube), typed: one(status.typed),
+        ...(status.tiktok ? { tiktok: one(status.tiktok) } : {}),
+    };
 }
 
 export function readUsage(value: unknown): UsageLog | null {
