@@ -426,6 +426,11 @@ const API = {
      * answers `{ refreshed: false, reason: 'throttled' }` rather than an error when it is too soon.
      */
     refreshConversationProfile: (id) => API.request(`/conversations/${encodeURIComponent(id)}/refresh-profile`, { method: 'POST' }),
+    /**
+     * The DM sales funnel for the last 7, 30 or 90 days: conversations by the step they reached, the plan's rates and the bot's reply time.
+     * Counts only. Asked when the card on the inbox page is opened and when its period changes, never from the poll.
+     */
+    getDmFunnel: (days) => API.request(`/dm/funnel?days=${encodeURIComponent(days)}`),
 
     // AI settings
     getAiSettings: () => API.request('/settings/ai'),

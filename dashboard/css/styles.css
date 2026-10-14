@@ -5120,6 +5120,54 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 }
 .carousel-btn-payload { padding-inline: var(--space-1); font-size: var(--fs-100); color: var(--text-muted); overflow-wrap: anywhere; }
 
+/* ─── The sales view: a hot lead, what the bot decided under its reply, and the funnel card (DM plan S11, S12) ──────────────── */
+
+/* A hot lead (the "Hot" badge on a thread). The pair `.chip-accent` already paints, which check-contrast measures: the accent's text on its soft ground. */
+.badge-accent { background: var(--accent-soft); color: var(--accent-text); }
+
+/* What the bot decided, under its reply (messages.ai_meta): intent, stage, next action, offer, engine, handoff reason. Its own line under the
+   timing line, in the same muted type; the label is a quiet noun before the value. */
+.msg-detail--meta { row-gap: var(--space-1); }
+.msg-detail-key { color: var(--text-muted); }
+
+/* The funnel card: a closed toggle between the search block and the list, 44px tall, that opens a panel with its own scroll so a long card never
+   pushes the list off a phone. It sits in the sidebar, so it is as wide as the list (one column on a phone, 340px beside the chat). */
+.dm-funnel { display: flex; flex-direction: column; flex: 0 1 auto; min-block-size: 0; max-block-size: 70%; border-block-end: 1px solid var(--border-subtle); }
+.dm-funnel-toggle {
+    display: flex; align-items: center; gap: var(--space-2);
+    inline-size: 100%; min-block-size: var(--tap-target);
+    padding: var(--space-2) var(--space-3);
+    background: none; border: 0; cursor: pointer;
+    font: inherit; font-size: var(--fs-200); font-weight: var(--fw-semibold);
+    text-align: start; color: var(--text-strong);
+}
+.dm-funnel-toggle:hover { background: var(--surface-glass-hover); }
+.dm-funnel-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.dm-funnel-toggle [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); flex-shrink: 0; }
+.dm-funnel-title { flex: 1 1 auto; min-inline-size: 0; }
+.dm-funnel-chevron { transition: transform var(--motion-fast) var(--ease-standard); }
+.dm-funnel-toggle.is-open .dm-funnel-chevron { transform: rotate(180deg); }
+.dm-funnel-panel { flex: 1 1 auto; min-block-size: 0; overflow-y: auto; padding: var(--space-1) var(--space-3) var(--space-3); }
+.dm-funnel-body { display: flex; flex-direction: column; gap: var(--space-3); }
+.dm-funnel-body .form-hint { margin: 0; }
+.dm-funnel-window { inline-size: 100%; }
+.dm-funnel-window .btn { flex: 1 1 auto; white-space: nowrap; }
+
+/* The five steps: the name and the count on one line, the bar under them. */
+.dm-funnel-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.dm-funnel-step { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: var(--space-1) var(--space-3); }
+.dm-funnel-step .studio-meter { grid-column: 1 / -1; }
+.dm-funnel-label { font-size: var(--fs-200); color: var(--text-default); overflow-wrap: anywhere; }
+.dm-funnel-count { font-size: var(--fs-100); color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* The rates: the name, then the percentage and the numbers it is made of. */
+.dm-funnel-rates { display: grid; gap: var(--space-2); margin: 0; }
+.dm-funnel-rate { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); }
+.dm-funnel-rate dt { font-size: var(--fs-100); color: var(--text-muted); }
+.dm-funnel-rate dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-strong); }
+.dm-funnel-of { font-size: var(--fs-100); color: var(--text-muted); }
+.dm-funnel-outcomes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
 /* Phones: back, picture and name on one row, the AI switch on the next. With all four in one row the name had 73px at 375. */
 @media (max-width: 30rem) {
     .chat-header { flex-wrap: wrap; }

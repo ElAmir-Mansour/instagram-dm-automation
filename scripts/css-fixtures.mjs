@@ -805,6 +805,60 @@ fixture('inbox-detail', async () => {
     return { nav: 'inbox', markup };
 });
 
+// The sales view (DM plan S11, S12): a stage chip on each thread, a hot one, the bot's decision under each of its replies, the link clicks in the header,
+// and the funnel card open. src/dashboard/inboxSales.test.ts. Names and handles are male or neutral (DESIGN.md §7); nothing here is a real account.
+const salesThreads = () => [
+    {
+        id: '5', username: 'omar_k', profile_name: 'Omar Khaled', platform: 'instagram', instagram_user_id: '17841400003051', created_at: ago(9 * DAY), message_count: 6,
+        is_bot_active: true, last_message_direction: 'inbound', last_message_at: ago(30000), last_message_text: 'كيف أدفع؟',
+        stage: 'link', last_intent: 'ready_to_buy', last_link_at: ago(2 * DAY),
+        link_clicks: { links: 1, clicks: 3, prefetch: 4, last_click_at: ago(3600000) },
+    },
+    { id: '6', username: 'sami', platform: 'instagram', instagram_user_id: '5531', is_bot_active: true, last_message_direction: 'outbound', last_message_at: ago(120000), last_message_text: 'هل يناسب المبتدئين؟', stage: 'recommend', last_intent: 'level_fit' },
+    { id: '7', username: 'nader', platform: 'instagram', instagram_user_id: '5532', is_bot_active: false, last_message_direction: 'inbound', last_message_at: ago(3 * 3600000), last_message_text: 'أبي أسترجع فلوسي', stage: 'handoff', handoff_at: ago(3 * 3600000), handoff_reason: 'refund', last_inbound_message_at: ago(3 * 3600000), last_operator_at: null },
+    { id: '8', username: 'fahad', platform: 'facebook', instagram_user_id: '5533', is_bot_active: true, last_message_direction: 'outbound', last_message_at: ago(DAY), last_message_text: 'أرسلت لك الرابط', stage: 'link', last_link_at: ago(DAY), link_clicks: { links: 1, clicks: 0, prefetch: 2, last_click_at: null } },
+    { id: '9', username: 'yazan', platform: 'instagram', instagram_user_id: '5534', is_bot_active: true, last_message_direction: 'outbound', last_message_at: ago(2 * DAY), last_message_text: 'مرحباً', stage: 'new' },
+];
+const salesMessages = () => [
+    { id: 's1', direction: 'inbound', sender: 'customer', text: 'السلام عليكم، كم سعر الكورس؟', created_at: ago(2 * DAY), handled_at: ago(2 * DAY - 4000), reply_attempts: 1 },
+    { id: 's2', direction: 'outbound', sender: 'ai', text: 'وعليكم السلام! سعر الكورس يظهر في صفحته على يوديمي. أرسل لك الرابط؟', created_at: ago(2 * DAY - 4000),
+        ai: { model: 'claude-sonnet-5-5', provider: 'anthropic', source: 'usage' },
+        ai_meta: { intent: 'price', stage: 'recommend', next_action: 'recommend', offer_id: 'agentic-ai', engine: 'providers', handoff_reason: 'none' } },
+    { id: 's3', direction: 'inbound', sender: 'customer', text: 'نعم أرسله', created_at: ago(2 * DAY - 60000), handled_at: ago(2 * DAY - 66000), reply_attempts: 1 },
+    { id: 's4', direction: 'outbound', sender: 'ai', text: 'تفضّل: https://msg-response-auto.vercel.app/r/ab12cd34ef', created_at: ago(2 * DAY - 66000),
+        ai: { model: 'claude-sonnet-5-5', provider: 'anthropic', source: 'usage' },
+        ai_meta: { intent: 'ready_to_buy', stage: 'link', next_action: 'send_link', offer_id: 'agentic-ai', engine: 'providers', handoff_reason: 'none' } },
+    { id: 's5', direction: 'outbound', sender: 'ai', text: 'هل فتحت الرابط؟ أنا هنا لو عندك سؤال.', created_at: ago(2 * DAY - 4 * 3600000),
+        ai_meta: { kind: 'followup', engine: 'kit', stage: 'follow_up', next_action: 'reply', offer_id: 'agentic-ai' } },
+    { id: 's6', direction: 'inbound', sender: 'customer', text: 'كيف أدفع؟', created_at: ago(30000), handled_at: null, reply_attempts: 1 },
+    { id: 's7', direction: 'outbound', sender: 'ai', text: 'سيرد عليك الأستاذ قريباً.', created_at: ago(26000),
+        ai_meta: { intent: 'other', stage: 'handoff', next_action: 'handoff', engine: 'rule', handoff_reason: 'unsure' } },
+];
+const salesFunnel = (days) => ({
+    days, since: new Date(NOW - days * DAY).toISOString(), conversations: 10,
+    steps: [{ id: 'conversations', count: 10, pct: 100 }, { id: 'qualified', count: 7, pct: 70 }, { id: 'recommended', count: 6, pct: 60 }, { id: 'link_sent', count: 4, pct: 40 }, { id: 'clicked', count: 2, pct: 20 }],
+    outcomes: { follow_up: 1, handoff: 2, closed: 1, opted_out: 1, complaints: 1 },
+    rates: { link: { count: 4, of: 6, pct: 67 }, click: { count: 2, of: 4, pct: 50 }, handoff: { count: 2, of: 10, pct: 20 }, opt_out: { count: 1, of: 10, pct: 10 } },
+    clicks: { people: 2, human: 4, preview: 3 },
+    reply: { sample: 11, median_ms: 10000, p90_ms: 16000 },
+});
+fixture('inbox-sales', async () => {
+    const h = harness({ files: ['dashboard/js/pages/inbox.js'] });
+    h.api.getConversations = () => Promise.resolve({ data: salesThreads(), pagination: { total: 5 } });
+    h.api.getConversationMessages = () => Promise.resolve(salesMessages());
+    h.api.refreshConversationProfile = () => Promise.resolve({ refreshed: false, reason: 'throttled' });
+    h.api.getDmFunnel = (days) => Promise.resolve(salesFunnel(days));
+    h.run('InboxPage.render()');
+    await settle();
+    h.run('InboxPage.toggleFunnel()');
+    await settle();
+    h.run("InboxPage.selectThread('5')");
+    await settle();
+    const markup = compose(h);
+    h.run('InboxPage.destroy()');
+    return { nav: 'inbox', markup };
+});
+
 // Overview — src/dashboard/reading.test.ts
 const week = () => [10, 12, 14, 8, 16, 12, 12].map((sent, i) => ({ day: isoDay(6 - i), sent, failed: i === 6 ? 2 : i === 2 ? 4 : 0 }));
 fixture('overview', async () => {

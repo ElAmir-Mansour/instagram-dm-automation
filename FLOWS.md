@@ -754,6 +754,35 @@ does nothing, and every classified echo is logged as `dm.echo_classified` with t
 so what an Instagram-app reply carries is unproven. An owner echo pauses that customer's conversation (tenant and sender scoped), stores his
 words as an `operator` row keyed on Meta's message id, and sends nothing.
 
+### 2.6e — The inbox's sales view and the funnel (DM plan S11, S12)
+
+**Read-side only: nothing here sends, pauses or writes.** The dashboard draws what the sales turn already stored.
+
+1. **`GET /api/conversations`** (**`routes/api.ts:3253`**) asks `loadLinkClicks` (**`services/inboxDetail.ts:130`**, `LINK_CLICKS_SQL`) for the page of
+   thread ids, tenant-scoped: per conversation, the tracked links created, the clicks by a PERSON (`NOT is_prefetch`), the previews on their own
+   count, and the newest person's click. It is its own optional lookup: a database without v38 logs `inbox.detail_failed` and answers the list
+   without counts. `conversationView` (**:155**) pins the v39 columns (`salesView`, **:83**: `stage` only if it is one of `STAGES`, else null) and
+   attaches `link_clicks`.
+2. **The inbox** (`dashboard/js/pages/inbox.js`) draws a stage chip per thread (`stageChip`, **:848**), the Hot filter (`isHot`, **:562**: a person
+   opened the link, or `last_intent = ready_to_buy`, or `handoff_reason = hot_lead`; never a closed or opted-out thread), the link clicks in the
+   header (`linkChips`, **:1364**) and, under each AI reply, what `messages.ai_meta` says the bot decided (`aiMetaDetail`, **:2024**: intent, stage,
+   next action, offer, engine, handoff reason). Every value but the offer id is looked up in a closed list that `inboxSales.test.ts` compares with
+   `dmSales/types.ts`; any other value is shown as escaped text and never used as a key.
+3. **`GET /api/dm/funnel?days=7|30|90`** (**`routes/api.ts:3499`**, any role, `Cache-Control: no-store`) runs three read-only statements with the
+   session's tenant as `$1` (`loadDmFunnel`, **`services/dmFunnel.ts:290`**) and counts them in `buildDmFunnel` (**:235**). **The cohort** is the
+   conversations whose FIRST customer message is in the window. **A step is "reached at least"** and the row keeps only where a conversation is now,
+   so `reachedOf` (**:170**) reads the stage, every stage a bot reply recorded in `ai_meta.stage`, and the columns a step sets (`qualifier_turns`,
+   `offers_linked`/`last_link_at`, `followups_sent`, `handoff_at`, `opted_out_at`). Steps: conversations, qualified, recommended, link sent,
+   clicked; outcomes beside them: follow-up, handoff, closed, opted out, complaints. **A click is a person's:** the statement hands the visits back
+   grouped by `is_prefetch` and `buildDmFunnel` leaves the previews out (and `clicked` needs a link that was sent). **Reply time** is the bot's
+   p50 and p90 over every customer message in the window: the next outbound message of any kind, counted only when `sender = 'ai'` and not a
+   follow-up nudge.
+4. **The card** sits in the inbox sidebar, closed, and asks only when opened or when the period changes (never from the 5 s poll). An answer that
+   arrives after a newer question, or after the page was left or the tenant switched, is dropped.
+
+**Checking it:** `dmFunnel.test.ts` counts from fact rows worked out by hand (`dmFunnelTestFixtures.ts`); `dmFunnel.sql.test.ts` runs the real
+statements against a local migrated Postgres on the same world (`DM_FUNNEL_TEST_DATABASE_URL`, every row rolled back).
+
 ### 2.7 — Gemini
 
 **`src/webhook/messaging.ts:377`** — `generateAiResponse(conversationId, dmPromptText(dm),
