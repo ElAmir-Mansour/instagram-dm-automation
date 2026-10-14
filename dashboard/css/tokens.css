@@ -29,11 +29,12 @@
        Seven steps, replacing the twelve ad-hoc sizes (9,10,11,12,13,14,15,16,
        18,20,28,32px) the eight screens used to share. 11px was unreadable in
        the UI face and carried table headers and timestamps; the floor is now 12px. */
-    /* ─── The system stack, and no webfont at all ─────────────────────────────
-       The platform's own UI face is the default answer for UI text, so this
+    /* ─── The system stack for UI text, and one self-hosted face for display ───
+       The platform's own UI face is the default answer for UI text, so that
        loads nothing: the Google Fonts request is gone, which removes a third-party
-       round trip from the critical path as well as ~100KB. (A display face for
-       headings and figures is a separate step; DESIGN.md §3 describes it.)
+       round trip from the critical path as well as ~100KB. The one font that IS
+       downloaded is the display face (`--font-display`, below), and it comes from
+       this origin, not a font CDN.
 
        Arabic coverage is the part that needed care, because it is functional
        rather than aesthetic here. On Apple platforms `-apple-system` resolves to
@@ -47,6 +48,12 @@
                system-ui, 'Segoe UI', Roboto, 'Noto Sans Arabic', 'Geeza Pro', Tahoma, sans-serif;
     --font-latin: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, 'Segoe UI', Roboto, sans-serif;
     --font-mono: ui-monospace, 'SF Mono', Menlo, Monaco, 'Cascadia Mono', monospace;
+    /* The display face: Alexandria at 600, one subset woff2 for both scripts (DESIGN.md §3). For public h1/h2, the wordmark,
+       figures, the dashboard's page and login titles and stat values; never body text, labels, buttons or legal copy.
+       'Alexandria Fallback' is the size-adjusted local face that stands in until the font arrives. Both are declared by the
+       @font-face block in the six public pages and in styles.css, written by scripts/build-font.mjs (`npm run check:font`).
+       Weight 600 is the only weight there is, so a display rule asks for 600 and nothing else. */
+    --font-display: 'Alexandria', 'Alexandria Fallback', var(--font-ui);
 
     --fs-100: 0.75rem;    /* 12px — meta, timestamps, chips            */
     --fs-200: 0.875rem;   /* 14px — the UI default                     */

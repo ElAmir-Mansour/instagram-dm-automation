@@ -442,8 +442,26 @@ describe('landing — the new CSS: logical properties, existing breakpoints, tok
 
     it('the hero headline is sized by the display token, not by an override', () => {
         assert.equal(/\.hero h1\s*\{/.test(css), false, 'no .hero h1 rule');
-        assert.match(css, /--lp-display:\s*clamp\(2\.25rem, 1\.35rem \+ 3\.2vw, 3\.75rem\)/);
+        // L3: the step that gives the hero h1 its system-face line counts in Alexandria 600 (DESIGN.md section 3):
+        // 31.5 -> 49.5, not the 36 -> 60 it was drawn at. Moving either end moves a count at a measured width.
+        assert.match(css, /--lp-display:\s*clamp\(1\.96875rem, 1\.2456rem \+ 2\.57vw, 3\.09375rem\)/);
         assert.match(css, /\n {8}h1 \{[^}]*font-size: var\(--lp-display\)/);
+    });
+
+    it('the hero step is the one DESIGN.md documents, with the line counts it was chosen for', () => {
+        const design = read('DESIGN.md');
+        const token = /--lp-display:\s*(clamp\([^)]*\))/.exec(css)![1]!;
+        assert.ok(design.includes(`\`${token}\``), 'DESIGN.md section 3 quotes the clamp the page declares');
+        assert.ok(design.includes('`--lp-display` 31.5→49.5'));
+        // The contract: the hero h1 keeps the counts it had in the system face (main, 2026-10-14), per width and language.
+        assert.ok(/\| Width \| 320 \| 375 \| 414 \| 768 \| 1280 \| 1440 \|/.test(design));
+        assert.ok(/\| Arabic \| 4 \| 3 \| 3 \| 2 \| 3 \| 3 \|/.test(design));
+        assert.ok(/\| English \| 5 \| 4 \| 3 \| 3 \| 4 \| 4 \|/.test(design));
+        // The floor and the ceiling in rem, converted: 31.5px and 49.5px.
+        assert.ok(Math.abs(1.96875 * 16 - 31.5) < 1e-9 && Math.abs(3.09375 * 16 - 49.5) < 1e-9);
+        // And the ramp meets the ceiling at about 1150px: 1024px allows 43.5 to 47.5 and 1100px 47 to 51, so it cannot arrive much earlier or later.
+        const [, a, b] = /clamp\([^,]+,\s*([\d.]+)rem \+ ([\d.]+)vw/.exec(token)!;
+        assert.ok(Math.abs((49.5 - Number(a) * 16) / (Number(b) / 100) - 1150) < 5, 'the ramp reaches 49.5px at about 1150px');
     });
 });
 
@@ -1570,5 +1588,81 @@ describe('landing — the 3D diagram scenes (L11)', () => {
                 assert.ok(brand(file).length < 20_000, `${scene} is its own code only`);
             }
         });
+    });
+});
+
+describe('landing — the display face is Alexandria 600, self-hosted (L3)', () => {
+    type Manifest = { output: { file: string; bytes: number; metrics: { zeroAdvance: number } } };
+    const manifest = JSON.parse(read('scripts/font/manifest.json')) as Manifest;
+    const file = manifest.output.file;
+    const rawCss = /<style>[\s\S]*?<\/style>/.exec(landing)![0];
+    const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    const markup = noComments(landing);
+    /** The declarations of the rule whose selector is exactly `sel` (any indent), first match. */
+    const rule = (sel: string): string => {
+        const m = new RegExp(`(?:^|\\n)[ \\t]*${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css);
+        assert.ok(m, `a rule for ${sel}`);
+        return m[1] ?? '';
+    };
+
+    it('preloads the committed font once, as a crossorigin font, ahead of the stylesheet that declares it', () => {
+        const tag = `<link rel="preload" href="/brand/${file}" as="font" type="font/woff2" crossorigin>`;
+        assert.equal(markup.split(tag).length - 1, 1, 'exactly one preload tag, naming the font the manifest records');
+        assert.equal([...markup.matchAll(/<link\b[^>]*rel="preload"[^>]*>/g)].length, 1, 'and no other preload on the page');
+        assert.ok(markup.indexOf(tag) < markup.indexOf('/dashboard/css/tokens.css'), 'discovered before the CSS, which is the point of a preload');
+    });
+
+    it('is the only public page that preloads it', () => {
+        for (const page of ['pricing', 'privacy', 'terms', 'data-deletion', '404']) {
+            assert.equal(/rel="preload"/.test(noComments(read(`public/${page}.html`))), false, `${page}.html`);
+        }
+    });
+
+    it('declares the face once, with `swap`, from this origin, and requests nothing from a font CDN', () => {
+        assert.equal([...css.matchAll(/@font-face\s*\{[^}]*font-family:\s*'Alexandria';/g)].length, 1);
+        assert.match(css, /font-family:\s*'Alexandria';\s*font-style:\s*normal;\s*font-weight:\s*600;\s*font-display:\s*swap;/);
+        assert.ok(css.includes(`url('/brand/${file}')`));
+        assert.equal(/fonts\.googleapis\.com|fonts\.gstatic\.com/.test(markup), false);
+    });
+
+    it('draws the headings, the figures, the tallies and the wordmark in --font-display, and nothing else', () => {
+        for (const sel of ['h1', 'h2', '.figures dt', '.tally dt', '.wordmark']) assert.match(rule(sel), /font-family:\s*var\(--font-display\);/, sel);
+        assert.equal([...css.matchAll(/var\(--font-display\)/g)].length, 5, 'no sixth use: body, labels, buttons and legal copy stay on the system stack');
+        assert.match(rule('body'), /font-family:\s*var\(--font-ui\);/);
+        assert.match(rule('body'), /font-synthesis-weight:\s*none;/);
+    });
+
+    it('asks it for 600 only, in both languages (there is no other weight to give)', () => {
+        assert.equal([...css.matchAll(/--lp-fw-display:\s*([^;]+);/g)].map((m) => m[1]).join(','), '600');
+        assert.match(rule('h1'), /font-weight:\s*var\(--lp-fw-display\);/);
+        assert.match(rule('h2'), /font-weight:\s*var\(--lp-fw-display\);/);
+        assert.match(rule('.tally dt'), /font-weight:\s*var\(--fw-semibold\);/);
+        assert.match(rule('.wordmark'), /font-weight:\s*var\(--fw-semibold\);/);
+    });
+
+    it('measures its headings in em, not ch: Alexandria\'s zero is wider than the fallback\'s, so a ch measure moves at the swap', () => {
+        const zero = manifest.output.metrics.zeroAdvance / 1000;
+        assert.ok(zero > 0.6 && zero < 0.8, `"0" is ${zero}em`);
+        const em = (decls: string, prop: string): number => {
+            const m = new RegExp(`${prop}:\\s*([\\d.]+)em;`).exec(decls);
+            assert.ok(m, `${prop} is in em`);
+            return Number(m[1]);
+        };
+        // The widths Alexandria's own ch gave: 19, 22, 20 and 3.5 zeros.
+        assert.ok(Math.abs(em(rule('h1'), 'max-width') - 19 * zero) < 0.06);
+        assert.ok(Math.abs(em(rule('h2'), 'max-width') - 22 * zero) < 0.06);
+        assert.ok(Math.abs(em(rule('.cta h2'), 'max-width') - 20 * zero) < 0.06);
+        // The stacked layout (a media query) is the second `.figures dt` rule.
+        const stacked = /\n[ \t]*\.figures dt\s*\{([^}]*min-inline-size[^}]*)\}/.exec(css);
+        assert.ok(stacked, 'the stacked .figures dt rule');
+        assert.ok(Math.abs(em(stacked[1] ?? '', 'min-inline-size') - 3.5 * zero) < 0.06);
+        for (const sel of ['h1', 'h2', '.cta h2']) assert.equal(/\dch\b/.test(rule(sel)), false, `${sel} has no ch measure`);
+    });
+
+    it('reserves the Arabic wordmark\'s width, so the bar cannot wrap when the font arrives', () => {
+        const decls = rule('.wordmark');
+        assert.match(decls, /inline-size:\s*6\.3em;/);
+        assert.match(decls, /flex:\s*none;/);
+        assert.match(decls, /white-space:\s*nowrap;/);
     });
 });

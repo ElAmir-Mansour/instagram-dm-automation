@@ -402,3 +402,85 @@ describe('preview.html and preview-dark.html', () => {
         }
     });
 });
+
+// ─── The display face (L3) ─────────────────────────────────────────────────────────────────────────
+describe('the display face: Alexandria 600, self-hosted (L3)', () => {
+    type Manifest = { spec: { unicodes: string; features: string[]; source: { commit: string } }; output: { file: string; bytes: number; codepoints: number } };
+    const manifest = JSON.parse(read('scripts/font/manifest.json')) as Manifest;
+    const sec3 = sectionOf(design, 3);
+    const styleOf = (html: string): string => (html.match(/<style>[\s\S]*?<\/style>/g) ?? []).join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+    const PUBLIC = ['landing', 'pricing', 'privacy', 'terms', 'data-deletion', '404'].map((p) => `public/${p}.html`);
+    const sheets: Array<[string, string]> = [
+        ...PUBLIC.map((p): [string, string] => [p, styleOf(read(p))]),
+        ['dashboard/css/styles.css', read('dashboard/css/styles.css').replace(/\/\*[\s\S]*?\*\//g, '')],
+    ];
+
+    it('tokens.css declares --font-display once: the face, its size-adjusted fallback, then the UI stack', () => {
+        assert.equal(cssNoComments.match(/--font-display\s*:/g)?.length, 1);
+        assert.equal(base['font-display'], "'Alexandria', 'Alexandria Fallback', var(--font-ui)");
+    });
+
+    it('DESIGN.md §3 describes the shipped face, with the numbers the build recorded, and no longer calls it planned', () => {
+        assert.equal(/planned|not in tokens\.css yet/i.test(sec3), false);
+        assert.ok(sec3.includes("`--font-display: 'Alexandria', 'Alexandria Fallback', var(--font-ui)`"));
+        assert.ok(sec3.includes(`**${(manifest.output.bytes / 1024).toFixed(1)} KB**`), 'the size is the committed file\'s');
+        assert.ok(manifest.output.bytes <= 48 * 1024);
+        assert.ok(sec3.includes(manifest.spec.source.commit.slice(0, 7)), 'the pinned source commit');
+        assert.ok(sec3.includes(`${manifest.output.codepoints} of those code points`), 'the coverage the build recorded');
+        assert.ok(sec3.includes('preloaded on `/` only'));
+        assert.ok(sec3.includes('`public/brand/OFL.txt`'));
+        assert.ok(sec3.includes('Display is 600 in both scripts'));
+    });
+
+    it('the subset DESIGN.md documents is the subset the build uses, and so are its features', () => {
+        const subset = /\*\*Subset:\*\*([\s\S]*?)\n {2}- \*\*/.exec(sec3)?.[1] ?? '';
+        const documented = [...subset.matchAll(/U\+([0-9A-F]{4})(?:[–-]([0-9A-F]{4}))?/g)].map((m) => `${m[1]}-${m[2] ?? m[1]}`);
+        const built = manifest.spec.unicodes.split(',').map((r) => r.replace('U+', '')).map((r) => (r.includes('-') ? r : `${r}-${r}`));
+        assert.deepEqual([...documented].sort(), [...built].sort());
+        const features = /\*\*OpenType features kept:\*\*\s*([a-zA-Z,\s]+)\(/.exec(sec3)?.[1]?.split(',').map((f) => f.trim()) ?? [];
+        assert.ok(features.length >= 15, `parsed ${features.length} features`);
+        assert.deepEqual([...features].sort(), manifest.spec.features.filter((f) => f !== 'rvrn').sort(), 'rvrn is the variable font\'s own and resolves away at wght 600');
+    });
+
+    it('every public page and styles.css declare the face the same way: Alexandria with `swap`, and a fallback face per script', () => {
+        for (const [file, css] of sheets) {
+            assert.equal([...css.matchAll(/@font-face\s*\{[^}]*font-family:\s*'Alexandria';[^}]*font-display:\s*swap;[^}]*url\('\/brand\/alexandria-600\.[0-9a-f]{8}\.woff2'\)/g)].length, 1, `${file}: the Alexandria face`);
+            assert.equal([...css.matchAll(/@font-face\s*\{[^}]*font-family:\s*'Alexandria Fallback';[^}]*size-adjust:/g)].length, 2, `${file}: the Latin and Arabic fallbacks`);
+            assert.ok(css.includes(`url('/brand/${manifest.output.file}')`), `${file} names the font the manifest records`);
+        }
+    });
+
+    it('uses it for display only: the headings, the wordmark, the figures, the dashboard\'s titles and stat values', () => {
+        const USES: Record<string, string[]> = {
+            'public/landing.html': ['.figures dt', '.tally dt', '.wordmark', 'h1', 'h2'],
+            'public/pricing.html': ['.wordmark', 'h1', 'h2'],
+            'public/privacy.html': ['.wordmark', 'h1', 'h2'],
+            'public/terms.html': ['.wordmark', 'h1', 'h2'],
+            'public/data-deletion.html': ['.wordmark', 'h1', 'h2'],
+            'public/404.html': ['.wordmark', 'h1'],
+            'dashboard/css/styles.css': ['.login-title', '.page-title', '.sidebar-brand', '.stat-value'],
+        };
+        for (const [file, css] of sheets) {
+            const users = rulesIn(css).filter((r) => /font-family:\s*var\(--font-display\)/.test(r.body)).flatMap((r) => r.selectors);
+            assert.deepEqual([...new Set(users)].sort(), USES[file], `${file}: what draws in the display face`);
+        }
+    });
+
+    it('asks it for weight 600 and nothing else: it is the only weight there is, and 700 would be smeared into a fake bold', () => {
+        let seen = 0;
+        for (const [file, css] of sheets) {
+            for (const r of rulesIn(css)) {
+                if (!/font-family:\s*var\(--font-display\)/.test(r.body)) continue;
+                const w = /font-weight:\s*([^;]+);/.exec(r.body)?.[1]?.trim();
+                assert.ok(w !== undefined && /^(?:600|var\(--fw-semibold(?:, 600)?\)|var\(--lp-fw-display\))$/.test(w), `${file}: ${r.selectors.join(', ')} asks for ${w}`);
+                seen++;
+            }
+        }
+        assert.ok(seen >= 20, `${seen} display rules checked`);
+    });
+
+    it('no page or stylesheet asks a font CDN for anything', () => {
+        for (const [file, css] of sheets) assert.equal(/fonts\.googleapis\.com|fonts\.gstatic\.com|use\.typekit\.net|fonts\.bunny\.net/.test(css), false, file);
+        assert.equal(/fonts\.googleapis\.com|fonts\.gstatic\.com/.test(cssNoComments), false);
+    });
+});

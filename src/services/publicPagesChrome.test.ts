@@ -149,3 +149,26 @@ describe('public pages — the legal line names every trademark the footer draws
         }
     });
 });
+
+describe('public pages — the shared chrome carries the display face (L3)', () => {
+    const css = chrome.get('landing')!.css;
+
+    it('declares Alexandria and its two size-adjusted fallbacks once, inside the block every page shares', () => {
+        assert.equal([...css.matchAll(/@font-face\s*\{/g)].length, 3);
+        assert.equal([...css.matchAll(/font-family:\s*'Alexandria';/g)].length, 1);
+        assert.equal([...css.matchAll(/font-family:\s*'Alexandria Fallback';/g)].length, 2);
+        assert.match(css, /font-display:\s*swap;/);
+    });
+
+    it('draws the wordmark in it, at 600, with the Arabic name\'s width reserved so the bar does not wrap when the font arrives', () => {
+        const m = /\n {8}\.wordmark \{([^}]*)\}/.exec(css);
+        assert.ok(m, 'a .wordmark rule');
+        const decls = m[1] ?? '';
+        assert.match(decls, /font-family:\s*var\(--font-display\);/);
+        assert.match(decls, /font-weight:\s*var\(--fw-semibold\);/);
+        assert.match(decls, /inline-size:\s*6\.3em;/);
+        assert.match(decls, /white-space:\s*nowrap;/);
+        // The Latin line under the name stays on the Latin system face.
+        assert.match(/\.wordmark \.latin \{([^}]*)\}/.exec(css)?.[1] ?? '', /font-family:\s*var\(--font-latin\);/);
+    });
+});

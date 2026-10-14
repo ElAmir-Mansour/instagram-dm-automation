@@ -18,7 +18,9 @@
     "check:contrast": "node scripts/check-contrast.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "build:hero3d": "node scripts/build-hero3d.mjs",
-    "check:hero3d": "node scripts/build-hero3d.mjs --check"
+    "check:hero3d": "node scripts/build-hero3d.mjs --check",
+    "build:font": "node scripts/build-font.mjs",
+    "check:font": "node scripts/build-font.mjs --check"
   },
   "keywords": [
     "instagram",

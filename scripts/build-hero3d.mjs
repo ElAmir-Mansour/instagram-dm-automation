@@ -32,6 +32,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import { build } from 'esbuild';
+import { FONT_FILE, LICENCE_FILE } from './build-font.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const OUT_DIR = join(ROOT, 'public/brand');
@@ -205,8 +206,9 @@ async function main() {
         if (!reachable.has(f)) problems.push(`${f} is a chunk no entry imports: an orphan from a release before the previous one (run npm run build:hero3d)`);
         for (const dep of importsOf(text)) if (!onDisk.has(dep)) problems.push(`${f} imports ${dep}, which is not in public/brand`);
     }
-    // 5. Nothing else lives there: the route serves this directory `immutable` for a year.
-    for (const f of have) if (!NAME.test(f)) problems.push(`public/brand/${f} is not a built file, and this directory is served immutable for a year`);
+    // 5. Nothing else lives there: the route serves this directory `immutable` for a year. The display font and its licence are
+    //    another script's (scripts/build-font.mjs, npm run check:font), which owns and verifies them.
+    for (const f of have) if (!NAME.test(f) && !FONT_FILE.test(f) && f !== LICENCE_FILE) problems.push(`public/brand/${f} is not a built file, and this directory is served immutable for a year`);
 
     if (problems.length) {
         console.error('\nhero3d check failed:\n');

@@ -96,7 +96,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.18',
+    ASSET_VERSION: '12.19',
 
     _modules: Object.create(null),
 
@@ -209,7 +209,7 @@ const App = {
         const reposition = Motion.coalesce(() => this.moveNavIndicator(false));
         window.addEventListener('resize', reposition);
         if (document.fonts && typeof document.fonts.ready === 'object') {
-            // The webfont landing changes the nav items' height.
+            // A web font landing (the display face) can change the nav items' height.
             document.fonts.ready.then(reposition, () => {});
         }
 

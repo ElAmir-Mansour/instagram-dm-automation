@@ -99,8 +99,9 @@ export function securityHeaders(_req: Request, res: Response, next: NextFunction
         "default-src 'self'",
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com",
         // fonts.googleapis.com and fonts.gstatic.com were dropped here when the HIG pass
-        // removed the webfont: typography is the -apple-system stack now and the dashboard
-        // downloads no font at all. A CSP allowance nothing needs is not harmless - it is a
+        // removed the webfont: typography is the -apple-system stack now, and the one font
+        // that is downloaded, the display face, is a same-origin file under /brand that
+        // font-src 'self' below already allows. A CSP allowance nothing needs is not harmless - it is a
         // hole left open for whatever is injected next, and it is exactly the kind of thing
         // that silently outlives the feature that justified it.
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com",
