@@ -18,6 +18,20 @@
  *     A schema may have at most 24 optional properties and 16 union-typed ones, or it is a 400
  *     that only says it is too complex; `buildAnthropicRequest` counts first.
  *
+ * Prompt caching (platform.claude.com, build-with-claude/prompt-caching and about-claude/pricing, 2026-10-14):
+ *
+ *   - Only when the caller asks (`cacheSystem`): `system` is then the array form, one text block that
+ *     carries `cache_control: {type: 'ephemeral'}`, which is the 5-minute lifetime (a `ttl` of `1h`
+ *     would be 2x to write and is never sent). Otherwise `system` is the plain string it always was.
+ *     A write costs 1.25x the input price, so a prompt that is not sent again within minutes would
+ *     only pay the premium.
+ *   - A prefix under the model's minimum is not cached and nothing says so: no error, both cache
+ *     counts zero. The minimum is 512 tokens on Opus 5.5, Sonnet 5.5 and Haiku 5.5.
+ *   - The answer's `usage` splits the prompt in three: `input_tokens` is the uncached remainder only
+ *     (what comes after the last breakpoint), `cache_creation_input_tokens` was written to the cache
+ *     and `cache_read_input_tokens` came from it. Total input is the sum. Each `usage.iterations`
+ *     entry carries the same three, so `billedOf` reads them per model.
+ *
  * Server-side fallback (`fallbacks: "default"` with `anthropic-beta: server-side-fallback-2026-07-01`)
  * re-runs a request the safety classifier declined on the model Anthropic recommends for that
  * category, inside the same call. It is the one fallback this library allows, because it is
@@ -38,6 +52,9 @@ import { getJson, postJson } from './post.js';
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 export const ANTHROPIC_VERSION = '2023-06-01';
 export const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
+
+/** The cache marker: the default 5-minute lifetime. A fresh object each time, so nothing a caller does to a request can reach the next one. */
+const cacheControl = () => ({ type: 'ephemeral' as const });
 
 /** The documented limits on structured-output schemas (structured-outputs, "Schema complexity limits"). */
 export const MAX_OPTIONAL_PROPERTIES = 24;
@@ -124,8 +141,9 @@ export function buildAnthropicRequest(a: AdapterArgs): { url: string; headers: R
         body: {
             model: a.model,
             max_tokens: a.maxTokens,
-            // An empty `system` is not a system prompt; leave it out rather than send one.
-            ...(a.system.trim() ? { system: a.system } : {}),
+            // An empty `system` is not a system prompt; leave it out rather than send one. With `cacheSystem` it is one
+            // cached text block, and the plain string otherwise (the bytes of every request that never asked are unchanged).
+            ...(a.system.trim() ? { system: a.cacheSystem === true ? [{ type: 'text', text: a.system, cache_control: cacheControl() }] : a.system } : {}),
             messages: messagesFor(a.user),
             output_config: {
                 format: { type: 'json_schema', schema },
@@ -148,23 +166,27 @@ function stopReasonOf(reason: unknown): StopReason {
 /**
  * What the call was billed for, per model. `usage.iterations` has one entry per model that ran: a
  * model that declined appears as a `message` entry, the one that answered as `fallback_message`.
- * Without a fallback there is one entry, or none, and the top-level `usage` is the whole bill. We
- * send no `cache_control`, so cache tokens are zero and `input_tokens` is all of the input.
+ * Without a fallback there is one entry, or none, and the top-level `usage` is the whole bill.
+ * `input_tokens` is the uncached input only: a call that asked for caching also has
+ * `cache_creation_input_tokens` and `cache_read_input_tokens`, kept on the entry (and absent when
+ * zero) because `costOf` prices each at its own multiple of the input price.
  *
  * This is a ceiling, not an invoice: a refusal that arrives before any output is billed only in
  * three categories (bio, frontier_llm, reasoning_extraction), and its entry is counted here
  * whatever the category. A budget that over-counts a few input tokens is the safe side.
  */
 function billedOf(data: any, served: string): Billed[] {
+    /** One model's tokens, the cache counts kept only when there were some. */
+    const entry = (model: string, u: any): Billed => {
+        const cacheRead = count(u?.cache_read_input_tokens);
+        const cacheWrite = count(u?.cache_creation_input_tokens);
+        return { model, in: count(u?.input_tokens), out: count(u?.output_tokens), ...(cacheRead ? { cacheRead } : {}), ...(cacheWrite ? { cacheWrite } : {}) };
+    };
     const iterations: unknown[] = Array.isArray(data?.usage?.iterations) ? data.usage.iterations : [];
     const entries = iterations
         .filter((it: any) => it && typeof it === 'object' && (Number.isFinite(it.input_tokens) || Number.isFinite(it.output_tokens)))
-        .map((it: any) => ({
-            model: typeof it.model === 'string' && it.model ? it.model : served,
-            in: count(it.input_tokens),
-            out: count(it.output_tokens),
-        }));
-    return entries.length ? entries : [{ model: served, in: count(data?.usage?.input_tokens), out: count(data?.usage?.output_tokens) }];
+        .map((it: any) => entry(typeof it.model === 'string' && it.model ? it.model : served, it));
+    return entries.length ? entries : [entry(served, data?.usage)];
 }
 
 export function parseAnthropicResponse(data: any, asked: string): AdapterResult {

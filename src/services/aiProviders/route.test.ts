@@ -87,7 +87,14 @@ describe('the default pick: the first provider that has a key', () => {
     it('gives each purpose its own default effort', async () => {
         saveKey('anthropic');
         for (const purpose of AI_PURPOSES) assert.equal((await pick(purpose)).effort, PURPOSE_DEFAULT_EFFORT[purpose], purpose);
-        assert.deepEqual(Object.values(PURPOSE_DEFAULT_EFFORT), ['high', 'medium', 'medium', 'high', 'high']);
+        assert.deepEqual(Object.values(PURPOSE_DEFAULT_EFFORT), ['high', 'medium', 'medium', 'high', 'high', 'low']);
+    });
+
+    it('answers the `dm` purpose at low effort on the default model, until a route is saved for it', async () => {
+        saveKey('anthropic');
+        assert.deepEqual(await pick('dm'), { purpose: 'dm', provider: 'anthropic', model: 'claude-opus-5-5', effort: 'low', source: 'default' });
+        saveProviders({ anthropic: { defaultModel: 'claude-sonnet-5-5' } });
+        assert.deepEqual(await pick('dm'), { purpose: 'dm', provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low', source: 'default' });
     });
 
     it('uses the operator\'s default model for a provider over the code\'s', async () => {
@@ -141,6 +148,24 @@ describe('a saved route', () => {
         saveRouting({ onboarding_proof: { provider: 'openai', model: 'gpt-6-luna', effort: 'low' } });
         assert.deepEqual(await pick('onboarding_proof'), { purpose: 'onboarding_proof', provider: 'openai', model: 'gpt-6-luna', effort: 'low', source: 'saved' });
         assert.equal((await pick('onboarding_draft')).provider, 'anthropic', 'a purpose with no route still takes the default');
+    });
+
+    it('for `dm` wins over the default, with its own model and effort, and leaves every other purpose on the default', async () => {
+        saveKey('anthropic');
+        saveKey('openai');
+        saveRouting({ dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } });
+        assert.deepEqual(await pick('dm'), { purpose: 'dm', provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low', source: 'saved' });
+        assert.equal((await pick('tenant_studio')).source, 'default');
+        saveRouting({ dm: { provider: 'anthropic', model: 'claude-haiku-5-5', effort: 'medium' } });
+        assert.deepEqual(await pick('dm'), { purpose: 'dm', provider: 'anthropic', model: 'claude-haiku-5-5', effort: 'medium', source: 'saved' });
+    });
+
+    it('for `dm` whose provider has no key is `no_provider` naming dm and the provider, never a move to the provider that has one', async () => {
+        saveKey('anthropic');
+        saveRouting({ dm: { provider: 'openai', model: 'gpt-6-astra', effort: 'low' } });
+        const err = await failure(resolveRoute('dm', null));
+        assert.equal(err.kind, 'no_provider');
+        assert.match(err.message, /dm uses OpenAI, which has no API key saved/);
     });
 
     it('with no model on it uses the provider\'s default model as it is when the call is made', async () => {
@@ -212,6 +237,7 @@ describe('the Mac guard', () => {
 
     it('names exactly the Monteur\'s thinking and the infographic writer', () => {
         assert.deepEqual([...MAC_BRAIN_PURPOSES].sort(), ['tenant_infographic', 'tenant_monteur_think']);
+        assert.equal(MAC_BRAIN_PURPOSES.has('dm'), false, 'a DM reply is never the Mac\'s: it is a job queue and cannot answer in seconds');
     });
 
     it('refuses both for the owner: his videos stay on the Mac, with nothing routed through the operator\'s key', async () => {
@@ -234,7 +260,7 @@ describe('the Mac guard', () => {
     });
 
     it('does not touch the owner\'s other purposes: his drafts and the Studio may use the API', async () => {
-        for (const purpose of ['onboarding_draft', 'onboarding_proof', 'tenant_studio'] as const) {
+        for (const purpose of ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'dm'] as const) {
             assert.equal((await resolveRoute(purpose, OWNER)).provider, 'anthropic', purpose);
         }
     });

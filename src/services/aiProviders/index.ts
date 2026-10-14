@@ -14,6 +14,6 @@
  */
 export { generate, setAiCaller, setProviderFetch, estimateUsd, type AiCaller, type AiGenerateArgs, type AiGenerateResult } from './generate.js';
 export { resolveRoute, pickRoute, assertNotMacBrainWork, MacBrainTenantRefused, type ResolvedRoute } from './route.js';
-export { AI_PURPOSES, isAiPurpose, KEY_TEST, MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, type AiPurpose, type UsagePurpose } from './purposes.js';
+export { AI_PURPOSES, EVAL, isAiPurpose, KEY_TEST, MAC_BRAIN_PURPOSES, PURPOSE_DEFAULT_EFFORT, type AiPurpose, type UsagePurpose } from './purposes.js';
 export { BudgetRefused, getUsageSummary, type BudgetScope, type UsageSummary } from './usage.js';
 export { loadAiSettings, type AiConfig, type Budgets, type KeyStatus } from './settings.js';

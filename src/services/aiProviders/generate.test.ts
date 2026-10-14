@@ -506,3 +506,182 @@ describe('the whole path, through the real Anthropic adapter', () => {
         assertNoKey(JSON.stringify(db.usage) + logs.map((l) => l.line).join('\n'), 'the rows and the log');
     });
 });
+
+// ─── Prompt caching (S2 of the DM plan) ───────────────────────────────────────────────────────
+
+describe('asking for the system prompt to be cached', () => {
+    it('is passed to the provider layer only when the caller asked: a call that did not ask sends exactly the arguments it always did', async () => {
+        await call();
+        await call({ cacheSystem: false });
+        await call({ cacheSystem: true });
+        assert.equal('cacheSystem' in providerCalls[0]!, false);
+        assert.equal('cacheSystem' in providerCalls[1]!, false);
+        assert.equal(providerCalls[2]!.cacheSystem, true);
+    });
+
+    it('records what the call read from and wrote to the cache beside its tokens, and prices them: Opus 5.5 reads at 0.05x', async () => {
+        answer = () => okAnswer({ usage: { in: 200, out: 100, cacheRead: 4000 }, billed: [{ model: 'claude-opus-5-5', in: 200, out: 100, cacheRead: 4000 }] });
+        const out = await call({ cacheSystem: true });
+        const row = db.usage[0]!;
+        assert.deepEqual(
+            [row.input_tokens, row.output_tokens, row.cache_read_tokens, row.cache_write_tokens, row.outcome],
+            [200, 100, 4000, 0, 'ok']
+        );
+        assert.equal(row.usd, 0.0036, '200 in at $4/M, 4,000 read at $0.20/M, 100 out at $20/M');
+        assert.equal(out.usd, 0.0036);
+        assert.deepEqual(out.usage, { in: 200, out: 100, cacheRead: 4000 });
+        assert.equal(out.billed[0]!.cacheRead, 4000);
+    });
+
+    it('prices a write at 1.25x the input price', async () => {
+        answer = () => okAnswer({ usage: { in: 200, out: 100, cacheWrite: 4000 }, billed: [{ model: 'claude-opus-5-5', in: 200, out: 100, cacheWrite: 4000 }] });
+        await call({ cacheSystem: true });
+        const row = db.usage[0]!;
+        assert.deepEqual([row.cache_read_tokens, row.cache_write_tokens], [0, 4000]);
+        assert.equal(row.usd, 0.0228, '200 in at $4/M, 4,000 written at $5/M, 100 out at $20/M');
+    });
+
+    it('writes zero cache tokens for a call that cached nothing, and the UPDATE carries both columns last', async () => {
+        await call();
+        const row = db.usage[0]!;
+        assert.deepEqual([row.cache_read_tokens, row.cache_write_tokens], [0, 0]);
+        const update = db.statements.find((s) => /^UPDATE ai_usage/.test(s.sql))!;
+        assert.match(update.sql, /cache_read_tokens = \$10, cache_write_tokens = \$11 WHERE id = \$1$/);
+        assert.deepEqual(update.params.slice(-2), [0, 0]);
+    });
+
+    it('reads the cache counts from `usage` when a stand-in gave no per-model entries', async () => {
+        answer = () => okAnswer({ billed: [], usage: { in: 10, out: 5, cacheRead: 100, cacheWrite: 50 } });
+        await call();
+        const row = db.usage[0]!;
+        assert.deepEqual([row.input_tokens, row.cache_read_tokens, row.cache_write_tokens], [10, 100, 50]);
+    });
+
+    it('charges and records the cache tokens of an answer that was refused or cut off, as it does the others', async () => {
+        answer = () => { throw new AiError({ kind: 'max_tokens', provider: 'anthropic', model: 'claude-opus-5-5', message: 'x', usage: { in: 100, out: 0, cacheRead: 2000 }, billed: [{ model: 'claude-opus-5-5', in: 100, out: 0, cacheRead: 2000 }] }); };
+        await failure(call({ cacheSystem: true }));
+        const row = db.usage[0]!;
+        assert.deepEqual([row.outcome, row.input_tokens, row.cache_read_tokens, row.usd], ['max_tokens', 100, 2000, 0.0008]);
+        // An error that carries only `usage`, with no per-model entries, loses nothing either.
+        db.usage.length = 0;
+        answer = () => { throw new AiError({ kind: 'refusal', provider: 'anthropic', model: 'claude-opus-5-5', message: 'x', usage: { in: 100, out: 0, cacheWrite: 1000 } }); };
+        await failure(call({ cacheSystem: true }));
+        assert.deepEqual([db.usage[0]!.cache_write_tokens, db.usage[0]!.usd], [1000, 0.0054]);
+    });
+
+    it('logs the cache counts under names the redactor leaves alone, and only when there were some', async () => {
+        await call();
+        answer = () => okAnswer({ usage: { in: 200, out: 100, cacheRead: 4000, cacheWrite: 300 }, billed: [{ model: 'claude-opus-5-5', in: 200, out: 100, cacheRead: 4000, cacheWrite: 300 }] });
+        await call({ cacheSystem: true });
+        const lines = logs.filter((l) => l.line.includes('"event":"ai.call"')).map((l) => JSON.parse(l.line));
+        assert.ok(!('usage_cache_read' in lines[0]) && !('usage_cache_write' in lines[0]));
+        assert.equal(lines[1].usage_cache_read, 4000);
+        assert.equal(lines[1].usage_cache_write, 300);
+    });
+
+    it('reserves the budget for the worst case: a call that caches its system prompt is estimated as if it wrote all of it', () => {
+        const args = { system: 'x'.repeat(4000), user: 'y'.repeat(1000), schema: SCHEMA };
+        const plain = estimateUsd(args, 4000, 'claude-opus-5-5', {});
+        const cached = estimateUsd({ ...args, cacheSystem: true }, 4000, 'claude-opus-5-5', {});
+        const rest = Math.ceil((1000 + JSON.stringify(SCHEMA).length) / 2);
+        assert.equal(cached.usd, Math.round(((rest * 4 + 2000 * 4 * 1.25 + 4000 * 20) / 1e6) * 1e9) / 1e9, 'the system prompt at 1.25x, the rest at the input price');
+        assert.ok(cached.usd > plain.usd, 'a write costs more than sending the same tokens');
+        assert.equal(estimateUsd({ ...args, cacheSystem: false }, 4000, 'claude-opus-5-5', {}).usd, plain.usd, 'asking for no cache is no different from not asking');
+        assert.equal(cached.priced, true);
+    });
+
+    it('reserves that estimate before the provider is asked', async () => {
+        let reserved: number | undefined;
+        answer = () => { reserved = db.usage.find((u) => u.outcome === 'reserved')?.usd; return okAnswer(); };
+        const args = { system: 'S'.repeat(6000), user: 'u', schema: SCHEMA };
+        await call({ ...args, cacheSystem: true });
+        assert.equal(reserved, estimateUsd({ ...args, cacheSystem: true }, 20_000, 'claude-opus-5-5', {}).usd);
+        assert.ok(db.usage.every((u) => u.outcome === 'ok'), 'and the reservation was settled');
+    });
+});
+
+describe('the `dm` purpose and the `eval` label, through generate', () => {
+    it('routes `dm` at low effort when nothing is saved, and records an evaluation run as `eval` with no tenant', async () => {
+        const out = await call({ purpose: 'dm', creatorId: null, usageAs: 'eval' });
+        assert.equal(providerCalls[0]!.effort, 'low');
+        assert.equal(out.effort, 'low');
+        assert.equal(out.route, 'default');
+        const row = db.usage[0]!;
+        assert.deepEqual([row.purpose, row.creator_id, row.outcome], ['eval', null, 'ok']);
+        assert.equal(db.usage.filter((u) => u.purpose === 'dm').length, 0, 'the run is not counted as a real DM');
+    });
+
+    it('records a real DM as `dm` for its tenant, and the owner is not refused it: it is not the Mac\'s work', async () => {
+        await call({ purpose: 'dm', creatorId: OWNER });
+        const row = db.usage[0]!;
+        assert.deepEqual([row.purpose, row.creator_id, row.outcome], ['dm', OWNER, 'ok']);
+    });
+
+    it('uses the route saved for `dm`: its model, its effort and its price', async () => {
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } }));
+        answer = (a) => okAnswer({ model: a.model, billed: [{ model: a.model, in: 1000, out: 500 }] });
+        const out = await call({ purpose: 'dm', creatorId: OWNER });
+        assert.equal(providerCalls[0]!.model, 'claude-sonnet-5-5');
+        assert.equal(out.route, 'saved');
+        assert.equal(db.usage[0]!.usd, 0.007, '1000 in at $2/M plus 500 out at $10/M');
+    });
+
+    it('prices a cached DM turn on Sonnet 5.5 at the model\'s own read rate: 0.05x of $2, so $0.10 a million', async () => {
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } }));
+        answer = () => okAnswer({ model: 'claude-sonnet-5-5', usage: { in: 300, out: 200, cacheRead: 5000 }, billed: [{ model: 'claude-sonnet-5-5', in: 300, out: 200, cacheRead: 5000 }] });
+        await call({ purpose: 'dm', creatorId: OWNER, cacheSystem: true });
+        assert.equal(db.usage[0]!.usd, 0.0031, '300 in at $2/M, 5,000 read at $0.10/M, 200 out at $10/M');
+    });
+
+    it('is held by the budgets like any purpose: a tenant at its limit is refused a DM, and an evaluation run at the platform\'s', async () => {
+        budgets({ 'ai.budget.tenant_daily_usd': '0' });
+        const refused = await failure(call({ purpose: 'dm', creatorId: TENANT }));
+        assert.equal(refused.kind, 'budget');
+        assert.equal(providerCalls.length, 0);
+        budgets({ 'ai.budget.daily_usd': '0' });
+        const evalRefused = await failure(call({ purpose: 'dm', creatorId: null, usageAs: 'eval' }));
+        assert.equal(evalRefused.kind, 'budget');
+        assert.equal(providerCalls.length, 0);
+        assert.ok(db.usage.some((u) => u.purpose === 'eval' && u.outcome === 'budget'));
+    });
+});
+
+describe('the whole path with the cache, through the real Anthropic adapter', () => {
+    const reply = (usage: Record<string, number>) => jsonResponse(200, {
+        id: 'msg_01', type: 'message', role: 'assistant', model: 'claude-opus-5-5',
+        content: [{ type: 'text', text: '{"reply":"hello"}' }], stop_reason: 'end_turn', stop_details: null,
+        usage: { input_tokens: 120, output_tokens: 34, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, ...usage },
+    });
+
+    it('two evaluation runs a minute apart: the first writes the cache, the second reads it, and both are on the books', async () => {
+        restoreCaller?.();
+        restoreCaller = undefined;
+        const { fetchImpl, calls } = stubFetch(reply({ cache_creation_input_tokens: 1800 }), reply({ cache_read_input_tokens: 1800 }));
+        setProviderFetch(fetchImpl);
+        const ask = () => call({ purpose: 'dm', creatorId: null, usageAs: 'eval', cacheSystem: true, system: 'SYSTEM-SENTINEL a long, stable persona. '.repeat(100) });
+
+        await ask();
+        await ask();
+
+        for (const c of calls) {
+            assert.equal(c.body.system[0].cache_control.type, 'ephemeral');
+            assert.equal(c.body.output_config.effort, 'low', 'the dm route\'s effort');
+            assert.equal(c.headers['x-api-key'], FAKE_KEYS.anthropic);
+            assert.ok(!c.raw.includes(FAKE_KEYS.anthropic));
+        }
+        assert.deepEqual(db.usage.map((u) => [u.purpose, u.cache_write_tokens, u.cache_read_tokens, u.input_tokens]), [['eval', 1800, 0, 120], ['eval', 0, 1800, 120]]);
+        assert.deepEqual(db.usage.map((u) => u.usd), [0.01016, 0.00152], 'a write is $5/M and a read is $0.20/M on Opus 5.5');
+        assert.ok(db.usage[1]!.usd < db.usage[0]!.usd);
+    });
+
+    it('sends no cache_control for a call that did not ask, and records zero cache tokens', async () => {
+        restoreCaller?.();
+        restoreCaller = undefined;
+        const { fetchImpl, calls } = stubFetch(reply({}));
+        setProviderFetch(fetchImpl);
+        await call({ purpose: 'dm', creatorId: null, usageAs: 'eval' });
+        assert.equal(typeof calls[0]!.body.system, 'string');
+        assert.ok(!calls[0]!.raw.includes('cache_control'));
+        assert.deepEqual([db.usage[0]!.cache_read_tokens, db.usage[0]!.cache_write_tokens], [0, 0]);
+    });
+});

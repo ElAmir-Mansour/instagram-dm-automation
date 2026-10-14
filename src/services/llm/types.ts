@@ -23,8 +23,15 @@ export type LlmTurn = { role: 'user' | 'model'; text: string };
  * Tokens, as `{in, out}` (the spec's names). Not `input_tokens`/`output_tokens`: the logger
  * (`utils/log.ts`) redacts any field whose name contains "token", so those arrived in every log
  * line as `[redacted]`. Thinking counts as output: every provider bills it at the output rate.
+ *
+ * `in` is the input billed at the full rate. Anthropic's prompt cache splits the prompt in three
+ * (usage.input_tokens is the uncached remainder only, so total input is the three added up), and
+ * the cached two are kept apart because they are priced apart (`cost.ts`):
+ *   - `cacheRead`:  `cache_read_input_tokens`, served from the cache (a fraction of the input price);
+ *   - `cacheWrite`: `cache_creation_input_tokens`, written to the cache (1.25x the input price).
+ * Both are absent, not zero, when there were none, so a provider with no cache looks as it always did.
  */
-export type Usage = { in: number; out: number };
+export type Usage = { in: number; out: number; cacheRead?: number; cacheWrite?: number };
 
 /**
  * Where a `usd` came from. `provider`: the provider said what it charged (OpenRouter's
@@ -42,7 +49,7 @@ export type CostSource = 'provider' | 'table';
  * reports a charge; otherwise `costOf` (cost.ts) fills in `usd` from the price table and marks it
  * `source: 'table'`.
  */
-export type Billed = { model: string; in: number; out: number; usd?: number; source?: CostSource };
+export type Billed = { model: string; in: number; out: number; cacheRead?: number; cacheWrite?: number; usd?: number; source?: CostSource };
 
 /**
  * How a Custom (OpenAI-compatible) endpoint is asked for JSON. `schema` sends the schema as a
@@ -84,6 +91,13 @@ export interface AdapterArgs {
      */
     maxTokens: number;
     effort: Effort;
+    /**
+     * Ask Anthropic to cache the system prompt (`cache_control` on the system block, 5-minute
+     * lifetime). Only the Anthropic adapter reads it; every other family ignores it. Absent unless
+     * a caller asked: a cache write costs 1.25x the input price, so it is for a prompt that is sent
+     * again within minutes, not a default.
+     */
+    cacheSystem?: boolean;
     signal?: AbortSignal;
     fetchImpl?: FetchLike;
 }

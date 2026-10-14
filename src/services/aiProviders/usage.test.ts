@@ -275,6 +275,25 @@ describe('settleCall', () => {
         assert.equal(db.usage.length, 1, 'one row per call');
     });
 
+    it('writes the cache tokens beside the others, and 0 for a call that has none (the reservation starts at 0 too)', async () => {
+        const r = await reserve();
+        assert.deepEqual([db.usage[0]!.cache_read_tokens, db.usage[0]!.cache_write_tokens], [0, 0], 'a fresh reservation caches nothing');
+        await settleCall(r, { ...outcome, cacheRead: 4000, cacheWrite: 250 });
+        const cached = db.usage.find((u) => u.id === r.id)!;
+        assert.deepEqual([cached.input_tokens, cached.cache_read_tokens, cached.cache_write_tokens], [1200, 4000, 250], 'input_tokens stays the uncached remainder');
+        const plain = await reserve();
+        await settleCall(plain, outcome);
+        const row = db.usage.find((u) => u.id === plain.id)!;
+        assert.deepEqual([row.cache_read_tokens, row.cache_write_tokens], [0, 0]);
+    });
+
+    it('clamps the cache tokens like the others: a negative or past-the-column count is written as what the column can hold', async () => {
+        const r = await reserve();
+        await settleCall(r, { ...outcome, cacheRead: -3, cacheWrite: 1e12 });
+        const row = db.usage.find((u) => u.id === r.id)!;
+        assert.deepEqual([row.cache_read_tokens, row.cache_write_tokens], [0, 2_147_483_647]);
+    });
+
     it('releases what was reserved: the spend becomes what the call cost', async () => {
         const limits = budgets({ dailyUsd: 1 });
         const r = await reserve({ budgets: limits, estimateUsd: 1 });
@@ -320,6 +339,15 @@ describe('recordCall and recordKeyCheck', () => {
         db.failOn(/^INSERT INTO ai_usage/, new Error('down'), 2);
         assert.equal(await recordKeyCheck('openai', '', 'ok', 1), false);
         assert.equal(await recordCall({ creatorId: null, purpose: 'key_test', provider: 'x', model: '', outcome: 'ok', tokensIn: 0, tokensOut: 0, usd: 0, priced: true, elapsedMs: 1 }), false);
+    });
+});
+
+describe('billedOfError and the cache', () => {
+    it('keeps the cache tokens of an error that carries only `usage`, and none it does not have', () => {
+        const withCache = new AiError({ kind: 'refusal', provider: 'anthropic', model: 'm', message: 'x', usage: { in: 7, out: 9, cacheRead: 100, cacheWrite: 20 } });
+        assert.deepEqual(billedOfError(withCache), [{ model: 'm', in: 7, out: 9, cacheRead: 100, cacheWrite: 20 }]);
+        const without = new AiError({ kind: 'refusal', provider: 'anthropic', model: 'm', message: 'x', usage: { in: 7, out: 9 } });
+        assert.deepEqual(billedOfError(without), [{ model: 'm', in: 7, out: 9 }]);
     });
 });
 

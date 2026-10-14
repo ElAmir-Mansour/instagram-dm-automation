@@ -55,8 +55,11 @@ const AiProvidersView = {
         anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', gemini: 'GEMINI_API_KEY', openrouter: 'OPENROUTER_API_KEY',
     }),
 
-    /** The purposes the interface has words for; any other (a newer server's) is shown as its own name. */
-    KNOWN_PURPOSES: ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'key_test'],
+    /**
+     * The purposes the interface has words for; any other (a newer server's) is shown as its own name. The last two are not routes:
+     * `key_test` (Check and Test) and `eval` (a run of the DM evaluation harness) only label spend, so they have a name and no hint.
+     */
+    KNOWN_PURPOSES: ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm', 'key_test', 'eval'],
 
     // ─── Numbers ──────────────────────────────────────────────────────────────────────────
 

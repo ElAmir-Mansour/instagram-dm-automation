@@ -182,7 +182,7 @@ describe('GET /ai', () => {
         const { status, body } = await call('GET', '/ai');
         assert.equal(status, 200);
         assert.deepEqual(body.providers.map((p: any) => p.id), ['anthropic', 'openai', 'gemini', 'openrouter', 'custom']);
-        assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic']);
+        assert.deepEqual(body.purposes.map((p: any) => p.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm']);
         assert.ok(body.prices.some((p: any) => p.model === 'claude-opus-5-5' && p.source === 'default'));
         assert.equal(body.budgets.unlimited, true);
         assert.deepEqual(body.warnings.map((w: any) => w.code), ['no_budget']);
@@ -215,6 +215,16 @@ describe('GET /ai', () => {
         assert.equal(byPurpose.tenant_studio.resolved.source, 'saved');
         assert.equal(byPurpose.onboarding_draft.resolved.source, 'default');
         assert.equal(byPurpose.onboarding_draft.saved, null);
+    });
+
+    it('lists the DM purpose last: low effort by default, not the Mac\'s, and resolved to the first provider with a key', async () => {
+        saveKey('anthropic');
+        const { body } = await call('GET', '/ai');
+        const dm = body.purposes.at(-1);
+        assert.deepEqual(dm, {
+            purpose: 'dm', defaultEffort: 'low', macBrainGuarded: false, saved: null,
+            resolved: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'low', source: 'default' },
+        });
     });
 
     it('fails with the migration hint when v34 has not been applied', async () => {
@@ -267,6 +277,25 @@ describe('PUT /ai', () => {
         await call('PUT', '/ai', { body: { routing: { onboarding_draft: null }, budgets: { dailyUsd: null } } });
         assert.deepEqual(Object.keys(JSON.parse(db.settings.get('ai.routing')!.value)), ['onboarding_proof']);
         assert.equal(db.settings.has('ai.budget.daily_usd'), false);
+    });
+
+    it('saves a route for the DM purpose under its own key, audits it by name, and clears it with null', async () => {
+        const saved = await call('PUT', '/ai', { body: { routing: { dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
+        assert.equal(saved.status, 200);
+        assert.deepEqual(JSON.parse(db.settings.get('ai.routing')!.value), { dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } });
+        assert.deepEqual(saved.body.purposes.at(-1).saved, { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' });
+        assert.deepEqual(db.audits.at(-1)!.detail.routes, { dm: 'anthropic/claude-sonnet-5-5/low' });
+        await call('PUT', '/ai', { body: { routing: { dm: null } } });
+        assert.equal(db.settings.has('ai.routing'), false);
+    });
+
+    it('refuses a route for a usage label: `eval` and `key_test` label spend and are not purposes', async () => {
+        for (const label of ['eval', 'key_test']) {
+            const { status, body } = await call('PUT', '/ai', { body: { routing: { [label]: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
+            assert.equal(status, 400, label);
+            assert.match(body.error, /is not a purpose: use .*\bdm\b/, label);
+        }
+        assert.equal(db.settings.has('ai.routing'), false);
     });
 
     it('refuses the whole body, writing nothing and auditing nothing, when any part of it is invalid', async () => {
@@ -456,7 +485,7 @@ describe('POST /ai/test', () => {
     it('refuses a provider with no key, Custom with no base URL, an unknown provider, and a body that is neither or both', async () => {
         assert.match((await call('POST', '/ai/test', { body: { provider: 'openai' } })).body.error, /No API key is saved for OpenAI/);
         assert.match((await call('POST', '/ai/test', { body: { provider: 'custom' } })).body.error, /has no base URL saved/);
-        for (const body of [{ provider: 'mistral' }, {}, { provider: 'anthropic', purpose: 'onboarding_draft' }, { purpose: 'key_test' }, { purpose: 'nope' }]) {
+        for (const body of [{ provider: 'mistral' }, {}, { provider: 'anthropic', purpose: 'onboarding_draft' }, { purpose: 'key_test' }, { purpose: 'eval' }, { purpose: 'nope' }]) {
             assert.equal((await call('POST', '/ai/test', { body })).status, 400, JSON.stringify(body));
         }
         assert.equal(hits.length, 0);
@@ -487,6 +516,19 @@ describe('POST /ai/test', () => {
         const { body } = await call('POST', '/ai/test', { body: { purpose: 'tenant_monteur_think' } });
         assert.equal(body.ok, true);
         assert.equal(generated[0]!.model, 'claude-sonnet-5-5');
+    });
+
+    it('{purpose: dm} tests the DM route: the saved model answers, it is recorded as `key_test` and not as DM spend, and the Mac guard does not come into it', async () => {
+        saveKey('anthropic');
+        db.setSetting('ai.routing', JSON.stringify({ dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } }));
+        const { status, body } = await call('POST', '/ai/test', { body: { purpose: 'dm' } });
+        assert.equal(status, 200);
+        assert.deepEqual({ ok: body.ok, purpose: body.purpose, provider: body.provider }, { ok: true, purpose: 'dm', provider: 'anthropic' });
+        assert.equal(generated.length, 1);
+        assert.equal(generated[0]!.model, 'claude-sonnet-5-5');
+        assert.equal(usageOf('key_test').length, 1);
+        assert.equal(usageOf('dm').length, 0, 'a Test is not DM spend');
+        assert.equal(usageOf('eval').length, 0);
     });
 
     it('reports a failed route test as ok false with the kind, and records what it was billed', async () => {

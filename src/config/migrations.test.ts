@@ -514,3 +514,73 @@ describe('migration v35: meta login', () => {
         for (const column of ['payload', 'return_to']) assert.match(all, new RegExp(`oauth_states ADD COLUMN IF NOT EXISTS ${column}\\b`), column);
     });
 });
+
+// ─── v36: prompt-cache tokens on ai_usage ──────────────────────────────────────────────────────
+
+describe('migration v36: ai_usage cache tokens', () => {
+    const FILE = 'migration_v36_ai_usage_cache.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+    /** The same without string literals (the COMMENT texts), so words inside them are not read as SQL. */
+    const code = sql.replace(/'(?:[^']|'')*'/g, "''");
+
+    it('is registered, right after v35, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.equal(i, EXPECTED_MIGRATIONS.indexOf('migration_v35_meta_login.sql') + 1);
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, as its first statement (every AI call reserves a row in the table it alters)', () => {
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('creates no table, so there is nothing for RLS to miss, and the generic scan still finds every table covered', () => {
+        assert.deepEqual(createdTables(sql), []);
+        assert.deepEqual(tablesWithoutRls(allMigrationFiles()), []);
+    });
+
+    it('adds exactly the two ai_usage columns, each a whole number that defaults to 0, and only if absent', () => {
+        const added = [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) (INT NOT NULL DEFAULT 0);/g)].map((m) => `${m[1]}.${m[2]} ${m[3]}`);
+        assert.deepEqual(added.sort(), ['ai_usage.cache_read_tokens INT NOT NULL DEFAULT 0', 'ai_usage.cache_write_tokens INT NOT NULL DEFAULT 0']);
+        assert.equal((code.match(/ADD COLUMN/g) ?? []).length, 2, 'and no other column is added');
+    });
+
+    it('rewrites no row: the default is a constant, which is stored in the catalog and not written into the table', () => {
+        for (const statement of code.split(';').filter((st) => /ADD COLUMN/.test(st))) {
+            assert.match(statement, /DEFAULT 0$/, 'a constant default, never a function (now(), random()) that would force a rewrite');
+        }
+        assert.doesNotMatch(code, /\b(INSERT|UPDATE|DELETE)\b/i);
+        assert.doesNotMatch(code, /\bDROP\b|\bTRUNCATE\b|\bALTER COLUMN\b|\bSET DATA TYPE\b/i);
+        assert.doesNotMatch(code, /CREATE (UNIQUE )?INDEX/i, 'no index: nothing reads these columns by value');
+    });
+
+    it('is idempotent: every column is added only if absent, so running it twice is the same as once', () => {
+        assert.equal((code.match(/ADD COLUMN/g) ?? []).length, (code.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+    });
+
+    it('alters a table that exists by the time it runs: v34 creates ai_usage', () => {
+        const before = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
+        for (const m of sql.matchAll(/ALTER TABLE (\w+) ADD/g)) assert.ok(existing.has(m[1]!), `${m[1]} is created before v36`);
+        assert.ok(existing.has('ai_usage'));
+    });
+
+    it('documents the three columns that now describe a call\'s input', () => {
+        for (const column of ['input_tokens', 'cache_read_tokens', 'cache_write_tokens']) {
+            assert.match(sql, new RegExp(`COMMENT ON COLUMN ai_usage\\.${column} IS`), column);
+        }
+    });
+
+    it('every column the application writes is one the migration adds: settleCall names both, and recordCall and the reservation need neither', () => {
+        const usage = readFileSync(path.join(CONFIG_DIR, '..', 'services', 'aiProviders', 'usage.ts'), 'utf8');
+        const update = /UPDATE ai_usage\s+SET ([\s\S]*?)WHERE id = \$1/.exec(usage);
+        assert.ok(update, 'settleCall\'s UPDATE is found');
+        const written = [...update![1]!.matchAll(/\b([a-z_]+) = \$\d+/g)].map((m) => m[1]);
+        assert.ok(written.includes('cache_read_tokens') && written.includes('cache_write_tokens'));
+        for (const column of ['cache_read_tokens', 'cache_write_tokens']) assert.match(sql, new RegExp(`ADD COLUMN IF NOT EXISTS ${column} INT`), column);
+        // The INSERTs run before a call is paid for or for a refusal: they leave the columns to their default of 0.
+        for (const insert of usage.matchAll(/INSERT INTO ai_usage \(([^)]*)\)/g)) assert.doesNotMatch(insert[1]!, /cache_/);
+    });
+});

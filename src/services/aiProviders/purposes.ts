@@ -6,17 +6,19 @@
  */
 import type { Effort } from '../llm/types.js';
 
-export const AI_PURPOSES = ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic'] as const;
+export const AI_PURPOSES = ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm'] as const;
 export type AiPurpose = (typeof AI_PURPOSES)[number];
 
 export const isAiPurpose = (value: unknown): value is AiPurpose => typeof value === 'string' && (AI_PURPOSES as readonly string[]).includes(value);
 
 /**
- * What `ai_usage.purpose` can say: a purpose, or `key_test`, which is the operator checking a key or pressing "Test" on a route
- * (spend that belongs to no tenant).
+ * What `ai_usage.purpose` can say: a purpose, or one of two labels that route like a purpose and are not one (spend that belongs to no tenant):
+ * `key_test`, the operator checking a key or pressing "Test" on a route, and `eval`, a run of the DM evaluation harness (docs/DM_SALES_PLAN.md
+ * §11), which asks for the `dm` route with `usageAs: EVAL` so its spend is read apart from real conversations.
  */
 export const KEY_TEST = 'key_test';
-export type UsagePurpose = AiPurpose | typeof KEY_TEST;
+export const EVAL = 'eval';
+export type UsagePurpose = AiPurpose | typeof KEY_TEST | typeof EVAL;
 
 /**
  * How hard each purpose thinks when its route does not say (06's table). Always sent explicitly: Opus 5.5's own default is medium,
@@ -28,6 +30,8 @@ export const PURPOSE_DEFAULT_EFFORT: Readonly<Record<AiPurpose, Effort>> = {
     tenant_studio: 'medium',
     tenant_monteur_think: 'high',
     tenant_infographic: 'high',
+    // A DM is answered while the person waits (target p50 under 10 s), so it thinks as little as the route lets it. Nothing calls it yet.
+    dm: 'low',
 };
 
 /** The effort of a `key_test` call: it asks for one word of JSON, so it asks for no thinking. */

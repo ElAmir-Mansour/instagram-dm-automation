@@ -24,6 +24,9 @@ export interface UsageRow {
     model: string;
     input_tokens: number;
     output_tokens: number;
+    /** v36: Anthropic prompt-cache tokens, apart from `input_tokens`. */
+    cache_read_tokens: number;
+    cache_write_tokens: number;
     usd: number;
     priced: boolean;
     outcome: string;
@@ -93,7 +96,7 @@ export function installAiDb(opts: { owner?: string | null } = {}): AiDb {
         seedUsage: (row) => {
             const full: UsageRow = {
                 id: String(nextId++), creator_id: null, purpose: 'onboarding_draft', provider: 'anthropic', model: 'claude-opus-5-5',
-                input_tokens: 0, output_tokens: 0, priced: true, outcome: 'ok', elapsed_ms: 1, at: new Date(db.now), ...row,
+                input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, priced: true, outcome: 'ok', elapsed_ms: 1, at: new Date(db.now), ...row,
             };
             db.usage.push(full);
             return full;
@@ -160,7 +163,7 @@ export function installAiDb(opts: { owner?: string | null } = {}): AiDb {
             if (m) {
                 const [creator, purpose, provider, model] = params as [string | null, string, string, string];
                 const row: UsageRow = {
-                    id: String(nextId++), creator_id: creator, purpose, provider, model, input_tokens: 0, output_tokens: 0,
+                    id: String(nextId++), creator_id: creator, purpose, provider, model, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
                     usd: m[1] === '$5' ? (params[4] as number) : 0, priced: m[2] === '$6' ? (params[5] as boolean) : true,
                     outcome: m[3]!, elapsed_ms: null, at: new Date(db.now),
                 };
@@ -169,14 +172,14 @@ export function installAiDb(opts: { owner?: string | null } = {}): AiDb {
             }
             if (/^INSERT INTO ai_usage \(creator_id, purpose, provider, model, input_tokens, output_tokens, usd, priced, outcome, elapsed_ms\)/.test(flat)) {
                 const [creator, purpose, provider, model, tin, tout, usd, priced, outcome, elapsed] = params as [string | null, string, string, string, number, number, number, boolean, string, number | null];
-                target().push({ id: String(nextId++), creator_id: creator, purpose, provider, model, input_tokens: tin, output_tokens: tout, usd, priced, outcome, elapsed_ms: elapsed, at: new Date(db.now) });
+                target().push({ id: String(nextId++), creator_id: creator, purpose, provider, model, input_tokens: tin, output_tokens: tout, cache_read_tokens: 0, cache_write_tokens: 0, usd, priced, outcome, elapsed_ms: elapsed, at: new Date(db.now) });
                 return ok([], 1);
             }
             if (/^UPDATE ai_usage SET provider = \$2, model = \$3,/.test(flat)) {
-                const [id, provider, model, tin, tout, usd, priced, outcome, elapsed] = params as [string, string, string, number, number, number, boolean, string, number | null];
+                const [id, provider, model, tin, tout, usd, priced, outcome, elapsed, cacheRead, cacheWrite] = params as [string, string, string, number, number, number, boolean, string, number | null, number, number];
                 const row = [...db.usage, ...pending].find((r) => r.id === id);
                 if (!row) return ok([], 0);
-                Object.assign(row, { provider, model, input_tokens: tin, output_tokens: tout, usd, priced, outcome, elapsed_ms: elapsed });
+                Object.assign(row, { provider, model, input_tokens: tin, output_tokens: tout, cache_read_tokens: cacheRead, cache_write_tokens: cacheWrite, usd, priced, outcome, elapsed_ms: elapsed });
                 return ok([], 1);
             }
             if (/^SELECT COUNT\(\*\) FILTER \(WHERE at >= \$1\)::int AS day_calls/.test(flat)) {

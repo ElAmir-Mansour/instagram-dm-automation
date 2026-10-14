@@ -326,14 +326,25 @@ describe('AI providers card — the pure helpers', () => {
     it('builds the routing table from the server\'s purposes, starting an unrouted purpose on Automatic at its own effort', () => {
         const ai = aiView({ config: { routing: { onboarding_proof: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
         const rows = View.routeRows(ai) as Json[];
-        assert.deepEqual(rows.map((r) => r.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic']);
+        assert.deepEqual(rows.map((r) => r.purpose), ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm']);
         const draft = rows[0]!;
         assert.deepEqual({ ...draft.selected }, { provider: '', model: '', effort: 'high' });
         assert.equal(draft.saved, null);
         const proof = rows[1]!;
         assert.deepEqual({ ...proof.selected }, { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' });
         assert.deepEqual(rows.filter((r) => r.macBrainGuarded).map((r) => r.purpose), ['tenant_monteur_think', 'tenant_infographic']);
+        // The DM purpose is a row like the others: unrouted it starts on Automatic at the effort the server gives it (low), and the Mac does not do it.
+        const dm = rows.find((r) => r.purpose === 'dm')!;
+        assert.deepEqual({ ...dm.selected }, { provider: '', model: '', effort: 'low' });
+        assert.equal(dm.saved, null);
+        assert.equal(dm.macBrainGuarded, false);
         assert.deepEqual([...View.routeRows(null)], []);
+    });
+
+    it('saves and clears a route for the DM purpose like any other, under its own key', () => {
+        assert.deepEqual(plain(View.routePatch('dm', { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' })),
+            { ok: true, patch: { routing: { dm: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
+        assert.deepEqual(plain(View.routePatch('dm', { provider: '', model: '', effort: 'low' })), { ok: true, patch: { routing: { dm: null } } });
     });
 
     it('knows when a route row differs from what is saved', () => {
@@ -497,9 +508,10 @@ describe('AI providers card — what it draws', () => {
     it('draws the routing table: a row per purpose, Automatic for an unrouted one with its model and effort off', () => {
         const { Card, View, t } = loaded({ config: { routing: { tenant_studio: { provider: 'anthropic', model: 'claude-sonnet-5-5', effort: 'low' } } } });
         const markup = String(Card.renderLoaded());
-        for (const purpose of ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic']) {
+        for (const purpose of ['onboarding_draft', 'onboarding_proof', 'tenant_studio', 'tenant_monteur_think', 'tenant_infographic', 'dm']) {
             assert.ok(markup.includes(`id="aip-r-${purpose}"`), purpose);
             assert.ok(markup.includes(t(`ops.ai.purpose.${purpose}`)), purpose);
+            assert.ok(markup.includes(t(`ops.ai.purpose.${purpose}.hint`)), `${purpose}: its hint`);
         }
         const rows = View.routeRows(Card.ai) as Json[];
         const draft = String(Card.routeInner(rows.find((r) => r.purpose === 'onboarding_draft')));
@@ -559,6 +571,22 @@ describe('AI providers card — what it draws', () => {
         for (const name of ['dailyUsd', 'monthlyUsd', 'tenantDailyUsd', 'tenantMonthlyUsd']) assert.match(input(name), /inputmode="decimal"[^>]*dir="ltr"|dir="ltr"[^>]*inputmode="decimal"/, name);
         assert.ok(markup.includes(t('ops.ai.budget.none')), 'the placeholder says no limit');
         assert.ok(markup.includes('<bdi class="ltr-text" dir="ltr">$0.0432</bdi>'), 'today\'s spend beside the platform daily budget');
+    });
+
+    it('names the DM purpose and the evaluation label in the spend, in words and not as raw ids, and counts both in the total', () => {
+        const usage = usageView({
+            byPurpose: [
+                { purpose: 'dm', provider: 'anthropic', calls: 3, failed: 0, usd: 0.06, tokensIn: 15_000, tokensOut: 900 },
+                { purpose: 'eval', provider: 'anthropic', calls: 30, failed: 1, usd: 0.5, tokensIn: 150_000, tokensOut: 9000 },
+            ],
+        });
+        const { Card, View, t } = loaded({}, { usage });
+        const markup = String(Card.spendInner());
+        assert.ok(markup.includes(t('ops.ai.purpose.dm')) && markup.includes(t('ops.ai.purpose.eval')));
+        assert.doesNotMatch(markup, />(dm|eval)</, 'a purpose the card has words for is never shown as its id');
+        const rows = View.spendRows(usage) as Json;
+        assert.ok(Math.abs(rows.total - 0.56) < 1e-9, 'the total is the sum of every row, evaluation runs included');
+        assert.deepEqual((rows.purposes as Json[]).map((r) => [r.purpose, r.share]), [['eval', 89], ['dm', 11]]);
     });
 
     it('draws the spend: today and this month, by purpose (named) and by tenant (the platform when there is none)', () => {
@@ -1407,7 +1435,8 @@ describe('AI providers card — interface copy in Arabic and English', () => {
         for (const effort of s.View.EFFORTS as string[]) keys.add(`ops.ai.effort.${effort}`);
         for (const purpose of s.View.KNOWN_PURPOSES as string[]) {
             keys.add(`ops.ai.purpose.${purpose}`);
-            if (purpose !== 'key_test') keys.add(`ops.ai.purpose.${purpose}.hint`);
+            // `key_test` and `eval` only label spend: they are not routes, so they have a name and no hint.
+            if (purpose !== 'key_test' && purpose !== 'eval') keys.add(`ops.ai.purpose.${purpose}.hint`);
         }
         for (const name of s.View.BUDGETS as string[]) keys.add(`ops.ai.budget.${name}`);
         for (const code of ['no_credit', 'no_model_list']) keys.add(`ops.ai.warning.${code}`);

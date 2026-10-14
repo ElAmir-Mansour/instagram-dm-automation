@@ -23,7 +23,7 @@
 import { log } from '../../utils/log.js';
 import { UUID_PATTERN } from '../studio/common.js';
 import { loadAiSettings } from './settings.js';
-import { costOf, totalUsage, usdFor, type PriceTable } from '../llm/cost.js';
+import { billedFromUsage, costOf, totalUsage, usdFor, type PriceTable } from '../llm/cost.js';
 import { AiError, isAiError } from '../llm/errors.js';
 import { generateJson, type GenerateJsonResult } from '../llm/generate.js';
 import { minOutputTokens } from '../llm/limits.js';
@@ -48,6 +48,12 @@ export interface AiGenerateArgs {
     timeoutMs: number;
     /** Overrides the route's effort for this call. */
     effort?: Effort;
+    /**
+     * Cache the system prompt: Anthropic's `cache_control` on the system block, 5-minute lifetime (other providers ignore it). Off unless the
+     * caller asks, because a write costs 1.25x the input price and only pays back when the same prompt is sent again within minutes. What the
+     * call then reads and writes is priced, recorded in `ai_usage` (`cache_read_tokens`, `cache_write_tokens`) and reserved against the budget.
+     */
+    cacheSystem?: boolean;
     /** For tests. Defaults to `setProviderFetch`'s, then the global `fetch`. */
     fetchImpl?: FetchLike;
 }
@@ -85,13 +91,23 @@ const badRequest = (message: string): AiError => new AiError({ kind: 'bad_reques
 /**
  * The most a call can cost: its whole `maxTokens` at the output price, on an input estimate. A character is at most half a token
  * (Arabic and code run about 2 to 3 characters a token, English 4), so the estimate is high on purpose. An unpriced model is estimated
- * at the table's ceiling, the same figure it will be charged.
+ * at the table's ceiling, the same figure it will be charged. A call that caches its system prompt is estimated as if it wrote all of it
+ * (1.25x the input price): a read is cheaper and a prefix under the model's minimum is not cached at all, so a write is the ceiling.
  */
-export function estimateUsd(args: Pick<AiGenerateArgs, 'system' | 'user' | 'schema'>, maxTokens: number, model: string, prices: PriceTable): { usd: number; priced: boolean } {
+export function estimateUsd(args: Pick<AiGenerateArgs, 'system' | 'user' | 'schema' | 'cacheSystem'>, maxTokens: number, model: string, prices: PriceTable): { usd: number; priced: boolean } {
     const user = typeof args.user === 'string' ? args.user.length : args.user.reduce((n, turn) => n + turn.text.length, 0);
-    const chars = args.system.length + user + JSON.stringify(args.schema).length;
-    return usdFor({ in: Math.ceil(chars / 2), out: maxTokens }, model, prices);
+    const rest = user + JSON.stringify(args.schema).length;
+    if (args.cacheSystem === true) {
+        return usdFor({ in: Math.ceil(rest / 2), cacheWrite: Math.ceil(args.system.length / 2), out: maxTokens }, model, prices);
+    }
+    return usdFor({ in: Math.ceil((args.system.length + rest) / 2), out: maxTokens }, model, prices);
 }
+
+/** The cache counts for a log line, only when there were some. Not `*_tokens`: the logger redacts any field whose name contains "token". */
+const cacheLog = (used: { cacheRead?: number; cacheWrite?: number }): Record<string, number> => ({
+    ...(used.cacheRead ? { usage_cache_read: used.cacheRead } : {}),
+    ...(used.cacheWrite ? { usage_cache_write: used.cacheWrite } : {}),
+});
 
 function costSourceOf(billed: readonly Billed[]): AiGenerateResult['costSource'] {
     const sources = new Set(billed.map((b) => b.source));
@@ -144,6 +160,7 @@ async function runGenerate(args: AiGenerateArgs): Promise<AiGenerateResult> {
             provider: route.provider, apiKey: keys.get(route.provider) ?? '', model: route.model,
             baseUrl: route.baseUrl, jsonMode: route.jsonMode,
             system: args.system, user: args.user, schema: args.schema, maxTokens, timeoutMs: args.timeoutMs, effort,
+            ...(args.cacheSystem === true ? { cacheSystem: true } : {}),
             fetchImpl: args.fetchImpl ?? providerFetch,
         });
     } catch (err) {
@@ -154,26 +171,28 @@ async function runGenerate(args: AiGenerateArgs): Promise<AiGenerateResult> {
         const elapsedMs = Date.now() - started;
         await settleCall(reservation, {
             outcome, provider: route.provider, model: (isAiError(err) && err.model) || route.model,
-            tokensIn: used.in, tokensOut: used.out, usd: cost.usd, priced: cost.priced, elapsedMs,
+            tokensIn: used.in, tokensOut: used.out, cacheRead: used.cacheRead ?? 0, cacheWrite: used.cacheWrite ?? 0,
+            usd: cost.usd, priced: cost.priced, elapsedMs,
         });
         log('warn', 'ai.call_failed', {
             purpose: label, creator_id: args.creatorId, provider: route.provider, model: route.model, effort, outcome,
-            elapsed_ms: elapsedMs, usage_in: used.in, usage_out: used.out, usd: cost.usd,
+            elapsed_ms: elapsedMs, usage_in: used.in, usage_out: used.out, ...cacheLog(used), usd: cost.usd,
         });
         throw err;
     }
 
-    const billed: Billed[] = result.billed?.length ? result.billed : [{ model: result.model, in: result.usage.in, out: result.usage.out }];
+    const billed: Billed[] = result.billed?.length ? result.billed : [billedFromUsage(result.model, result.usage)];
     const cost = costOf(billed, config.prices);
     const used = totalUsage(cost.billed);
     const elapsedMs = Date.now() - started;
     await settleCall(reservation, {
         outcome: 'ok', provider: route.provider, model: result.model || route.model,
-        tokensIn: used.in, tokensOut: used.out, usd: cost.usd, priced: cost.priced, elapsedMs,
+        tokensIn: used.in, tokensOut: used.out, cacheRead: used.cacheRead ?? 0, cacheWrite: used.cacheWrite ?? 0,
+        usd: cost.usd, priced: cost.priced, elapsedMs,
     });
     log('info', 'ai.call', {
         purpose: label, creator_id: args.creatorId, provider: route.provider, model: result.model, effort, outcome: 'ok',
-        elapsed_ms: elapsedMs, usage_in: used.in, usage_out: used.out, usd: cost.usd, priced: cost.priced,
+        elapsed_ms: elapsedMs, usage_in: used.in, usage_out: used.out, ...cacheLog(used), usd: cost.usd, priced: cost.priced,
     });
     return {
         ...result,

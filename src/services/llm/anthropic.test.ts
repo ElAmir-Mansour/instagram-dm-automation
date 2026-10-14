@@ -159,6 +159,54 @@ describe('buildAnthropicRequest', () => {
         assert.ok(!('system' in buildAnthropicRequest(args({ system: '  ' })).body));
     });
 
+    it('sends no cache_control unless the caller asks: `system` stays the plain string it always was', () => {
+        for (const over of [{}, { cacheSystem: false }, { cacheSystem: undefined }, { cacheSystem: 'yes' as unknown as boolean }]) {
+            const { body } = buildAnthropicRequest(args(over));
+            assert.equal(body.system, 'You write replies.', JSON.stringify(over));
+            assert.ok(!JSON.stringify(body).includes('cache_control'), JSON.stringify(over));
+        }
+    });
+
+    it('with cacheSystem puts one cache_control on the system prompt, as a single text block with the default 5-minute lifetime', () => {
+        const { body } = buildAnthropicRequest(args({ cacheSystem: true }));
+        assert.deepEqual(body.system, [{ type: 'text', text: 'You write replies.', cache_control: { type: 'ephemeral' } }]);
+        assert.ok(!('ttl' in (body.system as any)[0].cache_control), 'no ttl: the 1-hour lifetime would cost 2x to write');
+        assert.equal((JSON.stringify(body).match(/cache_control/g) ?? []).length, 1, 'one breakpoint, and nowhere else');
+    });
+
+    it('with cacheSystem changes nothing but the system block: the messages, the schema, the effort and the headers are the request that did not ask', () => {
+        const user = [{ role: 'user' as const, text: 'a' }, { role: 'model' as const, text: 'b' }, { role: 'user' as const, text: 'c' }];
+        for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-4-8']) {
+            const plain = buildAnthropicRequest(args({ model, effort: 'low', user }));
+            const cached = buildAnthropicRequest(args({ model, effort: 'low', user, cacheSystem: true }));
+            assert.deepEqual({ ...cached.body, system: undefined }, { ...plain.body, system: undefined }, model);
+            assert.deepEqual(cached.headers, plain.headers, model);
+            assert.equal(cached.url, plain.url, model);
+            assert.ok(Array.isArray(cached.body.system), model);
+        }
+    });
+
+    it('with cacheSystem but no system prompt sends no system block at all, so there is nothing to mark', () => {
+        for (const system of ['', '   ']) {
+            const { body } = buildAnthropicRequest(args({ system, cacheSystem: true }));
+            assert.ok(!('system' in body));
+            assert.ok(!JSON.stringify(body).includes('cache_control'));
+        }
+    });
+
+    it('gives every request its own cache marker, so nothing done to one request can reach the next', () => {
+        const a = buildAnthropicRequest(args({ cacheSystem: true }));
+        const b = buildAnthropicRequest(args({ cacheSystem: true }));
+        (a.body.system as any)[0].cache_control.type = 'changed';
+        assert.equal((b.body.system as any)[0].cache_control.type, 'ephemeral');
+    });
+
+    it('puts the same bytes in the cached prefix every time: the system text is sent as it is, not trimmed or rewritten', () => {
+        const system = '  You write replies.\n\nRules:\n- be brief  ';
+        assert.equal((buildAnthropicRequest(args({ system, cacheSystem: true })).body.system as any)[0].text, system);
+        assert.deepEqual(buildAnthropicRequest(args({ system, cacheSystem: true })).body, buildAnthropicRequest(args({ system, cacheSystem: true })).body);
+    });
+
     it('sends a {json} schema untouched', () => {
         const raw = { type: 'object', properties: { x: { type: ['string', 'null'] } }, required: ['x'], additionalProperties: false };
         assert.deepEqual((buildAnthropicRequest(args({ schema: { json: raw } })).body.output_config as any).format.schema, raw);
@@ -388,7 +436,93 @@ describe('what a server-side fallback bills', () => {
     });
 });
 
+describe('what prompt caching bills', () => {
+    const cached = (usage: Record<string, unknown>) => message({ usage: { input_tokens: 120, output_tokens: 34, ...usage } });
+
+    it('keeps cache writes and reads apart from the uncached input, on the entry and in the usage', () => {
+        const write = parseAnthropicResponse(cached({ cache_creation_input_tokens: 1800, cache_read_input_tokens: 0 }), 'claude-opus-5-5');
+        assert.deepEqual(write.billed, [{ model: 'claude-opus-5-5', in: 120, out: 34, cacheWrite: 1800 }]);
+        assert.deepEqual(write.usage, { in: 120, out: 34, cacheWrite: 1800 });
+        const read = parseAnthropicResponse(cached({ cache_creation_input_tokens: 0, cache_read_input_tokens: 1800 }), 'claude-opus-5-5');
+        assert.deepEqual(read.billed, [{ model: 'claude-opus-5-5', in: 120, out: 34, cacheRead: 1800 }]);
+        assert.deepEqual(read.usage, { in: 120, out: 34, cacheRead: 1800 });
+        const both = parseAnthropicResponse(cached({ cache_creation_input_tokens: 300, cache_read_input_tokens: 1500 }), 'claude-opus-5-5');
+        assert.deepEqual(both.usage, { in: 120, out: 34, cacheRead: 1500, cacheWrite: 300 });
+    });
+
+    it('leaves the cache fields out, not zero, when nothing was cached: a call that did not ask looks as it always did', () => {
+        const parsed = parseAnthropicResponse(message(), 'claude-opus-5-5');
+        assert.deepEqual(Object.keys(parsed.usage), ['in', 'out']);
+        assert.deepEqual(Object.keys(parsed.billed[0]!), ['model', 'in', 'out']);
+        const noFields = parseAnthropicResponse(message({ usage: { input_tokens: 5, output_tokens: 2 } }), 'claude-opus-5-5');
+        assert.deepEqual(noFields.usage, { in: 5, out: 2 });
+    });
+
+    it('reads a count that is not a usable number as none, so a bad field cannot make a call cost less or NaN', () => {
+        for (const bad of [-5, 'lots', null, Number.NaN, {}, [], true]) {
+            const parsed = parseAnthropicResponse(cached({ cache_creation_input_tokens: bad, cache_read_input_tokens: bad }), 'claude-opus-5-5');
+            assert.deepEqual(parsed.usage, { in: 120, out: 34 }, String(bad));
+        }
+    });
+
+    it('takes the cache counts of each iteration at its own model, and the usage is their sum', () => {
+        const parsed = parseAnthropicResponse(fellBack({
+            usage: {
+                input_tokens: 412, output_tokens: 264, cache_read_input_tokens: 500, cache_creation_input_tokens: 0,
+                iterations: [
+                    { type: 'message', model: 'claude-opus-5-5', input_tokens: 35, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 500 },
+                    { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 412, output_tokens: 264, cache_read_input_tokens: 500, cache_creation_input_tokens: 0 },
+                ],
+            },
+        }), 'claude-opus-5-5');
+        assert.deepEqual(parsed.billed, [
+            { model: 'claude-opus-5-5', in: 35, out: 0, cacheWrite: 500 },
+            { model: 'claude-opus-4-8', in: 412, out: 264, cacheRead: 500 },
+        ]);
+        assert.deepEqual(parsed.usage, { in: 447, out: 264, cacheRead: 500, cacheWrite: 500 });
+    });
+
+    it('is priced at the cached rates: Opus 5.5 reads at 0.05x and writes at 1.25x of its $4 input price', () => {
+        const read = costOf(parseAnthropicResponse(cached({ cache_read_input_tokens: 1800 }), 'claude-opus-5-5').billed, DEFAULT_PRICES);
+        // 120 in at $4, 1,800 read at $0.20 and 34 out at $20, per million.
+        assert.equal(read.usd, 0.00152);
+        const write = costOf(parseAnthropicResponse(cached({ cache_creation_input_tokens: 1800 }), 'claude-opus-5-5').billed, DEFAULT_PRICES);
+        // 120 in at $4, 1,800 written at $5 and 34 out at $20.
+        assert.equal(write.usd, 0.01016);
+        assert.equal(write.priced, true);
+    });
+
+    it('is priced per model across a fallback: each attempt\'s cache tokens at its own model\'s multiple', () => {
+        const parsed = parseAnthropicResponse(fellBack({
+            usage: {
+                input_tokens: 0, output_tokens: 0,
+                iterations: [
+                    { type: 'message', model: 'claude-opus-5-5', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0 },
+                    { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 0 },
+                ],
+            },
+        }), 'claude-opus-5-5');
+        // A million tokens read: $0.20 on Opus 5.5 (0.05x of $4), $0.50 on Opus 4.8 (0.1x of $5).
+        assert.deepEqual(costOf(parsed.billed, DEFAULT_PRICES).billed.map((b) => b.usd), [0.2, 0.5]);
+    });
+});
+
 describe('anthropicAdapter', () => {
+    it('asks for the cache when told to and returns what the answer says it wrote and read', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, message({ usage: { input_tokens: 20, output_tokens: 34, cache_creation_input_tokens: 1800, cache_read_input_tokens: 0 } })));
+        const out = await anthropicAdapter(args({ fetchImpl, cacheSystem: true }));
+        assert.deepEqual(calls[0]!.body.system, [{ type: 'text', text: 'You write replies.', cache_control: { type: 'ephemeral' } }]);
+        assert.deepEqual(out.usage, { in: 20, out: 34, cacheWrite: 1800 });
+        assert.deepEqual(out.billed, [{ model: 'claude-opus-5-5', in: 20, out: 34, cacheWrite: 1800 }]);
+    });
+
+    it('sends no cache_control down the wire when it was not asked to', async () => {
+        const { fetchImpl, calls } = stubFetch(jsonResponse(200, message()));
+        await anthropicAdapter(args({ fetchImpl }));
+        assert.equal(calls[0]!.body.system, 'You write replies.');
+        assert.ok(!calls[0]!.raw.includes('cache_control'));
+    });
+
     it('makes one POST and returns what the answer says', async () => {
         const { fetchImpl, calls } = stubFetch(jsonResponse(200, message()));
         const out = await anthropicAdapter(args({ fetchImpl }));
