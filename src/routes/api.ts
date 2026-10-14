@@ -13,7 +13,8 @@ import {
     sendDirectMessage, publishFacebookCarousel, publishFacebookPost, publishInstagramCarousel, publishInstagramPost,
     API_VERSION, MediaProcessingTimeoutError, resumeInstagramContainer,
 } from '../services/instagram.js';
-import { DEFAULT_MODEL, generateAiResponse, resolveModel, starterPersona, SUPPORTED_MODELS } from '../services/ai.js';
+import { DEFAULT_MODEL, resolveModel, starterPersona, SUPPORTED_MODELS } from '../services/ai.js';
+import { DEFAULT_DM_ENGINE, DEFAULT_GEMINI_FALLBACK, DM_ENGINES, generateDmReply, isDmEngine, type DmEngine } from '../services/dmEngine.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { assertDmSwitchOn, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import {
@@ -3365,7 +3366,9 @@ router.get('/settings/ai', async (req, res) => {
                 knowledge_base: '',
                 model: DEFAULT_MODEL,
                 temperature: 0.7,
-                is_active: true
+                is_active: true,
+                engine: DEFAULT_DM_ENGINE,
+                gemini_fallback: DEFAULT_GEMINI_FALLBACK,
             });
             return;
         }
@@ -3381,12 +3384,39 @@ router.get('/settings/ai', async (req, res) => {
     }
 });
 
+const ENGINE_MIGRATION_HINT = 'The database is missing migration v37 (src/config/migration_v37_dm_engine.sql), which adds the DM engine columns. Apply it with `npm run migrate`, then try again.';
+
+/**
+ * The reply-engine choice in a settings or sandbox body (`engine`, `gemini_fallback`), validated. Both are optional: an older
+ * dashboard sends neither, and then nothing about the engine changes. Present and wrong is a 400, never a silent default: a typo must
+ * not quietly put a tenant's DMs on the engine they did not pick.
+ */
+function engineChoiceOf(body: Record<string, unknown>): { engine?: DmEngine; gemini_fallback?: boolean } | { error: string } {
+    const choice: { engine?: DmEngine; gemini_fallback?: boolean } = {};
+    const { engine, gemini_fallback } = body;
+    if (engine !== undefined && engine !== null && engine !== '') {
+        if (!isDmEngine(engine)) return { error: `Unknown engine: choose ${DM_ENGINES.map((e) => `"${e}"`).join(' or ')}.` };
+        choice.engine = engine;
+    }
+    if (gemini_fallback !== undefined && gemini_fallback !== null) {
+        if (typeof gemini_fallback !== 'boolean') return { error: 'gemini_fallback must be true or false.' };
+        choice.gemini_fallback = gemini_fallback;
+    }
+    return choice;
+}
+
 router.post('/settings/ai', canOperate, async (req, res) => {
     try {
         const { system_prompt, knowledge_base, model, temperature, is_active } = req.body;
 
         if (!system_prompt) {
             res.status(400).json({ error: 'System prompt is required.' });
+            return;
+        }
+
+        const engineChoice = engineChoiceOf(req.body);
+        if ('error' in engineChoice) {
+            res.status(400).json({ error: engineChoice.error });
             return;
         }
 
@@ -3401,33 +3431,46 @@ router.post('/settings/ai', canOperate, async (req, res) => {
         // switch: saving a prompt on a bot that is already on, or off, never asks (`assertDmSwitchOn`).
         if (is_active !== false) await assertDmSwitchOn(creatorId);
 
+        // The engine columns (v37) are written only when the body names them, so a save that does not (an older dashboard, a
+        // script) is the statement it always was and leaves the engine as it is. A new row takes the columns' defaults.
+        const columns = ['creator_id', 'system_prompt', 'knowledge_base', 'model', 'temperature', 'is_active'];
+        const values: unknown[] = [
+            creatorId,
+            system_prompt,
+            knowledge_base || '',
+            // Stored as it will run: a retired or mistyped model would fall back at reply
+            // time anyway, and saving the fallback keeps the row honest about it.
+            resolveModel(model),
+            finalTemperature,
+            is_active !== false
+        ];
+        if (engineChoice.engine !== undefined) { columns.push('engine'); values.push(engineChoice.engine); }
+        if (engineChoice.gemini_fallback !== undefined) { columns.push('gemini_fallback'); values.push(engineChoice.gemini_fallback); }
+
         const result = await pool.query(
-            `INSERT INTO ai_agents (creator_id, system_prompt, knowledge_base, model, temperature, is_active)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            `INSERT INTO ai_agents (${columns.join(', ')})
+             VALUES (${columns.map((_, i) => `$${i + 1}`).join(', ')})
              ON CONFLICT (creator_id) 
              DO UPDATE SET 
-                system_prompt = EXCLUDED.system_prompt,
-                knowledge_base = EXCLUDED.knowledge_base,
-                model = EXCLUDED.model,
-                temperature = EXCLUDED.temperature,
-                is_active = EXCLUDED.is_active
+                ${columns.slice(1).map((c) => `${c} = EXCLUDED.${c}`).join(',\n                ')}
              RETURNING *`,
-            [
-                creatorId,
-                system_prompt,
-                knowledge_base || '',
-                // Stored as it will run: a retired or mistyped model would fall back at reply
-                // time anyway, and saving the fallback keeps the row honest about it.
-                resolveModel(model),
-                finalTemperature,
-                is_active !== false
-            ]
+            values
         );
+
+        if (engineChoice.engine !== undefined || engineChoice.gemini_fallback !== undefined) {
+            log('info', 'dm.engine_set', { creator_id: creatorId, engine: result.rows[0]?.engine, gemini_fallback: result.rows[0]?.gemini_fallback });
+        }
 
         res.json(result.rows[0]);
     } catch (err) {
         if (err instanceof ProfileIncomplete) {
             res.status(err.status).json(profileIncompleteBody(err));
+            return;
+        }
+        // The engine columns come from v37: a database that has not had it applied yet says which migration, not "Failed".
+        if (isMissingSchema(err) && /\b(engine|gemini_fallback)\b/.test(String((err as { message?: unknown } | null)?.message))) {
+            log('error', 'api.ai_settings_update_failed', describeError(err));
+            res.status(500).json({ error: ENGINE_MIGRATION_HINT, migrationPending: true });
             return;
         }
         log('error', 'api.ai_settings_update_failed', describeError(err));
@@ -3441,6 +3484,14 @@ router.post('/settings/ai/test', canOperate, async (req, res) => {
 
         if (!user_message) {
             res.status(400).json({ error: 'user_message is required.' });
+            return;
+        }
+
+        // The engine on screen, like the model and temperature below: the test runs what the operator is about to save, so a
+        // pick made before saving is what is tested. Absent (an older form): the saved engine, which is what a customer meets.
+        const engineChoice = engineChoiceOf(req.body);
+        if ('error' in engineChoice) {
+            res.status(400).json({ error: engineChoice.error });
             return;
         }
 
@@ -3474,21 +3525,36 @@ router.post('/settings/ai/test', canOperate, async (req, res) => {
         // This used to upsert the draft prompt into the live ai_agents row and never put the
         // old one back, so trying a throwaway idea in the tester overwrote the tuned
         // production prompt. A test run must not write anything: pass the draft through.
-        const aiRes = await generateAiResponse(mockConvId, user_message, creatorId, {
+        const reply = await generateDmReply(mockConvId, user_message, creatorId, {
             system_prompt: typeof system_prompt === 'string' && system_prompt.trim() ? system_prompt : undefined,
             knowledge_base: typeof knowledge_base === 'string' ? knowledge_base : undefined,
             model: modelOverride,
             temperature: temperatureOverride,
+            engine: engineChoice.engine,
+            gemini_fallback: engineChoice.gemini_fallback,
         });
 
         // null means the agent is switched off. Say that, rather than rendering an empty reply
         // that looks like the model returned nothing.
-        if (!aiRes) {
+        if (reply.kind === 'off') {
             res.status(409).json({ error: 'The AI agent is turned off — enable it to run a test.' });
             return;
         }
 
-        res.json(aiRes);
+        // The AI providers engine failed and nothing stood in for it: a customer would have been sent nothing, and the operator
+        // testing it should see why rather than an empty bubble. 502, never 401 or 403, which the dashboard reads as "signed out".
+        if (reply.kind === 'handoff') {
+            const also = reply.fallbackFailure ? ` Gemini failed too: ${reply.fallbackFailure.message}` : '';
+            res.status(502).json({ error: `The AI providers engine failed (${reply.failure.reason}): ${reply.failure.message}${also}` });
+            return;
+        }
+
+        // Which engine wrote it, so the sandbox can say so. `fell_back`: AI providers failed and Gemini answered in its place.
+        res.json({
+            ...reply.response,
+            engine: reply.engine,
+            ...(reply.fellBackFrom ? { fell_back: true, fallback_reason: reply.fellBackFrom.reason } : {}),
+        });
     } catch (err: any) {
         log('error', 'api.ai_test_failed', describeError(err));
         res.status(500).json({ error: err.message || 'Simulation call failed.' });

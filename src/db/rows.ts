@@ -381,6 +381,10 @@ export interface AiAgentRow {
     knowledge_base: string | null;
     model: string | null;
     temperature: number | null;
+    /** v37: what writes the DM reply. `gemini` is the call the bot has always made; `providers` goes through the AI providers layer (purpose `dm`). */
+    engine: 'gemini' | 'providers';
+    /** v37: when the `providers` engine fails, answer once with Gemini (true) or send nothing (false). */
+    gemini_fallback: boolean;
 }
 
 // ─── Carousel Studio (v21) ──────────────────────────────────────────────────────────────

@@ -10,6 +10,8 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import axios from 'axios';
 import { pool } from '../config/db.js';
+import { setAiCaller, type AiGenerateArgs, type AiGenerateResult } from '../services/aiProviders/generate.js';
+import { AiError } from '../services/llm/errors.js';
 import { FITNESS_EN, SHOP_EG } from '../services/profile/fixtures.js';
 import { throughJsonb } from '../services/profile/testSupport.js';
 import type { CreatorProfile } from '../services/profile/types.js';
@@ -184,5 +186,133 @@ describe('POST /settings/ai/test — the wording is the tenant\'s profile\'s (P8
         const res = await test({ user_message: 'x' });
         assert.equal(res.statusCode, 500);
         assert.equal(sent.length, 0);
+    });
+});
+
+/**
+ * DM plan S3: the sandbox runs the engine on screen. A test of the AI providers engine goes through the layer (`dm`, labelled `eval`),
+ * says which engine answered, and says why when nothing did. Gemini stays `axios.post`, as above; the layer is `setAiCaller`'s stand-in.
+ */
+describe('POST /settings/ai/test — the engine on screen (S3)', () => {
+    let layerCalls: AiGenerateArgs[];
+    let layer: (args: AiGenerateArgs) => Promise<AiGenerateResult>;
+    let savedEngine: { engine?: string; gemini_fallback?: boolean };
+    let undo: (() => void)[];
+
+    const layerSaying = (reply: Record<string, unknown>) => async (): Promise<AiGenerateResult> => ({
+        json: reply, usage: { in: 900, out: 60 }, billed: [], model: 'claude-test', provider: 'anthropic', stopReason: 'end_turn',
+        elapsed_ms: 800, usd: 0.003, priced: true, costSource: 'table', effort: 'low', route: 'saved', usageId: '1',
+    });
+    const layerFailing = (kind: AiError['kind'], message = `a ${kind} failure`) => async (): Promise<AiGenerateResult> => {
+        throw new AiError({ kind, provider: 'anthropic', model: 'claude-test', message });
+    };
+
+    beforeEach(() => {
+        layerCalls = [];
+        layer = layerSaying({ message_type: 'text', text: 'رد من المزوّد' });
+        savedEngine = {};
+        const base = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params?: unknown[]) => {
+            if (/^SELECT engine, gemini_fallback FROM ai_agents/.test(sql)) return { rows: [savedEngine], rowCount: 1 };
+            return (base as unknown as (s: string, p?: unknown[]) => Promise<unknown>).call(pool, sql, params);
+        };
+        const caller = setAiCaller((args) => { layerCalls.push(args); return layer(args); });
+        undo = [() => { (pool as unknown as { query: unknown }).query = base; }, () => { setAiCaller(caller); }];
+    });
+    afterEach(() => { for (const f of undo) f(); });
+
+    it('runs Gemini when nothing says otherwise, and says so', async () => {
+        const res = await test({ user_message: 'كم السعر؟' });
+        assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+        assert.equal(res.body.engine, 'gemini');
+        assert.equal(res.body.text, 'أهلاً');
+        assert.equal(layerCalls.length, 0);
+        assert.equal(sent.length, 1);
+    });
+
+    it('runs the AI providers engine when the form says so: purpose dm, labelled eval, charged to the tenant, no Gemini request', async () => {
+        const res = await test({ user_message: 'كم السعر؟', engine: 'providers' });
+        assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+        assert.equal(res.body.engine, 'providers');
+        assert.equal(res.body.text, 'رد من المزوّد');
+        assert.equal(res.body.fell_back, undefined);
+        assert.equal(layerCalls.length, 1);
+        assert.deepEqual([layerCalls[0]!.purpose, layerCalls[0]!.usageAs, layerCalls[0]!.creatorId, layerCalls[0]!.cacheSystem], ['dm', 'eval', TENANT, true]);
+        assert.equal(sent.length, 0);
+    });
+
+    it('tests the draft prompt on the AI providers engine, as on Gemini: the saved agent is not written to', async () => {
+        const statements: string[] = [];
+        const wrapped = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params?: unknown[]) => { statements.push(sql); return (wrapped as any).call(pool, sql, params); };
+        await test({ user_message: 'x', engine: 'providers', system_prompt: 'DRAFT PROMPT', knowledge_base: 'DRAFT KB' });
+        (pool as unknown as { query: unknown }).query = wrapped;
+        assert.match(layerCalls[0]!.system, /^DRAFT PROMPT\n\n/);
+        assert.match(layerCalls[0]!.system, /\nDRAFT KB\n/);
+        assert.ok(!statements.some((s) => /^\s*(INSERT|UPDATE|DELETE)/i.test(s)), 'a test writes nothing');
+    });
+
+    it('runs the saved engine when the form sends none (an older dashboard)', async () => {
+        savedEngine = { engine: 'providers', gemini_fallback: true };
+        const res = await test({ user_message: 'x' });
+        assert.equal(res.body.engine, 'providers');
+        assert.equal(sent.length, 0);
+    });
+
+    it('the engine on screen wins over the saved one, both ways', async () => {
+        savedEngine = { engine: 'providers', gemini_fallback: true };
+        const res = await test({ user_message: 'x', engine: 'gemini' });
+        assert.equal(res.body.engine, 'gemini');
+        assert.equal(layerCalls.length, 0);
+    });
+
+    it('answers with Gemini and says the AI providers engine failed, when the fallback is on', async () => {
+        layer = layerFailing('budget');
+        const res = await test({ user_message: 'x', engine: 'providers', gemini_fallback: true });
+        assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+        assert.equal(res.body.engine, 'gemini');
+        assert.equal(res.body.fell_back, true);
+        assert.equal(res.body.fallback_reason, 'budget');
+        assert.equal(sent.length, 1);
+    });
+
+    it('is a 502 that says why when the AI providers engine fails and the fallback on screen is off: what a customer would be sent is nothing', async () => {
+        layer = layerFailing('no_provider', 'No AI provider is ready.');
+        savedEngine = { engine: 'providers', gemini_fallback: true };
+        const res = await test({ user_message: 'x', gemini_fallback: false });
+        assert.equal(res.statusCode, 502, 'never 401 or 403: the dashboard reads those as signed out');
+        assert.match(res.body.error, /AI providers engine failed \(no_provider\): No AI provider is ready\./);
+        assert.equal(sent.length, 0);
+    });
+
+    it('is a 502 naming both when Gemini fails too', async () => {
+        layer = layerFailing('server', 'Anthropic is down.');
+        (axios as any).post = async () => { throw new Error('socket hang up'); };
+        const res = await test({ user_message: 'x', engine: 'providers' });
+        assert.equal(res.statusCode, 502);
+        assert.match(res.body.error, /\(server\): Anthropic is down\./);
+        assert.match(res.body.error, /Gemini failed too: Gemini request failed: socket hang up/);
+    });
+
+    it('answers a switched-off agent on the AI providers engine, as on Gemini: trying a prompt before switching the agent on is the point', async () => {
+        const base = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string, params?: unknown[]) => {
+            if (/FROM ai_agents WHERE creator_id = \$1/.test(sql) && !/^SELECT engine/.test(sql)) return { rows: [{ ...SAVED, is_active: false }], rowCount: 1 };
+            return (base as unknown as (s: string, p?: unknown[]) => Promise<unknown>).call(pool, sql, params);
+        };
+        const res = await test({ user_message: 'x', engine: 'providers' });
+        (pool as unknown as { query: unknown }).query = base;
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.engine, 'providers');
+        assert.equal(layerCalls.length, 1);
+    });
+
+    it('refuses an engine the server does not run, and a fallback that is not a boolean, before asking anyone', async () => {
+        for (const body of [{ engine: 'claude' }, { engine: 3 }, { gemini_fallback: 'false' }, { gemini_fallback: 1 }]) {
+            const res = await test({ user_message: 'x', ...body });
+            assert.equal(res.statusCode, 400, JSON.stringify(body));
+        }
+        assert.equal(sent.length, 0);
+        assert.equal(layerCalls.length, 0);
     });
 });

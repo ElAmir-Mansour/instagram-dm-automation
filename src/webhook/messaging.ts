@@ -6,7 +6,7 @@
  */
 import { queryCount, queryOne } from '../db/query.js';
 import type { ConversationPlatform, ConversationRow, MessageRow } from '../db/rows.js';
-import { generateAiResponse } from '../services/ai.js';
+import { generateDmReply } from '../services/dmEngine.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { sendDirectMessage } from '../services/instagram.js';
 import { isPermanentMetaError } from '../services/http.js';
@@ -369,12 +369,21 @@ async function processDm(
         // from it. A profile that cannot be read is the owner's wording (`profileContextOrLegacy`), never a failed reply.
         const dmCtx = await profileContextOrLegacy(creator.id, 'dm');
 
-        // Query Gemini. Timed, because this is both the dominant marginal cost of the product
-        // and the reason the webhook cannot finish inside Meta's timeout.
+        // Ask the engine the tenant chose (`ai_agents.engine`): Gemini, today's call, unless they flipped it. Timed, because
+        // this is both the dominant marginal cost of the product and the reason the webhook cannot finish inside Meta's timeout.
         const startedAt = Date.now();
         // `dmPromptText(dm)`, not `dm.text || dm.payload` — the same string `claimInbound`
         // stored, so ai.ts's "is this message already in the history" check can succeed.
-        const aiRes = await generateAiResponse(conversationId, dmPromptText(dm), creator.id, undefined, dmCtx);
+        const dmReply = await generateDmReply(conversationId, dmPromptText(dm), creator.id, undefined, dmCtx);
+
+        // The AI providers engine failed and so did what stands in for it (or the fallback is off): nothing is sent, no canned
+        // apology and no second try. `dm.engine_failed` has said why. Terminal on purpose, like the paused bot above: S8's handoff
+        // is what will pick this message up, and a retry here would only spend the same budget again.
+        if (dmReply.kind === 'handoff') {
+            await markHandled(claim.id);
+            return;
+        }
+        const aiRes = dmReply.kind === 'reply' ? dmReply.response : null;
         log('info', 'ai.replied', {
             creator_id: creator.id,
             duration_ms: Date.now() - startedAt,

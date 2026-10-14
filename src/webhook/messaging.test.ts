@@ -19,11 +19,13 @@
  */
 import assert from 'node:assert/strict';
 import axios from 'axios';
-import { after, before, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { encryptSecret } from '../config/crypto.js';
 import { DEFAULT_MODEL } from '../services/ai.js';
 import { MISSING_GEMINI_KEY } from '../services/appSettings.js';
+import { setAiCaller, type AiGenerateArgs, type AiGenerateResult } from '../services/aiProviders/generate.js';
+import { AiError } from '../services/llm/errors.js';
 import { metaHttp } from '../services/http.js';
 import { ProfileUnreadableError } from '../services/profile/context.js';
 import { FITNESS_EN, SHOP_EG } from '../services/profile/fixtures.js';
@@ -1075,5 +1077,139 @@ describe('handleMessagingEvent — the Gemini key', () => {
         assert.equal(error, null);
         assert.equal(geminiCalls, 0);
         assert.ok(!executed.some((e) => /FROM app_settings/.test(e.sql)));
+    });
+});
+
+/**
+ * DM plan S3: which engine writes the reply, and what the pipeline does with each outcome. The engine itself is tested in
+ * `services/dmEngine.test.ts`; this is the pipeline's side of it: what is sent, what is recorded, and whether the message is
+ * retried. The layer is a stand-in (`setAiCaller`); Gemini is `axios.post`, as everywhere in this file.
+ */
+describe('handleMessagingEvent — the reply engine (S3)', () => {
+    const agentOn = (engine: 'gemini' | 'providers', geminiFallback = true) => ({
+        is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7, engine, gemini_fallback: geminiFallback,
+    });
+
+    let layerCalls: AiGenerateArgs[];
+    let layer: (args: AiGenerateArgs) => Promise<AiGenerateResult>;
+    let logged: { level: string; event: string; [key: string]: unknown }[];
+    let undo: (() => void)[];
+
+    const layerSaying = (reply: Record<string, unknown>) => async (): Promise<AiGenerateResult> => ({
+        json: reply, usage: { in: 900, out: 60 }, billed: [], model: 'claude-test', provider: 'anthropic', stopReason: 'end_turn',
+        elapsed_ms: 800, usd: 0.003, priced: true, costSource: 'table', effort: 'low', route: 'saved', usageId: '1',
+    });
+    const layerFailing = (kind: AiError['kind']) => async (): Promise<AiGenerateResult> => {
+        throw new AiError({ kind, provider: 'anthropic', model: 'claude-test', message: `a ${kind} failure` });
+    };
+
+    beforeEach(() => {
+        layerCalls = [];
+        logged = [];
+        layer = layerSaying({ message_type: 'text', text: 'رد من المزوّد' });
+        const previousSink = setLogSink((level, line) => { logged.push({ level, ...JSON.parse(line) }); });
+        const previousCaller = setAiCaller((args) => { layerCalls.push(args); return layer(args); });
+        undo = [() => setLogSink(previousSink), () => { setAiCaller(previousCaller); }];
+    });
+    afterEach(() => { for (const f of undo) f(); });
+
+    const outboundRows = (executed: Executed[]) => executed.filter((e) => /INSERT INTO messages/.test(e.sql) && /'outbound'/.test(e.sql));
+
+    it('the gemini engine is today\'s pipeline: Gemini answers, the layer is never asked', async () => {
+        const { sends, geminiCalls, error, executed } = await runDm(textEvent(), { agent: agentOn('gemini') });
+
+        assert.equal(error, null);
+        assert.equal(geminiCalls, 1);
+        assert.equal(layerCalls.length, 0);
+        assert.equal(sends.length, 1);
+        assert.equal(sends[0]!.body.message.text.endsWith('أهلاً بك'), true);
+        assert.equal(ranMarkHandled(executed), true);
+    });
+
+    it('a row with no engine columns (v37 not applied yet) is the gemini engine', async () => {
+        const { sends, geminiCalls, error } = await runDm(textEvent(), {
+            agent: { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7 },
+        });
+        assert.equal(error, null);
+        assert.equal(geminiCalls, 1);
+        assert.equal(layerCalls.length, 0);
+        assert.equal(sends.length, 1);
+    });
+
+    it('the providers engine answers through the layer: one send with its words, one outbound row, Gemini never asked', async () => {
+        const { sends, geminiCalls, error, executed } = await runDm(textEvent(), { agent: agentOn('providers') });
+
+        assert.equal(error, null);
+        assert.equal(layerCalls.length, 1);
+        assert.equal(layerCalls[0]!.purpose, 'dm');
+        assert.equal(geminiCalls, 0);
+        assert.equal(sends.length, 1);
+        assert.ok(String(sends[0]!.body.message.text).endsWith('رد من المزوّد'));
+        assert.equal(outboundRows(executed).length, 1);
+        assert.equal(ranMarkHandled(executed), true);
+    });
+
+    it('the providers engine failing with the fallback on is answered by Gemini: still exactly one reply', async () => {
+        layer = layerFailing('timeout');
+        const { sends, geminiCalls, error, executed } = await runDm(textEvent(), { agent: agentOn('providers', true) });
+
+        assert.equal(error, null);
+        assert.equal(layerCalls.length, 1);
+        assert.equal(geminiCalls, 1);
+        assert.equal(sends.length, 1, 'never two replies');
+        assert.ok(String(sends[0]!.body.message.text).endsWith('أهلاً بك'), 'Gemini\'s words');
+        assert.equal(outboundRows(executed).length, 1);
+        assert.equal(ranMarkHandled(executed), true);
+    });
+
+    it('with the fallback off, nothing is sent and nothing is written as a reply; the message is closed, not retried; the log says why', async () => {
+        layer = layerFailing('no_provider');
+        const { sends, geminiCalls, error, executed } = await runDm(textEvent(), { agent: agentOn('providers', false) }, { lastAttempt: false });
+
+        assert.equal(error, null, 'not re-raised: a retry would only spend the same budget again');
+        assert.equal(sends.length, 0);
+        assert.equal(geminiCalls, 0);
+        assert.equal(outboundRows(executed).length, 0, 'no outbound turn is invented');
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(ranRelease(executed), false);
+        const failed = logged.filter((l) => l.event === 'dm.engine_failed');
+        assert.equal(failed.length, 1);
+        assert.equal(failed[0]!.reason, 'no_provider');
+        assert.equal(failed[0]!.fallback, 'off');
+        assert.equal(logged.filter((l) => l.event === 'dm.pipeline_failed').length, 0, 'a decision, not a crash');
+        assert.equal(logged.filter((l) => l.event === 'ai.replied').length, 0, 'nothing replied');
+    });
+
+    it('both engines failing sends no canned apology and no second try: the stub', async () => {
+        layer = layerFailing('server');
+        const { sends, geminiCalls, error, executed } = await runDm(textEvent(), {
+            agent: agentOn('providers', true),
+            gemini: async () => { throw new Error('socket hang up'); },
+        }, { lastAttempt: false });
+
+        assert.equal(error, null);
+        assert.equal(layerCalls.length, 1);
+        assert.equal(geminiCalls, 1);
+        assert.equal(sends.length, 0);
+        assert.equal(outboundRows(executed).length, 0);
+        assert.equal(ranMarkHandled(executed), true);
+        const [failed] = logged.filter((l) => l.event === 'dm.engine_failed');
+        assert.equal(failed?.reason, 'server');
+        assert.equal(failed?.fallback, 'failed');
+    });
+
+    it('a switched-off agent is silent whatever the engine, and does not count as a failure', async () => {
+        const { sends, geminiCalls, executed } = await runDm(textEvent(), { agent: { ...agentOn('providers'), is_active: false } });
+        assert.equal(sends.length, 0);
+        assert.equal(layerCalls.length, 0);
+        assert.equal(geminiCalls, 0);
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(logged.filter((l) => l.event === 'dm.engine_failed').length, 0);
+    });
+
+    it('still discloses the automation on the first reply, whichever engine wrote it', async () => {
+        const { sends } = await runDm(textEvent(), { agent: agentOn('providers') });
+        assert.match(sends[0]!.body.message.text, /^🤖 رد آلي من المساعد الذكي\n/);
+        assert.match(sends[0]!.body.message.text, /رد من المزوّد$/);
     });
 });

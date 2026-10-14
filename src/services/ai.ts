@@ -90,8 +90,11 @@ const DEFAULT_TEMPERATURE = 0.7;
  * Gemini context caching (`cachedContents`), which bills the static prefix once per TTL
  * instead of once per message — worth doing before the knowledge base grows further.
  * @see https://ai.google.dev/gemini-api/docs/caching
+ *
+ * Exported for `dmEngine.ts`, whose AI providers engine reads the same window: switching engines must not change what the
+ * model is shown of the conversation.
  */
-const HISTORY_WINDOW = 8;
+export const HISTORY_WINDOW = 8;
 
 /** Gemini can sit on a request indefinitely; a serverless invocation cannot. */
 const GEMINI_TIMEOUT_MS = 30_000;
@@ -268,8 +271,11 @@ export function coerceAiResponse(parsed: unknown): AiResponse {
 
 /**
  * Truncates strings to respect Meta's strict character constraints.
+ *
+ * Exported for `dmEngine.ts`: the AI providers engine coerces its answer through the same function, so a reply is cut to
+ * the same limits whichever engine wrote it.
  */
-function enforceMetaConstraints(response: AiResponse): AiResponse {
+export function enforceMetaConstraints(response: AiResponse): AiResponse {
     if (response.text) {
         response.text = response.text.substring(0, 1000);
     }

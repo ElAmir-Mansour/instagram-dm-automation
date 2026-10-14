@@ -12,6 +12,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
+import { DEFAULT_DM_ENGINE, DEFAULT_GEMINI_FALLBACK, DM_ENGINES } from '../services/dmEngine.js';
 import { PROFILE_LIMITS } from '../services/profile/validate.js';
 import { compareSchema, EXPECTED_MIGRATIONS } from './migrations.js';
 
@@ -582,5 +583,56 @@ describe('migration v36: ai_usage cache tokens', () => {
         for (const column of ['cache_read_tokens', 'cache_write_tokens']) assert.match(sql, new RegExp(`ADD COLUMN IF NOT EXISTS ${column} INT`), column);
         // The INSERTs run before a call is paid for or for a refusal: they leave the columns to their default of 0.
         for (const insert of usage.matchAll(/INSERT INTO ai_usage \(([^)]*)\)/g)) assert.doesNotMatch(insert[1]!, /cache_/);
+    });
+});
+
+// ─── v37: the DM engine switch ─────────────────────────────────────────────────────────────────
+
+describe('migration v37: the DM engine switch', () => {
+    const FILE = 'migration_v37_dm_engine.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered, right after v36, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.equal(i, EXPECTED_MIGRATIONS.indexOf('migration_v36_ai_usage_cache.sql') + 1);
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line and first statement', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('adds the engine, defaulting to Gemini, and the fallback switch, defaulting to on: today\'s behaviour for every existing row', () => {
+        assert.match(sql, /ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS engine VARCHAR\(10\) NOT NULL DEFAULT 'gemini'/);
+        assert.match(sql, /ALTER TABLE ai_agents ADD COLUMN IF NOT EXISTS gemini_fallback BOOLEAN NOT NULL DEFAULT TRUE/);
+        // The code's idea of "a row that says nothing" is the column's default.
+        assert.equal(DEFAULT_DM_ENGINE, 'gemini');
+        assert.equal(DEFAULT_GEMINI_FALLBACK, true);
+    });
+
+    it('allows exactly the engines the code runs, and replaces its CHECK so a re-run is harmless', () => {
+        const check = /ADD CONSTRAINT ai_agents_engine_check CHECK \(engine IN \(([^)]*)\)\)/.exec(sql);
+        assert.ok(check, 'the CHECK is there');
+        assert.deepEqual([...check![1]!.matchAll(/'([^']*)'/g)].map((m) => m[1]), [...DM_ENGINES]);
+        assert.ok(sql.indexOf('DROP CONSTRAINT IF EXISTS ai_agents_engine_check') >= 0 && sql.indexOf('DROP CONSTRAINT IF EXISTS ai_agents_engine_check') < sql.indexOf('ADD CONSTRAINT ai_agents_engine_check'));
+    });
+
+    it('is idempotent and creates no table: every column is added only if absent', () => {
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, (sql.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, 2);
+        assert.deepEqual(createdTables(sql), []);
+        assert.doesNotMatch(sql, /CREATE (UNIQUE )?INDEX/);
+    });
+
+    it('alters a table that exists by the time it runs, and touches no other', () => {
+        const before = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
+        const altered = [...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!);
+        assert.deepEqual([...new Set(altered)], ['ai_agents']);
+        assert.ok(existing.has('ai_agents'));
     });
 });

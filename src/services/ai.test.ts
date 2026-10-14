@@ -7,9 +7,17 @@
  * TypeError from inside the success path, four months after the last real DM went through.
  */
 import assert from 'node:assert/strict';
-import { after, before, describe, it } from 'node:test';
+import { readFileSync } from 'node:fs';
+import axios from 'axios';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
+import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
-import { coerceAiResponse, decideAgent, DEFAULT_MODEL, dmResponseSchema, dmSystemInstruction, type DmContext, resolveModel, starterPersona, SUPPORTED_MODELS } from './ai.js';
+import { coerceAiResponse, decideAgent, DEFAULT_MODEL, dmResponseSchema, dmSystemInstruction, generateAiResponse, type DmContext, resolveModel, starterPersona, SUPPORTED_MODELS } from './ai.js';
+import { generateDmReply } from './dmEngine.js';
+import { setAiCaller } from './aiProviders/generate.js';
+import { goldenPath } from './profile/golden.js';
+import { legacyContext } from './profile/context.js';
+import { ELAMIR_AGENT } from './studio/testFixtures.js';
 import { STUDIO_MODELS } from './studio/generate.js';
 import { toMetaMessage } from '../webhook/meta-payload.js';
 
@@ -320,5 +328,105 @@ describe('the DM wording is a function of the DM context', () => {
         assert.equal(persona(decideAgent(null, true, 'ar')), starterPersona('ar'));
         assert.equal(persona(decideAgent(null, true)), starterPersona('ar'));
         assert.deepEqual(decideAgent(null, false, 'en'), { speak: false, reason: 'unconfigured' });
+    });
+});
+
+
+/**
+ * DM plan S3: the Gemini engine is the call the bot has always made. A tenant on engine `gemini` (every row, until somebody flips it)
+ * must send Gemini exactly the request it sent before `ai_agents.engine` existed: the URL, the body down to the byte, the key header
+ * and the timeout. Pinned here against the owner's goldens (the system instruction and the response schema he is served), and against
+ * `generateAiResponse` called directly, which is what the pipeline called before the dispatch was put in front of it.
+ */
+describe('the gemini engine sends Gemini the request it always has (DM plan S3)', () => {
+    const TENANT = '55555555-5555-4555-8555-555555555555';
+    const CONVERSATION = '66666666-6666-4666-8666-666666666666';
+    const ctx = legacyContext('dm');
+    const agent = { is_active: true, ...ELAMIR_AGENT, model: 'gemini-2.5-flash', temperature: 0.7 };
+
+    let history: { direction: string; text: string }[];
+    let posts: { url: string; payload: unknown; config: unknown }[];
+    let layerCalled: number;
+    let undo: (() => void)[];
+
+    beforeEach(() => {
+        history = [];
+        posts = [];
+        layerCalled = 0;
+        const query = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string) => {
+            // The engine read is answered by a row that says `gemini`; the agent read by the same row without the engine columns.
+            if (/^SELECT engine, gemini_fallback FROM ai_agents/.test(sql)) return { rows: [{ engine: 'gemini', gemini_fallback: true }], rowCount: 1 };
+            if (/FROM ai_agents WHERE creator_id = \$1/.test(sql)) return { rows: [agent], rowCount: 1 };
+            // A copy: both callers `.reverse()` what they are handed, and the real driver hands each call its own array.
+            if (/SELECT direction, text/.test(sql)) return { rows: [...history], rowCount: history.length };
+            if (/FROM app_settings WHERE key/.test(sql)) return { rows: [], rowCount: 0 };
+            throw new Error(`no result arranged for SQL: ${sql}`);
+        };
+        const post = axios.post;
+        (axios as any).post = async (url: string, payload: unknown, config: unknown) => {
+            posts.push({ url, payload, config });
+            return { data: { candidates: [{ content: { parts: [{ text: JSON.stringify({ message_type: 'text', text: 'أهلاً' }) }] } }] } };
+        };
+        const caller = setAiCaller(async () => { layerCalled++; throw new Error('the layer must not be called by the gemini engine'); });
+        const key = process.env.GEMINI_API_KEY;
+        process.env.GEMINI_API_KEY = 'test-gemini-key';
+        undo = [
+            () => { (pool as unknown as { query: unknown }).query = query; },
+            () => { (axios as any).post = post; },
+            () => { setAiCaller(caller); },
+            () => { if (key === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = key; },
+        ];
+    });
+    afterEach(() => { for (const f of undo) f(); });
+
+    const golden = (name: string, ext: 'txt' | 'json'): string => readFileSync(goldenPath(name, ext), 'utf8');
+
+    it('is the pinned request: the endpoint, the key in a header, the 30 s deadline, and a body built from the goldens', async () => {
+        const reply = await generateDmReply(CONVERSATION, 'كم السعر؟', TENANT, undefined, ctx);
+
+        assert.equal(reply.kind, 'reply');
+        assert.equal(posts.length, 1);
+        assert.equal(layerCalled, 0);
+        const [call] = posts;
+        assert.equal(call!.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
+        assert.deepEqual(call!.config, { headers: { 'x-goog-api-key': 'test-gemini-key' }, timeout: 30_000 });
+        const expectedBody = {
+            contents: [{ role: 'user', parts: [{ text: 'كم السعر؟' }] }],
+            systemInstruction: { parts: [{ text: golden('dm.system-instruction', 'txt') }] },
+            generationConfig: {
+                responseMimeType: 'application/json',
+                responseSchema: JSON.parse(golden('dm.response-schema', 'json')),
+                temperature: 0.7,
+            },
+        };
+        assert.equal(JSON.stringify(call!.payload), JSON.stringify(expectedBody), 'the bytes of the body, key order included');
+    });
+
+    it('is, for every shape of conversation, the request `generateAiResponse` makes on its own', async () => {
+        const conversations: { direction: string; text: string }[][] = [
+            [],
+            [{ direction: 'inbound', text: 'سؤال' }],
+            [{ direction: 'inbound', text: 'سؤال' }, { direction: 'outbound', text: 'جواب' }],
+            Array.from({ length: 8 }, (_, i) => ({ direction: i % 2 ? 'outbound' : 'inbound', text: `رسالة ${i}` })),
+        ];
+        for (const rows of conversations) {
+            history = rows;
+            posts = [];
+            await generateDmReply(CONVERSATION, 'سؤال', TENANT, undefined, ctx);
+            const viaDispatch = JSON.stringify(posts);
+            posts = [];
+            await generateAiResponse(CONVERSATION, 'سؤال', TENANT, undefined, ctx);
+            assert.equal(viaDispatch, JSON.stringify(posts), `${rows.length} stored messages`);
+        }
+    });
+
+    it('is the sandbox\'s request too: the model and temperature on screen reach Gemini, and the engine\'s own fields do not', async () => {
+        await generateDmReply(CONVERSATION, 'x', TENANT, { model: 'gemini-3.8-flash', temperature: 0, engine: 'gemini', gemini_fallback: false }, ctx);
+        const direct = posts[0]!;
+        posts = [];
+        await generateAiResponse(CONVERSATION, 'x', TENANT, { model: 'gemini-3.8-flash', temperature: 0 }, ctx);
+        assert.equal(JSON.stringify(posts), JSON.stringify([direct]));
+        assert.match(direct.url, /models\/gemini-3\.8-flash:generateContent$/);
     });
 });

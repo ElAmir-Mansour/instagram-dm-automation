@@ -76,10 +76,18 @@ const AiSettingsPage = {
         // Another tenant's prompt must never be handed to this one.
         this._draft = null;
         this._saved = null;
+        this._routeView = undefined;
     },
 
     /** What the server last gave us, to compare the fields against. */
     _saved: null,
+
+    /**
+     * What `GET /api/admin/ai` said about the "dm" route, for the hint under the engine picker. `undefined`: not asked yet.
+     * `null`: not available (the signed-in person is not a platform admin, whose endpoint this is, or the call failed): the
+     * hint is only a hint, so it is then silent and never an error. Asked once per visit to this screen.
+     */
+    _routeView: undefined,
 
     currentValues() {
         const prompt = document.getElementById('system-prompt-text');
@@ -88,13 +96,19 @@ const AiSettingsPage = {
         return { system_prompt: prompt.value, knowledge_base: knowledge.value };
     },
 
-    /** The switch, the model and the temperature — the rest of what Save writes. */
+    /** The switch, the model, the temperature and the reply engine — the rest of what Save writes. */
     currentSettings() {
         const toggle = document.getElementById('ai-active-toggle');
         const model = document.getElementById('model-selector');
         const slider = document.getElementById('temp-slider');
         if (!toggle || !model || !slider) return null;
-        return { is_active: !!toggle.checked, model: model.value, temperature: String(slider.value) };
+        const settings = { is_active: !!toggle.checked, model: model.value, temperature: String(slider.value) };
+        // Present only when the form has them, so a screen that predates the picker is read as it always was.
+        const engine = document.getElementById('engine-selector');
+        if (engine) settings.engine = engine.value === 'providers' ? 'providers' : 'gemini';
+        const fallback = document.getElementById('gemini-fallback-toggle');
+        if (fallback) settings.gemini_fallback = !!fallback.checked;
+        return settings;
     },
 
     /**
@@ -114,7 +128,8 @@ const AiSettingsPage = {
         const now = this.currentSettings();
         const saved = this._saved && this._saved.settings;
         if (!now || !saved) return false;
-        return now.is_active !== saved.is_active || now.model !== saved.model || now.temperature !== saved.temperature;
+        return now.is_active !== saved.is_active || now.model !== saved.model || now.temperature !== saved.temperature
+            || now.engine !== saved.engine || now.gemini_fallback !== saved.gemini_fallback;
     },
 
     /** AI6: «تغييرات غير محفوظة» beside Save, while there are any. */
@@ -176,6 +191,31 @@ const AiSettingsPage = {
                             <textarea id="knowledge-base-text" class="field-textarea user-content" dir="auto" lang="ar" rows="10"
                                       aria-describedby="knowledge-base-desc"
                                       placeholder="${t('ai.knowledgePlaceholder')}"></textarea>
+                        </div>
+
+                        <!-- The reply engine: Gemini is the call the bot has always made; AI providers goes through the layer
+                             the operator configures in Operations (purpose "dm"). The model and temperature below are Gemini's. -->
+                        <div class="form-group">
+                            <label class="form-label" for="engine-selector">${t('ai.engine')}</label>
+                            <select class="select" id="engine-selector" data-change="ai:engineChanged"
+                                    aria-describedby="engine-desc engine-route-hint">
+                                <option value="gemini">${t('ai.engineGemini')}</option>
+                                <option value="providers">${t('ai.engineProviders')}</option>
+                            </select>
+                            <span class="field-desc" id="engine-desc">${t('ai.engineDesc')}</span>
+                            <p class="form-hint hidden" id="engine-route-hint" role="status" aria-live="polite"></p>
+                        </div>
+
+                        <div class="toggle-block hidden" id="fallback-block">
+                            <div>
+                                <h4 aria-level="3">${t('ai.fallbackTitle')}</h4>
+                                <p>${t('ai.fallbackDesc')}</p>
+                            </div>
+                            <label class="switch" for="gemini-fallback-toggle">
+                                <span class="sr-only">${t('ai.fallbackLabel')}</span>
+                                <input type="checkbox" id="gemini-fallback-toggle" data-change="ai:fallbackChanged" checked>
+                                <span class="switch-track"></span>
+                            </label>
                         </div>
 
                         <div class="form-grid">
@@ -295,6 +335,15 @@ const AiSettingsPage = {
             slider.value = temperature;
             this.updateTemperature(temperature);
 
+            // Optional: a server that predates the engine (or a row from before v37) sends neither, which is Gemini with the
+            // fallback on, the behaviour it always had.
+            const engine = document.getElementById('engine-selector');
+            if (engine) engine.value = settings.engine === 'providers' ? 'providers' : 'gemini';
+            const fallback = document.getElementById('gemini-fallback-toggle');
+            if (fallback) fallback.checked = settings.gemini_fallback !== false;
+            this._routeView = undefined;
+            this.syncEngine();
+
             this._saved = {
                 system_prompt: prompt.value,
                 knowledge_base: knowledge.value,
@@ -335,6 +384,98 @@ const AiSettingsPage = {
         }
     },
 
+    /**
+     * A provider's name, a model id or an error code is Latin text dropped into a sentence that may be Arabic: unisolated, the
+     * bidi algorithm lets the sentence's own punctuation and the hyphens and digits of an id (`claude-opus-5-5`) reorder around
+     * it. First-strong isolates (U+2068 .. U+2069) keep the run whole and in its own direction, in either language.
+     */
+    isolate(value) {
+        return `\u2068${String(value)}\u2069`;
+    },
+
+    /** The engine on screen. */
+    engineValue() {
+        const el = document.getElementById('engine-selector');
+        return el && el.value === 'providers' ? 'providers' : 'gemini';
+    },
+
+    /** Whether the Gemini fallback switch is on, on screen. */
+    fallbackOn() {
+        const el = document.getElementById('gemini-fallback-toggle');
+        return !el || !!el.checked;
+    },
+
+    /**
+     * What the "dm" route would do right now, from `GET /api/admin/ai` (`view`), as a short hint for the operator who picked AI
+     * providers: a muted line when a route is saved, a warning when no provider can answer (no key) or no route is saved (the
+     * first provider with a key then answers, whatever it is). Pure. `null` when `view` is not what it should be: a hint is
+     * never worth an error.
+     */
+    routeHint(view, fallbackOn) {
+        const purposes = view && Array.isArray(view.purposes) ? view.purposes : null;
+        const dm = purposes && purposes.find((p) => p && p.purpose === 'dm');
+        const resolved = dm && dm.resolved;
+        if (!resolved) return null;
+        if (resolved.error) return { tone: 'warning', text: t(fallbackOn ? 'ai.engineNoRouteOn' : 'ai.engineNoRouteOff') };
+        const providers = Array.isArray(view.providers) ? view.providers : [];
+        const found = providers.find((p) => p && p.id === resolved.provider);
+        const params = {
+            provider: this.isolate((found && found.label) || resolved.provider), model: this.isolate(resolved.model), effort: this.isolate(resolved.effort),
+        };
+        if (resolved.source === 'saved') return { tone: 'muted', text: t('ai.engineSavedRoute', params) };
+        return { tone: 'warning', text: t('ai.engineDefaultRoute', params) };
+    },
+
+    /** Paints the hint under the picker for the state on screen; written as text, so nothing in it is ever markup. */
+    showRouteHint() {
+        const el = document.getElementById('engine-route-hint');
+        if (!el) return;
+        const hint = this.engineValue() === 'providers' ? this.routeHint(this._routeView, this.fallbackOn()) : null;
+        el.textContent = hint ? hint.text : '';
+        el.classList.toggle('hidden', !hint);
+        el.classList.toggle('text-warning', !!hint && hint.tone === 'warning');
+    },
+
+    /** Asks the layer's status once per visit, and only of a platform admin (the endpoint is theirs; anyone else gets no hint). */
+    async loadRouteStatus() {
+        const seq = this._seq;
+        if (this._routeView === undefined) {
+            this._routeView = null;
+            if (typeof App !== 'undefined' && typeof App.isAdmin === 'function' && App.isAdmin()) {
+                try {
+                    this._routeView = await API.getAdminAi();
+                } catch (err) {
+                    this._routeView = null;
+                }
+            }
+        }
+        // The operator left while it was in flight: those elements belong to another page now.
+        if (seq !== this._seq) return;
+        this.showRouteHint();
+    },
+
+    /**
+     * Shows the fallback switch only while AI providers is the engine (it means nothing for Gemini), and asks for the route
+     * status the first time it is wanted.
+     */
+    syncEngine() {
+        const providers = this.engineValue() === 'providers';
+        const block = document.getElementById('fallback-block');
+        if (block) block.classList.toggle('hidden', !providers);
+        if (providers) this.loadRouteStatus();
+        else this.showRouteHint();
+    },
+
+    engineChanged() {
+        this.syncEngine();
+        this.refreshDirty();
+    },
+
+    fallbackChanged() {
+        this.showRouteHint();
+        this.refreshDirty();
+    },
+
     updateTemperature(value) {
         const out = document.getElementById('temp-value');
         if (out) out.textContent = UI.formatNumber(Number(value));
@@ -358,6 +499,9 @@ const AiSettingsPage = {
             model: document.getElementById('model-selector').value,
             temperature: parseFloat(document.getElementById('temp-slider').value),
         };
+        // The engine and the fallback switch, when the form has them. Sent every time, so what is on screen is what is saved.
+        if (document.getElementById('engine-selector')) payload.engine = this.engineValue();
+        if (document.getElementById('gemini-fallback-toggle')) payload.gemini_fallback = this.fallbackOn();
 
         try {
             await API.saveAiSettings(payload);
@@ -457,6 +601,7 @@ const AiSettingsPage = {
                              Arabic — that is the whole product. -->
                         <p dir="auto" lang="ar">${aiRes.text}</p>
                         ${this.structuredPreview(aiRes)}
+                        ${this.sandboxVia(aiRes) ? html`<p class="${aiRes.fell_back ? 'form-hint text-warning' : 'form-hint'}">${this.sandboxVia(aiRes)}</p>` : ''}
                     </div>
                 </div>
             `));
@@ -498,7 +643,19 @@ const AiSettingsPage = {
         if (model) payload.model = model;
         const temperature = parseFloat(value('temp-slider'));
         if (Number.isFinite(temperature)) payload.temperature = temperature;
+        // The engine on screen too, so the test runs what is about to be saved.
+        if (document.getElementById('engine-selector')) {
+            payload.engine = this.engineValue();
+            payload.gemini_fallback = this.fallbackOn();
+        }
         return payload;
+    },
+
+    /** Which engine wrote a test reply, and that AI providers failed when Gemini answered in its place; '' for a server that does not say. */
+    sandboxVia(aiRes) {
+        if (!aiRes || !aiRes.engine) return '';
+        if (aiRes.fell_back) return t('ai.sandboxViaFallback', { reason: this.isolate(aiRes.fallback_reason || '') });
+        return t(aiRes.engine === 'providers' ? 'ai.sandboxViaProviders' : 'ai.sandboxViaGemini');
     },
 
     /** AI3: the 409 "agent is turned off" arrived as raw English. */
@@ -551,4 +708,6 @@ UI.registerActions('ai', {
     sendSandboxTest: (el, e) => AiSettingsPage.sendSandboxTest(el, e),
     updateTemperature: (el) => AiSettingsPage.updateTemperature(el.value),
     refreshDirty: () => AiSettingsPage.refreshDirty(),
+    engineChanged: () => AiSettingsPage.engineChanged(),
+    fallbackChanged: () => AiSettingsPage.fallbackChanged(),
 });
