@@ -33,6 +33,9 @@ import { setLogSink } from '../../utils/log.js';
 import { dmFallbackReply } from '../../webhook/errors.js';
 import { disclosureLine } from '../../webhook/meta-payload.js';
 import { dmResponseSchema, dmSystemInstruction, type DmContext, starterPersona } from '../ai.js';
+import { buildSalesPrompt } from '../dmSales/prompt.js';
+import { salesReplySchema } from '../dmSales/schema.js';
+import type { SalesFacts } from '../dmSales/types.js';
 import { coachSystemPrompt, runCoach } from '../growth/coach.js';
 import { keywordsSystemPrompt, suggestKeywords } from '../growth/keywords.js';
 import { analystSystemPrompt } from '../monteur/analyst.js';
@@ -490,6 +493,47 @@ export function dmFallbackSurface(settings: StudioSettings, ctx: Wording<Comment
     return [
         built('comments.dm-fallback-replies.ar', 'json', 'elamir', arabic),
         built('comments.dm-fallback-replies.en', 'json', 'control', english),
+    ];
+}
+
+// ─── The DM sales prompt ────────────────────────────────────────────────────────────────────
+
+/** One run of the sales prompt builder: whose data it is read from, and what the entry is called. */
+export interface DmSalesRun {
+    /** `dm.sales-system`, or `dm.sales-system-filled`: the golden's name before its slug. */
+    base: string;
+    /** The fixture's suffix (`elamir`, `english`), as `studioSurface` names its own. */
+    slug: string;
+    set: GoldenSet;
+    agent: AgentPersona;
+    profile: CreatorProfile;
+    /** The tenant's timezone (`identity.timezone`): the hours' zone, and the day a price's "valid until" ends in. */
+    timezone: string;
+    /** The moment the prompt is for. A parameter, so the golden does not depend on today. */
+    now: Date;
+    /** The conversation's own facts, the last block. Left out, the entry is the static prefix alone. */
+    facts?: SalesFacts;
+    /** Also pin the schema the model answers in for this tenant's offers (`dm.sales-schema.<slug>`). */
+    schema?: boolean;
+}
+
+/**
+ * The DM sales prompt (docs/DM_SALES_PLAN.md §3, S5) and, when asked, its answer schema, for one tenant's profile and agent row.
+ *
+ * **Deliberately not in `tenantSurface`.** That list is what the live parity script hashes on both paths and what `assessOwnerOffers`
+ * compares before and after a save of the owner's offers; the sales prompt reads those offers (and the profile's own sales blocks, which
+ * no settings row carries), so path (a) could not describe it, and a row of it would turn every edit of an offer into a "prompt moved".
+ * Adding it there changes the parity digest and is a decision for S6, when something sends it. Until then it is pinned by goldens alone
+ * (`golden.test.ts`), which is what these entries are for.
+ */
+export function dmSalesSurface(run: DmSalesRun): SurfaceEntry[] {
+    const prompt = lazy(() => buildSalesPrompt(
+        { persona: run.agent.system_prompt, knowledge: run.agent.knowledge_base, ctx: contextFor(run.profile, 'dm', null), timezone: run.timezone, now: run.now },
+        run.facts,
+    ));
+    return [
+        built(named(run.base, run.slug), 'text', run.set, () => prompt().system),
+        ...(run.schema ? [built(named('dm.sales-schema', run.slug), 'json', run.set, () => salesReplySchema(prompt().offers.map((o) => o.id)))] : []),
     ];
 }
 

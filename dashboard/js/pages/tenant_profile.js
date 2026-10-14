@@ -36,6 +36,15 @@
  * A value reaches the page only through the `html` tag (which escapes element text and quoted attributes), never by
  * concatenation, and never into an inline handler: every control is wired by `data-action` / `data-submit`.
  * `<textarea>` content starts with a newline, which the HTML parser drops, so a value that begins with one survives.
+ *
+ * ─── An offer's sales details ───────────────────────────────────────────────
+ * Each offer card ends in a collapsible "Sales details" (`offer.sales`, docs/DM_SALES_PLAN.md §5): who it is for, what it gives, the
+ * price's end date, questions, objections and proof, which the DM bot sells from and quotes exactly. Its value is `null` when it holds
+ * nothing (the key is then absent from the offer, so an untouched offer sends no `sales` and a cleared one sends none either: the
+ * offers list is replaced whole), else the server's own shape. Three of its fields are lists of rows, each row a few controls, with Add
+ * and Remove: a row is a group of controls named `data-tp-cell="<list>.<index>.<field>"`, read back in the order the page has them.
+ * A row with nothing typed in it is no row (it is not sent); while the page is being redrawn for an Add or a Remove it IS kept, so the
+ * row just added is not thrown away by the redraw that shows it (`keepBlankRows`).
  */
 const TenantProfile = {
 
@@ -55,10 +64,25 @@ const TenantProfile = {
         rule: ['no_women_imagery'],
         social: ['instagram', 'youtube', 'linkedin', 'x', 'tiktok', 'facebook', 'github'],
         surface: ['dm', 'comments', 'carousel', 'reels', 'infographic', 'coach'],
+        salesLevel: ['beginner', 'intermediate', 'advanced', 'any'],
+        proofKind: ['stat', 'testimonial'],
     },
 
     /** The server's limits that a control can show (`PROFILE_LIMITS`): the server still decides. */
-    LIMITS: { displayName: 40, brandName: 80, role: 40, niche: 120, handle: 32, site: 40, link: 500, offerName: 200, offerUrl: 1000, offerPrice: 60, offerKeyword: 80, offers: 10 },
+    LIMITS: {
+        displayName: 40, brandName: 80, role: 40, niche: 120, handle: 32, site: 40, link: 500, offerName: 200, offerUrl: 1000, offerPrice: 60, offerKeyword: 80, offers: 10,
+        salesPriceNote: 200, salesCurrency: 3, salesImage: 1000,
+    },
+
+    /**
+     * The three lists of rows in an offer's sales block, and the controls of one row: `line` is one line of text (an input), `block` may run
+     * over several (a textarea), `choice` is one of a closed list. `limit` is how many rows the server holds; `max` the length of a line.
+     */
+    ROWS: {
+        faqs: { limit: 15, cells: [{ key: 'q', type: 'line', max: 200 }, { key: 'a', type: 'block' }] },
+        objections: { limit: 10, cells: [{ key: 'objection', type: 'line', max: 160 }, { key: 'answer', type: 'block' }] },
+        proof: { limit: 8, cells: [{ key: 'kind', type: 'choice', enum: 'proofKind' }, { key: 'text', type: 'block' }, { key: 'source', type: 'line', max: 120 }] },
+    },
 
     SECTIONS: ['identity', 'language', 'voice', 'audience', 'offers', 'content', 'socials'],
 
@@ -188,7 +212,63 @@ const TenantProfile = {
         }
     },
 
-    /** An offer as the form holds it: the fields a person edits, and the campaign carried along untouched. */
+    /** What an empty sales block is: the server's `blankSales()`. Level "any" and no date, so it states no price. */
+    blankSales() {
+        return { for_whom: '', level: 'any', outcomes: [], faqs: [], objections: [], proof: [], price_note: '', price_valid_until: '', currency: '', image_url: '' };
+    },
+
+    /** A row with its cells empty and a choice on its first value: what Add puts on the page. */
+    blankRow(list) {
+        const row = {};
+        for (const cell of this.ROWS[list].cells) row[cell.key] = cell.type === 'choice' ? this.ENUMS[cell.enum][0] : '';
+        return row;
+    },
+
+    /**
+     * The rows of one list as the server holds them: every cell in its canonical form. A row with no text in any cell is no row, unless
+     * `keepBlank` (a redraw that must keep the row the person just added). A choice always has a value, so it never makes a row.
+     */
+    rowsOf(list, rows, keepBlank) {
+        const spec = this.ROWS[list];
+        return (Array.isArray(rows) ? rows : []).map((row) => {
+            const r = row && typeof row === 'object' ? row : {};
+            const out = {};
+            for (const cell of spec.cells) {
+                if (cell.type === 'choice') out[cell.key] = this.ENUMS[cell.enum].includes(String(r[cell.key])) ? String(r[cell.key]) : this.ENUMS[cell.enum][0];
+                else out[cell.key] = cell.type === 'line' ? this.oneLine(r[cell.key]) : this.block(r[cell.key]);
+            }
+            return out;
+        }).filter((row) => keepBlank || spec.cells.some((cell) => cell.type !== 'choice' && row[cell.key] !== ''));
+    },
+
+    /**
+     * A sales block in the server's own shape, whatever it is made from: the stored block (lists), or a form's snapshot of one (text, for
+     * the lines). A level outside its list reads as "any", a currency is upper case, a missing field is its blank value.
+     */
+    salesFull(raw, keepBlank) {
+        const s = raw && typeof raw === 'object' ? raw : {};
+        const lines = (v) => (Array.isArray(v) ? v.map((x) => this.oneLine(x)).filter(Boolean) : this.linesOf({}, v));
+        return {
+            for_whom: this.block(s.for_whom),
+            level: this.ENUMS.salesLevel.includes(String(s.level)) ? String(s.level) : 'any',
+            outcomes: lines(s.outcomes),
+            faqs: this.rowsOf('faqs', s.faqs, keepBlank),
+            objections: this.rowsOf('objections', s.objections, keepBlank),
+            proof: this.rowsOf('proof', s.proof, keepBlank),
+            price_note: this.oneLine(s.price_note),
+            price_valid_until: this.oneLine(s.price_valid_until),
+            currency: this.oneLine(s.currency).toUpperCase(),
+            image_url: this.oneLine(s.image_url),
+        };
+    },
+
+    /** The block an offer carries, or null when it holds nothing: an empty block is no block (the key is left off the offer). */
+    salesValue(raw, keepBlank) {
+        const full = this.salesFull(raw, keepBlank);
+        return this.same(full, this.blankSales()) ? null : full;
+    },
+
+    /** An offer as the form holds it: the fields a person edits, the sales block when it holds anything, and the campaign carried along untouched. */
     offerOf(o) {
         const offer = o && typeof o === 'object' ? o : {};
         const out = {
@@ -204,6 +284,8 @@ const TenantProfile = {
             primary: offer.primary === true,
         };
         if (offer.campaign !== undefined) out.campaign = JSON.parse(JSON.stringify(offer.campaign));
+        const sales = this.salesValue(offer.sales);
+        if (sales) out.sales = sales;
         return out;
     },
 
@@ -229,7 +311,8 @@ const TenantProfile = {
     /**
      * The controls under `root` as plain snapshots, so reading is pure and testable without a DOM:
      *   fields  [{ path, value, checked }]   one per `[data-tp-path]` control (a checkbox is one per option)
-     *   offers  null when `root` holds no offers block, else [{ id, kind, name, order_via, url, price, keyword, facts, bullets, primary }]
+     *   offers  null when `root` holds no offers block, else [{ id, kind, name, order_via, url, price, keyword, facts, bullets, primary, sales }]
+     *           where `sales` is the raw text of the card's sales controls, and its three lists of rows, each row an object of its cells
      */
     snapshot(root) {
         const fields = [...root.querySelectorAll('[data-tp-path]')].map((el) => ({
@@ -243,10 +326,26 @@ const TenantProfile = {
                 return el ? el.value : '';
             };
             const primary = card.querySelector('[data-tp-offer="primary"]');
+            // A list's rows: every control named `<list>.<index>.<cell>`, grouped by index, in the order the page has them.
+            const rows = (list) => {
+                const out = [];
+                card.querySelectorAll(`[data-tp-cell^="${list}."]`).forEach((el) => {
+                    const [, at, cell] = String(el.getAttribute('data-tp-cell')).split('.');
+                    const i = Number(at);
+                    out[i] = out[i] || {};
+                    out[i][cell] = el.value;
+                });
+                return out.filter(Boolean);
+            };
             return {
                 id: card.getAttribute('data-offer-id') || '',
                 kind: read('kind'), name: read('name'), order_via: read('order_via'), url: read('url'), price: read('price'),
                 keyword: read('keyword'), facts: read('facts'), bullets: read('bullets'), primary: !!(primary && primary.checked),
+                sales: {
+                    for_whom: read('sales.for_whom'), level: read('sales.level'), outcomes: read('sales.outcomes'), price_note: read('sales.price_note'),
+                    price_valid_until: read('sales.price_valid_until'), currency: read('sales.currency'), image_url: read('sales.image_url'),
+                    faqs: rows('faqs'), objections: rows('objections'), proof: rows('proof'),
+                },
             };
         });
         return { fields, offers };
@@ -256,8 +355,11 @@ const TenantProfile = {
      * The values a snapshot holds. A path the snapshot does not mention keeps `base`'s value (another section's, or one with no control).
      * Choices that are lists keep the stored order of what stays chosen, and add what is newly chosen after it, so ticking one
      * more platform does not reorder the others.
+     *
+     * `options.keepBlankRows`: the rows of the sales lists that have nothing typed in them are kept. Only a redraw sets it (an Add or a
+     * Remove shows the section again from what the form holds, and the row just added is still empty); what is saved never does.
      */
-    fromSnapshots(snap, base) {
+    fromSnapshots(snap, base, options) {
         const values = {};
         const seen = {};
         for (const control of snap.fields) {
@@ -290,6 +392,10 @@ const TenantProfile = {
                 };
                 const before = known.get(o.id);
                 if (before && before.campaign !== undefined) offer.campaign = JSON.parse(JSON.stringify(before.campaign));
+                // The sales controls are on every card, so what they hold is the block. A snapshot with none (a caller that has not read them)
+                // leaves the offer's own block alone: the form never invents a change.
+                const sales = o.sales ? this.salesValue(o.sales, !!(options && options.keepBlankRows)) : before && before.sales ? before.sales : null;
+                if (sales) offer.sales = sales;
                 return offer;
             });
         }
@@ -477,6 +583,133 @@ ${(value || []).join('\n---\n')}</textarea>`;
         `;
     },
 
+    /** Is the sales block of this offer open? What the person last did with it, else open only when it holds something. */
+    salesOpen(offer) {
+        return this._salesOpen.has(offer.id) ? this._salesOpen.get(offer.id) : offer.sales !== undefined;
+    },
+
+    /**
+     * The control of one cell of a row. Its name is `<list>.<index>.<cell>`, which is how `snapshot` finds it again; `describedBy` is the
+     * list's hint.
+     */
+    cellMarkup(list, i, cell, value, id, describedBy) {
+        const name = `${list}.${i}.${cell.key}`;
+        const aria = describedBy ? html` aria-describedby="${describedBy}"` : '';
+        if (cell.type === 'choice') {
+            return html`<select class="select" id="${id}" data-tp-cell="${name}"${aria}>${
+                this.ENUMS[cell.enum].map((v) => html`<option value="${v}"${v === value ? html.raw(' selected') : ''}>${t(`tenantProfile.o.${cell.enum}.${v}`)}</option>`)
+            }</select>`;
+        }
+        if (cell.type === 'block') {
+            return html`<textarea class="field-textarea" id="${id}" data-tp-cell="${name}" dir="auto" rows="3"${aria}>
+${value}</textarea>`;
+        }
+        return html`<input class="field" id="${id}" type="text" data-tp-cell="${name}" value="${value}" dir="auto" maxlength="${cell.max}" autocomplete="off" spellcheck="false"${aria}>`;
+    },
+
+    /** One row of a list: a titled group of its cells, and a Remove for it. */
+    rowMarkup(index, list, i, row, hintId) {
+        const base = `tp-offer-${index}-sales-${list}-${i}`;
+        const title = t(`tenantProfile.sales.row.${list}`, { n: i + 1 });
+        return html`
+            <div class="tp-row" role="group" aria-labelledby="${base}-title">
+                <div class="tp-row-head">
+                    <span class="tp-row-title" id="${base}-title">${title}</span>
+                    <button type="button" class="btn btn-ghost btn-sm" data-action="tenantProfile:removeRow" data-list="${list}" data-index="${i}" aria-label="${t('tenantProfile.sales.removeRowN', { row: title })}">
+                        <i data-lucide="trash-2" aria-hidden="true"></i> ${t('tenantProfile.sales.removeRow')}
+                    </button>
+                </div>
+                ${this.ROWS[list].cells.map((cell) => html`
+                    <div class="form-group">
+                        <label class="form-label" for="${base}-${cell.key}">${t(`tenantProfile.sales.c.${cell.key}`)}</label>
+                        ${this.cellMarkup(list, i, cell, row[cell.key], `${base}-${cell.key}`, hintId)}
+                    </div>
+                `)}
+            </div>
+        `;
+    },
+
+    /** One list of rows of the sales block: its legend and hint, the rows, and Add (disabled at the server's limit). */
+    rowsMarkup(index, list, rows) {
+        const hintId = `tp-offer-${index}-sales-${list}-hint`;
+        return html`
+            <fieldset class="form-group fieldset-plain tp-rows" aria-describedby="${hintId}">
+                <legend class="form-label">${t(`tenantProfile.sales.f.${list}`)}</legend>
+                <p class="form-hint" id="${hintId}">${t(`tenantProfile.sales.h.${list}`)}</p>
+                ${rows.map((row, i) => this.rowMarkup(index, list, i, row, hintId))}
+                <div>
+                    ${UI.button({
+                        variant: 'secondary', size: 'sm', icon: 'plus', label: t(`tenantProfile.sales.add.${list}`), action: 'tenantProfile:addRow',
+                        data: { list }, disabled: rows.length >= this.ROWS[list].limit,
+                    })}
+                </div>
+            </fieldset>
+        `;
+    },
+
+    /**
+     * An offer's sales details (docs/DM_SALES_PLAN.md §5): a collapsible block at the foot of its card. Every control is named
+     * `data-tp-offer="sales.<field>"` (or `data-tp-cell` for a row), so reading the card reads the block. All of it is the owner's
+     * words, which the DM bot quotes and invents nothing beyond.
+     */
+    salesMarkup(offer, index) {
+        const s = this.salesFull(offer.sales, true);
+        const id = (key) => `tp-offer-${index}-sales-${key}`;
+        // "Filled in" is about what is typed: an offer that only has the empty row an Add just made is not.
+        const filled = this.salesValue(offer.sales) !== null;
+        const textarea = (key, rows, hint) => html`<textarea class="field-textarea" id="${id(key)}" data-tp-offer="sales.${key}" dir="auto" rows="${rows}"${hint ? html` aria-describedby="${id(`${key}-hint`)}"` : ''}>
+${Array.isArray(s[key]) ? s[key].join('\n') : s[key]}</textarea>`;
+        const input = (key, max, dir, type) => html`<input class="field${dir === 'ltr' ? html.raw(' field-mono') : ''}" id="${id(key)}" type="${type || 'text'}" data-tp-offer="sales.${key}" value="${s[key]}" dir="${dir || 'auto'}"${max ? html` maxlength="${max}"` : ''} autocomplete="off" spellcheck="false" aria-describedby="${id(`${key}-hint`)}">`;
+        const hint = (key) => html`<p class="form-hint" id="${id(`${key}-hint`)}">${t(`tenantProfile.sales.h.${key}`)}</p>`;
+        return html`
+            <details class="tp-sales" data-tp-sales="${offer.id}"${this.salesOpen(offer) ? html.raw(' open') : ''}>
+                <summary class="tp-sales-summary">${t('tenantProfile.sales.title')}${filled ? html` <span class="chip">${t('tenantProfile.sales.filled')}</span>` : ''}</summary>
+                <p class="form-hint tp-sales-intro">${t('tenantProfile.sales.hint')}</p>
+                <div class="form-group">
+                    <label class="form-label" for="${id('for_whom')}">${t('tenantProfile.sales.f.for_whom')}</label>
+                    ${textarea('for_whom', 3, true)}
+                    ${hint('for_whom')}
+                </div>
+                <div class="tp-grid">
+                    <div class="form-group">
+                        <label class="form-label" for="${id('level')}">${t('tenantProfile.sales.f.level')}</label>
+                        <select class="select" id="${id('level')}" data-tp-offer="sales.level">${
+                            this.ENUMS.salesLevel.map((v) => html`<option value="${v}"${v === s.level ? html.raw(' selected') : ''}>${t(`tenantProfile.o.salesLevel.${v}`)}</option>`)
+                        }</select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="${id('price_valid_until')}">${t('tenantProfile.sales.f.price_valid_until')}</label>
+                        ${input('price_valid_until', 0, 'ltr', 'date')}
+                        ${hint('price_valid_until')}
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="${id('currency')}">${t('tenantProfile.sales.f.currency')}</label>
+                        ${input('currency', this.LIMITS.salesCurrency, 'ltr')}
+                        ${hint('currency')}
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="${id('price_note')}">${t('tenantProfile.sales.f.price_note')}</label>
+                    ${input('price_note', this.LIMITS.salesPriceNote)}
+                    ${hint('price_note')}
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="${id('outcomes')}">${t('tenantProfile.sales.f.outcomes')}</label>
+                    ${textarea('outcomes', 3, true)}
+                    ${hint('outcomes')}
+                </div>
+                ${this.rowsMarkup(index, 'faqs', s.faqs)}
+                ${this.rowsMarkup(index, 'objections', s.objections)}
+                ${this.rowsMarkup(index, 'proof', s.proof)}
+                <div class="form-group">
+                    <label class="form-label" for="${id('image_url')}">${t('tenantProfile.sales.f.image_url')}</label>
+                    ${input('image_url', this.LIMITS.salesImage, 'ltr')}
+                    ${hint('image_url')}
+                </div>
+            </details>
+        `;
+    },
+
     /** One offer's card. The id rides in `data-offer-id` (escaped), and is how the campaign is carried over on save. */
     offerMarkup(offer, index) {
         const n = index + 1;
@@ -500,6 +733,7 @@ ${offer[key].join('\n')}</textarea>`;
                 </div>
                 <div class="form-group"><label class="form-label" for="${id('facts')}">${t('tenantProfile.f.offer.facts')}</label>${lines('facts', 3)}</div>
                 <div class="form-group"><label class="form-label" for="${id('bullets')}">${t('tenantProfile.f.offer.bullets')}</label>${lines('bullets', 3)}</div>
+                ${this.salesMarkup(offer, index)}
                 <div class="row row--between row--wrap gap-3">
                     <label class="check-row" for="${id('primary')}">
                         <input type="radio" name="tp-offer-primary" id="${id('primary')}" data-tp-offer="primary" value="${offer.id}"${offer.primary ? html.raw(' checked') : ''}>
@@ -623,6 +857,8 @@ ${offer[key].join('\n')}</textarea>`;
     base: null,
     /** Set by a 409 `PROFILE_VERSION_CONFLICT`: `{ currentVersion }`. Saving waits for a reload. */
     conflict: null,
+    /** Offer id → whether its "Sales details" was left open, for the offers a redraw has to show as the person left them. */
+    _salesOpen: new Map(),
     _seq: 0,
 
     /** Still the editor on screen? The admin may have moved to another tenant while a request was out. */
@@ -635,6 +871,7 @@ ${offer[key].join('\n')}</textarea>`;
         this.conflict = null;
         this.state = null;
         this.base = null;
+        this._salesOpen = new Map();
         const seq = ++this._seq;
         host.innerHTML = esc(html`<p class="form-hint" role="status">${t('common.loading')}</p>`);
         try {
@@ -654,6 +891,7 @@ ${offer[key].join('\n')}</textarea>`;
         this.state = null;
         this.base = null;
         this.conflict = null;
+        this._salesOpen = new Map();
     },
 
     adopt(state) {
@@ -834,10 +1072,17 @@ ${offer[key].join('\n')}</textarea>`;
     },
 
     // ─── Offers ─────────────────────────────────────────────────────────────
-    /** The offers as the form holds them, changed by `change`, drawn again with everything else in the section as typed. */
+    /**
+     * The offers as the form holds them, changed by `change`, drawn again with everything else in the section as typed. The redraw keeps
+     * the rows of the sales lists that nothing is typed in yet (the row a person just added), and each "Sales details" open or shut as
+     * they left it.
+     */
     editOffers(el, change) {
         const form = el.closest('form');
-        const values = this.fromSnapshots(this.snapshot(form), this.base);
+        const values = this.fromSnapshots(this.snapshot(form), this.base, { keepBlankRows: true });
+        if (form && typeof form.querySelectorAll === 'function') {
+            form.querySelectorAll('details[data-tp-sales]').forEach((d) => { this._salesOpen.set(d.getAttribute('data-tp-sales'), d.open === true); });
+        }
         const offers = values.offers.slice();
         const result = change(offers, el);
         if (!result) return null;
@@ -865,6 +1110,58 @@ ${offer[key].join('\n')}</textarea>`;
         const add = this.host.querySelector('[data-action="tenantProfile:addOffer"]');
         if (add && !add.disabled) add.focus();
     },
+
+    /**
+     * The id of the offer a row's button sits in, and the list it is for, or null when either is not what the page wrote. The list is
+     * looked up as an OWN key: `constructor` and `__proto__` are keys of every object, and are not lists.
+     */
+    rowTarget(el) {
+        const list = el.getAttribute('data-list');
+        const card = el.closest('[data-offer-id]');
+        const id = card ? card.getAttribute('data-offer-id') : null;
+        return typeof list === 'string' && Object.prototype.hasOwnProperty.call(this.ROWS, list) && id !== null ? { list, id } : null;
+    },
+
+    /** Add an empty row to one of an offer's sales lists, opening its block, and put the cursor in the row's first control. */
+    addRow(el) {
+        const target = this.rowTarget(el);
+        if (!target) return;
+        const { list, id } = target;
+        let added = null;
+        const offers = this.editOffers(el, (all) => all.map((o, at) => {
+            if (o.id !== id) return o;
+            const sales = this.salesFull(o.sales, true);
+            if (sales[list].length >= this.ROWS[list].limit) return o;
+            sales[list] = [...sales[list], this.blankRow(list)];
+            added = { at, n: sales[list].length - 1 };
+            return Object.assign({}, o, { sales });
+        }));
+        if (!offers || !added) return;
+        this._salesOpen.set(id, true);
+        const field = this.host.querySelector(`#tp-offer-${added.at}-sales-${list}-${added.n}-${this.ROWS[list].cells[0].key}`);
+        if (field) field.focus();
+    },
+
+    /** Remove one row of an offer's sales lists, and put the cursor on the Add that is left. */
+    removeRow(el) {
+        const target = this.rowTarget(el);
+        // Strictly digits: `Number(null)` and `Number('')` are 0, and a button with no index must not remove the first row.
+        const raw = el.getAttribute('data-index');
+        const at = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : -1;
+        if (!target || at < 0) return;
+        const { list, id } = target;
+        const offers = this.editOffers(el, (all) => all.map((o) => {
+            if (o.id !== id) return o;
+            const sales = this.salesFull(o.sales, true);
+            sales[list] = sales[list].filter((_, i) => i !== at);
+            return Object.assign({}, o, { sales });
+        }));
+        if (!offers) return;
+        this._salesOpen.set(id, true);
+        const card = this.host.querySelector(`[data-offer-id="${CSS.escape(id)}"]`);
+        const add = card ? card.querySelector(`[data-action="tenantProfile:addRow"][data-list="${list}"]`) : null;
+        if (add && !add.disabled) add.focus();
+    },
 };
 
 UI.registerActions('tenantProfile', {
@@ -872,6 +1169,8 @@ UI.registerActions('tenantProfile', {
     discard: (el) => TenantProfile.discard(el.getAttribute('data-section')),
     addOffer: (el) => TenantProfile.addOffer(el),
     removeOffer: (el) => TenantProfile.removeOffer(el),
+    addRow: (el) => TenantProfile.addRow(el),
+    removeRow: (el) => TenantProfile.removeRow(el),
     reloadKeep: () => Admin.report(TenantProfile.reload(true)),
     reloadDiscard: () => Admin.report(TenantProfile.reload(false)),
     retry: () => Admin.report(TenantProfile.mount(TenantProfile.host, { id: TenantProfile.tenantId, name: TenantProfile.tenantName })),

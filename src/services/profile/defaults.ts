@@ -7,10 +7,10 @@
  * instead; a new tenant never falls back to it.
  */
 import { defaultInfographicConfig } from '../studio/settingsTypes.js';
-import type { ContentRulePreset, CreatorProfile, Lang, Offer, OfferCampaign } from './types.js';
+import type { ContentRulePreset, CreatorProfile, Lang, Offer, OfferCampaign, OfferSales } from './types.js';
 import {
     ADDRESS, CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, FONTS, KINDS, LANGS, LEVELS, MATCH_MODES, OFFER_KINDS, ON_CAMERA, ORDER_VIA,
-    PRONOUNS, REGISTERS, SOCIALS, SURFACES, THEMES,
+    PRONOUNS, PROOF_KINDS, REGISTERS, SALES_LEVELS, SOCIALS, SURFACES, THEMES,
 } from './types.js';
 
 /** What a tenant with no Growth settings is aiming at (docs/agents/BRIEF.md). `DEFAULT_GOALS` in growth/settings.ts; a test holds them equal. */
@@ -71,6 +71,17 @@ function blankCampaign(): OfferCampaign {
     return { name_match: '', match: 'substring', keywords: [], dm_template: '', public_replies: [] };
 }
 
+/**
+ * A blank sales block: what one saved before a field of it existed reads as, and what an editor starts a new block from. Level 'any'
+ * and no date, so a blank block states no price and pitches at no one in particular.
+ */
+export function blankSales(): OfferSales {
+    return {
+        for_whom: '', level: 'any', outcomes: [], faqs: [], objections: [], proof: [],
+        price_note: '', price_valid_until: '', currency: '', image_url: '',
+    };
+}
+
 // ─── Reading a stored profile ───────────────────────────────────────────────────────────────
 
 type Loose = Record<string, unknown>;
@@ -86,6 +97,7 @@ const ENUMS: Record<string, readonly string[]> = {
     'language.primary': LANGS, 'language.register': REGISTERS, 'language.digits': DIGITS, 'voice.emoji': EMOJI_LEVELS, 'voice.address': ADDRESS,
     'content.domain': DOMAINS, 'brand.font_display': FONTS, 'brand.theme': THEMES,
     'offers[].kind': OFFER_KINDS, 'offers[].order_via': ORDER_VIA, 'offers[].campaign.match': MATCH_MODES,
+    'offers[].sales.level': SALES_LEVELS,
 };
 
 const isPresenter = (v: unknown): boolean => isObj(v) && isString(v.name) && member(PRONOUNS)(v.pronouns) && member(ON_CAMERA)(v.on_camera);
@@ -107,6 +119,10 @@ const ITEMS: Record<string, (v: unknown) => boolean> = {
     'content.rules': member(CONTENT_RULE_PRESETS), 'socials.platforms': member(SOCIALS),
     'dm.faq': (v) => isObj(v) && isString(v.q) && isString(v.a),
     'offers[].facts': isString, 'offers[].bullets': isString, 'offers[].campaign.keywords': isString, 'offers[].campaign.public_replies': isString,
+    'offers[].sales.outcomes': isString,
+    'offers[].sales.faqs': (v) => isObj(v) && isString(v.q) && isString(v.a),
+    'offers[].sales.objections': (v) => isObj(v) && isString(v.objection) && isString(v.answer),
+    'offers[].sales.proof': (v) => isObj(v) && member(PROOF_KINDS)(v.kind) && isString(v.text) && isString(v.source),
 };
 
 /** Keys of the default that are keyed by something other than a field name: read by hand, below. */
@@ -230,7 +246,7 @@ class Reader {
         return out as CreatorProfile['socials']['links'];
     }
 
-    /** Each offer over a blank one, and its optional campaign over a blank campaign. An entry that is no object is dropped. */
+    /** Each offer over a blank one, and its optional campaign and sales block over blank ones. An entry that is no object is dropped. */
     offers(value: unknown): Offer[] {
         if (value === undefined) return [];
         if (!Array.isArray(value)) {
@@ -244,11 +260,15 @@ class Reader {
                 this.note(at);
                 return;
             }
-            const { campaign, ...rest } = stored;
+            const { campaign, sales, ...rest } = stored;
             const offer = this.merge(blankOffer(), rest, at) as Offer;
             if (campaign !== undefined) {
                 if (isObj(campaign)) offer.campaign = this.merge(blankCampaign(), campaign, `${at}.campaign`) as OfferCampaign;
                 else this.note(`${at}.campaign`);
+            }
+            if (sales !== undefined) {
+                if (isObj(sales)) offer.sales = this.merge(blankSales(), sales, `${at}.sales`) as OfferSales;
+                else this.note(`${at}.sales`);
             }
             out.push(offer);
         });

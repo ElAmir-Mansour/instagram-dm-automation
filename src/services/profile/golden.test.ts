@@ -56,6 +56,8 @@ import vm from 'node:vm';
 import type { GrowthSettings } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
 import { AI_DISCLOSURE_LINE } from '../../webhook/meta-payload.js';
+import { starterPersona } from '../ai.js';
+import { NOW as SALES_NOW, withSales } from '../dmSales/testFixtures.js';
 import { COACH_SCHEMA, coachSystemPrompt } from '../growth/coach.js';
 import { KEYWORDS_SCHEMA } from '../growth/keywords.js';
 import { analystUserPrompt, LESSONS_SCHEMA } from '../monteur/analyst.js';
@@ -85,7 +87,7 @@ import { upgradeProfile } from './defaults.js';
 import { profileFromLegacy } from './legacy.js';
 import { LEGACY_COURSE_MAPPINGS } from './legacyCourseMappings.js';
 import {
-    dmContextSurface, dmFallbackSurface, dmInstructionSurface, growthSurface, infographicSurface, SAY, studioSurface, type GrowthRows, type SurfaceEntry,
+    dmContextSurface, dmFallbackSurface, dmInstructionSurface, dmSalesSurface, growthSurface, infographicSurface, SAY, studioSurface, type GrowthRows, type SurfaceEntry,
 } from './promptSurface.js';
 import { planOwnerOffers } from './ownerOffers.js';
 import { emptyState, installProfileDb, OTHER, OWNER, setPlatformOwner, studioRow } from './testDb.js';
@@ -573,6 +575,55 @@ describe('Campaign golden seeds', () => {
             matchGoldenJson('campaigns.import-rows', rows);
         }
     });
+});
+
+// ─── The DM sales prompt (S5) ───────────────────────────────────────────────────────────────
+
+/**
+ * The prompt the DM bot will be given when `sales_mode` is on (docs/DM_SALES_PLAN.md §3), and the schema it answers in. Nothing sends it yet:
+ * these are new files, beside the ones above, and none of the existing goldens moves for them. It is not in `tenantSurface`, so the live
+ * parity digest is the one it was (see `dmSalesSurface`).
+ *
+ *   dm.sales-system.elamir          the owner's profile as production holds it: nine offers, one with a link, no price, no sales block,
+ *                                   no FAQ or hand-off rule. What the bot would be told TODAY: the offers it can recommend are one, and it says
+ *                                   the price is on the page;
+ *   dm.sales-system-filled.elamir   the same with everything typed in (a price with a date that has not passed, a sales block, the FAQ, the
+ *                                   hand-off rule and the hours) and a conversation's facts after it: the whole shape of the prompt;
+ *   dm.sales-schema.elamir          the schema, with the nine offer ids;
+ *   dm.sales-system-filled.english  the English control: the same shape in the English kit.
+ *
+ * Each is built from the profile as it is and again from the profile as storage returns it (serialised, keys reordered, read through
+ * `upgradeProfile`): the sales block must survive being stored, or the bot would sell from less than the owner typed.
+ */
+describe('DM sales golden prompts', () => {
+    const ZONE = ELAMIR_SEED_SETTINGS.schedule.timezone;
+    /** The owner's profile as production holds it: his primary offer made from his product, and the eight others the seed script adds. */
+    const live = (): CreatorProfile => planOwnerOffers(storedProfile(ELAMIR_SEED_SETTINGS, ELAMIR_GROWTH)).next;
+    const english = (): CreatorProfile => storedProfile(ENGLISH_SETTINGS);
+    const primaryId = (p: CreatorProfile): string => p.offers.find((o) => o.primary)!.id;
+
+    for (const [via, read] of [
+        ['as built', (p: CreatorProfile) => p],
+        ['after storage', (p: CreatorProfile) => upgradeProfile(throughJsonb(p)).profile],
+    ] as const) {
+        it(`the sales prompt, its schema and the conversation's facts: the owner's two and the English control (${via})`, async (t) => {
+            const owner = { agent: ELAMIR_AGENT, timezone: ZONE, now: SALES_NOW, set: 'elamir' as const, slug: 'elamir' };
+            const filled = read(withSales(live(), 'ar'));
+            const keyword = filled.offers.find((o) => o.primary)!.campaign?.keywords[0] ?? 'link';
+            await matchEach(t, [
+                ...dmSalesSurface({ ...owner, base: 'dm.sales-system', profile: read(live()), schema: true }),
+                ...dmSalesSurface({
+                    ...owner, base: 'dm.sales-system-filled', profile: filled,
+                    facts: { stage: 'recommend', qualifierTurns: 2, linkSentFor: [], comment: { keyword, offerId: primaryId(filled) } },
+                }),
+                ...dmSalesSurface({
+                    base: 'dm.sales-system-filled', slug: 'english', set: 'control', agent: { system_prompt: starterPersona('en'), knowledge_base: '' },
+                    profile: read(withSales(english(), 'en')), timezone: 'Europe/London', now: SALES_NOW,
+                    facts: { stage: 'link', qualifierTurns: 1, linkSentFor: [primaryId(english())] },
+                }),
+            ]);
+        });
+    }
 });
 
 // ─── The net itself ─────────────────────────────────────────────────────────────────────────

@@ -30,7 +30,7 @@ import { mergePatch } from '../services/profile/patch.js';
 import { defaultProfile } from '../services/profile/defaults.js';
 import { leafPaths, richProfile } from '../services/profile/testSupport.js';
 import {
-    ADDRESS, CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, KINDS, LANGS, LEVELS, OFFER_KINDS, ORDER_VIA, REGISTERS, SOCIALS, SURFACES,
+    ADDRESS, CONTENT_RULE_PRESETS, DIGITS, DOMAINS, EMOJI_LEVELS, KINDS, LANGS, LEVELS, OFFER_KINDS, ORDER_VIA, PROOF_KINDS, REGISTERS, SALES_LEVELS, SOCIALS, SURFACES,
     type CreatorProfile,
 } from '../services/profile/types.js';
 import { validateProfile } from '../services/profile/validate.js';
@@ -117,6 +117,9 @@ function attrsOf(tag: string): Record<string, string> {
     return attrs;
 }
 
+/** The card's `sales` snapshot, made on first use: the raw text of its controls and its three lists of rows. */
+const salesOf = (card: Json): Json => (card.sales ??= { faqs: [], objections: [], proof: [] });
+
 /** The control snapshots `TenantProfile.snapshot()` would take from a page showing `markup`. */
 function parse(markup: string): Snap {
     const fields: Snap['fields'] = [];
@@ -147,8 +150,15 @@ function parse(markup: string): Snap {
         }
         if (attrs['data-tp-path'] !== undefined) fields.push({ path: attrs['data-tp-path'], value, checked });
         else if (attrs['data-tp-offer'] !== undefined && card) {
-            if (attrs['data-tp-offer'] === 'primary') card.primary = checked === true;
-            else card[attrs['data-tp-offer']] = value;
+            const key = attrs['data-tp-offer'];
+            if (key === 'primary') card.primary = checked === true;
+            else if (key.startsWith('sales.')) salesOf(card)[key.slice('sales.'.length)] = value;
+            else card[key] = value;
+        } else if (attrs['data-tp-cell'] !== undefined && card) {
+            // A row of one of the sales lists: `<list>.<index>.<cell>`, read back in the order the page has them, as `snapshot` does.
+            const [list, at, cell] = attrs['data-tp-cell'].split('.') as [string, string, string];
+            const rows = salesOf(card)[list] as Json[];
+            rows[Number(at)] = { ...(rows[Number(at)] ?? {}), [cell]: value };
         }
     }
     return { fields, offers: cards.length || /data-tp-offers/.test(markup) ? cards : null };
@@ -193,6 +203,7 @@ describe('the editor knows what a profile holds', () => {
         const expected: Record<string, readonly string[]> = {
             kind: KINDS, register: REGISTERS, digits: DIGITS, lang: LANGS, level: LEVELS, emoji: EMOJI_LEVELS, address: ADDRESS, domain: DOMAINS,
             offerKind: OFFER_KINDS, orderVia: ORDER_VIA, rule: CONTENT_RULE_PRESETS, social: SOCIALS, surface: SURFACES,
+            salesLevel: SALES_LEVELS, proofKind: PROOF_KINDS,
         };
         assert.deepEqual(plain(TP.ENUMS), expected);
         assert.equal(TP.OWNER_RULE, 'no_women_imagery');
@@ -430,6 +441,257 @@ describe('what a save sends', () => {
     });
 });
 
+// ─── An offer's sales details (S4) ───────────────────────────────────────────────────────────
+
+/**
+ * The collapsible "Sales details" at the foot of every offer card (`offer.sales`, docs/DM_SALES_PLAN.md §5). Pinned: it is drawn, read back
+ * and sent in the server's own shape; an offer that holds none sends none, and one cleared sends none either (the offers list is replaced
+ * whole); a row of a list with nothing in it is no row, but the redraw an Add makes keeps the row it just added; and the server accepts
+ * every patch the editor builds, or says in its own words what is wrong with a row.
+ */
+describe('an offer\'s sales details', () => {
+    const forMain = (offers: Json[]): Json => offers.find((o) => o.id === 'main')!;
+    const BLANK_SNAPSHOT = (): Json => ({ for_whom: '', level: 'any', outcomes: '', price_note: '', price_valid_until: '', currency: '', image_url: '', faqs: [], objections: [], proof: [] });
+
+    it('is a collapsible block on every card: open when the offer holds something, shut when it does not, and marked only when it does', () => {
+        const { markup } = mounted();
+        const out = markup();
+        assert.equal([...out.matchAll(/<details class="tp-sales"/g)].length, 2);
+        assert.match(out, /<details class="tp-sales" data-tp-sales="main" open>/);
+        assert.match(out, /<details class="tp-sales" data-tp-sales="side">/);
+        assert.equal([...out.matchAll(/<span class="chip">Filled in<\/span>/g)].length, 1, 'the chip is on the offer that holds something');
+        // Every card has the controls, so a person can start one on an offer that has none.
+        assert.match(out, /data-tp-offer="sales.for_whom"/);
+    });
+
+    it('does not call an offer filled in because of the empty row an Add just made: "filled in" is about what is typed', () => {
+        const { TP } = mounted();
+        const side = { ...plain<Json>(TP.blankOffer([])), id: 'side', sales: { ...TP.blankSales(), faqs: [TP.blankRow('faqs')] } };
+        assert.doesNotMatch(String(TP.offerMarkup(side, 0)), /Filled in/);
+        const typed = { ...side, sales: { ...TP.blankSales(), for_whom: 'Someone' } };
+        assert.match(String(TP.offerMarkup(typed, 0)), /Filled in/);
+    });
+
+    it('remembers which blocks a person left open or shut, over the redraw of an Add or a Remove', () => {
+        const { TP, markup } = mounted();
+        TP._salesOpen = new Map([['main', false], ['side', true]]);
+        const out = markup();
+        assert.match(out, /<details class="tp-sales" data-tp-sales="main">/, 'a block with content that was shut stays shut');
+        assert.match(out, /<details class="tp-sales" data-tp-sales="side" open>/, 'an empty one that was opened stays open');
+        const fixture = mounted();
+        const form = { querySelectorAll: () => ({ forEach: (fn: (d: Json) => void) => [{ getAttribute: () => 'main', open: false }, { getAttribute: () => 'side', open: true }].forEach(fn) }) };
+        fixture.TP.snapshot = () => fixture.form();
+        fixture.TP.paintSection = () => null;
+        fixture.TP.editOffers({ closest: () => form }, (offers: Json[]) => offers);
+        assert.deepEqual(plain([...fixture.TP._salesOpen]), [['main', false], ['side', true]]);
+    });
+
+    it('reads back the block it drew, a multi-line answer included, and an offer with none stays without one', () => {
+        const { TP, form } = mounted();
+        const read = plain<Json>(TP.fromSnapshots(form(), TP.base));
+        assert.deepEqual(forMain(read.offers).sales, rich().offers[1]!.sales);
+        assert.ok(forMain(read.offers).sales.faqs[1].a.includes('\n'), 'the fixture has an answer over two lines');
+        assert.equal('sales' in read.offers.find((o: Json) => o.id === 'side'), false, 'no sales key for an offer that has none');
+        assert.deepEqual(plain(TP.changedPaths(TP.base, TP.fromSnapshots(form(), TP.base))), []);
+    });
+
+    it('an untouched offer with no block sends none, and a block of blanks stored on an offer is not a change either', () => {
+        const profile = defaultProfile({ lang: 'en', rules: [] });
+        profile.offers = [{ id: 'one', kind: 'product', name: 'A', order_via: 'dm', url: '', price: '', facts: [], bullets: [], keyword: '', primary: true }];
+        const { TP, form } = mounted(profile);
+        assert.deepEqual(plain(TP.changedPaths(TP.base, TP.fromSnapshots(form(), TP.base))), []);
+        const blanks = defaultProfile({ lang: 'en', rules: [] });
+        blanks.offers = [{ ...profile.offers[0]!, sales: { for_whom: '', level: 'any', outcomes: [], faqs: [], objections: [], proof: [], price_note: '', price_valid_until: '', currency: '', image_url: '' } }];
+        const again = mounted(blanks);
+        assert.equal('sales' in again.TP.base.offers[0], false, 'an all-blank block is no block');
+        assert.deepEqual(plain(again.TP.changedPaths(again.TP.base, again.TP.fromSnapshots(again.form(), again.TP.base))), []);
+    });
+
+    it('typing into it changes `offers`, which is sent whole with the block in the server\'s own shape, and the server accepts it', () => {
+        const { TP, form } = mounted();
+        const snap = form();
+        const main = snap.offers!.find((o) => o.id === 'main')! as Json;
+        main.sales.for_whom = '  Busy parents.  ';
+        main.sales.level = 'advanced';
+        main.sales.currency = 'sar';
+        main.sales.price_valid_until = '2027-01-31';
+        main.sales.price_note = ' Moves with promotions. ';
+        main.sales.outcomes = 'Train at home\n\n  Sleep better  \n';
+        main.sales.faqs[1] = { q: ' How long? ', a: 'Fifteen minutes.\n\nSometimes ten.' };
+        main.sales.objections.push({ kind: 'ignored', objection: 'Too hard', answer: 'It is not.' });
+        main.sales.proof.push({ kind: 'testimonial', text: 'It works.', source: 'A named client' });
+        main.sales.image_url = '  https://app.example.com/api/uploads/33333333-3333-4333-8333-333333333333  ';
+        const current = TP.fromSnapshots(snap, TP.base);
+        assert.deepEqual(plain(TP.changedPaths(TP.base, current)), ['offers']);
+        const patch = plain<Json>(TP.buildPatch(current, ['offers']));
+        assert.deepEqual(Object.keys(patch), ['offers']);
+        assert.deepEqual(forMain(patch.offers).sales, {
+            for_whom: 'Busy parents.', level: 'advanced', currency: 'SAR', price_valid_until: '2027-01-31', price_note: 'Moves with promotions.',
+            outcomes: ['Train at home', 'Sleep better'],
+            faqs: [{ q: 'Do I need equipment?', a: 'No. A mat is enough.' }, { q: 'How long?', a: 'Fifteen minutes.\n\nSometimes ten.' }],
+            objections: [{ objection: 'I have no time', answer: 'Sessions are twenty minutes.' }, { objection: 'Too hard', answer: 'It is not.' }],
+            proof: [
+                { kind: 'stat', text: '4.8 out of 5 from 312 reviews', source: 'the program page' },
+                { kind: 'testimonial', text: 'I sleep better now.', source: 'a client who agreed to be quoted' },
+                { kind: 'testimonial', text: 'It works.', source: 'A named client' },
+            ],
+            image_url: 'https://app.example.com/api/uploads/33333333-3333-4333-8333-333333333333',
+        });
+        const checked = validateProfile(mergePatch(rich(), patch));
+        assert.ok('profile' in checked, JSON.stringify((checked as Json).problems));
+    });
+
+    it('typing into an offer that had none makes the block, and clearing every control of one that had one takes it away', () => {
+        const { TP, form } = mounted();
+        const started = form();
+        (started.offers!.find((o) => o.id === 'side') as Json).sales.for_whom = 'Anyone who wants a call.';
+        const added = TP.fromSnapshots(started, TP.base);
+        const side = plain<Json[]>(added.offers).find((o) => o.id === 'side')!;
+        assert.deepEqual(side.sales, { for_whom: 'Anyone who wants a call.', level: 'any', outcomes: [], faqs: [], objections: [], proof: [], price_note: '', price_valid_until: '', currency: '', image_url: '' });
+        assert.ok('profile' in validateProfile(mergePatch(rich(), TP.buildPatch(added, ['offers']))));
+
+        const cleared = form();
+        (cleared.offers!.find((o) => o.id === 'main') as Json).sales = BLANK_SNAPSHOT();
+        const gone = TP.fromSnapshots(cleared, TP.base);
+        assert.deepEqual(plain(TP.changedPaths(TP.base, gone)), ['offers'], 'removing what was there is a change');
+        const patch = plain<Json>(TP.buildPatch(gone, ['offers']));
+        assert.equal('sales' in forMain(patch.offers), false, 'the key is not sent, not sent as null: the list is replaced whole');
+        const merged = mergePatch(rich(), patch) as CreatorProfile;
+        assert.equal('sales' in merged.offers[1]!, false);
+        assert.ok('profile' in validateProfile(merged));
+    });
+
+    it('a row with nothing typed in it is no row when saved, and one half typed is sent and refused by the server in its own words', () => {
+        const { TP, form } = mounted();
+        const snap = form();
+        const main = snap.offers!.find((o) => o.id === 'main')! as Json;
+        main.sales.faqs.push({ q: '', a: '' }, { q: 'A question with no answer', a: '' });
+        main.sales.proof.push({ kind: 'testimonial', text: '', source: '' });
+        const current = TP.fromSnapshots(snap, TP.base);
+        const sent = forMain(plain<Json[]>(current.offers)).sales;
+        assert.equal(sent.faqs.length, 3, 'the empty row was dropped, the half-typed one kept');
+        assert.equal(sent.proof.length, 2, 'a row whose only value is its kind is empty');
+        const checked = validateProfile(mergePatch(rich(), TP.buildPatch(current, ['offers'])));
+        assert.ok('problems' in checked);
+        assert.ok((checked as Json).problems.includes('offers[1].sales.faqs[2].a is required'), JSON.stringify((checked as Json).problems));
+    });
+
+    it('keeps the blank rows only for a redraw: the same snapshot, read two ways', () => {
+        const { TP, form } = mounted();
+        const snap = form();
+        (snap.offers!.find((o) => o.id === 'main') as Json).sales.faqs.push({ q: '', a: '' });
+        assert.equal(forMain(plain<Json[]>(TP.fromSnapshots(snap, TP.base).offers)).sales.faqs.length, 2);
+        assert.equal(forMain(plain<Json[]>(TP.fromSnapshots(snap, TP.base, { keepBlankRows: true }).offers)).sales.faqs.length, 3);
+    });
+
+    /** A button the way the page names it: which list, which row, and the card it sits in. */
+    const button = (list: string, index?: number, offer = 'main'): Json => ({
+        getAttribute: (k: string) => ({ 'data-list': list, 'data-index': index === undefined ? null : String(index) } as Record<string, string | null>)[k] ?? null,
+        closest: (sel: string) => (sel === 'form' ? {} : { getAttribute: () => offer }),
+    });
+    const drawn = () => {
+        const fixture = mounted();
+        const seen: Json[] = [];
+        fixture.TP.snapshot = () => fixture.form();
+        fixture.TP.paintSection = (_section: string, values: Json) => { seen.push(plain(values)); return null; };
+        fixture.TP.host = { querySelector: () => null };
+        return { ...fixture, seen };
+    };
+
+    it('Add puts an empty row at the end of the list on the redraw, opens the block, and keeps what is already typed', () => {
+        const f = drawn();
+        f.TP.addRow(button('faqs'));
+        assert.equal(f.seen.length, 1);
+        const faqs = forMain(f.seen[0]!.offers).sales.faqs;
+        assert.deepEqual(faqs.map((r: Json) => r.q), ['Do I need equipment?', 'How long is a session?', '']);
+        assert.deepEqual(faqs[2], { q: '', a: '' });
+        assert.equal(f.TP._salesOpen.get('main'), true);
+        // A proof row starts on its first kind; an objection row has its two cells.
+        f.TP.addRow(button('proof'));
+        assert.deepEqual(forMain(f.seen[1]!.offers).sales.proof.at(-1), { kind: 'stat', text: '', source: '' });
+        f.TP.addRow(button('objections'));
+        assert.deepEqual(forMain(f.seen[2]!.offers).sales.objections.at(-1), { objection: '', answer: '' });
+    });
+
+    it('Add on an offer that has no block makes one, with the one row in it, and touches no other offer', () => {
+        const f = drawn();
+        f.TP.addRow(button('objections', undefined, 'side'));
+        const side = f.seen[0]!.offers.find((o: Json) => o.id === 'side');
+        assert.deepEqual(side.sales.objections, [{ objection: '', answer: '' }]);
+        assert.equal(side.sales.faqs.length, 0);
+        assert.deepEqual(forMain(f.seen[0]!.offers).sales, rich().offers[1]!.sales, 'the other offer is as it was');
+    });
+
+    it('Add does nothing at the server\'s limit, and the button is disabled there', () => {
+        const { TP } = mounted();
+        const rows = (n: number): Json[] => Array.from({ length: n }, () => TP.blankRow('faqs'));
+        assert.match(String(TP.rowsMarkup(0, 'faqs', rows(15))), /data-action="tenantProfile:addRow"[^>]*disabled/);
+        assert.doesNotMatch(String(TP.rowsMarkup(0, 'faqs', rows(14))), /data-action="tenantProfile:addRow"[^>]*disabled/);
+        assert.deepEqual(Object.fromEntries(Object.entries(TP.ROWS).map(([k, v]: [string, any]) => [k, v.limit])), { faqs: 15, objections: 10, proof: 8 });
+        // At the limit: fifteen real rows in the form, and Add leaves it at fifteen.
+        const f = drawn();
+        const snap = f.form();
+        (snap.offers!.find((o) => o.id === 'main') as Json).sales.faqs = Array.from({ length: 15 }, (_, i) => ({ q: `q${i}`, a: `a${i}` }));
+        f.TP.snapshot = () => snap;
+        f.TP.addRow(button('faqs'));
+        assert.equal(forMain(f.seen[0]!.offers).sales.faqs.length, 15);
+    });
+
+    it('Remove takes one row away and leaves the rest in order, and a row that is not there changes nothing', () => {
+        const f = drawn();
+        f.TP.removeRow(button('faqs', 0));
+        assert.deepEqual(forMain(f.seen[0]!.offers).sales.faqs.map((r: Json) => r.q), ['How long is a session?']);
+        f.TP.removeRow(button('faqs', 9));
+        assert.equal(forMain(f.seen[1]!.offers).sales.faqs.length, 2);
+        f.TP.removeRow(button('proof', 1));
+        assert.deepEqual(forMain(f.seen[2]!.offers).sales.proof.map((r: Json) => r.kind), ['stat']);
+    });
+
+    it('refuses a button that names a list it does not have, or no card, rather than guessing', () => {
+        const f = drawn();
+        f.TP.addRow(button('constructor'));
+        f.TP.addRow(button('__proto__'));
+        f.TP.removeRow(button('toString', 0));
+        f.TP.removeRow({ getAttribute: (k: string) => (k === 'data-list' ? 'faqs' : '0'), closest: () => null });
+        f.TP.removeRow(button('faqs'));
+        assert.deepEqual(f.seen, []);
+    });
+
+    it('draws the price date as a date input and the currency as a short code, both left to right, and every cell with its own label', () => {
+        const { markup } = mounted();
+        const out = markup();
+        assert.match(out, /<input class="field field-mono" id="tp-offer-1-sales-price_valid_until" type="date" data-tp-offer="sales.price_valid_until" value="2026-12-31" dir="ltr"/);
+        assert.match(out, /<input class="field field-mono" id="tp-offer-1-sales-currency" type="text" data-tp-offer="sales.currency" value="USD" dir="ltr" maxlength="3"/);
+        for (const cell of ['faqs-0-q', 'faqs-0-a', 'faqs-1-q', 'objections-0-objection', 'objections-0-answer', 'proof-0-kind', 'proof-1-text', 'proof-1-source']) {
+            assert.match(out, new RegExp(`<label class="form-label" for="tp-offer-1-sales-${cell}">`), cell);
+        }
+        // A row is a named group, and its remove button says which row it removes.
+        assert.match(out, /<div class="tp-row" role="group" aria-labelledby="tp-offer-1-sales-faqs-0-title">/);
+        assert.match(out, /data-action="tenantProfile:removeRow" data-list="faqs" data-index="0" aria-label="Remove Question 1"/);
+    });
+
+    it('says in both languages everything its controls say, and a bad value in a card the server returns is shown as text, not markup', () => {
+        for (const lang of ['ar', 'en'] as const) {
+            const { TP, ctx } = load(lang);
+            const dict = vm.runInContext('I18N.strings', ctx)[lang] as Record<string, string>;
+            const need: string[] = ['title', 'filled', 'hint', 'removeRow', 'removeRowN'].map((k) => `sales.${k}`);
+            for (const f of ['for_whom', 'level', 'price_valid_until', 'currency', 'price_note', 'outcomes', 'image_url']) need.push(`sales.f.${f}`);
+            for (const h of ['for_whom', 'price_valid_until', 'currency', 'price_note', 'outcomes', 'image_url']) need.push(`sales.h.${h}`);
+            for (const [list, spec] of Object.entries(TP.ROWS) as [string, Json][]) {
+                need.push(`sales.f.${list}`, `sales.h.${list}`, `sales.row.${list}`, `sales.add.${list}`);
+                for (const cell of spec.cells) need.push(`sales.c.${cell.key}`);
+            }
+            const absent = need.map((k) => `tenantProfile.${k}`).filter((k) => dict[k] === undefined);
+            assert.deepEqual(absent, [], `${lang}: keys the sales block uses and the dictionary lacks`);
+        }
+        // The two sentences the owner reads before he types a price or a cover are the ones that carry the rules.
+        const { t } = load('en');
+        assert.match(t('tenantProfile.sales.h.price_valid_until'), /only until this date/);
+        assert.match(t('tenantProfile.sales.h.image_url'), /woman or a girl/);
+        assert.match(load('ar').t('tenantProfile.sales.h.image_url'), /امرأة أو فتاة/);
+    });
+});
+
 // ─── Escaping ────────────────────────────────────────────────────────────────────────────────
 
 const PAYLOAD = (tag: string): string => `"><img src=x onerror=alert('${tag}')>' onfocus='alert("${tag}")&amp;<script>x</script>\`${tag}`;
@@ -458,8 +720,9 @@ function hostile(): { profile: CreatorProfile; tags: Map<string, string> } {
     return { profile: profile as CreatorProfile, tags };
 }
 
-const ALLOWED_TAGS = new Set(['div', 'section', 'form', 'h3', 'p', 'label', 'input', 'select', 'option', 'optgroup', 'textarea', 'fieldset', 'legend', 'button', 'i', 'span', 'datalist', 'code', 'ul', 'li']);
-const ALLOWED_ATTRS = /^(class|id|type|value|for|name|dir|rows|maxlength|list|autocomplete|spellcheck|checked|selected|disabled|tabindex|role|novalidate|aria-[a-z]+|data-[a-z-]+)$/;
+// `details` and `summary` are an offer's collapsible "Sales details" (S4), and `open` is how it is drawn open.
+const ALLOWED_TAGS = new Set(['div', 'section', 'form', 'h3', 'p', 'label', 'input', 'select', 'option', 'optgroup', 'textarea', 'fieldset', 'legend', 'button', 'i', 'span', 'datalist', 'code', 'ul', 'li', 'details', 'summary']);
+const ALLOWED_ATTRS = /^(class|id|type|value|for|name|dir|rows|maxlength|list|autocomplete|spellcheck|checked|selected|disabled|open|tabindex|role|novalidate|aria-[a-z]+|data-[a-z-]+)$/;
 const TAG = /<\/?([a-zA-Z][\w-]*)((?:\s+[\w:-]+(?:="[^"]*")?)*)\s*\/?>/g;
 
 describe('escaping: a payload in every field is text, never markup', () => {
@@ -495,7 +758,7 @@ describe('escaping: a payload in every field is text, never markup', () => {
         }
         assert.ok(shown.length > 30, `${shown.length} payloads were rendered: the text, line and offer fields all reflect their value`);
         for (const tag of tags.keys()) {
-            if (/identity\.(display_name|brand_name|role|niche|country|timezone)|voice\.(guide|tone|samples|use_words|avoid_words)|audience\.(description|pains|goals|countries|languages|timezone)|content\.(pillars|never_mention|custom_rules)|socials\.(handle|site|links)|offers\[\d\]\.(name|url|price|keyword|facts|bullets|id)/.test(tag)) {
+            if (/identity\.(display_name|brand_name|role|niche|country|timezone)|voice\.(guide|tone|samples|use_words|avoid_words)|audience\.(description|pains|goals|countries|languages|timezone)|content\.(pillars|never_mention|custom_rules)|socials\.(handle|site|links)|offers\[\d\]\.(name|url|price|keyword|facts|bullets|id)|offers\[\d\]\.sales\.(for_whom|outcomes|faqs|objections|proof\[\d\]\.(text|source)|price_note|price_valid_until|currency|image_url)/.test(tag)) {
                 assert.ok(shown.includes(tag), `${tag} is reflected in the form, escaped`);
             }
         }
