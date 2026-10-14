@@ -46,6 +46,8 @@ const SettingsPage = {
 
     destroy() {
         this._seq++;
+        // The Page picker may still be open over the next screen; what it repaints on a change must not be this one.
+        if (typeof MetaConnect !== 'undefined' && this._afterMeta && MetaConnect.afterChange === this._afterMeta) MetaConnect.afterChange = null;
     },
 
     skeleton() {
@@ -109,7 +111,12 @@ const SettingsPage = {
         // The onboarding settings (invite lifetime, role, sessions, the message): the deployment's, so platform admins only.
         let onboarding = null;
         let onboardingError = null;
-        const [tt, ttApp, ms, st, yt, ytApp, cu, ob] = await Promise.allSettled([
+        // Instagram & Facebook (P28), isolated the same way, with the module that draws the card (loaded on first use, and shared with the wizard).
+        let meta = null;
+        let metaError = null;
+        let metaApp = null;
+        let metaAppError = null;
+        const [tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
@@ -118,7 +125,14 @@ const SettingsPage = {
             App.isAdmin() ? API.getYouTubeAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaCleanup() : Promise.resolve(null),
             App.isAdmin() ? API.getOnboardingSettings() : Promise.resolve(null),
+            API.getMetaConnection(),
+            App.isAdmin() ? API.getMetaAppSettings() : Promise.resolve(null),
+            App.loadPageModule('meta_connect'),
         ]);
+        if (mc.status === 'fulfilled') meta = mc.value; else metaError = mc.reason;
+        if (mcApp.status === 'fulfilled') metaApp = mcApp.value; else metaAppError = mcApp.reason;
+        // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
+        if (!metaError && !(mcModule.status === 'fulfilled' && mcModule.value)) metaError = new Error(t('meta.moduleFailed'));
         // The clean-up block is extra: if it fails to load, the storage card shows without it.
         if (cu.status === 'fulfilled') cleanup = cu.value;
         if (yt.status === 'fulfilled') youtube = yt.value; else youtubeError = yt.reason;
@@ -349,6 +363,8 @@ const SettingsPage = {
                 </div>
             </section>
 
+            ${this.metaSection({ meta, metaError, metaApp, metaAppError })}
+
             ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
 
             ${this.youtubeSection({ youtube, youtubeError, youtubeApp, youtubeAppError })}
@@ -395,6 +411,59 @@ const SettingsPage = {
         Motion.announce(`${t('nav.settings')} — ${t('common.loaded')}`);
         this.announceTikTokReturn();
         this.announceYouTubeReturn();
+        this.announceMetaReturn().catch((err) => console.warn('Could not show the Meta return:', err));
+    },
+
+    // ─── Instagram & Facebook (P28) ──────────────────────────────────────────
+
+    /**
+     * The Connections card. The words, the Page picker and the actions are `MetaConnect`'s (`meta_connect.js`, shared with the wizard);
+     * this only hands it what it needs and says what to repaint when something changed.
+     */
+    metaSection({ meta, metaError, metaApp, metaAppError }) {
+        if (typeof MetaConnect === 'undefined') return this.metaFallback(metaError || new Error(t('meta.moduleFailed')));
+        // After a Page is chosen or Meta is disconnected, this screen is read again. Dropped when the screen is left (`destroy`).
+        this._afterMeta = this._afterMeta || (() => SettingsPage.render());
+        MetaConnect.afterChange = this._afterMeta;
+        return MetaConnect.settingsSection({
+            meta, metaError, app: metaApp, appError: metaAppError, canAdminister: App.canAdminister(), isAdmin: App.isAdmin(),
+        });
+    },
+
+    /** The card when its module could not be fetched: a sentence and Retry, never a blank section. */
+    metaFallback(error) {
+        return html`
+            <section class="section" id="settings-meta">
+                <h2 class="section-title">${t('meta.title')}</h2>
+                <div class="settings-card surface">
+                    <div class="inline-error" role="alert">
+                        <i data-lucide="alert-circle" aria-hidden="true"></i>
+                        <div><strong dir="auto">${t('meta.loadFailed', { message: (error && error.message) || '' })}</strong></div>
+                    </div>
+                    ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                </div>
+            </section>
+        `;
+    },
+
+    /**
+     * Back from Facebook's dialog: `#/settings?meta=connected|error|pick`. A pick opens the Page picker over this screen; the others
+     * are said once, as a toast. The parameters are dropped from the address either way, so a reload does not say it again.
+     */
+    async announceMetaReturn() {
+        if (typeof MetaConnect === 'undefined') return;
+        const ret = MetaConnect.readReturn((name) => App.hashParam(name));
+        if (!ret) return;
+        try {
+            history.replaceState(null, '', `${location.pathname}#/settings`);
+        } catch {
+            // Only the repeat-on-reload is lost.
+        }
+        if (ret.outcome === 'pick') {
+            await MetaConnect.openPicker(ret.pick, 'settings');
+            return;
+        }
+        MetaConnect.announce(ret);
     },
 
     /** Reasons Google's callback can send back, each with its own sentence. */

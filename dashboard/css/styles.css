@@ -1509,6 +1509,53 @@ fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger)
 .welcome-done-item.is-waiting > [data-lucide] { color: var(--warning-text); }
 .welcome-done-item strong { display: block; color: var(--text-strong); font-size: var(--fs-200); }
 .welcome-done-item p { margin: 0; color: var(--text-default); font-size: var(--fs-200); }
+/* ─── Instagram & Facebook, connected with clicks (dashboard/js/pages/meta_connect.js; the wizard's W4 in welcome.js) ───────────────
+   One notice, used by Settings ("reconnect due") and by the wizard (what a return from a provider said); the three connection
+   cards of W4 and the test comment under them; and the Page picker's disabled option. Tokens and logical properties only: the same
+   rules are right in Arabic and English, and every button inside is the 44px `.btn`. */
+.meta-notice {
+    display: flex; align-items: flex-start; gap: var(--space-3); min-inline-size: 0; overflow-wrap: anywhere;
+    margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4);
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+    font-size: var(--fs-200); color: var(--text-default);
+}
+.meta-notice > [data-lucide] { flex-shrink: 0; margin-block-start: 2px; }
+.meta-notice > span { min-inline-size: 0; }
+.meta-notice-more { display: block; margin-block-start: var(--space-1); }
+.meta-notice.is-success { background: var(--success-soft); border-color: var(--border-success); }
+.meta-notice.is-success > [data-lucide] { color: var(--success-text); }
+.meta-notice.is-warning { background: var(--warning-soft); border-color: var(--border-warning); }
+.meta-notice.is-warning > [data-lucide] { color: var(--warning-text); }
+.meta-notice.is-danger { background: var(--danger-soft); border-color: var(--border-danger); }
+.meta-notice.is-danger > [data-lucide] { color: var(--danger-text); }
+
+.connect-list { list-style: none; margin: 0 0 var(--space-4); padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.connect-card { display: flex; flex-direction: column; gap: var(--space-3); min-inline-size: 0; padding: var(--space-4); }
+.connect-card-head { display: flex; align-items: flex-start; gap: var(--space-3); min-inline-size: 0; }
+.connect-card-text { min-inline-size: 0; }
+.connect-card-title { margin: 0; font-size: var(--fs-300); color: var(--text-strong); }
+.connect-card-status { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-1) 0 0; font-size: var(--fs-200); color: var(--text-default); }
+.connect-card-status > span { min-inline-size: 0; overflow-wrap: anywhere; }
+.connect-card-status [data-lucide] { flex-shrink: 0; inline-size: var(--icon-md); block-size: var(--icon-md); }
+.connect-card-status.is-ok { color: var(--success-text); }
+.connect-card-status.is-attention { color: var(--warning-text); }
+.connect-card-detail { margin: 0; }
+
+.connect-check { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); }
+.connect-check-ask { margin: 0; font-size: var(--fs-200); color: var(--text-default); }
+.connect-check-state { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0 0 var(--space-2); font-size: var(--fs-200); }
+.connect-check-state [data-lucide] { flex-shrink: 0; inline-size: var(--icon-md); block-size: var(--icon-md); margin-block-start: 2px; }
+.connect-check-state.is-ready { color: var(--success-text); font-weight: var(--fw-semibold); }
+.connect-check-state.is-waiting { color: var(--warning-text); }
+.connect-check-time { color: var(--text-muted); font-weight: var(--fw-regular); font-variant-numeric: tabular-nums; }
+
+/* The checkboxes of the Page picker and of the operator's block: a row at least a finger tall (the label is the whole target). */
+.check-row-tap { align-items: center; min-block-size: var(--tap-target); }
+.check-row-tap .check-label, .check-row-tap .check-text { padding-block: var(--space-1); }
+
+/* A Page the person cannot run is listed, and cannot be chosen (the radio card is the wizard's own, reused by the Page picker). */
+.welcome-choice-input:disabled + .welcome-choice-body { opacity: var(--opacity-disabled); cursor: not-allowed; }
+
 .welcome-rules-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-2); }
 .welcome-rule-list { margin: 0; padding-inline-start: var(--space-5); color: var(--text-default); font-size: var(--fs-200); }
 

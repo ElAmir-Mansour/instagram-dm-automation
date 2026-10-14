@@ -7,6 +7,7 @@
  *
  *   metaRouter — mounted BELOW `resolveTenant`, so every route acts as the session's tenant
  *     GET  /connection      the Settings card: is it enabled, is the app set up, and the tenant's connection (never a token)
+ *     GET  /comment-check   operator: has a comment.process job arrived for this tenant since it connected? (the wizard's test comment)
  *     POST /connect         owner: mint a state, return the Login dialog's URL ({ returnTo?, reconnect?, authType? })
  *     GET  /candidates      owner: the Pages waiting for a choice, by ?pick= (names and ids, never a token)
  *     POST /select          owner: choose one ({ pick, pageId, facebookOnly?, confirmPageChange? })
@@ -32,13 +33,14 @@ import {
 } from '../services/appSettings.js';
 import {
     consumeOAuthState, consumePick, createOAuthState, isReturnTo, NONCE_PATTERN, OAUTH_STATE_TTL_MS, readCookie, readPick,
-    stateCookie as buildStateCookie, type OAuthReturnTo,
+    returnDestination, stateCookie as buildStateCookie, type OAuthReturnTo,
 } from '../services/oauthState.js';
 import {
     assertPageFree, buildLoginUrl, CALLBACK_PATH as META_CALLBACK_PATH, completeMetaConnection, CORE_SCOPES, disconnectMeta,
     finishLogin, getMetaConnection, isAuthType, loginAvailability, LOGIN_SCOPES, mayConnect, MetaLoginError, publicChoices,
     readIntent, readMetaApp, readPickPayload, replacesConnection, WEBHOOK_FIELDS,
 } from '../services/metaLogin.js';
+import { readCommentCheck } from '../services/metaCommentCheck.js';
 import { describeError, log } from '../utils/log.js';
 
 /** Carries the state through Meta's round trip so it can only complete in the browser that began it. */
@@ -51,21 +53,17 @@ function stateCookie(value: string, maxAgeSeconds: number): string {
 
 // ─── Where the browser goes back to ─────────────────────────────────────────────────────
 
-/** Settings, or the setup wizard: whichever started the flow (`return_to` on the state). A state that was never spent has no say: Settings. */
-function destination(returnTo: OAuthReturnTo | null): string {
-    return returnTo === 'welcome' ? '/dashboard#/welcome' : '/dashboard#/settings';
-}
-
 /**
- * Back to the page that started the flow, with the outcome in the HASH query (`#/settings?meta=…`), which is where the
- * dashboard's router reads it: a `?meta=` before the `#` is invisible to it. The state cookie is cleared on every way out.
+ * Back to the page that started the flow (`return_to` on the state: Settings, or the setup wizard's connect step; a state that was
+ * never spent has no say: Settings), with the outcome in the HASH query (`#/settings?meta=…`), which is where the dashboard's
+ * router reads it: a `?meta=` before the `#` is invisible to it. The state cookie is cleared on every way out.
  */
 function backTo(res: Response, returnTo: OAuthReturnTo | null, outcome: 'connected' | 'error', extra: { reason?: string; warnings?: string[] } = {}): void {
     const params = new URLSearchParams({ meta: outcome });
     if (extra.reason) params.set('reason', extra.reason);
     if (extra.warnings?.length) params.set('warn', extra.warnings.join(','));
     res.setHeader('Set-Cookie', stateCookie('', 0));
-    res.redirect(302, `${destination(returnTo)}?${params.toString()}`);
+    res.redirect(302, returnDestination(returnTo, params));
 }
 
 /** To the Page picker. The pick is a nonce bound to this tenant and user: opening it from another session finds nothing. */
@@ -157,6 +155,7 @@ metaPublicRouter.get('/callback', async (req, res) => {
 export const metaRouter = Router();
 
 const canAdminister = requireTenantRole('owner');
+const canObserve = requireTenantRole('operator');
 
 function requirePlatformAdmin(req: Request, res: Response, next: NextFunction): void {
     if (req.session?.role !== 'platform_admin') {
@@ -193,6 +192,23 @@ metaRouter.get('/connection', async (req, res) => {
         });
     } catch (err) {
         fail(res, err, 'api.meta_connection_read_failed', 'Failed to read the Meta connection.');
+    }
+});
+
+/**
+ * The wizard's test-comment check: has a `comment.process` job arrived for THIS tenant since it connected? A count and a time, never
+ * what the comment said. Operator and up: it is polled by the wizard, which only an owner finishes, and by nobody else.
+ */
+metaRouter.get('/comment-check', canObserve, async (req, res) => {
+    try {
+        const check = await readCommentCheck(getTenantId(req));
+        if (!check) {
+            res.status(404).json({ error: 'Not found.' });
+            return;
+        }
+        res.json(check);
+    } catch (err) {
+        fail(res, err, 'api.meta_comment_check_failed', 'Failed to check for the test comment.');
     }
 });
 

@@ -340,17 +340,34 @@ const API = {
      * it may post. Asked when TikTok becomes a composer target, never at page load.
      */
     getTikTokCreatorInfo: () => API.request('/tiktok/creator-info'),
-    startTikTokConnect: () => API.request('/tiktok/connect', { method: 'POST' }),
+    /** `returnTo`: 'welcome' when the setup wizard began it (the callback then returns there), else Settings. */
+    startTikTokConnect: (returnTo) => API.request('/tiktok/connect', {
+        method: 'POST', body: JSON.stringify(returnTo === 'welcome' ? { returnTo } : {}),
+    }),
     disconnectTikTok: () => API.request('/tiktok/disconnect', { method: 'POST' }),
     getTikTokAppSettings: () => API.request('/tiktok/app-settings'),
     saveTikTokAppSettings: (data) => API.request('/tiktok/app-settings', { method: 'POST', body: JSON.stringify(data) }),
 
     // YouTube — the channel is per account; the Google OAuth client is platform-admin only.
     getYouTubeConnection: () => API.request('/youtube/connection'),
-    startYouTubeConnect: () => API.request('/youtube/connect', { method: 'POST' }),
+    startYouTubeConnect: (returnTo) => API.request('/youtube/connect', {
+        method: 'POST', body: JSON.stringify(returnTo === 'welcome' ? { returnTo } : {}),
+    }),
     disconnectYouTube: () => API.request('/youtube/disconnect', { method: 'POST' }),
     getYouTubeAppSettings: () => API.request('/youtube/app-settings'),
     saveYouTubeAppSettings: (data) => API.request('/youtube/app-settings', { method: 'POST', body: JSON.stringify(data) }),
+
+    // Instagram & Facebook (P27, P28) — the connection is per tenant; the switch and the configuration id are platform-admin only.
+    // `startMetaConnect({ returnTo, reconnect, authType })` answers `{ url }`: Facebook's Login dialog, with the state cookie set.
+    getMetaConnection: () => API.request('/meta/connection'),
+    startMetaConnect: (body) => API.request('/meta/connect', { method: 'POST', body: JSON.stringify(body || {}) }),
+    getMetaCandidates: (pick) => API.request(`/meta/candidates?pick=${encodeURIComponent(pick)}`),
+    selectMetaPage: (body) => API.request('/meta/select', { method: 'POST', body: JSON.stringify(body) }),
+    disconnectMeta: () => API.request('/meta/disconnect', { method: 'POST', body: JSON.stringify({ confirm: true }) }),
+    /** `{ connected, since, received, count, latestAt }`: has a comment reached this tenant since it connected? (the wizard's test) */
+    getMetaCommentCheck: () => API.request('/meta/comment-check'),
+    getMetaAppSettings: () => API.request('/meta/app-settings'),
+    saveMetaAppSettings: (data) => API.request('/meta/app-settings', { method: 'POST', body: JSON.stringify(data) }),
 
     // Posts Scheduler
     getScheduledPosts: () => API.request('/posts/scheduled'),

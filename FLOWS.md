@@ -1011,7 +1011,9 @@ not, because they are housekeeping measured in days:
 4. **`runRetentionSweep()`** (**:703**) — clears `messages.raw_payload` (the mechanism by which
    the published `/data-deletion` promise is otherwise untrue) and deletes completed `jobs` rows.
 
-Then `drainWorker()` (**:712**) as a backstop, and `publishDuePosts()` (**:714**).
+Then `drainWorker()` (**:712**) as a backstop, and `publishDuePosts()` (**:714**). Further down the same handler: the OAuth-state
+purge, the TikTok and YouTube token refreshes ([6.6](#66--daily-token-check)), and the Meta token recheck of every connected tenant
+([8.8](#88--the-daily-token-recheck-p29)).
 
 ### 3.6 — Carousels (v20)
 
@@ -1564,8 +1566,15 @@ and register, time zone, one offer) and otherwise answers `409 ONBOARDING_INCOMP
 turns into "back to the step that fixes it". It writes **only the status**: the first campaign and the DM persona belong to the
 proof step (P25).
 
-**The seam.** `WIZARD_STEPS` (**onboardingWizard.ts:54**) lists W1 to W6; **W4 (connect, P28) and W5 (proof, P25) are listed and
-switched off**, so the page leaves them out of the order and the progress count and says on the last screen what is waiting.
+**The seam.** `WIZARD_STEPS` (**onboardingWizard.ts:54**) lists W1 to W6; **W5 (proof, P25) is listed and switched off**, so the page
+leaves it out of the order and the progress count and says on the last screen what is waiting. **W4 (connect, P28) is built and is
+on only when the operator has switched "Connect with Facebook" on** (`meta.login_enabled`, default off): `stepsFor(flags)`
+(**onboardingWizard.ts:79**) applies `readWizardFlags` (**:87**, fail-closed) to the registry, and `firstOpenStep`, `resumeStep`,
+`nextStepAfter`, `describeWizard`, `describeOnboardingBrief` and `saveStep` (**:409**) all take the flags, so with the switch off
+the order, the progress count, where Continue leads from W3 and the 404 a write to `connect` answers are exactly what they were. The
+setting is read only for a tenant that has not finished (the owner's `/auth/me` issues no extra query) and, in `saveStep`, only
+for the step it gates or when Continue or Skip must know what comes next. W4 is optional: Skip and Continue only mark it, and
+`completeOnboarding` never looks at it ([8.7](#87--the-dashboard-the-connections-card-the-page-picker-and-w4-p28)).
 `WelcomePage.register(id, def)` adds a renderer for a step; the server enabling it is all the shell needs.
 
 **The funnel** — `onboarding_events` (`recordEvent`, **:257**): `step_viewed` (when the position changes, or a step is shown for
@@ -1845,6 +1854,14 @@ the audit rejects own-account tools (**`src/services/tiktok.ts:9-14`**).
    (**`src/services/tiktok.ts:200`**, not retried: the code is single-use), a best-effort
    `getUserInfo`, then an upsert into `platform_connections` with both tokens `enc:v1:`. The same
    `open_id` on another tenant is a 23505 → `account_in_use` (**:198**).
+6. **Where the browser comes back to (P28).** Settings, unless the setup wizard began the flow: `POST /connect { returnTo: 'welcome' }`
+   (also YouTube's) writes `oauth_states.return_to` in **its own statement after the v18 INSERT**
+   (`setStateReturnTo`, **`oauthState.ts:183`**), so a Settings flow still issues exactly the v18 statements and a database without
+   v35 still connects; a failed write is only a flow that returns to Settings. The callback reads it back with `readStateReturnTo`
+   (**:192**, from a state of its own platform only) after the state is spent (or, for a cancelled dialog, once the cookie matched
+   it) and redirects with `returnDestination` (**:53**): `#/welcome?step=connect&tiktok=…` instead of `#/settings?tiktok=…`. A refusal
+   that cannot trust the browser or the state (no cookie, a different one, a spent or expired state) cannot know where the flow began
+   and goes to Settings.
 
 > **Why the state lives in the DB *and* a cookie.** Dashboard sessions are Bearer tokens in
 > localStorage, so TikTok's redirect back carries no session at all. The nonce is the only thing
@@ -2133,7 +2150,79 @@ which would cut off every other tenant the same person connected. Audit `meta.di
 `GET` / `POST /api/meta/app-settings`, platform admin only (anyone else gets 404). `meta.login_enabled` (`'true'`, **default off**) and
 `meta.login_config_id` (digits; `META_LOGIN_CONFIG_ID` is the fallback) live in `app_settings`; the app id and secret stay in
 `META_APP_ID` / `META_APP_SECRET`. `GET` reports what to register in Meta's dashboard (`redirectUri`) and what the dialog asks for.
-Each save is one `settings.meta_login_write` audit row naming the fields. No dashboard card yet: P28 builds the UI.
+Each save is one `settings.meta_login_write` audit row naming the fields. The dashboard's two fields for them are in the Connections
+card ([8.7](#87--the-dashboard-the-connections-card-the-page-picker-and-w4-p28)).
+
+### 8.7 — The dashboard: the Connections card, the Page picker and W4 (P28)
+
+One module, **`dashboard/js/pages/meta_connect.js`** (`MetaConnect`, not a route: `App.pages.meta_connect`, loaded on first use), is
+what Settings and the wizard share: the words for what the server says (`reasonText`, one sentence per `reason` or upper-cased `code`,
+the generic sentence for any other: never the raw code), `connectionState` (`none` / `ok` / `attention`), the Page picker, and Connect,
+Reconnect and Disconnect. Each host paints its own screen.
+
+1. **Settings → Instagram & Facebook** (**`settings.js:423`** `metaSection`, **`meta_connect.js:291`** `settingsSection`). Reads
+   `GET /api/meta/connection` (any member; **no token in it**): the Page, the `@handle`, `connected_at`, the webhook pill, how it was
+   connected, and a "reconnect due" notice (below). Owner only: Connect (not connected, and only when `enabled`, `appConfigured` and
+   `redirectUriConfigured` are all true: otherwise the card says "not switched on" or "being set up" and has no button), Reconnect, and
+   Disconnect behind a danger confirm. **The operator's own connection** (made by pasting a token: `via: 'token'`) is shown as that, has
+   **no Disconnect** (it would delete a token this screen cannot re-create), and its Reconnect asks first (it replaces that token). A
+   platform admin also gets the two fields (`meta.login_enabled`, `meta.login_config_id`) and the redirect URI to register.
+2. **Connect** (`MetaConnect.connect`) posts `{ returnTo, reconnect, authType? }` and navigates to the returned address only if it starts
+   with `https://www.facebook.com/`. Settings' button carries `settings`, the wizard's `welcome` (`settings` for a platform admin filling
+   the wizard in, who cannot reopen `?mode=behalf` from a redirect).
+3. **Coming back.** The callback sends `#/settings?meta=connected|error` (a toast) or, for several Pages, `#/connect-meta?meta=pick&pick=…
+   &return_to=…`, which is **not a screen**: `App.metaPickAddress` (**`app.js:714`**) rewrites it in place, before any routing, to the
+   screen that began the flow (`#/settings?meta=pick&pick=…`, or `#/welcome?step=connect&meta=pick&pick=…`), and that screen opens the
+   picker modal once painted (`announceMetaReturn`, **`settings.js:453`**; `enterConnect`, **`welcome.js:1223`**). A `pick` that does
+   not look like one of ours (`^[A-Za-z0-9_-]{20,100}$`) never reaches a request.
+4. **The Page picker** (`pickerMarkup`, **:373**; `openPicker`, **:497**): `GET /candidates?pick=` → names and ids. A radio card per
+   Page; one the person cannot run is listed disabled with the reason; a single usable Page is preselected. A Page with no Instagram
+   account connects **Facebook only** (`facebookOnly: true`, said on the button and above it); one that would **replace** the connected
+   Page or account needs a ticked box (`confirmPageChange`); "Don't see your Page?" asks Facebook again with `auth_type=rerequest`.
+   `pickGo` (**:558**) repaints the host first and closes the dialog after; a 404 (`PICK_EXPIRED`) becomes "start again". The pick is
+   spent by the choice (§8.4).
+5. **W4 in the wizard** (**`welcome.js`** `connectFields`, **:1203**): three cards (Instagram & Facebook; TikTok and YouTube, left out
+   when the operator has not set them up), each with where it stands and one button; a note that stays on screen says what a return
+   trip said (a TikTok or YouTube reason a person cannot act on reads as one friendly sentence, not "check the client secret"). On
+   `show('connect')` the step reads the three connections and the module (`enterConnect`), and **captured the address's parameters
+   before `syncHash` rewrote it** (`readConnectReturn`, **:1045**). Continue and Skip send **nothing to the profile**; the wizard
+   finishes whatever happens here.
+6. **The test comment** (**`metaCommentCheck.ts:42`** `readCommentCheck`, `GET /api/meta/comment-check`, operator and up). After Meta
+   connects the step says "ask a friend to comment *test* on your latest post, from another account" and polls this route every 5 s
+   (`startCheck`, **:1297**; `pollCheck`, **:1322**; one request at a time; a hidden tab asks nothing; stopped by a step change, a closed
+   wizard, the answer, ten minutes, or a 401). It turns green when a **`comment.process` job** exists for the tenant created after
+   `meta_connected_at` (24 h back for a token connection that has no such moment). **Not `jobs.creator_id`**: the webhook writes it NULL on
+   every row (a job is enqueued before the tenant is resolved), and puts the Meta id the delivery was addressed to in `tenant_key`; so
+   the tenant's jobs are those whose `tenant_key` is one of **its** Instagram or Facebook ids (or whose `creator_id` is the tenant).
+   Both come from the session, never the request. It proves the delivery path (subscription, signature, endpoint, queue) and not that a
+   campaign matched, and it still turns green for the tenant's own comment, which the pipeline drops later (§1.8) but the queue already
+   holds. The response is a count and a time: never what a comment said.
+
+### 8.8 — The daily token recheck (P29)
+
+`GET /api/cron/publish` ends its sweeps with **`recheckAllMetaTokens`** (**`src/services/metaTokenRecheck.ts:190`**, **`api.ts:1003`**):
+every tenant with a token, longest-unchecked first (`token_last_checked_at ASC NULLS FIRST`), one `debug_token` call each
+(`fetchDebugToken`), sequential, at most 100 per run and 20 s (`moreRemaining`: the rest are first in line tomorrow). Fail-soft, like
+the sweeps around it.
+
+**Four verdicts** (`classifyDebugToken`, **:75**; `classifyCheckFailure`, **:65**; both pure):
+
+| Verdict | When | Written |
+|---|---|---|
+| `valid` | `is_valid`, type PAGE, nothing about to lapse. `expires_at: 0` is "never expires" (the owner's token, and every Login connection's) | the five health columns |
+| `expiring` | valid, but `data_access_expires_at` (or a real `expires_at`) is under 14 days away | the five health columns; status stays `valid` |
+| `invalid` | Meta answered no: `is_valid: false`, a type other than PAGE, or data access already lapsed | the five health columns, status `invalid` |
+| `transient` | **everything else**: a timeout, a 5xx, a rate limit, a refused app token (a code 190 on the *call* is about our credentials, not the tenant's token), a body that is not an inspection (an empty 200, an error page, `is_valid` that is not a boolean), "not valid" with a code that means "could not look" (1, 2, 4, 17, 32, 341, 368, 613) | **nothing, not even `token_last_checked_at`** |
+
+"Reconnect due" is not a column: `getMetaConnection` (**`metaLogin.ts:870`**) derives `reconnectDue` / `reconnectReason`
+(`invalid` or `expiring`) from the stored status and dates, so only a definitive result can raise it and the next valid result clears it.
+Only the five health columns are ever written (`persistInspection`), never the Page ids, the token or the `meta_*` columns; a
+transient verdict leaves every row exactly as it was, **the owner's included**. The log lines are `token.recheck_transient` (warn) and
+`token.reconnect_due` (warn; error for `invalid`): the one to alert on. The notice shows on the Connections card and on Overview
+(**`overview.js:483`**, once: not again when the live token check already said the same).
+
+> **A transient failure of the *manual* Re-check still stores `invalid`** (`recheckTenantToken`, unchanged: "sends are failing right
+> now"). It is healed by the next daily run that gets an answer; the daily check itself never does that.
 
 > **Why a state in the DB, a cookie and a nonce in the callback's URL.** The dashboard's session is a Bearer token in
 > localStorage, so Meta's redirect carries none. The nonce binds the returned code to a tenant; the cookie binds the nonce to the
@@ -2318,6 +2407,11 @@ error, and several write **no row at all**.
 | 8 | Connect with Facebook is off (`meta.login_enabled`) | *(none: `reason=disabled`)* | the state is spent, nothing else |
 | 8 | the webhook could not be subscribed — `subscribePage` | `meta.subscribe_failed` / `_incomplete` / `_unread` (`warn`) | yes: connected, `meta_webhook_subscribed_at` NULL, `warn=` in the redirect |
 | 8 | a pick nobody finishes | *(none)* | `meta_pick` row, payload cleared after 10 min by the next Meta state or the daily cron |
+| 8 | **the test comment never turns green** (W4) — `readCommentCheck` finds no `comment.process` job for the tenant's ids since `meta_connected_at` | *(none: a normal `received: false`)* | no; the page stops asking after 10 minutes and offers "Check again". Means the webhook path is not delivering: for a Tester, the operator connects through Page access (docs/onboarding/04 §1) |
+| 8 | the daily recheck cannot reach Meta, or Meta's answer is not an inspection — `classifyDebugToken` | `token.recheck_transient` (`warn`) | **no** (not even `token_last_checked_at`); the tenant is first in line tomorrow |
+| 8 | a token that cannot be decrypted (a rotated key) — `recheckOneMetaToken` | `token.recheck_unreadable` (`warn`) | no |
+| 8 | a connection that needs renewing or that Meta rejects — the recheck | `token.reconnect_due` (`warn` / `error`) | yes: the health columns; "reconnect due" on the card and on Overview |
+| 8 | a TikTok or YouTube flow the wizard began, whose return address could not be saved (no v35 column) | `tiktok.return_to_unsaved` / `youtube.return_to_unsaved` (`warn`) | the state without `return_to`: it returns to Settings, and still connects |
 | 9 | **no AI provider has a key** — `draftStep` / `generate` (`no_provider`) | `ai.call_refused`, `onboarding.draft_failed` (`error_kind: no_provider`) | yes: `failed`, `needsAiKey`, the prefill kept; **no draft, no retry** |
 | 9 | one source unreadable (private Instagram, a site that refuses, no YouTube key) — `fetchDraftSources` | `onboarding.ig_source_failed`, `onboarding.yt_source_skipped`, `onboarding.draft_fetched` | yes: the draft is made from the rest, the failure is a line of `sources_status` |
 | 9 | **nothing at all readable** — `decideAfterFetch` | `onboarding.draft_step` (`outcome: fail`), `onboarding.draft_failed` | yes: `failed`, `no_source` (the wizard asks for the About text) |

@@ -11,7 +11,7 @@
  *   tiktokRouter — mounted BELOW `resolveTenant`, so every route acts as the session's tenant
  *     GET  /connection     the Settings card: connected account, app readiness, inbox usage
  *     GET  /creator-info   the composer's Direct Post panel: TikTok's live creator_info
- *     POST /connect        owner: mint a state, return TikTok's authorise URL
+ *     POST /connect        owner: mint a state, return TikTok's authorise URL ({ returnTo?: 'settings' | 'welcome' })
  *     POST /disconnect     owner: revoke and delete
  *     GET  /app-settings   platform admin: client key/secret status, URLs to register
  *     POST /app-settings   platform admin: save them
@@ -32,7 +32,10 @@ import {
     OAUTH_STATE_TTL_MS, summariseConnection, TikTokAccountInUseError, TikTokNotConnectedError,
 } from '../services/tiktokConnections.js';
 import { applyWebhookEvent, MAX_PENDING_INBOX_SHARES, pendingInboxShares } from '../services/tiktokPublish.js';
-import { readCookie, stateCookie as buildStateCookie } from '../services/oauthState.js';
+import {
+    isReturnTo, NONCE_PATTERN, readCookie, readStateReturnTo, returnDestination, setStateReturnTo, stateCookie as buildStateCookie,
+    type OAuthReturnTo,
+} from '../services/oauthState.js';
 import { describeError, log } from '../utils/log.js';
 
 // Moved to the shared OAuth-state module with the cookie code; kept exported from here for its importers.
@@ -61,15 +64,16 @@ function stateCookie(value: string, maxAgeSeconds: number): string {
 }
 
 /**
- * Back to Settings with an outcome the page turns into a toast. The parameters go in the HASH
- * query (`#/settings?tiktok=…`), because that is where the dashboard's router reads them
- * (`App.hashParam`) — a `?tiktok=` before the `#` is invisible to it, and the toast never showed.
+ * Back to where the flow began, with an outcome the page turns into a toast: Settings, or the setup wizard's connect step
+ * when it began there (`returnTo`, kept on the state by `POST /connect`). The parameters go in the HASH query
+ * (`#/settings?tiktok=…`), because that is where the dashboard's router reads them (`App.hashParam`) — a `?tiktok=` before
+ * the `#` is invisible to it, and the toast never showed. A refusal that cannot tell where the flow began goes to Settings.
  */
-function backToSettings(res: Response, outcome: 'connected' | 'error', reason?: string): void {
+function backTo(res: Response, returnTo: OAuthReturnTo | null, outcome: 'connected' | 'error', reason?: string): void {
     const params = new URLSearchParams({ tiktok: outcome });
     if (reason) params.set('reason', reason);
     res.setHeader('Set-Cookie', stateCookie('', 0));
-    res.redirect(302, `/dashboard#/settings?${params.toString()}`);
+    res.redirect(302, returnDestination(returnTo, params));
 }
 
 // ─── Public ─────────────────────────────────────────────────────────────────────────────
@@ -80,38 +84,43 @@ tiktokPublicRouter.get('/callback', async (req, res) => {
     const state = typeof req.query.state === 'string' ? req.query.state : '';
     const code = typeof req.query.code === 'string' ? req.query.code : '';
     const denied = typeof req.query.error === 'string' ? req.query.error : '';
+    let returnTo: OAuthReturnTo | null = null;
 
     try {
+        const cookie = readCookie(req.headers.cookie, STATE_COOKIE);
+
         // The user pressed "Cancel" on TikTok's consent screen, or TikTok refused the request
-        // (e.g. a scope the app is not approved for).
+        // (e.g. a scope the app is not approved for). The flow's own state is READ (not spent) when it is ours, to know where
+        // to send the browser back to.
         if (denied) {
+            if (state && NONCE_PATTERN.test(state) && cookie === state) returnTo = await readStateReturnTo(state, 'tiktok');
             log('warn', 'tiktok.oauth_denied', { error: denied });
-            backToSettings(res, 'error', denied === 'access_denied' ? 'denied' : 'tiktok_error');
+            backTo(res, returnTo, 'error', denied === 'access_denied' ? 'denied' : 'tiktok_error');
             return;
         }
         if (!state || !code) {
-            backToSettings(res, 'error', 'missing_code');
+            backTo(res, null, 'error', 'missing_code');
             return;
         }
 
         // The browser that started the flow holds the same value. A state lifted from a log or a
         // referrer and completed elsewhere fails here, before it is spent.
-        const cookie = readCookie(req.headers.cookie, STATE_COOKIE);
         if (!cookie || cookie !== state) {
             log('warn', 'tiktok.oauth_state_mismatch', { has_cookie: Boolean(cookie) });
-            backToSettings(res, 'error', 'state_mismatch');
+            backTo(res, null, 'error', 'state_mismatch');
             return;
         }
 
         const claim = await consumeOAuthState(state);
         if (!claim) {
-            backToSettings(res, 'error', 'state_expired');
+            backTo(res, null, 'error', 'state_expired');
             return;
         }
+        returnTo = await readStateReturnTo(state, 'tiktok');
 
         const redirectUri = await redirectUriFor(req);
         if (!redirectUri) {
-            backToSettings(res, 'error', 'no_base_url');
+            backTo(res, returnTo, 'error', 'no_base_url');
             return;
         }
 
@@ -130,10 +139,10 @@ tiktokPublicRouter.get('/callback', async (req, res) => {
             },
         });
         log('info', 'tiktok.connected', { creator_id: claim.creatorId, scopes: connection.scopes });
-        backToSettings(res, 'connected');
+        backTo(res, returnTo, 'connected');
     } catch (err) {
         log('error', 'tiktok.oauth_callback_failed', describeError(err));
-        backToSettings(res, 'error', err instanceof TikTokAccountInUseError ? 'account_in_use' : 'exchange_failed');
+        backTo(res, returnTo, 'error', err instanceof TikTokAccountInUseError ? 'account_in_use' : 'exchange_failed');
     }
 });
 
@@ -257,7 +266,21 @@ tiktokRouter.post('/connect', canAdminister, async (req, res) => {
             res.status(409).json({ error: 'The public site address is not set — add it in the TikTok app settings.' });
             return;
         }
+        const body = req.body ?? {};
+        if (body.returnTo !== undefined && !isReturnTo(body.returnTo)) {
+            res.status(400).json({ error: 'returnTo must be "settings" or "welcome".' });
+            return;
+        }
         const state = await createOAuthState(getTenantId(req), req.session?.userId ?? null);
+        // Only the wizard asks to come back to it. Written apart from the INSERT, so that a deployment that has not run v35
+        // still connects: the flow then returns to Settings, as it always did.
+        if (body.returnTo === 'welcome') {
+            try {
+                await setStateReturnTo(state, 'tiktok', 'welcome');
+            } catch (err) {
+                log('warn', 'tiktok.return_to_unsaved', describeError(err));
+            }
+        }
         const { directPostEnabled, audited } = await getTikTokPostingFlags();
         res.setHeader('Set-Cookie', stateCookie(state, Math.floor(OAUTH_STATE_TTL_MS / 1000)));
         res.json({

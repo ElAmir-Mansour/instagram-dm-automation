@@ -45,6 +45,18 @@ export function isReturnTo(value: unknown): value is OAuthReturnTo {
     return typeof value === 'string' && (RETURN_TO as readonly string[]).includes(value);
 }
 
+/**
+ * The address the browser goes back to, with the outcome in the HASH query (`#/settings?tiktok=connected`), which is where the
+ * dashboard's router reads it: a `?x=` before the `#` is invisible to it. Settings by default; the setup wizard's connect step
+ * (`step=connect`, so it opens on the step the flow began on) when the flow began there. Shared by the three callbacks.
+ */
+export function returnDestination(returnTo: OAuthReturnTo | null, outcome: URLSearchParams): string {
+    const params = new URLSearchParams();
+    if (returnTo === 'welcome') params.set('step', 'connect');
+    outcome.forEach((value, key) => params.set(key, value));
+    return `/dashboard#/${returnTo === 'welcome' ? 'welcome' : 'settings'}?${params.toString()}`;
+}
+
 /** The purposes whose rows carry the v35 columns. The others are written and read as before v35. */
 function usesV35(purpose: OAuthPurpose): boolean {
     return purpose === 'meta' || purpose === 'meta_pick';
@@ -150,6 +162,41 @@ function openPayload(stored: string | null | undefined): unknown {
     if (!stored) return null;
     try {
         return JSON.parse(decryptSecret(stored));
+    } catch {
+        return null;
+    }
+}
+
+// ─── Where a TikTok or YouTube flow returns to ───────────────────────────────────────
+
+/**
+ * TikTok and YouTube states are minted and spent with exactly the columns v18 gave them (see the top of this file), so where
+ * the browser returns to is kept in the one v35 column as a SEPARATE statement, and only when it is not the default:
+ *
+ *   - `setStateReturnTo` runs right after the INSERT, and only for `welcome`. A Settings flow writes nothing extra, so a
+ *     deployment that runs ahead of its migration connects exactly as before. When the column is missing the update fails, the
+ *     caller logs it and the flow returns to Settings: the connection itself is never at risk.
+ *   - `readStateReturnTo` runs AFTER the state was spent (or, for a refusal, after it was matched to the browser's cookie): the
+ *     nonce is 256 random bits held only by the browser that began the flow, and `return_to` can only be one of two values, so
+ *     reading it from a spent row hands nobody anything. Any failure is "Settings".
+ */
+export async function setStateReturnTo(nonce: string, purpose: 'tiktok' | 'youtube', returnTo: OAuthReturnTo | null): Promise<boolean> {
+    if (returnTo !== 'welcome' || !NONCE_PATTERN.test(nonce)) return false;
+    const changed = await queryCount(
+        `UPDATE oauth_states SET return_to = $3 WHERE nonce = $1 AND platform = $2 AND used_at IS NULL`,
+        [nonce, purpose, returnTo]
+    );
+    return changed > 0;
+}
+
+export async function readStateReturnTo(nonce: string, purpose: 'tiktok' | 'youtube'): Promise<OAuthReturnTo | null> {
+    if (!NONCE_PATTERN.test(nonce)) return null;
+    try {
+        const row = await queryOne<{ return_to: string | null }>(
+            `SELECT return_to FROM oauth_states WHERE nonce = $1 AND platform = $2`,
+            [nonce, purpose]
+        );
+        return isReturnTo(row?.return_to) ? row.return_to : null;
     } catch {
         return null;
     }

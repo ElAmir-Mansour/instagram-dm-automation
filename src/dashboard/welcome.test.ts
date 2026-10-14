@@ -188,8 +188,11 @@ describe('the wizard\'s sequence follows the server and skips what is not built'
         assert.deepEqual(plain(P.stepOrder(onboarding())), ['about', 'voice', 'brand', 'done']);
         assert.deepEqual(plain(P.formSteps(onboarding())), ['about', 'voice', 'brand']);
         // The server is ahead of the page (a step enabled that has no renderer): it is left out, never drawn blank.
-        const ahead = onboarding({ order: [...ORDER, { id: 'future', code: 'W9', required: false, enabled: true }].map((x) => (x.id === 'connect' ? { ...x, enabled: true } : x)) });
-        assert.deepEqual(plain(P.stepOrder(ahead)), ['about', 'voice', 'brand', 'done'], 'connect has no renderer yet, and nor does an invented step');
+        const ahead = onboarding({ order: [...ORDER, { id: 'future', code: 'W9', required: false, enabled: true }].map((x) => (x.id === 'proof' ? { ...x, enabled: true } : x)) });
+        assert.deepEqual(plain(P.stepOrder(ahead)), ['about', 'voice', 'brand', 'done'], 'proof has no renderer yet, and nor does an invented step');
+        // W4 does have one (P28): switched on by the server, it is in the sequence, after W3.
+        const connect = onboarding({ order: ORDER.map((x) => (x.id === 'connect' ? { ...x, enabled: true } : x)) });
+        assert.deepEqual(plain(P.stepOrder(connect)), ['about', 'voice', 'brand', 'connect', 'done']);
     });
 
     it('is a seam: registering a step puts it in the sequence, in the server\'s place', () => {

@@ -47,6 +47,7 @@ import { metaPublicRouter, metaRouter } from './meta.js';
 import { purgeOAuthStates } from '../services/oauthState.js';
 import { publishYouTubePost } from '../services/youtubePublish.js';
 import { refreshAllYouTubeConnections } from '../services/youtubeConnections.js';
+import { recheckAllMetaTokens } from '../services/metaTokenRecheck.js';
 import { checkYouTubeVisibility } from '../services/youtubeVisibility.js';
 import { studioRouter, studioWorkerRouter } from './studio.js';
 import {
@@ -994,6 +995,16 @@ router.get('/cron/publish', async (req, res) => {
         // And whether every published Short is still public (youtubeVisibility.ts). Cannot throw.
         const youtubeVisibility = await checkYouTubeVisibility();
         if (youtubeVisibility.checked > 0) log('info', 'cron.youtube_visibility', { ...youtubeVisibility });
+
+        // Meta: the same daily health check for every connected tenant's Page token (P29, metaTokenRecheck.ts). It writes only what
+        // Meta definitively said (valid, expiring, invalid) and never a transient failure, so "reconnect due" cannot be raised by
+        // a Meta outage. A tenant with no token is not in the sweep. Fail-soft, like the sweeps around it.
+        try {
+            const metaRecheck = await recheckAllMetaTokens();
+            if (metaRecheck.checked > 0 || metaRecheck.skipped > 0 || metaRecheck.moreRemaining) log('info', 'cron.meta_token_recheck', { ...metaRecheck });
+        } catch (recheckErr) {
+            log('error', 'cron.meta_token_recheck_failed', describeError(recheckErr));
+        }
 
         // Growth insights (GROWTH.md §2): every active tenant's metrics, once a day. Fail-soft —
         // `syncAllTenants` catches per tenant, and this catch is for anything else. A Meta outage
