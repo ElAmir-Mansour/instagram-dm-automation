@@ -1,0 +1,21 @@
+{
+  "id": "04-free-youtube-msa",
+  "title": "\"I can learn it free on YouTube\" (MSA)",
+  "fixture": "owner-ar",
+  "writes": "msa",
+  "turns": [
+    {
+      "user": "أستطيع تعلّم هذا المحتوى مجاناً من يوتيوب، فلماذا أدفع؟",
+      "expect": {
+        "intent": ["objection_price", "objection_trust", "info", "other"],
+        "next_action": ["reply", "recommend", "send_link", "ask_qualifier"],
+        "reply_language": {
+          "variety": "msa"
+        },
+        "must_not": ["لا تفوت|اخر فرص|آخر فرص|عرض محدود|الان فقط|الآن فقط|ستندم|مضيع"],
+        "soft": ["tone", "helpfulness", "no_pressure"],
+        "note": "Be honest that free material exists (the owner's own channel says so), say what the offer adds from its data, argue once, no pressure. Simple standard Arabic, no dialect."
+      }
+    }
+  ]
+}

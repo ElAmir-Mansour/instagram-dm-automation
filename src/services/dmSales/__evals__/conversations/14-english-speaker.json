@@ -1,0 +1,21 @@
+{
+  "id": "14-english-speaker",
+  "title": "An English speaker, price and level (English tenant)",
+  "fixture": "coach-en",
+  "writes": "english",
+  "turns": [
+    {
+      "user": "Hi! How much is the twelve-week plan, and is it OK for a complete beginner?",
+      "expect": {
+        "intent": ["price", "level_fit", "info"],
+        "next_action": ["recommend", "send_link", "reply"],
+        "offer_id": ["plan"],
+        "reply_language": {
+          "variety": "english"
+        },
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"],
+        "note": "English tenant with a live price of 49 USD: it may quote exactly that and no other number, and answers the beginner question from the offer's level."
+      }
+    }
+  ]
+}

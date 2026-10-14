@@ -1,0 +1,46 @@
+{
+  "id": "15-multi-turn-gulf",
+  "title": "Qualify, recommend, link (Gulf, three turns)",
+  "fixture": "owner-ar",
+  "writes": "gulf",
+  "turns": [
+    {
+      "user": "هلا، سمعت عن كورس الذكاء الاصطناعي وودي أعرف عنه",
+      "expect": {
+        "next_action": ["ask_qualifier", "reply", "recommend"],
+        "stage": ["new", "qualify", "recommend"],
+        "reply_language": {
+          "variety": "gulf"
+        },
+        "soft": ["tone", "helpfulness", "no_pressure"],
+        "note": "Nobody has asked for the link yet: greet, answer, at most one light qualifier."
+      }
+    },
+    {
+      "user": "أنا مبتدئ ما أعرف برمجة، وودي أبني شي يفيد شغلي",
+      "expect": {
+        "next_action": ["recommend"],
+        "offer_id": ["main"],
+        "stage": ["recommend"],
+        "reply_language": {
+          "variety": "gulf"
+        },
+        "must": ["رابط"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"],
+        "note": "Level and goal are now known: recommend the one linked offer with outcomes tied to their goal, and offer to send the link."
+      }
+    },
+    {
+      "user": "ايوه ارسله لي",
+      "expect": {
+        "next_action": ["send_link"],
+        "offer_id": ["main"],
+        "reply_language": {
+          "variety": "gulf"
+        },
+        "soft": ["tone", "helpfulness"],
+        "note": "They said yes: the link, now."
+      }
+    }
+  ]
+}

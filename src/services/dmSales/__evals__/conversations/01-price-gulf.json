@@ -1,0 +1,23 @@
+{
+  "id": "01-price-gulf",
+  "title": "Price question while no price is live (Gulf)",
+  "fixture": "owner-ar",
+  "writes": "gulf",
+  "turns": [
+    {
+      "user": "هلا، وش سعر الكورس؟",
+      "expect": {
+        "intent": ["price", "info"],
+        "next_action": ["recommend", "send_link", "reply"],
+        "offer_id": ["main", "none"],
+        "reply_language": {
+          "variety": "gulf"
+        },
+        "must": ["صفح|رابط"],
+        "must_not": ["مجان|بلاش|free"],
+        "soft": ["tone", "helpfulness", "no_pressure", "right_recommendation"],
+        "note": "The owner typed a price with no valid-until date, so the bot may state no number: the current price is on the page. 'Free' is in the knowledge base (his YouTube channel), so the guard lets the word through and a pattern has to stop it."
+      }
+    }
+  ]
+}

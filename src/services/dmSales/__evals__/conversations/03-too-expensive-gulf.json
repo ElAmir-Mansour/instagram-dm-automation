@@ -1,0 +1,22 @@
+{
+  "id": "03-too-expensive-gulf",
+  "title": "Too expensive, with a live price (Gulf)",
+  "fixture": "owner-ar-priced",
+  "writes": "gulf",
+  "turns": [
+    {
+      "user": "السعر غالي علي شوي",
+      "expect": {
+        "intent": ["objection_price"],
+        "next_action": ["reply", "recommend", "send_link"],
+        "offer_id": ["main", "none"],
+        "reply_language": {
+          "variety": "gulf"
+        },
+        "must_not": ["خصم|تخفيض|كوبون|مجان|بلاش|عرض خاص|اخر فرص|آخر فرص"],
+        "soft": ["tone", "helpfulness", "no_pressure"],
+        "note": "Answer only from the offer's objection (the price is on the page and moves with promotions). 49 USD is live and may be said; no discount, coupon or urgency."
+      }
+    }
+  ]
+}

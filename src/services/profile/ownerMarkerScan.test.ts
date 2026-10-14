@@ -55,6 +55,7 @@ const REASON = {
     docs: 'the in-app documentation: worked examples (an Arabic keyword, the course library, the worker\'s `courseRoot`), not a default any tenant receives',
     ui: 'a label of a course feature (the course library as the Monteur\'s source, the coupon-CSV import): its copy says course because the feature is one',
     scan: 'the definition of the rule: it lists every marker',
+    conversation: 'a golden conversation of the DM evaluation (docs/DM_SALES_PLAN.md §11): what the owner\'s followers write, in their own word for his offer; read only by scripts/eval-dm-sales.mts and its tests, never by a tenant\'s request',
 } as const;
 
 const tests = (...files: string[]): Allowed[] => files.map((file) => ({ file, reason: REASON.test }));
@@ -125,6 +126,11 @@ const ALLOWED: readonly Allowed[] = [
     { file: 'dashboard/js/pages/tenant_profile.js', markers: ['course'], reason: 'the admin\'s profile editor: `course` is one of the eight offer kinds a creator can choose (OFFER_KINDS); it is a choice in a list, and never the default of a new offer (that is `product`)' },
     { file: 'dashboard/js/pages/studio.js', markers: ['Asia/Riyadh', 'course'], reason: 'Asia/Riyadh is one of nineteen zones offered when the browser cannot list its own; the Studio turns course lessons into carousels' },
 
+    // ── The DM evaluation's golden conversations: a follower's message, as the owner's audience writes it ──
+    ...['01-price-gulf', '02-beginner-egyptian', '09-refund-egyptian', '12-not-covered-egyptian', '15-multi-turn-gulf'].map((id): Allowed => (
+        { file: `src/services/dmSales/__evals__/conversations/${id}.json`, markers: ['كورس'], reason: REASON.conversation }
+    )),
+
     // ── Tests ──
     ...tests(
         'src/dashboard/campaign-seeds.test.ts',
@@ -136,6 +142,11 @@ const ALLOWED: readonly Allowed[] = [
         'src/routes/profile.test.ts',
         'src/routes/studio.test.ts',
         'src/services/ai.test.ts',
+        'src/services/dmSales/__evals__/cases.test.ts',
+        'src/services/dmSales/__evals__/checks.test.ts',
+        'src/services/dmSales/__evals__/dialect.test.ts',
+        'src/services/dmSales/__evals__/judge.test.ts',
+        'src/services/dmSales/__evals__/runner.test.ts',
         'src/services/growth/overview.test.ts',
         'src/services/growth/settings.test.ts',
         'src/services/growth/sync.test.ts',

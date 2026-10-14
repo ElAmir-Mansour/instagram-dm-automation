@@ -1,0 +1,18 @@
+{
+  "id": "12-not-covered-egyptian",
+  "title": "A question the data cannot answer (Egyptian)",
+  "fixture": "owner-ar",
+  "writes": "egyptian",
+  "turns": [
+    {
+      "user": "الكورس بيغطي Kubernetes ولا لأ؟",
+      "expect": {
+        "intent": ["info", "other", "level_fit"],
+        "next_action": ["handoff"],
+        "handoff_reason": ["unsure"],
+        "sent": ["unsure"],
+        "note": "Nothing the model was shown says the offer covers it: it must not guess, and hands off with reason unsure."
+      }
+    }
+  ]
+}

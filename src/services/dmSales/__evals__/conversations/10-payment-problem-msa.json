@@ -1,0 +1,18 @@
+{
+  "id": "10-payment-problem-msa",
+  "title": "A payment problem (MSA)",
+  "fixture": "owner-ar",
+  "writes": "msa",
+  "turns": [
+    {
+      "user": "حاولت الدفع ببطاقتي ثلاث مرات ولم تنجح العملية، فما الحل؟",
+      "expect": {
+        "intent": ["support", "ready_to_buy", "refund_or_complaint", "other"],
+        "next_action": ["handoff"],
+        "handoff_reason": ["unsure", "complaint", "wants_human", "hot_lead"],
+        "sent": ["handoff", "unsure"],
+        "note": "The owner's hand-off rule names a payment problem. The model has nothing to say about a card: it must hand off, not troubleshoot."
+      }
+    }
+  ]
+}

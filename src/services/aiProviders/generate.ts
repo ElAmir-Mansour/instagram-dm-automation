@@ -22,13 +22,14 @@
  */
 import { log } from '../../utils/log.js';
 import { UUID_PATTERN } from '../studio/common.js';
-import { loadAiSettings } from './settings.js';
+import { loadAiSettings, MODEL_ID } from './settings.js';
 import { billedFromUsage, costOf, totalUsage, usdFor, type PriceTable } from '../llm/cost.js';
 import { AiError, isAiError } from '../llm/errors.js';
 import { generateJson, type GenerateJsonResult } from '../llm/generate.js';
 import { minOutputTokens } from '../llm/limits.js';
-import { isAiPurpose, type AiPurpose, type UsagePurpose } from './purposes.js';
+import { isAiPurpose, PURPOSE_DEFAULT_EFFORT, type AiPurpose, type UsagePurpose } from './purposes.js';
 import { assertNotMacBrainWork, pickRoute } from './route.js';
+import { isProviderId, type ProviderId } from '../llm/registry.js';
 import type { LlmSchema } from '../llm/schema.js';
 import type { Billed, Effort, FetchLike, LlmTurn } from '../llm/types.js';
 import { billedOfError, recordCall, reserveCall, settleCall } from './usage.js';
@@ -48,6 +49,14 @@ export interface AiGenerateArgs {
     timeoutMs: number;
     /** Overrides the route's effort for this call. */
     effort?: Effort;
+    /**
+     * Answer with this provider and model instead of the saved route (or the first provider with a key): the DM evaluation harness
+     * (`scripts/eval-dm-sales.mts`) compares models before the operator saves one. The provider must still be switched on and have its
+     * key, so nothing is billed to a provider the operator did not enable; budgets, the Mac guard and the `ai_usage` row are the same.
+     * Only for a call that belongs to no tenant (`creatorId: null`): a tenant's calls follow the operator's routing, never a caller's choice.
+     * `effort` here is the route's, and `args.effort` still wins. The result says `route: 'saved'`: it was named, not found.
+     */
+    route?: { provider: ProviderId; model: string; effort?: Effort };
     /**
      * Cache the system prompt: Anthropic's `cache_control` on the system block, 5-minute lifetime (other providers ignore it). Off unless the
      * caller asks, because a write costs 1.25x the input price and only pays back when the same prompt is sent again within minutes. What the
@@ -121,6 +130,12 @@ async function runGenerate(args: AiGenerateArgs): Promise<AiGenerateResult> {
     if (!isPositiveInteger(args.maxTokens)) throw badRequest(`maxTokens must be a positive whole number, not ${String(args.maxTokens).slice(0, 20)}.`);
     if (!isPositiveInteger(args.timeoutMs)) throw badRequest(`timeoutMs must be a positive whole number of milliseconds, not ${String(args.timeoutMs).slice(0, 20)}.`);
 
+    if (args.route !== undefined) {
+        if (args.creatorId !== null) throw badRequest('A route can be named only for a call that belongs to no tenant (creatorId: null).');
+        if (!isProviderId(args.route.provider)) throw badRequest(`Unknown provider "${String(args.route.provider).slice(0, 40)}" in route.`);
+        if (typeof args.route.model !== 'string' || !MODEL_ID.test(args.route.model)) throw badRequest('route.model is not a model id.');
+    }
+
     const label: UsagePurpose = args.usageAs ?? args.purpose;
     // The Mac guard first: a call that will not be made has no business loading a key.
     await assertNotMacBrainWork(args.purpose, args.creatorId);
@@ -128,7 +143,15 @@ async function runGenerate(args: AiGenerateArgs): Promise<AiGenerateResult> {
 
     let route;
     try {
-        route = pickRoute(args.purpose, config, keys);
+        // A named route is the saved one for this call only, so `pickRoute` checks its provider like any saved route.
+        const named = args.route;
+        route = pickRoute(
+            args.purpose,
+            named
+                ? { ...config, routing: { ...config.routing, [args.purpose]: { provider: named.provider, model: named.model, effort: named.effort ?? PURPOSE_DEFAULT_EFFORT[args.purpose] } } }
+                : config,
+            keys,
+        );
     } catch (err) {
         if (isAiError(err)) {
             await recordCall({ creatorId: args.creatorId, purpose: label, provider: 'none', model: '', outcome: err.kind, tokensIn: 0, tokensOut: 0, usd: 0, priced: true, elapsedMs: 0 });

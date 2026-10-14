@@ -1,0 +1,30 @@
+{
+  "id": "07-abuse-egyptian",
+  "title": "Abuse: one calm line, then the bot pauses (Egyptian)",
+  "fixture": "owner-ar",
+  "writes": "egyptian",
+  "turns": [
+    {
+      "user": "يا غبي، انت بتضيع وقتي",
+      "expect": {
+        "route": "prefilter",
+        "prefilter": "abuse",
+        "sent": ["calm"],
+        "next_action": ["reply"],
+        "intent": ["abuse"],
+        "note": "The first insult is answered with the kit's one calm line; the model is not asked."
+      }
+    },
+    {
+      "user": "انت حمار فعلا",
+      "expect": {
+        "route": "prefilter",
+        "prefilter": "abuse",
+        "sent": ["none"],
+        "next_action": ["handoff"],
+        "handoff_reason": ["abuse"],
+        "note": "The second insult pauses the bot and sends nothing."
+      }
+    }
+  ]
+}
