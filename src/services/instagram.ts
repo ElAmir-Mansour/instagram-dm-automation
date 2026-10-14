@@ -347,6 +347,74 @@ export async function sendDirectMessage(
     }
 }
 
+// ─── The Instagram Messenger Profile: ice breakers and the persistent menu (DM plan S13) ─────────────
+//
+// Profile-level writes, not message sends: they change what EVERY visitor to the account sees when they open a conversation. Nothing here is
+// called but by the owner pressing a button (src/routes/iceBreakers.ts), and `src/services/dmSales/iceBreakers.ts` builds every body.
+//
+// The shapes are Meta's, read on 2026-10-14:
+//   POST   /me/messenger_profile?platform=instagram   { platform, ice_breakers?, persistent_menu? }   sets the properties in the body, leaves the rest
+//   GET    /me/messenger_profile?platform=instagram&fields=ice_breakers,persistent_menu
+//   DELETE /me/messenger_profile?platform=instagram   { fields: ['ice_breakers', ...] }              removes the named properties
+// @see https://developers.facebook.com/documentation/business-messaging/messenger-platform/reference/messenger-profile-api.md
+// @see https://developers.facebook.com/documentation/business-messaging/instagram-messaging/features/ice-breakers.md
+// @see https://developers.facebook.com/documentation/business-messaging/instagram-messaging/features/persistent-menu.md
+//
+// The Page access token travels in the Authorization header, as for every other call in this file, and never in the URL (Meta's pages show
+// it as a query parameter; both are the same credential). Meta limits this endpoint to 10 calls per 10 minutes per Page, so a retry is spent
+// sparingly: setting the same properties twice is harmless, so one retry on a 5xx or a 429, not three.
+
+const MESSENGER_PROFILE_URL = `${GRAPH_BASE}/me/messenger_profile`;
+
+/** Set the properties in `body` on the account's Instagram profile. `body.platform` is `instagram`, as Meta's ice-breaker example sends it. */
+export async function setInstagramProfile(body: Record<string, unknown>, accessToken: string): Promise<unknown> {
+    try {
+        const response = await withRetry(
+            () => metaHttp.post(MESSENGER_PROFILE_URL, body, {
+                params: { platform: 'instagram' },
+                headers: { Authorization: `Bearer ${accessToken}` },
+            }),
+            { label: 'setInstagramProfile', retries: 1 }
+        );
+        return response.data;
+    } catch (error: any) {
+        throw metaFailure('Instagram profile update failed', error);
+    }
+}
+
+/** Read `fields` (comma separated: `ice_breakers,persistent_menu`) back from the account's Instagram profile: what Meta really holds. */
+export async function getInstagramProfile(fields: string, accessToken: string): Promise<unknown> {
+    try {
+        const response = await withRetry(
+            () => metaHttp.get(MESSENGER_PROFILE_URL, {
+                params: { platform: 'instagram', fields },
+                headers: { Authorization: `Bearer ${accessToken}` },
+            }),
+            { label: 'getInstagramProfile', retries: 1 }
+        );
+        return response.data;
+    } catch (error: any) {
+        throw metaFailure('Instagram profile read failed', error);
+    }
+}
+
+/** Remove the named properties (`['ice_breakers', 'persistent_menu']`) from the account's Instagram profile. The `fields` go in the body, as Meta documents. */
+export async function deleteInstagramProfile(fields: readonly string[], accessToken: string): Promise<unknown> {
+    try {
+        const response = await withRetry(
+            () => metaHttp.delete(MESSENGER_PROFILE_URL, {
+                params: { platform: 'instagram' },
+                data: { fields: [...fields] },
+                headers: { Authorization: `Bearer ${accessToken}` },
+            }),
+            { label: 'deleteInstagramProfile', retries: 1 }
+        );
+        return response.data;
+    } catch (error: any) {
+        throw metaFailure('Instagram profile removal failed', error);
+    }
+}
+
 // ─── Who a sender is (Instagram User Profile API) ───────────────────────────────────────
 
 /**

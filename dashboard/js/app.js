@@ -101,10 +101,13 @@ const App = {
         // Connecting Instagram and Facebook (P28): the status words, the Page picker and the Connect / Disconnect actions that the Settings card and the
         // wizard's connect step share. Loaded on first use by whichever of the two needs it, and reset with the other modules when the tenant changes.
         meta_connect: { src: 'meta_connect', page: () => MetaConnect, routable: false },
+        // The Instagram ice breakers and persistent menu editor (DM plan S13) on Settings: the owner's questions, Save, and the one Publish button. Loaded by Settings on
+        // first use (for the tenant's owner only). It holds no state of its own across renders: Settings hands it the server's answer every time it draws the card.
+        ice_breakers: { src: 'ice_breakers', page: () => IceBreakersCard, routable: false },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.31',
+    ASSET_VERSION: '12.32',
 
     _modules: Object.create(null),
 

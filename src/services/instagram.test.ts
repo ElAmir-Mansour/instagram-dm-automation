@@ -38,13 +38,16 @@ import {
     sendPrivateReply,
     sendPublicReply,
     sendSenderAction,
+    setInstagramProfile,
+    getInstagramProfile,
+    deleteInstagramProfile,
 } from './instagram.js';
 
 const BASE = `https://graph.facebook.com/${API_VERSION}`;
 const TOKEN = 'EAAGtest-token';
 
 interface Recorded {
-    method: 'post' | 'get';
+    method: 'post' | 'get' | 'delete';
     url: string;
     body: unknown;
     config: any;
@@ -53,9 +56,11 @@ interface Recorded {
 let calls: Recorded[] = [];
 let onPost: (url: string, body: any, config: any) => Promise<any>;
 let onGet: (url: string, config: any) => Promise<any>;
+let onDelete: (url: string, config: any) => Promise<any>;
 
 const originalPost = metaHttp.post;
 const originalGet = metaHttp.get;
+const originalDelete = metaHttp.delete;
 
 // The publish path logs a line per container transition by design. What it emits is covered
 // by src/utils/log.test.ts; here it only buries the assertions.
@@ -82,11 +87,19 @@ beforeEach(() => {
         calls.push({ method: 'get', url, body: undefined, config });
         return onGet(url, config);
     };
+    onDelete = async (url) => {
+        throw new Error(`no DELETE was arranged for ${url}`);
+    };
+    (metaHttp as any).delete = (url: string, config: any) => {
+        calls.push({ method: 'delete', url, body: config?.data, config });
+        return onDelete(url, config);
+    };
 });
 
 afterEach(() => {
     (metaHttp as any).post = originalPost;
     (metaHttp as any).get = originalGet;
+    (metaHttp as any).delete = originalDelete;
 });
 
 const ok = (data: unknown) => async () => ({ data });
@@ -814,5 +827,83 @@ describe('sendSenderAction', () => {
             () => sendSenderAction('igsid-1', 'mark_seen', TOKEN),
             (err: Error) => err instanceof MetaApiError && /Sender action mark_seen failed/.test(err.message) && /Code: 100/.test(err.message)
         );
+    });
+});
+
+// ─── The Instagram Messenger Profile: ice breakers and the persistent menu (DM plan S13) ───────────
+//
+// Profile-level writes that every visitor to the account sees. None of these may be called by anything but the owner's button, and the one
+// thing that can be proven without acting on the account is the request each one makes: which URL, which query, which body, which header.
+// Meta's shapes, read 2026-10-14: .../instagram-messaging/features/ice-breakers.md, .../persistent-menu.md and
+// .../messenger-platform/reference/messenger-profile-api.md (one POST sets several properties, one DELETE with a `fields` array removes
+// them, one GET with comma-separated `fields` reads them).
+
+describe('setInstagramProfile, getInstagramProfile, deleteInstagramProfile', () => {
+    const body = {
+        platform: 'instagram',
+        ice_breakers: [{ call_to_actions: [{ question: 'وش السعر؟', payload: 'TAP_PRICE' }], locale: 'default' }],
+        persistent_menu: [{ locale: 'default', call_to_actions: [{ type: 'web_url', title: 'الرابط', url: 'https://x.test/a' }] }],
+    };
+
+    it('set: ONE POST to /me/messenger_profile?platform=instagram carrying both properties, the token in the header and nowhere else', async () => {
+        onPost = ok({ result: 'success' });
+
+        const result = await setInstagramProfile(body, TOKEN);
+
+        assert.deepEqual(result, { result: 'success' });
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]!.method, 'post');
+        assert.equal(calls[0]!.url, `${BASE}/me/messenger_profile`);
+        assert.deepEqual(calls[0]!.config.params, { platform: 'instagram' });
+        assert.deepEqual(calls[0]!.body, body);
+        assert.equal(calls[0]!.config.headers.Authorization, `Bearer ${TOKEN}`);
+        assert.ok(!JSON.stringify([calls[0]!.url, calls[0]!.config.params, calls[0]!.body]).includes(TOKEN), 'the token is in no URL, query or body');
+    });
+
+    it('get: GET with platform=instagram and the fields comma-separated, as Meta documents', async () => {
+        onGet = ok({ data: [] });
+
+        await getInstagramProfile('ice_breakers,persistent_menu', TOKEN);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]!.method, 'get');
+        assert.equal(calls[0]!.url, `${BASE}/me/messenger_profile`);
+        assert.deepEqual(calls[0]!.config.params, { platform: 'instagram', fields: 'ice_breakers,persistent_menu' });
+        assert.equal(calls[0]!.config.headers.Authorization, `Bearer ${TOKEN}`);
+    });
+
+    it('delete: DELETE with platform=instagram in the query and `{ fields: [...] }` as the JSON body, as Meta documents', async () => {
+        onDelete = ok({ result: 'success' });
+
+        await deleteInstagramProfile(['ice_breakers', 'persistent_menu'], TOKEN);
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0]!.method, 'delete');
+        assert.equal(calls[0]!.url, `${BASE}/me/messenger_profile`);
+        assert.deepEqual(calls[0]!.config.params, { platform: 'instagram' });
+        assert.deepEqual(calls[0]!.body, { fields: ['ice_breakers', 'persistent_menu'] });
+        assert.equal(calls[0]!.config.headers.Authorization, `Bearer ${TOKEN}`);
+    });
+
+    it('each failure is a Meta error that names the action and keeps Meta\'s code, for the route to pass on', async () => {
+        onPost = async () => { throw metaError(10, 'Application does not have permission for this action'); };
+        onGet = async () => { throw metaError(190, 'Invalid OAuth access token'); };
+        onDelete = async () => { throw metaError(100, 'Unsupported delete request'); };
+
+        await assert.rejects(() => setInstagramProfile(body, TOKEN), (err: Error) => err instanceof MetaApiError && /Instagram profile update failed/.test(err.message) && err.metaCode === 10);
+        await assert.rejects(() => getInstagramProfile('ice_breakers', TOKEN), (err: Error) => err instanceof MetaApiError && /Instagram profile read failed/.test(err.message) && err.metaCode === 190);
+        await assert.rejects(() => deleteInstagramProfile(['ice_breakers'], TOKEN), (err: Error) => err instanceof MetaApiError && /Instagram profile removal failed/.test(err.message) && err.metaCode === 100);
+    });
+
+    it('a permanent refusal is one request: the endpoint allows ten calls in ten minutes, so nothing is retried that cannot succeed', async () => {
+        onPost = async () => { throw metaError(10, 'No permission'); };
+        await assert.rejects(() => setInstagramProfile(body, TOKEN));
+        assert.equal(posts().length, 1);
+    });
+
+    it('a transient failure is retried ONCE, not three times (the same ten-in-ten-minutes limit)', async () => {
+        onPost = async () => { throw Object.assign(new Error('boom'), { response: { status: 503, data: {} } }); };
+        await assert.rejects(() => setInstagramProfile(body, TOKEN));
+        assert.equal(posts().length, 2, 'the first try and one retry');
     });
 });

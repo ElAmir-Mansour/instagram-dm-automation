@@ -171,6 +171,8 @@ export interface SalesKit {
         linkSent: (offers: string) => string;
         linkNotSent: string;
         comment: (keyword: string, offer: string | null) => string;
+        /** They tapped a ready-made button (an ice breaker or a menu item): what it asks, as the schema's own intent word. */
+        tapped: (intent: string) => string;
     };
     lines: SalesLines;
 }
@@ -293,6 +295,7 @@ const ARABIC_SALES_TEXT: Omit<SalesKit, 'lines'> = {
         linkSent: (offers) => `أُرسل الرابط سابقاً لـ: ${offers}. لا تُعد إرساله إلا إن طلبه.`,
         linkNotSent: 'لم يُرسل أي رابط بعد.',
         comment: (keyword, offer) => (offer ? `علّق بكلمة «${keyword}» وأُرسل له رابط ${offer}.` : `علّق بكلمة «${keyword}» وأُرسل له رابط.`),
+        tapped: (intent) => `ضغط على زر جاهز في المحادثة، وهو يسأل عن: ${intent}. أجب عن هذا السؤال مباشرة.`,
     },
 };
 
@@ -547,6 +550,7 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
                 linkSent: (offers) => `The link was already sent for: ${offers}. Do not send it again unless they ask.`,
                 linkNotSent: 'No link has been sent yet.',
                 comment: (keyword, offer) => (offer ? `They commented «${keyword}» and were sent the link to ${offer}.` : `They commented «${keyword}» and were sent a link.`),
+                tapped: (intent) => `They tapped a ready-made button in the chat; it asks about: ${intent}. Answer that question directly.`,
             },
             lines: {
                 handoff: (name) => `I've passed your message to ${name}, and you'll hear back soon 🙏`,
