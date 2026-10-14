@@ -96,8 +96,113 @@ const DEFAULT_TEMPERATURE = 0.7;
  */
 export const HISTORY_WINDOW = 8;
 
-/** Gemini can sit on a request indefinitely; a serverless invocation cannot. */
-const GEMINI_TIMEOUT_MS = 30_000;
+/**
+ * Gemini can sit on a request indefinitely; a serverless invocation cannot. This is the budget for
+ * the WHOLE Gemini exchange inside one `generateAiResponse` call, retry included: the worst case
+ * stays the single 30 s deadline the call has always had.
+ */
+export const GEMINI_TIMEOUT_MS = 30_000;
+
+/**
+ * Gemini 2.5 Flash is intermittently overloaded: it answers 503 ("high demand") or hangs until the
+ * timeout. Failing the call sent the whole job to the runner's backoff (~30 s, plus up to 60 s for
+ * the worker's next poll), so about 1 DM in 6 took 100-175 s on 2026-10-14. One quick retry
+ * inside the call turns most of those into a few extra seconds. The numbers, and why:
+ *
+ *   - FIRST_ATTEMPT 18 s: a healthy call answers in 3-9 s, so a call still silent at 18 s is hung,
+ *     and waiting out the full 30 s would leave nothing for a second try.
+ *   - RETRY_WAIT 0.5-1.5 s, jittered: long enough that the retry is not a reflex into the same
+ *     overload, short enough to be invisible, and spread so a burst of failures does not retry
+ *     in lockstep.
+ *   - The retry gets what is left of the 30 s: at least 10.5 s (30 - 18 - 1.5), and about 29 s when
+ *     the first attempt failed fast. `RETRY_MIN_BUDGET` is the floor: below it a second try cannot
+ *     finish a healthy call, so the first error is thrown rather than the budget exceeded.
+ */
+export const GEMINI_FIRST_ATTEMPT_MS = 18_000;
+export const GEMINI_RETRY_WAIT_MIN_MS = 500;
+export const GEMINI_RETRY_WAIT_MAX_MS = 1_500;
+export const GEMINI_RETRY_MIN_BUDGET_MS = 10_000;
+
+/** The time sources the retry reads, so a test can run a 30 s budget in no time at all. */
+export interface GeminiClock {
+    now(): number;
+    sleep(ms: number): Promise<void>;
+    random(): number;
+}
+
+const realClock: GeminiClock = {
+    now: () => Date.now(),
+    sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    random: () => Math.random(),
+};
+let geminiClock: GeminiClock = realClock;
+
+/** Test seam, like `setLogSink` and `setAiCaller`: swaps the clock and returns the one it replaced. */
+export function setGeminiClock(next: GeminiClock): GeminiClock {
+    const previous = geminiClock;
+    geminiClock = next;
+    return previous;
+}
+
+/**
+ * Overload and flakiness worth one quick retry: HTTP 503, 429 and 500, a socket reset, and a timeout
+ * (axios reports its own timeout as ECONNABORTED, or ETIMEDOUT when `clarifyTimeoutError` is on).
+ * Everything else is final here: any other 4xx (a bad request stays bad), and the failures that
+ * are not an HTTP error at all, a safety block or an answer that is not JSON, which a second
+ * identical request does not cure and which are raised after this call, not inside it.
+ */
+export function isTransientGeminiError(err: unknown): boolean {
+    const e = err as { response?: { status?: unknown }; code?: unknown } | null | undefined;
+    const status = e?.response?.status;
+    if (typeof status === 'number') return status === 503 || status === 429 || status === 500;
+    return e?.code === 'ECONNRESET' || e?.code === 'ETIMEDOUT' || e?.code === 'ECONNABORTED';
+}
+
+/**
+ * The one HTTP exchange with Gemini: the call, and one quick retry when it fails transiently, all
+ * inside `GEMINI_TIMEOUT_MS`. The URL, the body and the headers are the same on both attempts; only
+ * the timeout differs, so the request Gemini sees is exactly the one pinned by `ai.test.ts`.
+ *
+ * Not `withRetry` (http.ts): that is Meta's, with Meta's error codes, an exponential backoff from
+ * 500 ms and no notion of a deadline, so it would retry on codes that mean nothing to Gemini and
+ * could stack three 30 s attempts into a serverless invocation.
+ *
+ * What is logged is a narrow set of fields, never the error: an axios error carries its request,
+ * headers included, and the headers hold the API key.
+ */
+async function postToGemini(url: string, payload: unknown, apiKey: string, model: string) {
+    const clock = geminiClock;
+    const startedAt = clock.now();
+    const post = (timeout: number) => axios.post(url, payload, { headers: { 'x-goog-api-key': apiKey }, timeout });
+
+    try {
+        return await post(GEMINI_FIRST_ATTEMPT_MS);
+    } catch (err: any) {
+        if (!isTransientGeminiError(err)) throw err;
+
+        const waitMs = Math.round(
+            GEMINI_RETRY_WAIT_MIN_MS + clock.random() * (GEMINI_RETRY_WAIT_MAX_MS - GEMINI_RETRY_WAIT_MIN_MS)
+        );
+        const remainingAfterWait = startedAt + GEMINI_TIMEOUT_MS - clock.now() - waitMs;
+        const gemError = err.response?.data?.error;
+        log('warn', 'ai.gemini_retry', {
+            model,
+            attempt: 1,
+            http_status: err.response?.status,
+            code: err.code,
+            gemini_status: gemError?.status,
+            message: String(gemError?.message ?? err.message).slice(0, 200),
+            wait_ms: waitMs,
+            retrying: remainingAfterWait >= GEMINI_RETRY_MIN_BUDGET_MS,
+        });
+        // Not enough left for a healthy call (only if the first attempt overran its own timeout):
+        // let the first error through rather than exceed the budget.
+        if (remainingAfterWait < GEMINI_RETRY_MIN_BUDGET_MS) throw err;
+
+        await clock.sleep(waitMs);
+        return await post(remainingAfterWait);
+    }
+}
 
 /**
  * The model a stored `ai_agents.model` value actually runs on. The Settings API uses it too,
@@ -516,10 +621,8 @@ export async function generateAiResponse(
         // The key goes in a header, not `?key=`. Query strings end up in proxy logs, browser
         // referrers and error reporters far more readily than headers do — and an axios error
         // carries `config.url`, so the old form leaked the key into anything that logged one.
-        const response = await axios.post(url, payload, {
-            headers: { 'x-goog-api-key': gemini.key },
-            timeout: GEMINI_TIMEOUT_MS
-        });
+        // `postToGemini` makes the call and retries it once, quickly, on transient overload.
+        const response = await postToGemini(url, payload, gemini.key, modelName);
         const rawJsonText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
         // Token counts are the product's dominant marginal cost and the only way to see it

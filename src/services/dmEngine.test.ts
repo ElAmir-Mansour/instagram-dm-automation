@@ -18,7 +18,7 @@ import axios from 'axios';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
 import { setLogSink } from '../utils/log.js';
-import { DEFAULT_MODEL, dmResponseSchema, dmSystemInstruction, generateAiResponse, HISTORY_WINDOW, type AiResponse, type DmContext } from './ai.js';
+import { DEFAULT_MODEL, dmResponseSchema, dmSystemInstruction, generateAiResponse, HISTORY_WINDOW, setGeminiClock, type AiResponse, type DmContext } from './ai.js';
 import {
     DM_MAX_TOKENS, DM_TIMEOUT_MS, DmEngineError, dmLlmSchema, dmTurns, failureOf, generateDmReply, generateDmViaLayer, isDmEngine, readDmEngine,
     type DmReply,
@@ -131,6 +131,10 @@ function install(): void {
         return gemini();
     };
     restore.push(() => { (axios as any).post = originalPost; });
+
+    // Gemini's quick retry waits 0.5-1.5 s; a test that makes Gemini fail has no use for the wait.
+    const realClock = setGeminiClock({ now: () => Date.now(), sleep: async () => {}, random: () => 0 });
+    restore.push(() => { setGeminiClock(realClock); });
 
     realCaller = setAiCaller(async (args) => {
         layerCalls.push(args);
@@ -421,7 +425,9 @@ describe('generateDmReply — the gemini engine is today\'s call', () => {
     it('lets a Gemini failure through as the error it always was, for the pipeline\'s retry rules: no fallback, no stub', async () => {
         gemini = async () => { throw Object.assign(new Error('overloaded'), { response: { status: 503, data: { error: { message: 'model overloaded' } } } }); };
         await assert.rejects(ask(), /Gemini request failed \[HTTP 503\]/);
-        assert.equal(geminiCalls.length, 1, 'not retried here');
+        // A 503 is Gemini's overload: `generateAiResponse` retries it once, quickly, inside its own 30 s budget (ai.ts, `postToGemini`).
+        // Nothing above that call retries it: not the engine, which is the contract this test holds.
+        assert.equal(geminiCalls.length, 2, 'retried once inside the Gemini call, and by nothing else');
         assert.equal(layerCalls.length, 0, 'and the other engine is not tried instead');
         assert.equal(events('dm.engine_failed').length, 0);
     });
@@ -547,7 +553,7 @@ describe('generateDmReply — otherwise the result is a handoff stub: nothing to
         assert.equal(events('dm.engine_fallback').length, 0);
     });
 
-    it('with the fallback on and Gemini failing too: the stub, both reasons logged, one try each and no third', async () => {
+    it('with the fallback on and Gemini failing too: the stub, both reasons logged, one try of the layer and no third of Gemini', async () => {
         layer = async () => { throw aiError('server', 'Anthropic is down.'); };
         gemini = async () => { throw Object.assign(new Error('quota'), { response: { status: 429, data: { error: { message: 'quota exceeded' } } } }); };
         const reply = await ask();
@@ -556,7 +562,8 @@ describe('generateDmReply — otherwise the result is a handoff stub: nothing to
         assert.equal(reply.kind === 'handoff' && reply.failure.reason, 'server');
         assert.match(reply.kind === 'handoff' ? reply.fallbackFailure?.message ?? '' : '', /Gemini request failed \[HTTP 429\]/);
         assert.equal(layerCalls.length, 1);
-        assert.equal(geminiCalls.length, 1);
+        // The 429 is retried once inside the Gemini call (ai.ts, `postToGemini`); the fallback does not ask a third time.
+        assert.equal(geminiCalls.length, 2);
         const [failed] = events('dm.engine_failed');
         assert.equal(failed?.reason, 'server');
         assert.equal(failed?.fallback, 'failed');

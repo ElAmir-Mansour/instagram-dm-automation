@@ -804,8 +804,14 @@ readily than headers do — and an axios error carries `config.url`, so the old 
 key into anything that logged one. The catch block at **`src/services/ai.ts:523-530`** logs
 narrow fields for the same reason, never the error object.
 
-`GEMINI_TIMEOUT_MS = 30_000` (**`src/services/ai.ts:89`**) — Gemini can sit on a request
-indefinitely; a serverless invocation cannot.
+`GEMINI_TIMEOUT_MS = 30_000` (`src/services/ai.ts`) — Gemini can sit on a request
+indefinitely; a serverless invocation cannot. It is the budget for the whole exchange, **one
+quick retry included** (`postToGemini`): HTTP 503, 429, 500, a socket reset or a timeout is
+retried once — first attempt 18 s (`GEMINI_FIRST_ATTEMPT_MS`), a 0.5–1.5 s jittered wait, then
+the rest of the 30 s, never under 10 s. Any other 4xx, a safety block or a non-JSON answer is
+not retried. The body is byte-identical on both attempts; the retry is logged `ai.gemini_retry`
+(status/code and attempt only, never the error object). Before this a transient 503 failed the
+job and waited out the runner's backoff plus the worker's next poll (100–175 s).
 
 **Token usage** is logged as `ai.usage` (**`src/services/ai.ts:465-475`**) including
 `cached_tokens`, because `prompt_tokens` is mostly the static prefix and that is precisely the
