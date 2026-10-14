@@ -104,6 +104,11 @@ export interface InteractionRow {
     status: InteractionStatus | string;
     error_log: string | null;
     platform: string | null;
+    /**
+     * v41. The platform-scoped id (IGSID / PSID) the private reply went to, from Meta's response: what a later DM carries as `sender.id`.
+     * NULL for a row written before v41, for one whose reply never went out, and for one that landed on a retry.
+     */
+    recipient_id: string | null;
     timestamp: Timestamptz;
 }
 

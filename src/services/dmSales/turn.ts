@@ -24,9 +24,14 @@
  * answered by the legacy Gemini path ONCE when the agent's `gemini_fallback` is on (the owner's setting, as for the engine switch), and
  * otherwise by a hand-off: the kit's line, the bot paused, a person to answer.
  *
+ * **Where a conversation began** (S10, `bridge.ts`): when the person commented a keyword and was sent a link in the private reply, the latest such
+ * campaign inside the window is stored on `conversations.source_campaign_id`, the turn starts at `recommend` (a conversation that is just beginning),
+ * and "they commented «keyword» and were sent the link to <offer>" is among the facts. Read beside the history, and never able to fail the turn:
+ * no source is the turn it would have been.
+ *
  * Once a turn is recorded, `handoff.ts` tells the owner when it handed the conversation over (or sent a hot lead its link): best effort,
  * after the customer has been answered, and never able to change the reply or the state. What this module does not do: send the
- * follow-up itself (S9's job does, `followupJob.ts`), or know where a conversation began (S10).
+ * follow-up itself (S9's job does, `followupJob.ts`).
  */
 import { queryCount } from '../../db/query.js';
 import { checkFairSendQuota } from '../../utils/rateLimiter.js';
@@ -39,6 +44,7 @@ import { sendDirectMessage, sendSenderAction, type SenderAction } from '../insta
 import type { LlmTurn } from '../llm/types.js';
 import type { ProfileContext } from '../profile/context.js';
 import { kitFor, type SalesKit } from '../profile/kits.js';
+import { bridgeFacts, commentSource, openingStage } from './bridge.js';
 import { coerceSalesReply, type SalesOfferRef } from './coerce.js';
 import {
     abuseDecision, decideTurn, handoffDecision, loopDecision, MAX_AI_REPLIES_PER_HOUR, optOutDecision, unchangedDecision, type TurnDecision,
@@ -306,11 +312,21 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
 
     // 5. The model. The prompt's static part is the same on every turn of this tenant (cacheable); the facts of this conversation ride with the message.
     const prompt = buildSalesPrompt({ persona: agent.system_prompt, knowledge: agent.knowledge_base, ctx, timezone: ctx.timezone, now: new Date() });
+    // Where the conversation began (S10), read beside the history: one statement that never throws (`commentSource`). A source is a conversation that
+    // began with a comment and the link in its private reply, which moves where a fresh one starts and what the model is told, and nothing else.
+    const [source, history] = await Promise.all([
+        commentSource({ conversationId: conversation.id, creatorId: creator.id, senderId: inbound.senderId, platform: input.pageId ? 'facebook' : 'instagram' }),
+        loadHistory(conversation.id, SALES_HISTORY_WINDOW),
+    ]);
+    const bridged = source ? bridgeFacts(source, ctx.offers) : null;
+    const stage = openingStage(state, source);
     const factsBlock = salesFactsBlock(ctx, {
-        stage: state.stage === 'handoff' ? 'new' : state.stage, qualifierTurns: state.qualifierTurns, linkSentFor: state.offersLinked,
+        stage: stage === 'handoff' ? 'new' : stage, qualifierTurns: state.qualifierTurns,
+        linkSentFor: [...new Set([...state.offersLinked, ...(bridged?.linkSentFor ?? [])])],
+        ...(bridged ? { comment: bridged.comment } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
-    const baseTurns = salesTurns(await loadHistory(conversation.id, SALES_HISTORY_WINDOW), inbound.text, owner, factsBlock, inbound.payload);
+    const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);
     const offers = new Map(ctx.offers.map((o) => [o.id, o]));
     const refs: SalesOfferRef[] = prompt.offers.map((o) => ({ id: o.id, hasLink: o.hasLink }));
 
@@ -360,22 +376,27 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
 
     /** An answer, coerced, ruled on and checked. Async only because the link may be a tracked one (S7) that has to be created. */
     const evaluate = async (json: unknown, final: boolean): Promise<Evaluated> => {
-        let { reply, repaired } = coerceSalesReply(json, { offers: refs, fallbackStage: state.stage });
-        const decision = decideTurn(state.stage, reply, { qualifierTurns: state.qualifierTurns, abuseStrikes: state.abuseStrikes, final });
+        let { reply, repaired } = coerceSalesReply(json, { offers: refs, fallbackStage: stage });
+        const decision = decideTurn(stage, reply, { qualifierTurns: state.qualifierTurns, abuseStrikes: state.abuseStrikes, final });
 
         let link: string | null = null;
         const offer = offers.get(reply.offer_id);
         if (decision.action === 'send_link' && offer) {
             link = await linkFor(offer, { id: conversation.id, creatorId: creator.id });
             // The link takes room out of the 900 bytes: the text is cut again to fit beside it.
-            ({ reply, repaired } = coerceSalesReply(json, { offers: refs, fallbackStage: state.stage, reserveBytes: utf8Bytes(`\n${link}`) }));
+            ({ reply, repaired } = coerceSalesReply(json, { offers: refs, fallbackStage: stage, reserveBytes: utf8Bytes(`\n${link}`) }));
         }
 
         let guarded: GuardedReply | null = null;
         let empty = false;
         if (sendsModelText(decision)) {
             // The link the server is inserting is on the allowlist, so a model that repeats it (it is never shown it) is not stripped of it.
-            const claims = { ...prompt.claims, allowedLinks: [...(prompt.claims.allowedLinks ?? []), ...(link ? [link] : [])] };
+            // The keyword they commented was shown to the model in the facts, so it is data like the rest (a keyword with a digit in it is no invented number).
+            const claims = {
+                ...prompt.claims,
+                texts: bridged?.comment.keyword ? [...prompt.claims.texts, bridged.comment.keyword] : prompt.claims.texts,
+                allowedLinks: [...(prompt.claims.allowedLinks ?? []), ...(link ? [link] : [])],
+            };
             guarded = guardReply(reply.text, claims);
             empty = guarded.text.trim().length === 0;
         }

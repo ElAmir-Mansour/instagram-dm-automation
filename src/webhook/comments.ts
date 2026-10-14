@@ -9,6 +9,7 @@ import type { CampaignRow as CampaignTableRow, InteractionRow } from '../db/rows
 import { sendPrivateReply, sendPublicReply, sendDirectMessage, likeComment } from '../services/instagram.js';
 import { getCreatorByPageId } from '../services/tenant.js';
 import { matchCampaign } from '../services/matching.js';
+import { recordPrivateReplyRecipient } from '../services/dmSales/bridge.js';
 import { profileContextOrLegacy, ProfileUnreadableError } from '../services/profile/context.js';
 import type { ArabicRegister } from '../services/profile/types.js';
 import { checkFairSendQuota, canDmRecipient, recordDmSent } from '../utils/rateLimiter.js';
@@ -333,8 +334,10 @@ async function processComment(
     }
 
     // ── Step 1: the private reply — the core action, and the only retryable one ──
+    // Meta's answer is kept: it names who the reply went to (`recipient_id`), which the comment → DM bridge writes down below.
+    let privateReply: unknown;
     try {
-        await sendPrivateReply(commentId, firstPart, creator.page_access_token, fbPageId);
+        privateReply = await sendPrivateReply(commentId, firstPart, creator.page_access_token, fbPageId);
     } catch (dmError: any) {
         log('error', 'dm.send_failed', { creator_id: creator.id, ...describeError(dmError) });
 
@@ -413,6 +416,19 @@ async function processComment(
     await queryCount('UPDATE interactions SET status = $1 WHERE id = $2', ['SENT', interactionId]);
     await recordDmSent(creator.id, senderId);
     log('info', 'dm.sent', { creator_id: creator.id, campaign_id: matchedCampaign.id });
+
+    // ── Step 1.25: the comment → DM bridge (docs/DM_SALES_PLAN.md S10) — best effort, like the like and the public reply ──
+    // Who the private reply went to, written on the interaction so that this person's DM can find the campaign (src/services/dmSales/bridge.ts).
+    // After SENT, in its own statement and its own try/catch: whatever happens here, the status stays SENT and everything below still runs.
+    // One UPDATE by primary key and no Graph call, so the comment's latency is what it was.
+    try {
+        await recordPrivateReplyRecipient(privateReply, {
+            interactionId, creatorId: creator.id, campaignId: matchedCampaign.id, commenterId: senderId,
+            platform: isFacebookComment ? 'facebook' : 'instagram',
+        });
+    } catch (bridgeErr: any) {
+        log('warn', 'comment.bridge_failed', { creator_id: creator.id, interaction_id: interactionId, ...describeError(bridgeErr) });
+    }
 
     // ── Step 1.5: the remaining [SPLIT] parts — best effort, like the public reply ──
     const totalParts = followUps.length + 1;
