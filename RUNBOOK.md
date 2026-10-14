@@ -1241,6 +1241,16 @@ node scripts/studio-worker.mjs --drain     # run in the foreground until the que
 scripts/uninstall-studio-worker.sh         # remove the agent; the log is kept
 ```
 
+**A tenant's worker (W2)** is a second, render-only agent, never the owner's: `com.aicourse.studio-worker.<name>`,
+log `~/Library/Logs/aicourse-studio-worker.<name>.log`, files under `~/.aicourse-studio/instances/<name>/`. Create the
+worker as that tenant in Studio, Settings, Workers (the token is shown once), then from the worker's folder
+`node scripts/studio/install-instance.mjs --instance <name>` is a dry run and `--apply` installs it (token from
+`--token-file` or `STUDIO_WORKER_TOKEN`, never an argument); `--remove --apply` takes it away, and the token keeps
+working until it is revoked in the dashboard. It asks for render kinds only, so the server's tenant scoping
+(`CLAIM_SQL … WHERE creator_id = $1`) plus the Mac-brain guard (`studio.mac_brain_tenants`) leave it nothing to think
+about: a think or a `write` is failed with the render-only message, never run. The aicourse-captions README has the
+add, rotate and remove steps.
+
 An idle worker polls silently, so a quiet log is not a dead worker; `last_seen_at` (below) is the
 signal. Every step of a job is one timestamped line, prefixed with the job's kind and the first 8
 characters of its id, for example `index_lesson 1a2b3c4d: uploading the 0.6 MB proxy to Gemini:
