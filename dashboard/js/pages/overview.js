@@ -215,6 +215,8 @@ const OverviewPage = {
             status: 'FAILED', limit: this.FAILED_TODAY_LIMIT, since: this.localMidnight().toISOString(),
         }));
         const tokenP = this._settle(API.getTokenStatus());
+        // The stored Facebook connection (columns only, no call to Meta): "reconnect due" comes from the daily recheck (P29).
+        const metaP = this._settle(API.getMetaConnection());
         const postsP = this._settle(API.getScheduledPosts());
         // 100, the route's cap: the default of 20 undercounted who is waiting.
         const threadsP = this._settle(API.getConversations({ limit: 100 }));
@@ -275,12 +277,12 @@ const OverviewPage = {
         // dailyP joins the wait here too: buildAlerts() reads it for the
         // trailing 7-day rate, and it was already being fetched in the same
         // tick for the chart, so this adds no extra round trip.
-        Promise.all([statsP, failedP, tokenP, postsP, threadsP, dailyP]).then(
-            ([statsRes, failedRes, tokenRes, postsRes, threadsRes, dailyRes]) => {
+        Promise.all([statsP, failedP, tokenP, postsP, threadsP, dailyP, metaP]).then(
+            ([statsRes, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes]) => {
                 if (!live()) return;
                 const host = this.region('briefing');
                 if (!host || statsRes.status !== 'fulfilled') return;
-                const alerts = this.sortAlerts(this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes, dailyRes));
+                const alerts = this.sortAlerts(this.buildAlerts(statsRes.value || {}, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes));
                 // Refresh lives inside the region it rewrites; keep focus on it.
                 const focus = UI.captureFocus(host);
                 host.innerHTML = esc(this.renderBriefing(alerts, new Date()));
@@ -441,7 +443,7 @@ const OverviewPage = {
      * Pushed in the order the checks run; `sortAlerts()` then puts what is
      * broken before what is late before what is merely worth knowing.
      */
-    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes) {
+    buildAlerts(stats, failedRes, tokenRes, postsRes, threadsRes, dailyRes, metaRes) {
         const alerts = [];
         const startOfToday = this.localMidnight();
 
@@ -474,6 +476,22 @@ const OverviewPage = {
                 level: 'warning', icon: 'help-circle',
                 title: t('overview.alert.tokenUnknown'),
                 body: t('overview.alert.tokenUnknownBody'),
+                action: t('overview.openSettings'), target: 'settings',
+            });
+        }
+
+        // 1b. A Facebook connection that needs its owner to reconnect (P29): Meta said the token is dead, or Instagram's access is about to
+        //     lapse. Read from what the daily recheck STORED (`reconnectDue`), so a Meta outage can never raise it. Said once: not again
+        //     when the live check above already called the token bad. A connection that failed to load says nothing here: this is an
+        //     early warning, and the card in Settings reports its own failures.
+        const connection = metaRes && metaRes.status === 'fulfilled' && metaRes.value ? metaRes.value.connection : null;
+        const liveSaidSo = alerts.some((a) => a.icon === 'key-round' || a.icon === 'clock-alert');
+        if (connection && connection.connected === true && connection.reconnectDue === true && !liveSaidSo) {
+            const invalid = connection.reconnectReason === 'invalid' || connection.tokenStatus === 'invalid';
+            alerts.push({
+                level: invalid ? 'danger' : 'warning', icon: invalid ? 'key-round' : 'clock-alert',
+                title: t(invalid ? 'overview.alert.metaInvalid' : 'overview.alert.metaExpiring'),
+                body: t(invalid ? 'overview.alert.metaInvalidBody' : 'overview.alert.metaExpiringBody'),
                 action: t('overview.openSettings'), target: 'settings',
             });
         }

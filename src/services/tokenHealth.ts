@@ -199,6 +199,15 @@ export function inspectionStatus(inspection: TokenInspection): 'valid' | 'invali
  * Never logs or returns the token. A thrown axios error is the caller's to handle.
  */
 export async function inspectToken(token: string): Promise<TokenInspection> {
+    return describeInspection(await fetchDebugToken(token));
+}
+
+/**
+ * The `data` object of Meta's `debug_token` answer, exactly as it came back (not yet read as a verdict): what `inspectToken` turns into a
+ * `TokenInspection`, and what the daily recheck (`metaTokenRecheck.ts`) checks the SHAPE of before it concludes anything. A call that
+ * fails throws the axios error.
+ */
+export async function fetchDebugToken(token: string): Promise<unknown> {
     const appId = process.env.META_APP_ID;
     const appSecret = process.env.META_APP_SECRET;
     const accessToken = appId && appSecret ? `${appId}|${appSecret}` : token;
@@ -207,7 +216,7 @@ export async function inspectToken(token: string): Promise<TokenInspection> {
         params: { input_token: token, access_token: accessToken },
         timeout: 10_000,
     });
-    return describeInspection(response.data?.data);
+    return response.data?.data;
 }
 
 /**
@@ -281,7 +290,7 @@ function recheckResult(fields: {
  * database's clock — the same clock the health endpoint reads back, and the one an operator
  * compares against `NOW()` when they wonder how stale a status is.
  */
-async function persistInspection(
+export async function persistInspection(
     creatorId: string,
     status: 'valid' | 'invalid',
     error: string | null,

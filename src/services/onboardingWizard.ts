@@ -29,6 +29,7 @@ import { pool } from '../config/db.js';
 import type { OnboardingStatus } from '../db/rows.js';
 import { queryOne } from '../db/query.js';
 import { describeError, log } from '../utils/log.js';
+import { APP_SETTING_KEYS, getSetting } from './appSettings.js';
 import { readProfileState, type ProfileState } from './profile/patch.js';
 import type { TenantRole } from './tenant.js';
 
@@ -60,16 +61,50 @@ export const WIZARD_STEPS: readonly WizardStep[] = Object.freeze([
     { id: 'done', code: 'W6', required: false, enabled: true },
 ]);
 
+// ─── What the operator has switched on ───────────────────────────────────────────────────────
+
+/**
+ * Steps that are not on or off for everybody: the operator's settings decide. The registry above is the baseline (`enabled` as
+ * written there); a flag raises one step above it. Only W4 has one: connecting accounts needs the operator to have switched
+ * "Connect with Facebook" on (`meta.login_enabled`, off by default), and until then the step is skipped exactly as it was before
+ * it existed: left out of the order, the progress count, `firstOpenStep` and `resumeStep`, and refused by `saveStep`.
+ */
+export interface WizardFlags {
+    connect: boolean;
+}
+
+export const NO_FLAGS: Readonly<WizardFlags> = Object.freeze({ connect: false });
+
+/** The registry with the flags applied. A flag can only switch a step ON that the registry lists. */
+export function stepsFor(flags: Readonly<WizardFlags> = NO_FLAGS): WizardStep[] {
+    return WIZARD_STEPS.map((s) => (s.id === 'connect' ? { ...s, enabled: s.enabled || flags.connect } : { ...s }));
+}
+
+/**
+ * Read the flags. Fails CLOSED: a setting that cannot be read (a database that has no `app_settings`, a failed query) is "off", so
+ * the wizard is the one it was before this existed and nobody is sent to a step the operator never switched on.
+ */
+export async function readWizardFlags(): Promise<WizardFlags> {
+    try {
+        // The switch alone, as `getMetaLoginSettings` reads it (database only, "true" and nothing else): the configuration id is the
+        // connect route's business, not the wizard's.
+        return { connect: (await getSetting(APP_SETTING_KEYS.metaLoginEnabled)) === 'true' };
+    } catch (err) {
+        log('warn', 'onboarding.flags_unreadable', describeError(err));
+        return { ...NO_FLAGS };
+    }
+}
+
 /** The steps a person can fill in, in order: the ones with something to save (`done` is where they land). */
-const formSteps = (): WizardStep[] => WIZARD_STEPS.filter((s) => s.enabled && s.id !== 'done');
+const formSteps = (flags: Readonly<WizardFlags> = NO_FLAGS): WizardStep[] => stepsFor(flags).filter((s) => s.enabled && s.id !== 'done');
 
 export function stepById(id: unknown): WizardStep | null {
     return WIZARD_STEPS.find((s) => s.id === id) ?? null;
 }
 
 /** The step after `id` that is switched on, or `done`. */
-export function nextStepAfter(id: WizardStepId): WizardStepId {
-    const enabled = WIZARD_STEPS.filter((s) => s.enabled);
+export function nextStepAfter(id: WizardStepId, flags: Readonly<WizardFlags> = NO_FLAGS): WizardStepId {
+    const enabled = stepsFor(flags).filter((s) => s.enabled);
     const at = enabled.findIndex((s) => s.id === id);
     return enabled[at + 1]?.id ?? 'done';
 }
@@ -149,18 +184,18 @@ const settled = (entry: StepEntry | undefined): boolean => entry?.status === 'do
  * The first step that still has to be dealt with: a switched-on step that is neither done nor skipped, or `done` when none is.
  * A required step is never passed over, so this is also the furthest a person may go.
  */
-export function firstOpenStep(steps: Record<string, StepEntry>): WizardStepId {
-    return formSteps().find((s) => !settled(steps[s.id]))?.id ?? 'done';
+export function firstOpenStep(steps: Record<string, StepEntry>, flags: Readonly<WizardFlags> = NO_FLAGS): WizardStepId {
+    return formSteps(flags).find((s) => !settled(steps[s.id]))?.id ?? 'done';
 }
 
 /**
  * Where the page opens: the step the person last saw, but never past the first that is still open (a stored position beyond it
  * means the entry behind it was changed, and landing there would skip a required step), and `done` once completed.
  */
-export function resumeStep(state: Pick<OnboardingState, 'status' | 'current_step' | 'steps'> | null): WizardStepId {
+export function resumeStep(state: Pick<OnboardingState, 'status' | 'current_step' | 'steps'> | null, flags: Readonly<WizardFlags> = NO_FLAGS): WizardStepId {
     if (!state || state.status === 'completed') return 'done';
-    const furthest = firstOpenStep(state.steps);
-    const order = WIZARD_STEPS.filter((s) => s.enabled).map((s) => s.id);
+    const furthest = firstOpenStep(state.steps, flags);
+    const order = stepsFor(flags).filter((s) => s.enabled).map((s) => s.id);
     const saved = state.current_step as WizardStepId | null;
     if (!saved || !order.includes(saved)) return furthest;
     return order.indexOf(saved) <= order.indexOf(furthest) ? saved : furthest;
@@ -201,9 +236,11 @@ export async function describeOnboardingBrief(
     try {
         const state = await loadOnboarding(creatorId);
         const status: OnboardingStatus = state?.status ?? 'completed';
+        // The flags only change where an UNFINISHED tenant resumes: nothing is asked for one that is completed (or has no row).
+        const flags = status === 'completed' ? NO_FLAGS : await readWizardFlags();
         return {
             status,
-            step: resumeStep(state),
+            step: resumeStep(state, flags),
             gated: onboardingGated({ status, sessionRole: who.sessionRole, tenantRole: who.tenantRole }),
         };
     } catch (err) {
@@ -307,14 +344,16 @@ export interface WizardView {
 }
 
 /** The step values and times are the person's own typing: the page treats every one as text. */
-export async function describeWizard(creatorId: string, who: { tenantRole: TenantRole | null }): Promise<WizardView> {
+export async function describeWizard(creatorId: string, who: { tenantRole: TenantRole | null }, given?: WizardFlags): Promise<WizardView> {
     const [state, profile, hints] = await Promise.all([loadOnboarding(creatorId), readProfileState(creatorId), loadHints(creatorId)]);
     // No row reads as completed (D14).
     const effective: OnboardingState = state ?? { status: 'completed', current_step: null, steps: {}, filled_by: null, started_at: null, completed_at: null };
+    // What the operator switched on is read for a tenant that is still setting up: a finished one is never sent to a step.
+    const flags = given ?? (effective.status === 'completed' ? NO_FLAGS : await readWizardFlags());
     return {
         status: effective.status,
-        step: resumeStep(state),
-        order: WIZARD_STEPS.map((s) => ({ ...s })),
+        step: resumeStep(state, flags),
+        order: stepsFor(flags),
         steps: effective.steps,
         filledBy: effective.filled_by,
         startedAt: effective.started_at,
@@ -367,9 +406,15 @@ function msSince(iso: string | undefined, now: number): number | null {
  * steps never overwrite each other. A tenant that is already `completed` (or has no row) changes nothing: the answer is the
  * state as it is, so a retried autosave after Finish is harmless rather than an error.
  */
-export async function saveStep(creatorId: string, stepId: unknown, input: StepInput, actor: StepActor, now: number = Date.now()): Promise<OnboardingState | null> {
+export async function saveStep(
+    creatorId: string, stepId: unknown, input: StepInput, actor: StepActor, now: number = Date.now(), given?: WizardFlags
+): Promise<OnboardingState | null> {
     const step = stepById(stepId);
-    if (!step || !step.enabled || step.id === 'done') throw new WizardError('UNKNOWN_STEP', 404, 'There is no such step.');
+    // The operator's switches are read only when they can matter: for the one step they gate, and to find where Continue and
+    // Skip lead next. An autosave of any other step asks nobody anything.
+    const flags = given ?? (step && (step.id === 'connect' || input.status === 'done' || input.status === 'skipped') ? await readWizardFlags() : NO_FLAGS);
+    const enabled = step ? stepsFor(flags).find((s) => s.id === step.id)?.enabled === true : false;
+    if (!step || !enabled || step.id === 'done') throw new WizardError('UNKNOWN_STEP', 404, 'There is no such step.');
 
     const wantsStatus = input.status !== undefined;
     const wantsValues = input.values !== undefined;
@@ -395,7 +440,7 @@ export async function saveStep(creatorId: string, stepId: unknown, input: StepIn
     if (input.status === 'done' || input.status === 'skipped') {
         // Replaced, not merged: the draft values are the unconfirmed copy, and Continue is what confirms them.
         entry = { status: input.status, at: stamp, by: actor.by };
-        currentStep = nextStepAfter(step.id);
+        currentStep = nextStepAfter(step.id, flags);
     } else {
         entry = { ...previous };
         if (wantsValues) {

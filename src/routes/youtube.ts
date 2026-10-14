@@ -6,7 +6,7 @@
  *
  *   youtubeRouter — mounted BELOW `resolveTenant`
  *     GET  /connection     the Settings card: the channel, whether the app is set up, public or private uploads
- *     POST /connect        owner: mint a state, return Google's consent URL
+ *     POST /connect        owner: mint a state, return Google's consent URL ({ returnTo?: 'settings' | 'welcome' })
  *     POST /disconnect     owner: revoke with Google and delete the tokens
  *     GET  /app-settings   platform admin: the OAuth client's status and the URLs to register
  *     POST /app-settings   platform admin: save the client ID / secret and the public-uploads switch
@@ -23,7 +23,10 @@ import {
     completeConnection, consumeOAuthState, createOAuthState, disconnect, getConnection, OAUTH_STATE_TTL_MS,
     summariseConnection, YouTubeChannelInUseError,
 } from '../services/youtubeConnections.js';
-import { readCookie, stateCookie as buildStateCookie } from '../services/oauthState.js';
+import {
+    isReturnTo, NONCE_PATTERN, readCookie, readStateReturnTo, returnDestination, setStateReturnTo, stateCookie as buildStateCookie,
+    type OAuthReturnTo,
+} from '../services/oauthState.js';
 import { visibilitySummary } from '../services/youtubeVisibility.js';
 import { describeError, log } from '../utils/log.js';
 
@@ -50,12 +53,16 @@ function stateCookie(value: string, maxAgeSeconds: number): string {
     return buildStateCookie(STATE_COOKIE, CALLBACK_PATH, value, maxAgeSeconds);
 }
 
-/** Back to Settings with an outcome in the HASH query, where the dashboard's router reads it. */
-function backToSettings(res: Response, outcome: 'connected' | 'error', reason?: string): void {
+/**
+ * Back to where the flow began (Settings, or the setup wizard's connect step: `returnTo`, kept on the state by `POST /connect`)
+ * with an outcome in the HASH query, where the dashboard's router reads it. A refusal that cannot tell where the flow began goes
+ * to Settings.
+ */
+function backTo(res: Response, returnTo: OAuthReturnTo | null, outcome: 'connected' | 'error', reason?: string): void {
     const params = new URLSearchParams({ youtube: outcome });
     if (reason) params.set('reason', reason);
     res.setHeader('Set-Cookie', stateCookie('', 0));
-    res.redirect(302, `/dashboard#/settings?${params.toString()}`);
+    res.redirect(302, returnDestination(returnTo, params));
 }
 
 /** The reason code the Settings toast explains, from whatever the exchange threw. */
@@ -76,30 +83,34 @@ youtubePublicRouter.get('/callback', async (req, res) => {
     const state = typeof req.query.state === 'string' ? req.query.state : '';
     const code = typeof req.query.code === 'string' ? req.query.code : '';
     const denied = typeof req.query.error === 'string' ? req.query.error : '';
+    let returnTo: OAuthReturnTo | null = null;
     try {
+        const cookie = readCookie(req.headers.cookie, STATE_COOKIE);
         if (denied) {
+            // The flow's own state is READ (not spent) when it is ours, to know where to send the browser back to.
+            if (state && NONCE_PATTERN.test(state) && cookie === state) returnTo = await readStateReturnTo(state, 'youtube');
             log('warn', 'youtube.oauth_denied', { error: denied });
-            backToSettings(res, 'error', denied === 'access_denied' ? 'denied' : 'google_error');
+            backTo(res, returnTo, 'error', denied === 'access_denied' ? 'denied' : 'google_error');
             return;
         }
         if (!state || !code) {
-            backToSettings(res, 'error', 'missing_code');
+            backTo(res, null, 'error', 'missing_code');
             return;
         }
-        const cookie = readCookie(req.headers.cookie, STATE_COOKIE);
         if (!cookie || cookie !== state) {
             log('warn', 'youtube.oauth_state_mismatch', { has_cookie: Boolean(cookie) });
-            backToSettings(res, 'error', 'state_mismatch');
+            backTo(res, null, 'error', 'state_mismatch');
             return;
         }
         const claim = await consumeOAuthState(state);
         if (!claim) {
-            backToSettings(res, 'error', 'state_expired');
+            backTo(res, null, 'error', 'state_expired');
             return;
         }
+        returnTo = await readStateReturnTo(state, 'youtube');
         const redirectUri = await redirectUriFor(req);
         if (!redirectUri) {
-            backToSettings(res, 'error', 'no_base_url');
+            backTo(res, returnTo, 'error', 'no_base_url');
             return;
         }
         const connection = await completeConnection({ creatorId: claim.creatorId, userId: claim.userId, code, redirectUri });
@@ -112,10 +123,10 @@ youtubePublicRouter.get('/callback', async (req, res) => {
             detail: { channel_id: connection.external_account_id, scopes: connection.scopes },
         });
         log('info', 'youtube.connected', { creator_id: claim.creatorId, channel_id: connection.external_account_id });
-        backToSettings(res, 'connected');
+        backTo(res, returnTo, 'connected');
     } catch (err) {
         log('error', 'youtube.oauth_callback_failed', describeError(err));
-        backToSettings(res, 'error', callbackFailureReason(err));
+        backTo(res, returnTo, 'error', callbackFailureReason(err));
     }
 });
 
@@ -158,7 +169,21 @@ youtubeRouter.post('/connect', canAdminister, async (req, res) => {
             res.status(409).json({ error: 'The public site address is not set — add it in the TikTok app settings.' });
             return;
         }
+        const body = req.body ?? {};
+        if (body.returnTo !== undefined && !isReturnTo(body.returnTo)) {
+            res.status(400).json({ error: 'returnTo must be "settings" or "welcome".' });
+            return;
+        }
         const state = await createOAuthState(getTenantId(req), req.session?.userId ?? null);
+        // Only the wizard asks to come back to it. Written apart from the INSERT, so that a deployment that has not run v35
+        // still connects: the flow then returns to Settings, as it always did.
+        if (body.returnTo === 'welcome') {
+            try {
+                await setStateReturnTo(state, 'youtube', 'welcome');
+            } catch (err) {
+                log('warn', 'youtube.return_to_unsaved', describeError(err));
+            }
+        }
         res.setHeader('Set-Cookie', stateCookie(state, Math.floor(OAUTH_STATE_TTL_MS / 1000)));
         res.json({ url: buildAuthorizeUrl({ clientId: app.clientId, redirectUri, state }) });
     } catch (err) {

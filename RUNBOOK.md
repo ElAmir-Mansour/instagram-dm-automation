@@ -237,6 +237,7 @@ re-authorising the app and re-exchanging the token (§3.3), not pasting the same
 | `recordTokenStatus` (`src/routes/api.ts:1579`) | someone opens the dashboard token page, saves a token, or runs the extend flow — three routes, one helper |
 | `persistInspection` (`src/services/tokenHealth.ts:284`) | a deliberate re-check asks Meta and records the answer, including `POST /api/admin/tenants/:id/recheck-token` |
 | `noteMetaFailure` (`src/services/tokenHealth.ts:49`) | **a real Meta send failed with code 190** |
+| `recheckAllMetaTokens` (`src/services/metaTokenRecheck.ts:190`) | **the daily cron** asks Meta about every connected tenant's Page token and writes what Meta definitively said (valid, expiring, invalid). A transient failure writes nothing |
 | `src/routes/admin.ts` (tenant create / PATCH) | a tenant is created (sets `'unknown'`), or an admin updates one |
 
 The third is the one that matters and it is new: every Meta send path calls `noteMetaFailure`
@@ -249,9 +250,18 @@ marking a working token invalid sends you to regenerate something that was never
 
 `GET /api/admin/tenants` shows `token_status`, `token_last_checked_at` and `token_error` per
 tenant (`src/routes/admin.ts:83-85`), but it **reads** the column — it does not re-check
-against Meta. There is no re-check endpoint and no scheduled check on `main`. Until there is,
-`node scripts/diagnose.mjs` is the only thing that actively asks Meta, and it only runs when
-you run it.
+against Meta. What does ask Meta: the daily cron (once a day, 00:00 UTC, with the other sweeps in
+`/api/cron/publish`), the tenant owner's or an admin's Re-check button, and
+`node scripts/diagnose.mjs`, which only runs when you run it.
+
+**"Reconnect due"** (the notice on Settings → Instagram & Facebook and on Overview) is not a
+column: it is `invalid`, or a data-access / token date less than 14 days away, as the daily check
+last stored them (`getMetaConnection`). To see why a tenant has it:
+`grep token.reconnect_due` in the logs (`warn`, `error` for a token Meta rejected), and
+`token.recheck_transient` for the runs that could not reach Meta and so wrote nothing. A tenant
+that shows it wrongly has a stored `invalid` from the manual Re-check pressed during a Meta
+outage (that button still records "could not check" as `invalid`); the next daily run that gets
+an answer clears it.
 
 ### 3.2 Tokens are encrypted at rest
 

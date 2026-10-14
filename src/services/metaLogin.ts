@@ -849,8 +849,21 @@ export interface MetaConnectionSummary {
     tokenLastCheckedAt: string | null;
     tokenExpiresAt: string | null;
     dataAccessExpiresAt: string | null;
-    /** Instagram's data access lapses within `RECONNECT_DUE_DAYS` (or already has): the Reconnect button should offer `reauthorize`. */
+    /**
+     * The connection needs its owner to reconnect: Meta said the token is dead (`invalid`), or Instagram's data access (or the token
+     * itself) lapses within `RECONNECT_DUE_DAYS` or already has (`expiring`; the Reconnect button then offers `reauthorize`). Read from
+     * what is STORED: only a definitive result, from the daily recheck (`metaTokenRecheck.ts`), a send that met a code 190, or a
+     * person pressing Re-check, ever writes either, so a Meta outage does not raise it.
+     */
     reconnectDue: boolean;
+    reconnectReason: 'invalid' | 'expiring' | null;
+}
+
+/** Is this date, if there is one, less than `RECONNECT_DUE_DAYS` away (or past)? */
+function isNear(at: Date | string | null, now: number = Date.now()): boolean {
+    if (!at) return false;
+    const time = new Date(at).getTime();
+    return !Number.isNaN(time) && time - now < RECONNECT_DUE_DAYS * 86_400_000;
 }
 
 /** What the dashboard may see. The token is never selected: only whether one exists. */
@@ -871,7 +884,8 @@ export async function getMetaConnection(creatorId: string): Promise<MetaConnecti
     if (!row) return null;
     const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
     const connected = row.has_token;
-    const dataAccess = row.token_data_access_expires_at ? new Date(row.token_data_access_expires_at).getTime() : null;
+    const invalid = connected && row.token_status === 'invalid';
+    const expiring = connected && (isNear(row.token_data_access_expires_at) || isNear(row.token_expires_at));
     return {
         connected,
         via: connected ? (row.meta_connected_at ? 'login' : 'token') : null,
@@ -887,7 +901,8 @@ export async function getMetaConnection(creatorId: string): Promise<MetaConnecti
         tokenLastCheckedAt: iso(row.token_last_checked_at),
         tokenExpiresAt: iso(row.token_expires_at),
         dataAccessExpiresAt: iso(row.token_data_access_expires_at),
-        reconnectDue: connected && dataAccess !== null && dataAccess - Date.now() < RECONNECT_DUE_DAYS * 86_400_000,
+        reconnectDue: invalid || expiring,
+        reconnectReason: invalid ? 'invalid' : expiring ? 'expiring' : null,
     };
 }
 

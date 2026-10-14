@@ -98,10 +98,13 @@ const App = {
         draft_client: { src: 'draft_client', page: () => DraftClient, routable: false },
         // The draft assist on the wizard's first step ("Fill it for me"): loaded by the wizard when it starts, optional.
         welcome_draft: { src: 'welcome_draft', page: () => WelcomeDraft, routable: false },
+        // Connecting Instagram and Facebook (P28): the status words, the Page picker and the Connect / Disconnect actions that the Settings card and the
+        // wizard's connect step share. Loaded on first use by whichever of the two needs it, and reset with the other modules when the tenant changes.
+        meta_connect: { src: 'meta_connect', page: () => MetaConnect, routable: false },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.20',
+    ASSET_VERSION: '12.21',
 
     _modules: Object.create(null),
 
@@ -398,6 +401,7 @@ const App = {
      * Every other change is a navigation, exactly as before.
      */
     onHashChange() {
+        this.settleMetaPickAddress();
         if (this.isInviteHash()) {
             this.showInvite();
             return;
@@ -700,7 +704,32 @@ const App = {
         await this.showApp();
     },
 
+    /**
+     * The Page picker's address. A person with several Pages is sent by the Meta callback to
+     * `#/connect-meta?meta=pick&pick=…&return_to=…`, which is not a screen: the picker is a modal over the screen that began the
+     * flow. So the address becomes that screen's (`#/settings?meta=pick&pick=…`, or the wizard's connect step), with the pick
+     * still in it, and that screen opens the modal when it has painted. Rewritten in place (no history entry), and before any
+     * routing, so a login in between (the session may have expired during the round trip) lands on the right screen too.
+     */
+    metaPickAddress(hash) {
+        const found = /^#\/connect-meta\?(.*)$/.exec(String(hash || ''));
+        if (!found) return null;
+        let params;
+        try { params = new URLSearchParams(found[1]); } catch { return null; }
+        const to = params.get('return_to') === 'welcome' ? '#/welcome?step=connect' : '#/settings';
+        params.delete('return_to');
+        const rest = params.toString();
+        return rest ? `${to}${to.includes('?') ? '&' : '?'}${rest}` : to;
+    },
+
+    settleMetaPickAddress() {
+        const next = this.metaPickAddress(location.hash);
+        if (!next) return;
+        try { history.replaceState(null, '', next); } catch { /* the address stays: the page opens on its default screen */ }
+    },
+
     async showApp() {
+        this.settleMetaPickAddress();
         document.getElementById('login-screen').classList.add('hidden');
         const inviteScreen = document.getElementById('invite-screen');
         if (inviteScreen) inviteScreen.classList.add('hidden');

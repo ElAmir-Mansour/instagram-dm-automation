@@ -52,6 +52,9 @@ export interface FakeCreator {
 
 export interface AuditRow { actor_user_id: string | null; actor_email: string | null; action: string; target_type: string | null; target_id: string | null; detail: string }
 
+/** A queue row, as far as the test-comment check reads it. `creator_id` is NULL on every row the webhook writes; `tenant_key` is the Meta id. */
+export interface FakeJob { kind: string; creator_id: string | null; tenant_key: string | null; created_at: Date; payload?: unknown }
+
 const flat = (sql: string): string => sql.replace(/\s+/g, ' ').trim();
 
 /** One counter for both fakes, so a test can say which happened first: a database statement or a Graph call. */
@@ -69,6 +72,7 @@ export class FakeDb {
     oauth: OAuthStateRow[] = [];
     creators = new Map<string, FakeCreator>();
     audit: AuditRow[] = [];
+    jobs: FakeJob[] = [];
     /** Every statement, with its parameters, in order. */
     statements: Array<{ sql: string; params: unknown[]; at: number }> = [];
     /** Runs once, just before the connection UPDATE is applied: lets a test make something happen between a check and the write. */
@@ -147,6 +151,17 @@ export class FakeDb {
             hit.used_at = now;
             return result([project(hit, consume[2]!)]);
         }
+        // TikTok and YouTube keep where to return to in the one v35 column, apart from the v18 INSERT (`setStateReturnTo`).
+        if (/^UPDATE oauth_states SET return_to = \$3 WHERE nonce = \$1 AND platform = \$2 AND used_at IS NULL$/.test(sql)) {
+            const hit = this.oauth.find((r) => r.nonce === params[0] && r.platform === params[1] && r.used_at === null);
+            if (!hit) return result([], 0);
+            hit.return_to = params[2] as string;
+            return result([], 1);
+        }
+        if (/^SELECT return_to FROM oauth_states WHERE nonce = \$1 AND platform = \$2$/.test(sql)) {
+            const hit = this.oauth.find((r) => r.nonce === params[0] && r.platform === params[1]);
+            return result(hit ? [{ return_to: hit.return_to }] : []);
+        }
         const peek = /^SELECT payload, return_to, expires_at FROM oauth_states WHERE (.*)$/.exec(sql);
         if (peek) {
             const hit = this.oauth.find((r) => this.matches(r, peek[1]!, params));
@@ -219,6 +234,51 @@ export class FakeDb {
                 meta_user_id: null, meta_page_name: null, meta_connected_at: null, meta_webhook_subscribed_at: null,
             });
             return result([], 1);
+        }
+
+        // ── the daily token recheck: who is asked, and what is written ──
+        if (/^SELECT id FROM creators WHERE page_access_token IS NOT NULL ORDER BY token_last_checked_at ASC NULLS FIRST, id LIMIT \$1$/.test(sql)) {
+            const rows = [...this.creators.values()]
+                .filter((c) => c.page_access_token !== null)
+                .sort((a, b) => {
+                    const x = a.token_last_checked_at?.getTime() ?? -Infinity;
+                    const y = b.token_last_checked_at?.getTime() ?? -Infinity;
+                    return x === y ? a.id.localeCompare(b.id) : x < y ? -1 : 1;
+                })
+                .slice(0, Number(params[0]))
+                .map((c) => ({ id: c.id }));
+            return result(rows);
+        }
+        if (/^UPDATE creators SET token_status = \$2, token_error = \$3, token_expires_at = \$4, token_data_access_expires_at = \$5, token_last_checked_at = NOW\(\) WHERE id = \$1 RETURNING token_last_checked_at$/.test(sql)) {
+            const c = this.creators.get(String(params[0]));
+            if (!c) return result([]);
+            c.token_status = params[1] as string;
+            c.token_error = params[2] as string | null;
+            c.token_expires_at = params[3] as Date | null;
+            c.token_data_access_expires_at = params[4] as Date | null;
+            c.token_last_checked_at = now;
+            return result([{ token_last_checked_at: now }]);
+        }
+
+        // ── the wizard's test-comment check ──
+        if (/^SELECT instagram_page_id, facebook_page_id, \(page_access_token IS NOT NULL\) AS connected, meta_connected_at FROM creators WHERE id = \$1$/.test(sql)) {
+            const c = this.creators.get(String(params[0]));
+            return result(c ? [{
+                instagram_page_id: c.instagram_page_id, facebook_page_id: c.facebook_page_id,
+                connected: c.page_access_token !== null, meta_connected_at: c.meta_connected_at,
+            }] : []);
+        }
+        if (/^SELECT COUNT\(\*\)::int AS count, MAX\(created_at\) AS latest FROM jobs WHERE /.test(sql)) {
+            // Each condition applies only if it is IN the SQL, as for `oauth_states`: delete one from the statement and the rows it
+            // kept out come back, and the test that depended on it fails.
+            let rows = this.jobs;
+            if (/kind = 'comment\.process'/.test(sql)) rows = rows.filter((j) => j.kind === 'comment.process');
+            if (/created_at > \$2/.test(sql)) rows = rows.filter((j) => j.created_at.getTime() > (params[1] as Date).getTime());
+            if (/\(creator_id = \$1 OR tenant_key = ANY\(\$3::text\[\]\)\)/.test(sql)) {
+                rows = rows.filter((j) => j.creator_id === params[0] || (j.tenant_key !== null && (params[2] as string[]).includes(j.tenant_key)));
+            }
+            const latest = rows.reduce<Date | null>((m, j) => (m === null || j.created_at > m ? j.created_at : m), null);
+            return result([{ count: rows.length, latest }]);
         }
 
         // ── app_settings ──
@@ -306,7 +366,11 @@ export interface GraphCall {
 }
 
 /** What `debug_token` says about a token. */
-export interface FakeInspection { is_valid?: boolean; type?: string; expires_at?: number; data_access_expires_at?: number; scopes?: string[] }
+export interface FakeInspection {
+    is_valid?: boolean; type?: string; expires_at?: number; data_access_expires_at?: number; scopes?: string[];
+    /** What Meta puts in the body of a token it calls not valid (`{ code: 190, subcode: 463, message }`). */
+    error?: { code?: number; subcode?: number; message?: string };
+}
 
 export class FakeGraph {
     shortToken = 'EAAShortLivedUserToken0123456789abcdefghij';
@@ -318,6 +382,8 @@ export class FakeGraph {
     pages: GraphPage[] = [];
     /** Per Page token: what debug_token says. Default: a valid PAGE token with every scope and data access 80 days out. */
     inspections = new Map<string, FakeInspection>();
+    /** Per token: the EXACT `data` of a `debug_token` answer, whatever it is (an empty body, a string, a list): for the shapes that are not answers. */
+    rawDebugBodies = new Map<string, unknown>();
     /** Fail a call: the first matching `METHOD /path` pattern answers this error (a Graph error body and an HTTP status). */
     failures: Array<{ match: RegExp; status: number; error: { message: string; code?: number; error_subcode?: number }; times: number; onlyIf?: (cfg: any) => boolean }> = [];
     /** What `GET /{page}/subscribed_apps` answers: the fields the app is subscribed with. Set by the POST, cleared by the DELETE. */
@@ -423,6 +489,7 @@ export class FakeGraph {
             failure.times--;
             throw graphError(failure.status, failure.error);
         }
+        if (this.rawDebugBodies.has(token)) return { data: { data: this.rawDebugBodies.get(token) } };
         const over = this.inspections.get(token) ?? {};
         return { data: { data: {
             is_valid: over.is_valid ?? true,
@@ -430,6 +497,7 @@ export class FakeGraph {
             expires_at: over.expires_at ?? 0,
             data_access_expires_at: over.data_access_expires_at ?? Math.floor(Date.now() / 1000) + 80 * 86_400,
             scopes: over.scopes ?? [...LOGIN_SCOPES],
+            ...(over.error ? { error: over.error } : {}),
         } } };
     }
 }

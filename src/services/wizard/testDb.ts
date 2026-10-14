@@ -56,6 +56,8 @@ export interface OnboardingWorld {
     events: EventRec[];
     creators: Map<string, CreatorRec>;
     memberships: MembershipRec[];
+    /** `app_settings`, by key: what the operator has switched on (`meta.login_enabled`). Plain values only. */
+    settings: Map<string, string>;
     /** A database that has no onboarding table (v34 not applied): every statement that names it throws. */
     noOnboardingTable: boolean;
     /** Runs once, just before the next statement that matches: another request getting in between two of ours. */
@@ -75,6 +77,7 @@ export function installOnboardingWorld(options: { state?: State } = {}): Onboard
         events: [],
         creators: new Map(),
         memberships: [],
+        settings: new Map(),
         noOnboardingTable: false,
         before: [],
         restore: () => db.restore(),
@@ -95,6 +98,12 @@ export function installOnboardingWorld(options: { state?: State } = {}): Onboard
     };
     /** What `pg` hands back for a row: jsonb parsed, a copy so a caller cannot change the table. */
     const out = (r: OnboardingRec): OnboardingRec => structuredClone(r);
+
+    // What the operator has switched on: the wizard reads `meta.login_enabled` to decide whether W4 is a step.
+    route(/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, ([key]) => {
+        const value = world.settings.get(key);
+        return { rows: value === undefined ? [] : [{ value, is_secret: false }] };
+    });
 
     route(/^SELECT status, current_step, steps, filled_by, started_at, completed_at FROM onboarding WHERE creator_id = \$1$/, ([id]) => {
         const row = world.onboarding.get(id);

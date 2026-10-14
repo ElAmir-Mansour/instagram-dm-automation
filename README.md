@@ -242,7 +242,7 @@ Bearer `CRON_SECRET`:
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/jobs/drain` | Drain the job queue. **Runs real handlers — sends real DMs** |
-| `GET` | `/api/cron/publish` | Reap stale claims, retention sweep, backstop drain, then **publish every due post to the live accounts** |
+| `GET` | `/api/cron/publish` | Reap stale claims, retention sweep, backstop drain, then **publish every due post to the live accounts**; also refreshes the TikTok and YouTube tokens and rechecks every connected tenant's Meta token (a transient failure writes nothing) |
 | `POST` | `/api/onboarding/drafts/sweep` | Advance the profile drafts nobody is working on (the backstop `heroku-worker` calls about every minute). Bearer `CRON_SECRET`, like the drain. Costs AI spend |
 
 Session token required:
@@ -270,6 +270,7 @@ Session token required:
 | `POST` | `/api/meta/connect` | Owner: mint a state and a cookie, return the Login dialog URL (`{ returnTo?, reconnect?, authType? }`). Refuses a tenant that is connected unless `reconnect` is true |
 | `GET`/`POST` | `/api/meta/candidates`, `/api/meta/select` | Owner: the Pages waiting for a choice (names and ids, never a token) / choose one. The choice spends the pick and nulls its stored tokens |
 | `POST` | `/api/meta/disconnect` | Owner: unsubscribe the Page from the webhook and delete the ids and the token. Needs `{ "confirm": true }` |
+| `GET` | `/api/meta/comment-check` | Operator and up: has a `comment.process` job arrived for this tenant since it connected? A count and a time, never a comment (the setup wizard's "ask a friend to comment *test*") |
 | `GET`/`POST` | `/api/onboarding/draft` | The tenant's profile draft (the wizard polls it every 3 s) / start one. Owner of the tenant, only while its onboarding is open |
 | `POST` | `/api/onboarding/draft/advance` | Do the next steps of the draft (up to 270 s inside the request); the wizard fires it when the poll says `advanceable` |
 

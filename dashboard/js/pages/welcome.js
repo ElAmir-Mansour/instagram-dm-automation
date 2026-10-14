@@ -8,10 +8,12 @@
  * (`invite.js`), before there is a session; this is W1 to W6.
  *
  * ─── Manual mode ────────────────────────────────────────────────────────────
- * The draft engine (P24), the proof samples (P25) and connecting accounts (P28) are not built, so W1, W2 and W3 are plain
- * forms with sensible defaults, W4 and W5 are switched off on the server (`order[i].enabled`), and W6 says plainly what is
- * waiting. Each is a seam: `WelcomePage.register(id, def)` adds a step, and the server enabling it is all the shell needs;
- * progress, Back and Next, autosave, resume and the 409 path are the shell's and a step does not rewrite them.
+ * The proof samples (P25) are not built, so W5 is switched off on the server (`order[i].enabled`); W1, W2 and W3 are forms with
+ * sensible defaults (the draft assist of P24 fills them on request), and W6 says plainly what is waiting. W4 (P28, connecting
+ * accounts) is built and is on only when the operator has switched "Connect with Facebook" on: until then the server leaves it out
+ * of the order and the wizard is exactly what it was. Each is a seam: `WelcomePage.register(id, def)` adds a step, and the server
+ * enabling it is all the shell needs; progress, Back and Next, autosave, resume and the 409 path are the shell's and a step does
+ * not rewrite them.
  *
  * ─── Two kinds of save, which never meet ────────────────────────────────────
  *   - **Autosave** (800 ms after typing, and on blur): what was typed goes to `onboarding.steps[step].values`
@@ -105,6 +107,10 @@ const WelcomePage = {
             busy: false,
             tenants: [],
             tenantId: '',
+            /** The connect step (P28): the three connections and the test comment. Null until the step is shown. */
+            connect: null,
+            /** What a return from a provider's consent screen said (`meta`, `reason`, `warn`, `pick`, `tiktok`, `youtube`): read from the address before the first paint rewrites it, used once. */
+            returned: null,
         };
     },
 
@@ -878,7 +884,7 @@ const WelcomePage = {
                     <i data-lucide="hourglass" aria-hidden="true"></i>
                     <div>
                         <strong>${t('welcome.done.connectTitle')}</strong>
-                        <p>${t('welcome.done.connect')}</p>
+                        <p>${this.stepOrder(onb).includes('connect') ? t('welcome.done.connectSettings') : t('welcome.done.connect')}</p>
                     </div>
                 </li>
                 <li class="welcome-done-item is-waiting">
@@ -979,6 +985,17 @@ const WelcomePage = {
             fields: (state) => P.brandFields(state),
             after: () => P.applyPreview(),
         });
+        // W4 (P28): on only when the operator has switched "Connect with Facebook" on (the server lists it as enabled; until then it is not in
+        // the order and this definition is never used). Nothing to send to the profile: Continue and Skip only mark the step.
+        this.register('connect', {
+            code: 'W4', required: false, skippable: true,
+            title: () => t('welcome.connect.title'), lead: () => t('welcome.connect.lead'), next: 'welcome.connect.next',
+            initial: () => ({}),
+            read: () => ({}),
+            problems: () => [],
+            patch: () => ({}),
+            fields: (state) => P.connectFields(state),
+        });
         // The last screen has no form and nothing to send: it finishes the setup (`enterDone`) and says what is waiting.
         this.register('done', {
             code: 'W6', required: false, skippable: false,
@@ -989,6 +1006,369 @@ const WelcomePage = {
             patch: () => ({}),
             fields: (state) => P.doneFields(state),
         });
+    },
+
+    // ─── The connect step, W4 (P28) ──────────────────────────────────────────
+    //
+    // Three cards (Instagram & Facebook, TikTok, YouTube), each with where it stands and the one button; after Meta connects, the test
+    // comment: "ask a friend to comment *test* on your latest post, from another account". The step is optional and never blocks the
+    // wizard: Skip and Continue only mark it, and nothing here is needed to finish.
+    //
+    // The Meta words, the Page picker and Connect itself are `MetaConnect`'s (`meta_connect.js`, shared with Settings, loaded when the step
+    // opens); a flow that began here comes back with `return_to=welcome`, to this step (`#/welcome?step=connect&meta=…`), where the outcome is
+    // read before the first paint rewrites the address (`readReturn`) and said as a note that stays on screen.
+
+    CHECK_EVERY_MS: 5000,
+    /** After this long without a comment the check stops asking and says so: the person can carry on, or ask again. */
+    CHECK_GIVE_UP_MS: 10 * 60 * 1000,
+    /** The reasons a person can do something about, per platform; every other one reads as one friendly sentence (the operator-facing ones are Settings'). */
+    TENANT_RETURN_REASONS: {
+        tiktok: ['denied', 'state_mismatch', 'state_expired', 'account_in_use'],
+        youtube: ['denied', 'state_mismatch', 'state_expired', 'channel_in_use', 'no_channel', 'scope_missing'],
+    },
+    _checkTimer: null,
+    _checking: false,
+
+    blankConnect() {
+        return {
+            phase: 'loading', meta: null, metaError: null, tiktok: null, youtube: null, notice: null,
+            check: { phase: 'idle', count: 0, latestAt: '', startedAt: 0 },
+        };
+    },
+
+    /** Where a flow that began here returns to: this step. A platform admin filling the wizard in for somebody goes back to Settings (the wizard has no `mode=behalf` to return to). */
+    connectReturnTo() {
+        return typeof App !== 'undefined' && App.hashParam('mode') === 'behalf' ? 'settings' : 'welcome';
+    },
+
+    /** The raw parameters of a return trip, or null: read from the address before it is rewritten. Validated where they are used. */
+    readConnectReturn() {
+        if (typeof App === 'undefined') return null;
+        const out = {};
+        let any = false;
+        ['meta', 'reason', 'warn', 'pick', 'tiktok', 'youtube'].forEach((name) => {
+            const value = App.hashParam(name);
+            if (value) { out[name] = value; any = true; }
+        });
+        return any ? out : null;
+    },
+
+    /** The words under a card's name, and what kind it is. Pure: a test feeds it every state. */
+    metaCard(c) {
+        const resp = c.meta;
+        const returnTo = this.connectReturnTo();
+        if (c.metaError || !resp) {
+            return {
+                id: 'meta', icon: 'instagram', title: t('welcome.connect.meta.title'), kind: 'none', status: t('welcome.connect.failed'), detail: '',
+                action: UI.button({ variant: 'secondary', full: true, icon: 'rotate-cw', label: t('common.retry'), action: 'welcome:retryConnect', id: 'connect-meta-retry' }),
+            };
+        }
+        const ready = typeof MetaConnect !== 'undefined';
+        const state = ready ? MetaConnect.connectionState(resp) : 'none';
+        const conn = resp.connection || {};
+        const title = t('welcome.connect.meta.title');
+        if (state === 'ok') {
+            const who = conn.instagramUsername ? MetaConnect.handle(conn.instagramUsername) : (conn.pageName ? html`<span dir="auto">${conn.pageName}</span>` : '');
+            return {
+                id: 'meta', icon: 'instagram', title, kind: 'ok', status: html`${t('welcome.connect.connectedAs')} ${who}`,
+                detail: conn.via === 'login' && !conn.webhookSubscribed ? t('meta.webhook.offHint') : '', action: '',
+            };
+        }
+        if (state === 'attention') {
+            const note = MetaConnect.attentionReason(conn) === 'invalid' ? t('meta.attention.invalid') : t('meta.attention.expiringSoon');
+            return {
+                id: 'meta', icon: 'instagram', title, kind: 'attention', status: t('welcome.connect.attention'), detail: note,
+                action: ready && MetaConnect.canStart(resp) ? MetaConnect.connectButton(resp, { returnTo, variant: 'primary', full: true, id: 'connect-meta-button' }) : '',
+            };
+        }
+        const startable = ready && MetaConnect.canStart(resp);
+        return {
+            id: 'meta', icon: 'instagram', title, kind: 'none', status: t('welcome.connect.notConnected'),
+            detail: startable ? t('welcome.connect.meta.hint') : t('welcome.connect.meta.unavailable'),
+            action: startable ? MetaConnect.connectButton(resp, { returnTo, variant: 'primary', full: true, id: 'connect-meta-button' }) : '',
+            manual: true,
+        };
+    },
+
+    /** TikTok and YouTube share one shape. A platform the operator has not set up is left out: there is nothing a tenant can do about it. */
+    providerCard(c, platform) {
+        const resp = c[platform];
+        if (!resp || resp.appConfigured !== true) return null;
+        const conn = resp.connection || {};
+        const youtube = platform === 'youtube';
+        const base = {
+            id: platform, icon: youtube ? 'youtube' : 'music-2',
+            title: t(youtube ? 'welcome.connect.youtube.title' : 'welcome.connect.tiktok.title'),
+        };
+        const name = youtube ? conn.channelTitle : conn.displayName;
+        const button = (label, variant) => UI.button({
+            variant, full: true, icon: 'link', label, action: youtube ? 'welcome:connectYouTube' : 'welcome:connectTikTok', id: `connect-${platform}-button`,
+        });
+        if (conn.connected && conn.status !== 'invalid') {
+            return {
+                ...base, kind: 'ok',
+                status: html`${t('welcome.connect.connectedAs')} ${name ? html`<span dir="auto">${name}</span>` : t(youtube ? 'settings.youtube.unnamed' : 'settings.tiktok.unnamed')}`,
+                detail: '', action: '',
+            };
+        }
+        if (conn.status === 'invalid') {
+            return {
+                ...base, kind: 'attention', status: t('welcome.connect.attention'),
+                detail: t(youtube ? 'settings.youtube.statusInvalid' : 'settings.tiktok.statusInvalid'),
+                action: button(t('welcome.connect.reconnect'), 'primary'),
+            };
+        }
+        return {
+            ...base, kind: 'none', status: t('welcome.connect.notConnected'),
+            detail: t(youtube ? 'welcome.connect.youtube.hint' : 'welcome.connect.tiktok.hint'),
+            action: button(t('welcome.connect.connect'), 'secondary'),
+        };
+    },
+
+    cardView(card) {
+        const icon = { ok: 'check-circle', attention: 'alert-triangle', none: 'circle-dashed' }[card.kind] || 'circle-dashed';
+        return html`
+            <li class="connect-card surface" id="connect-card-${card.id}" data-state="${card.kind}">
+                <div class="connect-card-head">
+                    <span class="stat-icon shrink-0"><i data-lucide="${card.icon}" aria-hidden="true"></i></span>
+                    <div class="connect-card-text">
+                        <h2 class="connect-card-title">${card.title}</h2>
+                        <p class="connect-card-status is-${card.kind}"><i data-lucide="${icon}" aria-hidden="true"></i> <span>${card.status}</span></p>
+                    </div>
+                </div>
+                ${card.detail ? html`<p class="form-hint connect-card-detail">${card.detail}</p>` : ''}
+                ${card.manual ? html`<p class="form-hint connect-card-detail">${t('welcome.connect.manual')}</p>` : ''}
+                ${card.action || ''}
+            </li>
+        `;
+    },
+
+    /** The note that stays on screen after a return from a provider: it connected (and what is missing), or why it did not. */
+    connectNotice(c) {
+        const n = c.notice;
+        if (!n) return '';
+        const icon = n.kind === 'success' ? 'check-circle' : 'alert-triangle';
+        return html`
+            <div class="meta-notice is-${n.kind}" role="${n.kind === 'danger' ? 'alert' : 'status'}" id="connect-notice">
+                <i data-lucide="${icon}" aria-hidden="true"></i>
+                <span>${n.text}${(n.extra || []).map((line) => html` <span class="meta-notice-more">${line}</span>`)}</span>
+            </div>
+        `;
+    },
+
+    /** Is Meta connected? The test comment is only asked for once it is. */
+    metaConnected(c) {
+        return !!(c && c.meta && c.meta.connection && c.meta.connection.connected);
+    },
+
+    /** The part of the test comment that changes: waiting, received (green), or given up. This is all a poll repaints. */
+    checkStateView(c) {
+        const check = (c && c.check) || { phase: 'idle' };
+        if (check.phase === 'received') {
+            return html`
+                <p class="connect-check-state is-ready" role="status">
+                    <i data-lucide="check-circle" aria-hidden="true"></i>
+                    <span>${t('welcome.connect.check.received')}${check.latestAt ? html` <span class="connect-check-time">${UI.formatDateTime(check.latestAt)}</span>` : ''}</span>
+                </p>
+            `;
+        }
+        if (check.phase === 'timeout') {
+            return html`
+                <p class="connect-check-state is-waiting" role="status">
+                    <i data-lucide="info" aria-hidden="true"></i><span>${t('welcome.connect.check.timeout')}</span>
+                </p>
+                ${UI.button({ variant: 'secondary', icon: 'refresh-cw', label: t('welcome.connect.check.again'), action: 'welcome:checkAgain', id: 'connect-check-again', full: true })}
+            `;
+        }
+        return html`
+            <p class="connect-check-state is-waiting" role="status">
+                <i data-lucide="hourglass" aria-hidden="true"></i><span>${t('welcome.connect.check.waiting')}</span>
+            </p>
+        `;
+    },
+
+    /** The test comment. Waiting turns green when a comment job for this tenant exists (`GET /api/meta/comment-check`). */
+    checkView(c) {
+        return html`
+            <section class="connect-check surface" id="connect-check" aria-labelledby="connect-check-title">
+                <h2 class="welcome-subtitle" id="connect-check-title">${t('welcome.connect.check.title')}</h2>
+                <p class="connect-check-ask">${t('welcome.connect.check.ask')}</p>
+                <div id="connect-check-state" aria-live="polite">${this.checkStateView(c)}</div>
+                <p class="form-hint">${t('welcome.connect.check.hint')}</p>
+            </section>
+        `;
+    },
+
+    /** The whole step. Pure, like every other: the state decides, and a test can give it a payload in every field. */
+    connectFields(state) {
+        const c = state.connect;
+        if (!c || c.phase === 'loading') return html`<div class="welcome-loading">${html.raw(UI.loader(t('welcome.loading')))}</div>`;
+        if (c.phase === 'failed') {
+            return html`
+                <div class="welcome-problems" role="alert"><p>${t('welcome.connect.loadFailed')}</p></div>
+                <button type="button" class="btn btn-secondary btn-full" data-action="welcome:retryConnect"><i data-lucide="rotate-cw" aria-hidden="true"></i> ${t('common.retry')}</button>
+            `;
+        }
+        const cards = [this.metaCard(c), this.providerCard(c, 'tiktok'), this.providerCard(c, 'youtube')].filter(Boolean);
+        return html`
+            ${this.connectNotice(c)}
+            <ul class="connect-list">${cards.map((card) => this.cardView(card))}</ul>
+            ${this.metaConnected(c) ? this.checkView(c) : ''}
+        `;
+    },
+
+    // ─── Running the connect step ────────────────────────────────────────────
+
+    /** Open the step: read the three connections (and the module that draws the first), then say what the return trip said, if there was one. */
+    async enterConnect() {
+        this.stopCheck();
+        const returned = this.state.returned;
+        this.state.returned = null;
+        this.state.connect = this.blankConnect();
+        this.paint(false);
+        const [meta, tiktok, youtube, module] = await Promise.allSettled([
+            API.getMetaConnection(), API.getTikTokConnection(), API.getYouTubeConnection(),
+            typeof App !== 'undefined' && App.loadPageModule ? App.loadPageModule('meta_connect') : Promise.resolve(null),
+        ]);
+        // Left for another step (or the page closed) while it loaded: nothing here is wanted any more.
+        if (this.state.step !== 'connect' || !this.state.connect) return;
+        const c = this.state.connect;
+        if (meta.status === 'fulfilled') c.meta = meta.value; else c.metaError = meta.reason;
+        if (tiktok.status === 'fulfilled') c.tiktok = tiktok.value;
+        if (youtube.status === 'fulfilled') c.youtube = youtube.value;
+        const moduleReady = module.status === 'fulfilled' && module.value && typeof MetaConnect !== 'undefined';
+        if (!moduleReady) c.metaError = c.metaError || new Error('module');
+        c.phase = c.meta || c.tiktok || c.youtube ? 'ready' : 'failed';
+        if (moduleReady) MetaConnect.afterChange = () => WelcomePage.reloadConnect();
+        this.readOutcome(c, returned, moduleReady);
+        this.paint(false);
+        if (moduleReady && returned && returned.meta === 'pick') this.openPickFromReturn(returned);
+        this.startCheck();
+    },
+
+    /** Turn what a return trip said into the note (and nothing else: a pick opens its modal separately). */
+    readOutcome(c, returned, moduleReady) {
+        if (!returned) return;
+        const meta = moduleReady ? MetaConnect.readReturn((name) => returned[name] || '') : null;
+        if (meta && meta.outcome === 'connected') {
+            c.notice = {
+                kind: meta.warnings.length ? 'warning' : 'success', text: t('welcome.connect.metaConnected'),
+                extra: meta.warnings.map((w) => t(`meta.warning.${w}`)),
+            };
+        } else if (meta && meta.outcome === 'error') {
+            c.notice = { kind: 'danger', text: MetaConnect.reasonText(meta.reason) };
+        }
+        for (const platform of ['tiktok', 'youtube']) {
+            const outcome = returned[platform];
+            if (outcome !== 'connected' && outcome !== 'error') continue;
+            const name = t(platform === 'youtube' ? 'welcome.connect.youtube.title' : 'welcome.connect.tiktok.title');
+            if (outcome === 'connected') {
+                c.notice = { kind: 'success', text: t('welcome.connect.providerConnected', { name }) };
+            } else {
+                const reason = this.TENANT_RETURN_REASONS[platform].includes(returned.reason) ? returned.reason : '';
+                c.notice = { kind: 'danger', text: reason ? t(`settings.${platform}.return.${reason}`) : t('welcome.connect.return.generic', { name }) };
+            }
+        }
+    },
+
+    openPickFromReturn(returned) {
+        if (typeof MetaConnect === 'undefined') return Promise.resolve();
+        return MetaConnect.openPicker(returned.pick, this.connectReturnTo());
+    },
+
+    /** The connection changed under the step (a Page was chosen in the picker): read it again, repaint, and start watching for the test comment. */
+    async reloadConnect() {
+        if (this.state.step !== 'connect' || !this.state.connect) return;
+        try {
+            const resp = await API.getMetaConnection();
+            if (this.state.step !== 'connect' || !this.state.connect) return;
+            this.state.connect.meta = resp;
+            this.state.connect.metaError = null;
+        } catch (err) {
+            if (err && err.status === 401) return;
+        }
+        this.paint(false);
+        this.startCheck();
+    },
+
+    // ─── The test comment ────────────────────────────────────────────────────
+
+    /** Watch for the test comment, once Meta is connected: a quiet poll that stops when it arrives, when the step is left, or after ten minutes. */
+    startCheck() {
+        this.stopCheck();
+        const c = this.state && this.state.connect;
+        if (!c || c.phase !== 'ready' || !this.metaConnected(c)) return;
+        if (c.check.phase === 'received') return;
+        c.check.phase = 'waiting';
+        c.check.startedAt = Date.now();
+        this.paintCheck();
+        this.pollCheck();
+        this._checkTimer = setInterval(() => this.pollCheck(), this.CHECK_EVERY_MS);
+    },
+
+    stopCheck() {
+        if (this._checkTimer !== null) clearInterval(this._checkTimer);
+        this._checkTimer = null;
+    },
+
+    /** "Ask again" after the check gave up: start the watch over. */
+    restartCheck() {
+        const c = this.state && this.state.connect;
+        if (!c) return;
+        c.check = { phase: 'idle', count: 0, latestAt: '', startedAt: 0 };
+        this.startCheck();
+    },
+
+    async pollCheck() {
+        const c = this.state && this.state.connect;
+        if (!c || this.state.step !== 'connect' || this._checking) return;
+        // A hidden tab asks nobody: the poll resumes on its own when the person comes back.
+        if (typeof document !== 'undefined' && document.hidden) return;
+        this._checking = true;
+        try {
+            const res = await API.getMetaCommentCheck();
+            if (this.state.connect !== c || this.state.step !== 'connect') return;
+            if (res && res.received === true) {
+                c.check = { phase: 'received', count: Number(res.count) || 0, latestAt: typeof res.latestAt === 'string' ? res.latestAt : '', startedAt: c.check.startedAt };
+                this.stopCheck();
+                this.paintCheck();
+                if (typeof Motion !== 'undefined' && Motion.announce) Motion.announce(t('welcome.connect.check.received'));
+            } else if (Date.now() - c.check.startedAt > this.CHECK_GIVE_UP_MS) {
+                c.check.phase = 'timeout';
+                this.stopCheck();
+                this.paintCheck();
+            }
+        } catch (err) {
+            // A failed look is not an answer: the next tick asks again. A dead session stops the poll.
+            if (err && err.status === 401) this.stopCheck();
+        } finally {
+            this._checking = false;
+        }
+    },
+
+    /** Only the check's own region: the cards (and any button the person is on) are not repainted by a poll. */
+    paintCheck() {
+        const c = this.state && this.state.connect;
+        const host = document.getElementById('connect-check-state');
+        if (!c || !host) return;
+        host.innerHTML = esc(this.checkStateView(c));
+        UI.icons(host);
+    },
+
+    /** TikTok and YouTube: the same round trip as Settings', with `returnTo` so it comes back here. The address is checked before it is followed. */
+    async connectProvider(btn, platform) {
+        if (!btn || btn.disabled) return;
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        try {
+            const returnTo = this.connectReturnTo();
+            const { url } = await (platform === 'youtube' ? API.startYouTubeConnect(returnTo) : API.startTikTokConnect(returnTo));
+            if (typeof url !== 'string' || !/^https:\/\//.test(url)) throw new Error(t('welcome.err.generic'));
+            window.location.href = url;
+        } catch (err) {
+            restore();
+            UI.toast((err && err.message) || t('welcome.err.generic'), 'error');
+        }
     },
 
     // ─── The draft assist (P24): optional, and in its own file ───────────────
@@ -1234,6 +1614,8 @@ const WelcomePage = {
     destroy() {
         clearTimeout(this._saveTimer);
         this._saveTimer = null;
+        this.stopCheck();
+        if (typeof MetaConnect !== 'undefined' && MetaConnect.afterChange) MetaConnect.afterChange = null;
         if (typeof WelcomeDraft !== 'undefined') WelcomeDraft.stop();
         const root = this.root();
         if (root && this._onFocusOut) root.removeEventListener('focusout', this._onFocusOut);
@@ -1287,6 +1669,8 @@ const WelcomePage = {
                 return;
             }
             this.state.phase = 'ready';
+            // What a return from a provider's consent screen said, before the first paint rewrites the address to `?step=…`.
+            this.state.returned = this.readConnectReturn();
             const asked = typeof App !== 'undefined' ? App.hashParam('step') : '';
             const want = asked && this.reachable(onb, asked) ? asked : (this.stepOrder(onb).includes(onb.step) ? onb.step : this.firstOpen(onb));
             await this.show(want, { replace: true });
@@ -1308,6 +1692,8 @@ const WelcomePage = {
         const order = this.stepOrder(onb);
         const target = order.includes(id) ? id : (order[0] || 'done');
         const def = this.STEPS[target];
+        // Whatever the step being left was watching (the test comment) stops with it.
+        this.stopCheck();
         this.state.step = target;
         this.state.values = def.initial(onb, !!opts.preferProfile);
         this.state.errors = {};
@@ -1324,6 +1710,8 @@ const WelcomePage = {
             this.enterDone();
             return;
         }
+        // The connect step reads the three connections as it opens (and says what a return trip said). Never fatal: it paints its own failure.
+        if (target === 'connect') this.enterConnect().catch(() => {});
         // Fire and forget: a missed note about where the person is costs nothing but the resume point.
         if (onb.status !== 'completed') API.saveOnboardingStep(target, { viewed: true }).catch(() => {});
     },
@@ -1786,6 +2174,10 @@ UI.registerActions('welcome', {
     removePortrait: () => WelcomePage.removePortrait(),
     toggleRules: () => { WelcomePage.state.rulesOpen = !WelcomePage.state.rulesOpen; WelcomePage.paint(false); },
     toggleRule: (el) => welcomeRun(WelcomePage.toggleRule(el)),
+    connectTikTok: (el) => welcomeRun(WelcomePage.connectProvider(el, 'tiktok')),
+    connectYouTube: (el) => welcomeRun(WelcomePage.connectProvider(el, 'youtube')),
+    retryConnect: () => welcomeRun(WelcomePage.enterConnect()),
+    checkAgain: () => WelcomePage.restartCheck(),
     signOut: () => WelcomePage.signOut(),
     switchTenant: (el) => welcomeRun(WelcomePage.switchTenant(el)),
     goDashboard: () => welcomeRun(WelcomePage.goDashboard()),

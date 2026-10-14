@@ -7,6 +7,10 @@
  *   PUT  /steps/:step      { values } | { status: 'done'|'skipped' } | { viewed: true }   →  { status, step, steps }   owner only
  *   POST /complete         →  { status: 'completed', alreadyCompleted, step }    owner only, idempotent
  *
+ * W4 (connect your accounts, P28) is a step only when the operator has switched "Connect with Facebook" on (`meta.login_enabled`):
+ * `GET /` lists it as enabled, `PUT /steps/connect` works, and Continue from W3 leads to it. With the switch off (the default) or
+ * unreadable it is exactly what it was: not in the order, and a write to it is `UNKNOWN_STEP` 404. It is optional and never blocks `POST /complete`.
+ *
  * The wizard saves in two ways that never meet (the top of `services/onboardingWizard.ts`): `PUT /steps/:step` with `values`
  * keeps what was typed in `onboarding.steps` and nothing else, so it never moves the profile's `version`; Continue is
  * `PATCH /api/profile` (the profile's own optimistic version, which answers 409 when someone else wrote in between) and then
@@ -19,7 +23,7 @@
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { completeOnboarding, describeWizard, resumeStep, saveStep, WizardError, type StepActor } from '../services/onboardingWizard.js';
+import { completeOnboarding, describeWizard, readWizardFlags, resumeStep, saveStep, WizardError, type StepActor } from '../services/onboardingWizard.js';
 import { ProfileError } from '../services/profile/store.js';
 import { getTenantId, requireTenantRole, type TenantRole } from '../services/tenant.js';
 import { describeError, log } from '../utils/log.js';
@@ -64,10 +68,13 @@ onboardingRouter.get('/', canOperate, handle('onboarding.read_failed', 'Failed t
 
 onboardingRouter.put('/steps/:step', canEdit, handle('onboarding.step_failed', 'Failed to save this step.', async (req, res) => {
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
-    const state = await saveStep(getTenantId(req), req.params.step, { values: body.values, status: body.status, viewed: body.viewed }, actorOf(req));
+    // What the operator has switched on (W4 needs "Connect with Facebook"), read once: it decides whether `connect` is a step at
+    // all, where Continue leads from W3, and where the page resumes. Unreadable is off, so the wizard is the one it always was.
+    const flags = await readWizardFlags();
+    const state = await saveStep(getTenantId(req), req.params.step, { values: body.values, status: body.status, viewed: body.viewed }, actorOf(req), Date.now(), flags);
     res.json({
         status: state?.status ?? 'completed',
-        step: resumeStep(state),
+        step: resumeStep(state, flags),
         steps: state?.steps ?? {},
     });
 }));

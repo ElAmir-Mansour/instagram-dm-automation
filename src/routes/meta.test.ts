@@ -865,6 +865,138 @@ describe('GET and POST /api/meta/app-settings', () => {
     });
 });
 
+// ─── The wizard's test comment ──────────────────────────────────────────────────────────
+
+describe('GET /api/meta/comment-check', () => {
+    const IG = '17841400000000001';
+    const FB = '200000000000001';
+    const SECRET_TEXT = 'a comment nobody asked the check to repeat';
+    const minutesAgo = (n: number): Date => new Date(Date.now() - n * 60_000);
+
+    /** A tenant that connected with Login 30 minutes ago: it holds an Instagram account and a Page. */
+    function connected(over: { id?: string; ig?: string; fb?: string; at?: Date | null } = {}): void {
+        db.addCreator(over.id ?? TENANT, {
+            name: 'New Tenant', instagram_page_id: over.ig ?? IG, facebook_page_id: over.fb ?? FB,
+            page_access_token: 'enc:v1:stored', meta_connected_at: over.at === undefined ? minutesAgo(30) : over.at,
+        });
+    }
+    /** What the webhook writes: `creator_id` NULL, the Meta id the delivery was addressed to in `tenant_key`. */
+    const job = (over: Partial<{ kind: string; creator_id: string | null; tenant_key: string | null; created_at: Date }> = {}) => {
+        db.jobs.push({
+            kind: 'comment.process', creator_id: null, tenant_key: IG, created_at: minutesAgo(5),
+            payload: { change: { value: { text: SECRET_TEXT } } }, ...over,
+        });
+    };
+    const check = (session: Session | null = OWNER_SESSION, query = '') => api('GET', `/comment-check${query}`, { session });
+
+    it('says "not connected" for a tenant with no Meta connection, and does not even look at the queue', async () => {
+        job();
+        const r = await check();
+        assert.equal(r.status, 200);
+        assert.deepEqual(r.json, { connected: false, since: null, received: false, count: 0, latestAt: null });
+        assert.equal(db.statements.filter((s) => /FROM jobs/.test(s.sql)).length, 0);
+    });
+
+    it('waits while nothing has arrived, and turns green when a comment job for this tenant does', async () => {
+        connected();
+        const waiting = await check();
+        assert.equal(waiting.json.connected, true);
+        assert.equal(waiting.json.received, false);
+        assert.equal(waiting.json.count, 0);
+        assert.equal(waiting.json.latestAt, null);
+
+        job({ created_at: minutesAgo(5) });
+        const green = await check();
+        assert.equal(green.json.received, true);
+        assert.equal(green.json.count, 1);
+        assert.ok(Math.abs(new Date(green.json.latestAt).getTime() - minutesAgo(5).getTime()) < 5_000, 'the latest job\'s time');
+    });
+
+    it('finds the job by the Meta id it was addressed to, for an Instagram comment and for a Facebook one', async () => {
+        connected();
+        job({ tenant_key: IG });
+        job({ tenant_key: FB });
+        assert.equal((await check()).json.count, 2);
+    });
+
+    it('also finds a job that names the tenant itself, should the webhook ever start filling that in', async () => {
+        connected();
+        job({ tenant_key: null, creator_id: TENANT });
+        assert.equal((await check()).json.received, true);
+    });
+
+    it('counts only comment jobs: not a DM, not anything else in the queue', async () => {
+        connected();
+        job({ kind: 'dm.process' });
+        job({ kind: 'monteur.sweep' });
+        assert.equal((await check()).json.received, false);
+    });
+
+    it('counts only what arrived AFTER the connection: an older comment is not proof', async () => {
+        connected({ at: minutesAgo(30) });
+        job({ created_at: minutesAgo(31) });
+        job({ created_at: minutesAgo(600) });
+        assert.equal((await check()).json.received, false);
+        job({ created_at: minutesAgo(29) });
+        assert.equal((await check()).json.count, 1);
+    });
+
+    it('for a connection with no recorded time (a pasted token), counts the last day only', async () => {
+        connected({ at: null });
+        job({ created_at: minutesAgo(3 * 24 * 60) });
+        assert.equal((await check()).json.received, false);
+        job({ created_at: minutesAgo(120) });
+        const r = await check();
+        assert.equal(r.json.count, 1);
+        assert.ok(Date.now() - new Date(r.json.since).getTime() < 24 * 3_600_000 + 5_000, 'the window is a day');
+    });
+
+    it('is scoped to the session\'s tenant: another tenant\'s comments are never counted, and nothing in the request can say otherwise', async () => {
+        connected();
+        db.addCreator(OTHER_TENANT, {
+            name: 'Other', instagram_page_id: '17841400000000099', facebook_page_id: '200000000000099',
+            page_access_token: 'enc:v1:other', meta_connected_at: minutesAgo(30),
+        });
+        job({ tenant_key: '17841400000000099' });
+        job({ tenant_key: '200000000000099' });
+        job({ tenant_key: null, creator_id: OTHER_TENANT });
+
+        const mine = await check(OWNER_SESSION, `?creatorId=${OTHER_TENANT}&tenantId=${OTHER_TENANT}&tenant_key=17841400000000099`);
+        assert.equal(mine.json.received, false, 'a query string cannot point the check at another tenant');
+        assert.equal(mine.json.count, 0);
+
+        const theirs = await check({ ...OWNER_SESSION, tenantId: OTHER_TENANT }, `?creatorId=${TENANT}`);
+        assert.equal(theirs.json.count, 3, 'and they see only their own');
+    });
+
+    it('returns a count and a time, never what a comment said', async () => {
+        connected();
+        job();
+        const r = await check();
+        assert.deepEqual(Object.keys(r.json).sort(), ['connected', 'count', 'latestAt', 'received', 'since']);
+        assert.ok(!r.text.includes(SECRET_TEXT));
+    });
+
+    it('is for an operator and above: a viewer is refused', async () => {
+        connected();
+        assert.equal((await check({ ...OWNER_SESSION, tenantRole: 'viewer' })).status, 403);
+        assert.equal((await check({ ...OWNER_SESSION, tenantRole: 'operator' })).status, 200);
+        assert.equal((await check({ ...OWNER_SESSION, tenantRole: 'owner' })).status, 200);
+    });
+
+    it('answers 404 for a tenant that does not exist', async () => {
+        assert.equal((await check({ ...OWNER_SESSION, tenantId: OTHER_TENANT })).status, 404);
+    });
+
+    it('fails with a clear 500, and no detail, when the queue cannot be read', async () => {
+        connected();
+        db.failOn = /FROM jobs/;
+        const r = await check();
+        assert.equal(r.status, 500);
+        assert.equal(r.json.error, 'Failed to check for the test comment.');
+    });
+});
+
 // ─── The mount ──────────────────────────────────────────────────────────────────────────
 
 describe('how the routes are mounted', () => {
@@ -888,6 +1020,10 @@ describe('how the routes are mounted', () => {
 
     it('leaves the connection summary readable by any member', () => {
         assert.equal(new Map(routes.map((r) => [r.key, r.guard])).get('GET /connection'), null);
+    });
+
+    it('guards the test-comment check with the operator role', () => {
+        assert.equal(new Map(routes.map((r) => [r.key, r.guard])).get('GET /comment-check'), 'operator');
     });
 
     it('mounts the callback above requireAuth and the rest below resolveTenant on the API router', () => {
