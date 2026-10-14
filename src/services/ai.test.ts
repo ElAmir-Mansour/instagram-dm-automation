@@ -11,8 +11,12 @@ import { readFileSync } from 'node:fs';
 import axios from 'axios';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
-import { setLogSink } from '../utils/log.js';
-import { coerceAiResponse, decideAgent, DEFAULT_MODEL, dmResponseSchema, dmSystemInstruction, generateAiResponse, type DmContext, resolveModel, starterPersona, SUPPORTED_MODELS } from './ai.js';
+import { setLogSink, type LogLevel } from '../utils/log.js';
+import {
+    coerceAiResponse, decideAgent, DEFAULT_MODEL, dmResponseSchema, dmSystemInstruction, GEMINI_FIRST_ATTEMPT_MS, GEMINI_RETRY_MIN_BUDGET_MS,
+    GEMINI_RETRY_WAIT_MAX_MS, GEMINI_RETRY_WAIT_MIN_MS, GEMINI_TIMEOUT_MS, generateAiResponse, isTransientGeminiError, setGeminiClock,
+    type DmContext, resolveModel, starterPersona, SUPPORTED_MODELS,
+} from './ai.js';
 import { generateDmReply } from './dmEngine.js';
 import { setAiCaller } from './aiProviders/generate.js';
 import { goldenPath } from './profile/golden.js';
@@ -382,7 +386,7 @@ describe('the gemini engine sends Gemini the request it always has (DM plan S3)'
 
     const golden = (name: string, ext: 'txt' | 'json'): string => readFileSync(goldenPath(name, ext), 'utf8');
 
-    it('is the pinned request: the endpoint, the key in a header, the 30 s deadline, and a body built from the goldens', async () => {
+    it('is the pinned request: the endpoint, the key in a header, the first attempt\'s 18 s deadline, and a body built from the goldens', async () => {
         const reply = await generateDmReply(CONVERSATION, 'كم السعر؟', TENANT, undefined, ctx);
 
         assert.equal(reply.kind, 'reply');
@@ -390,7 +394,8 @@ describe('the gemini engine sends Gemini the request it always has (DM plan S3)'
         assert.equal(layerCalled, 0);
         const [call] = posts;
         assert.equal(call!.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
-        assert.deepEqual(call!.config, { headers: { 'x-goog-api-key': 'test-gemini-key' }, timeout: 30_000 });
+        assert.deepEqual(call!.config, { headers: { 'x-goog-api-key': 'test-gemini-key' }, timeout: GEMINI_FIRST_ATTEMPT_MS });
+        assert.equal(GEMINI_FIRST_ATTEMPT_MS, 18_000);
         const expectedBody = {
             contents: [{ role: 'user', parts: [{ text: 'كم السعر؟' }] }],
             systemInstruction: { parts: [{ text: golden('dm.system-instruction', 'txt') }] },
@@ -428,5 +433,309 @@ describe('the gemini engine sends Gemini the request it always has (DM plan S3)'
         await generateAiResponse(CONVERSATION, 'x', TENANT, { model: 'gemini-3.8-flash', temperature: 0 }, ctx);
         assert.equal(JSON.stringify(posts), JSON.stringify([direct]));
         assert.match(direct.url, /models\/gemini-3\.8-flash:generateContent$/);
+    });
+});
+
+
+/**
+ * Gemini 2.5 Flash answers 503 or hangs now and then. Inside ONE `generateAiResponse` call a transient failure is retried once,
+ * quickly, so the DM is answered in seconds rather than after the job runner's backoff and the worker's next poll (100-175 s on
+ * 2026-10-14). The whole exchange, retry included, stays inside the 30 s the call always had. The clock is simulated: the stubbed
+ * `axios.post` advances it by however long the attempt "took", and `sleep` advances it by the wait, so no test waits for real.
+ */
+describe('generateAiResponse retries a transient Gemini failure once, inside the 30 s budget', () => {
+    const TENANT = '77777777-7777-4777-8777-777777777777';
+    const CONVERSATION = '88888888-8888-4888-8888-888888888888';
+    const KEY = 'test-gemini-key';
+    const ctx = legacyContext('dm');
+    const agent = { is_active: true, ...ELAMIR_AGENT, model: 'gemini-2.5-flash', temperature: 0.7 };
+    const OK = { data: { candidates: [{ content: { parts: [{ text: JSON.stringify({ message_type: 'text', text: 'أهلاً' }) }] } }] } };
+
+    /** What an attempt does: hangs until its own timeout, or takes `ms` of simulated time, then resolves with `ok` or throws `fail`. */
+    type Step = { hang?: true; ms?: number; ok?: unknown; fail?: unknown };
+    type PostConfig = { headers: Record<string, string>; timeout: number };
+
+    /** What axios throws on a non-2xx: the response, plus the request it would be rude to log (the URL and the key header). */
+    const httpError = (status: number, message = 'The model is overloaded. Please try again later.') =>
+        Object.assign(new Error(`Request failed with status code ${status}`), {
+            code: status >= 500 ? 'ERR_BAD_RESPONSE' : 'ERR_BAD_REQUEST',
+            response: { status, data: { error: { code: status, status: status === 503 ? 'UNAVAILABLE' : 'INVALID_ARGUMENT', message } } },
+            config: { url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', headers: { 'x-goog-api-key': KEY } },
+        });
+    const netError = (code: string, message: string) =>
+        Object.assign(new Error(message), { code, config: { headers: { 'x-goog-api-key': KEY } } });
+    const timeoutError = (ms: number) => netError('ECONNABORTED', `timeout of ${ms}ms exceeded`);
+
+    let t: number;
+    let sleeps: number[];
+    let random: number;
+    let steps: Step[];
+    let posts: { url: string; payload: unknown; config: PostConfig }[];
+    let lines: { level: LogLevel; line: string }[];
+    let undo: (() => void)[];
+
+    beforeEach(() => {
+        t = 1_000_000;
+        sleeps = [];
+        random = 0.5;
+        steps = [];
+        posts = [];
+        lines = [];
+        const query = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string) => {
+            if (/FROM ai_agents WHERE creator_id = \$1/.test(sql)) return { rows: [agent], rowCount: 1 };
+            if (/SELECT direction, text/.test(sql)) return { rows: [], rowCount: 0 };
+            if (/FROM app_settings WHERE key/.test(sql)) return { rows: [], rowCount: 0 };
+            throw new Error(`no result arranged for SQL: ${sql}`);
+        };
+        const post = axios.post;
+        (axios as any).post = async (url: string, payload: unknown, config: PostConfig) => {
+            posts.push({ url, payload, config });
+            const step = steps.shift();
+            if (!step) throw new Error('the test arranged no more attempts');
+            if (step.hang) {
+                t += config.timeout;
+                throw timeoutError(config.timeout);
+            }
+            t += step.ms ?? 0;
+            if (step.fail) throw step.fail;
+            return step.ok ?? OK;
+        };
+        const clock = setGeminiClock({
+            now: () => t,
+            sleep: async (ms) => { sleeps.push(ms); t += ms; },
+            random: () => random,
+        });
+        const sink = setLogSink((level, line) => { lines.push({ level, line }); });
+        const key = process.env.GEMINI_API_KEY;
+        process.env.GEMINI_API_KEY = KEY;
+        undo = [
+            () => { (pool as unknown as { query: unknown }).query = query; },
+            () => { (axios as any).post = post; },
+            () => { setGeminiClock(clock); },
+            () => { setLogSink(sink); },
+            () => { if (key === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = key; },
+        ];
+    });
+    afterEach(() => { for (const f of undo) f(); });
+
+    const generate = (overrides?: Parameters<typeof generateAiResponse>[3]) =>
+        generateAiResponse(CONVERSATION, 'كم السعر؟', TENANT, overrides, ctx);
+    const retryLines = () => lines.map((l) => JSON.parse(l.line)).filter((l) => l.event === 'ai.gemini_retry');
+
+    it('503 then success: one retry, and the success is the answer', async () => {
+        steps = [{ ms: 400, fail: httpError(503) }, { ms: 3_000 }];
+        const reply = await generate();
+
+        assert.deepEqual(reply, { message_type: 'text', text: 'أهلاً' });
+        assert.equal(posts.length, 2);
+        assert.equal(sleeps.length, 1);
+        assert.equal(retryLines().length, 1);
+    });
+
+    for (const status of [500, 503, 429]) {
+        it(`HTTP ${status} is retried`, async () => {
+            steps = [{ ms: 200, fail: httpError(status) }, { ms: 2_000 }];
+            const reply = await generate();
+            assert.equal(reply?.text, 'أهلاً');
+            assert.equal(posts.length, 2);
+        });
+    }
+
+    it('503 twice: two calls, then it throws like any Gemini failure, naming the status', async () => {
+        steps = [{ ms: 300, fail: httpError(503) }, { ms: 300, fail: httpError(503) }, { ms: 0 }];
+        await assert.rejects(generate(), /Gemini request failed \[HTTP 503\]: The model is overloaded/);
+        assert.equal(posts.length, 2, 'never a third');
+        assert.equal(retryLines().length, 1, 'one retry was announced, not two');
+    });
+
+    it('a timeout, then success: the hung attempt cost its 18 s, the retry answers', async () => {
+        steps = [{ hang: true }, { ms: 5_000 }];
+        const reply = await generate();
+        assert.equal(reply?.text, 'أهلاً');
+        assert.equal(posts.length, 2);
+        assert.equal(retryLines()[0].code, 'ECONNABORTED');
+    });
+
+    for (const [code, message] of [['ECONNRESET', 'read ECONNRESET'], ['ETIMEDOUT', 'connect ETIMEDOUT']] as const) {
+        it(`${code} is retried`, async () => {
+            steps = [{ ms: 100, fail: netError(code, message) }, { ms: 2_000 }];
+            assert.equal((await generate())?.text, 'أهلاً');
+            assert.equal(posts.length, 2);
+        });
+    }
+
+    it('a timeout twice: two calls, then it throws', async () => {
+        steps = [{ hang: true }, { hang: true }];
+        await assert.rejects(generate(), /Gemini request failed: timeout of \d+ms exceeded/);
+        assert.equal(posts.length, 2);
+    });
+
+    for (const status of [400, 401, 403, 404]) {
+        it(`HTTP ${status} is not retried`, async () => {
+            steps = [{ ms: 100, fail: httpError(status, 'API key not valid') }, { ms: 0 }];
+            await assert.rejects(generate(), new RegExp(`\\[HTTP ${status}\\]`));
+            assert.equal(posts.length, 1);
+            assert.equal(sleeps.length, 0);
+            assert.equal(retryLines().length, 0);
+        });
+    }
+
+    it('a safety block and an answer that is not JSON are not retried: they are not transport failures', async () => {
+        steps = [{ ok: { data: { candidates: [], promptFeedback: { blockReason: 'SAFETY' } } } }, { ms: 0 }];
+        await assert.rejects(generate(), /blockReason: SAFETY/);
+        assert.equal(posts.length, 1);
+
+        posts = [];
+        steps = [{ ok: { data: { candidates: [{ content: { parts: [{ text: '{"message_type": "te' }] } }] } } }, { ms: 0 }];
+        await assert.rejects(generate(), /not valid JSON/);
+        assert.equal(posts.length, 1);
+    });
+
+    describe('the time budget', () => {
+        it('the first attempt is given 18 s, the wait is 0.5-1.5 s, and the retry gets what is left of 30 s', async () => {
+            random = 1; // the longest wait: the tightest budget for the retry
+            steps = [{ hang: true }, { ms: 1_000 }];
+            await generate();
+
+            assert.equal(posts[0]!.config.timeout, 18_000);
+            assert.deepEqual(sleeps, [1_500]);
+            assert.equal(posts[1]!.config.timeout, 30_000 - 18_000 - 1_500);
+        });
+
+        it('the worst case, both attempts hanging to their timeouts, ends within 30 s and uses all of it', async () => {
+            for (const r of [0, 1]) {
+                t = 1_000_000;
+                posts = [];
+                sleeps = [];
+                random = r;
+                const start = t;
+                steps = [{ hang: true }, { hang: true }];
+                await assert.rejects(generate(), /timeout of/);
+                assert.equal(t - start, GEMINI_TIMEOUT_MS, `random ${r}: took ${t - start} ms`);
+                assert.ok(posts[1]!.config.timeout >= GEMINI_RETRY_MIN_BUDGET_MS, `retry timeout ${posts[1]!.config.timeout}`);
+            }
+        });
+
+        it('whatever the wait and however fast the first failure, the retry has at least 10 s and the total never passes 30 s', async () => {
+            for (const r of [0, 0.25, 0.5, 0.75, 1]) {
+                for (const firstMs of [0, 300, 5_000, 18_000]) {
+                    t = 1_000_000;
+                    posts = [];
+                    sleeps = [];
+                    random = r;
+                    const start = t;
+                    steps = [{ ms: firstMs, fail: httpError(503) }, { hang: true }];
+                    await assert.rejects(generate());
+                    const label = `random ${r}, first attempt ${firstMs} ms`;
+                    assert.equal(posts.length, 2, label);
+                    assert.ok(sleeps[0]! >= GEMINI_RETRY_WAIT_MIN_MS && sleeps[0]! <= GEMINI_RETRY_WAIT_MAX_MS, `${label}: wait ${sleeps[0]}`);
+                    assert.ok(posts[1]!.config.timeout >= GEMINI_RETRY_MIN_BUDGET_MS, `${label}: retry timeout ${posts[1]!.config.timeout}`);
+                    assert.ok(t - start <= GEMINI_TIMEOUT_MS, `${label}: took ${t - start} ms`);
+                }
+            }
+            // The constants fit together: the first attempt, the longest wait and the floor are within the budget.
+            assert.ok(GEMINI_FIRST_ATTEMPT_MS + GEMINI_RETRY_WAIT_MAX_MS + GEMINI_RETRY_MIN_BUDGET_MS <= GEMINI_TIMEOUT_MS);
+        });
+
+        it('a fast failure leaves the retry nearly the whole budget', async () => {
+            random = 0.5;
+            steps = [{ ms: 300, fail: httpError(503) }, { ms: 1_000 }];
+            await generate();
+            assert.deepEqual(sleeps, [1_000]);
+            assert.equal(posts[1]!.config.timeout, 30_000 - 300 - 1_000);
+        });
+
+        it('a first attempt that overran leaves less than the floor: the first error is thrown and the budget is not exceeded', async () => {
+            steps = [{ ms: 25_000, fail: timeoutError(18_000) }, { ms: 0 }];
+            await assert.rejects(generate(), /timeout of 18000ms exceeded/);
+            assert.equal(posts.length, 1);
+            assert.equal(sleeps.length, 0);
+            assert.equal(retryLines()[0].retrying, false);
+        });
+    });
+
+    describe('the request', () => {
+        const golden = (name: string, ext: 'txt' | 'json'): string => readFileSync(goldenPath(name, ext), 'utf8');
+
+        it('is the same on the retry as on the first attempt, and both are the owner\'s golden body: only the timeout differs', async () => {
+            steps = [{ ms: 300, fail: httpError(503) }, { ms: 2_000 }];
+            await generate();
+
+            const [first, second] = posts;
+            const expectedBody = {
+                contents: [{ role: 'user', parts: [{ text: 'كم السعر؟' }] }],
+                systemInstruction: { parts: [{ text: golden('dm.system-instruction', 'txt') }] },
+                generationConfig: {
+                    responseMimeType: 'application/json',
+                    responseSchema: JSON.parse(golden('dm.response-schema', 'json')),
+                    temperature: 0.7,
+                },
+            };
+            assert.equal(first!.url, second!.url);
+            assert.equal(JSON.stringify(first!.payload), JSON.stringify(second!.payload), 'the bytes of the body');
+            assert.equal(JSON.stringify(first!.payload), JSON.stringify(expectedBody));
+            assert.deepEqual(first!.config.headers, { 'x-goog-api-key': KEY });
+            assert.deepEqual(second!.config.headers, first!.config.headers);
+            assert.deepEqual(Object.keys(first!.config).sort(), ['headers', 'timeout'], 'nothing else was added to the call');
+            assert.deepEqual(Object.keys(second!.config).sort(), ['headers', 'timeout']);
+            assert.notEqual(first!.config.timeout, second!.config.timeout);
+        });
+
+        it('is the sandbox\'s too: the same retry, with the model and temperature on screen', async () => {
+            steps = [{ ms: 300, fail: httpError(503) }, { ms: 2_000 }];
+            const reply = await generate({ model: 'gemini-3.8-flash', temperature: 0 });
+
+            assert.equal(reply?.text, 'أهلاً');
+            assert.equal(posts.length, 2);
+            for (const p of posts) assert.match(p.url, /models\/gemini-3\.8-flash:generateContent$/);
+            assert.equal(JSON.stringify(posts[0]!.payload), JSON.stringify(posts[1]!.payload));
+        });
+    });
+
+    describe('the log', () => {
+        it('says ai.gemini_retry with the status and the attempt, and never the key, the URL or the headers', async () => {
+            steps = [{ ms: 300, fail: httpError(503) }, { ms: 2_000 }];
+            await generate();
+
+            const [retry] = retryLines();
+            assert.equal(retry.level, 'warn');
+            assert.equal(retry.attempt, 1);
+            assert.equal(retry.http_status, 503);
+            assert.equal(retry.gemini_status, 'UNAVAILABLE');
+            assert.equal(retry.model, 'gemini-2.5-flash');
+            assert.equal(retry.retrying, true);
+            assert.equal(retry.wait_ms, sleeps[0]);
+            const everything = lines.map((l) => l.line).join('\n');
+            assert.ok(!everything.includes(KEY), 'the key is in no line');
+            assert.ok(!everything.includes('generativelanguage'), 'nor is the request URL');
+            assert.ok(!/x-goog-api-key/i.test(everything), 'nor the header');
+        });
+
+        it('a network failure carries its code, not an HTTP status', async () => {
+            steps = [{ ms: 100, fail: netError('ECONNRESET', 'read ECONNRESET') }, { ms: 2_000 }];
+            await generate();
+            const [retry] = retryLines();
+            assert.equal(retry.code, 'ECONNRESET');
+            assert.equal(retry.http_status, undefined);
+        });
+    });
+});
+
+describe('isTransientGeminiError', () => {
+    const http = (status: number) => ({ response: { status } });
+
+    it('is HTTP 503, 429 and 500, a socket reset and a timeout', () => {
+        for (const status of [503, 429, 500]) assert.equal(isTransientGeminiError(http(status)), true, String(status));
+        for (const code of ['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED']) assert.equal(isTransientGeminiError({ code }), true, code);
+    });
+
+    it('is not any other 4xx, a plain error, or anything that is not an error at all', () => {
+        for (const status of [400, 401, 403, 404, 413, 422]) assert.equal(isTransientGeminiError(http(status)), false, String(status));
+        // Its HTTP status is the verdict: a 400 that carries a timeout-looking code is still a 400.
+        assert.equal(isTransientGeminiError({ ...http(400), code: 'ECONNABORTED' }), false);
+        assert.equal(isTransientGeminiError(new Error('Gemini returned no content')), false);
+        assert.equal(isTransientGeminiError({ code: 'ERR_BAD_REQUEST' }), false);
+        for (const nothing of [undefined, null, 'timeout', 503]) assert.equal(isTransientGeminiError(nothing), false);
     });
 });

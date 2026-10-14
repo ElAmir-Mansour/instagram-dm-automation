@@ -194,6 +194,13 @@ export const APP_SETTING_KEYS = {
      * secret. No Settings field edits it yet.
      */
     onboardingDiscoveryCreatorId: 'onboarding.discovery_creator_id',
+    /**
+     * Minutes after a sales DM's link before the ONE follow-up nudge is due (`src/services/dmSales/followup.ts`, DM plan §7): 0 to 1320,
+     * default 240 (four hours). `0` switches follow-ups off. Read when the link is sent (it sets when the nudge is due) and again when the
+     * nudge runs (a 0 saved in between cancels it). The 22 h ceiling keeps every delay inside Meta's 24 h window. Not a secret. Edited by a platform admin on the AI settings screen
+     * (`POST /api/settings/sales-followup`).
+     */
+    dmSalesFollowupMinutes: 'dm.sales.followup_minutes',
 } as const;
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];

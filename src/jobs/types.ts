@@ -16,7 +16,7 @@
  * failure of exactly the sort this whole change exists to remove. The compiler can catch it
  * instead.
  */
-export const JOB_KINDS = ['comment.process', 'dm.process'] as const;
+export const JOB_KINDS = ['comment.process', 'dm.process', 'dm.followup'] as const;
 export type JobKind = (typeof JOB_KINDS)[number];
 
 export function isJobKind(value: unknown): value is JobKind {
@@ -49,6 +49,25 @@ export interface JobPayloads {
          * v26.
          */
         object?: string;
+    };
+    /**
+     * The one nudge for a link a sales DM sent (docs/DM_SALES_PLAN.md §7, S9), due `dm.sales.followup_minutes` after it. Unlike the two
+     * above this is NOT a Meta event: it is written by the sales turn after the link was recorded, and everything it needs to decide is
+     * read again when it runs (`src/services/dmSales/followupJob.ts`), so the payload names only what the job is about.
+     */
+    'dm.followup': {
+        conversationId: string;
+        creatorId: string;
+        /** The person's id on the platform: what the nudge is sent to, and what a test-mode allowlist lists. */
+        senderId: string;
+        /** The Facebook Page id for a Messenger conversation; absent for Instagram (the endpoint `me`). */
+        pageId?: string;
+        /** The offer whose link went out. */
+        offerId: string;
+        /** The `messages` row that carried the link: with the conversation, the dedupe key. */
+        linkMessageId: string;
+        /** When the link went out (ISO 8601): a later link makes this job stale (a newer job exists for it). */
+        linkAt: string;
     };
 }
 
