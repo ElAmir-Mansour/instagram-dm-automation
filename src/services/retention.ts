@@ -168,6 +168,50 @@ export async function pruneCompletedJobs(): Promise<{ deleted: number }> {
 }
 
 /**
+ * How long a click on a tracked link (`/r/:code`, migration v38) is kept: 180 days, the plan's window (docs/DM_SALES_PLAN.md §9). A click is a
+ * time, a person-or-preview flag and a coarse device class, with no address and no user-agent, so this is housekeeping more than privacy: the
+ * funnel looks back 30 days at most, and the table stops growing for ever. The LINKS stay as long as their conversation does, because a person
+ * may tap a link in a DM months later and it must still go where it went. The cutoff is computed here and handed to the statement as a
+ * parameter, so a click exactly 180 days old is KEPT and one a millisecond older goes.
+ */
+export const LINK_CLICK_RETENTION_DAYS = 180;
+
+/** Rows deleted per statement, for the same reason `PRUNE_BATCH_SIZE` exists. */
+export const LINK_CLICK_PRUNE_BATCH = 5_000;
+
+/** `$1` the cutoff, `$2` the batch. `idx_link_clicks_clicked_at` makes the inner select a range scan. */
+export const PRUNE_LINK_CLICKS_SQL = `DELETE FROM link_clicks
+ WHERE id IN (SELECT id FROM link_clicks WHERE clicked_at < $1 ORDER BY clicked_at LIMIT $2)`;
+
+/** A click is pruned only when it is STRICTLY older than this. */
+export function linkClickCutoff(now: number = Date.now()): Date {
+    return new Date(now - LINK_CLICK_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * Delete link clicks past the window, in batches, until a batch comes back short or the pass limit is reached (the next daily run continues).
+ * Never throws. A database without migration v38 has no `link_clicks`: that is "nothing to prune", not a failed sweep.
+ */
+export async function pruneLinkClicks(now: number = Date.now()): Promise<{ deleted: number }> {
+    const cutoff = linkClickCutoff(now);
+    let deleted = 0;
+    try {
+        for (let pass = 0; pass < MAX_SWEEP_PASSES; pass++) {
+            const batch = await queryCount(PRUNE_LINK_CLICKS_SQL, [cutoff, LINK_CLICK_PRUNE_BATCH]);
+            deleted += batch;
+            if (batch < LINK_CLICK_PRUNE_BATCH) break;
+        }
+    } catch (err) {
+        if (!isMissingTable(err, 'link_clicks')) log('error', 'retention.link_clicks_prune_failed', { message: (err as Error)?.message });
+        return { deleted };
+    }
+    if (deleted > 0) {
+        log('info', 'retention.link_clicks_pruned', { deleted, retention_days: LINK_CLICK_RETENTION_DAYS });
+    }
+    return { deleted };
+}
+
+/**
  * Media whose only remaining reference is a post that already went live.
  *
  * `media_uploads` is `BYTEA` in Postgres and **nothing has ever deleted from it**. It grows
@@ -459,6 +503,8 @@ export interface RetentionSweepResult {
     moreRemaining: boolean;
     /** What was forgotten about onboarding (P31): old events, long-expired invites, the text drafts fetched. Once per sweep, not per pass. */
     onboarding: OnboardingPruneResult;
+    /** Clicks on tracked links older than `LINK_CLICK_RETENTION_DAYS` (S7). Once per sweep, not per pass. */
+    linkClicksDeleted: number;
 }
 
 /** Injected only so the loop's termination rules can be exercised without a database. */
@@ -469,6 +515,8 @@ export interface RetentionSweepDeps {
     removeObjects: typeof removeQueuedMediaObjects;
     /** Optional so a test of the loop's termination rules need not name it; the real sweep always has it (`DEFAULT_RETENTION_DEPS`). */
     pruneOnboarding?: typeof pruneOnboardingData;
+    /** Optional for the same reason; the real sweep always has it (`DEFAULT_RETENTION_DEPS`). */
+    pruneLinkClicks?: typeof pruneLinkClicks;
 }
 
 export const DEFAULT_RETENTION_DEPS: RetentionSweepDeps = {
@@ -477,6 +525,7 @@ export const DEFAULT_RETENTION_DEPS: RetentionSweepDeps = {
     pruneMedia: pruneOrphanedMedia,
     removeObjects: removeQueuedMediaObjects,
     pruneOnboarding: pruneOnboardingData,
+    pruneLinkClicks,
 };
 
 /**
@@ -493,6 +542,7 @@ export async function runRetentionSweep(deps: RetentionSweepDeps = DEFAULT_RETEN
     const result: RetentionSweepResult = {
         rawPayloadsCleared: 0, jobsDeleted: 0, mediaDeleted: 0, mediaObjectsRemoved: 0, passes: 0, moreRemaining: false,
         onboarding: { eventsDeleted: 0, invitesDeleted: 0, draftSourcesCleared: 0, moreRemaining: false },
+        linkClicksDeleted: 0,
     };
 
     await sweepPasses(deps, result);
@@ -505,6 +555,9 @@ export async function runRetentionSweep(deps: RetentionSweepDeps = DEFAULT_RETEN
     // Onboarding's own housekeeping, once (P31). It cannot throw (`pruneOnboardingData` logs and returns zeros), and a database
     // without v34 has none of these tables, which it reads as "nothing to prune".
     if (deps.pruneOnboarding) result.onboarding = await deps.pruneOnboarding();
+
+    // Tracked-link clicks (S7), once. It cannot throw (`pruneLinkClicks` logs and returns what it deleted), and a database without v38 reads as nothing.
+    if (deps.pruneLinkClicks) result.linkClicksDeleted = (await deps.pruneLinkClicks()).deleted;
     return result;
 }
 

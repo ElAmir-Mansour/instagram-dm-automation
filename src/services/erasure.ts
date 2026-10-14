@@ -423,6 +423,10 @@ export async function executeErasure(rawToken: unknown, now = Date.now()): Promi
             'DELETE FROM messages WHERE conversation_id = ANY($1::uuid[])',
             [target.conversationIds]
         );
+        // Deleting a conversation also deletes the tracked links sent in it and every click on them (migration v38: `tracked_links.conversation_id`
+        // and `link_clicks.code` are ON DELETE CASCADE), in this same transaction. That is done by the schema and not by a statement here, so it
+        // holds for whatever deletes a conversation, and an erasure on a database that has not had v38 applied yet still runs. The counts above
+        // and the audit row name conversations, messages, interactions and the send log: a link is metadata of the conversation, not a fifth subject.
         const deletedConversations = await client.query(
             'DELETE FROM conversations WHERE id = ANY($1::uuid[])',
             [target.conversationIds]
