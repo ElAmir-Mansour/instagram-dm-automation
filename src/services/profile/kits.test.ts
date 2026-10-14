@@ -432,6 +432,7 @@ function modelFacing(k: LanguageKit['sales']): string[] {
         ...Object.values(k.emoji), ...k.hours.days, k.hours.line('N', 'd', '09:00', '17:00', 'UTC'), k.hours.handoff('when'),
         ...k.rules('N'), k.conversation.stage('new'), k.conversation.qualifiers(1, 2), k.conversation.qualifiers(2, 2), k.conversation.linkSent('o'),
         k.conversation.linkNotSent, k.conversation.comment('kw', 'o'), k.conversation.comment('kw', null),
+        k.conversation.variantOpening('wording'), k.conversation.variantCta('wording'),
         k.offer.id('x'), k.offer.primary, k.offer.link, k.offer.priceLive('49', '2026-12-31'), k.offer.priceNone, k.offer.priceNote, k.offer.forWhom, k.offer.level,
         ...SALES_LEVELS.map((l) => k.offer.levels[l]), k.offer.outcomes, k.offer.facts, k.offer.includes, k.offer.faqs, k.offer.objection, k.offer.answer,
         k.offer.proof, ...PROOF_KINDS.map((p) => k.offer.proofKinds[p]), k.offer.source,

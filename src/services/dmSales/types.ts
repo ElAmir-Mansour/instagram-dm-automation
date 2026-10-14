@@ -80,6 +80,11 @@ export interface SalesFacts {
      * (`intentForPayload`): the model is told what the button asked, so it does not have to guess it from the title.
      */
     tapped?: { intent: Intent };
+    /**
+     * The owner's A/B wording for this conversation's arm (S14, `variants.ts`): how to open the FIRST reply (null once the bot has spoken, or when the arm
+     * says nothing about it) and how to word the offer of the link. Wording only: the rules above it in the prompt still hold.
+     */
+    variant?: { opening: string | null; cta: string | null };
 }
 
 /** A reply is never more than this many qualifier questions deep (§4). */

@@ -237,9 +237,12 @@ export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_K
  *   dmIceBreakers   the Instagram ice breakers and persistent menu the owner edits, and the record of the last publish (DM plan S13,
  *                   `src/services/dmSales/iceBreakerStore.ts`). Not a secret. There is no tenant deletion in this product (a tenant is
  *                   deactivated), so a row is never orphaned.
+ *   dmVariants      the owner's A/B wording experiment for the DM sales turn: up to three variants of how to open and how to offer the link, their
+ *                   weights, and whether it is running (DM plan S14, `src/services/dmSales/variantStore.ts`). Not a secret.
  */
 export const TENANT_SETTING_PREFIXES = {
     dmIceBreakers: 'dm.ice_breakers.',
+    dmVariants: 'dm.variants.',
 } as const;
 
 export type TenantSettingKey = `${(typeof TENANT_SETTING_PREFIXES)[keyof typeof TENANT_SETTING_PREFIXES]}${string}`;

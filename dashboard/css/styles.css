@@ -4907,6 +4907,15 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 
 /* AI (AI6): «تغييرات غير محفوظة» beside Save, while there are any. */
 .ai-save-row { align-items: center; }
+
+/* The wording experiment in AI settings (S14): a box per variant under the switch. A fieldset, so the name, share and two wordings read as one
+   variant to a screen reader; one column at every width (the share and the name stack on a phone with the rest of the form). */
+.variant-list { display: grid; gap: var(--space-3); }
+.variant-card { display: grid; gap: var(--space-3); min-inline-size: 0; margin: 0; padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.variant-card-title { padding-inline: var(--space-1); font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.variant-card .form-group { margin: 0; }
+.variant-text { min-block-size: 64px; }
+.variant-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-start: var(--space-3); }
 .unsaved-note {
     display: inline-flex; align-items: center; gap: var(--space-1);
     font-size: var(--fs-100); color: var(--warning-text);
@@ -5167,6 +5176,17 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 .dm-funnel-rate dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); font-size: var(--fs-200); color: var(--text-strong); }
 .dm-funnel-of { font-size: var(--fs-100); color: var(--text-muted); }
 .dm-funnel-outcomes { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* The A/B wording comparison (S14): one box per variant, its letter and name and conversation count on the first line, then its two rates. The
+   percentages are a dash below the minimum sample; the name is the owner's text, so it wraps anywhere instead of stretching the card. */
+.dm-funnel-variants { display: flex; flex-direction: column; gap: var(--space-2); padding-block-start: var(--space-3); border-block-start: 1px solid var(--border-subtle); }
+.dm-funnel-variants .form-hint { margin: 0; }
+.dm-funnel-variants-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-1) var(--space-3); }
+.dm-funnel-variants-title { margin: 0; font-size: var(--fs-200); font-weight: var(--fw-semibold); color: var(--text-strong); }
+.dm-funnel-arms { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.dm-funnel-arm { display: grid; gap: var(--space-2); min-inline-size: 0; padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.dm-funnel-arm-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-1) var(--space-3); }
+.dm-funnel-arm-name { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); min-inline-size: 0; font-size: var(--fs-200); color: var(--text-strong); overflow-wrap: anywhere; }
 
 /* Phones: back, picture and name on one row, the AI switch on the next. With all four in one row the name had 73px at 375. */
 @media (max-width: 30rem) {

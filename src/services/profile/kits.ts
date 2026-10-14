@@ -173,6 +173,9 @@ export interface SalesKit {
         comment: (keyword: string, offer: string | null) => string;
         /** They tapped a ready-made button (an ice breaker or a menu item): what it asks, as the schema's own intent word. */
         tapped: (intent: string) => string;
+        /** The owner's A/B wording for this conversation's arm (S14): how to open the first reply, and how to word the offer of the link. `text` is the owner's own. */
+        variantOpening: (text: string) => string;
+        variantCta: (text: string) => string;
     };
     lines: SalesLines;
 }
@@ -296,6 +299,8 @@ const ARABIC_SALES_TEXT: Omit<SalesKit, 'lines'> = {
         linkNotSent: 'لم يُرسل أي رابط بعد.',
         comment: (keyword, offer) => (offer ? `علّق بكلمة «${keyword}» وأُرسل له رابط ${offer}.` : `علّق بكلمة «${keyword}» وأُرسل له رابط.`),
         tapped: (intent) => `ضغط على زر جاهز في المحادثة، وهو يسأل عن: ${intent}. أجب عن هذا السؤال مباشرة.`,
+        variantOpening: (text) => `أسلوب افتتاح أول ردّ، من صاحب الحساب: ${text}`,
+        variantCta: (text) => `صياغة عرض الرابط، من صاحب الحساب: ${text}`,
     },
 };
 
@@ -551,6 +556,8 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
                 linkNotSent: 'No link has been sent yet.',
                 comment: (keyword, offer) => (offer ? `They commented «${keyword}» and were sent the link to ${offer}.` : `They commented «${keyword}» and were sent a link.`),
                 tapped: (intent) => `They tapped a ready-made button in the chat; it asks about: ${intent}. Answer that question directly.`,
+                variantOpening: (text) => `How to open your first reply, from the account owner: ${text}`,
+                variantCta: (text) => `How to word the offer of the link, from the account owner: ${text}`,
             },
             lines: {
                 handoff: (name) => `I've passed your message to ${name}, and you'll hear back soon 🙏`,

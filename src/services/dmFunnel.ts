@@ -45,10 +45,19 @@
  * the bot wrote it, so a message the owner answered by hand is the owner's time and not the bot's, and the follow-up nudge (hours later,
  * on purpose) is not a reply. The first message of a burst waits for the one answer that covers them all, which is what it really waited.
  *
+ * **The A/B comparison** (S14, `dmVariantFunnel.ts`) is a section beside these numbers, present only when the tenant has an experiment or a conversation
+ * that was given an arm: each arm's conversations, how many were recommended, sent the link and clicked it, and the link and click rates, with no
+ * percentage below a minimum sample. It reads the arm from `conversations.sales_variant` (v42) in a statement of its own, so a database that is behind
+ * costs the funnel this section and nothing else.
+ *
  * The aggregation (`buildDmFunnel`) is pure and tested from fixture rows by hand; `loadDmFunnel` is the three statements that feed it.
  * Every statement binds the TENANT as `$1`.
  */
 import { queryRows } from '../db/query.js';
+import { describeError, log } from '../utils/log.js';
+import { buildVariantBreakdown, type DmVariantBreakdown, type VariantFact } from './dmVariantFunnel.js';
+import { readVariantConfig } from './dmSales/variantStore.js';
+import type { VariantConfig } from './dmSales/variants.js';
 
 export const DM_FUNNEL_WINDOWS = [7, 30, 90] as const;
 export type DmFunnelWindow = (typeof DM_FUNNEL_WINDOWS)[number];
@@ -108,6 +117,13 @@ export const DM_FUNNEL_REPLY_SQL = `SELECT COUNT(*)::int AS n,
           ) nx ON nx.sender = 'ai'
          WHERE i.direction = 'inbound' AND i.created_at >= $2
        ) r`;
+
+/** The cohort's conversations that were given an A/B arm (v42), with it: a separate statement, so the funnel does not depend on the column. */
+export const DM_FUNNEL_VARIANTS_SQL = `SELECT c.id, c.sales_variant
+  FROM conversations c
+ WHERE c.creator_id = $1
+   AND c.sales_variant IS NOT NULL
+   AND ${FIRST_INBOUND_SQL} >= $2`;
 
 export interface ConversationFact {
     id: string;
@@ -222,6 +238,8 @@ export interface DmFunnel {
     clicks: { people: number; human: number; preview: number };
     /** How long the bot took to answer, over `sample` customer messages. null when none was answered. */
     reply: { sample: number; median_ms: number | null; p90_ms: number | null };
+    /** The A/B comparison of the owner's wording arms (S14). Absent when there is no experiment and no conversation was given an arm. */
+    variants?: DmVariantBreakdown;
 }
 
 const rate = (count: number, of: number): DmFunnelRate => ({ count, of, pct: of > 0 ? Math.round((100 * count) / of) : null });
@@ -236,7 +254,7 @@ export function buildDmFunnel(
     conversations: readonly ConversationFact[],
     clicks: readonly ClickFact[],
     reply: ReplyFact | null,
-    options: { days: DmFunnelWindow; now?: number }
+    options: { days: DmFunnelWindow; now?: number; variants?: { config: VariantConfig | null; assignments: readonly VariantFact[] } }
 ): DmFunnel {
     const now = options.now ?? Date.now();
 
@@ -269,6 +287,7 @@ export function buildDmFunnel(
         complaints: count((r) => r.complaint),
     };
     const sample = countOf(reply?.n);
+    const variants = options.variants ? buildVariantBreakdown(conversations, flags, options.variants.assignments, options.variants.config) : null;
     return {
         days: options.days,
         since: new Date(now - options.days * DAY_MS).toISOString(),
@@ -283,16 +302,28 @@ export function buildDmFunnel(
         },
         clicks: { people: counts.clicked, human: humanVisits, preview: previewVisits },
         reply: { sample, median_ms: sample > 0 ? msOf(reply?.p50_ms) : null, p90_ms: sample > 0 ? msOf(reply?.p90_ms) : null },
+        ...(variants ? { variants } : {}),
     };
 }
 
 /** The funnel for one tenant's last `days` days, from the database. Read-only. */
 export async function loadDmFunnel(tenantId: string, days: DmFunnelWindow, now: number = Date.now()): Promise<DmFunnel> {
     const since = new Date(now - days * DAY_MS);
-    const [conversations, clicks, reply] = await Promise.all([
+    const [conversations, clicks, reply, config] = await Promise.all([
         queryRows<ConversationFact>(DM_FUNNEL_CONVERSATIONS_SQL, [tenantId, since]),
         queryRows<ClickFact>(DM_FUNNEL_CLICKS_SQL, [tenantId, since]),
         queryRows<ReplyFact>(DM_FUNNEL_REPLY_SQL, [tenantId, since]),
+        readVariantConfig(tenantId),
     ]);
-    return buildDmFunnel(conversations, clicks, reply[0] ?? null, { days, now });
+    // The A/B section: only for a tenant that has saved an experiment (no row, no arm was ever assigned), and never at the funnel's expense. The arm is
+    // v42's column: a database that is behind answers an error here, which is a funnel without the comparison.
+    let variants: { config: VariantConfig | null; assignments: VariantFact[] } | undefined;
+    if (config !== null) {
+        try {
+            variants = { config, assignments: await queryRows<VariantFact>(DM_FUNNEL_VARIANTS_SQL, [tenantId, since]) };
+        } catch (err) {
+            log('warn', 'dm.funnel_variants_unavailable', { creator_id: tenantId, ...describeError(err) });
+        }
+    }
+    return buildDmFunnel(conversations, clicks, reply[0] ?? null, { days, now, ...(variants ? { variants } : {}) });
 }

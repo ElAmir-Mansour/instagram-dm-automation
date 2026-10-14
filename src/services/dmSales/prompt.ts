@@ -168,6 +168,8 @@ export function salesFactsBlock(ctx: Pick<SalesContext, 'language' | 'offers'>, 
     lines.push(facts.linkSentFor.length > 0 ? c.linkSent(facts.linkSentFor.map((id) => nameOf(id) ?? id).join(', ')) : c.linkNotSent);
     if (facts.comment) lines.push(c.comment(facts.comment.keyword, nameOf(facts.comment.offerId)));
     if (facts.tapped) lines.push(c.tapped(facts.tapped.intent));
+    if (facts.variant?.opening) lines.push(c.variantOpening(facts.variant.opening));
+    if (facts.variant?.cta) lines.push(c.variantCta(facts.variant.cta));
     return lines.join('\n');
 }
 

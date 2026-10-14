@@ -151,6 +151,8 @@ export interface ConversationRow {
     opted_out_at: Timestamptz | null;
     followups_sent: number;
     source_campaign_id: string | null;
+    /** v42. The A/B wording arm (A, B or C) the sales turn assigned: once, for good. NULL: never assigned. */
+    sales_variant: string | null;
 }
 
 /** v26. `conversations.platform`. */

@@ -439,6 +439,9 @@ const API = {
     // The follow-up delay after a sales DM's link (S9): a platform-wide setting, so a platform admin's alone.
     getSalesFollowup: () => API.request('/settings/sales-followup'),
     saveSalesFollowup: (data) => API.request('/settings/sales-followup', { method: 'POST', body: JSON.stringify(data) }),
+    // The owner's A/B wording experiment for the sales assistant (DM plan S14): the tenant's own, readable by every role, written by an operator.
+    getSalesVariants: () => API.request('/settings/sales-variants'),
+    saveSalesVariants: (data) => API.request('/settings/sales-variants', { method: 'POST', body: JSON.stringify(data) }),
 
     // ─── Carousel Studio (STUDIO.md §4) ─────────────────────────────────────
     // The worker on the Mac does the slow parts (indexing, rendering); these

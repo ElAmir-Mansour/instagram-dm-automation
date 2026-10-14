@@ -77,6 +77,7 @@ const AiSettingsPage = {
         this._draft = null;
         this._saved = null;
         this._routeView = undefined;
+        this._variants = undefined;
     },
 
     /** What the server last gave us, to compare the fields against. */
@@ -95,6 +96,17 @@ const AiSettingsPage = {
      * `null`: not available (not a platform admin, or the call failed): the field then stays out of the way. Asked once per visit to this screen.
      */
     _followup: undefined,
+
+    /**
+     * The A/B wording experiment (DM plan S14), from `GET /api/settings/sales-variants`: `{ limits, enabled, rows, savedCanon }`. It is the TENANT's own and any role
+     * may read it, so unlike the follow-up it is asked for whoever is signed in; `undefined`: not asked yet, `null`: not available (an older server, or the call
+     * failed), and the block then stays out of the way. `rows` is the editor's own copy: a row with nothing typed is legal here and dropped when saving, and a
+     * row that came from the server (`saved`) can only be retired (a share of 0), never removed, so a slot is never given to a different wording.
+     * `savedCanon` is what the server holds, in the form `variantsCanon` gives a draft, so "unsaved" is a comparison.
+     */
+    _variants: undefined,
+
+    VARIANT_SLOTS: ['A', 'B', 'C'],
 
     currentValues() {
         const prompt = document.getElementById('system-prompt-text');
@@ -135,7 +147,7 @@ const AiSettingsPage = {
     },
 
     hasUnsavedChanges() {
-        if (this.isDirty() || this.followupDirty()) return true;
+        if (this.isDirty() || this.followupDirty() || this.variantsDirty()) return true;
         const now = this.currentSettings();
         const saved = this._saved && this._saved.settings;
         if (!now || !saved) return false;
@@ -268,6 +280,29 @@ const AiSettingsPage = {
                             <p class="form-hint hidden" id="sales-followup-hint" role="status" aria-live="polite"></p>
                         </div>
 
+                        <!-- The A/B wording experiment (DM plan S14): up to three variants of how the sales assistant opens and offers the link. It is the
+                             tenant's own and any role may read it, so the block stays hidden until the screen has read it (never, for a server that lacks it)
+                             and the sales assistant is not Off. The variants are drawn into the list by paintVariants(). -->
+                        <div class="form-group hidden" id="sales-variants-block">
+                            <div class="toggle-block">
+                                <div>
+                                    <h4 aria-level="3">${t('ai.variants')}</h4>
+                                    <p id="sales-variants-desc">${t('ai.variantsDesc')}</p>
+                                </div>
+                                <label class="switch" for="sales-variants-enabled">
+                                    <span class="sr-only">${t('ai.variantsRun')}</span>
+                                    <input type="checkbox" id="sales-variants-enabled" data-change="ai:variantsChanged" aria-describedby="sales-variants-desc sales-variants-hint">
+                                    <span class="switch-track"></span>
+                                </label>
+                            </div>
+                            <div class="variant-list" id="sales-variants-list"></div>
+                            <div class="variant-actions">
+                                ${UI.button({ variant: 'secondary', size: 'sm', icon: 'plus', label: t('ai.variantAdd'), action: 'ai:addVariant', id: 'sales-variant-add' })}
+                            </div>
+                            <p class="form-hint">${t('ai.variantsRetire')}</p>
+                            <p class="form-hint hidden" id="sales-variants-hint" role="status" aria-live="polite"></p>
+                        </div>
+
                         <div class="form-grid">
                             <div class="form-group">
                                 <label class="form-label" for="model-selector">${t('ai.model')}</label>
@@ -398,6 +433,7 @@ const AiSettingsPage = {
             if (senders) senders.value = Array.isArray(settings.sales_test_senders) ? settings.sales_test_senders.join('\n') : '';
             this._routeView = undefined;
             this._followup = undefined;
+            this._variants = undefined;
             this.syncEngine();
             this.syncSales();
 
@@ -519,8 +555,274 @@ const AiSettingsPage = {
             followupHint.classList.toggle('hidden', !hint);
             followupHint.classList.toggle('text-warning', !!hint && hint.tone === 'warning');
         }
+        // The wording experiment: asked for once the sales assistant is on (Test or On), whoever is signed in, and shown once it has been read.
+        if (mode !== 'off') this.loadVariants();
+        const variantsBlock = document.getElementById('sales-variants-block');
+        if (variantsBlock) variantsBlock.classList.toggle('hidden', mode === 'off' || !this._variants);
+        this.paintVariantsHint();
         // The fallback switch and the route hint mean something whenever the layer writes replies, which Sales On and Test do too.
         this.syncEngine();
+    },
+
+    // ─── The wording experiment (DM plan S14) ────────────────────────────────────────────────
+
+    /** The first slot no row holds, or null when all are used. */
+    freeVariantSlot(rows) {
+        const taken = new Set(rows.map((r) => r.id));
+        return this.VARIANT_SLOTS.find((id) => !taken.has(id)) || null;
+    },
+
+    blankVariant(id) {
+        return { id, label: '', weight: 50, opening: '', cta: '', saved: false };
+    },
+
+    /** Whitespace of any kind as one space, as the server squashes it: what is compared and what is sent. */
+    squash(value) {
+        return String(value === undefined || value === null ? '' : value).replace(/\s+/g, ' ').trim();
+    },
+
+    /** A row with nothing typed (no name, no wording) is not a variant: it is dropped when saving. Its share alone does not make it one. */
+    variantBlank(row) {
+        return this.squash(row.label) === '' && this.squash(row.opening) === '' && this.squash(row.cta) === '';
+    },
+
+    /** The editor's rows from a config the server sent (`saved`), padded with blank ones to the two a comparison needs. Slots that are not ours are dropped. */
+    variantRowsFrom(config) {
+        const list = config && Array.isArray(config.variants) ? config.variants : [];
+        const rows = list.filter((v) => v && this.VARIANT_SLOTS.includes(v.id)).map((v) => ({
+            id: v.id, label: this.squash(v.label), weight: Number.isInteger(v.weight) ? v.weight : 0,
+            opening: this.squash(v.opening), cta: this.squash(v.cta), saved: true,
+        }));
+        while (rows.length < 2) {
+            const id = this.freeVariantSlot(rows);
+            if (!id) break;
+            rows.push(this.blankVariant(id));
+        }
+        return rows.sort((a, b) => this.VARIANT_SLOTS.indexOf(a.id) - this.VARIANT_SLOTS.indexOf(b.id));
+    },
+
+    /** What the server takes for these rows: blank rows left out, texts squashed, a share kept as typed when it is not a number (the check names it). */
+    variantsPayloadOf(enabled, rows) {
+        const variants = rows.filter((r) => !this.variantBlank(r)).map((r) => {
+            const typed = String(r.weight === undefined || r.weight === null ? '' : r.weight).trim();
+            return {
+                id: r.id, label: this.squash(r.label), weight: /^\d{1,3}$/.test(typed) ? Number(typed) : typed,
+                opening: this.squash(r.opening), cta: this.squash(r.cta),
+            };
+        });
+        return { enabled: !!enabled, variants };
+    },
+
+    /** One string for a payload, so "unsaved changes" is a comparison. */
+    variantsCanon(payload) {
+        return JSON.stringify([payload.enabled, payload.variants.map((v) => [v.id, v.label, v.weight, v.opening, v.cta])]);
+    },
+
+    /** Copies what is typed into the rows and the switch. A field that is not on the page keeps what the row has. */
+    syncVariantRows() {
+        const state = this._variants;
+        if (!state) return;
+        const read = (id, fallback) => {
+            const el = document.getElementById(id);
+            return el && typeof el.value === 'string' ? el.value : fallback;
+        };
+        state.rows.forEach((row) => {
+            row.label = read(`sales-variant-${row.id}-label`, row.label);
+            row.weight = read(`sales-variant-${row.id}-weight`, row.weight);
+            row.opening = read(`sales-variant-${row.id}-opening`, row.opening);
+            row.cta = read(`sales-variant-${row.id}-cta`, row.cta);
+        });
+        const toggle = document.getElementById('sales-variants-enabled');
+        if (toggle) state.enabled = !!toggle.checked;
+    },
+
+    /** The experiment on screen, as the server takes it. null when the block is not there (not read, or not available). */
+    variantsDraft() {
+        if (!this._variants) return null;
+        this.syncVariantRows();
+        return this.variantsPayloadOf(this._variants.enabled, this._variants.rows);
+    },
+
+    /** The experiment on screen differs from the one saved. False when the block is not there. */
+    variantsDirty() {
+        const draft = this.variantsDraft();
+        return !!draft && this.variantsCanon(draft) !== this._variants.savedCanon;
+    },
+
+    /**
+     * What is wrong with this payload, as the code the server would answer with, or null. The cheap checks only: whether a text carries a link or a number
+     * is the server's to say (it answers `VARIANTS_INVALID` with the field and code, and `variantsProblemText` words it). A draft that is switched off may
+     * be half written: only a running experiment needs two variants with a share.
+     */
+    variantsProblem(payload) {
+        const limits = (this._variants && this._variants.limits) || { label: 40, text: 300, weight: 100 };
+        const seen = new Set();
+        for (const v of payload.variants) {
+            if (v.label === '') return 'label_missing';
+            if (Array.from(v.label).length > limits.label) return 'label_long';
+            if (seen.has(v.label.toLowerCase())) return 'label_duplicate';
+            seen.add(v.label.toLowerCase());
+            if (!Number.isInteger(v.weight) || v.weight < 0 || v.weight > limits.weight) return 'weight_invalid';
+            if (Array.from(v.opening).length > limits.text || Array.from(v.cta).length > limits.text) return 'text_long';
+        }
+        if (payload.enabled) {
+            if (payload.variants.length < 2) return 'too_few';
+            if (payload.variants.filter((v) => v.weight > 0).length < 2) return 'weights_one_arm';
+        }
+        return null;
+    },
+
+    /** The words for a problem code, in the page's language; a code this page does not know says the generic line. */
+    variantsProblemText(code) {
+        const known = ['too_few', 'weights_one_arm', 'label_missing', 'label_long', 'label_duplicate', 'weight_invalid', 'text_long', 'text_link', 'text_number'];
+        const limits = (this._variants && this._variants.limits) || { label: 40, text: 300, weight: 100 };
+        const max = code === 'label_long' ? limits.label : code === 'weight_invalid' ? limits.weight : limits.text;
+        return t(`ai.variantsProblem.${known.includes(code) ? code : 'other'}`, { max });
+    },
+
+    /** The server's refusal of a save as words, or '' when the error is not one. */
+    variantsErrorText(err) {
+        const body = err && err.body;
+        if (!body || body.code !== 'VARIANTS_INVALID' || !Array.isArray(body.problems) || !body.problems[0]) return '';
+        return this.variantsProblemText(String(body.problems[0].code || ''));
+    },
+
+    /** "A 50% · B 30% · C 20%": how new conversations are shared out, from the shares on screen. Empty when nothing has a share. */
+    variantsSplit(payload) {
+        const arms = payload.variants.filter((v) => typeof v.weight === 'number' && v.weight > 0);
+        const total = arms.reduce((n, v) => n + v.weight, 0);
+        if (total <= 0) return '';
+        return arms.map((v) => `${v.id} ${UI.formatPercent(Math.round((100 * v.weight) / total))}`).join(' · ');
+    },
+
+    /** The line under the block: what is wrong, else how conversations are split while it runs. Written as text, so nothing in it is ever markup. */
+    paintVariantsHint() {
+        const el = document.getElementById('sales-variants-hint');
+        if (!el) return;
+        const draft = this.variantsDraft();
+        let hint = null;
+        if (draft) {
+            const problem = this.variantsProblem(draft);
+            if (problem) hint = { tone: 'warning', text: this.variantsProblemText(problem) };
+            else if (draft.enabled && this.variantsSplit(draft)) hint = { tone: 'muted', text: t('ai.variantsSplit', { split: this.isolate(this.variantsSplit(draft)) }) };
+        }
+        el.textContent = hint ? hint.text : '';
+        el.classList.toggle('hidden', !hint);
+        el.classList.toggle('text-warning', !!hint && hint.tone === 'warning');
+    },
+
+    /** One variant's card. Everything typed is an attribute value or element text of the `html` tag, which escapes it. */
+    variantCard(row, canRemove, limits) {
+        const field = (name) => `sales-variant-${row.id}-${name}`;
+        return html`
+            <fieldset class="variant-card" data-slot="${row.id}">
+                <legend class="variant-card-title">${t('ai.variantSlot', { slot: this.isolate(row.id) })}</legend>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label" for="${field('label')}">${t('ai.variantName')}</label>
+                        <input class="field" id="${field('label')}" type="text" maxlength="${limits.label}" dir="auto" autocomplete="off"
+                               value="${row.label}" placeholder="${t('ai.variantNamePlaceholder')}" data-input="ai:variantsChanged">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="${field('weight')}">${t('ai.variantShare')}</label>
+                        <input class="field" id="${field('weight')}" type="number" inputmode="numeric" dir="ltr" lang="en" min="0" max="${limits.weight}" step="1"
+                               autocomplete="off" value="${row.weight}" data-input="ai:variantsChanged">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="${field('opening')}">${t('ai.variantOpening')}</label>
+                    <textarea class="field-textarea variant-text" id="${field('opening')}" rows="2" maxlength="${limits.text}" dir="auto"
+                              placeholder="${t('ai.variantOpeningPlaceholder')}" data-input="ai:variantsChanged">${row.opening}</textarea>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="${field('cta')}">${t('ai.variantCta')}</label>
+                    <textarea class="field-textarea variant-text" id="${field('cta')}" rows="2" maxlength="${limits.text}" dir="auto"
+                              placeholder="${t('ai.variantCtaPlaceholder')}" data-input="ai:variantsChanged">${row.cta}</textarea>
+                </div>
+                ${canRemove ? UI.button({ variant: 'ghost', size: 'sm', icon: 'trash-2', label: t('ai.variantRemove', { slot: this.isolate(row.id) }), action: 'ai:removeVariant', data: { slot: row.id } }) : ''}
+            </fieldset>
+        `;
+    },
+
+    /** Draws the switch, the variants and the hint from the rows. Typing never calls this (it would take the caret), adding and removing do. */
+    paintVariants() {
+        const state = this._variants;
+        const list = document.getElementById('sales-variants-list');
+        if (!state || !list) return;
+        list.innerHTML = esc(state.rows.map((row) => this.variantCard(row, !row.saved && state.rows.length > 2, state.limits)));
+        UI.icons(list);
+        const toggle = document.getElementById('sales-variants-enabled');
+        if (toggle) toggle.checked = state.enabled;
+        const add = document.getElementById('sales-variant-add');
+        if (add) add.disabled = state.rows.length >= state.limits.max;
+        this.paintVariantsHint();
+    },
+
+    /** Asks for the experiment once per visit. Never an error: a server without it simply has no block. */
+    async loadVariants() {
+        if (this._variants !== undefined) return;
+        this._variants = null;
+        const seq = this._seq;
+        try {
+            const got = await API.getSalesVariants();
+            if (got && got.config && Array.isArray(got.config.variants)) {
+                const l = got.limits || {};
+                const limits = {
+                    max: Number.isInteger(l.max) ? l.max : 3, label: Number.isInteger(l.label) ? l.label : 40,
+                    text: Number.isInteger(l.text) ? l.text : 300, weight: Number.isInteger(l.weight) ? l.weight : 100,
+                };
+                const rows = this.variantRowsFrom(got.config);
+                const enabled = got.config.enabled === true;
+                this._variants = { limits, enabled, rows, savedCanon: this.variantsCanon(this.variantsPayloadOf(enabled, rows)) };
+            }
+        } catch (err) {
+            this._variants = null;
+        }
+        // The operator left while it was in flight: those elements belong to another page now.
+        if (seq !== this._seq) return;
+        this.paintVariants();
+        this.syncSales();
+        this.refreshDirty();
+    },
+
+    /** What the server answered to a save is now what is on screen and what is saved. */
+    adoptVariants(got) {
+        if (!this._variants || !got || !got.config) return;
+        const rows = this.variantRowsFrom(got.config);
+        const enabled = got.config.enabled === true;
+        this._variants = { ...this._variants, enabled, rows, savedCanon: this.variantsCanon(this.variantsPayloadOf(enabled, rows)) };
+        this.paintVariants();
+    },
+
+    variantsChanged() {
+        this.paintVariantsHint();
+        this.refreshDirty();
+    },
+
+    addVariant() {
+        const state = this._variants;
+        if (!state) return;
+        this.syncVariantRows();
+        const id = state.rows.length < state.limits.max ? this.freeVariantSlot(state.rows) : null;
+        if (!id) return;
+        state.rows.push(this.blankVariant(id));
+        state.rows.sort((a, b) => this.VARIANT_SLOTS.indexOf(a.id) - this.VARIANT_SLOTS.indexOf(b.id));
+        this.paintVariants();
+        const label = document.getElementById(`sales-variant-${id}-label`);
+        if (label && typeof label.focus === 'function') label.focus();
+        this.refreshDirty();
+    },
+
+    /** Only a variant nobody has saved can be removed: a saved one may already hold conversations, and its slot must not be given to other wording. */
+    removeVariant(slot) {
+        const state = this._variants;
+        if (!state) return;
+        this.syncVariantRows();
+        const row = state.rows.find((r) => r.id === slot);
+        if (!row || row.saved || state.rows.length <= 2) return;
+        state.rows = state.rows.filter((r) => r.id !== slot);
+        this.paintVariants();
+        this.refreshDirty();
     },
 
     /**
@@ -701,6 +1003,21 @@ const AiSettingsPage = {
             followup = { minutes };
         }
 
+        // The wording experiment (S14), when this screen has it and it changed: checked here for what can be told without the server, before anything
+        // is saved, so a typo does not leave the agent saved and the experiment not. It has a route of its own and is saved right after the agent's settings.
+        let variants = null;
+        if (this.variantsDirty()) {
+            const draft = this.variantsDraft();
+            const problem = this.variantsProblem(draft);
+            if (problem) {
+                this.syncSales();
+                UI.toast(this.variantsProblemText(problem), 'error');
+                restore();
+                return;
+            }
+            variants = draft;
+        }
+
         try {
             await API.saveAiSettings(payload);
             // The fields are now what the server holds, so nothing is unsaved
@@ -715,11 +1032,14 @@ const AiSettingsPage = {
                 await API.saveSalesFollowup(followup);
                 this._followup = { ...this._followup, minutes: followup.minutes };
             }
+            if (variants) {
+                this.adoptVariants(await API.saveSalesVariants(variants));
+            }
             this.refreshDirty();
             UI.toast(t('ai.saved'), 'success');
         } catch (err) {
             console.error('Save Settings Error:', err);
-            UI.toast(err.message || t('ai.saveFailed'), 'error');
+            UI.toast(this.variantsErrorText(err) || err.message || t('ai.saveFailed'), 'error');
             // Whatever did save is no longer unsaved: the note beside Save says what is still left.
             this.refreshDirty();
         } finally {
@@ -915,4 +1235,7 @@ UI.registerActions('ai', {
     engineChanged: () => AiSettingsPage.engineChanged(),
     fallbackChanged: () => AiSettingsPage.fallbackChanged(),
     salesChanged: () => AiSettingsPage.salesChanged(),
+    variantsChanged: () => AiSettingsPage.variantsChanged(),
+    addVariant: () => AiSettingsPage.addVariant(),
+    removeVariant: (el) => AiSettingsPage.removeVariant(el && el.dataset ? el.dataset.slot : ''),
 });

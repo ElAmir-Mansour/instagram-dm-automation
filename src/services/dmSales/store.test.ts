@@ -157,6 +157,40 @@ describe('recordTurn', () => {
         assert.match(sql, /opted_out_at = CASE WHEN \$12::boolean THEN NOW\(\) ELSE opted_out_at END/);
     });
 
+    it('writes no A/B arm unless the turn assigns one: the statement and its parameters are exactly what they were before the column existed (a database without v42 still records the turn)', async () => {
+        answering([], 1);
+        await recordTurn(turn());
+        assert.ok(!/sales_variant/.test(asked[0]!.sql));
+        assert.equal(asked[0]!.params.length, 16);
+        answering([], 1);
+        await recordTurn(turn({ variant: null }));
+        assert.ok(!/sales_variant/.test(asked[1]!.sql), 'null is the same as absent');
+        answering([], 1);
+        await recordTurn(turn({ message: null, linkedOfferId: null }));
+        assert.ok(!/sales_variant/.test(asked[2]!.sql));
+        assert.equal(asked[2]!.params.length, 12);
+    });
+
+    it('assigns the arm in the SAME statement as the reply, as the last parameter, and only while the conversation has none (COALESCE keeps one it already has)', async () => {
+        answering([], 1);
+        await recordTurn(turn({ variant: 'B' }));
+        assert.equal(asked.length, 1, 'one statement');
+        const { sql, params } = asked[0]!;
+        assert.match(sql, /opted_out_at = CASE WHEN \$12::boolean THEN NOW\(\) ELSE opted_out_at END, sales_variant = COALESCE\(sales_variant, \$17::text\) WHERE id = \$1 AND creator_id = \$2 RETURNING/);
+        assert.equal(params.length, 17);
+        assert.equal(params[16], 'B');
+        assert.deepEqual(params.slice(0, 12), ['conv-1', 'creator-1', 'link', 1, 0, 'ready_to_buy', 'plan', 'plan', false, null, false, false], 'the first sixteen are where they always were');
+        assert.deepEqual(params.slice(12, 14), ['text', 'Here you go']);
+    });
+
+    it('assigns the arm on a turn that sent nothing too, at $13', async () => {
+        answering([], 1);
+        await recordTurn(turn({ message: null, linkedOfferId: null, variant: 'A' }));
+        assert.match(asked[0]!.sql, /sales_variant = COALESCE\(sales_variant, \$13::text\) WHERE id = \$1 AND creator_id = \$2$/);
+        assert.equal(asked[0]!.params.length, 13);
+        assert.equal(asked[0]!.params[12], 'A');
+    });
+
     it('writes the state alone, still scoped to the tenant, when nothing was sent', async () => {
         answering([], 1);
         await recordTurn(turn({ message: null, pauseBot: true, stage: 'closed', handoffReason: 'abuse', linkedOfferId: null }));
