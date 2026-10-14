@@ -421,6 +421,11 @@ const API = {
     toggleConversationBot: (id, isActive) => API.request(`/conversations/${encodeURIComponent(id)}/toggle-bot`, {
         method: 'PUT', body: JSON.stringify({ is_bot_active: isActive }),
     }),
+    /**
+     * Look the sender up again (Instagram User Profile API). Throttled on the server, so asking is cheap and
+     * answers `{ refreshed: false, reason: 'throttled' }` rather than an error when it is too soon.
+     */
+    refreshConversationProfile: (id) => API.request(`/conversations/${encodeURIComponent(id)}/refresh-profile`, { method: 'POST' }),
 
     // AI settings
     getAiSettings: () => API.request('/settings/ai'),

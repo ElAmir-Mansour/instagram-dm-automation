@@ -285,6 +285,12 @@ interface Scenario {
     owner?: string | null;
     /** Statements a scenario arranges on top of the standard ones, tried first (the sales turn's own reads and writes). */
     extraRoutes?: Array<[RegExp, { rows?: any[]; rowCount?: number }]>;
+    /**
+     * The sender-profile lookup (v40): `claim` is whether the throttle lets it through (default true), `graph` what Meta answers
+     * (default a full profile) or throws. Absent = the lookup's statements are not arranged, so they throw like any statement a test
+     * did not arrange: which is itself a scenario, because a lookup that cannot run must not change what happens to the DM.
+     */
+    senderProfile?: { claim?: boolean; graph?: (url: string, config: any) => Promise<any> };
 }
 
 /** Any 32 bytes of hex: enough to encrypt and decrypt a saved key inside one run. */
@@ -314,7 +320,7 @@ async function runDm(
     entryId = 'ig-page-1',
     /** What to drive instead of `handleMessagingEvent` — the job handler, for the wiring test. */
     invoke?: (event: any, entryId: string) => Promise<void>
-): Promise<{ executed: Executed[]; sends: Sent[]; geminiCalls: number; geminiPayloads: any[]; geminiUrls: string[]; geminiKeys: string[]; error: any; timeline: string[] }> {
+): Promise<{ executed: Executed[]; sends: Sent[]; lookups: Array<{ url: string; config: any }>; geminiCalls: number; geminiPayloads: any[]; geminiUrls: string[]; geminiKeys: string[]; error: any; timeline: string[] }> {
     const {
         creator = CREATOR,
         conversation = { id: 'conv-1', is_bot_active: true, ai_disclosed_at: null },
@@ -331,6 +337,7 @@ async function runDm(
         profile,
         owner,
         extraRoutes = [],
+        senderProfile,
     } = scenario;
 
     const executed: Executed[] = [];
@@ -369,6 +376,11 @@ async function runDm(
         [/INSERT INTO rate_limit_counters/, { rows: [{ count: creatorQuotaCount }] }],
         [/INSERT INTO app_rate_limit_counters/, { rows: [{ count: appQuotaCount }] }],
     ];
+    // The sender-profile lookup's two statements: the throttle's claim, and the write.
+    if (senderProfile) {
+        routes.unshift([/profile_fetched_at = NOW\(\)/, { rows: [{ username: 'sam_dev', profile_name: 'Sam Dev', profile_fetched_at: new Date(0) }] }]);
+        routes.unshift([/SET profile_checked_at = NOW\(\)/, { rows: senderProfile.claim === false ? [] : [{ id: 'conv-1' }] }]);
+    }
     // Read as the database hands it back: JSONB, its keys in Postgres's order.
     if (profile) routes.unshift([/FROM creator_profiles/, { rows: [{ profile: throughJsonb(profile), version: 3, activated_at: null }] }]);
     if (owner !== undefined) routes.unshift([/SELECT id FROM creators ORDER BY created_at, id LIMIT 1/, { rows: owner === null ? [] : [{ id: owner }] }]);
@@ -379,6 +391,8 @@ async function runDm(
     const originalQuery = pool.query;
     const originalAxiosPost = axios.post;
     const originalMetaPost = metaHttp.post;
+    const originalMetaGet = metaHttp.get;
+    const lookups: Array<{ url: string; config: any }> = [];
     const originalKey = process.env.GEMINI_API_KEY;
     if (envGeminiKey === null) delete process.env.GEMINI_API_KEY;
     else process.env.GEMINI_API_KEY = envGeminiKey;
@@ -404,6 +418,13 @@ async function runDm(
         sends.push({ url, body });
         return send(url, body);
     };
+    // Only the profile lookup reads from Meta in this pipeline. Without a `senderProfile` scenario a GET is a bug in the test.
+    (metaHttp as any).get = async (url: string, config: any) => {
+        timeline.push('META profile');
+        lookups.push({ url, config });
+        if (!senderProfile) throw new Error(`no GET was arranged for ${url}`);
+        return (senderProfile.graph ?? (async () => ({ data: { name: 'Sam Dev', username: 'sam_dev', profile_pic: 'https://cdn.example.test/s.jpg', follower_count: 10 } })))(url, config);
+    };
 
     let error: any = null;
     try {
@@ -415,6 +436,7 @@ async function runDm(
         (pool as any).query = originalQuery;
         (axios as any).post = originalAxiosPost;
         (metaHttp as any).post = originalMetaPost;
+        (metaHttp as any).get = originalMetaGet;
         if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
         else process.env.GEMINI_API_KEY = originalKey;
         if (originalEncryptionKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
@@ -422,7 +444,7 @@ async function runDm(
         invalidateTenantCache();
     }
 
-    return { executed, sends, geminiCalls, geminiPayloads, geminiUrls, geminiKeys, error, timeline };
+    return { executed, sends, lookups, geminiCalls, geminiPayloads, geminiUrls, geminiKeys, error, timeline };
 }
 
 const textEvent = (over: Record<string, unknown> = {}) => ({
@@ -811,6 +833,103 @@ describe('handleMessagingEvent — which network, and who wrote it (v26)', () =>
             (event, entryId) => handlers['dm.process']({ event, entryId, object: 'page' }, job)
         );
         assert.equal(upsertOf(executed).params[2], 'facebook', 'the object wins over the Instagram recipient id');
+    });
+});
+
+/**
+ * Who the sender is (v40, the inbox's detail view): an Instagram DM triggers a profile lookup, throttled, best effort. The owner's rule
+ * is that it can never get in the way of the reply, so most of these are about what does NOT change.
+ */
+describe('handleMessagingEvent — the sender’s profile (v40)', () => {
+    const claimOf = (executed: Executed[]) => executed.find((e) => /SET profile_checked_at = NOW\(\)/.test(e.sql));
+    const storeOf = (executed: Executed[]) => executed.find((e) => /profile_fetched_at = NOW\(\)/.test(e.sql));
+    const IG = { lastAttempt: false, object: 'instagram' };
+
+    it('looks an Instagram sender up on first contact: the throttle’s claim, one GET with the Page token, and the write', async () => {
+        const { executed, lookups, sends, error } = await runDm(textEvent(), { senderProfile: {} }, IG);
+        assert.equal(error, null);
+        assert.equal(sends.length, 1, 'the reply went out as it always did');
+        assert.ok(claimOf(executed), 'the claim');
+        assert.deepEqual(claimOf(executed)!.params, ['conv-1', 3600, 86400]);
+        assert.equal(lookups.length, 1);
+        assert.match(lookups[0]!.url, /^https:\/\/graph\.facebook\.com\/v[\d.]+\/user-1$/);
+        assert.equal(lookups[0]!.config.headers.Authorization, 'Bearer EAAGplaintext');
+        assert.match(lookups[0]!.config.params.fields, /^name,username,profile_pic,follower_count,/);
+        assert.deepEqual(storeOf(executed)!.params.slice(0, 4), ['conv-1', 'sam_dev', 'Sam Dev', 'https://cdn.example.test/s.jpg']);
+        assert.equal(ranMarkHandled(executed), true);
+    });
+
+    it('a lookup Meta refuses is logged and changes nothing: the reply is sent once, the message is handled, nothing is re-raised', async () => {
+        const refused = Object.assign(new Error('User consent is required'), { response: { status: 400, data: { error: { code: 230, message: 'User consent is required' } } } });
+        const { executed, lookups, sends, error } = await runDm(textEvent(), { senderProfile: { graph: async () => { throw refused; } } }, IG);
+        assert.equal(error, null, 'the runner is never told');
+        assert.equal(sends.length, 1);
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(ranRelease(executed), false, 'the claim on the message is not released for a profile');
+        assert.equal(lookups.length, 1);
+        assert.equal(storeOf(executed), undefined, 'and nothing was stored');
+    });
+
+    it('a lookup that fails on the LAST attempt does not turn an answered DM into a failed job either', async () => {
+        const { error, sends } = await runDm(textEvent(), { senderProfile: { graph: async () => { throw new Error('socket hang up'); } } }, { lastAttempt: true, object: 'instagram' });
+        assert.equal(error, null);
+        assert.equal(sends.length, 1);
+    });
+
+    it('a database without v40 (the claim cannot run) still answers the DM, and Meta is not asked about the sender', async () => {
+        // No `senderProfile` scenario: the claim throws "no result arranged", which is what a missing column does.
+        const { executed, lookups, sends, error } = await runDm(textEvent(), {}, IG);
+        assert.equal(error, null);
+        assert.equal(sends.length, 1);
+        assert.equal(lookups.length, 0);
+        assert.equal(ranMarkHandled(executed), true);
+    });
+
+    it('does not call Meta when the throttle says the sender was looked up recently', async () => {
+        const { executed, lookups, sends } = await runDm(textEvent(), { senderProfile: { claim: false } }, IG);
+        assert.ok(claimOf(executed), 'it asked');
+        assert.equal(lookups.length, 0, 'and was told no');
+        assert.equal(storeOf(executed), undefined);
+        assert.equal(sends.length, 1);
+    });
+
+    it('is Instagram only: a Messenger thread has no lookup, no statement and no call', async () => {
+        const { executed, lookups, sends } = await runDm(
+            textEvent({ recipient: { id: 'fb-page-1' } }), { senderProfile: {} }, { lastAttempt: false, object: 'page' }, 'fb-page-1'
+        );
+        assert.equal(claimOf(executed), undefined);
+        assert.equal(lookups.length, 0);
+        assert.equal(sends.length, 1);
+    });
+
+    it('also looks up a sender whose AI is paused: the operator is the one who needs the name', async () => {
+        const { lookups, sends } = await runDm(textEvent(), { conversation: { id: 'conv-1', is_bot_active: false, ai_disclosed_at: null }, senderProfile: {} }, IG);
+        assert.equal(sends.length, 0, 'paused: nothing sent');
+        assert.equal(lookups.length, 1);
+    });
+
+    it('does not look up a message it will not answer: a redelivery, or one another attempt holds', async () => {
+        const { lookups, executed } = await runDm(textEvent(), { inboundInsert: [], resumeClaim: [], senderProfile: {} }, IG);
+        assert.equal(lookups.length, 0);
+        assert.equal(claimOf(executed), undefined);
+    });
+
+    it('runs alongside the reply and is awaited after it: a slow lookup does not hold the reply, and the job does not finish without it', async () => {
+        const order: string[] = [];
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        const pending = runDm(
+            textEvent(),
+            {
+                senderProfile: { graph: async () => { order.push('lookup:start'); await gate; order.push('lookup:end'); return { data: { name: 'Sam', username: 'sam_dev' } }; } },
+                send: async () => { order.push('reply:sent'); release(); return { data: { message_id: 'sent-1' } }; },
+            },
+            IG
+        );
+        const { error } = await pending;
+        assert.equal(error, null);
+        // The lookup started, the reply went out WHILE it was still waiting, and only then did it finish: it never held the reply.
+        assert.deepEqual(order, ['lookup:start', 'reply:sent', 'lookup:end']);
     });
 });
 
@@ -1242,11 +1361,17 @@ describe('handleMessagingEvent — the sales mode switch (S6)', () => {
         sales_mode: mode, sales_test_senders: senders,
     });
 
-    /** What the pipeline did for a first message on the old path, in order. `READ MODE` is the one statement the switch added (see below). */
+    /**
+     * What the pipeline did for a first message on the old path, in order. `READ MODE` is the one statement the switch added (see below).
+     * `CLAIM PROFILE` is the one the inbox's detail view added (v40): an Instagram thread claims its sender's profile lookup, which is at
+     * most one Graph call a day and never changes what happens to the DM (`describe('… the sender's profile (v40)')`). It is not the
+     * switch's: it is in every list of this block, the old path's and the sales turn's alike.
+     */
     const TODAYS_CALLS = [
         'SQL SELECT id, instagram_page_id, facebook_',
         'SQL INSERT INTO conversations (creator_id,',
         'SQL INSERT INTO messages (conversation_id,',
+        'SQL UPDATE conversations SET profile_checked',   // CLAIM PROFILE (v40): not arranged here, so it throws, and is logged
         'SQL SELECT sales_mode, sales_test_senders F',   // READ MODE: the only difference from the pipeline before S6
         'SQL SELECT profile, version, activated_at F',
         'SQL SELECT id FROM creators ORDER BY create',

@@ -347,6 +347,118 @@ export async function sendDirectMessage(
     }
 }
 
+// ─── Who a sender is (Instagram User Profile API) ───────────────────────────────────────
+
+/**
+ * What Meta's Instagram User Profile API is asked for: every field its reference lists.
+ * @see https://developers.facebook.com/docs/messenger-platform/instagram/features/user-profile
+ */
+export const PROFILE_FIELDS = 'name,username,profile_pic,follower_count,is_user_follow_business,is_business_follow_user,is_verified_user';
+
+/**
+ * The three that identify a person, asked on their own when the full list is refused with code 100: ONE field Meta does not serve for an
+ * account fails the whole call (src/services/onboarding/graph.ts has the same note), and a name with no follower count is far better than no name.
+ */
+export const PROFILE_FIELDS_BASIC = 'name,username,profile_pic';
+
+/** A profile is looked up while a DM is being answered, so it gets less than the 10 s every other Graph call has. */
+export const PROFILE_TIMEOUT_MS = 8_000;
+
+/** An Instagram sender as the inbox stores them. Every field is null when Meta did not send it, so a partial answer never invents one. */
+export interface InstagramUserProfile {
+    name: string | null;
+    username: string | null;
+    /** Meta's link to the picture. It EXPIRES after a few days, which is why it is a cache and not a record. */
+    profilePic: string | null;
+    followerCount: number | null;
+    /** The person follows the business account. */
+    followsBusiness: boolean | null;
+    /** The business account follows the person. */
+    businessFollows: boolean | null;
+    verified: boolean | null;
+}
+
+const PROFILE_NAME_MAX = 255;
+const PROFILE_URL_MAX = 2048;
+
+const cleanText = (value: unknown, max: number): string | null => {
+    if (typeof value !== 'string') return null;
+    const text = value.trim();
+    return text ? text.slice(0, max) : null;
+};
+
+/**
+ * Meta's answer, kept to what the columns hold. Pure.
+ *
+ * Nothing is trusted: a username or name is text capped at the column's width, the picture is kept only as an http(s) URL (the dashboard
+ * puts it in an `<img src>`, behind its own `safeUrl` as well), a count is a non-negative whole number and a flag is a real boolean. A body
+ * that is not an object maps to all nulls.
+ */
+export function mapInstagramUserProfile(data: unknown): InstagramUserProfile {
+    const d = (data && typeof data === 'object' ? data : {}) as Record<string, unknown>;
+    const pic = cleanText(d.profile_pic, PROFILE_URL_MAX);
+    const count = d.follower_count;
+    const flag = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
+    return {
+        name: cleanText(d.name, PROFILE_NAME_MAX),
+        username: cleanText(d.username, PROFILE_NAME_MAX),
+        profilePic: pic && /^https?:\/\//i.test(pic) ? pic : null,
+        followerCount: typeof count === 'number' && Number.isSafeInteger(count) && count >= 0 && count <= 2_147_483_647 ? count : null,
+        followsBusiness: flag(d.is_user_follow_business),
+        businessFollows: flag(d.is_business_follow_user),
+        verified: flag(d.is_verified_user),
+    };
+}
+
+/** Meta answered, and the answer names nobody: no name and no username. Nothing is stored for it. */
+export class ProfileUnavailableError extends Error {
+    constructor() {
+        super('Instagram returned no name or username for this sender.');
+        this.name = 'ProfileUnavailableError';
+    }
+}
+
+/**
+ * Who an Instagram sender is: `GET /{IGSID}?fields=…`, the Instagram User Profile API.
+ *
+ * The same host and the same Page access token as `sendDirectMessage` (graph.facebook.com, `Authorization: Bearer`): the reference's
+ * request is that call with a Page token, and it names no graph.instagram.com variant. It needs the person to have messaged the
+ * business (that message is their consent: a commenter gets a "consent required" error), and is refused for someone who blocked it.
+ *
+ * Throws on any failure: a `MetaApiError` carrying Meta's code, or `ProfileUnavailableError`. The caller (`senderProfile.ts`) owns what a
+ * failure means, which is "log it and carry on": nothing here may stop a reply.
+ * @see https://developers.facebook.com/docs/messenger-platform/instagram/features/user-profile
+ */
+export async function fetchInstagramUserProfile(igsid: string, accessToken: string): Promise<InstagramUserProfile> {
+    const url = `${GRAPH_BASE}/${encodeURIComponent(igsid)}`;
+    const ask = (fields: string) => withRetry(
+        () => metaHttp.get(url, {
+            params: { fields },
+            headers: { Authorization: `Bearer ${accessToken}` },
+            timeout: PROFILE_TIMEOUT_MS,
+        }),
+        { label: 'fetchInstagramUserProfile', retries: 1 }
+    );
+
+    let response;
+    try {
+        try {
+            response = await ask(PROFILE_FIELDS);
+        } catch (error: any) {
+            // Code 100 is "a parameter is invalid": the field list is what is most likely wrong, so it is asked once more with the
+            // three that identify the person. Any other failure (consent, a block, a dead token, throttling) is not changed by that.
+            if (metaErrorCode(error) !== 100) throw error;
+            response = await ask(PROFILE_FIELDS_BASIC);
+        }
+    } catch (error: any) {
+        throw metaFailure('Profile Lookup Failed', error);
+    }
+
+    const profile = mapInstagramUserProfile(response.data);
+    if (!profile.name && !profile.username) throw new ProfileUnavailableError();
+    return profile;
+}
+
 /**
  * What a DM's sender action can say: the conversation is read (`mark_seen`), or the bot is writing (`typing_on`). Instagram and
  * Messenger both have them, and a typing indicator lasts about twenty seconds or until the next message.

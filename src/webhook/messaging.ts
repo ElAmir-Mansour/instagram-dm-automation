@@ -12,6 +12,7 @@ import { runSalesTurn } from '../services/dmSales/turn.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { sendDirectMessage } from '../services/instagram.js';
 import { isPermanentMetaError } from '../services/http.js';
+import { PROFILE_WAIT_MS, refreshSenderProfile, settleWithin } from '../services/senderProfile.js';
 import { noteMetaFailure } from '../services/tokenHealth.js';
 import { getCreatorByPageId, type Creator } from '../services/tenant.js';
 import { checkFairSendQuota } from '../utils/rateLimiter.js';
@@ -296,12 +297,40 @@ async function releaseInbound(messageId: string): Promise<void> {
     );
 }
 
+/**
+ * Work that rides along with one DM and must be finished before its job is, but never decides how the DM turns out.
+ * Today that is the sender's profile lookup (`refreshSenderProfile`), which resolves whatever happened and never throws.
+ */
+interface DmSideTasks {
+    profile: Promise<unknown>;
+}
+
 async function processDm(
     dm: NormalizedDm,
     event: any,
     recipientId: string | undefined,
     entryId: string,
     options: WebhookHandlerOptions
+): Promise<void> {
+    const side: DmSideTasks = { profile: Promise.resolve() };
+    try {
+        await answerDm(dm, event, recipientId, entryId, options, side);
+    } finally {
+        // Awaited whichever way the DM ended, and AFTER it: the lookup started alongside the reply, so it only ever costs the job time it
+        // did not need to spend, and a serverless instance that is frozen after the response does not freeze it half way. For at most
+        // `PROFILE_WAIT_MS`: the reply is sent and the message handled by now, and a slow Meta must not hold the job for it. `settleWithin`
+        // never rejects: `refreshSenderProfile` does not either, and a profile must not be able to turn an answered DM into a failed job.
+        await settleWithin(side.profile, PROFILE_WAIT_MS);
+    }
+}
+
+async function answerDm(
+    dm: NormalizedDm,
+    event: any,
+    recipientId: string | undefined,
+    entryId: string,
+    options: WebhookHandlerOptions,
+    side: DmSideTasks
 ): Promise<void> {
     log('info', 'dm.received', { is_story_mention: dm.isStoryMention, has_payload: Boolean(dm.payload) });
 
@@ -328,6 +357,7 @@ async function processDm(
     //    The DO UPDATE also replaces the separate last_message_at write.
     //    `platform` (v26) is set once and kept: COALESCE fills a thread written before v26 on
     //    its next DM, and never flips one that already has an answer.
+    const platform = dmPlatform(options.object, creator, [recipientId, entryId]);
     const conversation = await queryOne<Pick<ConversationRow, 'id' | 'is_bot_active' | 'ai_disclosed_at'>>(
         `INSERT INTO conversations (creator_id, instagram_user_id, status, platform)
          VALUES ($1, $2, 'active', $3)
@@ -335,7 +365,7 @@ async function processDm(
          DO UPDATE SET last_message_at = NOW(),
                        platform = COALESCE(conversations.platform, EXCLUDED.platform)
          RETURNING id, is_bot_active, ai_disclosed_at`,
-        [creator.id, dm.senderId, dmPlatform(options.object, creator, [recipientId, entryId])]
+        [creator.id, dm.senderId, platform]
     );
 
     if (!conversation) {
@@ -355,6 +385,13 @@ async function processDm(
     }
     if (claim.resumed) {
         log('info', 'dm.resumed', { message_id: claim.id, reply_attempts: claim.attempts });
+    }
+
+    // Who the sender is, for the inbox (v40): Instagram only, on first contact and at most once a day after that, started now so it
+    // runs while the reply is being written and awaited in `processDm` once the DM is done. Best effort by construction: it never throws,
+    // so nothing below can change because of it. See src/services/senderProfile.ts.
+    if (platform === 'instagram') {
+        side.profile = refreshSenderProfile({ conversationId, igsid: dm.senderId, token: creator.page_access_token });
     }
 
     // 3. Call AI Agent to reply if Bot is active

@@ -5028,9 +5028,9 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
    bubble keeps its `max-width` against the full row; flex-start / flex-end stay
    writing-mode aware, so the tag sits at the bubble's own edge in both directions. On the
    chat canvas, not on the gradient: a tint on the outbound gradient falls below AA. */
-.message-row--tagged { flex-direction: column; gap: var(--space-1); }
-.message-row--tagged.row-outbound { align-items: flex-end; }
-.message-row--tagged.row-inbound { align-items: flex-start; }
+.message-row--tagged, .message-row--stacked { flex-direction: column; gap: var(--space-1); }
+.message-row--tagged.row-outbound, .message-row--stacked.row-outbound { align-items: flex-end; }
+.message-row--tagged.row-inbound, .message-row--stacked.row-inbound { align-items: flex-start; }
 .sender-tag {
     display: inline-flex; align-items: center;
     font-size: var(--fs-100);
@@ -5042,6 +5042,85 @@ details.cover-step[open] > summary { margin-block-end: var(--space-2); }
 /* Tints with their -text labels (DESIGN §3), the pairs `.chip-accent` and `.chip` use. */
 .sender-tag--ai { background: var(--accent-soft); color: var(--accent-text); }
 .sender-tag--operator { background: var(--surface-glass-hover); color: var(--text-default); }
+
+/* ─── The detail view: who the sender is, what a message was, how the AI answered it ───────────── */
+
+/* The sender's avatar: their initials on the highlighter, their picture over them. Meta's picture links expire after a
+   few days, so a picture that does not load is expected: inbox.js removes the broken <img> and the initials are what is left. */
+.avatar {
+    position: relative;
+    display: inline-flex; align-items: center; justify-content: center;
+    inline-size: 40px; block-size: 40px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-size: var(--fs-200);
+    font-weight: var(--fw-semibold);
+}
+.avatar [data-lucide] { inline-size: var(--icon-lg); block-size: var(--icon-lg); }
+.avatar-img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
+
+/* One line in the header, ellipsised: the id is the part a 375px screen can lose. The handle's separator is drawn only
+   when there is a handle. */
+.chat-header-info .chat-sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-handle:has([data-chat-handle]:not(:empty))::after { content: ' \00B7 '; }
+
+/* Follows you / you follow them / followers / first message / message count, as chips that wrap. Hidden while nothing is known. */
+.chat-meta {
+    display: flex; flex-wrap: wrap; gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+    border-block-end: 1px solid var(--border-subtle);
+}
+.chat-meta:empty { display: none; }
+
+/* Under a bubble, on the chat canvas (never on the outbound gradient): how long the AI took and with which model, a
+   tap the customer made, a reply that is failing. */
+.msg-detail {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3);
+    max-inline-size: 100%;
+    font-size: var(--fs-100);
+    color: var(--text-muted);
+}
+.row-outbound .msg-detail { justify-content: flex-end; }
+.msg-detail-item { display: inline-flex; align-items: center; gap: var(--space-1); }
+.msg-detail-item [data-lucide] { inline-size: var(--icon-xs); block-size: var(--icon-xs); }
+
+/* Inside a bubble: what a carousel or story mention was when its body is no longer stored, and what the customer attached. */
+.msg-note { margin: 0; font-size: var(--fs-100); color: color-mix(in srgb, currentColor 78%, transparent); }
+.msg-attachments { display: flex; flex-direction: column; gap: var(--space-2); }
+.msg-attachment { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.msg-attachment-img {
+    display: block;
+    inline-size: 100%; max-inline-size: 240px; max-block-size: 240px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+}
+.msg-attachment-link {
+    display: inline-flex; align-items: center;
+    min-block-size: var(--tap-target);
+    font-size: var(--fs-100);
+    color: var(--accent-text);
+}
+
+/* A carousel button's destination, under its picture: a link out as a real (44px) link, a postback as the payload it sends back. */
+.carousel-btn-wrap { display: flex; flex-direction: column; }
+.carousel-btn-url {
+    display: inline-flex; align-items: center;
+    min-block-size: var(--tap-target);
+    font-size: var(--fs-100);
+    color: var(--accent-text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.carousel-btn-payload { padding-inline: var(--space-1); font-size: var(--fs-100); color: var(--text-muted); overflow-wrap: anywhere; }
+
+/* Phones: back, picture and name on one row, the AI switch on the next. With all four in one row the name had 73px at 375. */
+@media (max-width: 30rem) {
+    .chat-header { flex-wrap: wrap; }
+    .chat-header-actions { flex-basis: 100%; justify-content: flex-end; }
+}
 
 /* A1: the window control above the tiles, and the window each panel names. */
 .analytics-toolbar { display: flex; justify-content: flex-end; margin-block-end: var(--space-4); }

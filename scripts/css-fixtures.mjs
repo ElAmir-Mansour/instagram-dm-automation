@@ -743,7 +743,9 @@ const threads = () => [
 const messages = () => [
     { id: 'm1', direction: 'inbound', text: 'السلام عليكم، كم سعر الكورس؟', created_at: ago(2 * DAY) },
     { id: 'm2', direction: 'outbound', sender: 'ai', text: 'وعليكم السلام! هذا الرابط 👇', created_at: ago(2 * DAY - 60000),
-        raw_payload: JSON.stringify({ quick_replies: [{ title: 'التفاصيل', payload: 'x' }, { title: 'السعر', payload: 'y' }] }) },
+        // An OBJECT, as the API sends it: `messages.raw_payload` is JSONB. This used to be a JSON string, which is the one shape the
+        // server never sends, and the page drew nothing for a real carousel while every fixture looked fine.
+        raw_payload: { quick_replies: [{ title: 'التفاصيل', payload: 'x' }, { title: 'السعر', payload: 'y' }] } },
     { id: 'm3', direction: 'inbound', text: 'شكراً، وهل فيه شهادة؟', created_at: ago(120000) },
     { id: 'm4', direction: 'outbound', sender: 'operator', text: 'نعم، شهادة إتمام.', created_at: ago(60000) },
 ];
@@ -754,6 +756,49 @@ fixture('inbox', async () => {
     h.run('InboxPage.render()');
     await settle();
     h.run("InboxPage.selectThread('1')");
+    await settle();
+    const markup = compose(h);
+    h.run('InboxPage.destroy()');
+    return { nav: 'inbox', markup };
+});
+
+// The detail view: a looked-up Instagram sender, a carousel with its link, a tap, an attachment, a retried reply and a failing one.
+// Names and handles are male or neutral (DESIGN.md §7); nothing here is a real account.
+const detailThreads = () => [
+    {
+        id: '4', username: 'omar_k', profile_name: 'Omar Khaled', platform: 'instagram', instagram_user_id: '17841400003051',
+        profile_pic_url: null, follower_count: 12400, is_user_follow_business: true, is_business_follow_user: false, is_verified_user: false,
+        profile_fetched_at: ago(3600000), profile_checked_at: ago(3600000), created_at: ago(9 * DAY), message_count: 6,
+        is_bot_active: true, last_message_direction: 'outbound', last_message_at: ago(30000),
+        last_message_text: '[Structured Template]', last_message_type: 'carousel', last_message_cards: 2, last_message_card_title: 'هندسة الأوامر',
+    },
+    ...threads(),
+];
+const detailMessages = () => [
+    { id: 'd1', direction: 'inbound', sender: 'customer', text: 'السلام عليكم، عندكم كورسات ثانية؟', created_at: ago(2 * DAY), handled_at: ago(2 * DAY - 4000), reply_attempts: 1 },
+    { id: 'd2', direction: 'outbound', sender: 'ai', message_type: 'quick_reply', text: 'وعليكم السلام! تفضّل:', created_at: ago(2 * DAY - 4000),
+        raw_payload: { text: 'وعليكم السلام! تفضّل:', quick_replies: [{ content_type: 'text', title: 'كورسات أخرى', payload: 'OTHER_PLANS' }, { content_type: 'text', title: 'الأسعار', payload: 'PRICE' }] },
+        ai: { model: 'gemini-2.5-flash', provider: null, source: 'agent' } },
+    { id: 'd3', direction: 'inbound', sender: 'customer', text: 'كورسات أخرى', payload: 'OTHER_PLANS', created_at: ago(60000), handled_at: ago(60000 - 131000), reply_attempts: 3,
+        raw_payload: { message: { mid: 'm', text: 'كورسات أخرى', quick_reply: { payload: 'OTHER_PLANS' } } } },
+    { id: 'd4', direction: 'outbound', sender: 'ai', message_type: 'carousel', text: '[Structured Template]', created_at: ago(60000 - 131000),
+        raw_payload: { attachment: { type: 'template', payload: { template_type: 'generic', elements: [
+            { title: 'هندسة الأوامر', subtitle: 'اكتب أوامر تعطيك نتائج', buttons: [{ type: 'web_url', title: 'افتح الكورس', url: 'https://msg-response-auto.vercel.app/r/ab12cd' }, { type: 'postback', title: 'المزيد', payload: 'MORE_PROMPTS' }] },
+            { title: 'الوكلاء الأذكياء', subtitle: 'ابنِ وكيلك الأول', buttons: [{ type: 'postback', title: 'السعر', payload: 'PRICE' }] },
+        ] } } },
+        ai: { model: 'claude-sonnet-5-5', provider: 'anthropic', source: 'usage' } },
+    { id: 'd5', direction: 'inbound', sender: 'customer', text: 'هذا ردّ على قصتك', created_at: ago(20000), handled_at: null, reply_attempts: 1,
+        delivery: { state: 'failed', code: 10903, attempts: 3, max_attempts: 3 },
+        raw_payload: { message: { text: 'هذا ردّ على قصتك', reply_to: { story: { url: 'https://cdn.example.test/story', id: '1' } }, attachments: [{ type: 'audio', payload: { url: 'https://cdn.example.test/voice.m4a' } }] } } },
+];
+fixture('inbox-detail', async () => {
+    const h = harness({ files: ['dashboard/js/pages/inbox.js'] });
+    h.api.getConversations = () => Promise.resolve({ data: detailThreads(), pagination: { total: 4 } });
+    h.api.getConversationMessages = () => Promise.resolve(detailMessages());
+    h.api.refreshConversationProfile = () => Promise.resolve({ refreshed: false, reason: 'throttled' });
+    h.run('InboxPage.render()');
+    await settle();
+    h.run("InboxPage.selectThread('4')");
     await settle();
     const markup = compose(h);
     h.run('InboxPage.destroy()');

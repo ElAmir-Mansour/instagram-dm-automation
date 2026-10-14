@@ -349,6 +349,13 @@ States, in order: rest · hover · active · focus-visible · selected · disabl
 - **Quick-reply pill** inside an outbound bubble: the bubble's own label colour (`color: inherit`), filled with 12%
   of it and edged with 30% of it. Left as `--text-default` on `--surface-glass` it measured 1.10:1 in dark and 1.51:1
   in light; `check:contrast` now measures the mix on every stop of the gradient.
+- **Detail line `.msg-detail`:** under a bubble, on the chat canvas and never on the gradient. 12px `--text-muted`;
+  the items are the AI's wait and model, and `.badge`s for a tap (`badge-info`), a retried reply (`badge-warning`) and
+  a failed one (`badge-danger`). Inside an inbound bubble an attachment is a `.badge-neutral` chip, plus a picture for
+  an image.
+- **Avatar `.avatar`:** 40px circle, `--accent-soft` with `--accent-text` initials, the picture on top of them (a link
+  that fails is removed and the initials stay). The header's detail strip is `.chip`s, `.chip-accent` for a relationship
+  that is true.
 - **Public hero bubble:** `--accent` fill, radius 16, end-end corner 8.
 
 ### Platform badge

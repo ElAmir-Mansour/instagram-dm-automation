@@ -170,7 +170,7 @@
          preconnect to a host nothing requests is a wasted DNS lookup and TLS handshake. The one downloaded font is
          the headings' and the wordmark's: Alexandria 600, self-hosted from /brand (the @font-face block in the shared
          chrome at the end of this <style>; DESIGN.md section 3). Only the landing preloads it. -->
-    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.26">
+    <link rel="stylesheet" href="/dashboard/css/tokens.css?v=12.27">
 
     <style>
         /* ─── Page ─────────────────────────────────────────────────────────── */
@@ -1101,8 +1101,16 @@
                     </li>
                     <li>
                         <strong>معرّف حسابك عند ميتا</strong> ووقت آخر رسالة ومتى أُبلغتَ آخر مرة
-                        بأن الردود آلية. لا يُخزَّن اسم المستخدم الخاص بك في مسار الرسائل الخاصة —
-                        المعرّف فقط.
+                        بأن الردود آلية.
+                    </li>
+                    <li>
+                        <strong>ملفك العام في إنستجرام، للرسائل الخاصة على إنستجرام فقط</strong>
+                        (لا ماسنجر): اسم المستخدم، والاسم الظاهر في ملفك، ورابط صورة الملف، وعدد
+                        متابعيك، وهل تتابع الحساب، وهل يتابعك، وهل حسابك موثّق. يعطي إنستجرام الحسابَ
+                        هذه التفاصيل بعد أن تراسله. تُجلب عند أول رسالة منك، ثم مرة واحدة في اليوم
+                        على الأكثر، عند كتابتك من جديد أو حين يفتح صاحب الحساب المحادثة، ليعرف من
+                        يكتب إليه. الصورة رابط يتركه إنستجرام ينتهي خلال أيام، ولا تُنسخ الصورة
+                        نفسها. وتُحذف مع محادثتك إن طلبتَ حذفها.
                     </li>
                     <li>الردود المُرسَلة إليك تُخزَّن بالطريقة نفسها، بنصّها.</li>
                     <li>
@@ -1553,8 +1561,18 @@
                     </li>
                     <li>
                         <strong>Your Meta-scoped account ID</strong>, the time of the last
-                        message, and when you were last told the replies are automated. Your
-                        username is not stored on the direct-message path — only the ID.
+                        message, and when you were last told the replies are automated.
+                    </li>
+                    <li>
+                        <strong>Your public Instagram profile, for Instagram direct messages only</strong>
+                        (not Messenger): your username, the name on your profile, a link to your profile
+                        picture, your follower count, whether you follow the account, whether it follows
+                        you, and whether you are verified. Instagram gives the account these details once
+                        you have messaged it. They are looked up when you first write and then at most once
+                        a day, when you write again or when the account’s owner opens the conversation, so
+                        the owner can see who is writing. The picture is a link that Instagram lets expire
+                        within days; the picture itself is not copied. They are deleted with your
+                        conversation if you ask for it to be erased.
                     </li>
                     <li>Replies sent to you are stored the same way, with their text.</li>
                     <li>
