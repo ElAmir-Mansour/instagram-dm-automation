@@ -69,6 +69,15 @@ const InboxPage = {
     STRUCTURED_PLACEHOLDER: '[Structured Template]',
     STORY_MENTION_PLACEHOLDER: '[Story Mention]',
     /**
+     * A message with no words (src/webhook/attachments.ts): the pipeline stores its kind as `message_type` and a placeholder (`[photo]`) as
+     * its text. This maps each kind to the chip that names it (`attachmentStyle`), so the chip is the message and the placeholder is never
+     * printed. No prototype, so a `message_type` from the data cannot find anything but a kind here.
+     */
+    WORDLESS_KINDS: Object.freeze(Object.assign(Object.create(null), {
+        image: 'image', video: 'video', audio: 'audio', file: 'file', sticker: 'sticker', share: 'share', reel: 'reel',
+        story_share: 'storyShare', story_mention: 'storyMention', story_reply: 'storyReply', attachment: 'other',
+    })),
+    /**
      * How close an AI reply's row and its inbound's `handled_at` are when the pipeline wrote one right after the other
      * (it marks the inbound handled the moment the reply is stored). The pairing for "replied in 4 s".
      */
@@ -399,7 +408,8 @@ const InboxPage = {
      * Not `last_message_text` as it stands: a carousel is stored as the placeholder "[Structured Template]", which the
      * operator saw in the list as if the customer had been sent those words. A carousel reads as its cards ("2 cards:
      * Pricing"); a placeholder with no cards behind it (the stored body is pruned after a while) reads as what kind of
-     * message it was; a story mention reads as one.
+     * message it was; a story mention reads as one; a message with no words (a photo, a voice note, a shared reel, a sticker) reads
+     * as what it was, not as its placeholder.
      */
     threadPreview(thread) {
         if (!thread) return t('inbox.noMessages');
@@ -414,6 +424,8 @@ const InboxPage = {
             return thread.last_message_type === 'carousel' ? t('inbox.preview.carousel') : t('inbox.preview.structured');
         }
         if (text === this.STORY_MENTION_PLACEHOLDER || (thread.last_message_type === 'story_mention' && !text)) return t('inbox.storyMention');
+        const wordless = this.wordlessKind(thread.last_message_type);
+        if (wordless && thread.last_message_type !== 'story_mention') return t(this.attachmentStyle(wordless).label);
         return text || t('inbox.noMessages');
     },
 
@@ -1417,6 +1429,9 @@ const InboxPage = {
             if (!structure) note = t(msg.message_type === 'carousel' ? 'inbox.carouselGone' : 'inbox.structuredGone');
         } else if (text === this.STORY_MENTION_PLACEHOLDER) {
             shown = t('inbox.storyMention');
+        } else if (!isOut && msg.message_type !== 'story_mention' && this.wordlessKind(msg.message_type)) {
+            // A message with no words: `[photo]` is what the pipeline stored, not what the customer said. The chips are the message.
+            shown = '';
         }
 
         return html`
@@ -1574,7 +1589,8 @@ const InboxPage = {
 
     /**
      * Everything the stored event says the customer attached, as `{ kind, url }`: the attachments Meta listed, a reply to one of your
-     * stories, and a story mention (also when the stored body is pruned and only the message's type remains).
+     * stories, and, when the row's own `message_type` names a kind that was not read from the event (the body is pruned after a while, or the
+     * kind has no attachment entry, like a message Instagram could not show), that kind with no link.
      */
     attachmentsOf(msg) {
         const out = [];
@@ -1584,22 +1600,29 @@ const InboxPage = {
             message.attachments.forEach((att) => {
                 if (!att || typeof att !== 'object') return;
                 const type = this.plainText(att.type).toLowerCase();
-                out.push({ kind: this.attachmentKind(type), url: this.plainText(att.payload && att.payload.url) });
+                // Messenger sends a sticker as an `image` that carries a `sticker_id`.
+                const sticker = type === 'image' && att.payload && att.payload.sticker_id;
+                out.push({ kind: sticker ? 'sticker' : this.attachmentKind(type), url: this.plainText(att.payload && att.payload.url) });
             });
         }
         const story = message && message.reply_to && message.reply_to.story;
         if (story && typeof story === 'object') out.push({ kind: 'storyReply', url: this.plainText(story.url) });
-        if (msg && msg.message_type === 'story_mention' && !out.some((a) => a.kind === 'storyMention')) {
-            out.push({ kind: 'storyMention', url: '' });
-        }
+        const stored = this.wordlessKind(msg && msg.message_type);
+        if (stored && !out.some((a) => a.kind === stored)) out.push({ kind: stored, url: '' });
         return out.slice(0, this.MAX_ATTACHMENTS);
+    },
+
+    /** The chip kind a row's `message_type` stands for when the message had no words, or '' for anything else (text, a tap, a carousel). */
+    wordlessKind(messageType) {
+        return typeof messageType === 'string' ? (this.WORDLESS_KINDS[messageType] || '') : '';
     },
 
     /** Meta's attachment `type` as one of the kinds this screen words; anything it does not know is a plain "Attachment". */
     attachmentKind(type) {
         const KINDS = Object.assign(Object.create(null), {
             image: 'image', video: 'video', audio: 'audio', file: 'file',
-            share: 'share', ig_post: 'share', ig_reel: 'reel', reel: 'reel', story_mention: 'storyMention',
+            sticker: 'sticker', share: 'share', ig_post: 'share', post: 'share', fallback: 'share', template: 'share',
+            ig_reel: 'reel', reel: 'reel', story: 'storyShare', ig_story: 'storyShare', story_mention: 'storyMention',
         });
         return KINDS[type] || 'other';
     },
@@ -1611,8 +1634,10 @@ const InboxPage = {
             video: { icon: 'play', label: 'inbox.attach.video' },
             audio: { icon: 'music', label: 'inbox.attach.audio' },
             file: { icon: 'file', label: 'inbox.attach.file' },
+            sticker: { icon: 'heart', label: 'inbox.attach.sticker' },
             share: { icon: 'share-2', label: 'inbox.attach.share' },
             reel: { icon: 'film', label: 'inbox.attach.reel' },
+            storyShare: { icon: 'history', label: 'inbox.attach.storyShare' },
             storyMention: { icon: 'history', label: 'inbox.attach.storyMention' },
             storyReply: { icon: 'history', label: 'inbox.attach.storyReply' },
             other: { icon: 'file', label: 'inbox.attach.other' },

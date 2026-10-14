@@ -671,6 +671,138 @@ describe('what the customer did: a tap, an attachment, a failing reply', () => {
 });
 
 // ─── The header ──────────────────────────────────────────────────────────────────────────────
+// ─── A message with no words: the chip is the message ────────────────────────────────────────
+/**
+ * The pipeline stores a message with no words (a photo, a voice note, a shared reel, a sticker) as its kind in `message_type` and a
+ * placeholder (`[photo]`) in `text` (src/webhook/attachments.ts). The placeholder is never what the customer said: the inbox draws the
+ * chip that names the kind and prints no text. Fixtures are Meta's shapes, as `raw_payload` holds them (the whole event).
+ */
+describe('a message with no words — the chip is the message, and the placeholder is never printed', () => {
+    const URL_ = 'https://cdn.example.test/x';
+    const raw = (message: Json): Json => ({ sender: { id: 'u' }, recipient: { id: 'p' }, message: { mid: 'm', ...message } });
+    const inbound = (message_type: string, text: string, rawPayload: Json): Json => ({ id: 'i', direction: 'inbound', message_type, text, created_at: NOW(), raw_payload: rawPayload });
+
+    /** type, placeholder, the attachment as Meta lists it, and the label key of the chip. */
+    const CASES: Array<[string, string, Json, string]> = [
+        ['image', '[photo]', { attachments: [{ type: 'image', payload: { url: URL_ } }] }, 'inbox.attach.image'],
+        ['video', '[video]', { attachments: [{ type: 'video', payload: { url: URL_ } }] }, 'inbox.attach.video'],
+        ['audio', '[voice note]', { attachments: [{ type: 'audio', payload: { url: URL_ } }] }, 'inbox.attach.audio'],
+        ['file', '[file]', { attachments: [{ type: 'file', payload: { url: URL_ } }] }, 'inbox.attach.file'],
+        ['sticker', '[sticker]', { attachments: [{ type: 'sticker', payload: { url: URL_, sticker_id: 369239263222822 } }] }, 'inbox.attach.sticker'],
+        ['share', '[shared post]', { attachments: [{ type: 'ig_post', payload: { url: URL_, title: 'A post', id: '1' } }] }, 'inbox.attach.share'],
+        ['reel', '[shared reel]', { attachments: [{ type: 'ig_reel', payload: { url: URL_, title: 'A reel', reel_video_id: '1' } }] }, 'inbox.attach.reel'],
+        ['story_share', '[shared story]', { attachments: [{ type: 'ig_story', payload: { url: URL_ } }] }, 'inbox.attach.storyShare'],
+        ['story_reply', '[story reply]', { reply_to: { story: { url: URL_, id: '1' } } }, 'inbox.attach.storyReply'],
+        ['attachment', '[attachment]', { attachments: [{ type: 'ephemeral' }] }, 'inbox.attach.other'],
+    ];
+
+    for (const lang of LANGS) {
+        it(`draws each kind as its chip, from the stored event, and prints no text (${lang})`, () => {
+            const { I, t } = load(lang);
+            for (const [type, placeholder, message, label] of CASES) {
+                const markup = String(I.messageBubble(inbound(type, placeholder, raw(message))));
+                assert.ok(markup.includes(t(label)), `${type}: the chip`);
+                assert.ok(!markup.includes(placeholder), `${type}: the placeholder is never printed`);
+                assert.ok(!markup.includes('<p dir="auto"'), `${type}: no text line at all`);
+                assert.equal((markup.match(/class="msg-attachment"/g) || []).length, 1, `${type}: one chip`);
+            }
+        });
+
+        it(`draws the chip from the row's type alone when the stored event is pruned (${lang})`, () => {
+            const { I, t } = load(lang);
+            for (const [type, placeholder, , label] of CASES) {
+                const markup = String(I.messageBubble(inbound(type, placeholder, null)));
+                assert.ok(markup.includes(t(label)), `${type}: the chip`);
+                assert.ok(!markup.includes(placeholder), `${type}: no placeholder`);
+                assert.equal((markup.match(/class="msg-attachment"/g) || []).length, 1, `${type}: one chip`);
+                assert.ok(!markup.includes('msg-attachment-link'), `${type}: nothing to open`);
+            }
+        });
+
+        it(`names the kind in the thread list instead of printing its placeholder (${lang})`, () => {
+            const { I, t } = load(lang);
+            for (const [type, placeholder, , label] of CASES) {
+                assert.equal(I.threadPreview({ last_message_text: placeholder, last_message_type: type }), t(label), type);
+            }
+            // A story mention keeps its own words, and the bot's own line (an outbound `attachment_ack`) previews as what it said.
+            assert.equal(I.threadPreview({ last_message_text: '[Story Mention]', last_message_type: 'story_mention' }), t('inbox.storyMention'));
+            assert.equal(I.threadPreview({ last_message_text: 'Got your attachment', last_message_type: 'attachment_ack' }), 'Got your attachment');
+        });
+    }
+
+    it('a view-once message and a message Instagram could not show have no attachment in the event, and are still a chip', () => {
+        const { I, t } = load();
+        const unsupported = String(I.messageBubble(inbound('attachment', '[attachment]', raw({ is_unsupported: true }))));
+        assert.ok(unsupported.includes(t('inbox.attach.other')) && !unsupported.includes('[attachment]'));
+        assert.equal((unsupported.match(/class="msg-attachment"/g) || []).length, 1);
+        const ephemeral = String(I.messageBubble(inbound('attachment', '[attachment]', raw({ attachments: [{ type: 'ephemeral' }] }))));
+        assert.equal((ephemeral.match(/class="msg-attachment"/g) || []).length, 1, 'one chip from the event, and none added for the type');
+    });
+
+    it('Messenger\'s sticker, an image that carries a sticker_id, is ONE sticker chip, not a sticker and an image', () => {
+        const { I, t } = load();
+        const message = { attachments: [{ type: 'image', payload: { url: URL_, sticker_id: 369239263222822 } }] };
+        const markup = String(I.messageBubble(inbound('sticker', '[sticker]', raw(message))));
+        assert.equal((markup.match(/class="msg-attachment"/g) || []).length, 1);
+        assert.ok(markup.includes(t('inbox.attach.sticker')) && !markup.includes(`>${t('inbox.attach.image')}<`) && !markup.includes('msg-attachment-img'));
+        // The same event read without the row's type: still a sticker, still one.
+        const list = I.attachmentsOf({ direction: 'inbound', raw_payload: raw(message) });
+        assert.deepEqual([...list].map((a: Json) => a.kind), ['sticker'], 'a list from the page\'s own realm, copied before it is compared');
+        // And an image with no sticker_id is a photo, previewed.
+        const photo = String(I.messageBubble(inbound('image', '[photo]', raw({ attachments: [{ type: 'image', payload: { url: URL_ } }] }))));
+        assert.ok(photo.includes('msg-attachment-img'));
+    });
+
+    it('two attachments are two chips, and the row\'s own type adds none that is already there', () => {
+        const { I } = load();
+        const message = { attachments: [{ type: 'image', payload: { url: URL_ } }, { type: 'video', payload: { url: URL_ } }] };
+        const markup = String(I.messageBubble(inbound('image', '[photo] [video]', raw(message))));
+        assert.equal((markup.match(/class="msg-attachment"/g) || []).length, 2);
+        assert.ok(!markup.includes('[photo]'));
+    });
+
+    it('maps every attachment type Meta documents to a kind this screen words, and the new kinds to icons the subset has', () => {
+        const { I } = load();
+        const kinds: Record<string, string> = {
+            image: 'image', video: 'video', audio: 'audio', file: 'file', sticker: 'sticker',
+            share: 'share', ig_post: 'share', post: 'share', fallback: 'share', template: 'share',
+            reel: 'reel', ig_reel: 'reel', story: 'storyShare', ig_story: 'storyShare', story_mention: 'storyMention',
+            media: 'other', ephemeral: 'other', appointment_booking: 'other', brand_new: 'other',
+        };
+        for (const [type, kind] of Object.entries(kinds)) assert.equal(I.attachmentKind(type), kind, type);
+        assert.deepEqual({ ...I.attachmentStyle('sticker') }, { icon: 'heart', label: 'inbox.attach.sticker' });
+        assert.deepEqual({ ...I.attachmentStyle('storyShare') }, { icon: 'history', label: 'inbox.attach.storyShare' });
+    });
+
+    it('a story mention is drawn exactly as before: its own words in the bubble, and its chip', () => {
+        const { I, t } = load();
+        const markup = String(I.messageBubble(inbound('story_mention', '[Story Mention]', raw({ attachments: [{ type: 'story_mention', payload: { url: URL_ } }] }))));
+        assert.ok(markup.includes(`<p dir="auto" >${t('inbox.storyMention')}</p>`) || markup.includes(`<p dir="auto">${t('inbox.storyMention')}</p>`));
+        assert.ok(!markup.includes('[Story Mention]'));
+        assert.ok(markup.includes(t('inbox.attach.storyMention')));
+        assert.equal((markup.match(/class="msg-attachment"/g) || []).length, 1);
+    });
+
+    it('the bot\'s own line for such a message is an ordinary outbound bubble, with its words', () => {
+        const { I } = load();
+        const markup = String(I.messageBubble({ id: 'o', direction: 'outbound', sender: 'ai', message_type: 'attachment_ack', text: 'Got your attachment', created_at: NOW() }));
+        assert.ok(markup.includes('>Got your attachment<'));
+        assert.ok(!markup.includes('msg-attachment'));
+    });
+
+    it('a row\'s type is a lookup, not a property: a type named like one of the language\'s own (constructor, __proto__) is just text', () => {
+        const { I } = load();
+        for (const type of ['constructor', '__proto__', 'toString', 'hasOwnProperty', '', null, undefined, 7]) {
+            assert.equal(I.wordlessKind(type), '', String(type));
+        }
+        const markup = String(I.messageBubble({ id: 'x', direction: 'inbound', message_type: 'constructor', text: 'hello', created_at: NOW() }));
+        assert.ok(markup.includes('>hello<') && !markup.includes('msg-attachment'));
+        // A customer's typed message that happens to be stored as a text row keeps its words whatever it says.
+        const typed = String(I.messageBubble(inbound('text', '[photo]', null)));
+        assert.ok(typed.includes('>[photo]<'), 'typing "[photo]" is words');
+    });
+});
+
 describe('the conversation header', () => {
     const SAM = {
         id: 'c1', platform: 'instagram', instagram_user_id: '17841400003051', is_bot_active: true,

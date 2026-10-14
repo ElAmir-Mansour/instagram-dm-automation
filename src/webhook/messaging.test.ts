@@ -29,6 +29,7 @@ import { AiError } from '../services/llm/errors.js';
 import { metaHttp } from '../services/http.js';
 import { ProfileUnreadableError } from '../services/profile/context.js';
 import { FITNESS_EN, SHOP_EG } from '../services/profile/fixtures.js';
+import { KITS } from '../services/profile/kits.js';
 import { throughJsonb } from '../services/profile/testSupport.js';
 import type { CreatorProfile } from '../services/profile/types.js';
 import { invalidateTenantCache, type Creator } from '../services/tenant.js';
@@ -39,6 +40,7 @@ import {
 } from './messaging.js';
 import { handlers } from '../jobs/handlers.js';
 import type { Job } from '../jobs/types.js';
+import { ATTACHMENT_ACK_TYPE, describeWordless, WORDLESS_MESSAGE_TYPES } from './attachments.js';
 import type { WebhookHandlerOptions } from './options.js';
 
 let restoreSink: (() => void) | undefined;
@@ -59,6 +61,7 @@ describe('normalizeDm', () => {
                 text: 'كم سعر الكورس؟',
                 payload: '',
                 isStoryMention: false,
+                wordless: null,
                 metaMessageId: 'm-1',
             }
         );
@@ -99,7 +102,7 @@ describe('normalizeDm', () => {
         assert.equal(dm?.metaMessageId, 'm-4', 'message.mid still wins as the dedupe key');
     });
 
-    it('treats a story mention as answerable even with no text', () => {
+    it('treats a story mention as a message with no words: stored as its kind, with the placeholder it always had', () => {
         const dm = normalizeDm({
             sender: { id: 'u-1' },
             message: { mid: 'm-5', attachments: [{ type: 'story_mention' }] },
@@ -111,17 +114,51 @@ describe('normalizeDm', () => {
         assert.equal(dm?.isStoryMention, true);
         assert.equal(dm?.text, '');
         assert.equal(dm?.senderId, 'u-1');
+        assert.equal(dm?.wordless?.kind, 'story_mention');
+        assert.equal(dm?.wordless?.ack, 'mention');
+        assert.equal(dmPromptText(dm!), STORY_MENTION_TEXT);
     });
 
-    it('ignores an attachment that is not a story mention', () => {
-        // An image or a voice note with no caption: there is nothing to hand Gemini, so this
-        // must not be treated as a story mention and answered as one.
+    it('returns an attachment that is not a story mention too: a photo is a message with no words, no longer dropped', () => {
+        // An image or a voice note with no caption used to return null here, so the person was never stored, shown or answered.
         const dm = normalizeDm({
             sender: { id: 'u-1' },
-            message: { mid: 'm-6', attachments: [{ type: 'image' }] },
+            message: { mid: 'm-6', attachments: [{ type: 'image', payload: { url: 'https://cdn.example.test/i.jpg' } }] },
         });
 
-        assert.equal(dm, null);
+        assert.notEqual(dm, null);
+        assert.equal(dm?.isStoryMention, false, 'and it is not read as a story mention');
+        assert.equal(dm?.wordless?.kind, 'image');
+        assert.equal(dm?.wordless?.placeholder, '[photo]');
+        assert.equal(dm?.text, '');
+        assert.equal(dm?.metaMessageId, 'm-6');
+    });
+
+    it('reads every other message with no words: a reply to a story, a message Instagram could not show', () => {
+        const reply = normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm-7', reply_to: { story: { url: 'https://cdn.example.test/s', id: '1' } } } });
+        assert.equal(reply?.wordless?.kind, 'story_reply');
+        const unsupported = normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm-8', is_unsupported: true } });
+        assert.equal(unsupported?.wordless?.kind, 'attachment');
+    });
+
+    it('a message with words is never word-less: a caption, a quick reply and a postback keep their words', () => {
+        const caption = normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm-9', text: 'كم سعره؟', attachments: [{ type: 'image', payload: { url: 'https://cdn.example.test/i.jpg' } }] } });
+        assert.equal(caption?.wordless, null);
+        assert.equal(caption?.text, 'كم سعره؟');
+        const quick = normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm-10', quick_reply: { payload: 'P' }, attachments: [{ type: 'image' }] } });
+        assert.equal(quick?.wordless, null);
+        // Messenger's `fallback` is a shared link, and usually comes WITH the text of the link: that is a text DM.
+        const link = normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm-11', text: 'https://example.test/page', attachments: [{ type: 'fallback', payload: { url: 'https://example.test/page', title: 'A page' } }] } });
+        assert.equal(link?.wordless, null);
+        assert.equal(link?.text, 'https://example.test/page');
+        const postback = normalizeDm({ sender: { id: 'u-1' }, postback: { mid: 'm-12', title: 'ابدأ', payload: 'GET_STARTED' } });
+        assert.equal(postback?.wordless, null);
+    });
+
+    it('an unsend is not a new message, even one that still carries attachments', () => {
+        assert.equal(normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm-13', is_deleted: true } }), null);
+        assert.equal(normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm-14', is_deleted: true, attachments: [{ type: 'image', payload: { url: 'x' } }] } }), null);
+        assert.equal(normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm-15', is_deleted: true, text: 'x' } }), null);
     });
 
     it('skips events with nothing to reply to', () => {
@@ -131,6 +168,9 @@ describe('normalizeDm', () => {
         assert.equal(normalizeDm({ sender: { id: 'u-1' }, delivery: { watermark: 1 } }), null);
         assert.equal(normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm', text: '' } }), null);
         assert.equal(normalizeDm({ message: { mid: 'm', text: 'no sender' } }), null);
+        assert.equal(normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm' } }), null, 'a message with nothing in it');
+        assert.equal(normalizeDm({ sender: { id: 'u-1' }, message: { mid: 'm', attachments: [] } }), null, 'and one with an empty list');
+        assert.equal(normalizeDm({ message: { mid: 'm', attachments: [{ type: 'image' }] } }), null, 'no sender: nobody to answer, whatever it holds');
         assert.equal(normalizeDm({}), null);
         assert.equal(normalizeDm(null), null);
     });
@@ -259,6 +299,11 @@ interface Scenario {
     inboundInsert?: Record<string, unknown>[];
     /** Rows the re-claim UPDATE returns. Empty = handled already, or someone else holds it. */
     resumeClaim?: Record<string, unknown>[];
+    /**
+     * Rows the acknowledgement's claim statement returns (src/webhook/attachmentAck.ts: the outbound row, inserted only when no later
+     * message is waiting, no words are being answered and it has not asked already). Default one row; empty = the claim refused.
+     */
+    ackClaim?: Record<string, unknown>[];
     agent?: Record<string, unknown> | null;
     creatorQuotaCount?: number;
     appQuotaCount?: number;
@@ -326,6 +371,7 @@ async function runDm(
         conversation = { id: 'conv-1', is_bot_active: true, ai_disclosed_at: null },
         inboundInsert = [{ id: 'msg-1' }],
         resumeClaim = [],
+        ackClaim = [{ id: 'ack-1' }],
         agent = { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7 },
         history = [],
         creatorQuotaCount = 1,
@@ -372,6 +418,8 @@ async function runDm(
         [/SET reply_claimed_at = NULL WHERE/, { rowCount: 1 }],
         [/FROM ai_agents/, { rows: agent ? [agent] : [] }],
         [/SELECT direction, text/, { rows: history }],
+        [/SELECT \$1, \$2, 'outbound'/, { rows: ackClaim }],   // the acknowledgement's claim: an outbound row WITH `RETURNING id`
+        [/DELETE FROM messages WHERE id = \$1/, { rowCount: 1 }],   // the claim taken back
         [/INSERT INTO messages/, { rowCount: 1 }],   // the outbound row; no RETURNING
         [/INSERT INTO rate_limit_counters/, { rows: [{ count: creatorQuotaCount }] }],
         [/INSERT INTO app_rate_limit_counters/, { rows: [{ count: appQuotaCount }] }],
@@ -541,14 +589,18 @@ describe('handleMessagingEvent — claiming the inbound message', () => {
         assert.ok(outboundAt > -1 && handledAt > outboundAt, 'handled_at must be written last');
     });
 
-    it('labels a story mention and gives it text Gemini can read', async () => {
-        const { executed } = await runDm(
+    it('stores a story mention as its kind, with its placeholder, and answers it with the mention line: Gemini is never asked', async () => {
+        const { executed, geminiCalls, sends } = await runDm(
             textEvent({ message: { mid: 'mid-2', attachments: [{ type: 'story_mention' }] } })
         );
 
         const claim = executed.find((e) => /ON CONFLICT \(meta_message_id\)/.test(e.sql))!;
         assert.equal(claim.params[2], 'story_mention');
         assert.equal(claim.params[3], '[Story Mention]');
+        // It used to go to Gemini as the text "[Story Mention]", which cannot see the story: now one fixed line, no model.
+        assert.equal(geminiCalls, 0);
+        assert.equal(sends.length, 1);
+        assert.ok(String(sends[0]!.body.message.text).endsWith(KITS.gulf.attachments.mention));
     });
 
     it('re-claims a message a previous attempt left unfinished', async () => {
@@ -1053,7 +1105,7 @@ describe('dmPromptText', () => {
         // comparing the stored text against the string it was passed — so those two
         // disagreeing meant it ALWAYS appended a turn, and the turn it appended was empty.
         const dm = {
-            senderId: 'u', text: '', payload: '', isStoryMention: true, metaMessageId: 'mid-1',
+            senderId: 'u', text: '', payload: '', isStoryMention: true, wordless: describeWordless({ attachments: [{ type: 'story_mention' }] }), metaMessageId: 'mid-1',
         };
 
         assert.equal(dmPromptText(dm), STORY_MENTION_TEXT);
@@ -1061,7 +1113,7 @@ describe('dmPromptText', () => {
 
     it("carries a quick reply's payload, which used to be stored as an empty bubble", () => {
         const dm = {
-            senderId: 'u', text: '', payload: 'COURSES', isStoryMention: false, metaMessageId: 'mid-1',
+            senderId: 'u', text: '', payload: 'COURSES', isStoryMention: false, wordless: null, metaMessageId: 'mid-1',
         };
 
         assert.equal(dmPromptText(dm), 'COURSES');
@@ -1069,21 +1121,33 @@ describe('dmPromptText', () => {
 
     it('prefers what the person actually typed', () => {
         const dm = {
-            senderId: 'u', text: 'كم السعر؟', payload: 'PRICE', isStoryMention: true, metaMessageId: 'mid-1',
+            senderId: 'u', text: 'كم السعر؟', payload: 'PRICE', isStoryMention: true, wordless: null, metaMessageId: 'mid-1',
         };
 
         assert.equal(dmPromptText(dm), 'كم السعر؟');
     });
 
+    it('is the placeholder of the kind for a message with no words: what is stored, and what a later model turn sees in the history', () => {
+        const dm = normalizeDm({ sender: { id: 'u' }, message: { mid: 'm', attachments: [{ type: 'image', payload: { url: 'x' } }, { type: 'video', payload: { url: 'y' } }] } });
+        assert.equal(dmPromptText(dm!), '[photo] [video]');
+    });
+
     it('is never empty for anything normalizeDm agrees to return', () => {
         // The invariant that matters: normalizeDm returns null unless there is text, a payload
-        // or a story mention, and each of those three produces a non-empty prompt here. So no
-        // reachable DM can arrive at Gemini as an empty part.
+        // or a message with no words (a story mention, a photo, ...), and each of those produces a non-empty prompt here. So no
+        // reachable DM can arrive anywhere as an empty part.
         const events = [
             { sender: { id: 'u' }, message: { mid: 'm', text: 'hi' } },
             { sender: { id: 'u' }, message: { mid: 'm', quick_reply: { payload: 'P' } } },
             { sender: { id: 'u' }, postback: { mid: 'm', title: 'T', payload: 'P' } },
             { sender: { id: 'u' }, message: { mid: 'm', attachments: [{ type: 'story_mention' }] } },
+            // The messages with no words: every kind of the table, on Meta's shapes.
+            { sender: { id: 'u' }, message: { mid: 'm', attachments: [{ type: 'image', payload: { url: 'https://cdn.example.test/i.jpg' } }] } },
+            { sender: { id: 'u' }, message: { mid: 'm', attachments: [{ type: 'ephemeral' }] } },
+            { sender: { id: 'u' }, message: { mid: 'm', attachments: [{ type: 'sticker', payload: { url: 'https://cdn.example.test/s.png', sticker_id: 369239263222822 } }] } },
+            { sender: { id: 'u' }, message: { mid: 'm', attachments: [{ type: 'ig_reel', payload: { url: 'https://cdn.example.test/r' } }] } },
+            { sender: { id: 'u' }, message: { mid: 'm', reply_to: { story: { url: 'https://cdn.example.test/st', id: '1' } } } },
+            { sender: { id: 'u' }, message: { mid: 'm', is_unsupported: true } },
         ];
 
         for (const event of events) {
@@ -1095,30 +1159,31 @@ describe('dmPromptText', () => {
 });
 
 describe('handleMessagingEvent — what reaches Gemini', () => {
-    const storyMentionEvent = {
+    // A quick reply with no words: the one shape left whose stored text is not what the person typed (the payload stands for it).
+    const payloadOnlyEvent = {
         sender: { id: 'user-1' },
         recipient: { id: 'ig-page-1' },
-        message: { mid: 'mid-story', attachments: [{ type: 'story_mention' }] },
+        message: { mid: 'mid-payload', quick_reply: { payload: 'COURSES' } },
     };
 
-    it('never sends an empty part for a pure story mention', async () => {
+    it('never sends an empty part for a message that is only a tapped payload', async () => {
         // With the row already in history — which it always is, because claimInbound writes it
         // before the AI call — the old code produced TWO consecutive `user` turns, the second
         // one empty. An empty part is at best a wasted turn and at worst a 400 from the API.
-        const { geminiPayloads } = await runDm(storyMentionEvent, {
-            history: [{ direction: 'inbound', text: STORY_MENTION_TEXT }],
+        const { geminiPayloads } = await runDm(payloadOnlyEvent, {
+            history: [{ direction: 'inbound', text: 'COURSES' }],
         });
 
         assert.equal(geminiPayloads.length, 1);
         const parts = geminiPayloads[0].contents.flatMap((c: any) => c.parts);
-        assert.deepEqual(parts.map((part: any) => part.text), [STORY_MENTION_TEXT]);
+        assert.deepEqual(parts.map((part: any) => part.text), ['COURSES']);
     });
 
     it('stores and sends the same string, so the history check can succeed', async () => {
         // The mechanism, asserted directly: the `text` column claimInbound writes and the
         // argument generateAiResponse receives are now the same value by construction.
-        const { executed, geminiPayloads } = await runDm(storyMentionEvent, {
-            history: [{ direction: 'inbound', text: STORY_MENTION_TEXT }],
+        const { executed, geminiPayloads } = await runDm(payloadOnlyEvent, {
+            history: [{ direction: 'inbound', text: 'COURSES' }],
         });
 
         const insert = executed.find((e) => /ON CONFLICT \(meta_message_id\)/.test(e.sql));
@@ -1127,18 +1192,19 @@ describe('handleMessagingEvent — what reaches Gemini', () => {
         const sentTexts = geminiPayloads[0].contents
             .flatMap((c: any) => c.parts).map((part: any) => part.text);
 
-        assert.equal(storedText, STORY_MENTION_TEXT);
+        assert.equal(storedText, 'COURSES');
         assert.ok(sentTexts.includes(storedText));
     });
 
-    it('still answers a story mention rather than dropping it', async () => {
-        // The fix must not turn a bug into a silence: a story mention is a person waiting.
-        const { sends, error } = await runDm(storyMentionEvent, {
-            history: [{ direction: 'inbound', text: STORY_MENTION_TEXT }],
+    it('never reaches Gemini for a story mention: it is a message with no words, and is answered with a fixed line', async () => {
+        const { geminiCalls, sends, error } = await runDm({
+            sender: { id: 'user-1' }, recipient: { id: 'ig-page-1' },
+            message: { mid: 'mid-story', attachments: [{ type: 'story_mention' }] },
         });
 
         assert.equal(error, null);
-        assert.equal(sends.length, 1);
+        assert.equal(geminiCalls, 0);
+        assert.equal(sends.length, 1, 'but the person is answered, not dropped');
     });
 
     it('answers an agent still set to a retired model, on the default model', async () => {
@@ -1512,5 +1578,333 @@ describe('handleMessagingEvent — the sales mode switch (S6)', () => {
         assert.equal(ranRelease(executed), true);
         assert.equal(ranMarkHandled(executed), false);
         assert.ok(!executed.some((e) => /UPDATE conversations SET stage/.test(e.sql)), 'nothing recorded for a reply that did not go');
+    });
+});
+
+// ─── A message with no words ────────────────────────────────────────────────────────────────
+
+/**
+ * A photo, a video, a voice note, a file, a shared post, reel or story, a sticker, a reply to a story, a message Instagram could not show:
+ * a customer who sent one used to be dropped (`normalizeDm` returned null), so it was never stored, never shown in the inbox, never
+ * answered. Now it is stored as its kind and the bot sends ONE fixed line from the kit, never a model, in every `sales_mode`
+ * (src/webhook/attachments.ts, src/webhook/attachmentAck.ts). What is asserted here is the pipeline's side: what is stored, what is sent,
+ * what is claimed and taken back, and whether the message is retried. Meta's shapes are the documented ones (attachments.test.ts).
+ */
+describe('handleMessagingEvent — a message with no words', () => {
+    const PHOTO = { type: 'image', payload: { url: 'https://cdn.example.test/i.jpg' } };
+    const photoEvent = (over: Record<string, unknown> = {}) => textEvent({ message: { mid: 'mid-photo', attachments: [PHOTO] }, ...over });
+    const LINE = KITS.gulf.attachments.media;
+    const DISCLOSED = { id: 'conv-1', is_bot_active: true, ai_disclosed_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() };
+
+    const inboundOf = (executed: Executed[]) => executed.find((e) => /ON CONFLICT \(meta_message_id\)/.test(e.sql))!;
+    const claimOf = (executed: Executed[]) => executed.find((e) => /SELECT \$1, \$2, 'outbound'/.test(e.sql));
+    const unclaimOf = (executed: Executed[]) => executed.find((e) => /DELETE FROM messages WHERE id = \$1/.test(e.sql));
+    const ranQuota = (executed: Executed[]) => executed.some((e) => /INSERT INTO rate_limit_counters/.test(e.sql));
+    const ranDisclosed = (executed: Executed[]) => executed.some((e) => /UPDATE conversations SET ai_disclosed_at/.test(e.sql));
+
+    let layerCalls: AiGenerateArgs[];
+    let logged: { level: string; event: string; [key: string]: unknown }[];
+    let undo: (() => void)[];
+    beforeEach(() => {
+        layerCalls = [];
+        logged = [];
+        const previousSink = setLogSink((level, line) => { logged.push({ level, ...JSON.parse(line) }); });
+        // The providers layer is armed with a stub that records every call: the claim is that it is never reached.
+        const previousCaller = setAiCaller(async (args) => { layerCalls.push(args); throw new Error('a message with no words must never reach a model'); });
+        undo = [() => setLogSink(previousSink), () => { setAiCaller(previousCaller); }];
+    });
+    afterEach(() => { for (const f of undo) f(); });
+
+    it('stores a photo as a photo, with the link Meta sent, and never asks a model', async () => {
+        const { executed, geminiCalls, error } = await runDm(photoEvent());
+
+        assert.equal(error, null);
+        const inbound = inboundOf(executed);
+        assert.equal(inbound.params[2], 'image', 'message_type is the kind');
+        assert.equal(inbound.params[3], '[photo]', 'text is the placeholder');
+        assert.equal(inbound.params[4], null, 'no payload');
+        assert.equal(inbound.params[6], 'mid-photo');
+        assert.ok(String(inbound.params[5]).includes('https://cdn.example.test/i.jpg'), 'raw_payload is the whole Meta event, link included');
+        assert.deepEqual(JSON.parse(String(inbound.params[5])), photoEvent(), 'and not reshaped');
+        assert.equal(geminiCalls, 0);
+        assert.equal(layerCalls.length, 0);
+        assert.ok(!executed.some((e) => /FROM ai_agents[^]*sales_mode|sales_mode/.test(e.sql)), 'the sales mode is not even read');
+    });
+
+    it('answers it once, with the owner\'s line behind the disclosure: claimed first, sent, then the disclosure stamped and the message handled', async () => {
+        const { executed, sends, timeline, error } = await runDm(photoEvent());
+
+        assert.equal(error, null);
+        const claim = claimOf(executed)!;
+        assert.ok(claim, 'the ack\'s claim statement ran');
+        assert.deepEqual(claim.params.slice(0, 4), ['conv-1', 'creator-1', ATTACHMENT_ACK_TYPE, LINE]);
+        assert.equal(claim.params[2], 'attachment_ack');
+        assert.deepEqual(JSON.parse(claim.params[4]), { text: LINE }, 'what the bot said, without the disclosure');
+        assert.deepEqual(JSON.parse(claim.params[5]), { engine: 'rule', reply: 'attachment_ack', kind: 'image' });
+        assert.equal(claim.params[6], 'msg-1', 'the inbound row it answers');
+        assert.deepEqual(claim.params[7], [...WORDLESS_MESSAGE_TYPES]);
+
+        assert.equal(sends.length, 1, 'exactly one Send API call, and no typing indicator');
+        assert.match(sends[0]!.url, /\/me\/messages$/);
+        assert.equal(sends[0]!.body.message.text, `${KITS.gulf.disclosure}\n${LINE}`);
+        assert.equal(sends[0]!.body.recipient.id, 'user-1');
+
+        assert.equal(ranDisclosed(executed), true, 'the thread has now been told');
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(ranRelease(executed), false);
+        assert.equal(unclaimOf(executed), undefined, 'the claim stands');
+
+        // Order: the claim comes before the send, and the disclosure and `handled_at` after it.
+        const inserts = timeline.flatMap((call, i) => (call.startsWith('SQL INSERT INTO messages') ? [i] : []));
+        assert.equal(inserts.length, 2, 'the inbound row, then the claim');
+        const sentAt = timeline.indexOf('META message');
+        assert.ok(inserts[1]! < sentAt, 'claimed before it is sent');
+        assert.ok(sentAt < timeline.findIndex((c) => /UPDATE conversations SET ai_disclosed_a/.test(c)), 'disclosure recorded after the send');
+        assert.ok(sentAt < timeline.findIndex((c) => /UPDATE messages SET handled_at/.test(c)), 'handled last');
+    });
+
+    it('claims in ONE statement that refuses on its own: a later message waiting, words still being answered, an ask within a day', async () => {
+        const { executed } = await runDm(photoEvent());
+        const sql = claimOf(executed)!.sql.replace(/\s+/g, ' ');
+
+        assert.match(sql, /^INSERT INTO messages \(conversation_id, creator_id, direction, message_type, text, raw_payload, sender, ai_meta\) SELECT \$1, \$2, 'outbound', \$3::text, \$4::text, \$5::jsonb, 'ai', \$6::jsonb WHERE NOT EXISTS/);
+        assert.equal((sql.match(/NOT EXISTS/g) || []).length, 3);
+        assert.match(sql, /n\.direction = 'inbound' AND n\.id <> \$7 AND n\.created_at > \(SELECT created_at FROM messages WHERE id = \$7\)/);
+        assert.match(sql, /w\.handled_at IS NULL AND w\.created_at > NOW\(\) - INTERVAL '15 minutes' AND COALESCE\(w\.message_type, 'text'\) <> ALL\(\$8::text\[\]\)/);
+        assert.match(sql, /a\.direction = 'outbound' AND a\.message_type = \$3 AND a\.created_at > NOW\(\) - INTERVAL '24 hours'/);
+        assert.match(sql, /RETURNING id$/);
+    });
+
+    it('answers in every sales mode with the same line: mode "on" does not reach the sales turn, and the providers layer is never called', async () => {
+        const agent = { is_active: true, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7, engine: 'providers', gemini_fallback: true, sales_mode: 'on', sales_test_senders: [] };
+        const { sends, geminiCalls, timeline, error } = await runDm(photoEvent(), { agent });
+
+        assert.equal(error, null);
+        assert.equal(layerCalls.length, 0, 'the layer stub was never called');
+        assert.equal(geminiCalls, 0);
+        assert.ok(!timeline.some((c) => /sales_mode|last_inbound_at/.test(c)), 'no sales statement ran');
+        assert.deepEqual(sends.map((s) => s.body.sender_action ?? 'message'), ['message'], 'no mark_seen and no typing_on either');
+        assert.ok(String(sends[0]!.body.message.text).endsWith(LINE));
+    });
+
+    it('answers a story mention with the mention line, as a story mention', async () => {
+        const { executed, sends, geminiCalls } = await runDm(textEvent({ message: { mid: 'mid-sm', attachments: [{ type: 'story_mention', payload: { url: 'https://cdn.example.test/m' } }] } }));
+
+        assert.equal(inboundOf(executed).params[2], 'story_mention');
+        assert.equal(inboundOf(executed).params[3], '[Story Mention]');
+        assert.equal(claimOf(executed)!.params[3], KITS.gulf.attachments.mention);
+        assert.deepEqual(JSON.parse(claimOf(executed)!.params[5]), { engine: 'rule', reply: 'attachment_ack', kind: 'story_mention' });
+        assert.equal(geminiCalls, 0);
+        assert.equal(sends.length, 1);
+    });
+
+    it('answers every other kind with the media line, whatever it is: a voice note, a reel, a story reply, an unsupported message', async () => {
+        const messages: Array<[string, Record<string, unknown>]> = [
+            ['audio', { mid: 'a', attachments: [{ type: 'audio', payload: { url: 'https://cdn.example.test/a.m4a' } }] }],
+            ['reel', { mid: 'b', attachments: [{ type: 'ig_reel', payload: { url: 'https://cdn.example.test/r' } }] }],
+            ['story_reply', { mid: 'c', reply_to: { story: { url: 'https://cdn.example.test/s', id: '1' } } }],
+            ['attachment', { mid: 'd', is_unsupported: true }],
+        ];
+        for (const [kind, message] of messages) {
+            const { executed, sends, geminiCalls, error } = await runDm(textEvent({ message }));
+            assert.equal(error, null, kind);
+            assert.equal(inboundOf(executed).params[2], kind, kind);
+            assert.equal(claimOf(executed)!.params[3], LINE, kind);
+            assert.equal(sends.length, 1, kind);
+            assert.equal(geminiCalls, 0, kind);
+        }
+    });
+
+    it('a sticker is stored and handled, and gets no answer: no claim, no quota, no send', async () => {
+        const sticker = { mid: 'mid-st', attachments: [{ type: 'sticker', payload: { url: 'https://cdn.example.test/s.png', sticker_id: 369239263222822 } }] };
+        const { executed, sends, geminiCalls, error } = await runDm(textEvent({ message: sticker }));
+
+        assert.equal(error, null);
+        assert.equal(inboundOf(executed).params[2], 'sticker');
+        assert.equal(inboundOf(executed).params[3], '[sticker]');
+        assert.equal(claimOf(executed), undefined);
+        assert.equal(ranQuota(executed), false);
+        assert.equal(sends.length, 0);
+        assert.equal(geminiCalls, 0);
+        assert.equal(ranMarkHandled(executed), true);
+        assert.ok(logged.some((l) => l.event === 'dm.wordless_silent'));
+    });
+
+    it('a claim that finds no row sends nothing, spends no quota and handles the message: a later message, words being answered, or it already asked', async () => {
+        const { executed, sends, error } = await runDm(photoEvent(), { ackClaim: [] });
+
+        assert.equal(error, null);
+        assert.ok(claimOf(executed), 'it tried');
+        assert.equal(sends.length, 0);
+        assert.equal(ranQuota(executed), false);
+        assert.equal(unclaimOf(executed), undefined, 'there is no row to take back');
+        assert.equal(ranDisclosed(executed), false);
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(ranRelease(executed), false);
+        assert.ok(logged.some((l) => l.event === 'dm.wordless_ack_skipped'));
+    });
+
+    it('a switched-off agent says nothing to a photo either: no claim, no send, handled', async () => {
+        // `ai.disabled` is a debug line (an owner using the toggle is not a fault), which the log drops unless LOG_LEVEL asks for it.
+        const previousLevel = process.env.LOG_LEVEL;
+        process.env.LOG_LEVEL = 'debug';
+        try {
+            const { executed, sends, error } = await runDm(photoEvent(), { agent: { is_active: false, system_prompt: 'p', knowledge_base: 'k', model: DEFAULT_MODEL, temperature: 0.7 } });
+
+            assert.equal(error, null);
+            assert.equal(claimOf(executed), undefined);
+            assert.equal(sends.length, 0);
+            assert.equal(ranMarkHandled(executed), true);
+            assert.equal(logged.find((l) => l.event === 'ai.disabled')?.level, 'debug');
+        } finally {
+            if (previousLevel === undefined) delete process.env.LOG_LEVEL;
+            else process.env.LOG_LEVEL = previousLevel;
+        }
+    });
+
+    it('a tenant with no agent row says nothing either, and it is logged as the fault it is', async () => {
+        const { executed, sends, error } = await runDm(photoEvent(), { agent: null });
+
+        assert.equal(error, null);
+        assert.equal(claimOf(executed), undefined);
+        assert.equal(sends.length, 0);
+        assert.equal(ranMarkHandled(executed), true);
+        const unconfigured = logged.find((l) => l.event === 'ai.unconfigured');
+        assert.equal(unconfigured?.level, 'warn');
+    });
+
+    it('a paused conversation is stored and handled, and not answered: the pause comes before anything', async () => {
+        const { executed, sends, geminiCalls } = await runDm(photoEvent(), { conversation: { id: 'conv-1', is_bot_active: false, ai_disclosed_at: null } });
+
+        assert.equal(inboundOf(executed).params[2], 'image', 'the operator still sees it');
+        assert.equal(claimOf(executed), undefined);
+        assert.equal(sends.length, 0);
+        assert.equal(geminiCalls, 0);
+        assert.equal(ranMarkHandled(executed), true);
+    });
+
+    it('a refused send quota takes the claim back, sends nothing and handles the message: an acknowledgement is not retried', async () => {
+        const { executed, sends, error } = await runDm(photoEvent(), { creatorQuotaCount: 181 }, { lastAttempt: false });
+
+        assert.equal(error, null, 'not re-raised, even mid-budget');
+        assert.equal(sends.length, 0);
+        assert.deepEqual(unclaimOf(executed)?.params, ['ack-1'], 'the claim row is deleted');
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(ranRelease(executed), false);
+        const refused = logged.find((l) => l.event === 'dm.quota_exhausted');
+        assert.equal(refused?.source, 'dm_ack');
+        assert.equal(refused?.blocked_by, 'creator');
+        assert.equal(refused?.count, 181);
+        assert.equal(refused?.limit, 180);
+        assert.equal(ranDisclosed(executed), false);
+
+        const app = await runDm(photoEvent(), { appQuotaCount: 1_001 });
+        assert.equal(app.error, null);
+        assert.equal(app.sends.length, 0);
+        assert.ok(unclaimOf(app.executed));
+    });
+
+    it('a transient send failure mid-budget takes the claim back, releases the message and re-raises for the runner', async () => {
+        const { executed, sends, error } = await runDm(photoEvent(), {
+            send: async () => { throw Object.assign(new Error('boom'), { response: { status: 500, data: {} } }); },
+        }, { lastAttempt: false });
+
+        assert.ok(error, 'raised for the job runner');
+        assert.ok(sends.length >= 1, 'it did try');
+        assert.deepEqual(unclaimOf(executed)?.params, ['ack-1'], 'nothing went out, so the claim is taken back and the retry can claim again');
+        assert.equal(ranRelease(executed), true);
+        assert.equal(ranMarkHandled(executed), false);
+        assert.equal(ranDisclosed(executed), false, 'a failed first reply still discloses next time');
+    });
+
+    it('a transient failure on the LAST attempt is final: the claim is taken back, the message handled, nothing re-raised', async () => {
+        const { executed, error } = await runDm(photoEvent(), {
+            send: async () => { throw Object.assign(new Error('boom'), { response: { status: 500, data: {} } }); },
+        }, { lastAttempt: true });
+
+        assert.equal(error, null);
+        assert.ok(unclaimOf(executed));
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(ranRelease(executed), false);
+    });
+
+    it('a permanent Meta error is final: the claim is taken back and the message handled, the token flagged, nothing re-raised', async () => {
+        const { executed, error } = await runDm(photoEvent(), {
+            send: async () => { throw Object.assign(new Error('Invalid OAuth access token'), { response: { status: 400, data: { error: { code: 190, error_subcode: 463 } } } }); },
+        }, { lastAttempt: false });
+
+        assert.equal(error, null);
+        assert.ok(unclaimOf(executed));
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(ranRelease(executed), false);
+        assert.ok(executed.some((e) => /UPDATE creators/.test(e.sql)), 'the token death is written down as for any reply');
+    });
+
+    it('a message with no mid gets one attempt: a failed ack is final, however much budget is left', async () => {
+        const { executed, error } = await runDm(textEvent({ message: { attachments: [PHOTO] } }), {
+            send: async () => { throw Object.assign(new Error('boom'), { response: { status: 500, data: {} } }); },
+        }, { lastAttempt: false });
+
+        assert.equal(error, null);
+        assert.equal(ranMarkHandled(executed), true);
+        assert.equal(ranRelease(executed), false);
+    });
+
+    it('an English tenant is answered in English, with the English disclosure', async () => {
+        const { executed, sends, error } = await runDm(photoEvent(), { profile: FITNESS_EN });
+
+        assert.equal(error, null);
+        assert.equal(claimOf(executed)!.params[3], KITS.en.attachments.media);
+        assert.equal(sends[0]!.body.message.text, `🤖 Automated reply from the AI assistant\n${KITS.en.attachments.media}`);
+        assert.doesNotMatch(String(sends[0]!.body.message.text), /[؀-ۿ]/);
+    });
+
+    it('an Egyptian shop is answered in its own register', async () => {
+        const { sends } = await runDm(photoEvent(), { profile: SHOP_EG });
+        assert.ok(String(sends[0]!.body.message.text).endsWith(KITS.egyptian.attachments.media));
+    });
+
+    it('a thread that was told inside the week is not told again: the line alone, and the stamp left as it was', async () => {
+        const { executed, sends } = await runDm(photoEvent(), { conversation: DISCLOSED });
+
+        assert.equal(sends[0]!.body.message.text, LINE);
+        assert.equal(ranDisclosed(executed), false);
+    });
+
+    it('a Messenger customer is answered through the Page: /{pageId}/messages', async () => {
+        const post = { mid: 'mid-fb', attachments: [{ type: 'post', payload: { url: 'https://cdn.example.test/p', title: 'A post', id: '17887498072083520' } }] };
+        const { executed, sends } = await runDm(textEvent({ recipient: { id: 'fb-page-1' }, message: post }), {}, { lastAttempt: false, object: 'page' }, 'fb-page-1');
+
+        assert.equal(inboundOf(executed).params[2], 'share');
+        assert.match(sends[0]!.url, /\/fb-page-1\/messages$/);
+    });
+
+    it('a redelivery of a message already handled is not answered again, and a resumed one is answered once', async () => {
+        const again = await runDm(photoEvent(), { inboundInsert: [], resumeClaim: [] });
+        assert.equal(claimOf(again.executed), undefined);
+        assert.equal(again.sends.length, 0);
+
+        const resumed = await runDm(photoEvent(), { inboundInsert: [], resumeClaim: [{ id: 'msg-1', reply_attempts: 2 }] });
+        assert.equal(resumed.sends.length, 1);
+        assert.equal(claimOf(resumed.executed)!.params[6], 'msg-1');
+        assert.equal(ranMarkHandled(resumed.executed), true);
+    });
+
+    it('a photo WITH a caption is a text DM: answered by the model, stored as text', async () => {
+        const { executed, geminiCalls, sends } = await runDm(textEvent({ message: { mid: 'mid-cap', text: 'كم سعره؟', attachments: [PHOTO] } }));
+
+        assert.equal(inboundOf(executed).params[2], 'text');
+        assert.equal(inboundOf(executed).params[3], 'كم سعره؟');
+        assert.equal(claimOf(executed), undefined);
+        assert.equal(geminiCalls, 1);
+        assert.equal(sends.length, 1);
+    });
+
+    it('an unsend is not stored, not shown and not answered: no statement at all', async () => {
+        const { executed, sends, geminiCalls } = await runDm(textEvent({ message: { mid: 'mid-del', is_deleted: true, attachments: [PHOTO] } }));
+
+        assert.equal(executed.length, 0);
+        assert.equal(sends.length, 0);
+        assert.equal(geminiCalls, 0);
     });
 });

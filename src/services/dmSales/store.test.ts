@@ -62,11 +62,22 @@ describe('supersession', () => {
     it('compares with the message\'s own created_at: a later unhandled inbound, and any reply after it', async () => {
         answering([{ newer_unhandled: true, answered: false }]);
         assert.deepEqual(await supersession('conv-1', 'msg-1'), { newerUnhandled: true, answered: false });
-        assert.deepEqual(asked[0]!.params, ['conv-1', 'msg-1']);
         assert.match(asked[0]!.sql, /n\.direction = 'inbound' AND n\.id <> \$2 AND n\.handled_at IS NULL AND n\.created_at > \(SELECT created_at FROM messages WHERE id = \$2\)/);
         assert.match(asked[0]!.sql, /o\.direction = 'outbound' AND o\.created_at > \(SELECT created_at FROM messages WHERE id = \$2\)/);
         assert.match(asked[0]!.sql, /n\.conversation_id = \$1/);
         assert.match(asked[0]!.sql, /o\.conversation_id = \$1/);
+    });
+
+    it('does not count a message with no words as "a later message is waiting", nor the ack as "already answered": the word-less types and the ack type are its params', async () => {
+        answering([{ newer_unhandled: false, answered: false }]);
+        await supersession('conv-1', 'msg-1');
+        assert.deepEqual(asked[0]!.params, [
+            'conv-1', 'msg-1',
+            ['story_reply', 'image', 'video', 'audio', 'file', 'sticker', 'share', 'reel', 'story_share', 'story_mention', 'attachment'],
+            'attachment_ack',
+        ]);
+        assert.match(asked[0]!.sql, /AND COALESCE\(n\.message_type, 'text'\) <> ALL\(\$3::text\[\]\)\) AS newer_unhandled/);
+        assert.match(asked[0]!.sql, /AND COALESCE\(o\.message_type, ''\) <> \$4\) AS answered/);
     });
 
     it('is neither when the database says nothing', async () => {

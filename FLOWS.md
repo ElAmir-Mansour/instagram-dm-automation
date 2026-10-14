@@ -525,24 +525,30 @@ Dedupe key is `dm:<mid>` from `message.mid` or `postback.mid`
 
 The handler adapter is **`src/jobs/handlers.ts:33`** → `handleMessagingEvent`.
 
-### 2.2 — `handleMessagingEvent` and `normalizeDm`'s four shapes
+### 2.2 — `handleMessagingEvent` and `normalizeDm`'s shapes
 
 **`src/webhook/messaging.ts:122`**. A second echo check at **:130** (the inline fallback path
 does not go through `isActionableMessagingEvent`), then `normalizeDm`
 (**`src/webhook/messaging.ts:49`**).
 
-| Shape | Source | Lines |
+| Shape | Source | Stored as |
 |---|---|---|
-| plain text message | `event.message.text` | **`messaging.ts:52`** |
-| quick reply | `event.message.quick_reply.payload` (text still from `message.text`) | **`messaging.ts:55-58`** |
-| postback | `event.postback.title` → text, `event.postback.payload` → payload | **`messaging.ts:60-64`** |
-| story mention | an attachment with `type === 'story_mention'` | **`messaging.ts:66-73`** |
+| plain text message | `event.message.text` | `message_type = 'text'` |
+| quick reply | `event.message.quick_reply.payload` (text still from `message.text`) | `'text'`, payload kept |
+| postback | `event.postback.title` → text, `event.postback.payload` → payload | `'text'`, payload kept |
+| **no words** | no text and no payload, but `message.attachments[]`, `message.reply_to.story` or `message.is_unsupported` (`src/webhook/attachments.ts`, `describeWordless`) | `message_type` = its kind (`image`, `video`, `audio`, `file`, `sticker`, `share`, `reel`, `story_share`, `story_mention`, `story_reply`, `attachment`), `text` = a placeholder (`[photo]`) |
 
-Rejection is at **`src/webhook/messaging.ts:75`**: no `senderId`, or no text *and* no payload
-*and* not a story mention. `dm.skipped_empty` deliberately logs `has_message` and the attachment
-type list (**:80-86**), because this branch catches two very different things: a read receipt
-(fine) and **a real message whose only content is an attachment this pipeline cannot describe to
-Gemini** — an image, a voice note, a shared reel. The second is a person waiting for an answer.
+A **message with no words** is stored whole (`raw_payload` is the Meta event, which already holds each attachment's `type` and
+link), drawn in the inbox as a chip, and **never reaches a model**, in any `sales_mode`: `answerDm` hands it to `acknowledgeWordless`
+(`src/webhook/attachmentAck.ts`) before it reads the mode. That sends one fixed kit line (`kit.attachments.mention` for a story
+mention, `.media` for the rest, nothing for a sticker), claimed as an outbound row in one statement so a burst is acknowledged once and
+never in place of a real answer. Skipped, with the message still marked handled, when the bot is paused, the agent is off, the claim
+refuses or the send quota refuses (no retry for an acknowledgement); a transient send failure takes the claim back and retries.
+
+Rejection: no `senderId`, or no text, no payload *and* nothing word-less (read and delivery receipts, reactions, referrals, and an
+unsend, `message.is_deleted`, even one that still lists attachments). An attachment alone is no longer rejected: it used to be, which
+was a person waiting for an answer to a message nobody had stored. `dm.skipped_empty` logs `has_message`, `is_deleted` and the
+attachment types.
 
 `metaMessageId` is `message.mid ?? postback.mid ?? null` (**`src/webhook/messaging.ts:95`**).
 
