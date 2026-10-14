@@ -9,6 +9,7 @@ import { validateEnv } from './config/env.js';
 import { appSecrets, verifyMetaSignature } from './utils/signature.js';
 import { isDiagnosticProbe } from './utils/probe.js';
 import { enqueueWebhookBody, processWebhookBody } from './webhook/router.js';
+import { acknowledgeThenRun } from './webhook/ack.js';
 import { drainInline } from './jobs/drain.js';
 import { currentRequestId, describeError, log, newRequestId, withLogContext } from './utils/log.js';
 import { profileCacheScope } from './services/profile/cache.js';
@@ -378,6 +379,10 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
     // "still pending". The inline drain below then does the common case immediately, so
     // latency is unchanged in the happy path; anything it does not finish is picked up by
     // the next drain (another webhook, or GET /api/jobs/drain).
+    //
+    // The inline drain is kept alive with `waitUntil`: without it the instance can still be
+    // frozen after the 200 with a job claimed and `running`, which only a thaw or the 300 s
+    // stale-claim reaper ends.
 
     // The same id the middleware put on every log line for this request, carried across the
     // queue boundary so the work and its acknowledgement share a correlation id.
@@ -402,17 +407,13 @@ app.post('/webhook', async (req: express.Request, res: express.Response) => {
         }
     }
 
-    res.sendStatus(200);
-
-    try {
+    // Acknowledge, then drain under `waitUntil` (src/webhook/ack.ts). Not awaited: the 200 is
+    // already out, and awaiting here is what left the work to the mercy of the instance thawing
+    // (jobs sat `running` for ~70 s, or ~6 min until the stale-claim reaper took them back).
+    void acknowledgeThenRun(res, async () => {
         if (enqueued) await drainInline();
         else await processWebhookBody(body);
-    } catch (err) {
-        // Both paths isolate every entry and every event inside them, so reaching here means
-        // something outside the per-event handlers broke. The response is already sent; all
-        // that is left is to make it visible.
-        log('error', 'webhook.pipeline_error', describeError(err));
-    }
+    });
 });
 
 // ─── Not Found ──────────────────────────────────────────────────────────────
