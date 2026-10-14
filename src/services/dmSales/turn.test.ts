@@ -76,6 +76,8 @@ interface World {
     recipient?: string;
     /** The code of the quick reply the customer tapped: the event is then a button tap, with `text` as the button's title. */
     quickReply?: string;
+    /** The whole messaging event, in place of the plain message built from `text` (an Instagram `postback`: an ice breaker or a menu item tapped). */
+    event?: Row;
     /** `app.public_base_url` (here through PUBLIC_BASE_URL): set, a link is a tracked `/r/<code>` one; unset, the offer's own address. */
     baseUrl?: string;
     /** The code the `tracked_links` insert hands back; absent, the insert is not arranged and throws, as a database that is behind would. */
@@ -227,7 +229,7 @@ async function run(world: World = {}): Promise<Run> {
     let error: any = null;
     try {
         await handleMessagingEvent(
-            { sender: { id: 'user-1' }, recipient: { id: world.recipient ?? 'ig-page-1' }, message: { mid: 'mid-1', text, ...(world.quickReply ? { quick_reply: { payload: world.quickReply } } : {}) } },
+            world.event ?? { sender: { id: 'user-1' }, recipient: { id: world.recipient ?? 'ig-page-1' }, message: { mid: 'mid-1', text, ...(world.quickReply ? { quick_reply: { payload: world.quickReply } } : {}) } },
             world.recipient ?? 'ig-page-1',
             { lastAttempt: world.lastAttempt ?? false }
         );
@@ -1237,5 +1239,69 @@ describe('the sales turn: a conversation that began with a comment (S10)', () =>
         const r = await run({ bridge: BRIDGED });
         assert.ok(!factsOf(r).includes(PLAN_URL));
         assert.ok(!String(r.layerCalls[0]!.system).includes(PLAN_URL));
+    });
+});
+
+// ─── A tap on one of the owner's own buttons (DM plan S13) ──────────────────────────────────
+
+describe('the sales turn: an ice breaker or a menu item that was tapped', () => {
+    /** What Instagram sends for a tapped ice breaker: a postback (no `message`), `title` the question and `payload` our code. */
+    const postback = (title: string, payload: string): Row => ({
+        sender: { id: 'user-1' }, recipient: { id: 'ig-page-1' }, timestamp: 1, postback: { mid: 'mid-1', title, payload },
+    });
+    const lastTurn = (r: Run): string => {
+        const turns = r.layerCalls[0]!.user as { role: string; text: string }[];
+        return turns[turns.length - 1]!.text;
+    };
+    const en = kitFor({ code: 'en', register: null }).sales;
+
+    it('tells the model what the button asked, in the schema\'s own word, and shows the question and the code the way a tapped quick reply is shown', async () => {
+        const r = await run({
+            event: postback('How much is it?', 'TAP_PRICE'),
+            history: [{ direction: 'inbound', text: 'How much is it?', payload: 'TAP_PRICE' }],
+            layer: saying(reply({ intent: 'price', text: 'The current price is on the page.' })),
+        });
+
+        assert.equal(r.error, null);
+        assert.equal(r.layerCalls.length, 1, 'the sales turn answered it');
+        const last = lastTurn(r);
+        assert.ok(last.includes(en.conversation.tapped('price')), `the tapped fact, with the intent the code stands for: ${last}`);
+        assert.ok(last.endsWith('How much is it? (tapped: TAP_PRICE)'), `S6's history line: the title, then the code: ${last}`);
+        assert.equal(messages(r).length, 1);
+        assert.ok(handled(r));
+    });
+
+    it('each code is its own intent: the link button is a ready_to_buy, the person button a wants_human', async () => {
+        for (const [code, intent] of [['TAP_LINK', 'ready_to_buy'], ['TAP_HUMAN', 'wants_human'], ['TAP_LEVEL', 'level_fit']] as const) {
+            const r = await run({ event: postback('Question', code), history: [{ direction: 'inbound', text: 'Question', payload: code }] });
+            assert.ok(lastTurn(r).includes(en.conversation.tapped(intent)), `${code} → ${intent}`);
+        }
+    });
+
+    it('a payload that is not one of ours says nothing extra: a quick reply the bot offered itself is still shown with its code, and no more', async () => {
+        const r = await run({
+            event: postback('Other plans', 'OTHER_PLANS'),
+            history: [{ direction: 'inbound', text: 'Other plans', payload: 'OTHER_PLANS' }],
+        });
+        const last = lastTurn(r);
+        assert.ok(last.endsWith('Other plans (tapped: OTHER_PLANS)'));
+        assert.ok(!last.includes(en.conversation.tapped('info')) && !/ready-made button/.test(last), 'no tapped fact');
+    });
+
+    it('a typed message with no payload has no tapped fact either', async () => {
+        const r = await run({ text: 'How much is it?' });
+        assert.ok(!/ready-made button/.test(lastTurn(r)));
+    });
+
+    it('a tap in sales_mode off is the old path\'s ordinary message with the button\'s title: no sales turn, Gemini answers, and the question is what it is given', async () => {
+        const r = await run({
+            agent: { ...AGENT, sales_mode: 'off' },
+            event: postback('How much is it?', 'TAP_PRICE'),
+            history: [{ direction: 'inbound', text: 'How much is it?', payload: 'TAP_PRICE' }],
+        });
+        assert.equal(r.layerCalls.length, 0, 'no sales turn');
+        assert.equal(r.geminiCalls, 1, 'the old path answered');
+        assert.equal(messages(r).length, 1);
+        assert.ok(r.executed.some((e) => /INSERT INTO messages/.test(e.sql) && e.params.includes('How much is it?') && e.params.includes('TAP_PRICE')), 'the inbound row stores the title as its text and the code as its payload');
     });
 });

@@ -75,6 +75,11 @@ export interface SalesFacts {
     linkSentFor: readonly string[];
     /** They commented a keyword and were sent an offer's link; `offerId` is null when the campaign matched no offer. */
     comment?: { keyword: string; offerId: string | null };
+    /**
+     * They tapped one of OUR buttons (an ice breaker or a persistent-menu item, S13) and `intent` is what its code stands for
+     * (`intentForPayload`): the model is told what the button asked, so it does not have to guess it from the title.
+     */
+    tapped?: { intent: Intent };
 }
 
 /** A reply is never more than this many qualifier questions deep (§4). */

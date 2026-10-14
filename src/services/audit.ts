@@ -158,6 +158,12 @@ export const AUDIT_ACTIONS = {
     settingsOnboardingWrite: 'settings.onboarding_write',
     /** A profile draft was started for a tenant (P24), by the operator or by the tenant's own wizard. `detail` names the draft, its origin and which inputs it was given, never their values. Starting one is what costs money; advancing it is not recorded. */
     onboardingDraftStart: 'onboarding.draft_start',
+    /** The ice breakers or persistent menu draft was saved from Settings (S13). `detail` holds the counts and a fingerprint, never the questions. Nothing was sent to Instagram. */
+    dmIceBreakersWrite: 'dm.ice_breakers_write',
+    /** The owner pressed "Publish to Instagram" (S13): a profile-level write to Meta that every visitor to the account sees. `detail` holds what was set and removed, the counts and a fingerprint, and the outcome. */
+    dmIceBreakersPublish: 'dm.ice_breakers_publish',
+    /** The owner pressed "Remove from Instagram" (S13): the ice breakers and the persistent menu were deleted from the account's Instagram profile. */
+    dmIceBreakersRemove: 'dm.ice_breakers_remove',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

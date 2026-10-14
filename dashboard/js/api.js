@@ -565,4 +565,19 @@ const API = {
     testNotify: (lang) => API.request('/settings/notify/test', { method: 'POST', body: JSON.stringify({ lang }) }),
     /** Meta's verify handshake, run by the server against the public webhook URL. `{ ok, reason, status, detail, url }` */
     checkWebhookHandshake: () => API.request('/settings/webhook-token/check', { method: 'POST' }),
+
+    // ─── Settings → Instagram ice breakers and persistent menu (DM plan S13; the tenant's owner only) ───
+    /**
+     * `{ config: { iceBreakers, menu }, saved, published, inSync, connected: { instagram }, suggestions: { kit, items }, limits, taps }`.
+     * Reading sends nothing to Instagram.
+     */
+    getIceBreakers: () => API.request('/dm/ice-breakers'),
+    /** Saves the DRAFT: `{ iceBreakers: [{ question, payload }], menu: [{ type, title, payload | url }] }`. A 400 carries `problems` on `err.body`. Sends nothing to Instagram. */
+    saveIceBreakers: (data) => API.request('/dm/ice-breakers', { method: 'PUT', body: JSON.stringify(data) }),
+    /** THE publish: the saved draft goes to Instagram. The answer holds `result` and what Instagram holds afterwards (`live`). A refusal from Meta is a 502 with `err.body.metaCode`. */
+    publishIceBreakers: () => API.request('/dm/ice-breakers/publish', { method: 'POST' }),
+    /** Deletes the ice breakers and the persistent menu from the account's Instagram profile. The draft stays. */
+    removeIceBreakers: () => API.request('/dm/ice-breakers/publish', { method: 'DELETE' }),
+    /** What Instagram holds right now, read from Meta: `{ live: { iceBreakers, menu } }`. */
+    readIceBreakersLive: () => API.request('/dm/ice-breakers/live'),
 };

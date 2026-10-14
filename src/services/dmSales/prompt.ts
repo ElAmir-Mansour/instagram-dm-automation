@@ -167,6 +167,7 @@ export function salesFactsBlock(ctx: Pick<SalesContext, 'language' | 'offers'>, 
     const lines = [kit.headers.conversation, c.stage(facts.stage), c.qualifiers(facts.qualifierTurns, MAX_QUALIFIER_TURNS)];
     lines.push(facts.linkSentFor.length > 0 ? c.linkSent(facts.linkSentFor.map((id) => nameOf(id) ?? id).join(', ')) : c.linkNotSent);
     if (facts.comment) lines.push(c.comment(facts.comment.keyword, nameOf(facts.comment.offerId)));
+    if (facts.tapped) lines.push(c.tapped(facts.tapped.intent));
     return lines.join('\n');
 }
 

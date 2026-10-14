@@ -78,6 +78,7 @@ import { droppedLeversNote, reachOptionsFor, sendsMetaOptions, validateMetaOptio
 import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
+import { iceBreakersRouter } from './iceBreakers.js';
 import { onboardingRouter } from './onboarding.js';
 import { describeOnboardingBrief } from '../services/onboardingWizard.js';
 import { onboardingDraftsRouter } from './onboardingDrafts.js';
@@ -1543,6 +1544,10 @@ router.use('/growth', growthRouter);
 
 // The Creator Profile (FLOWS.md §4.7) — tenant-scoped. Any member reads it; only an owner changes it (the router carries the guard).
 router.use('/profile', profileRouter);
+
+// The Instagram ice breakers and persistent menu (DM plan S13) — tenant-scoped, owner only on every route (the router carries the guard). Its only paths to Meta are
+// POST/DELETE /publish and GET /live, each a button on the Settings card; saving a draft sends nothing.
+router.use('/dm/ice-breakers', iceBreakersRouter);
 
 // The onboarding wizard (FLOWS.md §4.9) — tenant-scoped. An operator reads it; only an owner writes it (the router carries the guards).
 router.use('/onboarding', onboardingRouter);

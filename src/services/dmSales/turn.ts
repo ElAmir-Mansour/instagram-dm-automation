@@ -52,6 +52,7 @@ import {
 import { scheduleFollowup } from './followupJob.js';
 import { guardReply, type GuardedReply, type Violation } from './guard.js';
 import { noticeFor, notifyOwner } from './handoff.js';
+import { intentForPayload } from './iceBreakers.js';
 import { linkFor } from './link.js';
 import { prefilter, type PrefilterDecision } from './prefilter.js';
 import { buildSalesPrompt, creatorName, salesFactsBlock } from './prompt.js';
@@ -320,10 +321,14 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     ]);
     const bridged = source ? bridgeFacts(source, ctx.offers) : null;
     const stage = openingStage(state, source);
+    // A tap on one of the owner's own buttons (an ice breaker or a menu item, S13) says what it asks by its code: the model is told that, in the
+    // schema's own words, and not left to read it from the title. Any other payload (a quick reply this bot offered, a campaign's) says nothing here.
+    const tappedIntent = intentForPayload(inbound.payload);
     const factsBlock = salesFactsBlock(ctx, {
         stage: stage === 'handoff' ? 'new' : stage, qualifierTurns: state.qualifierTurns,
         linkSentFor: [...new Set([...state.offersLinked, ...(bridged?.linkSentFor ?? [])])],
         ...(bridged ? { comment: bridged.comment } : {}),
+        ...(tappedIntent ? { tapped: { intent: tappedIntent } } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
     const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);

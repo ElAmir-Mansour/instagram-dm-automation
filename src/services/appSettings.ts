@@ -228,6 +228,30 @@ export const APP_SETTING_KEYS = {
 
 export type AppSettingKey = (typeof APP_SETTING_KEYS)[keyof typeof APP_SETTING_KEYS];
 
+/**
+ * Settings that belong to ONE tenant, in the same table: the prefix and the tenant's id make the key (`dm.ice_breakers.<creator uuid>`).
+ * `APP_SETTING_KEYS` is the deployment's own list, one value each; a tenant's value cannot be a constant, so it has a family. The key is
+ * always built from the request's resolved tenant (`getTenantId`), never from anything a client sent, and `tenantSettingKey` refuses an id
+ * that is not the shape of one, so a request cannot reach another tenant's row or a deployment-wide key by choosing its "id".
+ *
+ *   dmIceBreakers   the Instagram ice breakers and persistent menu the owner edits, and the record of the last publish (DM plan S13,
+ *                   `src/services/dmSales/iceBreakerStore.ts`). Not a secret. There is no tenant deletion in this product (a tenant is
+ *                   deactivated), so a row is never orphaned.
+ */
+export const TENANT_SETTING_PREFIXES = {
+    dmIceBreakers: 'dm.ice_breakers.',
+} as const;
+
+export type TenantSettingKey = `${(typeof TENANT_SETTING_PREFIXES)[keyof typeof TENANT_SETTING_PREFIXES]}${string}`;
+
+/** A tenant id as a key part: letters, digits and dashes (a uuid), at most 64 of them. The column is 100 characters wide. */
+const TENANT_ID_PART = /^[A-Za-z0-9-]{1,64}$/;
+
+export function tenantSettingKey(prefix: (typeof TENANT_SETTING_PREFIXES)[keyof typeof TENANT_SETTING_PREFIXES], creatorId: string): TenantSettingKey {
+    if (!TENANT_ID_PART.test(creatorId)) throw new Error('tenantSettingKey: not a tenant id.');
+    return `${prefix}${creatorId}`;
+}
+
 const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.tiktokClientSecret,
     APP_SETTING_KEYS.youtubeClientSecret,
@@ -241,12 +265,12 @@ const SECRET_KEYS: ReadonlySet<AppSettingKey> = new Set([
     APP_SETTING_KEYS.notifyTelegramBotToken,
 ]);
 
-export function isSecretSetting(key: AppSettingKey): boolean {
-    return SECRET_KEYS.has(key);
+export function isSecretSetting(key: AppSettingKey | TenantSettingKey): boolean {
+    return SECRET_KEYS.has(key as AppSettingKey);
 }
 
 /** The decrypted value, or null when unset. */
-export async function getSetting(key: AppSettingKey): Promise<string | null> {
+export async function getSetting(key: AppSettingKey | TenantSettingKey): Promise<string | null> {
     const row = await queryOne<Pick<AppSettingRow, 'value' | 'is_secret'>>(
         'SELECT value, is_secret FROM app_settings WHERE key = $1',
         [key]
@@ -279,7 +303,7 @@ export async function getSettings(keys: readonly AppSettingKey[]): Promise<Map<A
  * Secrets are encrypted here, the one place they are written.
  */
 export async function setSetting(
-    key: AppSettingKey,
+    key: AppSettingKey | TenantSettingKey,
     value: string | null,
     updatedBy: string | null
 ): Promise<void> {

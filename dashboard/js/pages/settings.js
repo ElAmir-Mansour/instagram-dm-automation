@@ -119,7 +119,11 @@ const SettingsPage = {
         let metaError = null;
         let metaApp = null;
         let metaAppError = null;
-        const [tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt] = await Promise.allSettled([
+        // The Instagram ice breakers and persistent menu (DM plan S13): the tenant OWNER's, so nobody else is asked (the server refuses them
+        // anyway), and isolated like the rest. Reading them sends nothing to Instagram.
+        let iceBreakers = null;
+        let iceBreakersError = null;
+        const [tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt, ib, ibModule] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
@@ -132,7 +136,12 @@ const SettingsPage = {
             App.isAdmin() ? API.getMetaAppSettings() : Promise.resolve(null),
             App.loadPageModule('meta_connect'),
             App.isAdmin() ? API.getNotifySettings() : Promise.resolve(null),
+            App.canAdminister() ? API.getIceBreakers() : Promise.resolve(null),
+            App.canAdminister() ? App.loadPageModule('ice_breakers') : Promise.resolve(null),
         ]);
+        if (ib.status === 'fulfilled') iceBreakers = ib.value; else iceBreakersError = ib.reason;
+        // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
+        if (!iceBreakersError && App.canAdminister() && !(ibModule.status === 'fulfilled' && ibModule.value)) iceBreakersError = new Error(t('iceb.moduleFailed'));
         if (mc.status === 'fulfilled') meta = mc.value; else metaError = mc.reason;
         if (mcApp.status === 'fulfilled') metaApp = mcApp.value; else metaAppError = mcApp.reason;
         // A card whose module could not be fetched is a card that says so, with Retry: never a blank section.
@@ -370,6 +379,8 @@ const SettingsPage = {
 
             ${this.metaSection({ meta, metaError, metaApp, metaAppError })}
 
+            ${canAdmin ? this.iceBreakersSection(iceBreakers, iceBreakersError) : ''}
+
             ${this.tiktokSection({ tiktok, tiktokError, tiktokApp, tiktokAppError })}
 
             ${this.youtubeSection({ youtube, youtubeError, youtubeApp, youtubeAppError })}
@@ -419,6 +430,32 @@ const SettingsPage = {
         this.announceTikTokReturn();
         this.announceYouTubeReturn();
         this.announceMetaReturn().catch((err) => console.warn('Could not show the Meta return:', err));
+    },
+
+    // ─── Instagram ice breakers and persistent menu (DM plan S13) ─────────────
+
+    /**
+     * The card's words, editor and buttons are `IceBreakersCard`'s (`ice_breakers.js`, loaded on first use); this hands it the server's answer, or
+     * says why there is none. Owner only: the caller does not ask for it otherwise.
+     */
+    iceBreakersSection(data, error) {
+        // The error card is drawn HERE, not by the module: a module that could not be fetched is the very case it is for.
+        if (error || !data || typeof IceBreakersCard === 'undefined') {
+            const message = (error && error.message) || t('iceb.moduleFailed');
+            return html`
+                <section class="section" id="iceb-card">
+                    <h2 class="section-title">${t('iceb.title')}</h2>
+                    <div class="settings-card surface">
+                        <div class="inline-error" role="alert">
+                            <i data-lucide="alert-circle" aria-hidden="true"></i>
+                            <div><strong dir="auto">${t('iceb.loadFailed', { message })}</strong></div>
+                        </div>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                    </div>
+                </section>
+            `;
+        }
+        return IceBreakersCard.section(data);
     },
 
     // ─── Instagram & Facebook (P28) ──────────────────────────────────────────
