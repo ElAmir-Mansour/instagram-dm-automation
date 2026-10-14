@@ -86,10 +86,13 @@ const App = {
         // on demand by Tenants and the tenant detail.
         invite: { src: 'invite', page: () => InvitePage, routable: false },
         invite_card: { src: 'invite_card', page: () => InviteCard, routable: false, adminOnly: true },
+        // The AI providers card on Operations: keys, routes, prices, budgets and spend, with the Gemini key as one provider row. Loaded
+        // by Operations on first use, and reset with every other module when the tenant changes.
+        ai_providers: { src: 'ai_providers', page: () => AiProviders, routable: false, adminOnly: true },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.16',
+    ASSET_VERSION: '12.17',
 
     _modules: Object.create(null),
 

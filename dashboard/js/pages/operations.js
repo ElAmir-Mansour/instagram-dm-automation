@@ -21,26 +21,33 @@
  * short-keyword hazard list — `تم` matches inside اهتمام, and substring
  * matching means a two-letter keyword fires on half the comments on a post.
  *
- * The Gemini key sits right under the tenant cards: it is one key for every
- * tenant, so a missing one silences every DM bot at once.
+ * The AI providers card sits right under the tenant cards (pages/ai_providers.js,
+ * loaded on first use). It absorbed the Gemini key card: Gemini is one provider
+ * row in it, and it is still one key for every tenant, so a missing one silences
+ * every DM bot at once.
  */
 const OperationsPage = {
     data: null,
 
-    /** GET /admin/gemini-key: which key is answering. Never the key itself. */
-    gemini: null,
-    geminiError: null,
-    /**
-     * Models whose quota the last save found spent — shown once in the section
-     * rather than in a toast that is gone in 4.5s.
-     */
-    geminiNotice: null,
+    /** Whether ai_providers.js is in and the card has its data: otherwise the section says it could not load. */
+    aiReady: false,
 
     resetTenantState() {
         this.data = null;
-        this.gemini = null;
-        this.geminiError = null;
-        this.geminiNotice = null;
+        this.aiReady = false;
+        // The card's own state is reset with the rest by App.resetTenantState(): it is a registered module (`routable: false`).
+    },
+
+    /**
+     * Fetch the card's module (App.loadPageModule: on demand, at the dashboard's asset version, a failed fetch not remembered so
+     * Retry asks again), then what it shows. Resolves true when the card can paint; its own parts keep their own errors, because the
+     * Gemini key must stay usable when the AI settings cannot be read.
+     */
+    async loadAiCard() {
+        const card = await App.loadPageModule('ai_providers');
+        if (!card) return false;
+        await card.load();
+        return true;
     },
 
     skeleton() {
@@ -57,14 +64,13 @@ const OperationsPage = {
         const gate = Motion.beginLoad(container, () => this.skeleton());
 
         let result;
-        let gemini = null;
-        let geminiError = null;
+        let aiReady = false;
         try {
-            // Side by side. The key status can fail on its own: the rest of the
-            // screen is still worth showing without it.
-            [result, gemini] = await Promise.all([
+            // Side by side. The AI card never rejects (its parts keep their own
+            // errors): the rest of the screen is still worth showing without it.
+            [result, aiReady] = await Promise.all([
                 API.getAdminOps(),
-                API.getGeminiKey().catch((err) => { geminiError = err; return null; }),
+                this.loadAiCard().catch(() => false),
             ]);
         } catch (err) {
             gate.done();
@@ -78,10 +84,7 @@ const OperationsPage = {
         gate.done();
 
         this.data = result || {};
-        this.gemini = gemini;
-        this.geminiError = geminiError;
-        const notice = this.geminiNotice;
-        this.geminiNotice = null;
+        this.aiReady = aiReady;
         const tenants = this.tenantRows();
 
         container.innerHTML = esc(html`
@@ -101,7 +104,7 @@ const OperationsPage = {
                     : html`<div class="ops-grid">${tenants.map((row) => this.renderTenantCard(row))}</div>`}
             </section>
 
-            ${this.renderGeminiKey(notice)}
+            ${this.renderAiProviders()}
             ${this.renderQueue()}
             ${this.renderSchema()}
             ${this.renderStorage()}
@@ -263,79 +266,21 @@ const OperationsPage = {
     // ─── Platform-wide ───────────────────────────────────────────────────────
 
     /**
-     * The one Gemini key every tenant's DM replies and the Studio run on.
-     *
-     * The server never sends the key back, so there is nothing to prefill: the
-     * status says which key is answering (the one saved here, shown masked, or
-     * the server's GEMINI_API_KEY), and the field only ever takes a new one.
-     * Saving is "check and save" because the server tries the key with Google
-     * on the DM bot's own models first and refuses one that fails.
+     * The AI providers card (pages/ai_providers.js): keys, routes, prices, budgets and spend, with the Gemini key, which every tenant's
+     * DM replies and the Studio run on, as one provider row. When the module could not be fetched the section says so, with a retry
+     * that reloads the screen: nothing here depends on it.
      */
-    renderGeminiKey(notice) {
-        const title = html`<h2 class="section-title">${t('ops.gemini.title')}</h2>`;
-        if (this.geminiError) {
-            return html`
-                <section class="section">
-                    ${title}
-                    <div class="surface pad-5">
-                        <p class="form-hint text-warning" dir="auto">${t('ops.gemini.loadFailed', { message: this.geminiError.message })}</p>
-                    </div>
-                </section>
-            `;
-        }
-        const status = this.gemini;
-        if (!status) return html``;
-
-        const inUse = (text, preview) => html`
-            <p class="token-info">
-                <i data-lucide="check-circle" class="icon-success" aria-hidden="true"></i>
-                <span dir="auto">${text}</span>
-                ${preview ? html`<code>${UI.ltr(preview)}</code>` : ''}
-            </p>
-        `;
-        // The masked hint stays out of the sentence: Latin inside Arabic copy
-        // needs its own <bdi>, or the parentheses and bullets around it reorder.
-        const statusLine = status.source === 'database'
-            ? inUse(t('ops.gemini.fromDatabase'), status.preview)
-            : status.source === 'env'
-                ? inUse(t('ops.gemini.fromEnv'))
-                : html`
-                    <div class="warning-card" role="alert">
-                        <div class="row row--start gap-4">
-                            <span class="stat-icon warning shrink-0"><i data-lucide="key-round" aria-hidden="true"></i></span>
-                            <p>${t('ops.gemini.none')}</p>
-                        </div>
-                    </div>
-                `;
-
+    renderAiProviders() {
+        const card = this.aiReady ? App.pages.ai_providers.page() : null;
+        if (card) return card.renderSection();
         return html`
             <section class="section">
-                ${title}
+                <h2 class="section-title">${t('ops.ai.title')}</h2>
                 <div class="surface pad-5 stack gap-4">
-                    ${statusLine}
-                    ${notice && notice.length ? html`
-                        <p class="form-hint text-warning">${t('ops.gemini.quotaSpent')} ${UI.ltr(notice.join(', '))}</p>
-                    ` : ''}
-                    <p class="form-hint">${t('ops.gemini.body')}</p>
-                    <form id="gemini-key-form" data-submit="ops:saveGeminiKey">
-                        <div class="form-group">
-                            <label class="form-label" for="gemini-key-input">${t('ops.gemini.label')}</label>
-                            <input class="field field-mono" id="gemini-key-input" name="apiKey" type="password" dir="ltr"
-                                   autocomplete="new-password" spellcheck="false" autocapitalize="off" required
-                                   aria-describedby="gemini-key-hint">
-                            <p class="form-hint" id="gemini-key-hint">${t('ops.gemini.hint')}</p>
-                        </div>
-                        <div class="form-actions">
-                            ${UI.button({
-                                variant: 'primary', size: 'sm', type: 'submit', icon: 'shield-check',
-                                label: t('ops.gemini.save'), id: 'gemini-key-submit',
-                            })}
-                            ${status.source === 'database' ? UI.button({
-                                variant: 'secondary', size: 'sm', icon: 'trash-2',
-                                label: t('ops.gemini.remove'), action: 'ops:removeGeminiKey',
-                            }) : ''}
-                        </div>
-                    </form>
+                    <p class="form-hint text-warning" dir="auto">${t('ops.ai.moduleFailed')}</p>
+                    <div class="form-actions aip-actions-flush">
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'ops:render' })}
+                    </div>
                 </div>
             </section>
         `;
@@ -498,45 +443,6 @@ const OperationsPage = {
 
     // ─── Actions ─────────────────────────────────────────────────────────────
 
-    async saveGeminiKey(form, event) {
-        event.preventDefault();
-        const apiKey = (new FormData(form).get('apiKey') || '').toString().trim();
-        if (!apiKey) return;
-
-        const restore = UI.formBusy(form, t('ops.gemini.checking'));
-        if (!restore) return; // already in flight
-        try {
-            const result = await API.saveGeminiKey(apiKey);
-            const spent = result && Array.isArray(result.quotaSpent) ? result.quotaSpent : [];
-            if (spent.length) this.geminiNotice = spent;
-            UI.toast(t('ops.gemini.saved'), 'success');
-            // The re-render drops the form, and the key with it.
-            await this.render();
-        } catch (err) {
-            // Kept in the field, so a typo can be fixed rather than pasted again.
-            restore();
-            UI.toast((err && err.message) || t('ops.gemini.saveFailed'), 'error');
-        }
-    },
-
-    removeGeminiKey() {
-        const fallback = !!(this.gemini && this.gemini.envFallback);
-        Admin.confirm({
-            title: t('ops.gemini.removeTitle'),
-            body: fallback ? t('ops.gemini.removeBodyEnv') : t('ops.gemini.removeBodyNone'),
-            confirmLabel: t('ops.gemini.remove'),
-            confirmIcon: 'trash-2',
-            onConfirm: () => OperationsPage.removeGeminiKeyConfirmed(),
-        });
-    },
-
-    /** A rejection is shown inside the confirm dialog, which stays open (Admin.runConfirm). */
-    async removeGeminiKeyConfirmed() {
-        await API.removeGeminiKey();
-        UI.toast(t('ops.gemini.removed'), 'success');
-        await this.render();
-    },
-
     openTenant(id) {
         if (!id) return;
         App.goWithQuery('tenant_detail', { id });
@@ -573,6 +479,4 @@ UI.registerActions('ops', {
     render: () => Admin.report(OperationsPage.render()),
     openTenant: (el) => OperationsPage.openTenant(el.dataset.id),
     recheckToken: (el) => Admin.report(OperationsPage.recheckToken(el)),
-    saveGeminiKey: (el, e) => OperationsPage.saveGeminiKey(el, e),
-    removeGeminiKey: () => OperationsPage.removeGeminiKey(),
 });
