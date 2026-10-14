@@ -102,6 +102,9 @@ const SettingsPage = {
         // platform admins only, and isolated for the same reason.
         let site = null;
         let siteError = null;
+        // Handoff alerts and echo takeover (DM plan S8): the deployment's too, so platform admins only, and isolated like the rest.
+        let notify = null;
+        let notifyError = null;
         // YouTube, isolated the same way.
         let youtube = null;
         let youtubeError = null;
@@ -116,7 +119,7 @@ const SettingsPage = {
         let metaError = null;
         let metaApp = null;
         let metaAppError = null;
-        const [tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule] = await Promise.allSettled([
+        const [tt, ttApp, ms, st, yt, ytApp, cu, ob, mc, mcApp, mcModule, nt] = await Promise.allSettled([
             API.getTikTokConnection(),
             App.isAdmin() ? API.getTikTokAppSettings() : Promise.resolve(null),
             App.isAdmin() ? API.getMediaStorage() : Promise.resolve(null),
@@ -128,6 +131,7 @@ const SettingsPage = {
             API.getMetaConnection(),
             App.isAdmin() ? API.getMetaAppSettings() : Promise.resolve(null),
             App.loadPageModule('meta_connect'),
+            App.isAdmin() ? API.getNotifySettings() : Promise.resolve(null),
         ]);
         if (mc.status === 'fulfilled') meta = mc.value; else metaError = mc.reason;
         if (mcApp.status === 'fulfilled') metaApp = mcApp.value; else metaAppError = mcApp.reason;
@@ -141,6 +145,7 @@ const SettingsPage = {
         if (ttApp.status === 'fulfilled') tiktokApp = ttApp.value; else tiktokAppError = ttApp.reason;
         if (ms.status === 'fulfilled') media = ms.value; else mediaError = ms.reason;
         if (st.status === 'fulfilled') site = st.value; else siteError = st.reason;
+        if (nt.status === 'fulfilled') notify = nt.value; else notifyError = nt.reason;
         if (ob.status === 'fulfilled') onboarding = ob.value; else onboardingError = ob.reason;
 
         if (!live()) return;
@@ -372,6 +377,8 @@ const SettingsPage = {
             ${App.isAdmin() ? this.mediaStorageSection(media, mediaError, cleanup) : ''}
 
             ${App.isAdmin() ? this.siteSection(site, siteError) : ''}
+
+            ${App.isAdmin() ? this.notifySection(notify, notifyError) : ''}
 
             ${App.isAdmin() ? this.onboardingSection(onboarding, onboardingError) : ''}
 
@@ -1407,6 +1414,223 @@ const SettingsPage = {
         }
     },
 
+    // ─── Handoff alerts and echo takeover (platform admin) ───────────────────────────────────────────────
+
+    /** The field each input maps to, for marking the one a refusal names. */
+    NOTIFY_FIELDS: { botToken: 'notify-token', chatId: 'notify-chat', enabled: 'notify-enabled', hotLeads: 'notify-hot', takeover: 'notify-echo', ownerAppIds: 'notify-app-ids' },
+
+    /**
+     * The four steps that make the bot, in the order the owner does them. @BotFather is a name typed in Latin letters, so it goes through
+     * `ltrIn`: in an Arabic sentence a bare «@BotFather» would have its @ jump to the other end.
+     */
+    notifyHelp() {
+        return html`
+            <details class="settings-block mbe-4">
+                <summary class="form-label">${t('settings.notify.help.title')}</summary>
+                <ol class="stack gap-2 mbs-4">
+                    <li>${this.ltrIn('settings.notify.help.step1', { bot: '@BotFather' }, 'bot')}</li>
+                    <li>${t('settings.notify.help.step2')}</li>
+                    <li>${t('settings.notify.help.step3')}</li>
+                    <li>${this.ltrIn('settings.notify.help.step4', { bot: '@userinfobot' }, 'bot')}</li>
+                </ol>
+            </details>
+        `;
+    },
+
+    notifySection(notify, error) {
+        if (error || !notify) {
+            if (!error) return '';
+            return html`
+                <section class="section">
+                    <h2 class="section-title">${t('settings.notify.title')}</h2>
+                    <div class="settings-card surface">
+                        <div class="inline-error" role="alert">
+                            <i data-lucide="alert-circle" aria-hidden="true"></i>
+                            <div><strong dir="auto">${t('settings.notify.loadFailed', { message: error.message })}</strong></div>
+                        </div>
+                        ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'settings:render' })}
+                    </div>
+                </section>
+            `;
+        }
+        const tg = notify.telegram || {};
+        const echo = notify.echo || {};
+        const token = tg.botToken || {};
+        const documented = (Array.isArray(echo.documentedAppIds) ? echo.documentedAppIds : []).join(', ');
+        return html`
+            <section class="section">
+                <h2 class="section-title">${t('settings.notify.title')}</h2>
+                <div class="settings-card surface">
+                    <p class="form-hint mbe-4">${t('settings.notify.intro')}</p>
+                    ${this.notifyHelp()}
+                    <div id="notify-settings-error"></div>
+                    <form id="notify-settings-form" data-submit="settings:saveNotify" novalidate>
+                        <div class="form-group">
+                            <div class="check-row">
+                                <input type="checkbox" id="notify-enabled" name="enabled" ${tg.enabled ? html.raw('checked') : ''}>
+                                <span class="check-text"><label class="check-label" for="notify-enabled">${t('settings.notify.enabled')}</label></span>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <!-- Never prefilled: the token is never sent back. Blank means "keep what is saved". -->
+                            <label class="form-label" for="notify-token">${t('settings.notify.token')}</label>
+                            <input class="field field-mono" id="notify-token" name="botToken" type="password" dir="ltr" maxlength="128"
+                                   autocomplete="new-password" spellcheck="false" autocapitalize="off" placeholder="123456789:AA…"
+                                   aria-describedby="notify-token-hint">
+                            <p class="form-hint" id="notify-token-hint">${token.set
+                                ? (token.last4 ? this.ltrIn('settings.notify.tokenSaved', { last4: token.last4 }, 'last4') : t('settings.notify.tokenSavedShort'))
+                                : t('settings.notify.tokenNone')}</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="notify-chat">${t('settings.notify.chatId')}</label>
+                            <input class="field field-mono" id="notify-chat" name="chatId" type="text" dir="ltr" maxlength="40"
+                                   inputmode="numeric" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="123456789"
+                                   value="${tg.chatId || ''}" aria-describedby="notify-chat-hint">
+                            <p class="form-hint" id="notify-chat-hint">${t('settings.notify.chatIdHint')}</p>
+                        </div>
+                        <div class="form-group">
+                            <div class="check-row">
+                                <input type="checkbox" id="notify-hot" name="hotLeads" ${tg.hotLeads !== false ? html.raw('checked') : ''}>
+                                <span class="check-text"><label class="check-label" for="notify-hot">${t('settings.notify.hotLeads')}</label></span>
+                            </div>
+                        </div>
+
+                        <fieldset class="form-group fieldset-plain">
+                            <legend class="form-label">${t('settings.notify.echo.title')}</legend>
+                            <div class="check-row">
+                                <input type="checkbox" id="notify-echo" name="takeover" aria-describedby="notify-echo-hint" ${echo.takeover ? html.raw('checked') : ''}>
+                                <span class="check-text"><label class="check-label" for="notify-echo">${t('settings.notify.echo.takeover')}</label></span>
+                            </div>
+                            <p class="form-hint" id="notify-echo-hint">${t('settings.notify.echo.hint')}</p>
+                            <div class="form-group mbs-4">
+                                <label class="form-label" for="notify-app-ids">${t('settings.notify.echo.appIds')} <span class="label-optional">${t('common.optional')}</span></label>
+                                <input class="field field-mono" id="notify-app-ids" name="ownerAppIds" type="text" dir="ltr" maxlength="300"
+                                       autocomplete="off" spellcheck="false" placeholder="1217981644879628"
+                                       value="${(Array.isArray(echo.ownerAppIds) ? echo.ownerAppIds : []).join(', ')}" aria-describedby="notify-app-ids-hint">
+                                <p class="form-hint" id="notify-app-ids-hint">${this.ltrIn('settings.notify.echo.appIdsHint', { documented }, 'documented')}</p>
+                            </div>
+                        </fieldset>
+
+                        <div class="form-actions">
+                            ${UI.button({
+                                variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
+                                label: t('settings.notify.save'), id: 'notify-settings-submit',
+                            })}
+                            ${UI.button({
+                                variant: 'secondary', size: 'sm', icon: 'send',
+                                label: t('settings.notify.test'), action: 'settings:testNotify', id: 'notify-test',
+                            })}
+                            ${token.set ? UI.button({
+                                variant: 'secondary', size: 'sm', icon: 'trash-2',
+                                label: t('settings.notify.removeToken'), action: 'settings:removeNotifyToken', id: 'notify-remove-token',
+                            }) : ''}
+                        </div>
+                        <p class="form-hint">${t('settings.notify.testHint')}</p>
+                        <div id="notify-test-result" aria-live="polite"></div>
+                    </form>
+                </div>
+            </section>
+        `;
+    },
+
+    showNotifyError(field, message) {
+        const host = document.getElementById('notify-settings-error');
+        const form = document.getElementById('notify-settings-form');
+        if (form) UI.clearInvalid(form);
+        if (!host) { UI.toast(message, 'error'); return; }
+        const stripId = 'notify-settings-error-strip';
+        host.innerHTML = esc(UI.errorStrip(message, '', stripId));
+        UI.icons(host);
+        const input = field && this.NOTIFY_FIELDS[field] ? document.getElementById(this.NOTIFY_FIELDS[field]) : null;
+        if (input) UI.markInvalid(input, stripId);
+        else if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ block: 'nearest' });
+    },
+
+    async saveNotify(form, event) {
+        event.preventDefault();
+        const data = new FormData(form);
+        const read = (name) => (data.get(name) || '').toString().trim();
+        const host = document.getElementById('notify-settings-error');
+        if (host) host.innerHTML = '';
+        UI.clearInvalid(form);
+
+        // A blank token is "keep it": it is never sent back to this page, so it cannot be re-sent. The two switches are always sent (a
+        // cleared box is a real off), and so are the chat id and the app ids (an emptied field clears them).
+        const telegram = { chatId: read('chatId'), enabled: data.get('enabled') !== null, hotLeads: data.get('hotLeads') !== null };
+        const token = read('botToken');
+        if (token) telegram.botToken = token;
+        const payload = { telegram, echo: { takeover: data.get('takeover') !== null, ownerAppIds: read('ownerAppIds') } };
+
+        const focus = UI.captureFocus(document.getElementById('page-container'));
+        const restore = UI.formBusy(form, t('common.saving'));
+        if (!restore) return;
+        try {
+            await API.saveNotifySettings(payload);
+            UI.toast(t('settings.notify.saved'), 'success');
+            await this.render();
+            UI.restoreFocus(focus);
+        } catch (err) {
+            restore();
+            const field = err && err.body && err.body.field;
+            const known = field && this.NOTIFY_FIELDS[field];
+            this.showNotifyError(field, known ? t(`settings.notify.invalid.${field}`) : ((err && err.message) || t('error.unexpected')));
+        }
+    },
+
+    /** What the server found when it tried the saved token and chat id: a strip that says so, in words, never the token. */
+    notifyTestResult(r) {
+        const result = r || {};
+        if (result.ok) {
+            return html`
+                <span class="health-pill health-fresh">
+                    <i data-lucide="check-circle" aria-hidden="true"></i>
+                    ${t('settings.notify.test.ok')}
+                </span>
+            `;
+        }
+        const reason = ['not_configured', 'rejected', 'unreachable'].includes(result.reason) ? result.reason : 'unreachable';
+        const status = Number.isFinite(Number(result.status)) && result.status !== null ? Number(result.status) : '';
+        return UI.errorStrip(t(`settings.notify.test.${reason}`, { status }), result.description || '', 'notify-test-strip');
+    },
+
+    /** «أرسل رسالة تجريبية»: the server sends the message with what is SAVED, so a change has to be saved first (the card says so). */
+    async testNotify(btn) {
+        const restore = UI.actionBusy(btn);
+        if (!restore) return;
+        const host = document.getElementById('notify-test-result');
+        if (host) host.innerHTML = '';
+        try {
+            const result = await API.testNotify(I18N.lang === 'en' ? 'en' : 'ar');
+            if (host) { host.innerHTML = esc(this.notifyTestResult(result)); UI.icons(host); }
+        } catch (err) {
+            if (host) {
+                host.innerHTML = esc(UI.errorStrip(t('settings.notify.test.requestFailed'), (err && err.message) || '', 'notify-test-strip'));
+                UI.icons(host);
+            }
+        } finally {
+            restore();
+        }
+    },
+
+    removeNotifyToken(btn) {
+        if (!btn || btn.disabled) return;
+        Admin.confirm({
+            title: t('settings.notify.removeTitle'),
+            body: t('settings.notify.removeBody'),
+            hint: t('settings.notify.removeHint'),
+            confirmLabel: t('settings.notify.removeToken'),
+            confirmIcon: 'trash-2',
+            onConfirm: () => SettingsPage.removeNotifyTokenConfirmed(),
+        });
+    },
+
+    /** Alerts are switched off with the token: "on" with nothing to send with is refused by the server. */
+    async removeNotifyTokenConfirmed() {
+        await API.saveNotifySettings({ telegram: { botToken: null, enabled: false } });
+        UI.toast(t('settings.notify.tokenRemoved'), 'success');
+        await this.render();
+    },
+
     // ─── Onboarding (platform admin): how invite links behave ─────────────────────────────────────────
 
     /** The field each input maps to, for marking the one a refusal names. */
@@ -1857,5 +2081,8 @@ UI.registerActions('settings', {
     previewDirectPost: (el) => SettingsPage.previewDirectPost(el),
     previewWhatsapp: (el) => SettingsPage.previewWhatsapp(el),
     saveSiteSettings: (el, e) => SettingsPage.saveSiteSettings(el, e),
+    saveNotify: (el, e) => SettingsPage.saveNotify(el, e),
+    testNotify: (el) => SettingsPage.testNotify(el),
+    removeNotifyToken: (el) => SettingsPage.removeNotifyToken(el),
     saveOnboardingSettings: (el, e) => SettingsPage.saveOnboardingSettings(el, e),
 });

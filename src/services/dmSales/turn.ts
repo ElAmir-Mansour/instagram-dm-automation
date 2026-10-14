@@ -24,8 +24,9 @@
  * answered by the legacy Gemini path ONCE when the agent's `gemini_fallback` is on (the owner's setting, as for the engine switch), and
  * otherwise by a hand-off: the kit's line, the bot paused, a person to answer.
  *
- * What this module does not do: tell the owner (S8's notification), send the follow-up itself (S9's job does, `followupJob.ts`), or know where a
- * conversation began (S10).
+ * Once a turn is recorded, `handoff.ts` tells the owner when it handed the conversation over (or sent a hot lead its link): best effort,
+ * after the customer has been answered, and never able to change the reply or the state. What this module does not do: send the
+ * follow-up itself (S9's job does, `followupJob.ts`), or know where a conversation began (S10).
  */
 import { queryCount } from '../../db/query.js';
 import { checkFairSendQuota } from '../../utils/rateLimiter.js';
@@ -44,6 +45,7 @@ import {
 } from './flow.js';
 import { scheduleFollowup } from './followupJob.js';
 import { guardReply, type GuardedReply, type Violation } from './guard.js';
+import { noticeFor, notifyOwner } from './handoff.js';
 import { linkFor } from './link.js';
 import { prefilter, type PrefilterDecision } from './prefilter.js';
 import { buildSalesPrompt, creatorName, salesFactsBlock } from './prompt.js';
@@ -206,9 +208,16 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
             return { kind: 'done', outcome };
         };
 
+        /** Recorded: now, and only now, the owner is told (when this turn is one he needs to hear of). `notifyOwner` never throws. */
+        const finish = async (): Promise<SalesTurnResult> => {
+            const plan = noticeFor(decision, { intent: o.intent, linkSent: o.link !== null });
+            if (plan) await notifyOwner({ creatorId: creator.id, conversationId: conversation.id, plan, language: ctx.language.code });
+            return done();
+        };
+
         if (o.text === null && o.payload === undefined) {
             await recordTurn(record);
-            return done();
+            return finish();
         }
 
         const payload = o.payload ?? salesPayload(o.text ?? '', o.quick);
@@ -259,7 +268,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
                 offerId: record.linkedOfferId, recorded,
             });
         }
-        return done();
+        return finish();
     };
 
     // 2. Is this still the message to answer?

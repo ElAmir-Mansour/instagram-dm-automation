@@ -21,6 +21,7 @@ import { describeError, log, withLogContext } from '../utils/log.js';
 import { getJobQueue } from '../jobs/queue.js';
 import type { EnqueueInput } from '../jobs/types.js';
 import { handleMessagingEvent } from './messaging.js';
+import { echoFromOwnApp, echoTakeoverEnabled } from './echo.js';
 import { handleCommentChange } from './comments.js';
 import { FINAL_ATTEMPT } from './options.js';
 
@@ -61,17 +62,30 @@ function dmDedupeKey(event: any): string | undefined {
  * this function cannot see anything answerable in it, because the handler is the thing that
  * knows, and dropping a real customer message would be far worse than one wasted job.
  */
-function isActionableMessagingEvent(event: any): boolean {
+function isActionableMessagingEvent(event: any, options: PlanOptions = {}): boolean {
     // Echoes are the page's own outbound messages coming back. On an active account they are
-    // a large share of all messaging events.
-    if (event?.message?.is_echo) return false;
+    // a large share of all messaging events, so they are dropped here unless echo takeover is on
+    // (`dm.echo_takeover`, off by default), and then still dropped when `app_id` says they are this
+    // deployment's own sends: a person's reply is the only echo worth a job.
+    if (event?.message?.is_echo) return Boolean(options.echoes) && !echoFromOwnApp(event);
     if (event?.message) return true;
     if (event?.postback) return true;
     return false;
 }
 
+export interface PlanOptions {
+    /** Echo takeover is on: echoes become jobs. Absent or false is how the queue always behaved. */
+    echoes?: boolean;
+}
+
+/** Does this body hold an echo? Decides whether the queue has to ask if takeover is on. */
+function hasEcho(body: any): boolean {
+    const entries: any[] = Array.isArray(body?.entry) ? body.entry : [];
+    return entries.some((entry) => Array.isArray(entry?.messaging) && entry.messaging.some((event: any) => event?.message?.is_echo));
+}
+
 /** Flatten one webhook body into the jobs it implies, without touching the database. */
-export function planJobs(body: any): EnqueueInput[] {
+export function planJobs(body: any, options: PlanOptions = {}): EnqueueInput[] {
     const planned: EnqueueInput[] = [];
     const entries: any[] = Array.isArray(body?.entry) ? body.entry : [];
     // Which network the DMs in this body came from. It is on the body, not the event, so it
@@ -88,7 +102,7 @@ export function planJobs(body: any): EnqueueInput[] {
 
         if (Array.isArray(entry?.messaging)) {
             for (const event of entry.messaging) {
-                if (!isActionableMessagingEvent(event)) continue;
+                if (!isActionableMessagingEvent(event, options)) continue;
                 planned.push({
                     kind: 'dm.process',
                     payload: object ? { event, entryId, object } : { event, entryId },
@@ -127,7 +141,16 @@ export interface EnqueueResult {
  * them on the Meta clock.
  */
 export async function enqueueWebhookBody(body: any, requestId?: string): Promise<EnqueueResult> {
-    const planned = planJobs(body);
+    // Asked only when a delivery holds an echo (one indexed row), and read as OFF when it cannot be read: the queue then behaves as it always did.
+    let echoes = false;
+    if (hasEcho(body)) {
+        try {
+            echoes = await echoTakeoverEnabled();
+        } catch (err) {
+            log('warn', 'webhook.echo_setting_unreadable', describeError(err));
+        }
+    }
+    const planned = planJobs(body, { echoes });
     const result: EnqueueResult = { planned: planned.length, enqueued: 0, deduped: 0 };
 
     if (planned.length === 0) {

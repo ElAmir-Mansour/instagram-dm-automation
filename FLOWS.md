@@ -504,7 +504,10 @@ divergence is at **`src/webhook/router.ts:86-96`**, the `entry.messaging` branch
 function (**`src/webhook/router.ts:64`**) drops:
 
 - **echoes** — `event.message.is_echo` (**:67**), the page's own outbound messages coming back.
-  On an active account they are a large share of all messaging events.
+  On an active account they are a large share of all messaging events. **Unless echo takeover is on**
+  (`dm.echo_takeover`, off by default, §2.6d): then a person's echo is a job like any message, and only an echo
+  whose `app_id` is this deployment's own app is still dropped. The queue reads that switch only for a
+  delivery that holds an echo (**`enqueueWebhookBody`**), and reads it as off when it cannot.
 - **everything with neither `message` nor `postback`** (**:68-70**) — read watermarks, delivery
   receipts, reactions, referrals, handover-protocol events.
 
@@ -528,7 +531,8 @@ The handler adapter is **`src/jobs/handlers.ts:33`** → `handleMessagingEvent`.
 ### 2.2 — `handleMessagingEvent` and `normalizeDm`'s shapes
 
 **`src/webhook/messaging.ts:122`**. A second echo check at **:130** (the inline fallback path
-does not go through `isActionableMessagingEvent`), then `normalizeDm`
+does not go through `isActionableMessagingEvent`) hands the event to `handleEcho` (`src/webhook/echo.ts`,
+§2.6d), which with takeover off reads one setting and drops it, as it always did. Then `normalizeDm`
 (**`src/webhook/messaging.ts:49`**).
 
 | Shape | Source | Stored as |
@@ -719,6 +723,36 @@ One short nudge, a few hours after a sales DM sent a link, to someone who has no
    runner, except Meta's final answers (a dead token, a blocked recipient, outside the window), which are not.
 5. **The line** is the kit's (`SalesLines.nudge`, per register and English): no model, no link, no number. It is sent as `RESPONSE` through
    `sendDirectMessage`, recorded as an outbound `messages` row with `ai_meta {kind: 'followup'}`, and the same quota check as every send applies.
+
+### 2.6d — Handoff, the owner's alert, and echo takeover (DM plan S8)
+
+**A handoff is decided by `flow.ts` and written by `turn.ts`** in one statement with the customer's line (`recordTurn`): the bot paused
+(`is_bot_active = false`), `stage = 'handoff'`, `handoff_at`, `handoff_reason`, and the profile's own handoff line (`dm.handoff.message`) or the
+kit's, never the model's words. **Then `src/services/dmSales/handoff.ts` tells the owner**, after the customer has been answered and the state
+recorded, best effort (`notifyOwner` never throws; a failure is `dm.handoff_notify_failed` with a status and a description scrubbed of the bot token):
+
+1. `noticeFor` (pure): stage `handoff` is a handoff alert (also a conversation paused for looping); a second insult (stage `closed`) and an opt-out
+   alone are NOT; a reply that SENT the link (`linkSent`) to an intent in `HOT_INTENTS` (`ready_to_buy`, `price`, `level_fit`) is a hot lead.
+2. `notifyOwner`: Telegram configured and on (`notify.telegram_*` in `app_settings`; the token encrypted, `{set, last4}` to the card), hot leads on
+   (`notify.telegram_hot_leads`, on unless turned off), the conversation is the platform OWNER's tenant (another tenant's customers are never sent
+   to his chat), then the per-conversation allowance (`rate_limit_counters`, buckets `notify:<id>` 3/hour and `notify_hot:<id>` 1/hour), then
+   the facts (username, last inbound message, its time), then one plain-text `sendMessage` (no `parse_mode`; links and bidi controls in the
+   customer's words are taken out): who, why, the last message, how long Meta's 24 h window has left, and `/dashboard#/inbox?c=<id>`.
+3. The inbox reads `stage`, `handoff_at`, `last_operator_at` and `last_inbound_message_at` (`conversationsQuery`) for "Needs you" (stage `handoff`,
+   and nobody has answered since `handoff_at`: **whether the bot is paused or not**, because a sales handoff pauses it and a reply that could not be
+   written at all, §2.11, leaves it on) and the window countdown. The follow-up job (§2.6c) already refuses a conversation that was handed over.
+
+**Resume:** `PUT /api/conversations/:id/toggle-bot` turning the bot ON for a thread that was paused also clears `ai_disclosed_at`, so the next
+reply says it is automated again (Meta asks for the disclosure when a chat moves from human to automated). Turning it ON also moves a `handoff`
+stage on to `new` (a separate best-effort statement: `stage` is v39), which the bot already treats alike, and which ends "Needs you" for a thread
+whose bot was on all along. The bot's own next turn in the sales flow ends it the same way, by leaving the `handoff` stage.
+
+**Echo takeover** (`src/webhook/echo.ts`, assumption A4; off by default, `dm.echo_takeover`). An echo is the account's own message coming back;
+pausing on ours would silence the bot after every reply, so only positive evidence pauses it: `app_id` on the owner list (the Page inbox app's, plus
+ids the operator adds) is the owner; `app_id` equal to `META_APP_ID` / `INSTAGRAM_APP_ID` is ours; no `app_id`, or another app's, is UNKNOWN and
+does nothing, and every classified echo is logged as `dm.echo_classified` with the `app_id` seen. Meta documents `app_id` on Messenger echoes only,
+so what an Instagram-app reply carries is unproven. An owner echo pauses that customer's conversation (tenant and sender scoped), stores his
+words as an `operator` row keyed on Meta's message id, and sends nothing.
 
 ### 2.7 — Gemini
 
@@ -921,7 +955,14 @@ onwards.
 1. Log `dm.pipeline_failed` (**:403**), `noteMetaFailure` (**:405**).
 2. `isPermanentMetaError(aiError)` (**:414**).
 3. `!permanent && mayRetry` → **`releaseInbound`** (**:416**) then re-throw (**:417**).
-4. Otherwise → `markHandled` (**:420**), terminal.
+4. Otherwise → `markHandled` (**:420**), terminal. **Before it, for a failure that is not a permanent Meta one, the conversation is
+   handed over** (`handoffAfterFailure`, `src/services/dmSales/failureHandoff.ts`, every `sales_mode`; found live 2026-10-14, when Gemini
+   failed all three attempts and the DM got no reply at all): stamped (`stage = 'handoff'`, `handoff_at`, `handoff_reason = 'unsure'`, the closest
+   value the CHECK allows) and **NOT paused** (an outage is not a request for a person, so the customer's next message gets a normal reply), the
+   customer sent the handoff line ONCE (with the disclosure when not yet given), the owner told (`engine_failed` in the alert). The same call
+   closes the providers-engine path whose engine AND fallback both failed (`dmReply.kind === 'handoff'`, §2.7), which used to be silence. It never
+   throws and never loops, and answers nobody who has been answered (a reply already sent or recorded, or the owner's own); a message with no
+   words (a photo) is not handed over.
 
 `releaseInbound` (**`src/webhook/messaging.ts:228`**) clears `reply_claimed_at` without setting
 `handled_at`. It matters because the runner's first backoff is ~30 seconds, far shorter than the
