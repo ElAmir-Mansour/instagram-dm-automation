@@ -43,6 +43,7 @@ import { enqueueMonteurRender } from '../studio/jobs.js';
 import { getStudioSettings } from '../studio/settings.js';
 import { currentLessons, runDueAnalyst } from './analyst.js';
 import { autoApproveClips, type AutoApproveResult } from './auto.js';
+import { effectiveBrain } from './brain.js';
 import { askOf, writeCopy } from './copy.js';
 import { reelKitsFor } from './copyKits.js';
 import { writeEdits } from './editor.js';
@@ -50,7 +51,8 @@ import { editorKitFor } from './editorKits.js';
 import { inFlightTriggers } from './keywords.js';
 import { pickClips, type PickOutcome } from './pick.js';
 import { loadReelEvidence, type ReelEvidenceSet } from './reelEvidence.js';
-import { MIN_CALL_MS, usageFields } from './model.js';
+import { type ApiOn, MIN_CALL_MS, usageFields } from './model.js';
+import { isAiError } from '../llm/errors.js';
 import { clipsThinkKey, isThinkSignal, sourceThinkKey, ThinkExhausted, ThinkWaiting, type ThinkOn } from './think.js';
 import { accentsFor, buildRenderPayload } from './render.js';
 import { groupLines, type PickedClip } from './transcript.js';
@@ -312,7 +314,7 @@ async function handOff(
  */
 async function editReady(
     source: ClaimedSource, settings: StudioSettings, ready: ReadyClip[], lines: PickOutcome['lines'],
-    words: readonly TranscriptWord[], record: SourcePick, deadline: number, think?: ThinkOn,
+    words: readonly TranscriptWord[], record: SourcePick, deadline: number, think?: ThinkOn, api?: ApiOn,
 ): Promise<void> {
     let lastErr: unknown = null;
     // What the prompt says about the creator, from their profile; read once, not once per retry. A profile that cannot
@@ -324,7 +326,7 @@ async function editReady(
     const on = think ? { ...think, key: clipsThinkKey(think.key, ready.map((r) => r.clip)) } : undefined;
     for (let attempt = 0; ; attempt++) {
         try {
-            const { edits, directions, cost } = await writeEdits(ready.map((r) => r.clip), lines, words, settings, kit, deadline, on);
+            const { edits, directions, cost } = await writeEdits(ready.map((r) => r.clip), lines, words, settings, kit, deadline, on, api);
             ready.forEach((r, i) => {
                 r.edits = edits[i] ?? [];
                 r.direction = directions[i] ?? null;
@@ -380,6 +382,8 @@ export function setEditRetryWaits(next: readonly number[]): readonly number[] {
 
 /** A failure a short wait may cure: the model busy or rate-limited, not a bad request or a bad answer. */
 export function transientModelError(err: unknown): boolean {
+    // The AI providers layer says so itself (rate, server, timeout): the same wait cures it as a busy Gemini model.
+    if (isAiError(err) && err.retryable) return true;
     return /\b(429|500|502|503|504)\b|high demand|overloaded|unavailable|RESOURCE_EXHAUSTED|timed out/i.test(errorText(err));
 }
 
@@ -395,9 +399,12 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         // attempt spans several drains, so the stamp is the version at hand-off, which can be newer than the pick's prompt.
         const profileVersion = await profileVersionFor(source.creator_id);
         // Claude on the Mac, keyed by this attempt: the drain that finds an answer reads it by the same key.
-        const think: ThinkOn | undefined = settings.monteur.brain === 'claude_mac'
+        // `api` is the AI providers layer, for a tenant the Mac is not for; for the owner it is the Mac (brain.ts). Only `api` reads the database here.
+        const brain = await effectiveBrain(source.creator_id, settings.monteur.brain);
+        const think: ThinkOn | undefined = brain === 'claude_mac'
             ? { creatorId: source.creator_id, key: sourceThinkKey(source.id, source.attempts) }
             : undefined;
+        const api: ApiOn | undefined = brain === 'api' ? { creatorId: source.creator_id } : undefined;
         const [lessons, context] = await Promise.all([currentLessons(pool, source.creator_id), loadPickContext(source.creator_id)]);
         const words = Array.isArray(source.words) ? source.words : [];
 
@@ -411,7 +418,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
             record = { ...source.pick! };
             log('info', 'monteur.pick_reused', { source_id: source.id, clips: saved.clips.length });
         } else {
-            const fresh = await pickClips({ words, duration: source.duration }, settings, { ...context, lessons, kit: kits.pick }, deadline, think);
+            const fresh = await pickClips({ words, duration: source.duration }, settings, { ...context, lessons, kit: kits.pick }, deadline, think, api);
             picked = fresh;
             record = {
                 model: fresh.cost.model, tokens_in: fresh.cost.tokens_in, tokens_out: fresh.cost.tokens_out, considered: fresh.considered,
@@ -454,7 +461,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         const copy = await writeCopy(picked.kept, picked.lines, settings, {
             kit: kits.copy, activeKeywords: ctx.activeKeywords, seo: ctx.seo, recentAsks: context.recentAsks,
             inFlightKeywords: context.inFlightKeywords, inFlightVariants: context.inFlightVariants,
-        }, lessons, deadline, think);
+        }, lessons, deadline, think, api);
         log('info', 'monteur.copy', {
             source_id: source.id, creator_id: source.creator_id, ...usageFields(copy.cost),
             clips: picked.kept.length, usable: copy.outcomes.filter((o) => 'copy' in o).length,
@@ -471,7 +478,7 @@ async function pickSource(source: ClaimedSource, deadline: number): Promise<Mont
         if (unusable.length) log('warn', 'monteur.copy_unusable', { source_id: source.id, dropped: unusable.length, reasons: unusable });
         if (!ready.length) throw new Error(`The Marketer's copy could not be used: ${unusable.join('; ')}`);
 
-        await editReady(source, settings, ready, picked.lines, words, record, deadline, think);
+        await editReady(source, settings, ready, picked.lines, words, record, deadline, think, api);
         const handed = await handOff(source, settings, ready, record, picked.topic, profileVersion);
         return { source_id: source.id, outcome: handed.outcome, clips: handed.clips };
     } catch (err) {

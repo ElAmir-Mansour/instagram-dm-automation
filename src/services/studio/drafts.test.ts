@@ -8,14 +8,17 @@ import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import type { CarouselDraftRow } from '../../db/rows.js';
 import { setLogSink } from '../../utils/log.js';
+import { setAiCaller, type AiCaller, type AiGenerateArgs, type AiGenerateResult } from '../aiProviders/generate.js';
 import { withProfileCache } from '../profile/cache.js';
 import { profileReads } from '../profile/stampSupport.js';
+import { invalidateTenantCache } from '../tenant.js';
 import type { Carousel } from './carouselTypes.js';
 import { StudioError } from './common.js';
 import {
-    buildGenContext, createDraft, parseDraftInput, patchDraft, preferPrimaryKeyword, presentDraft, rewriteDraftSlide, setGeneration,
+    buildGenContext, createDraft, parseDraftInput, patchDraft, planDrafts, preferPrimaryKeyword, presentDraft, rewriteDraftSlide, setGeneration,
     STALE_GENERATION_ERROR, STALE_GENERATION_MS,
 } from './drafts.js';
+import type { GenOptions } from './generate.js';
 import { defaultStudioSettings } from './settings.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -398,6 +401,73 @@ describe('preferPrimaryKeyword', () => {
 });
 
 // ─── The profile stamp (P7) ─────────────────────────────────────────────────────────────
+
+describe('whose model writes: the owner’s Gemini as ever, any other tenant’s through the AI providers layer (P32, D13)', () => {
+    let seen: unknown[];
+    let owner: string | null;
+    let restoreCaller: AiCaller | undefined;
+    beforeEach(() => {
+        seen = [];
+        owner = TENANT;
+        invalidateTenantCache();
+        library();
+        routes.unshift([/^SELECT id FROM creators ORDER BY created_at, id LIMIT 1$/, () => {
+            if (owner === 'fails') throw new Error('connection terminated');
+            return { rows: owner ? [{ id: owner }] : [] };
+        }]);
+        setGeneration({
+            generateDraft: async (_input, _sources, _ctx, opts) => { seen.push(opts); return { carousel: CAROUSEL, shots: SHOTS, campaign: CAMPAIGN }; },
+            rewriteSlide: async (_c, _i, _x, _s, _ctx, opts) => { seen.push(opts); return { kind: 'point', title: 'جديد' }; },
+            planWeek: async (_n, _l, _ctx, opts) => { seen.push(opts); return []; },
+            validateCarousel: () => [],
+        });
+    });
+    afterEach(() => {
+        invalidateTenantCache();
+        if (restoreCaller) setAiCaller(restoreCaller);
+        restoreCaller = undefined;
+    });
+
+    const plan = (creatorId: string) => planDrafts(creatorId, { count: 1, lessonIds: [LESSON] });
+
+    it('the owner’s three calls get no options at all: generateDraft(input, sources, ctx, {}) is the call as it was, and Gemini answers', async () => {
+        await createDraft(TENANT, { lessonIds: [LESSON] });
+        await rewriteDraftSlide(TENANT, DRAFT, { index: 1 });
+        await plan(TENANT);
+        assert.deepEqual(seen, [{}, {}, {}]);
+    });
+
+    it('another tenant’s three calls are handed the layer’s callModel', async () => {
+        await createDraft(OTHER_TENANT, { lessonIds: [LESSON] });
+        await rewriteDraftSlide(OTHER_TENANT, DRAFT, { index: 1 });
+        await plan(OTHER_TENANT);
+        assert.equal(seen.length, 3);
+        for (const opts of seen) assert.equal(typeof (opts as GenOptions).callModel, 'function');
+    });
+
+    it('that callModel is that tenant’s, as tenant_studio: the layer is asked for them, with the writer’s own prompt and schema', async () => {
+        await createDraft(OTHER_TENANT, { lessonIds: [LESSON] });
+        const asked: AiGenerateArgs[] = [];
+        restoreCaller = setAiCaller(async (args) => {
+            asked.push(args);
+            return { json: { ok: true }, usage: { in: 5, out: 6 }, billed: [], model: 'm', provider: 'anthropic', stopReason: 'end_turn', elapsed_ms: 1, usd: 0, priced: true, costSource: 'table', effort: 'medium', route: 'default', usageId: '1' } as AiGenerateResult;
+        });
+        const schema = { type: 'OBJECT' as const, properties: { a: { type: 'STRING' as const } } };
+        const out = await (seen[0] as GenOptions).callModel!({ purpose: 'draft', system: 'sys', turns: [{ role: 'user', text: 'hi' }], schema, temperature: 0.7, thinkingBudget: 1, timeoutMs: 60_000 });
+        assert.deepEqual(out, { ok: true });
+        assert.deepEqual(asked.map((a) => [a.purpose, a.creatorId, a.system, a.user]), [['tenant_studio', OTHER_TENANT, 'sys', [{ role: 'user', text: 'hi' }]]]);
+        assert.equal(asked[0]!.schema, schema);
+    });
+
+    it('with no creators, or an owner lookup that fails, the call is the one it always was: a failed read never moves the owner’s Studio', async () => {
+        owner = null;
+        await createDraft(OTHER_TENANT, { lessonIds: [LESSON] });
+        invalidateTenantCache();
+        owner = 'fails';
+        await createDraft(TENANT, { lessonIds: [LESSON] });
+        assert.deepEqual(seen, [{}, {}]);
+    });
+});
 
 describe('createDraft — profile_version', () => {
     const generate = () => setGeneration({

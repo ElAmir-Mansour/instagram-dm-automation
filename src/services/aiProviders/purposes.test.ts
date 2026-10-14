@@ -45,6 +45,27 @@ describe('the `dm` purpose', () => {
     });
 });
 
+describe('the tenant purposes (P32): tenant_monteur_think, tenant_infographic, tenant_studio', () => {
+    it('are purposes a route can be saved for, at the efforts 06 names', () => {
+        for (const [purpose, effort] of [['tenant_monteur_think', 'high'], ['tenant_infographic', 'high'], ['tenant_studio', 'medium']] as const) {
+            assert.equal(isAiPurpose(purpose), true, purpose);
+            assert.equal(PURPOSE_DEFAULT_EFFORT[purpose], effort, purpose);
+        }
+    });
+
+    it('the Monteur and the infographic are the Mac’s work, so the router refuses them for the owner; the Studio writer is not, so the owner’s is decided by who is asking, not by the router', () => {
+        assert.deepEqual([...MAC_BRAIN_PURPOSES].sort(), ['tenant_infographic', 'tenant_monteur_think']);
+        assert.equal(MAC_BRAIN_PURPOSES.has('tenant_studio'), false);
+    });
+
+    it('are described to the card with their guard: the two the Mac does, guarded; the Studio writer, not', () => {
+        const budgets = { dailyUsd: null, monthlyUsd: null, tenantDailyUsd: null, tenantMonthlyUsd: null };
+        const view = describeAi({ providers: {}, routing: {}, prices: {}, budgets }, new ProviderKeys(new Map(), new Set()));
+        const row = (purpose: string) => view.purposes.find((p) => p.purpose === purpose)!;
+        assert.deepEqual(['tenant_monteur_think', 'tenant_infographic', 'tenant_studio'].map((p) => [row(p).defaultEffort, row(p).macBrainGuarded]), [['high', true], ['high', true], ['medium', false]]);
+    });
+});
+
 describe('the usage labels', () => {
     it('`eval` and `key_test` label spend and are not purposes: nothing can be routed for them', () => {
         assert.equal(EVAL, 'eval');

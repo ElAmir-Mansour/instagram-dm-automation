@@ -67,6 +67,7 @@ import { defaultProfile } from '../services/profile/defaults.js';
 import { patchProfile, readProfileState } from '../services/profile/patch.js';
 import { createProfile, ProfileError } from '../services/profile/store.js';
 import { withTransaction } from '../services/studio/common.js';
+import { seedApiBrain } from '../services/studio/settings.js';
 import aiRouter from './adminAi.js';
 import onboardingFunnelRouter from './adminOnboarding.js';
 import { profileErrorBody } from './profile.js';
@@ -668,6 +669,8 @@ function maskToken(value: string | null): { configured: boolean; preview: string
  *     pre-ticked (D9). Without it the tenant is described by its legacy settings, and a tenant with none is described as the
  *     owner (his role, domain, pronouns: `profileFromLegacy`); it has to exist before anything reads the tenant (P16, plan §4b);
  *   - for an Arabic tenant, the Studio's text direction `rtl` (not a profile field, so it is seeded into `studio_settings`);
+ *   - `monteur.brain: 'api'` in its Studio settings (P32): its Monteur thinks through the AI providers layer on the operator's key, never on
+ *     the owner's Mac and never on Gemini. The owner's row, and every row that exists, keep the brain they have;
  *   - an `onboarding` row, `invited`. A tenant with no row reads as completed (D14), which a new tenant is not.
  *
  * Nothing is created if any of it fails: a tenant is never left without its profile. The starter DM persona follows, in the
@@ -798,6 +801,8 @@ router.post('/tenants', async (req, res) => {
             // The profile, its history and the mirror into the Studio and Growth settings, then where the tenant is in the wizard.
             // `rtl` is the Studio's own setting (`brand.direction` is not derived from the language), so Arabic seeds it here.
             await createProfile(row.id, profile, { source: 'admin', userId: req.session?.userId ?? null, direction: lang === 'ar' ? 'rtl' : undefined }, tx);
+            // The Monteur's brain is the AI providers layer (P32): the Mac is the owner's, and a new tenant is never put on it.
+            await seedApiBrain(tx, row.id);
             await tx.query(
                 `INSERT INTO onboarding (creator_id, status) VALUES ($1, 'invited') ON CONFLICT (creator_id) DO NOTHING`,
                 [row.id]

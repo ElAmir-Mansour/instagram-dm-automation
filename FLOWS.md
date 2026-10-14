@@ -2381,12 +2381,13 @@ allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409*
    try is read or queued. `ask()`'s Mac route (`model.ts`) is the only way in, so the pick, the Marketer, the Editor
    and the Analyst are all covered. A refused source stops at once with the reason (`failAttempt`,
    **`sweep.ts:209`**); a refused Analyst run fails with it; neither falls back to Gemini.
-2. **An infographic is written** by `createInfographic` (**`infographics.ts:149`**) and by `rerenderInfographic` with
-   `rewrite: true` (**`:221`**): before any row is written or locked, so the operator gets the 409 and nothing is left
-   `writing`. A row with no spec yet is a rewrite whatever the body says, and step 3 refuses that one. A render alone
-   (an edit, a copy, the other theme, the second half of "both themes") asks Claude nothing and is never refused.
+2. **An infographic is written on the Mac** by `createInfographic` and by `rerenderInfographic` with `rewrite: true`
+   **only for the owner and the listed tenants**; any other tenant's is written on the server (7.1), so these two no longer
+   answer a tenant 409. A row with no spec yet is a rewrite whatever the body says. A render alone (an edit, a copy, the
+   other theme, the second half of "both themes") asks Claude nothing and is never refused.
 3. **The net:** `enqueueJob` (**`studio/jobs.ts:88`**) refuses any `monteur_think` or `render_infographic` with
-   `write` whoever calls it.
+   `write` whoever calls it. A tenant's server-written infographic queues a `render_infographic` with a `spec` and **no
+   `write`**, so the net does not touch it.
 4. **The claim:** a job already queued (before the guard, or for a tenant since taken off the list) is **failed with
    the same reason instead of being handed to the worker**, in the claim that found it, and the claim goes on to the
    next job (`claimJob`, **`jobs.ts:300`**, at most 50 refusals per poll). Its infographic goes `failed` with the
@@ -2394,7 +2395,7 @@ allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409*
    read** after the claim, the job is **released** (`RELEASE_CLAIM_SQL`: `pending`, attempt unspent) before the error
    goes on, so it is neither handed out unchecked nor left `claimed` for 15 minutes.
 5. **The settings:** a tenant the Mac is not for cannot switch `monteur.brain` to `claude_mac`: 400 with the same
-   message and code (`applyStudioPatch`, **`studio/settings.ts:331`**). Only the switch is refused.
+   message and code (`applyStudioPatch`, **`studio/settings.ts`**). Only the switch is refused. The mirror image is 7.1.
 6. **The operator surface:** platform admin `GET` / `PUT /api/admin/mac-brain-tenants` (**`routes/admin.ts:392`**,
    **`:405`**). `GET` reports `platform_tenant` (the owner) and `extra_tenants` (the saved list). `PUT { tenants: [ids] }`
    saves the list (`[]` is allowed; every id must be a creator), `{ tenants: null }` forgets it; each write is one
@@ -2403,6 +2404,44 @@ allowed. The refusal is a `MacBrainRefused`, a `StudioError` that answers **409*
 > **Fails closed, but never against the owner.** The list is read on every call. A read that errors throws; it is
 > never a yes. A saved value that is not a list of UUIDs is logged (`studio.mac_brain_setting_unreadable`) and
 > ignored, which leaves the owner alone. Tenants get the Monteur and infographics through the AI providers layer.
+
+### 7.1 The other half: a tenant's AI work on the AI providers layer (P32)
+
+A tenant the Mac is not for gets the same three kinds of work through `src/services/aiProviders/` (`generate`), on the
+operator's keys (Operations → AI providers), charged to **that tenant** in `ai_usage` and held to the per-tenant budget.
+Three purposes, each at its own default effort: `tenant_monteur_think` (high), `tenant_infographic` (high),
+`tenant_studio` (medium). **The owner's work never moves**: the router refuses the Mac's two purposes for him and for a
+listed tenant (`MacBrainTenantRefused`), and nothing hands him the Studio writer's `callModel`.
+
+1. **The Monteur: `monteur.brain: 'api'`.** `pickSource` and `runAnalyst` ask `effectiveBrain`
+   (**`monteur/brain.ts:20`**; **`sweep.ts:403`**, **`analyst.ts:252`**): `gemini` and `claude_mac` come back as stored with no
+   read; **`api` is the layer for a tenant the Mac is not for, and the Mac for the owner or a listed tenant**, whatever is
+   stored. The steps (`pickClips`, `writeCopy`, `writeEdits`, the Analyst) then carry an `api` route beside `think`, and
+   `ask()` (**`model.ts:82`**, `askApi` **`:108`**) calls `generate` with the step's own system prompt, turns and schema,
+   purpose `tenant_monteur_think`. Neither route set is a bug (nothing is asked); there is no route from `api` to Gemini or
+   to the Mac. A new tenant starts on `api` (`seedApiBrain`, **`routes/admin.ts:805`**, in the creating transaction);
+   `defaultMonteurConfig()` stays `gemini`, so no existing row moves. Saving `api` for the owner or a listed tenant is a 400
+   `MAC_BRAIN_TENANT` (`applyStudioPatch`, **`settings.ts:349`**).
+2. **Infographics: written on the server, then drawn.** `createInfographic` (**`infographics.ts:210`**) and
+   `rerenderInfographic` with `rewrite` (**`:357`**, **`:385`**) send a tenant the Mac is not for to `createOnServer`
+   (**`:253`**) / `rewriteOnServer` (**`:279`**): the profile context is read, `writeInfographicOnServer`
+   (**`infographicWriter.ts:163`**) asks the layer (`tenant_infographic`) with `writeSystemPrompt`, `writeUserPrompt` and
+   `WRITE_SCHEMA` (as plain JSON Schema, array bounds out, objects closed), `answerToWritten` (**`:100`**) makes the
+   template's spec exactly as the worker's `specFromAnswer` does, and only then does a transaction open: the row is born
+   `rendering` with its spec, caption and review, and a **render-only** `render_infographic` job (`spec`, no `write`) goes to the
+   worker. `theme: 'both'` writes once and makes both rows at once (no `pair_theme`). One difference from the Mac's path: the
+   worker finds `logo` and the examples' logos in `simple-icons`, a dev dependency, so the server leaves `logo` out and gives
+   examples as names alone.
+3. **The Studio writer (D13).** `createDraft`, `rewriteDraftSlide` and `planDrafts` pass `writerOptionsFor(creatorId)`
+   (**`drafts.ts:556`**, **`:660`**, **`:761`**; **`tenantAi.ts:108`**) as `GenOptions`: `{}` for the owner (Gemini, the call as it
+   was) and `{ callModel: layerCallModel(creatorId) }` (**`tenantAi.ts:83`**) for everyone else. If the owner cannot be read the
+   answer is `{}`: a failed read never moves his Studio.
+
+**It never falls back.** A call the layer cannot answer is an error that says why (`studioErrorFromAi`, **`tenantAi.ts:50`**):
+no provider is `409 NEEDS_AI_PROVIDER` ("Nothing was sent to the Mac"), a spent budget `429 AI_BUDGET_SPENT`, the provider
+down or refusing the operator's key `503 AI_UNAVAILABLE` / `AI_PROVIDER_REJECTED`, an unusable answer `502
+AI_ANSWER_UNUSABLE`. An infographic refused for any of them has no row and no job; a Monteur call fails its attempt with the
+same words (`monteur.brain: 'api'` is never retried on Gemini or the Mac).
 
 ## 8. Meta login → a connected Page
 
@@ -2753,7 +2792,9 @@ error, and several write **no row at all**.
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |
 | 6 | unknown `publish_id` / account — **`tiktokPublish.ts:379-380`** | `tiktok.webhook_applied` (`ignored:…`) | no |
 | 6 | **creator never posts the draft** | *(none)* | row stays `IN_INBOX`; the sweep stops asking after 7 days |
-| 7 | a think or an infographic write for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:300`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
+| 7 | a think, or an infographic job with `write`, for a tenant that is neither the owner nor on `studio.mac_brain_tenants` — **`think.ts:246`**, **`jobs.ts:300`** | `studio.mac_brain_refused` / `studio.mac_brain_job_refused` (`warn`) | no job; a queued one is `failed` with `NEEDS_API_BRAIN`'s message |
+| 7 | a tenant's AI call the layer cannot answer (no provider key, a budget spent, the provider down) — `generate`, **`tenantAi.ts:50`** | `ai.call_refused` / `ai.call_failed` (`warn`), an `ai_usage` row with the outcome | an infographic: no row, no job (409 / 429 / 503 / 502); a Monteur call: the attempt fails with the layer's words (Editor: the reel goes on without edits); a Studio draft: `failed` with them. **Never the Mac, never Gemini** |
+| 7 | the owner (or a listed tenant) with `monteur.brain: 'api'` stored — **`brain.ts:20`** | *(none)* | no: the call is the Mac's, as `claude_mac` is |
 | 8 | a callback with no cookie, or one that does not equal `state` — **`meta.ts:114`** | `meta.oauth_state_mismatch` | no (before the DB) |
 | 8 | a replayed, expired or foreign `state` — **`oauthState.ts:134`** | *(none: `reason=state_expired` in the redirect)* | no (the UPDATE matched nothing) |
 | 8 | a tenant that is connected and did not ask for a reconnect — `mayConnect` | `meta.oauth_callback_failed` (`reason: already_connected`) | no, and Meta is never called |

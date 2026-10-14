@@ -2851,6 +2851,8 @@
     'monteur.settings.brain': 'AI for picking, captions and edits',
     'monteur.settings.brainGemini': 'Gemini (in the app)',
     'monteur.settings.brainClaude': 'Claude on the Mac',
+    'monteur.settings.brainApi': 'AI providers (set up by the platform)',
+    'monteur.settings.brainHintApi': 'Answers through the AI the platform is set up with, so it needs no Mac and no Gemini key, and it is charged to the platform’s AI budget. If no AI provider is ready, the video stops with the reason, and Retry asks again once one is.',
     'monteur.settings.brainHint': 'Claude on the Mac answers with your Claude plan, on {name}. While {name} is asleep, new reels wait for it; if it doesn’t answer for about four hours, the video stops with the reason, and Retry asks again.',
     'monteur.settings.style': 'Edit style',
     'monteur.settings.styleClassic': 'Classic',

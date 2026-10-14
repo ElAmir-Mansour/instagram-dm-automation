@@ -10,7 +10,9 @@
  *
  * Anthropic's terms forbid routing other people's work through a personal Pro or Max plan. So before a second
  * tenant exists, the server refuses that work for everyone but the owner and those the operator added, in code, not by
- * convention. A refused tenant gets the AI providers layer instead (docs/onboarding/06-ai-providers.md).
+ * convention. A refused tenant gets the AI providers layer instead (docs/onboarding/06-ai-providers.md, P32): `monteur.brain: 'api'`,
+ * infographics written on the server, the Studio writer's `callModel`. The guard has two halves: the Mac refuses a tenant it is not for
+ * (everything below), and the layer refuses the owner and the tenants on the list (`assertNotMacBrainTenant`; `MacBrainTenantRefused`).
  *
  * **The owner is always allowed; the list adds tenants.** The owner is the platform's own tenant: the first creator
  * ever made (`getPlatformOwnerId`), active or not, so deactivating it can never hand the Mac to tenant #2 and no
@@ -47,6 +49,15 @@ export const NEEDS_API_BRAIN_MESSAGE =
 
 /** More than this is a paste gone wrong: the list is a handful of the operator's own tenants. */
 export const MAX_MAC_BRAIN_TENANTS = 50;
+
+/**
+ * The other half of the guard (P32): the AI providers layer is for the tenants the Mac is NOT for. The owner's Monteur and infographics
+ * stay on his Mac and his own plan, so a tenant the Mac works for cannot switch `monteur.brain` to `api`, and the layer refuses the
+ * Mac's purposes for one (`MacBrainTenantRefused`, aiProviders/route.ts).
+ */
+export const MAC_BRAIN_TENANT = 'MAC_BRAIN_TENANT';
+export const MAC_BRAIN_TENANT_MESSAGE =
+    'This tenant\'s AI work runs on the operator\'s Mac, so it does not use the AI providers layer.';
 
 /**
  * The refusal. 409 for work that was asked for; 400 where the tenant is trying to set `monteur.brain`.
@@ -126,6 +137,16 @@ export async function assertMacBrainAllowed(creatorId: string, status = 409): Pr
     if (await isMacBrainAllowed(creatorId)) return;
     log('warn', 'studio.mac_brain_refused', { creator_id: creatorId });
     throw new MacBrainRefused(creatorId, status);
+}
+
+/**
+ * Throws a `StudioError` (400 where a tenant is trying to set `monteur.brain`, else 409, code `MAC_BRAIN_TENANT`) when the tenant is one the
+ * Mac works for: the owner, or a tenant on `studio.mac_brain_tenants`. For them the layer is never the way.
+ */
+export async function assertNotMacBrainTenant(creatorId: string, status = 409): Promise<void> {
+    if (!(await isMacBrainAllowed(creatorId))) return;
+    log('warn', 'studio.mac_brain_tenant_on_api', { creator_id: creatorId });
+    throw new StudioError(status, MAC_BRAIN_TENANT_MESSAGE, undefined, MAC_BRAIN_TENANT);
 }
 
 /**

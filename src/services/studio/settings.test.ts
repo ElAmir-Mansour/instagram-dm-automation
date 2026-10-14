@@ -7,11 +7,11 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
 import type { StudioSettings } from '../../db/rows.js';
-import { MacBrainRefused, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
+import { MAC_BRAIN_TENANT_MESSAGE, MacBrainRefused, NEEDS_API_BRAIN_MESSAGE } from '../macBrain.js';
 import { installFakeDb, type FakeDb } from '../monteur/testDb.js';
 import { StudioError } from './common.js';
 import {
-    defaultStudioSettings, getMonteurSettings, getStudioSettings, mergeSettings, overDefaults, settingsProblems, updateStudioSettings,
+    defaultStudioSettings, getMonteurSettings, getStudioSettings, mergeSettings, overDefaults, seedApiBrain, settingsProblems, updateStudioSettings,
 } from './settings.js';
 
 const TENANT = '11111111-1111-4111-8111-111111111111';
@@ -225,11 +225,12 @@ describe('the monteur section (MONTEUR.md §1)', () => {
         });
     });
 
-    it('brain: Gemini by default, Claude on the Mac when chosen, nothing else', () => {
-        assert.equal(overDefaults({ monteur: { enabled: true } } as never).monteur.brain, 'gemini', 'a section saved before brain existed');
+    it('brain: Gemini by default, Claude on the Mac or the AI providers layer when chosen, nothing else', () => {
+        assert.equal(overDefaults({ monteur: { enabled: true } } as never).monteur.brain, 'gemini', 'a section saved before brain existed: never moved onto the operator’s API key');
         assert.deepEqual(problemsFor({ monteur: { brain: 'claude_mac' } }), []);
-        assert.deepEqual(problemsFor({ monteur: { brain: 'claude' } }), ['monteur.brain must be one of gemini, claude_mac']);
-        assert.deepEqual(problemsFor({ monteur: { brain: null } }), ['monteur.brain must be one of gemini, claude_mac']);
+        assert.deepEqual(problemsFor({ monteur: { brain: 'api' } }), []);
+        assert.deepEqual(problemsFor({ monteur: { brain: 'claude' } }), ['monteur.brain must be one of gemini, claude_mac, api']);
+        assert.deepEqual(problemsFor({ monteur: { brain: null } }), ['monteur.brain must be one of gemini, claude_mac, api']);
     });
 
     it('style: classic by default, paper when chosen, nothing else', () => {
@@ -397,6 +398,63 @@ describe('monteur.brain = claude_mac — the Mac is the owner’s (G1)', () => {
             updateStudioSettings(NEW_TENANT, { monteur: { brain: 'claude_mac', run_at: 'noon' } }),
             (err: unknown) => err instanceof StudioError && !(err instanceof MacBrainRefused) && err.status === 400 && Boolean(err.problems?.some((p) => /monteur\.run_at/.test(p))),
         );
+    });
+});
+
+describe('monteur.brain = api — the AI providers layer is for the tenants the Mac is not for (P32)', () => {
+    const NEW_TENANT = '22222222-2222-4222-8222-222222222222';
+    let db: FakeDb;
+    let stored: Record<string, unknown> | null;
+    let saved: string | null;
+
+    beforeEach(() => {
+        db = installFakeDb({ platformTenant: TENANT });
+        stored = null;
+        saved = null;
+        db.routes.push(
+            [/FROM studio_settings/, () => ({ rows: stored ? [stored] : [] })],
+            [/^SELECT value, is_secret FROM app_settings WHERE key = \$1$/, (p) => ({
+                rows: p[0] === 'studio.mac_brain_tenants' && saved !== null ? [{ value: saved, is_secret: false }] : [],
+            })],
+        );
+    });
+    afterEach(() => db.restore());
+
+    const writes = () => db.ran(/^INSERT INTO studio_settings/);
+    const refusedMacTenant = (err: unknown) => err instanceof StudioError && err.status === 400 && err.code === 'MAC_BRAIN_TENANT' && err.message === MAC_BRAIN_TENANT_MESSAGE;
+
+    it('lets a tenant the Mac is not for switch to it', async () => {
+        assert.equal((await updateStudioSettings(NEW_TENANT, { monteur: { brain: 'api' } })).settings.monteur.brain, 'api');
+        assert.equal(writes().length, 1);
+    });
+
+    it('refuses the owner with a 400 MAC_BRAIN_TENANT, writing nothing: his work stays on his Mac', async () => {
+        await assert.rejects(updateStudioSettings(TENANT, { monteur: { brain: 'api' } }), refusedMacTenant);
+        assert.equal(writes().length, 0);
+    });
+
+    it('refuses a tenant on the Mac list the same way, and lets it go back the moment it is taken off', async () => {
+        saved = JSON.stringify([NEW_TENANT]);
+        await assert.rejects(updateStudioSettings(NEW_TENANT, { monteur: { brain: 'api' } }), refusedMacTenant);
+        saved = '[]';
+        assert.equal((await updateStudioSettings(NEW_TENANT, { monteur: { brain: 'api' } })).settings.monteur.brain, 'api');
+    });
+
+    it('only the switch is refused: the owner whose stored brain is claude_mac saves every other Monteur setting, and one already on api keeps saving', async () => {
+        stored = { monteur: { ...defaultStudioSettings().monteur, brain: 'claude_mac' } };
+        const { settings } = await updateStudioSettings(TENANT, { monteur: { mode: 'auto' } });
+        assert.deepEqual([settings.monteur.brain, settings.monteur.mode], ['claude_mac', 'auto']);
+        stored = { monteur: { ...defaultStudioSettings().monteur, brain: 'api' } };
+        assert.equal((await updateStudioSettings(TENANT, { monteur: { mode: 'auto' } })).settings.monteur.brain, 'api', 'a stored api is read as stored: the runtime keeps the owner on the Mac (brain.ts)');
+    });
+
+    it('a new tenant is seeded api, and only when its row says nothing about the brain', async () => {
+        await seedApiBrain(pool, NEW_TENANT);
+        const [seed] = db.ran(/^UPDATE studio_settings SET monteur/);
+        assert.deepEqual(seed!.params, [NEW_TENANT]);
+        assert.match(seed!.sql, /jsonb_build_object\('brain', 'api'\)/);
+        assert.match(seed!.sql, /WHERE creator_id = \$1 AND \(monteur IS NULL OR monteur->>'brain' IS NULL\)/, 'a brain the row already has is never overwritten');
+        assert.ok(!/SET[^W]*(brand|voice|cta)/.test(seed!.sql), 'and no other field is touched');
     });
 });
 

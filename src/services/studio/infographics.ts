@@ -17,12 +17,18 @@
  *
  * Every write of a job's id goes with the job's insert, in one transaction: `job_id` is how the
  * result of an older render is told apart from the latest (jobs.ts drops it).
+ *
+ * **Who writes it** (P32). The owner, and any tenant on `studio.mac_brain_tenants`, have Claude write it on the Mac, inside the render job
+ * (`write` in its payload). Every other tenant has it written HERE, through the AI providers layer on the operator's key
+ * (`tenant_infographic`, infographicWriter.ts), and the job that goes to the worker is render-only: a `spec`, no `write`. That tenant's
+ * row is born `rendering`, with its spec, caption and review already on it; a request that cannot be answered (no provider ready, a budget
+ * spent, the provider down) is refused before any row exists, and never falls back to the Mac.
  */
 import crypto from 'crypto';
 import { pool } from '../../config/db.js';
 import type { InfographicRow, InfographicSchedule, RenderInfographicPayload, ScheduledPostRow } from '../../db/rows.js';
 import { describeError, log } from '../../utils/log.js';
-import { assertMacBrainAllowed } from '../macBrain.js';
+import { isMacBrainAllowed } from '../macBrain.js';
 import { insertVideoPost, metaPlatformFor } from '../monteur/clips.js';
 import { THINK_MODEL } from '../monteur/think.js';
 import { contextFor, profileContext, type ProfileContext } from '../profile/context.js';
@@ -33,6 +39,7 @@ import {
     captionProblems, dirFor, headline, payloadBrand, specProblems, THEMES, WRITE_SCHEMA, writeSystemPrompt, writeUserPrompt,
     type InfographicSpec, type InfographicWriterContext,
 } from './infographicSpec.js';
+import { writeInfographicOnServer, type ServerWritten } from './infographicWriter.js';
 import { enqueueJob } from './jobs.js';
 import { getStudioSettings } from './settings.js';
 import type { InfographicTheme, StudioSettings } from './settingsTypes.js';
@@ -97,7 +104,7 @@ async function lockRow(exec: Exec, creatorId: string, id: string): Promise<Infog
 }
 
 /** An open job means its result is still coming; anything that would queue another waits for it. */
-function assertIdle(row: InfographicRow): void {
+function assertIdle(row: Pick<InfographicRow, 'status'>): void {
     if (row.status === 'writing') throw new StudioError(409, 'Claude is still writing this infographic.');
     if (row.status === 'rendering') throw new StudioError(409, 'This infographic is still rendering.');
     if (row.status === 'scheduled') throw new StudioError(409, 'This infographic is already scheduled. Make a copy to change it.');
@@ -175,6 +182,18 @@ async function queue(exec: Exec, creatorId: string, id: string, payload: RenderI
     );
 }
 
+/**
+ * The language and theme a new infographic is made in, from the request over the tenant's settings. `both`: the settings' theme first,
+ * and `pair` the other one, which is copied from it once it is written.
+ */
+function newInfographicChoices(b: Record<string, unknown>, settings: StudioSettings): { language: 'ar' | 'en'; theme: InfographicTheme; pair: InfographicTheme | null } {
+    const language = (b.language as 'ar' | 'en' | undefined) ?? settings.infographic.language;
+    const both = b.theme === 'both';
+    const theme = both ? settings.infographic.theme : parseTheme(b.theme, settings.infographic.theme);
+    const pair: InfographicTheme | null = both ? (theme === 'dark' ? 'light' : 'dark') : null;
+    return { language, theme, pair };
+}
+
 /** POST /infographics `{ topic, notes?, language?, theme? }` (theme dark, light or both): Claude writes it, then the Mac renders it. */
 export async function createInfographic(creatorId: string, body: unknown): Promise<InfographicView> {
     const b = isPlainObject(body) ? body : {};
@@ -186,15 +205,12 @@ export async function createInfographic(creatorId: string, body: unknown): Promi
     if (notes && notes.length > MAX_NOTES) problems.push(`notes are longer than ${MAX_NOTES} characters`);
     if (b.language !== undefined && b.language !== 'ar' && b.language !== 'en') problems.push('language must be ar or en');
     if (problems.length) throw problemsError(problems, 'this infographic');
-    // Claude writes it, on the Mac: only for the owner and the tenants the operator added, and before any row exists (G1).
-    await assertMacBrainAllowed(creatorId);
+    // Claude writes it on the Mac only for the owner and the tenants the operator added, and before any row exists (G1). Anyone else's is
+    // written on the server through the AI providers layer (P32): the Mac is never asked for them.
+    if (!(await isMacBrainAllowed(creatorId))) return createOnServer(creatorId, { topic: topic!, notes, body: b });
 
     const settings = await getStudioSettings(creatorId);
-    const language = (b.language as 'ar' | 'en' | undefined) ?? settings.infographic.language;
-    const both = b.theme === 'both';
-    // Both: the settings' theme first, the other one copied from it once it is written.
-    const theme = both ? settings.infographic.theme : parseTheme(b.theme, settings.infographic.theme);
-    const pair: InfographicTheme | null = both ? (theme === 'dark' ? 'light' : 'dark') : null;
+    const { language, theme, pair } = newInfographicChoices(b, settings);
     // What the writer's prompt is built from (the profile's role, domain and register), read through the pool BEFORE the
     // transaction opens: a plain SELECT takes no row lock, so the lock order is untouched. Its version is the stamp
     // (profile/stamp.ts): the profile this row's prompt was built from, not a second read of it. A tenant whose profile
@@ -209,6 +225,76 @@ export async function createInfographic(creatorId: string, body: unknown): Promi
         const id = rows[0]!.id;
         await queue(client, creatorId, id, renderPayload(id, { topic: topic!, notes, language }, theme, settings, null, ctx), 'writing');
         log('info', 'studio.infographic_created', { infographic_id: id, language, theme, pair_theme: pair });
+        return loadView(client, creatorId, id);
+    });
+}
+
+/** The row of an infographic that is already written: it is born `rendering`, with its spec, caption and review on it. */
+async function insertWritten(
+    exec: Exec, creatorId: string, row: RenderRow & { theme: InfographicTheme; profileVersion: number | null }, written: Pick<ServerWritten, 'spec' | 'caption' | 'review'>,
+): Promise<string> {
+    const { rows } = await exec.query<{ id: string }>(
+        `INSERT INTO infographics (creator_id, topic, notes, language, theme, status, spec, caption, review, profile_version)
+         VALUES ($1, $2, $3, $4, $5, 'rendering', $6::jsonb, $7, $8::jsonb, $9) RETURNING id`,
+        [creatorId, row.topic, row.notes, row.language, row.theme, JSON.stringify(written.spec), written.caption,
+            written.review ? JSON.stringify(written.review) : null, row.profileVersion]
+    );
+    return rows[0]!.id;
+}
+
+/**
+ * A tenant's new infographic (P32): written here, through the layer, then queued as a render-only job. Everything that can refuse it
+ * (the profile that cannot be read, no provider, a spent budget, a provider that is down, an answer that is no infographic) happens
+ * before the transaction opens, so nothing is left `writing` and no row exists for a request that was turned down. The model call is
+ * the long part, and it is made with no transaction open: the pool is small.
+ *
+ * `theme: 'both'` writes once and makes both rows now: the written spec is in hand, so there is no `pair_theme` to wait for.
+ */
+async function createOnServer(creatorId: string, { topic, notes, body }: { topic: string; notes: string | null; body: Record<string, unknown> }): Promise<InfographicView> {
+    const settings = await getStudioSettings(creatorId);
+    const { language, theme, pair } = newInfographicChoices(body, settings);
+    const ctx = await infographicContext(creatorId);
+    const written = await writeInfographicOnServer({ creatorId, topic, notes, language, avoid: settings.voice.avoid ?? [], ctx });
+    return withTransaction(async (client) => {
+        const first = { topic, notes, language, theme, profileVersion: ctx.version };
+        const id = await insertWritten(client, creatorId, first, written);
+        await queue(client, creatorId, id, renderPayload(id, first, theme, settings, written.spec), 'rendering');
+        if (pair) {
+            const other = { ...first, theme: pair };
+            const pairId = await insertWritten(client, creatorId, other, written);
+            await queue(client, creatorId, pairId, renderPayload(pairId, other, pair, settings, written.spec), 'rendering');
+        }
+        log('info', 'studio.infographic_created', {
+            infographic_id: id, language, theme, pair_theme: pair, written_on: 'server', provider: written.provider, model: written.model, usd: written.usd,
+        });
+        return loadView(client, creatorId, id);
+    });
+}
+
+/**
+ * A tenant's infographic written again (P32), on the server: the idle check and the theme are settled before the model is asked, so a
+ * request that would be refused costs nothing; the row is locked and checked again after, because the call takes long enough for another
+ * request to land. The spec, caption, review and profile stamp are replaced together with the render-only job that draws them.
+ */
+async function rewriteOnServer(creatorId: string, id: string, b: Record<string, unknown>): Promise<InfographicView> {
+    const before = await loadView(pool, creatorId, id);
+    assertIdle(before);
+    const theme = parseTheme(b.theme, before.theme);
+    const settings = await getStudioSettings(creatorId);
+    const ctx = await infographicContext(creatorId);
+    const written = await writeInfographicOnServer({
+        creatorId, topic: before.topic, notes: before.notes, language: before.language, avoid: settings.voice.avoid ?? [], ctx,
+    });
+    return withTransaction(async (client) => {
+        const row = await lockRow(client, creatorId, id);
+        assertIdle(row);
+        await client.query(
+            `UPDATE infographics SET spec = $3::jsonb, caption = $4, review = $5::jsonb, profile_version = $6, updated_at = NOW()
+              WHERE id = $1 AND creator_id = $2`,
+            [id, creatorId, JSON.stringify(written.spec), written.caption, written.review ? JSON.stringify(written.review) : null, ctx.version]
+        );
+        await queue(client, creatorId, id, renderPayload(id, row, theme, settings, written.spec), 'rendering');
+        log('info', 'studio.infographic_rewritten', { infographic_id: id, written_on: 'server', provider: written.provider, model: written.model, usd: written.usd });
         return loadView(client, creatorId, id);
     });
 }
@@ -265,9 +351,10 @@ class NeedsContext extends Error {}
 export async function rerenderInfographic(creatorId: string, rawId: unknown, body: unknown): Promise<InfographicView> {
     const id = requireId(rawId, 'infographic');
     const b = isPlainObject(body) ? body : {};
-    // Written again by Claude on the Mac: the same gate as a new one, before the row is locked (G1). A row with no
-    // spec yet is a rewrite whatever the body says, and `enqueueJob` refuses that one. A render alone needs none.
-    if (b.rewrite === true) await assertMacBrainAllowed(creatorId);
+    // Written again by Claude on the Mac: the same gate as a new one, before the row is locked (G1). A tenant the Mac is not for has it
+    // written on the server instead (P32), and the Mac is never asked. A row with no spec yet is a rewrite whatever the body says
+    // (below). A render alone needs none.
+    if (b.rewrite === true && !(await isMacBrainAllowed(creatorId))) return rewriteOnServer(creatorId, id, b);
     const settings = await getStudioSettings(creatorId);
     const attempt = (ctx: ProfileContext<'infographic'> | undefined): Promise<InfographicView> => withTransaction(async (client) => {
         const row = await lockRow(client, creatorId, id);
@@ -294,6 +381,8 @@ export async function rerenderInfographic(creatorId: string, rawId: unknown, bod
         return await attempt(b.rewrite === true ? await infographicContext(creatorId) : undefined);
     } catch (err) {
         if (!(err instanceof NeedsContext)) throw err;
+        // A row with no spec asked to be rendered, which is a rewrite: for a tenant the Mac is not for, the server's.
+        if (!(await isMacBrainAllowed(creatorId))) return rewriteOnServer(creatorId, id, b);
         return attempt(await infographicContext(creatorId));
     }
 }

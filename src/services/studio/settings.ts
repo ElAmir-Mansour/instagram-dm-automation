@@ -20,7 +20,7 @@ import type { CreatorProfile } from '../profile/types.js';
 import type { InfographicPlatform, InfographicSocial, InfographicTheme, MonteurBrain, MonteurMode, MonteurSource, MonteurStyle } from './settingsTypes.js';
 import { type Exec, isPlainObject, lockTenantSettings, problemsError, StudioError, withTransaction } from './common.js';
 import { defaultStudioSettings, mergeSettings, overDefaults, readStudioSettings, STUDIO_SETTINGS_SECTIONS } from './settingsMerge.js';
-import { assertMacBrainAllowed } from '../macBrain.js';
+import { assertMacBrainAllowed, assertNotMacBrainTenant } from '../macBrain.js';
 import { clearProfileCache } from '../profile/cache.js';
 import {
     loadOverlayProfile, loadScheduleTimezone, lockStoredProfile, newerSchemaError, overlayProfile, ProfileError, saveProfile, type SavedProfile,
@@ -37,7 +37,7 @@ export const DM_PLACEHOLDERS = ['username', 'question', 'pitch', 'url', 'bullets
 export const MONTEUR_PLATFORMS: readonly MonteurPlatform[] = ['instagram', 'facebook', 'tiktok', 'youtube'];
 export const MONTEUR_SOURCES: readonly MonteurSource[] = ['folder', 'course'];
 export const MONTEUR_MODES: readonly MonteurMode[] = ['review', 'auto'];
-export const MONTEUR_BRAINS: readonly MonteurBrain[] = ['gemini', 'claude_mac'];
+export const MONTEUR_BRAINS: readonly MonteurBrain[] = ['gemini', 'claude_mac', 'api'];
 export const MONTEUR_STYLES: readonly MonteurStyle[] = ['classic', 'paper'];
 export const INFOGRAPHIC_SOCIALS: readonly InfographicSocial[] = ['instagram', 'youtube', 'linkedin', 'x', 'tiktok', 'facebook', 'github'];
 export const INFOGRAPHIC_THEMES: readonly InfographicTheme[] = ['dark', 'light'];
@@ -259,6 +259,21 @@ export async function getMonteurSettings(creatorId: string, exec: Exec = pool): 
 }
 
 /**
+ * A new tenant's Monteur brain is the AI providers layer (P32): the Mac is the owner's, and Gemini is not what the Monteur writes with
+ * for a second creator. Run inside the transaction that creates the tenant, after its settings row exists (`createProfile` mirrors one in).
+ * Seeds only when the row says nothing about `brain`, and never touches another field, so it cannot undo a choice. Nothing else sets it:
+ * `defaultMonteurConfig()` stays `gemini`, which is what a row saved before the brain existed has always meant.
+ */
+export async function seedApiBrain(exec: Exec, creatorId: string): Promise<void> {
+    await exec.query(
+        `UPDATE studio_settings
+            SET monteur = COALESCE(monteur, '{}'::jsonb) || jsonb_build_object('brain', 'api'), updated_at = NOW()
+          WHERE creator_id = $1 AND (monteur IS NULL OR monteur->>'brain' IS NULL)`,
+        [creatorId]
+    );
+}
+
+/**
  * The tenant's settings, over the defaults, with the fields the Creator Profile owns read from it. `exec` is a
  * transaction's client, when inside one.
  *
@@ -329,6 +344,9 @@ async function applyStudioPatch(
     // (G1). Only the switch is refused: a tenant already on it saves its other settings, and its calls are
     // refused where they are made (think.ts).
     if (next.monteur.brain === 'claude_mac' && current.monteur.brain !== 'claude_mac') await assertMacBrainAllowed(creatorId, 400);
+    // The other way round (P32): the AI providers layer is for the tenants the Mac is not for. The owner, and a tenant on the Mac list,
+    // cannot switch onto it; a runtime that finds `api` stored for one anyway keeps it on the Mac (`effectiveBrain`).
+    if (next.monteur.brain === 'api' && current.monteur.brain !== 'api') await assertNotMacBrainTenant(creatorId, 400);
 
     // What the profile owns and this patch changed. A profile this release cannot fully read takes no write (it would
     // delete what a newer release stored), so an edit that needs it is refused before anything is written; an edit

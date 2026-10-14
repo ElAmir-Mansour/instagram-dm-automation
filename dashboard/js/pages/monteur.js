@@ -118,7 +118,7 @@ const MonteurPage = {
     SOURCES: Object.freeze(['folder', 'course']),
     MODES: Object.freeze(['review', 'auto']),
     /** MONTEUR.md §6.3: who makes the pick, the captions, the edits and the lessons. */
-    BRAINS: Object.freeze(['gemini', 'claude_mac']),
+    BRAINS: Object.freeze(['gemini', 'claude_mac', 'api']),
     /** MONTEUR.md §6.2: how the worker draws the edits, sent to it as `brand.style`. */
     STYLES: Object.freeze(['classic', 'paper']),
     NUMBER_FIELDS: Object.freeze(['videos_per_run', 'reels_per_video', 'min_seconds', 'max_seconds']),
@@ -1739,7 +1739,7 @@ const MonteurPage = {
         ]);
     },
 
-    /** "AI for picking, captions and edits": Gemini, in the app, or Claude, on the Mac worker. */
+    /** "AI for picking, captions and edits": Gemini, in the app, Claude on the Mac worker, or the platform's AI providers (`api`, P32). */
     brainMarkup() {
         const chosen = this.work.brain;
         const option = (value, label) => html`<option value="${value}"${chosen === value ? html.raw(' selected') : ''}>${label}</option>`;
@@ -1749,8 +1749,9 @@ const MonteurPage = {
                 <select class="select" id="mt-brain" data-change="monteur:setting" data-key="brain" aria-describedby="mt-brain-hint">
                     ${option('gemini', t('monteur.settings.brainGemini'))}
                     ${option('claude_mac', t('monteur.settings.brainClaude'))}
+                    ${option('api', t('monteur.settings.brainApi'))}
                 </select>
-                <p class="form-hint" id="mt-brain-hint">${t('monteur.settings.brainHint', { name: this.workerName() })}</p>
+                <p class="form-hint" id="mt-brain-hint">${chosen === 'api' ? t('monteur.settings.brainHintApi') : t('monteur.settings.brainHint', { name: this.workerName() })}</p>
             </div>
         `;
     },

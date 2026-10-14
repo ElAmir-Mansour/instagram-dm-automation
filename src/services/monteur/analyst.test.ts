@@ -5,12 +5,14 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { setLogSink } from '../../utils/log.js';
+import { setAiCaller, type AiCaller, type AiGenerateArgs, type AiGenerateResult } from '../aiProviders/generate.js';
+import { AiError } from '../llm/errors.js';
 import { withProfileCache } from '../profile/cache.js';
 import { profileReads } from '../profile/stampSupport.js';
 import { StudioError } from '../studio/common.js';
 import { setModelCaller, type CallModel, type ModelRequest } from '../studio/generate.js';
 import {
-    ANALYST_FRESH_DAYS, ANALYST_MIN_POSTS, ANALYST_RETRY_HOURS, analystDue, parseLessons, recentReels, reelLine,
+    ANALYST_FRESH_DAYS, ANALYST_MIN_POSTS, ANALYST_RETRY_HOURS, analystDue, LESSONS_SCHEMA, parseLessons, recentReels, reelLine,
     refreshLessons, runAnalyst, runDueAnalyst,
 } from './analyst.js';
 import { installFakeDb, type FakeDb } from './testDb.js';
@@ -294,6 +296,95 @@ describe('the Analyst on Claude on the Mac (monteur.brain = claude_mac, MONTEUR.
         const view = presentLessons({ ...running, thinking: true } as never);
         assert.equal(view.status, 'running');
         assert.equal(presentLessons({ ...running, thinking: false } as never).status, 'failed', 'a Gemini run that old was cut off');
+    });
+});
+
+// ─── The AI providers layer (monteur.brain = api, P32) ──────────────────────────────────
+
+describe('the Analyst on the AI providers layer (monteur.brain = api, P32)', () => {
+    const NEW_TENANT = '22222222-2222-4222-8222-222222222222';
+    let db: FakeDb;
+    let gemini: ModelRequest[];
+    let layer: AiGenerateArgs[];
+    let previousCaller: CallModel;
+    let restoreLayer: AiCaller;
+    let restoreSink: (() => void) | undefined;
+    let answer: (args: AiGenerateArgs) => unknown;
+    const reel = { id: 'insight-1', platform: 'instagram', media_type: 'REELS', caption: 'hook', published_at: new Date('2026-09-20T16:00:00Z'), metrics: { views: 900 } };
+    const LESSONS = { lessons: [{ rule: 'Open on the result', evidence: 'skip 40%' }], summary: 'Hooks work.' };
+
+    before(() => {
+        const previous = setLogSink(() => {});
+        restoreSink = () => setLogSink(previous);
+    });
+    after(() => restoreSink?.());
+
+    beforeEach(() => {
+        db = installFakeDb({ platformTenant: TENANT });
+        gemini = [];
+        layer = [];
+        answer = () => LESSONS;
+        previousCaller = setModelCaller(async (req) => {
+            gemini.push(req);
+            throw new Error('Gemini was reached');
+        });
+        restoreLayer = setAiCaller(async (args) => {
+            layer.push(args);
+            const out = answer(args);
+            if (out instanceof Error) throw out;
+            return {
+                json: out, usage: { in: 700, out: 90 }, billed: [{ model: 'claude-opus-5-5', in: 700, out: 90 }], model: 'claude-opus-5-5', provider: 'anthropic', stopReason: 'end_turn',
+                elapsed_ms: 5000, usd: 0.01, priced: true, costSource: 'table', effort: 'high', route: 'default', usageId: '3',
+            } as AiGenerateResult;
+        });
+        db.routes.push(
+            [/FROM studio_settings/, () => ({ rows: [{ voice: { language: 'ar', digits: 'arabic-indic', guide: '' }, monteur: { brain: 'api' } }] })],
+            [/^INSERT INTO studio_lessons/, (p) => ({ rows: [{ id: 'run-1', creator_id: p[0], status: 'running', created_at: new Date() }] })],
+            [/FROM post_insights WHERE creator_id = \$1 AND media_type/, () => ({ rows: [reel] })],
+            [/FROM account_insights_daily/, () => ({ rows: [] })],
+            [/^SELECT lessons FROM studio_lessons/, () => ({ rows: [] })],
+            [/^SELECT id, status, result, error, \(payload->>'try'\)::int AS try/, () => ({ rows: [] })],
+            [/^INSERT INTO studio_jobs \(creator_id, kind, payload\) VALUES \(\$1, 'monteur_think'/, () => ({ rows: [{ id: 'think-job' }] })],
+            [/^UPDATE studio_lessons SET status = 'done'/, (p) => ({ rows: [{ id: p[0], status: 'done', lessons: JSON.parse(p[1]), summary: p[2], basis: JSON.parse(p[3]), model: p[4], created_at: new Date() }] })],
+            [/^UPDATE studio_lessons SET status = 'failed'/, (p) => ({ rows: [{ id: p[0], status: 'failed', error: p[1], lessons: null, created_at: new Date() }] })],
+        );
+    });
+    afterEach(() => {
+        db.restore();
+        setModelCaller(previousCaller);
+        setAiCaller(restoreLayer);
+    });
+
+    const toMac = () => db.statements.filter((s) => /monteur_think/.test(s.sql));
+
+    it('a tenant’s run is one layer call, tenant_monteur_think charged to them, and fills the run done with the layer’s model: no Gemini, no Mac', async () => {
+        const row = await runAnalyst(NEW_TENANT, Date.now() + 100_000);
+        assert.equal(row.status, 'done');
+        assert.deepEqual(row.lessons, LESSONS.lessons);
+        assert.equal(row.model, 'claude-opus-5-5');
+        assert.deepEqual(layer.map((l) => [l.purpose, l.creatorId]), [['tenant_monteur_think', NEW_TENANT]]);
+        assert.equal(layer[0]!.schema, LESSONS_SCHEMA);
+        assert.match(JSON.stringify(layer[0]!.user), /Reels, newest first:/);
+        assert.equal(gemini.length, 0);
+        assert.equal(toMac().length, 0);
+    });
+
+    it('the owner, even with api stored, is the Mac’s: his run waits for the Mac, and the layer is never asked', async () => {
+        const row = await runAnalyst(TENANT, Date.now() + 100_000);
+        assert.equal(row.status, 'running', 'waiting for the Mac, not failed');
+        assert.equal(layer.length, 0);
+        assert.equal(gemini.length, 0);
+        const [job] = db.ran(/^INSERT INTO studio_jobs/).map((s) => JSON.parse(s.params[1]));
+        assert.deepEqual([job.request, job.step, job.model, job.purpose], ['lessons/run-1/monteur.analyst', 'analyst', 'claude-opus-5-5', 'monteur.analyst']);
+    });
+
+    it('no provider fails the run with the layer’s own words, and nothing else is tried', async () => {
+        answer = () => new AiError({ kind: 'no_provider', provider: '', model: '', message: 'No AI provider is ready: save an API key for one in Operations → AI providers.' });
+        const row = await runAnalyst(NEW_TENANT, Date.now() + 100_000);
+        assert.equal(row.status, 'failed');
+        assert.match(row.error ?? '', /No AI provider is ready/);
+        assert.equal(toMac().length, 0);
+        assert.equal(gemini.length, 0);
     });
 });
 
