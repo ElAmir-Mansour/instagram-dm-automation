@@ -395,6 +395,20 @@ export function decodeIco(buf) {
 const pixelsHash = (img) => sha256(Buffer.from(img.rgba));
 /** How far a committed pixel may sit from a fresh render, per channel: rounding across platforms, never a different mark. */
 const PIXEL_TOLERANCE = 16;
+/**
+ * The first channel index where two RGBA buffers differ by more than PIXEL_TOLERANCE in what is actually seen: alpha, and each colour
+ * channel premultiplied by its alpha. An edge pixel that one platform leaves at alpha 0 and another at alpha 1 carries an arbitrary
+ * colour that nobody sees, so its raw colour is not compared. -1 when they match.
+ */
+function firstVisibleDifference(a, b) {
+    for (let p = 0; p < a.length; p += 4) {
+        if (Math.abs(a[p + 3] - b[p + 3]) > PIXEL_TOLERANCE) return p + 3;
+        for (let c = 0; c < 3; c++) {
+            if (Math.abs((a[p + c] * a[p + 3]) / 255 - (b[p + c] * b[p + 3]) / 255) > PIXEL_TOLERANCE) return p + c;
+        }
+    }
+    return -1;
+}
 
 /** Every output as bytes, keyed as OUTPUTS is, with the pixel hash of each image. `read(name)` returns a source's text. */
 export function renderAll(read) {
@@ -571,7 +585,7 @@ export function collectProblems(root = ROOT, overrides = {}) {
                 const actual = decodePng(png);
                 // A small per-channel tolerance: the coverage arithmetic lands antialiased edge pixels differently on CI's Linux/Node than on
                 // the Mac (seen at 181,16 on the 192 tile's corner arc). A real change to the mark moves pixels by far more than 16 levels.
-                const diff = fresh.rgba.findIndex((v, j) => Math.abs(v - actual.rgba[j]) > PIXEL_TOLERANCE);
+                const diff = firstVisibleDifference(fresh.rgba, actual.rgba);
                 if (diff >= 0) problems.push(`${rec.file}: image ${i} differs from ${want.from} rendered at ${want.size}px at pixel ${Math.floor(diff / 4) % want.size},${Math.floor(diff / 4 / want.size)} (channel ${diff % 4}: committed ${actual.rgba[diff]}, fresh ${fresh.rgba[diff]}): re-render with node scripts/build-brand-icons.mjs`);
             } catch (e) {
                 problems.push(`${rec.file}: image ${i} could not be compared (${e.message})`);
