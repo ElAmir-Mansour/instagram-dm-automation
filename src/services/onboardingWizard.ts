@@ -25,11 +25,11 @@
  * Events (`onboarding_events`) are enums and numbers only, never a field's value (02 §6). They are best-effort: a failed
  * insert is logged and never fails the request that caused it.
  */
-import { pool } from '../config/db.js';
 import type { OnboardingStatus } from '../db/rows.js';
 import { queryOne } from '../db/query.js';
 import { describeError, log } from '../utils/log.js';
 import { APP_SETTING_KEYS, getSetting } from './appSettings.js';
+import { recordEvent, type Actor, type EventContext } from './onboardingEvents.js';
 import { readProfileState, type ProfileState } from './profile/patch.js';
 import type { TenantRole } from './tenant.js';
 
@@ -112,7 +112,7 @@ export function nextStepAfter(id: WizardStepId, flags: Readonly<WizardFlags> = N
 // ─── What is stored ──────────────────────────────────────────────────────────────────────────
 
 export type StepStatus = 'done' | 'skipped';
-export type Actor = 'tenant' | 'admin';
+export type { Actor };
 
 /** One entry of `onboarding.steps`, as read back and made safe: the column is JSONB, so anything could be in it. */
 export interface StepEntry {
@@ -279,29 +279,11 @@ export function validateStepValues(values: unknown): string | null {
 
 // ─── Events ──────────────────────────────────────────────────────────────────────────────────
 
+// The funnel's rows are written by `onboardingEvents.ts` (enums and numbers only, best-effort); the wizard's four are
+// step_viewed, step_completed, step_skipped and wizard_completed. Re-exported so what already imports them from here still does.
+export { recordEvent };
+export type { EventContext };
 export type WizardEvent = 'step_viewed' | 'step_completed' | 'step_skipped' | 'wizard_completed';
-
-export interface EventContext {
-    creatorId: string;
-    userId: string | null;
-    actor: Actor;
-}
-
-/**
- * One funnel row: the event, the step and numbers only (02 §6: "enums and paths only, never field values"). Best-effort: a
- * database without v34, or a failed insert, is logged and the request goes on. The funnel is not worth a failed Continue.
- */
-export async function recordEvent(ctx: EventContext, event: WizardEvent, step: WizardStepId | null, props: Record<string, number | string> = {}): Promise<void> {
-    try {
-        await pool.query(
-            'INSERT INTO onboarding_events (creator_id, user_id, actor, event, step, props) VALUES ($1, $2, $3, $4, $5, $6::jsonb)',
-            [ctx.creatorId, ctx.userId, ctx.actor, event, step, JSON.stringify(props)]
-        );
-    } catch (err) {
-        // Not `event:` — that key is the log line's own name.
-        log('warn', 'onboarding.event_failed', { wizard_event: event, step, tenant_id: ctx.creatorId, ...describeError(err) });
-    }
-}
 
 // ─── Reading, for the wizard ─────────────────────────────────────────────────────────────────
 

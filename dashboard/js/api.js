@@ -49,13 +49,15 @@ const API = {
     },
 
     async request(path, options = {}) {
+        // `profileAsked` is ours, not fetch's: it marks the one retry made after the person answered a profile question.
+        const { profileAsked, ...fetchOptions } = options;
         const headers = { 'Content-Type': 'application/json' };
         if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
 
         let res;
         try {
             res = await fetch(`${this.baseUrl}${path}`, {
-                ...options,
+                ...fetchOptions,
                 headers: { ...headers, ...options.headers },
             });
         } catch (networkErr) {
@@ -95,6 +97,16 @@ const API = {
             err.status = res.status;
             err.body = body;
             err.rawText = rawText;
+            // An agent was switched on before it had what it writes from (P30). Ask for it, in a sheet, ONCE, and send the very same
+            // request again if it was answered; when it cannot be answered here (the wizard's own fields, or a cancelled sheet), the
+            // person is told in their own language and not in the server's.
+            if (res.status === 409 && body && body.code === 'PROFILE_INCOMPLETE') {
+                if (!profileAsked && typeof ProfileAsk !== 'undefined') {
+                    const answered = await ProfileAsk.require(body.missing, { agent: body.agent });
+                    if (answered) return this.request(path, { ...options, profileAsked: true });
+                }
+                err.message = t('profileAsk.refused');
+            }
             throw err;
         }
 
@@ -139,6 +151,12 @@ const API = {
     }),
     completeOnboarding: () => API.request('/onboarding/complete', { method: 'POST', body: '{}' }),
     patchProfile: (version, patch) => API.request('/profile', { method: 'PATCH', body: JSON.stringify({ version, patch }) }),
+    /** The profile and the version a patch must send back (the one-field sheet, `ProfileAsk`). */
+    getProfile: () => API.request('/profile'),
+    /** How complete the profile is and the next three things to do (the Overview card). */
+    getProfileProgress: () => API.request('/profile/progress'),
+    /** The invite-to-finished funnel for the last 30 or 90 days (Operations, platform admin). */
+    getOnboardingFunnel: (days) => API.request(`/admin/onboarding/funnel?days=${encodeURIComponent(days)}`),
 
     /** Returns a NEW session token scoped to `tenantId`. Store it like a login. */
     switchTenant: (tenantId) => API.request('/auth/switch-tenant', {

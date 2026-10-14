@@ -21,6 +21,10 @@
  * short-keyword hazard list — `تم` matches inside اهتمام, and substring
  * matching means a two-letter keyword fires on half the comments on a post.
  *
+ * The onboarding funnel (P31) sits right under the AI providers: invited, opened, password, each wizard step, finished, with counts and
+ * median times for the last 30 or 90 days (`GET /api/admin/onboarding/funnel`, counts and durations only). It loads on its own after
+ * the page is drawn, so the tenants above it never wait for it, and a failed load is a message with a Retry inside the card.
+ *
  * The AI providers card sits right under the tenant cards (pages/ai_providers.js,
  * loaded on first use). It absorbed the Gemini key card: Gemini is one provider
  * row in it, and it is still one key for every tenant, so a missing one silences
@@ -32,9 +36,13 @@ const OperationsPage = {
     /** Whether ai_providers.js is in and the card has its data: otherwise the section says it could not load. */
     aiReady: false,
 
+    /** The funnel card: the window shown (30 or 90 days), what came back, whether it failed, and which request is the live one. */
+    funnel: { days: 30, data: null, failed: false, loading: false, seq: 0 },
+
     resetTenantState() {
         this.data = null;
         this.aiReady = false;
+        this.funnel = { days: 30, data: null, failed: false, loading: false, seq: 0 };
         // The card's own state is reset with the rest by App.resetTenantState(): it is a registered module (`routable: false`).
     },
 
@@ -105,6 +113,7 @@ const OperationsPage = {
             </section>
 
             ${this.renderAiProviders()}
+            <div data-region="funnel">${this.renderFunnel()}</div>
             ${this.renderQueue()}
             ${this.renderSchema()}
             ${this.renderStorage()}
@@ -114,6 +123,187 @@ const OperationsPage = {
         UI.icons(container);
         Admin.applyMeters(container);
         Motion.announce(t('ops.count', { count: tenants.length }));
+        // After the screen is up, and never awaited: the funnel is its own request with its own failure.
+        this.loadFunnel(this.funnel.days);
+    },
+
+    // ─── The onboarding funnel (P31) ─────────────────────────────────────────
+
+    FUNNEL_WINDOWS: [30, 90],
+
+    /** The funnel's region, if the screen is still the one that is open. */
+    funnelRegion() {
+        const container = document.getElementById('page-container');
+        return container ? container.querySelector('[data-region="funnel"]') : null;
+    },
+
+    /** Ask for `days` days, and redraw the card when the answer lands. An answer that comes after a newer question is dropped. */
+    async loadFunnel(days) {
+        const span = this.FUNNEL_WINDOWS.includes(days) ? days : 30;
+        const seq = (this.funnel.seq || 0) + 1;
+        this.funnel = { days: span, data: null, failed: false, loading: true, seq };
+        this.paintFunnel();
+        let data = null;
+        let failed = false;
+        try {
+            data = await API.getOnboardingFunnel(span);
+        } catch {
+            failed = true;
+        }
+        if (this.funnel.seq !== seq) return;
+        this.funnel = { days: span, data, failed: failed || !data || typeof data !== 'object', loading: false, seq };
+        this.paintFunnel();
+    },
+
+    paintFunnel() {
+        const host = this.funnelRegion();
+        if (!host) return;
+        const focus = UI.captureFocus(host);
+        host.innerHTML = esc(this.renderFunnel());
+        UI.icons(host);
+        Admin.applyMeters(host);
+        UI.restoreFocus(focus);
+    },
+
+    /** A duration as a person says it: "under a minute", "4m", "1h 20m", "2d". */
+    duration(ms) {
+        const n = Number(ms);
+        if (ms === null || ms === undefined || !Number.isFinite(n) || n < 0) return '—';
+        const minute = 60000;
+        if (n < minute) return t('ops.funnel.lessThanMinute');
+        const minutes = Math.round(n / minute);
+        if (minutes < 60) return t('common.minutes', { n: UI.formatNumber(minutes) });
+        const hours = Math.floor(minutes / 60);
+        if (hours < 24) {
+            const rest = minutes % 60;
+            const h = t('common.hours', { n: UI.formatNumber(hours) });
+            return rest ? `${h} ${t('common.minutes', { n: UI.formatNumber(rest) })}` : h;
+        }
+        return t('common.days', { n: UI.formatNumber(Math.round(hours / 24)) });
+    },
+
+    /** The stages and steps the server names are the wizard's own ids: a word from a fixed table, never one from the response. */
+    STAGE_IDS: ['invited', 'opened', 'accepted', 'about', 'voice', 'brand', 'connect', 'proof', 'completed'],
+
+    renderFunnel() {
+        const f = this.funnel;
+        return html`
+            <section class="section" aria-labelledby="ops-funnel-title">
+                <div class="row row--between row--wrap gap-3 mbe-4">
+                    <h2 class="section-title mbe-2" id="ops-funnel-title">${t('ops.funnel.title')}</h2>
+                    <div class="funnel-window" role="group" aria-label="${t('ops.funnel.windowLabel')}">
+                        ${this.FUNNEL_WINDOWS.map((days) => html`
+                            <button type="button" class="btn btn-secondary btn-sm" data-action="ops:funnelWindow" data-days="${days}"
+                                    aria-pressed="${f.days === days ? 'true' : 'false'}">${t('ops.funnel.window', { days: UI.formatNumber(days) })}</button>
+                        `)}
+                    </div>
+                </div>
+                <div class="surface pad-5 stack gap-4">
+                    <p class="form-hint">${t('ops.funnel.intro')}</p>
+                    ${f.loading ? html`<p class="form-hint" role="status">${t('common.loading')}</p>` : ''}
+                    ${!f.loading && f.failed ? html`
+                        <p class="form-hint text-warning" role="alert">${t('ops.funnel.failed')}</p>
+                        <div class="form-actions aip-actions-flush">
+                            ${UI.button({ variant: 'secondary', size: 'sm', icon: 'rotate-cw', label: t('common.retry'), action: 'ops:funnelRetry' })}
+                        </div>
+                    ` : ''}
+                    ${!f.loading && !f.failed && f.data ? this.renderFunnelBody(f.data) : ''}
+                </div>
+            </section>
+        `;
+    },
+
+    renderFunnelBody(data) {
+        const cohort = Admin.num(data, 'cohort') || 0;
+        if (cohort === 0) return html`<p class="form-hint">${t('ops.funnel.empty')}</p>`;
+        const stages = (Array.isArray(data.stages) ? data.stages : []).filter((s) => s && this.STAGE_IDS.includes(s.id));
+        const steps = (Array.isArray(data.steps) ? data.steps : []).filter((s) => s && this.STAGE_IDS.includes(s.step));
+        const drafts = data.drafts && typeof data.drafts === 'object' ? data.drafts : {};
+        const draftTotal = (Number(drafts.started) || 0) + (Number(drafts.ready) || 0) + (Number(drafts.failed) || 0);
+        return html`
+            <div class="stats-grid">
+                ${Admin.statTile({ label: t('ops.funnel.finished'), value: UI.formatNumber(Admin.num(data, 'completed') || 0), icon: 'check-circle', tone: 'success' })}
+                ${Admin.statTile({ label: t('ops.funnel.inProgress'), value: UI.formatNumber(Admin.num(data, 'in_progress') || 0), icon: 'clock', tone: 'accent' })}
+                ${Admin.statTile({ label: t('ops.funnel.abandoned'), value: UI.formatNumber(Admin.num(data, 'abandoned') || 0), icon: 'hourglass', tone: (Admin.num(data, 'abandoned') || 0) > 0 ? 'warning' : 'accent' })}
+            </div>
+
+            <div>
+                <h3 class="form-label">${t('ops.funnel.stages')}</h3>
+                <ol class="funnel-stages">
+                    ${stages.map((stage) => {
+                        const label = t(`ops.funnel.stage.${stage.id}`);
+                        const reached = Number(stage.reached) || 0;
+                        const count = t('ops.funnel.reached', { count: UI.formatNumber(reached), total: UI.formatNumber(cohort) });
+                        return html`
+                            <li class="funnel-stage">
+                                <span class="funnel-stage-label">${label}</span>
+                                <progress class="studio-meter" max="${cohort}" value="${Math.min(reached, cohort)}" aria-label="${label}: ${count}"></progress>
+                                <span class="funnel-stage-count">${count}</span>
+                            </li>
+                        `;
+                    })}
+                </ol>
+            </div>
+
+            ${this.renderFunnelMedians(data)}
+            ${steps.length > 0 ? this.renderFunnelSteps(steps) : ''}
+            ${draftTotal > 0 ? html`<p class="form-hint">${t('ops.funnel.drafts', {
+                started: UI.formatNumber(Number(drafts.started) || 0), ready: UI.formatNumber(Number(drafts.ready) || 0), failed: UI.formatNumber(Number(drafts.failed) || 0),
+            })}</p>` : ''}
+        `;
+    },
+
+    renderFunnelMedians(data) {
+        const m = data.medians && typeof data.medians === 'object' ? data.medians : {};
+        const target = Number(data.target_open_to_complete_ms);
+        const open = Number(m.open_to_complete_ms);
+        const known = m.open_to_complete_ms !== null && m.open_to_complete_ms !== undefined && Number.isFinite(open);
+        const within = known && Number.isFinite(target) && open <= target;
+        return html`
+            <div>
+                <h3 class="form-label">${t('ops.funnel.medians')}</h3>
+                <dl class="ops-facts">
+                    ${Admin.field(t('ops.funnel.median.open_to_complete'), html`
+                        <span>${this.duration(m.open_to_complete_ms)}</span>
+                        ${known && Number.isFinite(target) ? html`<span class="badge ${within ? html.raw('badge-success') : html.raw('badge-warning')}">${within ? t('ops.funnel.onTarget') : t('ops.funnel.overTarget')}</span>` : ''}
+                        ${Number.isFinite(target) ? html`<span class="form-hint">${t('ops.funnel.target', { time: this.duration(target) })}</span>` : ''}
+                    `)}
+                    ${Admin.field(t('ops.funnel.median.invite_to_open'), this.duration(m.invite_to_open_ms))}
+                    ${Admin.field(t('ops.funnel.median.invite_to_accept'), this.duration(m.invite_to_accept_ms))}
+                    ${Admin.field(t('ops.funnel.median.accept_to_complete'), this.duration(m.accept_to_complete_ms))}
+                </dl>
+            </div>
+        `;
+    },
+
+    renderFunnelSteps(steps) {
+        return html`
+            <div>
+                <h3 class="form-label">${t('ops.funnel.steps')}</h3>
+                <div class="table-wrapper">
+                    <table class="data-table">
+                        <thead><tr>
+                            <th scope="col">${t('ops.funnel.col.step')}</th>
+                            <th scope="col">${t('ops.funnel.col.reached')}</th>
+                            <th scope="col">${t('ops.funnel.col.done')}</th>
+                            <th scope="col">${t('ops.funnel.col.skipped')}</th>
+                            <th scope="col">${t('ops.funnel.col.median')}</th>
+                        </tr></thead>
+                        <tbody>
+                            ${steps.map((row) => html`
+                                <tr>
+                                    <th scope="row">${t(`ops.funnel.stage.${row.step}`)}</th>
+                                    <td>${UI.formatNumber(Number(row.reached) || 0)}</td>
+                                    <td>${UI.formatNumber(Number(row.completed) || 0)}</td>
+                                    <td>${UI.formatNumber(Number(row.skipped) || 0)}</td>
+                                    <td class="nowrap">${this.duration(row.median_ms)}</td>
+                                </tr>
+                            `)}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
     },
 
     // ─── Tenants ─────────────────────────────────────────────────────────────
@@ -477,6 +667,8 @@ const OperationsPage = {
 
 UI.registerActions('ops', {
     render: () => Admin.report(OperationsPage.render()),
+    funnelWindow: (el) => OperationsPage.loadFunnel(Number(el.dataset.days)),
+    funnelRetry: () => OperationsPage.loadFunnel(OperationsPage.funnel.days),
     openTenant: (el) => OperationsPage.openTenant(el.dataset.id),
     recheckToken: (el) => Admin.report(OperationsPage.recheckToken(el)),
 });

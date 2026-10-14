@@ -156,6 +156,7 @@ const ALLOWED: readonly Allowed[] = [
         'src/services/onboarding/validateDraft.test.ts',
         'src/services/profile/article.test.ts',
         'src/services/profile/campaignSeeds.test.ts',
+        'src/services/profile/completeness.test.ts',
         'src/services/profile/consumers.test.ts',
         'src/services/profile/context.test.ts',
         'src/services/profile/courseMappings.test.ts',

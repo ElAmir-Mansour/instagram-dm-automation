@@ -25,12 +25,13 @@ import { getPublicBaseUrl, getTikTokPostingFlags } from '../services/appSettings
 import { isMissingSchema } from '../services/health.js';
 import { getMediaStore } from '../services/storage.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
+import { assertAgentReady, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import { refreshLessons } from '../services/monteur/analyst.js';
 import { approveClip, patchClip, rejectClip, rerenderClip } from '../services/monteur/clips.js';
 import { enqueueDueMonteurScan, requestFolderPick, runMonteurNow } from '../services/monteur/daily.js';
 import { signWorkerUpload } from '../services/monteur/uploads.js';
 import { getMonteurView, presentLessons, retrySource } from '../services/monteur/view.js';
-import { clipText, requireId, STUDIO_MIGRATION_HINT, StudioError } from '../services/studio/common.js';
+import { clipText, isPlainObject, requireId, STUDIO_MIGRATION_HINT, StudioError } from '../services/studio/common.js';
 import {
     createDraft, deleteDraft, getDraft, listDrafts, patchDraft, planDrafts, renderDraft, rewriteDraftSlide,
     setTikTokPublic,
@@ -61,6 +62,11 @@ function handle(event: string, fallback: string, fn: Handler) {
         try {
             await fn(req, res);
         } catch (err) {
+            // An agent switched on before it has what it writes from (the gate, services/profile/agentGate.ts).
+            if (err instanceof ProfileIncomplete) {
+                res.status(err.status).json(profileIncompleteBody(err));
+                return;
+            }
             if (err instanceof StudioError) {
                 res.status(err.status).json({
                     error: err.message,
@@ -251,6 +257,10 @@ studioRouter.get('/settings', handle('studio.settings_read_failed', 'Failed to r
 
 studioRouter.put('/settings', handle('studio.settings_save_failed', 'Failed to save the Studio settings.', async (req, res) => {
     const creatorId = getTenantId(req);
+    // Switching the Monteur ON is the one settings save that asks for what it writes from (P30). Saving it while it is already on,
+    // or any other setting, never does.
+    const wantsMonteur = isPlainObject(req.body) && isPlainObject(req.body.monteur) && req.body.monteur.enabled === true;
+    if (wantsMonteur && !(await getStudioSettings(creatorId)).monteur.enabled) await assertAgentReady(creatorId, 'monteur');
     // `undefined` is the pool; the session's user is who the profile version (if the change makes one) is recorded as written by.
     const { settings, changed } = await updateStudioSettings(creatorId, req.body, undefined, { userId: req.session?.userId ?? null });
     await writeAudit(await actorFromSession(req.session), {
@@ -315,6 +325,7 @@ studioRouter.get('/drafts/:id', handle('studio.draft_failed', 'Failed to read th
 }));
 
 studioRouter.post('/drafts', handle('studio.draft_create_failed', 'Failed to create the draft.', async (req, res) => {
+    await assertAgentReady(getTenantId(req), 'studio');
     // 201 even when the draft came back `failed`: the row exists, and the failure is its content.
     res.status(201).json({ draft: await createDraft(getTenantId(req), req.body) });
 }));
@@ -382,6 +393,7 @@ studioRouter.get('/slots', handle('studio.slots_failed', 'Failed to find free sl
 }));
 
 studioRouter.post('/plan', handle('studio.plan_failed', 'Failed to plan the posts.', async (req, res) => {
+    await assertAgentReady(getTenantId(req), 'studio');
     res.json({ proposals: await planDrafts(getTenantId(req), req.body) });
 }));
 
@@ -393,6 +405,7 @@ studioRouter.get('/monteur', handle('monteur.view_failed', 'Failed to read the M
 }));
 
 studioRouter.post('/monteur/run', handle('monteur.run_failed', 'Failed to queue the scan.', async (req, res) => {
+    await assertAgentReady(getTenantId(req), 'monteur');
     res.json({ job: await runMonteurNow(getTenantId(req)) });
 }));
 
@@ -445,6 +458,7 @@ studioRouter.get('/infographics/:id', handle('studio.infographic_failed', 'Faile
 }));
 
 studioRouter.post('/infographics', handle('studio.infographic_create_failed', 'Failed to start the infographic.', async (req, res) => {
+    await assertAgentReady(getTenantId(req), 'studio');
     res.status(201).json(await createInfographic(getTenantId(req), req.body));
 }));
 

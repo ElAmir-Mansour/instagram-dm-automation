@@ -32,6 +32,7 @@ import { getJobQueue } from '../jobs/queue.js';
 import { log } from '../utils/log.js';
 import { isMissingTable } from './health.js';
 import { removeQueuedMediaObjects } from './storage.js';
+import { pruneOnboardingData, type OnboardingPruneResult } from './onboardingRetention.js';
 
 /** Floor on the configurable window. Below this, debugging a live webhook issue is hopeless. */
 export const MIN_RETENTION_DAYS = 7;
@@ -451,6 +452,8 @@ export interface RetentionSweepResult {
     passes: number;
     /** True when a pass came back full, so there is more behind it than this run cleared. */
     moreRemaining: boolean;
+    /** What was forgotten about onboarding (P31): old events, long-expired invites, the text drafts fetched. Once per sweep, not per pass. */
+    onboarding: OnboardingPruneResult;
 }
 
 /** Injected only so the loop's termination rules can be exercised without a database. */
@@ -459,7 +462,17 @@ export interface RetentionSweepDeps {
     pruneJobs: typeof pruneCompletedJobs;
     pruneMedia: typeof pruneOrphanedMedia;
     removeObjects: typeof removeQueuedMediaObjects;
+    /** Optional so a test of the loop's termination rules need not name it; the real sweep always has it (`DEFAULT_RETENTION_DEPS`). */
+    pruneOnboarding?: typeof pruneOnboardingData;
 }
+
+export const DEFAULT_RETENTION_DEPS: RetentionSweepDeps = {
+    pruneRaw: pruneRawPayloads,
+    pruneJobs: pruneCompletedJobs,
+    pruneMedia: pruneOrphanedMedia,
+    removeObjects: removeQueuedMediaObjects,
+    pruneOnboarding: pruneOnboardingData,
+};
 
 /**
  * The whole retention story, in one call, converging rather than chipping.
@@ -471,16 +484,10 @@ export interface RetentionSweepDeps {
  * Never throws: it runs ahead of the scheduled posts in the same cron invocation, and a
  * retention sweep must not be able to stop a publish.
  */
-export async function runRetentionSweep(
-    deps: RetentionSweepDeps = {
-        pruneRaw: pruneRawPayloads,
-        pruneJobs: pruneCompletedJobs,
-        pruneMedia: pruneOrphanedMedia,
-        removeObjects: removeQueuedMediaObjects,
-    }
-): Promise<RetentionSweepResult> {
+export async function runRetentionSweep(deps: RetentionSweepDeps = DEFAULT_RETENTION_DEPS): Promise<RetentionSweepResult> {
     const result: RetentionSweepResult = {
         rawPayloadsCleared: 0, jobsDeleted: 0, mediaDeleted: 0, mediaObjectsRemoved: 0, passes: 0, moreRemaining: false,
+        onboarding: { eventsDeleted: 0, invitesDeleted: 0, draftSourcesCleared: 0, moreRemaining: false },
     };
 
     await sweepPasses(deps, result);
@@ -489,6 +496,10 @@ export async function runRetentionSweep(
     // Studio or a tenant deletion removed, and it must drain even with MEDIA_RETENTION_DAYS unset.
     const objects = await deps.removeObjects();
     result.mediaObjectsRemoved = objects.removed;
+
+    // Onboarding's own housekeeping, once (P31). It cannot throw (`pruneOnboardingData` logs and returns zeros), and a database
+    // without v34 has none of these tables, which it reads as "nothing to prune".
+    if (deps.pruneOnboarding) result.onboarding = await deps.pruneOnboarding();
     return result;
 }
 

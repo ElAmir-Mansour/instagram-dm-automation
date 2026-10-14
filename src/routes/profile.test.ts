@@ -83,14 +83,15 @@ describe('the profile router', () => {
         assert.ok(profileAt > tenantAt, 'the profile router comes after resolveTenant');
     });
 
-    it('GET is operator-level, the campaign seeds too, and PATCH is owner-only, and there is no other route', () => {
+    it('GET is operator-level, the campaign seeds and the progress card too, and PATCH is owner-only, and there is no other route', () => {
         const guardOf = (layer: Layer): string | null => layer.route!.stack.map((s) => s.handle?.minimumRole).find((m): m is string => typeof m === 'string') ?? null;
         assert.equal(guardOf(layerFor('get', '/')), 'operator');
         assert.equal(guardOf(layerFor('get', '/campaign-seeds')), 'operator');
+        assert.equal(guardOf(layerFor('get', '/progress')), 'operator');
         assert.equal(guardOf(layerFor('patch', '/')), 'owner');
         assert.deepEqual(
             (profileRouter as unknown as { stack: Layer[] }).stack.flatMap((l) => (l.route ? Object.keys(l.route.methods).map((m) => `${m.toUpperCase()} ${l.route!.path}`) : [])).sort(),
-            ['GET /', 'GET /campaign-seeds', 'PATCH /'],
+            ['GET /', 'GET /campaign-seeds', 'GET /progress', 'PATCH /'],
             'no other route: nothing mutating hides without a guard',
         );
     });

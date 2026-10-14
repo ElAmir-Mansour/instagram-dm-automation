@@ -30,6 +30,7 @@ import { pool } from '../../config/db.js';
 import { describeError, log } from '../../utils/log.js';
 import { generate, type AiGenerateResult } from '../aiProviders/generate.js';
 import { isAiError } from '../llm/errors.js';
+import { recordDraftEvent, type DraftOutcome } from '../onboardingEvents.js';
 import { withTransaction } from '../studio/common.js';
 import { buildDraftPrompt, PROFILE_DRAFT_V1 } from './draftPrompt.js';
 import { DRAFT_CALLS, DRAFT_MAX_TOKENS, DRAFT_SCHEMAS, type DraftCall } from './draftSchema.js';
@@ -72,6 +73,17 @@ export function setDraftSourcesFetcher(next: SourcesFetcher): SourcesFetcher {
 }
 
 const newOwner = (): string => `adv-${randomBytes(6).toString('hex')}`;
+
+/**
+ * The funnel's three draft moments (P31): started, ready, failed. Enums and numbers only (how long, and the failure's KIND), never the
+ * draft's text, a provider's words or anything that was fetched. A draft the operator asked for (`admin_create`, `redraft`) is the
+ * operator's; one the wizard asked for is the tenant's; one that finishes on its own is filed under whoever asked. Best-effort.
+ */
+const noteDraft = (row: Pick<DraftRow, 'creator_id' | 'requested_by' | 'origin'>, outcome: DraftOutcome, details: { ms?: number; code?: string; partial?: boolean } = {}): Promise<void> =>
+    recordDraftEvent(
+        { creatorId: row.creator_id, userId: row.requested_by, actor: row.origin === 'admin_create' || row.origin === 'redraft' ? 'admin' : 'tenant' },
+        outcome, { ...details, ...(outcome === 'started' && row.origin ? { origin: row.origin } : {}) },
+    );
 
 // ─── Starting ───────────────────────────────────────────────────────────────────────────────
 
@@ -121,6 +133,7 @@ export async function startDraft(args: StartDraftArgs): Promise<StartDraftResult
         });
         return { row, reused: false, superseded };
     });
+    if (!result.reused) await noteDraft(result.row, 'started');
     log('info', result.reused ? 'onboarding.draft_reused' : 'onboarding.draft_started', {
         draft_id: result.row.id, creator_id: args.creatorId, origin: args.origin, status: result.row.status, superseded: result.superseded, forced: args.force === true,
         has_instagram: Boolean(args.inputs.instagram), has_website: Boolean(args.inputs.website), has_youtube: Boolean(args.inputs.youtube), has_about: Boolean(args.inputs.about), via: args.inputs.via,
@@ -300,7 +313,9 @@ async function fetchStep(ctx: StepContext, claimed: DraftRow): Promise<DraftRow>
             sourcesStatus: outcome.status, usage: ctx.usage,
         });
     }
-    return finishFailed(pool, row.id, ctx.owner, { error: summarize(outcome), errorKind: decision.errorKind, draft: null, sourcesStatus: outcome.status, usage: ctx.usage });
+    const failed = await finishFailed(pool, row.id, ctx.owner, { error: summarize(outcome), errorKind: decision.errorKind, draft: null, sourcesStatus: outcome.status, usage: ctx.usage });
+    await noteDraft(failed, 'failed', { ms: ctx.now() - row.created_at.getTime(), code: decision.errorKind });
+    return failed;
 }
 
 // ─── The draft step ─────────────────────────────────────────────────────────────────────────
@@ -455,6 +470,7 @@ async function draftStep(ctx: StepContext, row: DraftRow): Promise<DraftRow> {
     for (const call of DRAFT_CALLS) if (calls[call].provider && calls[call].model) models[call] = { provider: calls[call].provider!, model: calls[call].model! };
     const finished: ResultColumn = { stage: 'final', result, code: codeOf(bundle.facts), models, promptVersion: PROFILE_DRAFT_V1 };
     const ready = await finishReady(pool, row.id, ctx.owner, { draft: finished, partial: decision.partial || result.partial, usage: ctx.usage });
+    await noteDraft(ready, 'ready', { ms: ctx.now() - row.created_at.getTime(), partial: ready.partial === true });
     log('info', 'onboarding.draft_ready', {
         draft_id: row.id, creator_id: row.creator_id, partial: ready.partial, flags: result.flags.length, touched: result.touched.length,
         total_ms: ctx.now() - row.created_at.getTime(), attempts: ready.attempts, usd: ctx.usage.totals.usd,
@@ -468,6 +484,7 @@ async function draftStep(ctx: StepContext, row: DraftRow): Promise<DraftRow> {
 async function failDraft(ctx: StepContext, row: DraftRow, kind: DraftErrorKind, message: string, bundle: FetchedBundle | null = readBundle(row.sources)): Promise<DraftRow> {
     const prefill = bundle ? prefillOf(bundle, row.inputs) : null;
     const failed = await finishFailed(pool, row.id, ctx.owner, { error: message.slice(0, 500), errorKind: kind, draft: prefill, usage: ctx.usage });
+    await noteDraft(failed, 'failed', { ms: ctx.now() - row.created_at.getTime(), code: kind });
     log('warn', 'onboarding.draft_failed', {
         draft_id: row.id, creator_id: row.creator_id, error_kind: kind, attempts: row.attempts, total_ms: ctx.now() - row.created_at.getTime(), prefill: prefill !== null,
         message: message.slice(0, 240),

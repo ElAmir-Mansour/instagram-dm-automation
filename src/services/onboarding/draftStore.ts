@@ -218,3 +218,27 @@ export const finishFailed = (
         id, owner, v.error, v.errorKind, v.draft === null || v.draft === undefined ? null : JSON.stringify(v.draft),
         v.sourcesStatus === undefined ? null : JSON.stringify(v.sourcesStatus), JSON.stringify(v.usage),
     ]);
+
+// ─── Forgetting (P31) ───────────────────────────────────────────────────────────────────────
+
+/**
+ * What the daily sweep (`services/onboardingRetention.ts`) forgets: the RAW text a draft fetched (`sources`: the bio, the captions, the
+ * site's words), thirty days after the draft settled. Only that column. The row stays, with what the draft answered, which sources
+ * worked and what it cost. A draft still being made (`ACTIVE_STATUSES`) is never touched, because its next step reads `sources`, and
+ * `updated_at` is left alone: this is housekeeping, not an edit. `$1` the cutoff (a draft that finished, or was made if it never
+ * finished, strictly before it), `$2` the batch.
+ */
+export const PRUNE_SOURCES_SQL = `UPDATE profile_drafts SET sources = NULL
+ WHERE id IN (
+       SELECT id FROM profile_drafts
+        WHERE sources IS NOT NULL
+          AND status NOT IN (${ACTIVE_LIST})
+          AND COALESCE(finished_at, created_at) < $1
+        ORDER BY COALESCE(finished_at, created_at)
+        LIMIT $2)`;
+
+/** How many drafts lost their fetched text. */
+export async function pruneSources(exec: Exec, cutoff: Date, limit: number): Promise<number> {
+    const result = await exec.query(PRUNE_SOURCES_SQL, [cutoff, limit]);
+    return result.rowCount ?? 0;
+}

@@ -1160,3 +1160,101 @@ describe('a step that throws', () => {
         assert.equal(events('onboarding.draft_release_failed').length, 1);
     });
 });
+
+// ─── The funnel's draft events (P31) ─────────────────────────────────────────────────────────
+
+describe('the funnel\'s draft events', () => {
+    let funnel: Array<{ creator_id: string; user_id: string | null; actor: string; event: string; step: string | null; props: Record<string, unknown> }>;
+    beforeEach(() => {
+        funnel = [];
+        world.db.routes.push([/^INSERT INTO onboarding_events /, ([creator_id, user_id, actor, event, step, props]) => {
+            funnel.push({ creator_id, user_id, actor, event, step, props: JSON.parse(props) });
+            return { rows: [] };
+        }]);
+    });
+    const names = () => funnel.map((e) => e.event);
+
+    it('draft_started is written when a draft is made: as the operator\'s when the operator asked, the tenant\'s when the wizard did', async () => {
+        await start({ requestedBy: uuid(7) });
+        assert.deepEqual(funnel, [{ creator_id: TENANT, user_id: uuid(7), actor: 'admin', event: 'draft_started', step: null, props: { origin: 'admin_create' } }]);
+        funnel.length = 0;
+        await start({ origin: 'wizard', requestedBy: uuid(8), inputs: { ...INPUTS, website: null } });
+        assert.deepEqual(funnel.map((e) => [e.actor, e.user_id, e.props]), [['tenant', uuid(8), { origin: 'wizard' }]]);
+        funnel.length = 0;
+        await start({ origin: 'redraft', requestedBy: uuid(7), force: true, inputs: { ...INPUTS, instagram: null } });
+        assert.deepEqual(funnel.map((e) => [e.actor, e.props]), [['admin', { origin: 'redraft' }]]);
+    });
+
+    it('is not written again for a start that returned the draft that was already there', async () => {
+        await start();
+        await start({ origin: 'wizard' });
+        assert.deepEqual(names(), ['draft_started']);
+    });
+
+    it('is not written for a start that was refused', async () => {
+        for (let i = 0; i < DRAFTS_PER_DAY; i++) await start({ inputs: { ...INPUTS, about: `try ${i}` } });
+        funnel.length = 0;
+        await assert.rejects(start({ inputs: { ...INPUTS, about: 'one more' } }), (e: unknown) => e instanceof DraftError && e.status === 429);
+        assert.deepEqual(funnel, []);
+    });
+
+    it('draft_ready is written when the draft is finished, with how long it took and whether it was partial', async () => {
+        const { row } = await start();
+        await advance(row.id);
+        assert.deepEqual(names(), ['draft_started', 'draft_ready']);
+        const ready = funnel[1]!;
+        assert.equal(ready.actor, 'admin');
+        assert.deepEqual(Object.keys(ready.props).sort(), ['ms', 'partial']);
+        assert.equal(ready.props.ms, events('onboarding.draft_ready')[0]!.total_ms, 'the number the log line gives');
+        assert.equal(ready.props.partial, 0);
+    });
+
+    it('draft_failed carries the kind of failure and the time, and never the provider\'s words: no key', async () => {
+        ai = async () => { throw aiError('no_provider', 'No AI provider has a key: add one in Operations. (sk-ant-api03-SECRET)'); };
+        const { row } = await start();
+        await advance(row.id);
+        assert.deepEqual(names(), ['draft_started', 'draft_failed']);
+        assert.deepEqual(Object.keys(funnel[1]!.props).sort(), ['code', 'ms']);
+        assert.equal(funnel[1]!.props.code, 'no_provider');
+        assert.equal(JSON.stringify(funnel).includes('SECRET'), false);
+        assert.equal(JSON.stringify(funnel).includes('Operations'), false);
+    });
+
+    it('draft_failed is written for a draft whose fetch found nothing, too: the failure that ends it at the first step', async () => {
+        sources = async () => outcome({ usable: 0, anyRetryable: false, bundle: bundle({ sources: [] }) });
+        const { row } = await start();
+        await advance(row.id);
+        assert.deepEqual(funnel.slice(1).map((e) => [e.event, e.props.code]), [['draft_failed', 'no_source']]);
+        assert.equal(draftOf(row.id).status, 'failed');
+    });
+
+    it('writes no failure for a try that will be retried: only the end of the draft is an event', async () => {
+        const { row } = await start();
+        sources = async () => outcome({ usable: 0, anyRetryable: true, bundle: bundle({ sources: [] }) });
+        await advance(row.id);
+        assert.equal(draftOf(row.id).status, 'fetching');
+        assert.deepEqual(names(), ['draft_started']);
+        world.clock += 61_000;
+        await advance(row.id);
+        world.clock += 301_000;
+        await advance(row.id);
+        assert.equal(draftOf(row.id).status, 'failed');
+        assert.deepEqual(names(), ['draft_started', 'draft_failed'], 'one failure for three tries');
+    });
+
+    it('holds nothing that was read or written: not a hostile page, not a model\'s answer, not a handle', async () => {
+        const { row } = await start();
+        await advance(row.id);
+        const text = JSON.stringify(funnel);
+        for (const secret of ['noor', 'perfumes', 'متجر', 'example', ...HOSTILE_PROSE.slice(0, 3)]) assert.equal(text.includes(secret), false, secret);
+        for (const e of funnel) for (const value of Object.values(e.props)) assert.ok(typeof value === 'number' || /^[a-z0-9_]{1,32}$/.test(String(value)));
+    });
+
+    it('never fails the draft: a funnel that cannot be written is a log line', async () => {
+        world.db.routes.unshift([/^INSERT INTO onboarding_events /, () => { throw new Error('connection lost'); }]);
+        const { row } = await start();
+        await advance(row.id);
+        assert.equal(draftOf(row.id).status, 'ready');
+        assert.ok(logs.some((l) => l.event === 'onboarding.event_failed'));
+    });
+});

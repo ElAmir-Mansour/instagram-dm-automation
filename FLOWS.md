@@ -1587,6 +1587,71 @@ only, **never a field's value**; a failed insert is logged (`onboarding.event_fa
 > pinned by a test, the server function by a table of every combination, and the page by the same table run against the server's
 > own function.
 
+### 4.10 — Progress, the agent gate and the funnel (P30, P31)
+
+Three things make onboarding progressive and measured: a card that says how much of the profile there is and what to do next, a
+409 that stops an agent being switched on before it has what it writes from, and a funnel that says how far new tenants get. None of
+them is on a running path.
+
+**The card.** `GET /api/profile/progress` (**`routes/profile.ts:83`**, operator level) → `describeProgress`
+(**`services/profile/progress.ts:41`**) reads who the tenant is (`readGateFacts`), the profile, what is connected and whether the DM
+bot is on (one statement, `CONNECTIONS_SQL`), and hands them to two pure functions in **`completeness.ts`**: `completeness`
+(**:131**: a weighted percent over the fields a tenant can fix from the dashboard, 100 only when none is missing) and `nextBestActions`
+(**:212**: at most three, in a fixed order of what each unlocks: finish setup, connect Instagram and Facebook, voice samples, the DM
+hand-off, the presenter, the portrait, the audience, then TikTok and YouTube). The answer carries ids, paths and numbers; the words are
+the dashboard's (`profileCard.*`), in both languages. The Overview paints it above the briefing as its own region
+(`OverviewPage.fillProfile`); an answer that is not an answer leaves the region empty, so the card can never break the page.
+
+**The owner is measured on what his setup can hold.** A tenant with no onboarding row, one v34 inserted as `completed` that nobody
+filled in, or the platform owner (`exemptionOf`, **`agentGate.ts:99`**) is `legacy`: only the fields his Studio and Growth settings
+have a home for count (name, time zone, language, the main offer and its link, the portrait), so a niche, a presenter's name, an
+audience, voice samples or a DM hand-off rule, which that setup was built without, are never asked of him. His percentage is his real
+state over those, and he is still told about a platform he has not connected.
+
+**The gate.** An agent's own switch-on route calls `assertAgentReady(creatorId, agent)` (**`agentGate.ts:139`**) and a tenant missing
+what that agent needs answers
+
+    409 { code: 'PROFILE_INCOMPLETE', agent, missing: [paths], fixStep: 'about' | 'voice' | 'ask' }
+
+on top of the six activation fields (`agentMissing`, **:79**): the Monteur needs a presenter, the Growth coach an audience, the DM bot a
+hand-off rule, the Studio nothing more. `fixStep` says where the first missing field is fixed: a wizard step, or `ask`, the one-field
+sheet (`ProfileAsk`, components.js) the dashboard opens over the screen the person is on. `api.js` catches the 409, opens the sheet, and
+sends the same request again once it was answered (once: a second refusal is a message).
+
+| Agent | Where it is switched on | Gated when |
+|---|---|---|
+| Studio | `POST /studio/drafts`, `/plan`, `/infographics` (**studio.ts:328, :396, :461**) | any call: the writer needs only the six fields |
+| Monteur | `PUT /studio/settings` (**studio.ts:263**), `POST /studio/monteur/run` (**:408**) | `monteur.enabled` goes false to true, or Run now |
+| Growth coach | `POST /growth/coach` (**growth.ts:90**) | any call |
+| DM bot | `POST /settings/ai` (**api.ts:3391**, `assertDmSwitchOn`) | the save asks for the bot ON and it was not on |
+
+**Never gated:** the owner (decided first, before his onboarding row or his profile is read, so his path depends on neither), a tenant
+that predates onboarding, and anything that runs by itself: the webhook, the queue, the cron and every service never call the gate (a
+test lists its callers). **It fails open**: a database that cannot answer lets the switch through and logs `profile.gate_unreadable`
+(`warn`), because it is a convenience and never the reason a tenant cannot work.
+
+**The funnel.** `onboarding_events` is written by one function, `recordEvent` (**`services/onboardingEvents.ts:92`**), from a closed
+list of ten events, each with a closed list of props that are numbers or enum words (`sanitizeProps`, **:72**): a name, an address, a
+link or a sentence cannot be stored even by a caller that tries. Who writes what: `invite_created` (`issueInvite` and Regenerate, a
+join link only), `invite_opened` (the first `peek` of a join link), `invite_accepted` (`acceptInvite`), the four wizard events (§4.9),
+and `draft_started`, `draft_ready`, `draft_failed` (`noteDraft` in the draft state machine, `drafts.ts:82`, carrying how long and the
+failure's KIND, never a provider's words). A reset link is not onboarding and writes none. Best-effort: a failed insert is
+`onboarding.event_failed` and the request goes on.
+
+`GET /api/admin/onboarding/funnel?days=30|90` (**`routes/adminOnboarding.ts`**, platform admin, 404 for everyone else) → `loadFunnel`
+(**`onboardingFunnel.ts:248`**): two SELECTs over `onboarding_events` and nothing else, aggregated by the pure `buildFunnel` (**:146**).
+Each tenant is placed at its furthest stage (invited, opened, password, each wizard step that is switched on, finished) and a stage's
+count is the tenants that reached it or went past it. The cohort is the tenants whose FIRST event is in the window. Median times are
+over the tenants that have both ends, `abandoned` is derived (not finished, quiet for a day), and the answer holds no tenant id.
+Operations draws it below the AI providers card, loading after the page so the tenants above never wait for it.
+
+**Forgetting.** `runRetentionSweep` (**`retention.ts`**) ends with `pruneOnboardingData` (**`onboardingRetention.ts:81`**), once per sweep:
+events older than 180 days, invites never used that expired more than 30 days ago (a used invite stays: it is how a person came to
+hold their membership), and the raw text a settled draft fetched (`sources`, set to NULL 30 days after it finished; the draft row, its
+answers and its cost stay, and a draft still being made is never touched). Three statements, three tables, nothing else; each cutoff
+is computed in TypeScript and sent as a parameter, so a row exactly as old as the limit is kept. The draft statement lives in
+`draftStore.ts`, the one module that names `profile_drafts`.
+
 ---
 
 ## 5. Job lifecycle
@@ -2395,6 +2460,12 @@ error, and several write **no row at all**.
 | 4 | `/auth/me`'s onboarding cannot be read (a database without v34, a failed query) — **`onboardingWizard.ts:198`** | `onboarding.brief_unreadable` (`warn`) | no (`onboarding: null`: the dashboard gates nothing) |
 | 4 | an autosave or Continue for a tenant that has finished, or has no onboarding row — **`onboardingWizard.ts:370`** | *(none)* | no (200, the state as it is) |
 | 4 | a funnel event that could not be written — **`onboardingWizard.ts:257`** | `onboarding.event_failed` (`warn`) | no (the step still saved) |
+| 4 | an agent switched on without a hand-off rule, presenter or audience — **`agentGate.ts:139`** | *(none: the answer is `409 PROFILE_INCOMPLETE`)* | no (nothing was switched) |
+| 4 | the agent gate cannot read the tenant (a failed query, a database without v34) — **`agentGate.ts:139`**, **`:157`** | `profile.gate_unreadable` (`warn`) | no (the switch goes through) |
+| 4 | the owner or a tenant that predates onboarding switches an agent on with a field empty — **`agentGate.ts:99`** | *(none)* | no (never gated, and his row and profile are not even read) |
+| 4 | the Overview's profile card cannot be read — **`routes/profile.ts:83`** | `profile.progress_failed` (`error`) | no (the region stays empty) |
+| 4 | a draft or invite event that could not be written — **`onboardingEvents.ts:92`** | `onboarding.event_failed` (`warn`) | no (the draft or the link still worked) |
+| 4 | the daily sweep forgets old events, long-expired invites and a draft's fetched text — **`onboardingRetention.ts:81`** | `retention.onboarding_pruned` (`info`) | rows deleted, or `sources` set to NULL; the draft row stays |
 | 5 | budget spent — **`runner.ts:145`** | `job.drain_complete` (`budgetExhausted: true`) | jobs stay `pending` |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |

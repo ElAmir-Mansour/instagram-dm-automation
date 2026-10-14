@@ -39,6 +39,7 @@ const ENGINE = /onboarding\/(?:drafts|draftStore|draftSources|draftView|draftTyp
 const ALLOWED: Record<string, string> = {
     'routes/onboardingDrafts.ts': 'the wizard\'s and the operator\'s routes, and the handlers both share',
     'routes/api.ts': 'mounts them, and holds the backstop sweep a worker calls with the cron secret',
+    'services/onboardingRetention.ts': 'the daily retention sweep, which sets the text a settled draft fetched to NULL after 30 days (P31)',
 };
 
 describe('nothing outside the draft engine reads what was scraped', () => {

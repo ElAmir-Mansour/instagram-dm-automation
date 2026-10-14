@@ -28,6 +28,7 @@ import { getGrowthStatus } from '../services/growth/status.js';
 import { runSync } from '../services/growth/sync.js';
 import { isMissingSchema } from '../services/health.js';
 import { getTenantId, requireTenantRole } from '../services/tenant.js';
+import { assertAgentReady, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import { describeError, log } from '../utils/log.js';
 
 type Handler = (req: Request, res: Response) => Promise<void>;
@@ -41,6 +42,11 @@ export function handle(event: string, fallback: string, fn: Handler) {
         try {
             await fn(req, res);
         } catch (err) {
+            // The coach asked for before it knows who the content is for (the gate, services/profile/agentGate.ts).
+            if (err instanceof ProfileIncomplete) {
+                res.status(err.status).json(profileIncompleteBody(err));
+                return;
+            }
             if (err instanceof GrowthError) {
                 const retryAfter = err.extra?.retryAfter;
                 if (err.status === 429 && typeof retryAfter === 'number') res.setHeader('Retry-After', String(retryAfter));
@@ -81,6 +87,7 @@ growthRouter.get('/posts', handle('growth.posts_failed', 'Failed to list the pos
 }));
 
 growthRouter.post('/coach', handle('growth.coach_route_failed', 'Failed to run the coach.', async (req, res) => {
+    await assertAgentReady(getTenantId(req), 'coach');
     res.json(await runCoach(getTenantId(req)));
 }));
 
