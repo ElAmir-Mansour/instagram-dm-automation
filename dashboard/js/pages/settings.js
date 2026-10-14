@@ -1344,6 +1344,7 @@ const SettingsPage = {
     ONBOARDING_FIELDS: {
         inviteTtlDays: 'onboarding-ttl', resetTtlHours: 'onboarding-reset-ttl', sessionDays: 'onboarding-session-days',
         defaultRole: 'onboarding-role', inviterName: 'onboarding-inviter', whatsappText: 'onboarding-whatsapp', defaultRules: 'onboarding-rule-women',
+        discoveryCreatorId: 'onboarding-discovery', youtubeApiKey: 'onboarding-yt-key',
     },
 
     onboardingSection(data, error) {
@@ -1434,6 +1435,7 @@ const SettingsPage = {
                                 </div>
                             </div>
                         </fieldset>
+                        ${this.draftSourcesGroup(data.draftSources)}
                         <div class="form-actions">
                             ${UI.button({
                                 variant: 'primary', size: 'sm', type: 'submit', icon: 'save',
@@ -1443,6 +1445,51 @@ const SettingsPage = {
                     </form>
                 </div>
             </section>
+        `;
+    },
+
+    /**
+     * What reads a new tenant's public accounts (the profile draft, docs/onboarding/03 §1): the tenant whose connected Instagram account reads other
+     * people's profiles, and the YouTube Data API key. The key is a secret and the server never sends it back: only whether one is set, where it
+     * comes from and its last four characters. An empty key field means "leave it"; the tick removes it. Nothing is rendered for a server that
+     * does not describe them (an older deployment), so the rest of the card works as before.
+     */
+    draftSourcesGroup(sources) {
+        if (!sources || !sources.youtubeApiKey || !sources.discovery) return '';
+        const key = sources.youtubeApiKey;
+        const discovery = sources.discovery;
+        const tenants = Array.isArray(sources.tenants) ? sources.tenants : [];
+        const chosen = discovery.source === 'setting' ? discovery.creatorId : '';
+        const keyHint = key.set
+            ? t(key.source === 'env' ? 'settings.onboarding.ytKeyEnv' : 'settings.onboarding.ytKeySaved', { last4: key.last4 || '••••' })
+            : t('settings.onboarding.ytKeyNone');
+        return html`
+            <fieldset class="onboarding-rules onboarding-sources">
+                <legend class="form-label">${t('settings.onboarding.sources.title')}</legend>
+                <p class="form-hint mbe-3">${t('settings.onboarding.sources.intro')}</p>
+                <div class="form-group">
+                    <label class="form-label" for="onboarding-discovery">${t('settings.onboarding.discovery')}</label>
+                    <select class="select" id="onboarding-discovery" name="discoveryCreatorId" aria-describedby="onboarding-discovery-hint">
+                        <option value="" ${chosen === '' ? html.raw('selected') : ''}>${t('settings.onboarding.discoveryOwner')}</option>
+                        ${tenants.map((tenant) => html`<option value="${tenant.id}" ${tenant.id === chosen ? html.raw('selected') : ''}>${tenant.name || tenant.id}${tenant.connected ? '' : html` · ${t('settings.onboarding.notConnected')}`}</option>`)}
+                    </select>
+                    <p class="form-hint" id="onboarding-discovery-hint">${t('settings.onboarding.discoveryHint')}</p>
+                    ${discovery.creatorId && !discovery.connected ? html`<p class="form-hint text-warning" role="status">${t('settings.onboarding.discoveryUnconnected')}</p>` : ''}
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="onboarding-yt-key">${t('settings.onboarding.ytKey')}</label>
+                    <input class="field field-mono" id="onboarding-yt-key" name="youtubeApiKey" type="password" dir="ltr" maxlength="256"
+                           autocomplete="new-password" spellcheck="false" placeholder="AIza…" aria-describedby="onboarding-yt-key-hint">
+                    <p class="form-hint" id="onboarding-yt-key-hint">${keyHint}</p>
+                    <p class="form-hint">${t('settings.onboarding.ytKeyHint')}</p>
+                    ${key.set && key.source === 'database' ? html`
+                        <div class="check-row">
+                            <input type="checkbox" id="onboarding-yt-key-clear" name="clearYoutubeApiKey">
+                            <div class="check-text"><label class="check-label" for="onboarding-yt-key-clear">${t('settings.onboarding.ytKeyClear')}</label></div>
+                        </div>
+                    ` : ''}
+                </div>
+            </fieldset>
         `;
     },
 
@@ -1478,6 +1525,12 @@ const SettingsPage = {
             whatsappText: read('whatsappText'),
             defaultRules: data.getAll('rule').map((value) => value.toString()),
         };
+        // The draft's sources (when the card has them): the reading tenant is always sent (empty is "the owner's tenant"); the key only when typed,
+        // or `null` when the tick removes the saved one. A blank key field means "leave it": the saved key is never sent to the page, so never back.
+        if (form.elements.discoveryCreatorId) payload.discoveryCreatorId = read('discoveryCreatorId');
+        const youtubeKey = read('youtubeApiKey');
+        if (youtubeKey) payload.youtubeApiKey = youtubeKey;
+        else if (data.get('clearYoutubeApiKey')) payload.youtubeApiKey = null;
         if (payload.whatsappText && !payload.whatsappText.includes('{link}')) {
             this.showOnboardingError('whatsappText', t('settings.onboarding.invalid.whatsappText'));
             return;

@@ -144,6 +144,9 @@ export const BUSINESS_SCHEMA: GeminiSchema = object({
 
 export type DraftCall = 'voice' | 'business';
 
+/** Both calls, in the order they are asked and shown. */
+export const DRAFT_CALLS: readonly DraftCall[] = ['voice', 'business'];
+
 export const DRAFT_SCHEMAS: Readonly<Record<DraftCall, GeminiSchema>> = { voice: VOICE_SCHEMA, business: BUSINESS_SCHEMA };
 
 /** The schema as OpenAI's strict mode takes it. For a schema with every property required this changes nothing, which a test holds. */

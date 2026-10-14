@@ -18,6 +18,10 @@
  * GitHub Actions workflow was meant to — it does not touch the database directly and does not
  * need the Meta/Gemini credentials the app itself uses to process a job, so there is nothing
  * else to duplicate or keep in sync across two platforms.
+ *
+ * Two loops, independent of each other: the drain above, and (P24) the profile-draft sweep,
+ * `POST /api/onboarding/drafts/sweep`, which advances the drafts nobody is working on. See
+ * `sweepLoop` below for why it is not part of the drain's.
  */
 
 const BASE_URL = process.env.DRAIN_BASE_URL || 'https://msg-response-auto.vercel.app';
@@ -28,6 +32,10 @@ const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS) || 60_000;
 // logged every such run as a failure while the work finished anyway. The polls stay sequential,
 // so a long drain only delays the next one.
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 290_000;
+// The profile-draft backstop (docs/onboarding/03 §4): its own loop, below. A draft takes minutes (two model calls of up to 150 s), so
+// it must never share a request with the drain, whose queue would then wait on a model. The wait is between the END of one sweep and
+// the start of the next, so a long sweep only delays the next one.
+const DRAFT_SWEEP_INTERVAL_MS = Number(process.env.DRAFT_SWEEP_INTERVAL_MS) || 60_000;
 
 if (!CRON_SECRET) {
     console.error(JSON.stringify({ level: 'error', event: 'worker.missing_secret', message: 'CRON_SECRET is not set' }));
@@ -74,6 +82,48 @@ async function loop() {
 }
 
 loop();
+
+/**
+ * One call to the draft sweep: `POST /api/onboarding/drafts/sweep`, the same bearer secret as the drain. It advances the profile drafts
+ * that nobody is working on (a function that was lost mid-draft, a retry whose wait is over, a draft nobody opened). Most calls find
+ * nothing, so only a call that did something, and every failure, is logged.
+ */
+async function sweepOnce() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+        const res = await fetch(`${BASE_URL}/api/onboarding/drafts/sweep`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${CRON_SECRET}` },
+            signal: controller.signal,
+        });
+        const body = await res.text();
+        if (res.status !== 200) {
+            log('error', 'worker.sweep_bad_status', { status: res.status, body: body.slice(0, 500) });
+            return;
+        }
+        let parsed;
+        try { parsed = JSON.parse(body); } catch { parsed = { raw: body.slice(0, 500) }; }
+        if (parsed && parsed.considered > 0) log('info', 'worker.sweep_ok', parsed);
+    } catch (err) {
+        // Same as the drain: a failed poll must not end the loop.
+        log('error', 'worker.sweep_failed', { message: err?.message || String(err) });
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+log('info', 'worker.sweep_started', { draft_sweep_interval_ms: DRAFT_SWEEP_INTERVAL_MS });
+
+// Its own loop, independent of the drain's: neither waits for the other, and a hung sweep cannot hold the queue.
+async function sweepLoop() {
+    for (;;) {
+        await sweepOnce();
+        await new Promise((resolve) => setTimeout(resolve, DRAFT_SWEEP_INTERVAL_MS));
+    }
+}
+
+sweepLoop();
 
 // Heroku sends SIGTERM ~30s before a dyno restart (routine, at least daily). There is no
 // in-flight state to save here — the next tick, on this dyno or the one after it, just

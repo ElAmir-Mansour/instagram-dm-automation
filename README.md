@@ -243,6 +243,7 @@ Bearer `CRON_SECRET`:
 |---|---|---|
 | `GET` | `/api/jobs/drain` | Drain the job queue. **Runs real handlers — sends real DMs** |
 | `GET` | `/api/cron/publish` | Reap stale claims, retention sweep, backstop drain, then **publish every due post to the live accounts** |
+| `POST` | `/api/onboarding/drafts/sweep` | Advance the profile drafts nobody is working on (the backstop `heroku-worker` calls about every minute). Bearer `CRON_SECRET`, like the drain. Costs AI spend |
 
 Session token required:
 
@@ -269,6 +270,8 @@ Session token required:
 | `POST` | `/api/meta/connect` | Owner: mint a state and a cookie, return the Login dialog URL (`{ returnTo?, reconnect?, authType? }`). Refuses a tenant that is connected unless `reconnect` is true |
 | `GET`/`POST` | `/api/meta/candidates`, `/api/meta/select` | Owner: the Pages waiting for a choice (names and ids, never a token) / choose one. The choice spends the pick and nulls its stored tokens |
 | `POST` | `/api/meta/disconnect` | Owner: unsubscribe the Page from the webhook and delete the ids and the token. Needs `{ "confirm": true }` |
+| `GET`/`POST` | `/api/onboarding/draft` | The tenant's profile draft (the wizard polls it every 3 s) / start one. Owner of the tenant, only while its onboarding is open |
+| `POST` | `/api/onboarding/draft/advance` | Do the next steps of the draft (up to 270 s inside the request); the wizard fires it when the poll says `advanceable` |
 
 Platform admin only (returns **404** to everyone else — the surface does not announce itself):
 
@@ -284,6 +287,9 @@ Platform admin only (returns **404** to everyone else — the surface does not a
 | `DELETE` | `/api/admin/invites/:id` | Revoke a link |
 | `GET`/`PUT` | `/api/admin/onboarding-settings` | Invite lifetime, default role, "keep me signed in" length, sender name, WhatsApp text, default content rules |
 | `GET`/`POST` | `/api/meta/app-settings` | Connect with Facebook: the on/off switch (default off) and the Login for Business configuration id, and what to register in Meta's dashboard |
+| `GET`/`PUT` | `/api/admin/onboarding-settings` | Invite lifetime, default role, "keep me signed in" length, sender name, WhatsApp text, default content rules, the YouTube Data API key (never returned: `{set, source, last4}`) and the tenant whose Instagram reads other people's profiles |
+| `GET`/`POST` | `/api/admin/tenants/:id/draft` | A tenant's profile draft: read it / start one (`force` makes a new one over a finished draft). The tenant comes from the path |
+| `POST` | `/api/admin/tenants/:id/draft/advance` | Do the next steps of the draft (up to 270 s inside the request); **starts** the draft from the handle and site typed at creation when there is none |
 
 ---
 

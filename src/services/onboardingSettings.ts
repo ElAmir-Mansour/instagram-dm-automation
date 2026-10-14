@@ -9,8 +9,11 @@
  * Pure where it can be (`readInt`, `validateOnboardingPatch`, `renderWhatsappText`), so the rules are testable without a
  * database; the two functions that touch `app_settings` read and write one key each, like every other setting.
  */
-import { APP_SETTING_KEYS, getOnboardingDefaultRules, getSetting, parseOnboardingRules, setSetting, type AppSettingKey } from './appSettings.js';
+import { APP_SETTING_KEYS, getOnboardingDefaultRules, getSetting, getYouTubeApiKey, last4, parseOnboardingRules, setSetting, type AppSettingKey } from './appSettings.js';
+import { queryRows } from '../db/query.js';
+import { pickDiscoveryCreatorId } from './onboarding/discoveryProbe.js';
 import { CONTENT_RULE_PRESETS, type ContentRulePreset } from './profile/types.js';
+import { getPlatformOwnerId } from './tenant.js';
 
 export const INVITE_ROLES = ['owner', 'operator', 'viewer'] as const;
 export type InviteRole = (typeof INVITE_ROLES)[number];
@@ -204,8 +207,29 @@ export function validateOnboardingPatch(body: Record<string, unknown>): Settings
         }
     }
 
+    // What reads a new tenant's public accounts (the draft engine, docs/onboarding/03 §1).
+    if (body.youtubeApiKey !== undefined) {
+        // A secret: sending text saves it, `null` or an empty string removes the saved one (the environment's, if any, answers again).
+        if (empty(body.youtubeApiKey)) writes.push({ field: 'youtubeApiKey', key: APP_SETTING_KEYS.youtubeApiKey, value: null });
+        else if (typeof body.youtubeApiKey !== 'string' || !YOUTUBE_API_KEY_SHAPE.test(body.youtubeApiKey.trim())) {
+            return { ok: false, field: 'youtubeApiKey', error: 'youtubeApiKey does not look like a Google API key: 20 to 256 letters, digits, dashes and underscores, as Google Cloud shows it.' };
+        } else writes.push({ field: 'youtubeApiKey', key: APP_SETTING_KEYS.youtubeApiKey, value: body.youtubeApiKey.trim() });
+    }
+
+    if (body.discoveryCreatorId !== undefined) {
+        // A tenant id; empty goes back to the owner's tenant. That the tenant EXISTS is the route's check: this file reads no tenants.
+        if (empty(body.discoveryCreatorId)) writes.push({ field: 'discoveryCreatorId', key: APP_SETTING_KEYS.onboardingDiscoveryCreatorId, value: null });
+        else if (typeof body.discoveryCreatorId !== 'string' || !UUID_SHAPE.test(body.discoveryCreatorId.trim())) {
+            return { ok: false, field: 'discoveryCreatorId', error: 'discoveryCreatorId must be the id of a tenant.' };
+        } else writes.push({ field: 'discoveryCreatorId', key: APP_SETTING_KEYS.onboardingDiscoveryCreatorId, value: body.discoveryCreatorId.trim().toLowerCase() });
+    }
+
     return { ok: true, writes };
 }
+
+/** Google API keys are `AIza` and 35 characters today; any 20 to 256 of the URL-safe alphabet is accepted, so a key shape Google changes still saves. */
+const YOUTUBE_API_KEY_SHAPE = /^[A-Za-z0-9_-]{20,256}$/;
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function saveOnboardingSettings(writes: readonly SettingWrite[], updatedBy: string | null): Promise<void> {
     for (const write of writes) await setSetting(write.key, write.value, updatedBy);
@@ -217,6 +241,7 @@ export async function describeOnboardingSettings(): Promise<{
     saved: Record<string, boolean>;
     limits: typeof ONBOARDING_LIMITS;
     whatsappDefaults: Record<InviteLang, string>;
+    draftSources: DraftSourceSettings;
 }> {
     const [settings, ...raw] = await Promise.all([
         getOnboardingSettings(),
@@ -237,5 +262,46 @@ export async function describeOnboardingSettings(): Promise<{
         },
         limits: ONBOARDING_LIMITS,
         whatsappDefaults: DEFAULT_WHATSAPP_TEXT,
+        draftSources: await describeDraftSources(),
+    };
+}
+
+// ─── What reads a new tenant's accounts ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The two inputs the draft engine needs from the operator (docs/onboarding/03 §1), as Settings shows them: the YouTube Data API key,
+ * which is a secret and is only ever described as `{set, source, last4}`, never returned; and the tenant whose connected Instagram
+ * account reads OTHER people's public profiles (Business Discovery), with the tenants to choose from.
+ */
+export interface DraftSourceSettings {
+    youtubeApiKey: { set: boolean; source: 'database' | 'env' | null; last4: string | null };
+    discovery: {
+        /** The tenant in force: the saved one, else the owner's. Null when there is neither. */
+        creatorId: string | null;
+        /** `setting`: saved here; `owner`: nothing (usable) saved, so the owner's tenant; `none`: no tenant at all. */
+        source: 'setting' | 'owner' | 'none';
+        name: string | null;
+        /** The tenant has an Instagram account and token: without them Business Discovery cannot run. */
+        connected: boolean;
+    };
+    tenants: Array<{ id: string; name: string | null; connected: boolean }>;
+}
+
+export async function describeDraftSources(): Promise<DraftSourceSettings> {
+    const [youtube, savedId, owner, rows] = await Promise.all([
+        getYouTubeApiKey(),
+        getSetting(APP_SETTING_KEYS.onboardingDiscoveryCreatorId),
+        getPlatformOwnerId(),
+        queryRows<{ id: string; name: string | null; connected: boolean }>(
+            `SELECT id, name, (instagram_page_id IS NOT NULL AND page_access_token IS NOT NULL) AS connected FROM creators WHERE is_active = true ORDER BY created_at, id LIMIT 500`,
+        ),
+    ]);
+    const creatorId = pickDiscoveryCreatorId(savedId, owner);
+    const saved = creatorId !== null && typeof savedId === 'string' && savedId.trim().toLowerCase() === creatorId;
+    const chosen = creatorId ? rows.find((r) => r.id === creatorId) : undefined;
+    return {
+        youtubeApiKey: { set: youtube !== null, source: youtube ? youtube.source : null, last4: youtube ? last4(youtube.key) : null },
+        discovery: { creatorId, source: creatorId === null ? 'none' : saved ? 'setting' : 'owner', name: chosen?.name ?? null, connected: chosen?.connected === true },
+        tenants: rows.map((r) => ({ id: r.id, name: r.name ?? null, connected: r.connected === true })),
     };
 }

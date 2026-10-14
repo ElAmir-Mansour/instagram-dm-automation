@@ -5,6 +5,7 @@
  */
 import { prepareSources, type DraftSource } from '../fence.js';
 import { computeSignals, type SampleCandidate } from '../draftSignals.js';
+import { DRAFT_SCHEMAS } from '../draftSchema.js';
 
 const RAW_SOURCES: DraftSource[] = [
     { id: 'bio', kind: 'ig_bio', text: 'متجر نور للعطور 🌹\nعطور شرقية وغربية أصلية\nشحن لكل مدن المملكة\nwww.noor-perfumes.example\nواتساب: +966 50 123 4567' },
@@ -107,6 +108,26 @@ export function okBusiness(): Record<string, any> {
         handoff_hint: field('عند طلب خصم خاص أو شكوى', 'inferred', '', 'low'),
     };
 }
+
+// ─── An answer that fits the schema and says nothing ─────────────────────────────────────────
+
+type SchemaNode = { type?: string; properties?: Record<string, SchemaNode>; enum?: string[] };
+
+/** What a model that knows nothing writes: every string "", every choice "unknown", every list empty, nothing sourced and everything low. */
+function nothingFor(node: SchemaNode, key = ''): unknown {
+    if (node.type === 'OBJECT') return Object.fromEntries(Object.entries(node.properties ?? {}).map(([k, v]) => [k, nothingFor(v, k)]));
+    if (node.type === 'ARRAY') return [];
+    if (node.type === 'BOOLEAN') return key === 'needs_input';
+    if (key === 'source') return 'inferred';
+    if (key === 'confidence') return 'low';
+    if (node.enum) return node.enum.includes('unknown') ? 'unknown' : node.enum[0]!;
+    return '';
+}
+
+/** An answer of the voice call that has every field the schema asks for and no content: well formed, and no use to anybody. */
+export const emptyVoice = (): Record<string, any> => nothingFor(DRAFT_SCHEMAS.voice as SchemaNode) as Record<string, any>;
+/** The same for the business call. (An empty business answer is also a correct one for a creator who sells nothing: lists empty, nothing guessed.) */
+export const emptyBusiness = (): Record<string, any> => nothingFor(DRAFT_SCHEMAS.business as SchemaNode) as Record<string, any>;
 
 // ─── A checker for the schema subset the draft schemas use ───────────────────────────────────
 

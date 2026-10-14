@@ -399,6 +399,10 @@ const TenantsPage = {
 
         try {
             const created = await API.createAdminTenant(payload);
+            // D6 (docs/onboarding/03 §4): the profile draft starts at once, so it is ready before the tenant opens its link. Only for a tenant made
+            // by name (it comes back with an invite) that was given a handle or a site to read: one made with a Meta connection is the operator's
+            // own, and one with nothing to read has nothing to draft from.
+            if (!firstRun && created && created.id && created.invite && (payload.instagram_username || payload.website)) this.startDraftInBackground(created.id);
             UI.closeModal();
             UI.toast(t('tenants.created'));
             await App.refreshSession();
@@ -423,6 +427,20 @@ const TenantsPage = {
         } catch (err) {
             restore();
             UI.toast(err.message || t('tenants.createFailed'), 'error');
+        }
+    },
+
+    /**
+     * Fire `advance` for a new tenant's draft and forget it. The server starts the draft from the handle and site just typed and works inside this
+     * one request (minutes); the answer is not this screen's, so nothing waits for it and nothing is shown if it fails: the tenant's page and the
+     * wizard show where the draft is, and the backstop sweep finishes one whose request was lost. Never throws.
+     */
+    startDraftInBackground(id) {
+        try {
+            const sent = API.request(`/admin/tenants/${encodeURIComponent(id)}/draft/advance`, { method: 'POST', body: '{}' });
+            if (sent && typeof sent.catch === 'function') sent.catch(() => {});
+        } catch {
+            // No API to call (a stub, a page that is going away): the sweep and the wizard's poll move the draft on.
         }
     },
 

@@ -1,8 +1,9 @@
 /**
  * What the draft engine's pure half (P21 and P23) may depend on. It has no database and no settings, and exactly one module opens a
  * socket, so "every read of a tenant-supplied address goes through `safeFetch`" is a fact about the imports and not only a habit.
- * The list is explicit: the other draft-engine modules (the Instagram and YouTube sources, the state machine) talk to Meta, Google
- * and the database by design and are not held to this.
+ * The list is explicit: the other draft-engine modules (the Instagram and YouTube sources, the fetch phase, the store and the engine itself) talk to Meta, Google
+ * and the database by design and are not held to this. The state machine's DECISIONS (`draftStep.ts`), its inputs and its view are held to it: what the
+ * machine does next is decided where no database, clock or socket can reach.
  */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,9 +12,9 @@ import { describe, it } from 'node:test';
 const DIR = new URL('./', import.meta.url);
 
 const PURE_MODULES = [
-    'brand.ts', 'captions.ts', 'colour.ts', 'discoveryProbe.ts', 'draftPrompt.ts', 'draftSchema.ts', 'draftSignals.ts', 'fence.ts', 'geo.ts', 'handles.ts', 'html.ts',
-    'igMap.ts', 'imageSniff.ts', 'netGuard.ts', 'register.ts', 'robots.ts', 'safeFetch.ts', 'siteExtract.ts', 'socials.ts', 'sourceError.ts', 'textClean.ts',
-    'validateDraft.ts', 'website.ts', 'ytMap.ts',
+    'brand.ts', 'captions.ts', 'colour.ts', 'discoveryProbe.ts', 'draftInputs.ts', 'draftPrompt.ts', 'draftSchema.ts', 'draftSignals.ts', 'draftStep.ts', 'draftTypes.ts', 'draftView.ts',
+    'fence.ts', 'geo.ts', 'handles.ts', 'html.ts', 'igMap.ts', 'imageSniff.ts', 'netGuard.ts', 'register.ts', 'robots.ts', 'safeFetch.ts', 'siteExtract.ts', 'socials.ts', 'sourceError.ts',
+    'textClean.ts', 'validateDraft.ts', 'website.ts', 'ytMap.ts',
 ];
 
 const importsOf = (file: string): string[] =>
