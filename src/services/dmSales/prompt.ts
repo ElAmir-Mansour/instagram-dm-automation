@@ -25,7 +25,7 @@ import { type LivePrice, livePrice } from './price.js';
 import { MAX_QUALIFIER_TURNS, type SalesFacts } from './types.js';
 
 /** What of the profile's `dm` context the prompt reads, so a test can hand it a context cut from a profile. */
-export type SalesContext = Pick<ProfileContext<'dm'>, 'language' | 'who' | 'names' | 'offers' | 'faq' | 'handoff' | 'hours' | 'voice'>;
+export type SalesContext = Pick<ProfileContext<'dm'>, 'language' | 'who' | 'names' | 'offers' | 'faq' | 'handoff' | 'hours' | 'voice' | 'voice_guide' | 'links'>;
 
 export interface SalesPromptInput {
     /** `ai_agents.system_prompt`, verbatim. */
@@ -57,6 +57,14 @@ export interface SalesPrompt {
     claims: ClaimFacts;
     /** The primary offer first, then the others in the profile's order. */
     offers: SalesOfferInfo[];
+}
+
+/**
+ * The links the model may repeat (`ClaimFacts.allowedLinks`): the creator's own site and social links, as the profile has them. Never an
+ * offer's address, which the model is not shown and the server inserts itself, and never the handle, which is a name and not an address.
+ */
+export function ownLinks(links: SalesContext['links']): string[] {
+    return [...new Set([links.site, ...Object.values(links.links)].map((l) => (l ?? '').trim()).filter(Boolean))];
 }
 
 /** An offer's address is something to send. */
@@ -181,7 +189,9 @@ export function buildSalesPrompt(input: SalesPromptInput, facts?: SalesFacts): S
     collected.texts.push(owner, role, niche);
 
     // Voice: the guide verbatim, and how many emoji. `voice.address` is not used: the rule is neutral address unless the person's own words show it.
-    const guide = ctx.voice.guide.trim();
+    // The guide is the DM's own (`dm.voice_guide`) when the owner typed one, else the profile's: `voice.guide` is tuned for posts ("one point per
+    // slide", "the link is in the bio"), which a chat reply is not. A blank one counts as none, so the default prompt is the one it always was.
+    const guide = ctx.voice_guide.trim() || ctx.voice.guide.trim();
     blocks.push(section(kit.headers.voice, [...(guide ? [guide] : []), kit.emoji[ctx.voice.emoji]]));
     if (guide) collected.texts.push(guide);
 
@@ -228,7 +238,7 @@ export function buildSalesPrompt(input: SalesPromptInput, facts?: SalesFacts): S
     return {
         system,
         prefix,
-        claims: { texts: collected.texts.filter((t) => t.trim().length > 0), prices: collected.prices },
+        claims: { texts: collected.texts.filter((t) => t.trim().length > 0), prices: collected.prices, allowedLinks: ownLinks(ctx.links) },
         offers: all.map((o) => ({ id: o.id, name: o.name, hasLink: hasLink(o), priceLive: livePrice(o, now, timezone) !== null })),
     };
 }

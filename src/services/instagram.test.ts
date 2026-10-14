@@ -37,6 +37,7 @@ import {
     sendDirectMessage,
     sendPrivateReply,
     sendPublicReply,
+    sendSenderAction,
 } from './instagram.js';
 
 const BASE = `https://graph.facebook.com/${API_VERSION}`;
@@ -769,5 +770,49 @@ describe('reach levers — alt text, collaborators, trial reels (GROWTH.md §4)'
         assert.equal(err.metaCode, 36003);
         assert.match(err.message, /the real problem/);
         assert.ok(!posts().some((c) => c.url.endsWith('/feed')), 'no feed post without every photo');
+    });
+});
+
+describe('sendSenderAction', () => {
+    it('sends mark_seen and typing_on as a sender action, with no message and no messaging_type', async () => {
+        onPost = ok({ recipient_id: 'igsid-1' });
+
+        await sendSenderAction('igsid-1', 'mark_seen', TOKEN);
+        await sendSenderAction('igsid-1', 'typing_on', TOKEN);
+
+        assert.deepEqual(calls.map((c) => c.body), [
+            { recipient: { id: 'igsid-1' }, sender_action: 'mark_seen' },
+            { recipient: { id: 'igsid-1' }, sender_action: 'typing_on' },
+        ]);
+        assert.equal('message' in (calls[0]!.body as object), false, 'a sender action is not a message');
+        assert.equal('messaging_type' in (calls[0]!.body as object), false);
+        assert.equal(calls[0]!.config.headers.Authorization, `Bearer ${TOKEN}`, 'the token goes in a header, never in the URL');
+        assert.ok(!calls[0]!.url.includes(TOKEN));
+    });
+
+    it('routes to /me without a page id and /{pageId} with one, like the message it precedes', async () => {
+        onPost = ok({});
+        await sendSenderAction('igsid-1', 'typing_on', TOKEN);
+        await sendSenderAction('igsid-1', 'typing_on', TOKEN, '1112223334');
+
+        assert.equal(calls[0]!.url, `${BASE}/me/messages`);
+        assert.equal(calls[1]!.url, `${BASE}/1112223334/messages`);
+    });
+
+    it('is not retried: a typing indicator that arrives late is worse than none, and it is only decoration', async () => {
+        onPost = async () => { throw metaError(2, 'Temporary', 500); };
+
+        await assert.rejects(() => sendSenderAction('igsid-1', 'typing_on', TOKEN), (err: unknown) => err instanceof MetaApiError);
+
+        assert.equal(posts().length, 1, 'one request, however the server answered');
+    });
+
+    it('fails as a Meta error that names the action and Meta\'s code, for the caller to log and ignore', async () => {
+        onPost = async () => { throw metaError(100, 'Param sender_action is invalid'); };
+
+        await assert.rejects(
+            () => sendSenderAction('igsid-1', 'mark_seen', TOKEN),
+            (err: Error) => err instanceof MetaApiError && /Sender action mark_seen failed/.test(err.message) && /Code: 100/.test(err.message)
+        );
     });
 });

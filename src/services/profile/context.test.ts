@@ -203,7 +203,7 @@ describe('surfaces', () => {
 
 describe('slices', () => {
     const SLICE_KEYS: Record<Purpose, string[]> = {
-        dm: ['faq', 'handoff', 'hours', 'links', 'names', 'offers', 'voice'],
+        dm: ['faq', 'handoff', 'hours', 'links', 'names', 'offers', 'timezone', 'voice', 'voice_guide'],
         comment_reply: ['offers', 'voice'],
         carousel: ['audience', 'pillars'],
         clip_pick: ['audience', 'pillars'],

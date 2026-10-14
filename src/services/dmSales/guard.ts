@@ -6,7 +6,10 @@
  *
  *   1. **Links.** Every URL, domain and address the model wrote is taken out (`stripLinks`). The only link a customer ever receives is
  *      the one the server adds from the offer's own `url` when the reply says `send_link`. A link the model wrote may be invented,
- *      altered, or point somewhere that earns the owner nothing.
+ *      altered, or point somewhere that earns the owner nothing. The one exception is a short allowlist (`ClaimFacts.allowedLinks`):
+ *      the creator's own site and social links from the profile, and the offer link the server is inserting in this very reply, kept
+ *      only when the model's link EXACTLY matches one (scheme, `www.` and a closing slash aside). A link that differs by a letter, a
+ *      path or a query (another affiliate code, say) is not on the list, so it is still taken out.
  *   2. **Women in emoji.** An emoji that shows a woman or a girl is taken out (`stripWomenEmoji`): the rule that no content shows
  *      them holds for a model's emoji as for a picture.
  *   3. **Money.** A number that names an amount of money (beside a currency, or after "price") must be a price the owner has made live
@@ -35,6 +38,12 @@ export interface ClaimFacts {
     texts: readonly string[];
     /** The prices that may be stated now: one per offer whose price is typed and has a valid-until date that has not passed. */
     prices: readonly LivePrice[];
+    /**
+     * Links the model may repeat: the creator's own site and social links (`socials.site`, `socials.links`) and the offer link the server
+     * inserts in this reply. Each is kept only on an exact match (`linkKey`); every other link the model wrote is still taken out. Absent
+     * means none, which is the strict rule.
+     */
+    allowedLinks?: readonly string[];
 }
 
 export type ViolationKind = 'number' | 'price' | 'discount' | 'coupon' | 'free';
@@ -63,20 +72,50 @@ const EMAIL = /[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[a-z]{2,}/giu;
 const TRAILING = /[.,;:!?؟،؛…]+$/;
 
 /**
+ * What makes two links the same address: the host (in any case), then the path and the query EXACTLY. The scheme, a leading `www.` and a
+ * closing slash do not count (a model writes `https://example.com/` for `example.com`). Nothing else is forgiven: a path or a query that
+ * differs by one character is another address, which is what keeps a wrong affiliate code out.
+ */
+export function linkKey(url: string): string {
+    const bare = url.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^www\./i, '').replace(/\/+$/, '');
+    const cut = bare.search(/[/?#]/);
+    return cut < 0 ? bare.toLowerCase() : bare.slice(0, cut).toLowerCase() + bare.slice(cut);
+}
+
+/** Stands in for a link that is being kept, so a later pattern cannot take a piece of it out (private-use characters, which no reply holds). */
+const KEPT_OPEN = '';
+const KEPT_CLOSE = '';
+const KEPT = new RegExp(`${KEPT_OPEN}(\\d+)${KEPT_CLOSE}`, 'g');
+
+/**
  * `text` without any link, and what was taken out. Tries, in this order, a markdown link (its words stay), a URL with a scheme, a
  * `www.` address, an email address, a dotted name followed by a path (`shop.example/offer`, whatever its ending) and a bare domain
  * with a common ending (`example.com`, `wa.me/…`, `bit.ly/…`). The
  * sentence's own punctuation after a link stays. Spaces left behind are tidied; nothing else is rewritten.
+ *
+ * `allowed` is the exception (top of the file): a link whose `linkKey` is one of theirs is KEPT as written, and is not in `removed`. A
+ * markdown link to an allowed address keeps both its words and its address, as `words address`.
  */
-export function stripLinks(text: string): { text: string; removed: string[] } {
+export function stripLinks(text: string, allowed: readonly string[] = []): { text: string; removed: string[] } {
     const removed: string[] = [];
+    const keys = new Set(allowed.map(linkKey));
+    const kept: string[] = [];
+    const isAllowed = (link: string): boolean => keys.size > 0 && keys.has(linkKey(link));
+    const hold = (link: string): string => {
+        kept.push(link);
+        return `${KEPT_OPEN}${kept.length - 1}${KEPT_CLOSE}`;
+    };
     const take = (match: string): string => {
         const tail = TRAILING.exec(match)?.[0] ?? '';
-        removed.push(tail ? match.slice(0, -tail.length) : match);
+        const link = tail ? match.slice(0, -tail.length) : match;
+        if (isAllowed(link)) return hold(link) + tail;
+        removed.push(link);
         return tail;
     };
     const out = text
         .replace(MARKDOWN_LINK, (whole: string, label: string) => {
+            const target = /\(\s*([^)\s]*)\s*\)$/.exec(whole)?.[1] ?? '';
+            if (target && isAllowed(target)) return `${label} ${hold(target)}`.trim();
             removed.push(whole);
             return label;
         })
@@ -85,8 +124,8 @@ export function stripLinks(text: string): { text: string; removed: string[] } {
         .replace(EMAIL, take)
         .replace(DOMAIN_WITH_PATH, take)
         .replace(BARE_DOMAIN, take);
-    if (removed.length === 0) return { text, removed };
-    return { text: tidy(out), removed };
+    if (removed.length === 0 && kept.length === 0) return { text, removed };
+    return { text: tidy(out).replace(KEPT, (_m, i: string) => kept[Number(i)] ?? ''), removed };
 }
 
 /** What a removal leaves behind: a pair of brackets or quotes with nothing in it, spaces doubled or before punctuation, ragged line ends. */
@@ -335,7 +374,7 @@ export interface GuardedReply {
 
 /** A reply, cleaned and checked: links out, women emoji out, then every claim against the data. */
 export function guardReply(text: string, facts: ClaimFacts): GuardedReply {
-    const noLinks = stripLinks(text);
+    const noLinks = stripLinks(text, facts.allowedLinks ?? []);
     const noWomen = stripWomenEmoji(noLinks.text);
     const violations = checkClaims(noWomen.text, facts);
     return { text: noWomen.text, violations, ok: violations.length === 0, linksRemoved: noLinks.removed, womenEmojiRemoved: noWomen.removed };

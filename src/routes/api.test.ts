@@ -696,6 +696,88 @@ describe('/settings/ai — the model shown and saved', () => {
         assert.equal(res.statusCode, 500);
         assert.equal(res.body.error, 'Failed to update AI settings.');
     });
+
+    // ── The sales turn's switch (v39, DM plan S6) ─────────────────────────────────────────────
+
+    it('shows a tenant with no agent row the sales mode it will have: off, with nobody on the test list', async () => {
+        const { res } = await call('get', null);
+        assert.equal(res.body.sales_mode, 'off');
+        assert.deepEqual(res.body.sales_test_senders, []);
+    });
+
+    it('passes the stored sales mode and test senders through as they are', async () => {
+        const { res } = await call('get', { ...row, model: DEFAULT_MODEL, sales_mode: 'test', sales_test_senders: ['17841400000000001'] });
+        assert.equal(res.body.sales_mode, 'test');
+        assert.deepEqual(res.body.sales_test_senders, ['17841400000000001']);
+    });
+
+    it('a save that names neither is still the statement it always was: no sales column, six values', async () => {
+        const { res, statements } = await call('post', null, { system_prompt: 'p', model: DEFAULT_MODEL });
+        const insert = insertOf(statements)!;
+        assert.equal(res.statusCode, 200);
+        assert.equal(insert.params.length, 6);
+        assert.ok(!/sales_/.test(insert.sql), insert.sql);
+    });
+
+    it('saves the sales mode and the test senders when the form sends them, after the columns it always sends, the senders cleaned up', async () => {
+        const { res, statements } = await call('post', null, {
+            system_prompt: 'p', model: DEFAULT_MODEL, sales_mode: 'test', sales_test_senders: ' 17841400000000001\n17841400000000002, 17841400000000001 ',
+        });
+        const insert = insertOf(statements)!;
+        assert.equal(res.statusCode, 200);
+        assert.deepEqual(insert.params.slice(6), ['test', ['17841400000000001', '17841400000000002']]);
+        assert.match(squash(insert.sql), /\(creator_id, system_prompt, knowledge_base, model, temperature, is_active, sales_mode, sales_test_senders\) VALUES \(\$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8\)/);
+        assert.match(squash(insert.sql), /sales_mode = EXCLUDED\.sales_mode, sales_test_senders = EXCLUDED\.sales_test_senders RETURNING \*$/);
+    });
+
+    it('takes a list of senders as well as text, saves the mode alone, and an empty list clears it', async () => {
+        const list = insertOf((await call('post', null, { system_prompt: 'p', sales_test_senders: ['12345', '67890'] })).statements)!;
+        assert.deepEqual(list.params.slice(6), [['12345', '67890']]);
+        assert.ok(!/sales_mode/.test(list.sql));
+        const mode = insertOf((await call('post', null, { system_prompt: 'p', sales_mode: 'on' })).statements)!;
+        assert.deepEqual(mode.params.slice(6), ['on']);
+        assert.ok(!/sales_test_senders/.test(mode.sql));
+        const cleared = insertOf((await call('post', null, { system_prompt: 'p', sales_test_senders: [] })).statements)!;
+        assert.deepEqual(cleared.params.slice(6), [[]]);
+    });
+
+    it('treats a missing, null or empty mode as "not sent", not as off', async () => {
+        for (const body of [{ sales_mode: null }, { sales_mode: '' }, { sales_mode: undefined }, { sales_test_senders: null }]) {
+            const { res, statements } = await call('post', null, { system_prompt: 'p', ...body });
+            assert.equal(res.statusCode, 200, JSON.stringify(body));
+            assert.equal(insertOf(statements)!.params.length, 6, JSON.stringify(body));
+        }
+    });
+
+    it('refuses a mode it does not run and a test sender that is not an id, before writing anything: a typo must not quietly change who is answered', async () => {
+        for (const body of [
+            { sales_mode: 'ON' }, { sales_mode: 'sales' }, { sales_mode: true }, { sales_mode: 1 }, { sales_mode: ['on'] },
+            { sales_test_senders: 'someone' }, { sales_test_senders: '12345, abc' }, { sales_test_senders: ['12345', '@x'] }, { sales_test_senders: 5 },
+            { sales_test_senders: [1234567] }, { sales_test_senders: Array.from({ length: 21 }, (_, i) => String(10000 + i)) },
+        ]) {
+            const { res, statements } = await call('post', null, { system_prompt: 'p', ...body });
+            assert.equal(res.statusCode, 400, JSON.stringify(body).slice(0, 80));
+            assert.match(res.body.error, /sales|sender/i, JSON.stringify(body).slice(0, 80));
+            assert.equal(insertOf(statements), undefined, `${JSON.stringify(body).slice(0, 80)} wrote nothing`);
+        }
+    });
+
+    it('says which migration to apply when the sales columns are not there yet, and not "Failed"', async () => {
+        const original = pool.query;
+        (pool as unknown as { query: unknown }).query = async (sql: string) => {
+            if (/INSERT INTO ai_agents/.test(sql)) throw Object.assign(new Error('column "sales_mode" of relation "ai_agents" does not exist'), { code: '42703' });
+            throw new Error(`no result arranged for SQL: ${sql}`);
+        };
+        const res = { statusCode: 200, body: null as any, status(code: number) { this.statusCode = code; return this; }, json(payload: unknown) { this.body = payload; return this; } };
+        try {
+            await handlerFor('post', '/settings/ai')({ params: {}, body: { system_prompt: 'p', sales_mode: 'test' }, session: { userId: 'u-1', role: 'user', tenantId: TENANT_A } }, res, () => {});
+        } finally {
+            (pool as unknown as { query: unknown }).query = original;
+        }
+        assert.equal(res.statusCode, 500);
+        assert.match(res.body.error, /migration v39/);
+        assert.equal(res.body.migrationPending, true);
+    });
 });
 
 /**

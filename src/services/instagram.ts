@@ -348,6 +348,39 @@ export async function sendDirectMessage(
 }
 
 /**
+ * What a DM's sender action can say: the conversation is read (`mark_seen`), or the bot is writing (`typing_on`). Instagram and
+ * Messenger both have them, and a typing indicator lasts about twenty seconds or until the next message.
+ *
+ * @see https://developers.facebook.com/documentation/business-messaging/instagram-messaging/features/sender-actions
+ */
+export type SenderAction = 'mark_seen' | 'typing_on';
+
+/**
+ * Tells the person the message was read and that a reply is being written. BEST EFFORT, and made to be called that way: it is not
+ * retried (a late "typing" is worse than none), and the caller logs a failure and goes on, because the reply is the point and
+ * these are decoration. One forum report says the page token only allows react/unreact for these on Instagram (DM plan A6), which
+ * is why a failure here must never cost a reply.
+ */
+export async function sendSenderAction(
+    recipientId: string,
+    action: SenderAction,
+    accessToken: string,
+    pageId?: string            // Pass Facebook Page ID for FB DMs; omit for Instagram
+): Promise<void> {
+    const endpoint = pageId ? pageId : 'me';
+    try {
+        await metaHttp.post(`${GRAPH_BASE}/${endpoint}/messages`, {
+            recipient: { id: recipientId },
+            sender_action: action,
+        }, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+    } catch (error: any) {
+        throw metaFailure(`Sender action ${action} failed`, error);
+    }
+}
+
+/**
  * Automatically likes a comment.
  *
  * - Instagram & Facebook: POST /{comment-id}/likes

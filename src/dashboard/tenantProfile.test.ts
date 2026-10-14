@@ -1246,3 +1246,84 @@ describe('opening and leaving the editor', () => {
         assert.equal(l.TP.state, null);
     });
 });
+
+// ─── The DM's own voice guide (S6) ───────────────────────────────────────────────────────────
+
+describe('the voice guide for direct messages (dm.voice_guide)', () => {
+    const PATH = 'dm.voice_guide';
+    /** A profile that never typed one: the key is absent, as it is for every profile stored before S6. */
+    const without = (): CreatorProfile => { const p = rich(); delete (p.dm as Json).voice_guide; return p; };
+
+    it('is a field of the voice section: a wide text area, with a label and a hint in both languages', () => {
+        const { TP } = load();
+        const field = (TP.allFields() as Json[]).find((f) => f.path === PATH);
+        assert.ok(field, 'the editor has it');
+        assert.deepEqual([field!.section, field!.type, field!.wide, field!.hint], ['voice', 'textarea', true, true]);
+        for (const lang of ['ar', 'en'] as const) {
+            const { ctx } = load(lang);
+            const dict = vm.runInContext('I18N.strings', ctx)[lang] as Record<string, string>;
+            assert.ok(dict[`tenantProfile.f.${PATH}`], `${lang} label`);
+            assert.ok(dict[`tenantProfile.h.${PATH}`], `${lang} hint`);
+            assert.match(dict[`tenantProfile.h.${PATH}`]!, lang === 'en' ? /instead of the guide above/ : /بدل الدليل أعلاه/);
+        }
+    });
+
+    it('is drawn under the profile\'s own guide, blank for a profile that never typed one, and left alone by an untouched form', () => {
+        const { TP, form, markup } = mounted(without());
+        const snap = form();
+        const at = snap.fields.map((f) => f.path);
+        assert.equal(at.indexOf(PATH), at.indexOf('voice.guide') + 1, 'right under it');
+        assert.equal(snap.fields.find((f) => f.path === PATH)!.value, '');
+        assert.match(markup(), /<textarea[^>]*data-tp-path="dm\.voice_guide"/);
+        assert.deepEqual(plain(TP.changedPaths(TP.base, TP.fromSnapshots(snap, TP.base))), [], 'nothing to send for a field nobody touched');
+    });
+
+    it('shows the guide a profile has, and reads it back unchanged', () => {
+        const p = rich();
+        (p.dm as Json).voice_guide = 'Short and friendly.\nOne question at most.';
+        const { TP, form } = mounted(p);
+        const snap = form();
+        assert.equal(snap.fields.find((f) => f.path === PATH)!.value, 'Short and friendly.\nOne question at most.');
+        assert.deepEqual(plain(TP.changedPaths(TP.base, TP.fromSnapshots(snap, TP.base))), []);
+    });
+
+    it('sends its own path nested the way the server merges it, and the merged profile is one the server accepts, with the guide in its DM context', () => {
+        const { TP, form } = mounted(without());
+        const snap = form();
+        type(snap, PATH, '  Write like a text to a friend.  ');
+        const current = TP.fromSnapshots(snap, TP.base);
+        assert.deepEqual(plain(TP.changedPaths(TP.base, current)), [PATH]);
+        const patch = plain<Json>(TP.buildPatch(current, [PATH]));
+        assert.deepEqual(patch, { dm: { voice_guide: 'Write like a text to a friend.' } });
+        const merged = mergePatch(without(), patch) as CreatorProfile;
+        const checked = validateProfile(merged);
+        assert.ok('profile' in checked, JSON.stringify((checked as Json).problems));
+        assert.equal(merged.dm.voice_guide, 'Write like a text to a friend.');
+        assert.deepEqual(merged.dm.handoff, rich().dm.handoff, 'and the rest of the dm section is untouched');
+    });
+
+    it('clearing a guide that was there sends an empty one, so the profile\'s own guide is the voice again', () => {
+        const p = rich();
+        (p.dm as Json).voice_guide = 'Short and friendly.';
+        const { TP, form } = mounted(p);
+        const snap = form();
+        type(snap, PATH, '   ');
+        const current = TP.fromSnapshots(snap, TP.base);
+        assert.deepEqual(plain(TP.changedPaths(TP.base, current)), [PATH]);
+        assert.deepEqual(plain(TP.buildPatch(current, [PATH])), { dm: { voice_guide: '' } });
+    });
+
+    it('is text, never markup: a guide typed as HTML is shown as the characters it is', () => {
+        const p = rich();
+        (p.dm as Json).voice_guide = '<img src=x onerror=alert(1)> & "quotes"';
+        const { markup, form } = mounted(p);
+        assert.ok(!/<img/i.test(markup()), 'no tag from the value');
+        assert.ok(markup().includes('&lt;img src=x onerror=alert(1)&gt;'));
+        assert.equal(form().fields.find((f) => f.path === PATH)!.value, '<img src=x onerror=alert(1)> & "quotes"', 'and it round-trips');
+    });
+
+    it('is left to automatic direction, as the profile\'s own guide is: it may be Arabic or English', () => {
+        const { markup } = mounted(without());
+        assert.match(markup(), /<textarea[^>]*data-tp-path="dm\.voice_guide"[^>]*dir="auto"|<textarea[^>]*dir="auto"[^>]*data-tp-path="dm\.voice_guide"/);
+    });
+});

@@ -125,6 +125,27 @@ export interface ConversationRow {
      * since v26 and the migration could not attribute exactly.
      */
     platform: ConversationPlatform | null;
+    /** v39. The sales flow's stage (`Stage` in dmSales/types.ts): decided by the code. 'new' until a sales turn has run. */
+    stage: string;
+    /** v39. What the person's last message was (`Intent`), or null before a sales turn. */
+    last_intent: string | null;
+    /** v39. The offer in play: an id from the creator's profile. */
+    offer_id: string | null;
+    /** v39. The offers whose link this conversation has been sent. */
+    offers_linked: string[];
+    last_link_at: Timestamptz | null;
+    /** v39. Qualifying questions asked so far; the flow allows two. */
+    qualifier_turns: number;
+    /** v39. Insults so far: one calm line, then the bot pauses. */
+    abuse_strikes: number;
+    /** v39. When the person last wrote. */
+    last_inbound_at: Timestamptz | null;
+    handoff_at: Timestamptz | null;
+    handoff_reason: string | null;
+    /** v39. When they asked to be left alone. Nothing is sent after it. */
+    opted_out_at: Timestamptz | null;
+    followups_sent: number;
+    source_campaign_id: string | null;
 }
 
 /** v26. `conversations.platform`. */
@@ -167,6 +188,8 @@ export interface MessageRow {
     reply_attempts: number;
     /** v26. Who wrote it; NULL on rows written before v26 that the migration could not attribute. */
     sender: MessageSender | null;
+    /** v39. On a sales-turn reply: { intent, stage, next_action, offer_id, handoff_reason, engine, latency_ms, guard }. NULL on every other row. */
+    ai_meta: Record<string, unknown> | null;
     created_at: Timestamptz;
 }
 
@@ -385,6 +408,10 @@ export interface AiAgentRow {
     engine: 'gemini' | 'providers';
     /** v37: when the `providers` engine fails, answer once with Gemini (true) or send nothing (false). */
     gemini_fallback: boolean;
+    /** v39: the DM sales turn. `off` is the old path (the default); `test` answers only `sales_test_senders`; `on` answers everyone. */
+    sales_mode: 'off' | 'test' | 'on';
+    /** v39: with `sales_mode = 'test'`, the sender ids (IGSIDs on Instagram) the sales turn answers. */
+    sales_test_senders: string[];
 }
 
 // ─── Carousel Studio (v21) ──────────────────────────────────────────────────────────────

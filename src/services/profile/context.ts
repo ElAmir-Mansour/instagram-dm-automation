@@ -151,6 +151,10 @@ export interface Slices {
         hours: { days: number[]; from: string; to: string } | null;
         links: { handle: string; site: string; links: CreatorProfile['socials']['links'] };
         voice: { guide: string } & ContextVoice;
+        /** `dm.voice_guide`: the voice of a chat reply. '' when the profile has none, and then the sales prompt uses `voice.guide`. */
+        voice_guide: string;
+        /** The tenant's timezone (`identity.timezone`), UTC when it has none: the hours are in it, and a price's "valid until" ends at the end of that day in it. */
+        timezone: string;
     };
     comment_reply: { offers: CommentOffer[]; voice: ContextVoice };
     carousel: { audience: AudienceBrief; pillars: string[] };
@@ -222,6 +226,8 @@ const SLICE_OF: { readonly [P in Purpose]: (p: CreatorProfile) => Slices[P] } = 
         hours: structuredClone(p.dm.hours),
         links: { handle: p.socials.handle, site: p.socials.site, links: { ...p.socials.links } },
         voice: { guide: p.voice.guide, ...voiceOf(p) },
+        voice_guide: p.dm.voice_guide ?? '',
+        timezone: scheduleTimezone(p),
     }),
     comment_reply: (p) => ({ offers: p.offers.map(commentOffer), voice: voiceOf(p) }),
     carousel: (p) => ({ audience: audienceOf(p), pillars: [...p.content.pillars] }),

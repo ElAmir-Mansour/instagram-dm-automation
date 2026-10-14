@@ -241,6 +241,14 @@ export interface CreatorProfile {
         handoff: { when: string; message: string } | null;
         /** `days` are 0 (Sunday) to 6, `from` and `to` are 'HH:MM' in `identity.timezone`. */
         hours: { days: number[]; from: string; to: string } | null;
+        /**
+         * The voice of a direct message, when it is not the voice of a post (docs/DM_SALES_PLAN.md S6). `voice.guide` is tuned for
+         * carousels and captions ("one point per slide", "the link is in the bio"), and a chat reply is none of that. When this is
+         * set (not blank) the sales prompt uses it INSTEAD of `voice.guide`; when it is absent or blank it uses `voice.guide`, so a
+         * profile that never typed one reads exactly as before. Optional, and absent until somebody types one: no stored profile,
+         * no golden and no other prompt moves for it.
+         */
+        voice_guide?: string;
     };
     goals: { followers: number; views: number };
 }

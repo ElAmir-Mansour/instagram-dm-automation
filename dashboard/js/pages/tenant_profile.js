@@ -114,6 +114,7 @@ const TenantProfile = {
         { path: 'language.digits', section: 'language', type: 'select', enum: 'digits' },
 
         { path: 'voice.guide', section: 'voice', type: 'textarea', wide: true, rows: 6, hint: true },
+        { path: 'dm.voice_guide', section: 'voice', type: 'textarea', wide: true, rows: 5, hint: true },
         { path: 'voice.tone', section: 'voice', type: 'lines', wide: true, rows: 3, hint: true },
         { path: 'voice.samples', section: 'voice', type: 'samples', wide: true, rows: 7, hint: true },
         { path: 'voice.use_words', section: 'voice', type: 'lines', wide: true, rows: 3, hint: true },

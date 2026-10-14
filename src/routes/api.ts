@@ -15,6 +15,7 @@ import {
 } from '../services/instagram.js';
 import { DEFAULT_MODEL, resolveModel, starterPersona, SUPPORTED_MODELS } from '../services/ai.js';
 import { DEFAULT_DM_ENGINE, DEFAULT_GEMINI_FALLBACK, DM_ENGINES, generateDmReply, isDmEngine, type DmEngine } from '../services/dmEngine.js';
+import { DEFAULT_SALES_MODE, isSalesMode, parseTestSenders, SALES_MODES, type SalesMode } from '../services/dmSales/mode.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { assertDmSwitchOn, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import {
@@ -3369,6 +3370,8 @@ router.get('/settings/ai', async (req, res) => {
                 is_active: true,
                 engine: DEFAULT_DM_ENGINE,
                 gemini_fallback: DEFAULT_GEMINI_FALLBACK,
+                sales_mode: DEFAULT_SALES_MODE,
+                sales_test_senders: [],
             });
             return;
         }
@@ -3385,6 +3388,27 @@ router.get('/settings/ai', async (req, res) => {
 });
 
 const ENGINE_MIGRATION_HINT = 'The database is missing migration v37 (src/config/migration_v37_dm_engine.sql), which adds the DM engine columns. Apply it with `npm run migrate`, then try again.';
+const SALES_MIGRATION_HINT = 'The database is missing migration v39 (src/config/migration_v39_dm_sales_state.sql), which adds the DM sales columns. Apply it with `npm run migrate`, then try again.';
+
+/**
+ * The sales-turn choice in a settings body (`sales_mode`, `sales_test_senders`), validated. Both optional, like the engine's: a dashboard that
+ * predates the picker sends neither, and then nothing about the sales turn changes. Present and wrong is a 400, never a silent default: a typo
+ * must not quietly leave the one account the owner meant to test with off the list, or put customers on a mode they did not pick.
+ */
+function salesChoiceOf(body: Record<string, unknown>): { sales_mode?: SalesMode; sales_test_senders?: string[] } | { error: string } {
+    const choice: { sales_mode?: SalesMode; sales_test_senders?: string[] } = {};
+    const { sales_mode, sales_test_senders } = body;
+    if (sales_mode !== undefined && sales_mode !== null && sales_mode !== '') {
+        if (!isSalesMode(sales_mode)) return { error: `Unknown sales mode: choose ${SALES_MODES.map((m) => `"${m}"`).join(', ')}.` };
+        choice.sales_mode = sales_mode;
+    }
+    if (sales_test_senders !== undefined && sales_test_senders !== null) {
+        const parsed = parseTestSenders(sales_test_senders);
+        if ('error' in parsed) return { error: parsed.error };
+        choice.sales_test_senders = parsed.senders;
+    }
+    return choice;
+}
 
 /**
  * The reply-engine choice in a settings or sandbox body (`engine`, `gemini_fallback`), validated. Both are optional: an older
@@ -3419,6 +3443,11 @@ router.post('/settings/ai', canOperate, async (req, res) => {
             res.status(400).json({ error: engineChoice.error });
             return;
         }
+        const salesChoice = salesChoiceOf(req.body);
+        if ('error' in salesChoice) {
+            res.status(400).json({ error: salesChoice.error });
+            return;
+        }
 
         const creatorId = getTenantId(req);
 
@@ -3446,6 +3475,9 @@ router.post('/settings/ai', canOperate, async (req, res) => {
         ];
         if (engineChoice.engine !== undefined) { columns.push('engine'); values.push(engineChoice.engine); }
         if (engineChoice.gemini_fallback !== undefined) { columns.push('gemini_fallback'); values.push(engineChoice.gemini_fallback); }
+        // The sales columns (v39) likewise: only when the body names them, so a save that does not leaves the mode and the list as they are.
+        if (salesChoice.sales_mode !== undefined) { columns.push('sales_mode'); values.push(salesChoice.sales_mode); }
+        if (salesChoice.sales_test_senders !== undefined) { columns.push('sales_test_senders'); values.push(salesChoice.sales_test_senders); }
 
         const result = await pool.query(
             `INSERT INTO ai_agents (${columns.join(', ')})
@@ -3460,6 +3492,11 @@ router.post('/settings/ai', canOperate, async (req, res) => {
         if (engineChoice.engine !== undefined || engineChoice.gemini_fallback !== undefined) {
             log('info', 'dm.engine_set', { creator_id: creatorId, engine: result.rows[0]?.engine, gemini_fallback: result.rows[0]?.gemini_fallback });
         }
+        if (salesChoice.sales_mode !== undefined || salesChoice.sales_test_senders !== undefined) {
+            log('info', 'dm.sales_mode_set', {
+                creator_id: creatorId, sales_mode: result.rows[0]?.sales_mode, test_senders: Array.isArray(result.rows[0]?.sales_test_senders) ? result.rows[0].sales_test_senders.length : 0,
+            });
+        }
 
         res.json(result.rows[0]);
     } catch (err) {
@@ -3471,6 +3508,12 @@ router.post('/settings/ai', canOperate, async (req, res) => {
         if (isMissingSchema(err) && /\b(engine|gemini_fallback)\b/.test(String((err as { message?: unknown } | null)?.message))) {
             log('error', 'api.ai_settings_update_failed', describeError(err));
             res.status(500).json({ error: ENGINE_MIGRATION_HINT, migrationPending: true });
+            return;
+        }
+        // The sales columns come from v39, the same way.
+        if (isMissingSchema(err) && /\b(sales_mode|sales_test_senders)\b/.test(String((err as { message?: unknown } | null)?.message))) {
+            log('error', 'api.ai_settings_update_failed', describeError(err));
+            res.status(500).json({ error: SALES_MIGRATION_HINT, migrationPending: true });
             return;
         }
         log('error', 'api.ai_settings_update_failed', describeError(err));
