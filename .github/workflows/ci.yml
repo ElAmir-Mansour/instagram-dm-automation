@@ -88,3 +88,10 @@ jobs:
       # language here, so en-without-ar is the failure, not the reverse.
       - name: Check translations
         run: npm run check:i18n
+
+      # IDENTITY.md section 7 lists the words this product never says: "Pro" outside the name, instant, guaranteed, AI-powered, bot,
+      # revolutionary, all-in-one, magic, viral, supercharge, unlimited and their Arabic (فوراً، مضمون، ذكي، بوت ...). A document is read
+      # once; a hype word added to a page, a dictionary value or the dashboard's title nine months later is not caught by anything else.
+      # The name is allowed, a limit stated ("not guaranteed") is allowed, and every other exception is a reasoned entry that fails when stale.
+      - name: Check voice
+        run: npm run check:voice

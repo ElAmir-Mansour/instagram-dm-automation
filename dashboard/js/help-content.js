@@ -578,7 +578,7 @@ const HelpContent = {
                         ar: [
                             { ul: [
                                 'اختر **موعد النشر المطلوب** بتوقيت جهازك، واضغط **جدوِل**.',
-                                'أو فعّل **انشر فوراً بدل الجدولة** وينزل الحين.',
+                                'أو فعّل **انشر الآن بدل الجدولة** وينزل الحين.',
                                 'المُجدوِل يفحص المنشورات المستحقة كل دقيقة، فالمنشور ينزل خلال دقائق من موعده، وتحت كل منشور تشوف متى يُتوقع ينزل.',
                                 'ولو توقف الفحص المتكرر لأي سبب، يرجع المُجدوِل لتشغيل واحد في اليوم الساعة 00:00 بتوقيت UTC (3 الفجر بتوقيت الرياض)، وساعتها يُحسب اليوم مو الدقيقة.',
                                 'تقدر تعدّل المنشور أو تحذفه ما دام **بالانتظار**.',
@@ -587,7 +587,7 @@ const HelpContent = {
                         en: [
                             { ul: [
                                 'Pick the **Requested publish time**, in your device’s time zone, and press **Schedule**.',
-                                'Or tick **Publish immediately instead of scheduling** and it goes out now.',
+                                'Or tick **Publish now instead of scheduling** and it goes out now.',
                                 'The scheduler checks for due posts every minute, so a post goes out within minutes of its time, and each card tells you when it expects to publish.',
                                 'If that frequent check ever stops, the scheduler falls back to one run a day at 00:00 UTC (3am in Riyadh), and then the date is what counts, not the minute.',
                                 'You can edit or delete a post while it is **Pending**.',
@@ -752,7 +752,7 @@ const HelpContent = {
                     title: { ar: 'كيف تقرأ خطة المدرب', en: 'Reading the coach’s plan' },
                     body: {
                         ar: [
-                            'اضغط **اكتب لي خطة** في **مدرب النمو الذكي**. يقرأ أرقام الفترة ونصوص منشوراتك وإعداداتك، ويكتب بلغة حسابك. تأخذ عادةً أقل من دقيقة، وتقدر تطلع من الصفحة وترجع تلقاها جاهزة.',
+                            'اضغط **اكتب لي خطة** في **مدرب النمو بالذكاء الاصطناعي**. يقرأ أرقام الفترة ونصوص منشوراتك وإعداداتك، ويكتب بلغة حسابك. تأخذ عادةً أقل من دقيقة، وتقدر تطلع من الصفحة وترجع تلقاها جاهزة.',
                             { dl: [
                                 ['الملخص', 'جملتين عن وضعك الآن.'],
                                 ['ما الذي ينجح / ما الذي يعيقك', 'أشياء محددة من منشوراتك، مو نصائح عامة.'],

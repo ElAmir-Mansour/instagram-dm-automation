@@ -110,7 +110,7 @@ const App = {
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.36',
+    ASSET_VERSION: '12.37',
 
     _modules: Object.create(null),
 
@@ -164,6 +164,8 @@ const App = {
         I18N.applyStatic();
         this.renderLanguageToggle();
         document.title = `${t('app.name')} — ${t('app.tagline')}`;
+        // The shell's static description is the Arabic one; a reload on a language switch is what lets this follow the language.
+        document.querySelector('meta[name="description"]')?.setAttribute('content', t('app.description'));
 
         // Login form handler
         document.getElementById('login-form').addEventListener('submit', async (e) => {

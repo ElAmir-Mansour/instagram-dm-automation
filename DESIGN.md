@@ -608,6 +608,7 @@ the same paragraph as the feature.
 | `landingLogos.test.ts` | a logo path that differs from simple-icons@16.33.0; a `<use>` that points at nothing; a glyph that is not `aria-hidden` or has no platform name beside it; a transform, mirror, colour literal or non-`--logo-*` fill on `.plogo` or `.ptile`; the sprite differing between pages; different glyphs in Arabic and English |
 | `check:icons` | a directional icon that does not mirror in RTL, or a clock that does |
 | `check:i18n` | an English string with no Arabic translation, a placeholder mismatch, an Arabic-Indic digit outside its allow-list |
+| `check:voice` | a word from the "Never" list (IDENTITY.md §7: "Pro" outside the name, Premium, Powered by, instant, guaranteed, AI-powered, bot, revolutionary, all-in-one, magic, viral, growth hack, supercharge, unlimited, "trusted by", and the Arabic of each) in a dashboard dictionary value, a public page's text, meta or alt, or the dashboard shell's title and description. The name is allowed, and so is a limit stated ("not guaranteed"); any other exception is an entry in `scripts/check-voice.mjs` with a reason, and an entry that matches nothing fails |
 | `check:assets` | a dashboard change shipping without a cache-version bump, on the shell **or** on the public pages that pin the same stylesheet |
 | `check:icon-subset` | `dashboard/js/icons.js` out of date with the icon names the dashboard uses |
 | `design-md.test.ts` | a §2 value that differs from tokens.css; a colour token with no row; the frozen mark, favicon or manifest icons changing; the browser-chrome `theme-color` drifting from `--surface-page`; a colour literal creeping back into a legal page's fallbacks |
@@ -615,7 +616,7 @@ the same paragraph as the feature.
 ### Before the PR
 Run:
 
-`npm run typecheck && npm test && npm run check:contrast && npm run check:i18n && npm run check:icons && npm run check:icon-subset && BASE_REF=origin/main npm run check:assets`
+`npm run typecheck && npm test && npm run check:contrast && npm run check:i18n && npm run check:voice && npm run check:icons && npm run check:icon-subset && BASE_REF=origin/main npm run check:assets`
 
 Any change under `dashboard/` bumps `?v=` and `ASSET_VERSION` together, and the same `?v=` on every page in
 `SHARED_ASSET_PAGES`.
