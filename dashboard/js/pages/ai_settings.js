@@ -89,6 +89,13 @@ const AiSettingsPage = {
      */
     _routeView: undefined,
 
+    /**
+     * The follow-up delay, from `GET /api/settings/sales-followup` (S9): `{ minutes, min, max, defaultMinutes }`. It is one value for the whole
+     * deployment with a platform admin's route of its own, so it is read, shown and saved by a platform admin only. `undefined`: not asked yet.
+     * `null`: not available (not a platform admin, or the call failed): the field then stays out of the way. Asked once per visit to this screen.
+     */
+    _followup: undefined,
+
     currentValues() {
         const prompt = document.getElementById('system-prompt-text');
         const knowledge = document.getElementById('knowledge-base-text');
@@ -128,13 +135,19 @@ const AiSettingsPage = {
     },
 
     hasUnsavedChanges() {
-        if (this.isDirty()) return true;
+        if (this.isDirty() || this.followupDirty()) return true;
         const now = this.currentSettings();
         const saved = this._saved && this._saved.settings;
         if (!now || !saved) return false;
         return now.is_active !== saved.is_active || now.model !== saved.model || now.temperature !== saved.temperature
             || now.engine !== saved.engine || now.gemini_fallback !== saved.gemini_fallback
             || now.sales_mode !== saved.sales_mode || now.sales_test_senders !== saved.sales_test_senders;
+    },
+
+    /** The follow-up delay on screen differs from the one saved. False when the field is not there (not an admin, not loaded). */
+    followupDirty() {
+        const el = document.getElementById('sales-followup-minutes');
+        return !!(el && this._followup && String(el.value).trim() !== String(this._followup.minutes));
     },
 
     /** AI6: «تغييرات غير محفوظة» beside Save, while there are any. */
@@ -243,6 +256,16 @@ const AiSettingsPage = {
                                       aria-describedby="sales-senders-desc sales-senders-hint"
                                       placeholder="${t('ai.salesSendersPlaceholder')}"></textarea>
                             <p class="form-hint hidden" id="sales-senders-hint" role="status" aria-live="polite"></p>
+                        </div>
+
+                        <!-- The one follow-up nudge, hours after a link (DM plan S9): a platform admin's setting for the whole deployment, so the
+                             block stays hidden until the screen has read it (it never does for anyone else) and the sales assistant is not Off. -->
+                        <div class="form-group hidden" id="sales-followup-block">
+                            <label class="form-label" for="sales-followup-minutes">${t('ai.salesFollowup')}</label>
+                            <span class="field-desc" id="sales-followup-desc">${t('ai.salesFollowupDesc')}</span>
+                            <input class="field" id="sales-followup-minutes" type="number" inputmode="numeric" dir="ltr" lang="en" min="0" max="1320" step="1"
+                                   autocomplete="off" data-input="ai:salesChanged" aria-describedby="sales-followup-desc sales-followup-hint">
+                            <p class="form-hint hidden" id="sales-followup-hint" role="status" aria-live="polite"></p>
                         </div>
 
                         <div class="form-grid">
@@ -374,6 +397,7 @@ const AiSettingsPage = {
             const senders = document.getElementById('sales-test-senders');
             if (senders) senders.value = Array.isArray(settings.sales_test_senders) ? settings.sales_test_senders.join('\n') : '';
             this._routeView = undefined;
+            this._followup = undefined;
             this.syncEngine();
             this.syncSales();
 
@@ -484,8 +508,67 @@ const AiSettingsPage = {
             hintEl.classList.toggle('hidden', !hint);
             hintEl.classList.toggle('text-warning', !!hint);
         }
+        // The follow-up delay: asked for once the sales assistant is on (Test or On), and shown only to the platform admin who may change it.
+        if (mode !== 'off') this.loadFollowup();
+        const followupBlock = document.getElementById('sales-followup-block');
+        if (followupBlock) followupBlock.classList.toggle('hidden', mode === 'off' || !this._followup);
+        const followupHint = document.getElementById('sales-followup-hint');
+        if (followupHint) {
+            const hint = this._followup ? this.followupHint(this.followupMinutes()) : null;
+            followupHint.textContent = hint ? hint.text : '';
+            followupHint.classList.toggle('hidden', !hint);
+            followupHint.classList.toggle('text-warning', !!hint && hint.tone === 'warning');
+        }
         // The fallback switch and the route hint mean something whenever the layer writes replies, which Sales On and Test do too.
         this.syncEngine();
+    },
+
+    /**
+     * The follow-up delay on screen: a whole number of minutes from `min` to `max` (0 turns follow-ups off), or `null` for anything else (empty,
+     * a decimal, out of range). The server checks again and refuses a bad one.
+     */
+    followupMinutes() {
+        const el = document.getElementById('sales-followup-minutes');
+        const text = String(el ? el.value : '').trim();
+        if (!/^\d{1,4}$/.test(text)) return null;
+        const minutes = Number(text);
+        const limits = this._followup || { min: 0, max: 1320 };
+        return minutes >= limits.min && minutes <= limits.max ? minutes : null;
+    },
+
+    /** What to tell the operator about the delay on screen: a warning for a value the server would refuse, a note for 0 (off). Pure over its argument. */
+    followupHint(minutes) {
+        const max = this._followup ? this._followup.max : 1320;
+        if (minutes === null) return { tone: 'warning', text: t('ai.salesFollowupInvalid', { max }) };
+        if (minutes === 0) return { tone: 'muted', text: t('ai.salesFollowupOff') };
+        return null;
+    },
+
+    /** Asks for the follow-up delay once per visit, and only of a platform admin (the endpoint is theirs; anyone else gets no field). Never an error. */
+    async loadFollowup() {
+        if (this._followup !== undefined) return;
+        this._followup = null;
+        if (!(typeof App !== 'undefined' && typeof App.isAdmin === 'function' && App.isAdmin())) return;
+        const seq = this._seq;
+        try {
+            const got = await API.getSalesFollowup();
+            if (got && Number.isInteger(got.minutes)) {
+                this._followup = {
+                    minutes: got.minutes,
+                    min: Number.isInteger(got.min) ? got.min : 0,
+                    max: Number.isInteger(got.max) ? got.max : 1320,
+                    defaultMinutes: Number.isInteger(got.defaultMinutes) ? got.defaultMinutes : 240,
+                };
+            }
+        } catch (err) {
+            this._followup = null;
+        }
+        // The operator left while it was in flight: those elements belong to another page now.
+        if (seq !== this._seq) return;
+        const input = document.getElementById('sales-followup-minutes');
+        if (input && this._followup) input.value = String(this._followup.minutes);
+        this.syncSales();
+        this.refreshDirty();
     },
 
     /**
@@ -604,6 +687,20 @@ const AiSettingsPage = {
             }
         }
 
+        // The follow-up delay (S9), when this screen has it (a platform admin) and it changed: checked here, before anything is saved, so a typo
+        // does not leave the agent saved and the delay not. It has a route of its own and is saved right after the agent's settings.
+        let followup = null;
+        if (this.followupDirty()) {
+            const minutes = this.followupMinutes();
+            if (minutes === null) {
+                this.syncSales();
+                UI.toast(this.followupHint(null).text, 'error');
+                restore();
+                return;
+            }
+            followup = { minutes };
+        }
+
         try {
             await API.saveAiSettings(payload);
             // The fields are now what the server holds, so nothing is unsaved
@@ -614,11 +711,17 @@ const AiSettingsPage = {
                 settings: this.currentSettings(),
             };
             this._draft = null;
+            if (followup) {
+                await API.saveSalesFollowup(followup);
+                this._followup = { ...this._followup, minutes: followup.minutes };
+            }
             this.refreshDirty();
             UI.toast(t('ai.saved'), 'success');
         } catch (err) {
             console.error('Save Settings Error:', err);
             UI.toast(err.message || t('ai.saveFailed'), 'error');
+            // Whatever did save is no longer unsaved: the note beside Save says what is still left.
+            this.refreshDirty();
         } finally {
             restore();
         }

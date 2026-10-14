@@ -688,6 +688,31 @@ turn concluded; released and re-raised when the send quota stopped it; the catch
 8. **Send and record.** The same quota, disclosure and `sendDirectMessage` as the old path, then ONE statement writes the reply (with
    `messages.ai_meta`) and the conversation's new state (`recordTurn`, **`store.ts`**), then the message is marked handled. A failed send records
    nothing.
+9. **A link queues its follow-up** (S9, below). The same `recordTurn` statement hands back the link's time (`last_link_at`) and the reply row's id; a
+   reply that carried a link then calls `scheduleFollowup` (**`src/services/dmSales/followupJob.ts`**), after the record and before the message is
+   marked handled.
+
+### 2.6c — The follow-up nudge (DM plan S9)
+
+One short nudge, a few hours after a sales DM sent a link, to someone who has not answered or opened it. Only the sales turn queues it, so
+`sales_mode = 'off'` (and a test sender who is not on the list) queues nothing.
+
+1. **Queued** by `scheduleFollowup`: one `dm.followup` job per link SENT, `run_after` = the link's time + `dm.sales.followup_minutes` (an operator
+   setting, 0 to 1320, default 240, 0 is off; edited by a platform admin on the AI settings screen, `POST /api/settings/sales-followup`), and
+   `dedupe_key = dm-followup:<conversation>:<message that held the link>`, so a re-run recording cannot queue a second. It never throws: a queue
+   that fails costs the nudge (`dm.followup_schedule_failed`), never a retry of the turn that already answered.
+2. **Drained** like any job (the Heroku worker, the GitHub schedule, the daily cron): the handler is `runFollowup`
+   (**`followupJob.ts`**) and the rules are `followupEligible` (**`followup.ts`**, pure, one table-driven test).
+3. **Re-checked when it runs; nothing is ever cancelled.** The job reads the conversation, its tracked-link clicks, the tenant's sales mode and the
+   delay AGAIN. It sends only if: the sales mode answers this sender, follow-ups are not switched off, the agent is on, no opt-out, no hand-off,
+   the AI not paused, no nudge sent yet (one per conversation, ever), the stage still `link`, no newer link, the person has not written since the
+   link, no click by a PERSON (`link_clicks.is_prefetch = false`: Meta's own crawler opens every link, and does not count), and less than 23 hours
+   since their last message (Meta's window is 24). Otherwise the job ends as done and says why (`dm.followup_skipped`, `reason`).
+4. **Claimed before it is sent, so it goes at most once.** One conditional `UPDATE` (`followups_sent + 1`, stage `follow_up`) that repeats the rules
+   that matter; two drains at once, a retry and a reaped claim cannot both win it. A send that fails gives the claim back and is retried by the
+   runner, except Meta's final answers (a dead token, a blocked recipient, outside the window), which are not.
+5. **The line** is the kit's (`SalesLines.nudge`, per register and English): no model, no link, no number. It is sent as `RESPONSE` through
+   `sendDirectMessage`, recorded as an outbound `messages` row with `ai_meta {kind: 'followup'}`, and the same quota check as every send applies.
 
 ### 2.7 — Gemini
 
@@ -1767,8 +1792,8 @@ The payload stores the Meta event **verbatim**, not pre-normalised
 whereas the raw event means a fixed normaliser can be replayed against jobs that already failed.
 It also keeps the enqueue path free of any logic that could throw before the acknowledgement.
 
-`JobKind` is a closed union — `'comment.process' | 'dm.process'` (**`src/jobs/types.ts:19-20`**)
-— rather than a free string, because an enqueue for a kind with no handler is a job that fails
+`JobKind` is a closed union — `'comment.process' | 'dm.process' | 'dm.followup'` (**`src/jobs/types.ts`**,
+`JOB_KINDS`; `dm.followup` is not a Meta event, §2.6c) — rather than a free string, because an enqueue for a kind with no handler is a job that fails
 `max_attempts` times and then sits in the table forever.
 
 ### 5.2 — The atomic claim, and why not `FOR UPDATE SKIP LOCKED`

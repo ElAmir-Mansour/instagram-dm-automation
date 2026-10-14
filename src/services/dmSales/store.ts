@@ -165,8 +165,18 @@ const SET_STATE = `stage = $3, qualifier_turns = $4, abuse_strikes = $5,
                handoff_at = CASE WHEN $11::boolean THEN NOW() ELSE handoff_at END,
                opted_out_at = CASE WHEN $12::boolean THEN NOW() ELSE opted_out_at END`;
 
+/**
+ * What the recording statement hands back, for the one thing that happens after a turn is recorded: a link was just sent, so the follow-up is
+ * scheduled (`followupJob.ts`). `linkAt` is the database's own `last_link_at`, in the precision the later reads see it in; `replyId` is the message
+ * row that carried the link. Both null when the statement matched no conversation (the state did not move, so no link was recorded).
+ */
+export interface RecordedTurn {
+    linkAt: Date | null;
+    replyId: string | null;
+}
+
 /** Record a turn: the reply and the new state in one statement (see the top of the file), or the state alone when nothing was sent. */
-export async function recordTurn(record: TurnRecord): Promise<void> {
+export async function recordTurn(record: TurnRecord): Promise<RecordedTurn> {
     const state = [
         record.stage, record.qualifierTurns, record.abuseStrikes, record.intent, record.offerId, record.linkedOfferId,
         record.pauseBot, record.handoffReason, record.stampHandoff, record.optOut,
@@ -177,15 +187,30 @@ export async function recordTurn(record: TurnRecord): Promise<void> {
             `UPDATE conversations SET ${SET_STATE} WHERE id = $1 AND creator_id = $2`,
             [record.conversationId, record.creatorId, ...state]
         );
-        return;
+        return { linkAt: null, replyId: null };
     }
     // `sender = 'ai'` as the old path writes it: the inbox tags the bot's replies apart from the operator's own.
-    await queryRows(
+    const rows = await queryRows<RecordedRow & Record<string, unknown>>(
         `WITH reply AS (
              INSERT INTO messages (conversation_id, creator_id, direction, message_type, text, raw_payload, sender, ai_meta)
              VALUES ($1, $2, 'outbound', $13, $14, $15::jsonb, 'ai', $16::jsonb)
+             RETURNING id
          )
-         UPDATE conversations SET ${SET_STATE} WHERE id = $1 AND creator_id = $2`,
+         UPDATE conversations SET ${SET_STATE} WHERE id = $1 AND creator_id = $2
+         RETURNING last_link_at, (SELECT id FROM reply) AS reply_id`,
         [record.conversationId, record.creatorId, ...state, message.type, message.text, JSON.stringify(message.payload), JSON.stringify(message.aiMeta)]
     );
+    return recordedOf(rows[0]);
+}
+
+interface RecordedRow {
+    last_link_at: Date | null;
+    reply_id: string | null;
+}
+
+function recordedOf(row: RecordedRow | undefined): RecordedTurn {
+    return {
+        linkAt: row?.last_link_at instanceof Date ? row.last_link_at : row?.last_link_at ? new Date(row.last_link_at) : null,
+        replyId: typeof row?.reply_id === 'string' ? row.reply_id : null,
+    };
 }

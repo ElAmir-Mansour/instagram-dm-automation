@@ -403,3 +403,210 @@ describe('AI settings — saving the sales controls', () => {
         assert.equal(AiSettingsPage.hasUnsavedChanges(), true);
     });
 });
+
+// ─── The follow-up delay (S9) ───────────────────────────────────────────────────────────────
+
+/** The follow-up field's elements, as the shell renders them: the block hidden until the screen has the value. */
+function mountFollowup(dom: Map<string, FakeEl>): void {
+    for (const id of ['sales-followup-block', 'sales-followup-minutes', 'sales-followup-hint']) dom.set(id, fakeEl(id));
+    dom.get('sales-followup-block')!.classes.add('hidden');
+    dom.get('sales-followup-hint')!.classes.add('hidden');
+}
+
+/** Lets the follow-up request the page fires (and does not await) land. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+const FOLLOWUP = { minutes: 240, defaultMinutes: 240, min: 0, max: 1320 };
+
+describe('AI settings — the follow-up delay (S9)', () => {
+    for (const lang of LANGS) {
+        it(`has the field, hidden until the screen has read it, a number box left to right in 0..1320, with its help and a polite status region (${lang})`, () => {
+            const { AiSettingsPage, t } = load(lang);
+            const shell = String(AiSettingsPage.shell());
+            assert.match(shell, /<div class="form-group hidden" id="sales-followup-block">/);
+            const input = shell.match(/<input[^>]*\bid="sales-followup-minutes"[^>]*>/)?.[0] ?? '';
+            assert.ok(input, 'the form has the field');
+            for (const attr of [/\btype="number"/, /\bdir="ltr"/, /\binputmode="numeric"/, /\bmin="0"/, /\bmax="1320"/, /\bstep="1"/, /\bdata-input="ai:salesChanged"/, /\baria-describedby="sales-followup-desc sales-followup-hint"/]) {
+                assert.match(input, attr);
+            }
+            assert.match(shell, /<label[^>]*for="sales-followup-minutes"/);
+            assert.match(shell, /<p class="form-hint hidden" id="sales-followup-hint" role="status" aria-live="polite"><\/p>/);
+            assert.ok(shell.includes(t('ai.salesFollowup')) && shell.includes(t('ai.salesFollowupDesc')));
+        });
+
+        it(`has every follow-up string in both languages, filled, and says what the nudge waits for (${lang})`, () => {
+            const { t } = load(lang);
+            for (const key of ['ai.salesFollowup', 'ai.salesFollowupDesc', 'ai.salesFollowupInvalid', 'ai.salesFollowupOff']) {
+                const value = t(key, { max: 1320 });
+                assert.notEqual(value, key, `${key} is translated`);
+                assert.equal(/\{\w+\}/.test(value), false, `${key} has no unfilled placeholder`);
+                if (lang === 'ar') assert.equal(/[٠-٩۰-۹]/.test(value), false, `${key}: Latin digits`);
+            }
+            const help = t('ai.salesFollowupDesc');
+            if (lang === 'en') {
+                assert.match(help, /has not replied, has not opened the link, has not asked to stop/);
+                assert.match(help, /24-hour window/);
+                assert.match(help, /0 turns follow-ups off/);
+                assert.match(help, /every account on this deployment/);
+            } else {
+                assert.match(help, /ألّا يكون الشخص قد ردّ أو فتح الرابط أو طلب التوقف/);
+                assert.match(help, /24 ساعة/);
+                assert.match(help, /والقيمة 0 توقف المتابعة/);
+            }
+        });
+    }
+
+    it('a platform admin with the sales assistant on sees the saved delay, read once', async () => {
+        const calls: number[] = [];
+        const { AiSettingsPage, dom } = load('en', {
+            api: {
+                getAiSettings: async () => ({ ...SETTINGS, sales_mode: 'on' }),
+                getSalesFollowup: async () => { calls.push(1); return { ...FOLLOWUP, minutes: 10 }; },
+            },
+        });
+        mountForm(dom);
+        mountFollowup(dom);
+        await AiSettingsPage.loadSettings();
+        await settle();
+        assert.equal(dom.get('sales-followup-minutes')!.value, '10');
+        assert.equal(dom.get('sales-followup-block')!.classes.has('hidden'), false);
+        assert.equal(dom.get('sales-followup-hint')!.classes.has('hidden'), true, 'a good value needs no hint');
+        AiSettingsPage.salesChanged();
+        AiSettingsPage.salesChanged();
+        await settle();
+        assert.equal(calls.length, 1, 'once per visit');
+        assert.equal(AiSettingsPage.hasUnsavedChanges(), false);
+    });
+
+    it('stays out of the way while the sales assistant is Off, and does not ask the server', async () => {
+        const calls: number[] = [];
+        const { AiSettingsPage, dom } = load('en', {
+            api: {
+                getAiSettings: async () => ({ ...SETTINGS, sales_mode: 'off' }),
+                getSalesFollowup: async () => { calls.push(1); return FOLLOWUP; },
+            },
+        });
+        mountForm(dom);
+        mountFollowup(dom);
+        await AiSettingsPage.loadSettings();
+        await settle();
+        assert.equal(calls.length, 0);
+        assert.equal(dom.get('sales-followup-block')!.classes.has('hidden'), true);
+    });
+
+    it('is never shown to anyone but a platform admin, and never asked for: the setting is the whole deployment\'s', async () => {
+        const calls: number[] = [];
+        const { AiSettingsPage, dom } = load('en', {
+            admin: false,
+            api: {
+                getAiSettings: async () => ({ ...SETTINGS, sales_mode: 'on' }),
+                getSalesFollowup: async () => { calls.push(1); return FOLLOWUP; },
+            },
+        });
+        mountForm(dom);
+        mountFollowup(dom);
+        await AiSettingsPage.loadSettings();
+        await settle();
+        assert.equal(calls.length, 0);
+        assert.equal(dom.get('sales-followup-block')!.classes.has('hidden'), true);
+        assert.equal(AiSettingsPage.followupDirty(), false);
+    });
+
+    it('a read that fails leaves the field hidden and says nothing: the rest of the screen works as before', async () => {
+        const { AiSettingsPage, dom, toasts } = load('en', {
+            api: {
+                getAiSettings: async () => ({ ...SETTINGS, sales_mode: 'test', sales_test_senders: [ID_A] }),
+                getSalesFollowup: async () => { throw new Error('Not found.'); },
+            },
+        });
+        mountForm(dom);
+        mountFollowup(dom);
+        await AiSettingsPage.loadSettings();
+        await settle();
+        assert.equal(dom.get('sales-followup-block')!.classes.has('hidden'), true);
+        assert.equal(toasts.length, 0);
+        assert.equal(AiSettingsPage.hasUnsavedChanges(), false);
+    });
+
+    it('says what is wrong with a value, and that 0 means off, as text', () => {
+        for (const lang of LANGS) {
+            const { AiSettingsPage, t } = load(lang);
+            assert.deepEqual(plain(AiSettingsPage.followupHint(null)), { tone: 'warning', text: t('ai.salesFollowupInvalid', { max: 1320 }) });
+            assert.deepEqual(plain(AiSettingsPage.followupHint(0)), { tone: 'muted', text: t('ai.salesFollowupOff') });
+            assert.equal(AiSettingsPage.followupHint(240), null);
+        }
+    });
+
+    it('reads only a whole number of minutes in range from the box', () => {
+        const { AiSettingsPage, dom } = load('en');
+        mountForm(dom);
+        mountFollowup(dom);
+        const read = (value: string) => { dom.get('sales-followup-minutes')!.value = value; return AiSettingsPage.followupMinutes(); };
+        assert.equal(read('240'), 240);
+        assert.equal(read(' 10 '), 10);
+        assert.equal(read('0'), 0);
+        assert.equal(read('1320'), 1320);
+        for (const bad of ['', '1321', '-5', '4.5', 'abc', '1e3']) assert.equal(read(bad), null, bad);
+    });
+
+    describe('saving it', () => {
+        async function savedFollowup(value: string, over: Json = {}) {
+            const order: string[] = [];
+            const followups: Json[] = [];
+            const { AiSettingsPage, dom, toasts } = load('en', {
+                api: {
+                    getAiSettings: async () => ({ ...SETTINGS, sales_mode: 'on' }),
+                    getSalesFollowup: async () => FOLLOWUP,
+                    saveAiSettings: async () => { order.push('agent'); return {}; },
+                    saveSalesFollowup: async (body: Json) => { order.push('followup'); followups.push(body); return { ...FOLLOWUP, minutes: body.minutes }; },
+                    ...over,
+                },
+            });
+            mountForm(dom);
+            mountFollowup(dom);
+            await AiSettingsPage.loadSettings();
+            await settle();
+            dom.get('sales-followup-minutes')!.value = value;
+            AiSettingsPage.salesChanged();
+            await AiSettingsPage.saveSettings({ querySelector: () => null }, { preventDefault() {} });
+            return { AiSettingsPage, dom, toasts, order, followups };
+        }
+
+        it('a changed delay is saved through its own route, right after the agent\'s settings, and is then not unsaved', async () => {
+            const { AiSettingsPage, order, followups, toasts } = await savedFollowup('10');
+            assert.deepEqual(order, ['agent', 'followup']);
+            assert.deepEqual(plain(followups), [{ minutes: 10 }]);
+            assert.equal(toasts.at(-1)!.type, 'success');
+            assert.equal(AiSettingsPage.hasUnsavedChanges(), false);
+        });
+
+        it('0 is saved as 0: follow-ups off, and the hint says so', async () => {
+            const { followups, dom } = await savedFollowup('0');
+            assert.deepEqual(plain(followups), [{ minutes: 0 }]);
+            assert.equal(dom.get('sales-followup-hint')!.classes.has('hidden'), false);
+        });
+
+        it('an unchanged delay is not sent: only the agent is saved', async () => {
+            const { order } = await savedFollowup('240');
+            assert.deepEqual(order, ['agent']);
+        });
+
+        it('a value the server would refuse stops the save before ANY request, with the reason, and keeps what was typed', async () => {
+            const { order, toasts, dom } = await savedFollowup('1500');
+            assert.deepEqual(order, [], 'nothing half-saved');
+            assert.equal(toasts.length, 1);
+            assert.equal(toasts[0]!.type, 'error');
+            assert.match(toasts[0]!.message, /0 to 1320/);
+            assert.equal(dom.get('sales-followup-minutes')!.value, '1500');
+            assert.equal(dom.get('sales-followup-hint')!.classes.has('hidden'), false);
+        });
+
+        it('a failed delay save says so and leaves the delay unsaved (the agent\'s settings did save)', async () => {
+            const { AiSettingsPage, order, toasts } = await savedFollowup('10', { saveSalesFollowup: async () => { throw new Error('Failed to save the follow-up delay.'); } });
+            assert.deepEqual(order, ['agent']);
+            assert.equal(toasts.at(-1)!.type, 'error');
+            assert.match(toasts.at(-1)!.message, /follow-up delay/);
+            assert.equal(AiSettingsPage.followupDirty(), true);
+        });
+    });
+});

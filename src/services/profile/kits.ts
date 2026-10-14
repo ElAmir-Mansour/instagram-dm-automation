@@ -88,8 +88,8 @@ export interface ImportFallbackLines {
 }
 
 /**
- * What a customer is sent WITHOUT a model reading their message or after the guard refused its answer (docs/DM_SALES_PLAN.md §6): four
- * lines, in the register's own dialect. `name` is how the creator is called (their display name, or the kit's `names.fallback`), so
+ * What a customer is sent WITHOUT a model reading their message or after the guard refused its answer (docs/DM_SALES_PLAN.md §6), and the one
+ * follow-up nudge (§7, S9): five lines, in the register's own dialect. `name` is how the creator is called (their display name, or the kit's `names.fallback`), so
  * none of them names anyone, and none addresses the reader by gender: they are written to be true of anyone.
  */
 export interface SalesLines {
@@ -101,6 +101,11 @@ export interface SalesLines {
     optOut: string;
     /** The first insult: one calm line. */
     calm: string;
+    /**
+     * The ONE follow-up, a few hours after a link and only to someone who has not answered or opened it (`dmSales/followup.ts`): short, no
+     * pressure, no urgency, and no link (the one they have is above it). It offers help with a question and asks for nothing.
+     */
+    nudge: string;
 }
 
 /** Words of one offer's block in the sales prompt, and of the conversation's last block. */
@@ -338,6 +343,7 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             unsure: (name) => `هالمعلومة ما عندي فيها تأكيد، راح أسأل ${name} وأرجع لك 🙏`,
             optOut: 'تمام، ما راح نرسل لك رسائل ثانية. شكراً لوقتك 🙏',
             calm: 'نقدّر لو نتكلم بأسلوب محترم، ولو عندك أي سؤال يسعدنا نساعدك 🙏',
+            nudge: 'لو عندك أي سؤال عن الرابط اللي أرسلناه لك، يسعدنا نساعدك 🙏',
         }),
 
     msa: arabic('msa',
@@ -364,6 +370,7 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             unsure: (name) => `لا أملك تأكيداً لهذه المعلومة، وسأسأل ${name} وأعود إليك 🙏`,
             optOut: 'حسناً، لن نرسل إليك رسائل أخرى. شكراً لوقتك 🙏',
             calm: 'نقدّر الحوار المحترم، وإن كان لديك أي سؤال فيسعدنا أن نساعدك 🙏',
+            nudge: 'إن كان لديك أي سؤال حول الرابط الذي أرسلناه إليك، فيسعدنا أن نساعدك 🙏',
         }),
 
     egyptian: arabic('egyptian',
@@ -389,6 +396,7 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             unsure: (name) => `مش عندي تأكيد للمعلومة دي، هسأل ${name} وأرجعلك 🙏`,
             optOut: 'تمام، مش هنبعتلك رسايل تانية. شكراً لوقتك 🙏',
             calm: 'يا ريت نتكلم بأسلوب محترم، ولو عندك أي سؤال يسعدنا نساعدك 🙏',
+            nudge: 'لو عندك أي سؤال عن الرابط اللي بعتناه ليك، يسعدنا نساعدك 🙏',
         }),
 
     levantine: arabic('levantine',
@@ -414,6 +422,7 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
             unsure: (name) => `ما عندي تأكيد لهالمعلومة، رح اسأل ${name} وبرجعلك 🙏`,
             optOut: 'تمام، ما رح نبعتلك رسائل تانية. شكراً لوقتك 🙏',
             calm: 'منقدّر لو نحكي بأسلوب محترم، ولو عندك أي سؤال بيسعدنا نساعدك 🙏',
+            nudge: 'إذا عندك أي سؤال عن الرابط اللي بعتناه إلك، بيسعدنا نساعدك 🙏',
         }),
 
     // English has no register, and none of its lines is a translation of the owner's: they say the same thing in plain English.
@@ -507,6 +516,7 @@ export const KITS: Readonly<Record<KitKey, LanguageKit>> = Object.freeze({
                 unsure: (name) => `I can't confirm that yet. I'll check with ${name} and get back to you 🙏`,
                 optOut: 'Understood, we won\'t message you again. Thanks for your time 🙏',
                 calm: 'Let\'s keep this respectful. If you have a question, I\'m glad to help 🙏',
+                nudge: 'If you have any questions about the link we sent, we\'re happy to help 🙏',
             },
         },
         dm: {

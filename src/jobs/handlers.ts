@@ -7,6 +7,7 @@
  * inline path in `src/webhook/router.ts` calls the very same functions, so the two routes
  * through the system cannot drift.
  */
+import { runFollowup } from '../services/dmSales/followupJob.js';
 import { handleCommentChange } from '../webhook/comments.js';
 import { handleMessagingEvent } from '../webhook/messaging.js';
 import type { JobHandlerRegistry } from './types.js';
@@ -35,5 +36,11 @@ export const handlers: JobHandlerRegistry = {
             lastAttempt: isLastAttempt(job),
             object: payload.object,
         });
+    },
+    // Not a Meta event: the sales turn queues it after a link (DM plan S9). The handler re-reads the conversation and may well do nothing: a
+    // person who answered, clicked or said stop in the meantime is simply not eligible, and the job ends as done. A transient send failure
+    // throws, which the runner retries; everything else is a normal return.
+    'dm.followup': async (payload) => {
+        await runFollowup(payload);
     },
 };

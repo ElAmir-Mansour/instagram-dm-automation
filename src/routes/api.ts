@@ -16,6 +16,8 @@ import {
 import { DEFAULT_MODEL, resolveModel, starterPersona, SUPPORTED_MODELS } from '../services/ai.js';
 import { DEFAULT_DM_ENGINE, DEFAULT_GEMINI_FALLBACK, DM_ENGINES, generateDmReply, isDmEngine, type DmEngine } from '../services/dmEngine.js';
 import { DEFAULT_SALES_MODE, isSalesMode, parseTestSenders, SALES_MODES, type SalesMode } from '../services/dmSales/mode.js';
+import { FOLLOWUP_MINUTES_DEFAULT, FOLLOWUP_MINUTES_MAX, FOLLOWUP_MINUTES_MIN, followupMinutesInput } from '../services/dmSales/followup.js';
+import { getFollowupMinutes } from '../services/dmSales/followupJob.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { assertDmSwitchOn, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import {
@@ -3945,6 +3947,47 @@ router.post('/settings/site', requirePlatformAdmin, canAdminister, async (req, r
     } catch (err) {
         log('error', 'api.site_settings_write_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save the public site settings.' });
+    }
+});
+
+// ─── DM sales follow-up delay ───────────────────────────────────────────────
+// `dm.sales.followup_minutes` (DM plan §7, S9): how long after a sales DM sends a link the ONE follow-up nudge is due. An operator setting, not a
+// constant: 0 to 1320 minutes, four hours when unset, 0 switches follow-ups off. One value for the whole deployment, so platform admins only, under
+// the same rules as the public site settings above (404 for everyone else; the write also carries `canAdminister`).
+
+async function salesFollowupPayload() {
+    return { minutes: await getFollowupMinutes(), defaultMinutes: FOLLOWUP_MINUTES_DEFAULT, min: FOLLOWUP_MINUTES_MIN, max: FOLLOWUP_MINUTES_MAX };
+}
+
+router.get('/settings/sales-followup', requirePlatformAdmin, async (_req, res) => {
+    try {
+        res.json(await salesFollowupPayload());
+    } catch (err) {
+        log('error', 'api.sales_followup_read_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to read the follow-up delay.' });
+    }
+});
+
+router.post('/settings/sales-followup', requirePlatformAdmin, canAdminister, async (req, res) => {
+    try {
+        const body = req.body ?? {};
+        // `minutes` absent is nothing to save; null or empty is "go back to the default".
+        if (typeof body !== 'object' || !('minutes' in body)) {
+            res.status(400).json({ error: 'Nothing to save.' });
+            return;
+        }
+        const parsed = followupMinutesInput(body.minutes);
+        if ('error' in parsed) {
+            res.status(400).json({ error: parsed.error, field: 'minutes' });
+            return;
+        }
+        const updatedBy = req.session?.userId ?? null;
+        await setSetting(APP_SETTING_KEYS.dmSalesFollowupMinutes, parsed.minutes === null ? null : String(parsed.minutes), updatedBy);
+        log('info', 'api.sales_followup_written', { minutes: parsed.minutes, user_id: updatedBy });
+        res.json(await salesFollowupPayload());
+    } catch (err) {
+        log('error', 'api.sales_followup_write_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to save the follow-up delay.' });
     }
 });
 

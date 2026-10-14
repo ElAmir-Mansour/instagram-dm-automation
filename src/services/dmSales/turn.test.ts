@@ -20,6 +20,8 @@ import assert from 'node:assert/strict';
 import axios from 'axios';
 import { after, before, describe, it } from 'node:test';
 import { pool } from '../../config/db.js';
+import { setJobQueue } from '../../jobs/queue.js';
+import type { EnqueueInput, JobQueue } from '../../jobs/types.js';
 import { metaHttp } from '../http.js';
 import { setAiCaller, type AiGenerateArgs, type AiGenerateResult } from '../aiProviders/generate.js';
 import { AiError } from '../llm/errors.js';
@@ -78,6 +80,34 @@ interface World {
     baseUrl?: string;
     /** The code the `tracked_links` insert hands back; absent, the insert is not arranged and throws, as a database that is behind would. */
     trackedCode?: string;
+    /** `dm.sales.followup_minutes` as saved (S9); absent, nothing is saved and the default (240) answers. */
+    followupMinutes?: string;
+    /** What the recording statement hands back (`last_link_at`, the reply row's id); null is "it matched no conversation". Defaults to a link recorded at `LINK_AT`. */
+    recordedRow?: Row | null;
+    /** The job queue the follow-up is offered to: a recording one by default, or this one (shared across runs, to see the queue dedupe). */
+    queue?: ReturnType<typeof recordingQueue>;
+}
+
+/** When the link of a recorded reply went, and the id of the row that carried it: what `recordTurn` reads back from its statement. */
+const LINK_AT = new Date('2026-10-14T09:00:00.000Z');
+
+/** A queue that records what it is offered. `keyed` refuses a dedupe key it has seen, as the real one does; `throw` is a queue that cannot be written. */
+function recordingQueue(behaviour: 'ok' | 'keyed' | 'throw' = 'ok') {
+    const calls: EnqueueInput[] = [];
+    const stored: EnqueueInput[] = [];
+    const queue: JobQueue & { calls: EnqueueInput[]; stored: EnqueueInput[]; onEnqueue?: (input: EnqueueInput) => void } = {
+        calls, stored,
+        async enqueue(input) {
+            calls.push(input as EnqueueInput);
+            queue.onEnqueue?.(input as EnqueueInput);
+            if (behaviour === 'throw') throw new Error('jobs table does not exist');
+            if (behaviour === 'keyed' && input.dedupeKey && stored.some((j) => j.dedupeKey === input.dedupeKey)) return null;
+            stored.push(input as EnqueueInput);
+            return `job-${stored.length}`;
+        },
+        async claim() { return []; }, async complete() {}, async fail() {}, async reapStale() { return 0; }, async pruneCompleted() { return 0; },
+    };
+    return queue;
 }
 
 const CREATOR = { id: 'creator-1', instagram_page_id: 'ig-page-1', facebook_page_id: 'fb-page-1', page_access_token: 'EAAGplaintext' };
@@ -102,6 +132,8 @@ const STATE: Row = {
 
 interface Run {
     executed: Executed[];
+    /** What the follow-up was offered to the job queue (S9), in order. */
+    enqueued: EnqueueInput[];
     sends: Sent[];
     layerCalls: AiGenerateArgs[];
     geminiCalls: number;
@@ -135,7 +167,7 @@ async function run(world: World = {}): Promise<Run> {
         [/UPDATE conversations SET ai_disclosed_at/, { rowCount: 1 }],
         [/FROM ai_agents/, { rows: agent ? [agent] : [] }],
         [/SELECT direction, text/, { rows: [...history].reverse().map((h) => ({ sender: h.direction === 'inbound' ? 'customer' : 'ai', payload: null, raw_payload: null, ...h })) }],
-        [/INSERT INTO messages|UPDATE conversations SET stage/, { rowCount: 1 }],
+        [/INSERT INTO messages|UPDATE conversations SET stage/, { rows: world.recordedRow === null ? [] : [{ last_link_at: LINK_AT, reply_id: 'reply-1', ...world.recordedRow }] }],
         ...(world.trackedCode ? [[/INSERT INTO tracked_links/, { rows: [{ code: world.trackedCode }] }] as [RegExp, { rows: any[] }]] : []),
         [/INSERT INTO rate_limit_counters/, { rows: [{ count: world.creatorQuotaCount ?? 1 }] }],
         [/INSERT INTO app_rate_limit_counters/, { rows: [{ count: 1 }] }],
@@ -153,9 +185,17 @@ async function run(world: World = {}): Promise<Run> {
     const previousSink = setLogSink((level, line) => { logged.push({ level, ...JSON.parse(line) }); });
     const layer = world.layer ?? saying(reply());
     const previousCaller = setAiCaller((args) => { layerCalls.push(args); return layer(args, layerCalls.length); });
+    // The job queue the follow-up is offered to: never the database's. An offer is logged among the statements too, so its place in the turn can be read.
+    const queue = world.queue ?? recordingQueue();
+    const callsBefore = queue.calls.length;
+    queue.onEnqueue = (input) => { executed.push({ sql: `<enqueue ${input.kind}>`, params: [input] }); };
+    const previousQueue = setJobQueue(queue);
 
     (pool as any).query = async (sql: string, params: any[] = []) => {
         executed.push({ sql, params });
+        if (/FROM app_settings WHERE key/.test(sql) && params[0] === 'dm.sales.followup_minutes' && world.followupMinutes !== undefined) {
+            return { rows: [{ value: world.followupMinutes, is_secret: false }], rowCount: 1 };
+        }
         const route = routes.find(([pattern]) => pattern.test(sql));
         if (!route) throw new Error(`no result arranged for SQL:\n${sql}`);
         const { rows = [], rowCount } = route[1];
@@ -188,10 +228,12 @@ async function run(world: World = {}): Promise<Run> {
         if (originalBase === undefined) delete process.env.PUBLIC_BASE_URL;
         else process.env.PUBLIC_BASE_URL = originalBase;
         setAiCaller(previousCaller);
+        setJobQueue(previousQueue);
+        queue.onEnqueue = undefined;
         setLogSink(previousSink);
         invalidateTenantCache();
     }
-    return { executed, sends, layerCalls, geminiCalls, logged, error };
+    return { executed, enqueued: queue.calls.slice(callsBefore), sends, layerCalls, geminiCalls, logged, error };
 }
 
 /** The messages that went to the person: everything on the Send API except the sender actions. */
@@ -898,5 +940,159 @@ describe('the sales turn: the link is a tracked one when it can be', () => {
     it('a reply that sends no link makes none: nothing is minted for a recommendation', async () => {
         const r = await run({ layer: saying(reply({ next_action: 'recommend', offer_id: 'plan', text: 'The plan fits you. Want the link?' })), baseUrl: 'https://app.example', trackedCode: 'Ab12Cd34Ef' });
         assert.equal(r.executed.filter((e) => /INSERT INTO tracked_links/.test(e.sql)).length, 0);
+    });
+});
+
+// ─── The follow-up, queued when a link goes out (S9) ────────────────────────────────────────
+
+describe('the sales turn: the follow-up is queued when a link goes out', () => {
+    const SEND_LINK = reply({ intent: 'ready_to_buy', next_action: 'send_link', offer_id: 'plan', stage: 'link', text: 'Here you go:' });
+    const followups = (r: Run): EnqueueInput[] => r.enqueued.filter((j) => j.kind === 'dm.followup');
+
+    it('queues ONE dm.followup job for the link: due four hours after it, for this conversation, person and offer, keyed on the message that held the link', async () => {
+        const r = await run({ layer: saying(SEND_LINK) });
+        assert.equal(r.error, null);
+        assert.equal(messages(r).length, 1);
+        assert.equal(followups(r).length, 1);
+
+        const job = followups(r)[0]!;
+        assert.equal(job.dedupeKey, 'dm-followup:conv-1:reply-1');
+        assert.equal(job.creatorId, 'creator-1');
+        assert.equal(job.runAfter?.toISOString(), '2026-10-14T13:00:00.000Z', 'link time + 240 minutes');
+        assert.deepEqual(job.payload, {
+            conversationId: 'conv-1', creatorId: 'creator-1', senderId: 'user-1', offerId: 'plan', linkMessageId: 'reply-1', linkAt: '2026-10-14T09:00:00.000Z',
+        });
+    });
+
+    it('is queued AFTER the reply was sent and recorded, and before the message is marked handled: a failure to queue can only cost the nudge', async () => {
+        const r = await run({ layer: saying(SEND_LINK) });
+        const at = (pattern: RegExp) => r.executed.findIndex((e) => pattern.test(e.sql));
+        const sent = at(/UPDATE conversations SET ai_disclosed_at/);
+        const recordedAt = at(/UPDATE conversations SET stage/);
+        const queuedAt = at(/^<enqueue dm\.followup>$/);
+        const handledAt = at(/SET handled_at = NOW\(\)/);
+        assert.ok(sent > -1 && recordedAt > sent && queuedAt > recordedAt && handledAt > queuedAt, `sent ${sent}, recorded ${recordedAt}, queued ${queuedAt}, handled ${handledAt}`);
+    });
+
+    it('reads the link\'s time and message from the very statement that recorded it', async () => {
+        const r = await run({ layer: saying(SEND_LINK), recordedRow: { last_link_at: new Date('2026-10-14T09:00:05.250Z'), reply_id: 'reply-77' } });
+        const job = followups(r)[0]!;
+        assert.equal(job.dedupeKey, 'dm-followup:conv-1:reply-77');
+        assert.equal(job.runAfter?.toISOString(), '2026-10-14T13:00:05.250Z');
+        assert.equal((job.payload as any).linkAt, '2026-10-14T09:00:05.250Z');
+        const recordedSql = recorded(r)!.sql.replace(/\s+/g, ' ');
+        assert.match(recordedSql, /RETURNING last_link_at, \(SELECT id FROM reply\) AS reply_id$/);
+    });
+
+    it('uses the operator\'s delay: ten minutes for the live test', async () => {
+        const r = await run({ layer: saying(SEND_LINK), followupMinutes: '10' });
+        assert.equal(followups(r)[0]!.runAfter?.toISOString(), '2026-10-14T09:10:00.000Z');
+    });
+
+    it('queues nothing when the operator turned follow-ups off (0), and the reply still goes', async () => {
+        const r = await run({ layer: saying(SEND_LINK), followupMinutes: '0' });
+        assert.equal(r.enqueued.length, 0);
+        assert.equal(messages(r).length, 1);
+        assert.ok(handled(r));
+    });
+
+    it('carries the Facebook Page id of a Messenger conversation, so the nudge goes through the same endpoint as the link', async () => {
+        const r = await run({ layer: saying(SEND_LINK), recipient: 'fb-page-1' });
+        assert.equal((followups(r)[0]!.payload as any).pageId, 'fb-page-1');
+        assert.match(messages(r)[0]!.url, /\/fb-page-1\/messages$/);
+        const ig = await run({ layer: saying(SEND_LINK) });
+        assert.ok(!('pageId' in (followups(ig)[0]!.payload as object)));
+    });
+
+    it('queues for a tracked link as for an untracked one: it is the link being SENT that counts', async () => {
+        const r = await run({ layer: saying(SEND_LINK), baseUrl: 'https://app.example', trackedCode: 'Ab12Cd34Ef' });
+        assert.equal(followups(r).length, 1);
+    });
+
+    it('queues nothing for any reply that is not a link: a pitch, a question, an answer to an objection', async () => {
+        for (const json of [
+            reply({ next_action: 'recommend', offer_id: 'plan', stage: 'recommend', text: 'The plan fits you. Want the link?' }),
+            reply({ stage: 'qualify', next_action: 'ask_qualifier', text: 'What is your goal?' }),
+            reply({ intent: 'objection_price', stage: 'objection', next_action: 'reply', text: 'The current price is on the page.' }),
+            reply(),
+        ]) {
+            const r = await run({ layer: saying(json) });
+            assert.equal(messages(r).length, 1);
+            assert.equal(r.enqueued.length, 0, String(json.next_action));
+        }
+    });
+
+    it('queues nothing for a hand-off, an opt-out, or a person who said no and is not being sold to', async () => {
+        const handoff = await run({ text: 'I want a refund', layer: saying(reply()) });
+        assert.equal(handoff.enqueued.length, 0, 'a refund: the prefilter, no model');
+        const optOut = await run({ text: 'stop' });
+        assert.equal(optOut.enqueued.length, 0);
+        const closed = await run({ state: { stage: 'closed' }, layer: saying(reply({ intent: 'info', next_action: 'send_link', offer_id: 'plan', text: 'Sure, here you go!' })) });
+        assert.equal(closed.enqueued.length, 0, 'a closed conversation is not sold to: send_link became a plain reply');
+    });
+
+    it('queues nothing when the link was not recorded (the statement matched no conversation): there is no link on record to follow up', async () => {
+        const r = await run({ layer: saying(SEND_LINK), recordedRow: null });
+        assert.equal(r.enqueued.length, 0);
+        assert.equal(r.error, null);
+        assert.equal(logs(r, 'dm.followup_not_scheduled').length, 1);
+    });
+
+    it('a queue that cannot be written NEVER fails the turn: the reply went out and was recorded, the message is handled, the job is not retried', async () => {
+        const r = await run({ layer: saying(SEND_LINK), queue: recordingQueue('throw') });
+        assert.equal(r.error, null, 'nothing thrown: a retry would answer the person twice');
+        assert.equal(messages(r).length, 1);
+        assert.ok(recorded(r));
+        assert.ok(handled(r));
+        assert.ok(!released(r));
+        assert.equal(logs(r, 'dm.followup_schedule_failed').length, 1);
+    });
+
+    it('the same link recorded twice leaves ONE job: the queue refuses the second on its key', async () => {
+        const queue = recordingQueue('keyed');
+        const first = await run({ layer: saying(SEND_LINK), queue });
+        const second = await run({ layer: saying(SEND_LINK), queue });
+        assert.equal(first.error, null);
+        assert.equal(second.error, null);
+        assert.equal(queue.calls.length, 2, 'offered twice');
+        assert.equal(queue.stored.length, 1, 'one job exists');
+        assert.equal(queue.calls[0]!.dedupeKey, queue.calls[1]!.dedupeKey);
+        assert.equal(logs(second, 'dm.followup_deduped').length, 1);
+    });
+
+    it('a second link in the conversation is a second job (the handler\'s one-nudge rule is what keeps it to one): the key follows the message', async () => {
+        const queue = recordingQueue('keyed');
+        await run({ layer: saying(SEND_LINK), queue });
+        await run({ layer: saying(SEND_LINK), queue, recordedRow: { reply_id: 'reply-2', last_link_at: new Date('2026-10-14T10:00:00Z') } });
+        assert.deepEqual(queue.stored.map((j) => j.dedupeKey), ['dm-followup:conv-1:reply-1', 'dm-followup:conv-1:reply-2']);
+    });
+});
+
+describe('the sales turn: who is followed up is who the sales mode answers', () => {
+    const SEND_LINK = reply({ intent: 'ready_to_buy', next_action: 'send_link', offer_id: 'plan', stage: 'link', text: 'Here you go:' });
+
+    it('sales_mode off queues nothing: the old path answers, and it has never queued a follow-up', async () => {
+        const r = await run({ agent: { ...AGENT, sales_mode: 'off' }, layer: saying(SEND_LINK) });
+        assert.equal(r.layerCalls.length, 0, 'no sales turn');
+        assert.equal(r.geminiCalls, 1, 'the old path answered');
+        assert.equal(r.enqueued.length, 0);
+        assert.ok(!r.executed.some((e) => /followup/i.test(e.sql)));
+    });
+
+    it('test mode, a sender who is not on the list: the old path, and nothing queued', async () => {
+        const r = await run({ agent: { ...AGENT, sales_mode: 'test', sales_test_senders: ['17841400000000002'] }, layer: saying(SEND_LINK) });
+        assert.equal(r.layerCalls.length, 0);
+        assert.equal(r.enqueued.length, 0);
+    });
+
+    it('test mode, a listed sender: the sales turn, and the link is followed up', async () => {
+        const r = await run({ agent: { ...AGENT, sales_mode: 'test', sales_test_senders: ['user-1'] }, layer: saying(SEND_LINK) });
+        assert.equal(r.layerCalls.length, 1);
+        assert.equal(r.enqueued.filter((j) => j.kind === 'dm.followup').length, 1);
+    });
+
+    it('on: the sales turn, and the link is followed up', async () => {
+        const r = await run({ layer: saying(SEND_LINK) });
+        assert.equal(r.enqueued.filter((j) => j.kind === 'dm.followup').length, 1);
     });
 });
