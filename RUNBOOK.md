@@ -680,6 +680,16 @@ and accept is in **Audit** (`invite.*`), without the link. Checking a link works
 admin's own session (that is refused, so it is not used up). Sessions from a link last 24 hours, or 30 days if the person leaves
 "keep me signed in" ticked (also a setting). Full walk-through: FLOWS.md §4.8.
 
+**What the person sees next (the setup wizard, P18).** A tenant whose onboarding is not `completed` is sent to `#/welcome` from every
+dashboard route (an owner only: operators, viewers and platform admins are never held by it); they answer W1 (about them), W2 (their
+voice) and W3 (their look, skippable), and the last screen finishes it. What they type is kept as they go (`onboarding.steps`), so a
+closed phone resumes where it was, and nothing reaches the profile until they press Next. To look at one tenant:
+`SELECT status, current_step, filled_by, steps FROM onboarding WHERE creator_id = '<id>'`. **A tenant is stuck** when Next answers
+an error you cannot clear: open **Tenants → the tenant → Profile** and fill the missing fields in yourself (it is the same profile,
+and the wizard then lets them finish), or, as a last resort, `UPDATE onboarding SET status = 'completed', completed_at = NOW()
+WHERE creator_id = '<id>'`, which lets them in with a profile that is not complete. The owner's own tenant is `completed` and
+never sees the wizard; `#/welcome?mode=behalf` opens it for a platform admin. Full walk-through: FLOWS.md §4.9.
+
 ### 8.2 Meta side — get the verify token right *before* the subscription exists
 
 This is the ordering trap, and it has already cost hours.

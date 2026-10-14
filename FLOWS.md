@@ -1506,6 +1506,75 @@ puts the one-field form back). The token is never in `localStorage`, only in `se
 > or revoke the link, and the SQL is the only place both are decided at once. `src/routes/invites.test.ts` loses that race
 > deterministically (the stand-in reads the predicates out of the SQL it is given), so deleting any one of the three fails.
 
+### 4.9 — The setup wizard: where a new tenant is sent, and how it saves (P18)
+
+After an invite is used, a tenant that has not finished setting up lands in `#/welcome`, and every other route sends them back
+there until they finish. The server half is **`src/services/onboardingWizard.ts`** and **`src/routes/onboarding.ts`**; the
+dashboard half is **`dashboard/js/pages/welcome.js`** and the gate in **`dashboard/js/app.js`**. W0 (choosing a password) is the
+invite page of §4.8, before there is a session; this is W1 to W6 (docs/onboarding/02 §3).
+
+**The gate: who is sent to the wizard.**
+
+1. `GET /api/auth/me` (**`routes/api.ts:1272`**) now answers `onboarding: { status, step, gated }` (**:1295**,
+   `describeOnboardingBrief`, **onboardingWizard.ts:198**). `gated` is **`onboardingGated`** (**:179**): the tenant's status is not
+   `completed`, **and** the session is not a platform admin, **and** its role in that tenant is `owner` (the only role whose writes
+   can finish the wizard, so an operator or a viewer is never held by a screen they cannot complete).
+2. **The owner is never gated**, in three independent ways: v34 inserted a `completed` row for every tenant that existed (it is
+   `completed` in production, read-only, 2026-10-14); a tenant with **no row** reads as completed (D14); and a database that
+   cannot answer returns `onboarding: null` (`onboarding.brief_unreadable`, warn), which the dashboard reads as "gate nothing".
+   `completed` is the first condition checked on both sides, and `src/routes/onboarding.test.ts` fails if it is removed.
+3. The dashboard keeps it in the session (`App.loadSession`) and decides in `App.mustOnboard` (**app.js:785**), which repeats the
+   two conditions that must never be wrong (a platform admin is exempt; `completed` is never gated). `App.showApp` (**:695**) reads
+   the session **before** it shows `#app`, so a gated tenant never sees a flash of the dashboard, and `App.navigate` (**:1249**) is
+   the choke point every route passes through. `showWelcome` (**:809**) renders into `#welcome-screen`, outside `#app`, and
+   `leaveWelcome` (**:835**) asks the gate again.
+4. The one way in for a platform admin is `#/welcome?mode=behalf` (`wantsWelcome`, **:794**); the writes then record `by: 'admin'`.
+5. The invite link may be `#/invite?t=…` (P17) or `#/welcome?invite=…` (the spec's spelling): `isInviteHash` (**:591**) takes both,
+   `captureInvite` moves either token out of the address bar, and `completeInvite` (**:683**) lands a tenant that has not finished in
+   `#/welcome` and anybody else (a second member, a reset) on the dashboard.
+
+**Reading it** — `GET /api/onboarding` (**routes/onboarding.ts:60**, an operator may read): `describeWizard` (**onboardingWizard.ts:310**)
+answers the status, where to resume (`resumeStep`, **:160**: the step last seen, never past the first required one still open),
+the registry (`order`), each step's entry (`steps`: `{status, at, by}` once confirmed, `{values}` while only typed), the profile with
+its `version` and what activation still misses, the operator's hints (the name and handle they typed) and `canEdit`.
+
+**The two saves, which never meet.**
+
+- **Autosave** — `PUT /api/onboarding/steps/:step { values }` (**:65**, owner only) → `saveStep` (**:370**): one `UPDATE` of one step's
+  entry (`jsonb_set`), guarded by `status <> 'completed'`, and **nothing else**: no statement names `creator_profiles`, so a keystroke
+  never moves the profile's `version`, never writes a history row and cannot 409 against an admin. The page sends it 800 ms after
+  typing and on blur (`WelcomePage.scheduleSave`/`flush`), one at a time, in order. `validateStepValues` (**:228**) keeps a draft a
+  small flat form: no nesting, no odd field names, 16 KB.
+- **Continue is the confirmation** — `WelcomePage.submit` (**welcome.js:1379**) checks the step, then `PATCH /api/profile
+  { version, patch }` (§4.7; **`saveProfile`, :1417**), and only when that went through `PUT … { status: 'done' }`, which **replaces**
+  the step's entry (so the typed copy goes) and moves `current_step` to the next step that is switched on.
+- **The 409 path** — when an admin wrote the profile in between (P19), `PATCH /api/profile` answers `409 PROFILE_VERSION_CONFLICT`
+  with `currentVersion`; `reloadAfterConflict` (**:1443**) reads `GET /api/onboarding` again, shows **the same step with the newer
+  values** and a note, and saves what it shows as the draft so the older typing does not come back. The step is never marked done
+  on a refusal.
+
+**Finishing** — the last screen calls `POST /api/onboarding/complete` as it opens (`enterDone`, **welcome.js:1508**) →
+`completeOnboarding` (**onboardingWizard.ts:461**). It is **idempotent**: a tenant already `completed` (or with no row) answers
+`alreadyCompleted: true` and writes nothing, and the `UPDATE` itself carries `status <> 'completed'`, so a second Finish that
+raced the first moves neither `completed_at` nor the funnel. The first needs `activationMissing` empty (name, kind, niche, language
+and register, time zone, one offer) and otherwise answers `409 ONBOARDING_INCOMPLETE` with `missing` and `fixStep`, which the page
+turns into "back to the step that fixes it". It writes **only the status**: the first campaign and the DM persona belong to the
+proof step (P25).
+
+**The seam.** `WIZARD_STEPS` (**onboardingWizard.ts:54**) lists W1 to W6; **W4 (connect, P28) and W5 (proof, P25) are listed and
+switched off**, so the page leaves them out of the order and the progress count and says on the last screen what is waiting.
+`WelcomePage.register(id, def)` adds a renderer for a step; the server enabling it is all the shell needs.
+
+**The funnel** — `onboarding_events` (`recordEvent`, **:257**): `step_viewed` (when the position changes, or a step is shown for
+the first time), `step_completed { ms_on_step }`, `step_skipped`, `wizard_completed { total_ms, by }`. Event names, steps and numbers
+only, **never a field's value**; a failed insert is logged (`onboarding.event_failed`) and never fails the request.
+
+> **Why the gate is written down three times.** The server's `onboardingGated`, the dashboard's `mustOnboard` and the v34 backfill
+> each look redundant next to the others. They are the same rule at three layers, so the owner (whose tenant is `completed`, whose
+> operators are not owners) stays out of a wizard that was built for somebody else, whichever layer is wrong: the SQL file is
+> pinned by a test, the server function by a table of every combination, and the page by the same table run against the server's
+> own function.
+
 ---
 
 ## 5. Job lifecycle
@@ -1996,6 +2065,9 @@ error, and several write **no row at all**.
 | 3 | row claimed by another run — **`api.ts:632`** | `cron.publish_already_claimed` | no change |
 | 3 | a Meta post of a tenant with no token — `attemptPublish` | `cron.publish_failed` (`META_NOT_CONNECTED`) | yes, `FAILED` + the "not connected" sentence |
 | 4 | `PATCH /api/profile` that changes nothing — **`patch.ts:184`** | *(none)* | no (200, version unchanged, no audit entry) |
+| 4 | `/auth/me`'s onboarding cannot be read (a database without v34, a failed query) — **`onboardingWizard.ts:198`** | `onboarding.brief_unreadable` (`warn`) | no (`onboarding: null`: the dashboard gates nothing) |
+| 4 | an autosave or Continue for a tenant that has finished, or has no onboarding row — **`onboardingWizard.ts:370`** | *(none)* | no (200, the state as it is) |
+| 4 | a funnel event that could not be written — **`onboardingWizard.ts:257`** | `onboarding.event_failed` (`warn`) | no (the step still saved) |
 | 5 | budget spent — **`runner.ts:145`** | `job.drain_complete` (`budgetExhausted: true`) | jobs stay `pending` |
 | 6 | 5 drafts already pending — **`tiktokPublish.ts:183-186`** | `cron.publish_held_tiktok_inbox` | yes, back to `PENDING` + `error_log` |
 | 6 | bad webhook signature — **`routes/tiktok.ts:150`** | `tiktok.webhook_signature_rejected` | no (401 precedes the DB) |

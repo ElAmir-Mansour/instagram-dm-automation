@@ -127,8 +127,18 @@ const API = {
     peekInvite: (token) => API.request('/invites/peek', { method: 'POST', body: JSON.stringify({ token }) }),
     acceptInvite: (data) => API.request('/invites/accept', { method: 'POST', body: JSON.stringify(data) }),
 
-    /** Who am I, what may I do, and which tenants can I act as. */
+    /** Who am I, what may I do, and which tenants can I act as. `onboarding` says whether this session is sent to the wizard. */
     getMe: () => API.request('/auth/me'),
+
+    // The setup wizard (P18). `saveOnboardingStep` autosaves what was typed (`{ values }`) and marks Continue / Skip
+    // (`{ status }`); it never writes the profile. Continue is `patchProfile`, whose `version` is the one the last read
+    // returned: a 409 means somebody else wrote in between, and the page reloads that step.
+    getOnboarding: () => API.request('/onboarding'),
+    saveOnboardingStep: (step, body) => API.request(`/onboarding/steps/${encodeURIComponent(step)}`, {
+        method: 'PUT', body: JSON.stringify(body),
+    }),
+    completeOnboarding: () => API.request('/onboarding/complete', { method: 'POST', body: '{}' }),
+    patchProfile: (version, patch) => API.request('/profile', { method: 'PATCH', body: JSON.stringify({ version, patch }) }),
 
     /** Returns a NEW session token scoped to `tenantId`. Store it like a login. */
     switchTenant: (tenantId) => API.request('/auth/switch-tenant', {

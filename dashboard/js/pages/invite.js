@@ -14,6 +14,12 @@
  * /api/invites/accept` makes the account. Every way a link can be unusable arrives as the same 410, so the page says one
  * thing for all of them ("no longer valid") and offers the two things that can help: ask for a new one, or sign in.
  *
+ * ─── W0 of the wizard ───────────────────────────────────────────────────────
+ * This page IS the wizard's first screen (docs/onboarding/02 §3, W0): the link may be spelled `#/welcome?invite=…` as well as
+ * `#/invite?t=…` (`App.isInviteHash`), and a tenant that has not finished setting up lands in `#/welcome` after it
+ * (`App.completeInvite`). A person who opened the link inside Instagram's, Facebook's or WhatsApp's own browser is told so
+ * (`UI.inAppHint`): connecting an account later does not work from there.
+ *
  * ─── Escaping ───────────────────────────────────────────────────────────────
  * The tenant's name, the inviter's, and the address come from the server and from people. They go through `html` like
  * everything else in the dashboard, inside `<bdi>`, and `view()` is pure so a test can feed it a payload in each of them.
@@ -111,6 +117,7 @@ const InvitePage = {
 
         return html`
             ${this.header(title, subtitle)}
+            ${UI.inAppHint(s.inApp)}
             ${!isReset ? html`
                 <p class="invite-role">
                     ${t('invite.roleLine')}
@@ -233,7 +240,7 @@ const InvitePage = {
             <button type="button" class="lang-toggle login-lang" data-lang-toggle
                     lang="en" dir="ltr" aria-label="Switch language"
                     data-action="app:toggleLanguage">English</button>
-            ${this.view({ phase: this.phase, peek: this.peek, wait: this.wait, email: this.email })}
+            ${this.view({ phase: this.phase, peek: this.peek, wait: this.wait, email: this.email, inApp: UI.inAppBrowser() })}
         `);
         UI.icons(host);
         if (typeof App !== 'undefined' && App.renderLanguageToggle) App.renderLanguageToggle();

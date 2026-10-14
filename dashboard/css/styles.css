@@ -1322,6 +1322,176 @@ html[data-invite] #login-screen { display: none; }
 .invite-suggest:hover { color: var(--text-strong); }
 .invite-suggested { color: var(--success-text); }
 
+/* ─── The setup wizard (dashboard/js/pages/welcome.js, `#/welcome`) ──────────────────────────────────
+   Outside #app, like the invite page, and the login screen's ground and glow. The login centres ONE card; this is a column
+   that scrolls (a form's worth of fields), with a bar that sticks to the bottom of a phone: Back and the save state in a row,
+   and the one primary action full width under them. One column and 44px targets all the way down to 375px; logical properties
+   throughout, so the same rules are right in Arabic and English. The preview's colours are CSS custom properties set from
+   script (`--pv-*`), from validated hex only: there is no colour in this block that is not a token. */
+/* `clip`, not `hidden`: the glow behind it is wider than a phone, and `hidden` would make this a scroll container and stop the bar sticking. */
+.welcome-screen { display: block; overflow: visible; overflow-x: clip; padding: 0; }
+.welcome-root {
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column;
+    min-block-size: 100vh; min-block-size: 100dvh;
+    max-inline-size: 36rem; margin-inline: auto;
+}
+.welcome-top {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3);
+    padding: var(--space-4) var(--space-4) var(--space-2);
+    padding-block-start: max(var(--space-4), env(safe-area-inset-top));
+}
+.welcome-brand { display: flex; align-items: center; gap: var(--space-2); min-inline-size: 0; }
+.welcome-brand-name { font-weight: var(--fw-bold); font-size: var(--fs-300); color: var(--text-strong); white-space: nowrap; }
+.welcome-tools { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+.welcome-tenant { max-inline-size: 10rem; }
+.welcome-link {
+    display: inline-flex; align-items: center; gap: var(--space-1);
+    min-block-size: var(--tap-target); min-inline-size: var(--tap-target); justify-content: center; padding-inline: var(--space-2);
+    background: none; border: 0; font: inherit; font-size: var(--fs-200); cursor: pointer;
+    color: var(--text-default); text-decoration: underline; text-underline-offset: 3px;
+    touch-action: manipulation;
+}
+.welcome-link:hover { color: var(--text-strong); }
+.welcome-link [data-lucide] { inline-size: var(--icon-md); block-size: var(--icon-md); }
+.welcome-signout { font-size: var(--fs-100); color: var(--text-muted); }
+
+.welcome-progress { padding: var(--space-2) var(--space-4); }
+.welcome-count { font-size: var(--fs-100); color: var(--text-muted); margin-block-end: var(--space-2); font-variant-numeric: tabular-nums; }
+.welcome-steps { display: flex; gap: var(--space-2); list-style: none; margin: 0; padding: 0; }
+.welcome-segment { flex: 1; block-size: 6px; }
+.welcome-segment.is-done, .welcome-segment.is-current { background: var(--accent); }
+.welcome-segment.is-current { box-shadow: 0 0 0 2px var(--accent-ring); }
+
+.welcome-card { margin: var(--space-3) var(--space-4); padding: var(--space-5); min-inline-size: 0; overflow-wrap: anywhere; }
+.welcome-title { font-size: var(--fs-500); line-height: var(--lh-tight); color: var(--text-strong); margin-block-end: var(--space-2); }
+.welcome-title:focus { outline: 0; box-shadow: none; }
+.welcome-lead { color: var(--text-default); font-size: var(--fs-200); margin-block-end: var(--space-5); }
+.welcome-subtitle { font-size: var(--fs-300); color: var(--text-strong); }
+.welcome-muted { color: var(--text-muted); font-size: var(--fs-200); }
+.welcome-loading, .welcome-finishing { display: flex; flex-direction: column; align-items: center; padding-block: var(--space-5); }
+.welcome-error { color: var(--danger-text); font-size: var(--fs-100); margin-block: var(--space-2); }
+.welcome-problems {
+    margin-block-end: var(--space-4); padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border-danger); border-radius: var(--radius-md); background: var(--danger-soft);
+    font-size: var(--fs-200); color: var(--text-default);
+}
+.welcome-problems p { margin: 0; color: var(--danger-text); font-weight: var(--fw-semibold); }
+.welcome-problems ul { margin: var(--space-2) 0 0; padding-inline-start: var(--space-5); }
+.welcome-notice { margin-block-end: var(--space-4); }
+.welcome-notice p, .inapp-hint-text { margin: 0; min-inline-size: 0; }
+.welcome-notice [data-lucide], .inapp-hint > [data-lucide] { color: var(--info-text); flex-shrink: 0; margin-block-start: 4px; }
+.inapp-hint-text { flex: 1; }
+
+/* A choice is a card with a radio in it: the input is the control, the body is what is drawn. Selected is the accent's inset ring
+   (DESIGN.md §4, Focus: "selected is not focus"); a control that is both shows both. */
+.welcome-choices { display: grid; gap: var(--space-2); }
+.welcome-choices-pair { grid-template-columns: 1fr 1fr; }
+.welcome-choice { display: block; position: relative; cursor: pointer; }
+.welcome-choice-input { position: absolute; inline-size: 1px; block-size: 1px; margin: 0; opacity: 0; }
+.welcome-choice-body {
+    position: relative; display: flex; flex-direction: column; gap: var(--space-1);
+    min-block-size: var(--tap-target);
+    padding: var(--space-3) var(--space-4); padding-inline-start: calc(var(--space-4) + 20px + var(--space-3));
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+}
+.welcome-choice-body::before {
+    content: ''; position: absolute; inset-inline-start: var(--space-4); inset-block-start: calc(var(--space-3) + 2px);
+    inline-size: 20px; block-size: 20px; border-radius: 50%; border: 2px solid var(--border-strong);
+}
+.welcome-choice:hover .welcome-choice-body { border-color: var(--border-strong); }
+fieldset[aria-invalid='true'] .welcome-choice-body { border-color: var(--danger); }
+.welcome-choice-input:checked + .welcome-choice-body { background: var(--accent-soft); border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
+.welcome-choice-input:checked + .welcome-choice-body::before { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 40%, transparent 46%); }
+.welcome-choice-input:focus-visible + .welcome-choice-body { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 var(--ring) var(--accent-ring); }
+.welcome-choice-input:checked:focus-visible + .welcome-choice-body { box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 var(--ring) var(--accent-ring); }
+.welcome-choice-title { font-weight: var(--fw-semibold); color: var(--text-strong); font-size: var(--fs-200); }
+.welcome-choice-hint { color: var(--text-muted); font-size: var(--fs-100); }
+.welcome-choice-input:checked + .welcome-choice-body .welcome-choice-hint { color: var(--text-default); }
+.welcome-choice-sample { color: var(--text-default); font-size: var(--fs-200); line-height: var(--lh-normal); }
+.welcome-sample-name { font-weight: var(--fw-semibold); color: var(--text-strong); }
+
+/* The tone words are `.chip`s that can be pressed: 44px tall, and `.chip-accent` when picked. */
+.welcome-tones { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-block-end: var(--space-3); }
+.welcome-chip { min-block-size: var(--tap-target); padding-inline: var(--space-4); font-size: var(--fs-200); cursor: pointer; touch-action: manipulation; }
+.welcome-chip:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+.welcome-tone-add .field { min-inline-size: 0; }
+
+/* The preview: an infographic footer and a carousel cover. A swipe strip on a phone, two columns from 40rem. */
+.welcome-preview {
+    display: flex; align-items: flex-start; gap: var(--space-3); margin-block-end: var(--space-5); padding-block-end: var(--space-2);
+    overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
+}
+.pv-card {
+    flex: 0 0 82%; scroll-snap-align: start; margin: 0; padding: var(--space-4);
+    display: flex; flex-direction: column; gap: var(--space-3);
+    background: var(--pv-bg, var(--surface-sunken)); color: var(--pv-ink, var(--text-strong));
+    border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+}
+.pv-cover { flex-basis: 60%; aspect-ratio: 4 / 5; justify-content: space-between; }
+.pv-caption { font-size: var(--fs-100); color: var(--pv-muted, var(--text-muted)); }
+.pv-footer-row { display: flex; align-items: center; gap: var(--space-3); min-inline-size: 0; }
+.pv-portrait {
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden;
+    inline-size: 40px; block-size: 40px; border-radius: 50%; border: 2px solid var(--pv-ring, var(--accent));
+    font-weight: var(--fw-bold); color: var(--pv-accent, var(--accent-text));
+}
+.pv-portrait img { inline-size: 100%; block-size: 100%; object-fit: cover; }
+.pv-footer-text { display: flex; flex-direction: column; min-inline-size: 0; }
+.pv-name { font-weight: var(--fw-semibold); color: var(--pv-ink, var(--text-strong)); }
+.pv-meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-family: var(--font-mono); font-size: var(--fs-100); color: var(--pv-accent, var(--accent-text)); }
+.pv-headline { margin: 0; font-size: var(--fs-500); font-weight: var(--fw-bold); line-height: var(--lh-tight); }
+.pv-keyword { color: var(--pv-accent, var(--accent-text)); }
+.pv-cover-foot { margin: 0; font-size: var(--fs-100); color: var(--pv-muted, var(--text-muted)); }
+
+.welcome-colour { display: flex; gap: var(--space-2); align-items: stretch; }
+.welcome-colour .field { flex: 1; min-inline-size: 0; font-family: var(--font-mono); }
+.welcome-swatch {
+    flex-shrink: 0; inline-size: var(--tap-target); block-size: var(--tap-target); padding: 0; cursor: pointer;
+    background: var(--surface-sunken); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);
+}
+.welcome-contrast { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; font-size: var(--fs-200); }
+.welcome-contrast [data-contrast-text] { flex: 1 1 10rem; min-inline-size: 0; }
+.welcome-contrast .welcome-contrast-fix { flex: 0 0 auto; }
+.welcome-contrast.is-ok { color: var(--success-text); }
+.welcome-contrast.is-low { color: var(--warning-text); }
+/* The two icons and the fix button are always in the markup (welcome.js `contrastMarkup`); the verdict shows the ones that apply. */
+.welcome-contrast.is-ok .welcome-contrast-low, .welcome-contrast.is-ok .welcome-contrast-fix,
+.welcome-contrast.is-low .welcome-contrast-ok { display: none; }
+.welcome-portrait-hint { margin-block: 0 var(--space-2); }
+.welcome-portrait-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.welcome-file { cursor: pointer; }
+.welcome-file-input:focus-visible + .welcome-file { outline: 2px solid var(--accent); outline-offset: 2px; box-shadow: 0 0 0 var(--ring) var(--accent-ring); }
+
+.welcome-done-list { list-style: none; margin: 0 0 var(--space-5); padding: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.welcome-done-item { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+.welcome-done-item > [data-lucide] { flex-shrink: 0; margin-block-start: 4px; }
+.welcome-done-item.is-ready > [data-lucide] { color: var(--success-text); }
+.welcome-done-item.is-waiting > [data-lucide] { color: var(--warning-text); }
+.welcome-done-item strong { display: block; color: var(--text-strong); font-size: var(--fs-200); }
+.welcome-done-item p { margin: 0; color: var(--text-default); font-size: var(--fs-200); }
+.welcome-rules-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-block-end: var(--space-2); }
+.welcome-rule-list { margin: 0; padding-inline-start: var(--space-5); color: var(--text-default); font-size: var(--fs-200); }
+
+/* The bar sticks to the bottom of the screen and sits at the end of the column when the form is short. It is hidden while the
+   on-screen keyboard is open (welcome.js reads `visualViewport`), so it never covers the field being typed in. */
+.welcome-bar {
+    position: sticky; inset-block-end: 0; z-index: 2; margin-block-start: auto;
+    display: flex; flex-direction: column; gap: var(--space-1);
+    padding: var(--space-2) var(--space-4); padding-block-end: max(var(--space-3), env(safe-area-inset-bottom));
+    background: var(--surface-chrome); border-block-start: 1px solid var(--border-subtle);
+    backdrop-filter: blur(var(--blur-chrome)) saturate(180%); -webkit-backdrop-filter: blur(var(--blur-chrome)) saturate(180%);
+}
+.welcome-bar-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.welcome-save { flex: 1; text-align: center; font-size: var(--fs-100); color: var(--text-muted); }
+.welcome-screen.kb-open .welcome-bar { display: none; }
+
+@media (min-width: 40rem) {
+    .welcome-preview { overflow-x: visible; }
+    .pv-card, .pv-cover { flex: 1 1 0; }
+    .welcome-card { padding: var(--space-6); }
+}
+
 /* Input with a leading icon. The icon is taken out of flow and overlaid on the field. Its
    size AND its position are written on `[data-lucide]`, so the `<i>` placeholder sits in
    exactly the box the `<svg>` will: an in-flow placeholder would push the input sideways
@@ -2988,10 +3158,10 @@ html[lang='en'] .page-toolbar-count {
    pass's one flagged pair, .empty-state × .loader, is explained in
    scripts/design-pass.tags.json). */
 
-/* ─── Pattern: callout — shared by .schedule-truth, .tiktok-note, .studio-hint, .studio-callout, .help-callout ─── */
+/* ─── Pattern: callout — shared by .schedule-truth, .tiktok-note, .studio-hint, .studio-callout, .help-callout, .welcome-notice, .inapp-hint ─── */
 /* One recipe: 12/16 padding, a 12 gap, an inner panel's radius, UI-size text, and the tone's
    one border (--border-<tone>, tokens.css). A variant changes the tone, never the shape. */
-.schedule-truth, .tiktok-note, .studio-hint, .studio-callout, .help-callout {
+.schedule-truth, .tiktok-note, .studio-hint, .studio-callout, .help-callout, .welcome-notice, .inapp-hint {
     display: flex; align-items: flex-start; gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-md);
@@ -2999,6 +3169,10 @@ html[lang='en'] .page-toolbar-count {
     border: 1px solid var(--border-info);
     font-size: var(--fs-200);
 }
+
+/* The in-app-browser note's own geometry (welcome.js, invite.js): after the pattern, whose `padding` shorthand it narrows at the end. */
+.inapp-hint { position: relative; margin-block-end: var(--space-4); padding-inline-end: calc(var(--tap-target) + var(--space-2)); text-align: start; }
+.inapp-hint-close { position: absolute; inset-block-start: var(--space-1); inset-inline-end: var(--space-1); }
 
 /* ─── Pattern: step mark — shared by .slide-num, .slide-card-num, .studio-step-num, .setup-step-mark, .studio-stage-mark ─── */
 /* One size everywhere: 24px, its label at --fs-100 semibold. Growth's `.growth-action-num` is
@@ -3047,17 +3221,17 @@ html[lang='en'] .page-toolbar-count {
     border-radius: var(--radius-md);
 }
 
-/* ─── Pattern: tint panel — shared by .setup-stage, .plan-item, .slide-card, .studio-more, .help-empty, .help-toc, .help-qa-item ─── */
-.setup-stage, .plan-item, .slide-card, .studio-more, .help-empty, .help-toc, .help-qa-item {
+/* ─── Pattern: tint panel — shared by .setup-stage, .plan-item, .slide-card, .studio-more, .help-empty, .help-toc, .help-qa-item, .welcome-done-item ─── */
+.setup-stage, .plan-item, .slide-card, .studio-more, .help-empty, .help-toc, .help-qa-item, .welcome-done-item {
     border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
     background: var(--surface-glass);
 }
 
-/* ─── Pattern: meter — shared by .platform-bar, .dm-meter-track, .studio-meter, .studio-indeterminate ─── */
+/* ─── Pattern: meter — shared by .platform-bar, .dm-meter-track, .studio-meter, .studio-indeterminate, .welcome-segment ─── */
 /* Heights: a progress meter is 6px (.dm-meter-track, .studio-meter and Growth's SVG .growth-bar);
    the indeterminate sweep is 4px; the labelled data bar (.platform-bar) is 10px. Each states its
    own height, since the three differ by role. */
-.platform-bar, .dm-meter-track, .studio-meter, .studio-indeterminate {
+.platform-bar, .dm-meter-track, .studio-meter, .studio-indeterminate, .welcome-segment {
     border-radius: var(--radius-pill); background: var(--surface-glass-hover); overflow: hidden;
 }
 

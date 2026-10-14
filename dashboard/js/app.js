@@ -89,10 +89,14 @@ const App = {
         // The AI providers card on Operations: keys, routes, prices, budgets and spend, with the Gemini key as one provider row. Loaded
         // by Operations on first use, and reset with every other module when the tenant changes.
         ai_providers: { src: 'ai_providers', page: () => AiProviders, routable: false, adminOnly: true },
+        // The setup wizard a new tenant is sent to (#/welcome). Like the invite page it renders OUTSIDE #app, into
+        // #welcome-screen: it has its own shell, and `navigate()` never reaches it. `showWelcome` is how it opens, and
+        // the navigate gate (`mustOnboard`) is how a tenant that has not finished ends up there from every other route.
+        welcome: { src: 'welcome', page: () => WelcomePage, routable: false },
     },
 
     /** Must match the `?v=` the rest of the assets are served with. */
-    ASSET_VERSION: '12.17',
+    ASSET_VERSION: '12.18',
 
     _modules: Object.create(null),
 
@@ -210,14 +214,7 @@ const App = {
         }
 
         // Logout — tears the current page down first, so no poller survives it
-        document.getElementById('logout-btn').addEventListener('click', () => {
-            this.teardownCurrentPage();
-            this.currentPage = null;
-            this.session = null;
-            this.resetTenantState();
-            API.clearToken();
-            this.showLogin();
-        });
+        document.getElementById('logout-btn').addEventListener('click', () => this.logout());
 
         // Mobile menu — the sidebar becomes a fixed-position drawer at
         // ≤860px (see the `@media (max-width: 860px)` block in styles.css).
@@ -273,6 +270,16 @@ const App = {
         } else {
             this.showLogin();
         }
+    },
+
+    /** Sign out: the page's timers stop first, so no poll survives into the login screen (the sidebar button and the wizard's link). */
+    logout() {
+        this.teardownCurrentPage();
+        this.currentPage = null;
+        this.session = null;
+        this.resetTenantState();
+        API.clearToken();
+        this.showLogin();
     },
 
     // ─── Mobile nav drawer ───────────────────────────────────────────────────
@@ -388,6 +395,24 @@ const App = {
     onHashChange() {
         if (this.isInviteHash()) {
             this.showInvite();
+            return;
+        }
+        // The wizard owns its own hash (`#/welcome?step=voice`, so the phone's Back button moves between its steps).
+        if (this.isWelcomeScreenOpen()) {
+            if (this.isWelcomeHash() && this.wantsWelcome()) {
+                const page = this.pages.welcome.page();
+                if (page && typeof page.onHashChange === 'function') page.onHashChange();
+            } else if (API.token) {
+                // Left it by the address bar, or finished: whatever the gate says this session should see (the wizard, again, if it is not done).
+                this.showApp();
+            } else {
+                this.showLogin();
+            }
+            return;
+        }
+        // A #/welcome typed or followed from the dashboard: only a gated tenant (or the platform admin filling in for one) sees it.
+        if (this.isWelcomeHash() && API.token) {
+            this.showApp();
             return;
         }
         // Leaving the invite page by the address bar: back to whichever screen this browser would otherwise show.
@@ -511,6 +536,7 @@ const App = {
         document.getElementById('app').classList.add('hidden');
         const inviteScreen = document.getElementById('invite-screen');
         if (inviteScreen) inviteScreen.classList.add('hidden');
+        this.hideWelcome();
         const errorEl = document.getElementById('login-error');
         if (errorEl) {
             errorEl.textContent = reason ? String(reason) : '';
@@ -560,8 +586,14 @@ const App = {
     INVITE_RETURN_KEY: 'invite_return',
     _inviteToken: '',
 
+    /**
+     * `#/invite?t=…`, the links the invite card has made since P17, and `#/welcome?invite=…`, the spelling the onboarding spec
+     * gives (02 §3, W0): the invite page IS the wizard's first screen, so a link may name either. A bare `#/welcome` is the
+     * wizard itself and is not an invite.
+     */
     isInviteHash() {
-        return /^#\/invite(?:[?/#]|$)/.test(String(location.hash || ''));
+        const hash = String(location.hash || '');
+        return /^#\/invite(?:[?/#]|$)/.test(hash) || /^#\/welcome\?(?:[^#]*&)?invite=/.test(hash);
     },
 
     /** Read the token out of the hash (once), keep it for this tab, and take it out of the address bar. */
@@ -569,7 +601,10 @@ const App = {
         const raw = String(location.hash || '');
         const at = raw.indexOf('?');
         let token = '';
-        try { token = new URLSearchParams(at === -1 ? '' : raw.slice(at + 1)).get('t') || ''; } catch { token = ''; }
+        try {
+            const query = new URLSearchParams(at === -1 ? '' : raw.slice(at + 1));
+            token = query.get('t') || query.get('invite') || '';
+        } catch { token = ''; }
         if (token) {
             this._inviteToken = token;
             try { sessionStorage.setItem(this.INVITE_KEY, token); } catch { /* the in-memory copy serves this page view */ }
@@ -613,6 +648,7 @@ const App = {
         this.setInboxWaiting(0);
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('app').classList.add('hidden');
+        this.hideWelcome();
         const screen = document.getElementById('invite-screen');
         if (screen) screen.classList.remove('hidden');
         this.renderLanguageToggle();
@@ -642,8 +678,10 @@ const App = {
     },
 
     /**
-     * The link worked: keep the session it answered with, remember the address for the login, forget the token, and open the
-     * dashboard. The tenant's wizard comes later (P18); for now they land where every member lands.
+     * The link worked: keep the session it answered with, remember the address for the login, forget the token, and go in. A
+     * tenant that has not finished setting up lands in the wizard (`#/welcome`, which is where the navigate gate would send
+     * them anyway); a link that adds somebody to a tenant that is set up already (a second member, a password reset) lands
+     * on the dashboard like any other sign-in.
      */
     async completeInvite(result, email) {
         API.setToken(result.token);
@@ -651,7 +689,9 @@ const App = {
         this.forgetInvite();
         const screen = document.getElementById('invite-screen');
         if (screen) screen.classList.add('hidden');
-        history.replaceState(null, '', `#/${this.DEFAULT_PAGE}`);
+        const status = result && result.onboarding && result.onboarding.status;
+        const toWizard = !!status && status !== 'completed' && result.purpose !== 'reset';
+        history.replaceState(null, '', toWizard ? '#/welcome' : `#/${this.DEFAULT_PAGE}`);
         await this.showApp();
     },
 
@@ -659,10 +699,19 @@ const App = {
         document.getElementById('login-screen').classList.add('hidden');
         const inviteScreen = document.getElementById('invite-screen');
         if (inviteScreen) inviteScreen.classList.add('hidden');
-        document.getElementById('app').classList.remove('hidden');
 
+        // The session first, the app second: whether this person sees the dashboard at all depends on what /auth/me says (a
+        // tenant that has not finished setting up is sent to the wizard), and showing the sidebar for the length of that
+        // answer would flash a dashboard they are about to be taken out of.
         const ok = await this.loadSession();
         if (!ok) return; // 401 — API.request already bounced us to the login screen
+
+        if (this.wantsWelcome()) {
+            await this.showWelcome();
+            return;
+        }
+        this.hideWelcome();
+        document.getElementById('app').classList.remove('hidden');
 
         this.applyChrome();
 
@@ -707,13 +756,89 @@ const App = {
                 // who still have them.
                 tenantRole: (me && me.tenantRole) || null,
                 tenants: (me && Array.isArray(me.tenants)) ? me.tenants : [],
+                // Where this tenant is in the setup wizard, and whether this session is sent to it. Null when the server could
+                // not say (an older deployment): the dashboard then gates nothing.
+                onboarding: (me && me.onboarding && typeof me.onboarding === 'object') ? me.onboarding : null,
                 available: true,
             };
         } catch (err) {
             if (err && err.status === 401) return false;
-            this.session = { userId: null, role: null, tenantId: null, tenantRole: null, tenants: [], available: false };
+            this.session = { userId: null, role: null, tenantId: null, tenantRole: null, tenants: [], onboarding: null, available: false };
         }
         return true;
+    },
+
+    // ─── The setup wizard (#/welcome) ────────────────────────────────────────
+
+    isWelcomeHash() {
+        return /^#\/welcome(?:[?/#]|$)/.test(String(location.hash || ''));
+    },
+
+    isWelcomeScreenOpen() {
+        const screen = document.getElementById('welcome-screen');
+        return !!(screen && !screen.classList.contains('hidden'));
+    },
+
+    /**
+     * The navigate gate: is this session sent to the wizard from every other route? The server decides (`onboarding.gated` in
+     * /auth/me: an OWNER of a tenant whose setup is not completed) and this repeats the two conditions that must never be
+     * wrong. A platform admin is exempt, and `completed` is never gated, so the owner (whose tenant is completed, and whose
+     * operators are not owners) never sees the wizard, whatever else is stored or missing.
+     */
+    mustOnboard() {
+        const s = this.session;
+        if (!s || !s.available) return false;
+        if (s.role === 'platform_admin') return false;
+        const o = s.onboarding;
+        return !!(o && o.gated === true && o.status !== 'completed');
+    },
+
+    /** The gate, plus the one way in for a platform admin: `#/welcome?mode=behalf`, filling the wizard in for the tenant they are acting as. */
+    wantsWelcome() {
+        if (this.mustOnboard()) return true;
+        return this.isWelcomeHash() && this.isAdmin() && this.hashParam('mode') === 'behalf';
+    },
+
+    hideWelcome() {
+        const screen = document.getElementById('welcome-screen');
+        if (screen) screen.classList.add('hidden');
+        try {
+            const page = this.pages.welcome.page();
+            if (page && typeof page.destroy === 'function') page.destroy();
+        } catch { /* the module was never loaded: nothing to stop */ }
+    },
+
+    /** Show the wizard, outside the app: its own shell, no sidebar. The session is already known (`showApp` read it). */
+    async showWelcome() {
+        this.teardownCurrentPage();
+        this.currentPage = null;
+        this.setInboxWaiting(0);
+        document.documentElement.removeAttribute('data-invite');
+        document.getElementById('login-screen').classList.add('hidden');
+        document.getElementById('app').classList.add('hidden');
+        const invite = document.getElementById('invite-screen');
+        if (invite) invite.classList.add('hidden');
+        const screen = document.getElementById('welcome-screen');
+        if (screen) screen.classList.remove('hidden');
+        this.renderLanguageToggle();
+
+        // Sent here from another route: the address says where they are.
+        if (!this.isWelcomeHash()) history.replaceState(null, '', '#/welcome');
+
+        const page = await this.loadPageModule('welcome');
+        if (!page) {
+            const root = document.getElementById('welcome-root');
+            if (root) root.textContent = t('welcome.loadFailed');
+            return;
+        }
+        await page.start();
+    },
+
+    /** The wizard is finished (or the platform admin is done): open the dashboard, with the gate asked again. */
+    async leaveWelcome() {
+        this.hideWelcome();
+        history.replaceState(null, '', `#/${this.DEFAULT_PAGE}`);
+        await this.showApp();
     },
 
     /** Re-read /auth/me after something changed the tenant list, then re-chrome. */
@@ -894,6 +1019,15 @@ const App = {
 
             const tenant = this.currentTenant();
             UI.toast(t('tenants.switched', { name: (tenant && tenant.name) || '—' }));
+
+            // Switched from the wizard's own screen: the gate decides again for the tenant now acted as, the wizard for another
+            // one that has not finished and the dashboard for one that has. (`show()` below only fills the dashboard's container.)
+            if (this.isWelcomeScreenOpen()) {
+                this.currentPage = null;
+                history.replaceState(null, '', `#/${this.DEFAULT_PAGE}`);
+                await this.showApp();
+                return;
+            }
 
             const page = this.pages[this.currentPage] ? this.currentPage : this.pageFromHash();
             this.currentPage = null; // teardown already ran; don't run it twice
@@ -1117,6 +1251,12 @@ const App = {
 
     async navigate(page) {
         if (!this.pages[page]) return;
+
+        // The one place every route passes through: a tenant that has not finished setting up goes to the wizard instead.
+        if (this.mustOnboard()) {
+            await this.showWelcome();
+            return;
+        }
 
         // A platform-admin page reached by typing the hash, by an account that
         // is not one: send them home rather than to a guaranteed 403.

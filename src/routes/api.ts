@@ -63,6 +63,8 @@ import { droppedLeversNote, reachOptionsFor, sendsMetaOptions, validateMetaOptio
 import type { DroppedReachOption } from '../services/instagram.js';
 import { growthRouter } from './growth.js';
 import { profileRouter } from './profile.js';
+import { onboardingRouter } from './onboarding.js';
+import { describeOnboardingBrief } from '../services/onboardingWizard.js';
 import { syncAllTenants } from '../services/growth/sync.js';
 import { sweepDeadline, sweepMonteur, type MonteurSweepResult } from '../services/monteur/sweep.js';
 
@@ -1287,12 +1289,18 @@ router.get('/auth/me', async (req, res) => {
         const tenantRole = tenants.find((t) => t.id === tenantId)?.role
             ?? (session.role === 'platform_admin' ? 'owner' : null);
 
+        // Where this tenant is in the setup wizard, and whether this session is sent to it (`onboarding.gated`: an owner of a
+        // tenant that has not finished; never a platform admin, and never a tenant with no row, the owner's included). Null
+        // when it cannot be read, and the dashboard then gates nothing: failing open never locks anybody out.
+        const onboarding = tenantId ? await describeOnboardingBrief(tenantId, { sessionRole: session.role, tenantRole }) : null;
+
         res.json({
             userId: session.userId,
             role: session.role,
             tenantId,
             tenantRole,
             tenants,
+            onboarding,
         });
     } catch (err) {
         log('error', 'api.session_identity_failed', describeError(err));
@@ -1474,6 +1482,9 @@ router.use('/growth', growthRouter);
 
 // The Creator Profile (FLOWS.md §4.7) — tenant-scoped. Any member reads it; only an owner changes it (the router carries the guard).
 router.use('/profile', profileRouter);
+
+// The onboarding wizard (FLOWS.md §4.9) — tenant-scoped. An operator reads it; only an owner writes it (the router carries the guards).
+router.use('/onboarding', onboardingRouter);
 
 // ─── In-tenant role guards ──────────────────────────────────────────────────
 //

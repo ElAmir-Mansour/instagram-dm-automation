@@ -418,6 +418,49 @@ const UI = {
         return UI.ltr(UI.formatNumber(value));
     },
 
+    // ─── In-app browsers ────────────────────────────────────────────────────
+    /**
+     * Which app's built-in browser is this page open in? '' when none (or when it cannot tell).
+     *
+     * A link tapped inside Instagram, Facebook or WhatsApp opens in that app's own web view, not in Safari or Chrome. Google
+     * refuses its sign-in there (`disallowed_useragent`), which would break connecting YouTube later in the setup, and
+     * a session kept in a web view is not the one the person's browser holds. So the invite page and the wizard say so,
+     * once, and offer the way out (`inAppHint`). Detection is the user agent's own word for it, and nothing else: a
+     * web view that does not say is not detected, and nothing breaks for it.
+     */
+    inAppBrowser(userAgent) {
+        let ua = userAgent;
+        if (ua === undefined) {
+            try { ua = navigator.userAgent; } catch { ua = ''; }
+        }
+        ua = String(ua || '');
+        if (/Instagram/i.test(ua)) return 'instagram';
+        if (/FBAN|FBAV|FB_IAB|FBIOS/.test(ua)) return 'facebook';
+        if (/WhatsApp/i.test(ua)) return 'whatsapp';
+        return '';
+    },
+
+    /** The one-line note for a person in an app's web view: what is wrong with it and how to leave. '' for none, or once dismissed. */
+    inAppHint(app) {
+        if (app !== 'instagram' && app !== 'facebook' && app !== 'whatsapp') return '';
+        let dismissed = false;
+        try { dismissed = sessionStorage.getItem('inapp_hint_dismissed') === '1'; } catch { dismissed = false; }
+        if (dismissed) return '';
+        return html`
+            <div class="inapp-hint" role="note" data-inapp-hint>
+                <i data-lucide="external-link" aria-hidden="true"></i>
+                <p class="inapp-hint-text">
+                    <strong>${t('inapp.title', { app: t(`inapp.app.${app}`) })}</strong>
+                    ${' '}${t('inapp.body')}
+                </p>
+                <button type="button" class="icon-btn inapp-hint-close" data-action="ui:dismissInAppHint"
+                        aria-label="${t('common.close')}" title="${t('common.close')}">
+                    <i data-lucide="x" aria-hidden="true"></i>
+                </button>
+            </div>
+        `;
+    },
+
     // ─── Contextual help ────────────────────────────────────────────────────
     /**
      * A small link into the Help Center, next to the control it explains.
@@ -1195,6 +1238,13 @@ const UI = {
 };
 
 UI.registerActions('ui', {
+    /** The in-app-browser note is told once per tab: closing it is remembered, and it stays closed across steps and reloads. */
+    dismissInAppHint: (el) => {
+        try { sessionStorage.setItem('inapp_hint_dismissed', '1'); } catch { /* the note simply shows again on the next screen */ }
+        const note = el && el.closest ? el.closest('[data-inapp-hint]') : null;
+        if (note) note.remove();
+    },
+
     /**
      * Every Cancel and every × in the dashboard points here, so the
      * unsaved-work question is asked once, in one place, for all of them.

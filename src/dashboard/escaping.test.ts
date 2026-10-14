@@ -192,3 +192,81 @@ describe('safeUrl() — because escaping alone does not stop javascript:', () =>
         }
     });
 });
+
+// ─── The setup wizard (P18): a payload in every field a person or the server fills in ────────────
+
+/**
+ * The wizard (`dashboard/js/pages/welcome.js`) shows more of other people's text than any screen before it: what a tenant typed
+ * into each step, the profile's fields, the operator's hints, a workspace's name, the server's list of problems. This loads the
+ * real file beside `components.js` and renders every step with an injection payload in each of those, so the one defence on this
+ * page (`html` and `esc`) is shown to hold there as well. `welcome.test.ts` runs the same view through the real dictionaries and
+ * every state; this is the case `docs/onboarding/02 §5` asks for in this file.
+ */
+describe('the wizard escapes a payload in every field it shows', () => {
+    const PAYLOAD = '<img src=x onerror=alert(document.cookie)>';
+    const BREAKOUT = '"><script>alert(1)</script><x y="';
+    const noop = (): void => {};
+
+    function loadWelcome(): { P: any } {
+        const stubEl = {
+            addEventListener: noop, removeEventListener: noop, querySelectorAll: () => [], querySelector: () => null, appendChild: noop,
+            setAttribute: noop, getAttribute: () => null, classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
+            style: {}, dataset: {}, focus: noop, remove: noop, closest: () => null, contains: () => false, children: [],
+        };
+        const ctx: Record<string, unknown> = {
+            document: { ...stubEl, createElement: () => ({ ...stubEl }), body: { ...stubEl }, head: { ...stubEl }, documentElement: { ...stubEl, lang: 'ar', dir: 'rtl' }, getElementById: () => null, activeElement: null },
+            window: { addEventListener: noop, matchMedia: () => ({ matches: false, addEventListener: noop }), location: { hash: '' } },
+            Intl, console, setTimeout, clearTimeout, requestAnimationFrame: (f: () => void) => f(),
+            I18N: { lang: 'en', locale: () => 'en-US', t: (k: string) => k, strings: { ar: {}, en: {} } },
+            t: (k: string, p?: Record<string, unknown>) => (p && p.word !== undefined ? `${k}:${String(p.word)}` : k),
+            navigator: { language: 'en', userAgent: '' }, sessionStorage: { getItem: () => null, setItem: noop }, localStorage: { getItem: () => null, setItem: noop },
+        };
+        ctx.globalThis = ctx;
+        vm.createContext(ctx);
+        for (const file of ['dashboard/js/components.js', 'dashboard/js/pages/welcome.js']) vm.runInContext(readFileSync(file, 'utf8'), ctx, { filename: file });
+        return { P: vm.runInContext('WelcomePage', ctx) };
+    }
+
+    const { P } = loadWelcome();
+    const everyValue = {
+        name: PAYLOAD, kind: PAYLOAD, niche: BREAKOUT, offerName: PAYLOAD, orderVia: PAYLOAD, offerUrl: BREAKOUT, price: PAYLOAD, country: PAYLOAD, timezone: PAYLOAD,
+        register: PAYLOAD, tone: [PAYLOAD, BREAKOUT], primary: PAYLOAD, accent: BREAKOUT, theme: PAYLOAD, handle: PAYLOAD, site: BREAKOUT, portraitUrl: 'javascript:alert(1)',
+    };
+    const profile = {
+        identity: { display_name: { ar: PAYLOAD, en: BREAKOUT }, brand_name: PAYLOAD, kind: PAYLOAD, role: PAYLOAD, niche: PAYLOAD, country: PAYLOAD, timezone: PAYLOAD },
+        language: { primary: 'ar', register: PAYLOAD, digits: PAYLOAD, surfaces: {} },
+        offers: [{ id: PAYLOAD, kind: PAYLOAD, name: PAYLOAD, order_via: PAYLOAD, url: BREAKOUT, price: PAYLOAD, facts: [PAYLOAD], bullets: [PAYLOAD], keyword: PAYLOAD, primary: true }],
+        voice: { guide: PAYLOAD, tone: [PAYLOAD], samples: [PAYLOAD], use_words: [PAYLOAD], avoid_words: [PAYLOAD], emoji: PAYLOAD, address: PAYLOAD },
+        content: { domain: PAYLOAD, pillars: [PAYLOAD], never_mention: [PAYLOAD], rules: [PAYLOAD], custom_rules: [PAYLOAD] },
+        brand: { primary: PAYLOAD, accent: BREAKOUT, font_display: PAYLOAD, logo_url: PAYLOAD, portrait_url: 'javascript:alert(1)', theme: PAYLOAD },
+        socials: { handle: PAYLOAD, site: BREAKOUT, platforms: [PAYLOAD], links: { instagram: PAYLOAD } },
+    };
+    const order = ['about', 'voice', 'brand', 'connect', 'proof', 'done'].map((id, i) => ({ id, code: `W${i + 1}`, required: i < 2, enabled: id !== 'connect' && id !== 'proof' }));
+    const onb = {
+        status: 'in_progress', step: 'about', order, profile, version: 7, missing: [PAYLOAD],
+        steps: { about: { values: everyValue }, voice: { values: everyValue }, brand: { values: everyValue } },
+        hints: { name: PAYLOAD, instagramUsername: BREAKOUT, websiteUrl: PAYLOAD }, canEdit: true,
+    };
+
+    for (const step of ['about', 'voice', 'brand', 'done']) {
+        it(`${step}: nothing is a live tag, handler or address, and the text is there as text`, () => {
+            const state = P.freshState();
+            state.phase = 'ready';
+            state.onb = onb;
+            state.step = step;
+            state.values = P.STEPS[step].initial(onb, false);
+            state.problems = [PAYLOAD, BREAKOUT];
+            state.notice = 'conflict';
+            state.tenants = [{ id: PAYLOAD, name: PAYLOAD }, { id: BREAKOUT, name: BREAKOUT }];
+            state.tenantId = BREAKOUT;
+            state.rulesOpen = true;
+            const out = String(P.view(state));
+            assert.ok(!out.includes('<img src=x'), 'no live img tag');
+            assert.ok(!out.includes('<script'), 'no live script tag');
+            assert.ok(!/"\s*>\s*<(script|img|x)\b/i.test(out), 'nothing broke out of an attribute');
+            assert.ok(!/javascript:/i.test(out), 'no javascript: address in the page');
+            assert.ok(!/\son[a-z]+\s*=/i.test(out.replace(/&lt;[^<>]*/g, '')), 'no live event handler');
+            assert.ok(out.includes('&lt;img src=x onerror=alert('), 'and the payload is there, escaped, as the text it is');
+        });
+    }
+});
