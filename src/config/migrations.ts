@@ -58,6 +58,7 @@ export const EXPECTED_MIGRATIONS: readonly string[] = [
     'migration_v39_dm_sales_state.sql',
     'migration_v40_conversation_profile.sql',
     'migration_v41_interaction_recipient.sql',
+    'migration_v42_dm_variant.sql',
 ] as const;
 
 export interface SchemaState {

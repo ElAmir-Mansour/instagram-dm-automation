@@ -164,6 +164,8 @@ export const AUDIT_ACTIONS = {
     dmIceBreakersPublish: 'dm.ice_breakers_publish',
     /** The owner pressed "Remove from Instagram" (S13): the ice breakers and the persistent menu were deleted from the account's Instagram profile. */
     dmIceBreakersRemove: 'dm.ice_breakers_remove',
+    /** The A/B wording experiment of the DM sales turn was saved from AI settings (S14). `detail` holds whether it is running, the variants' ids and weights and the length of their texts, never the texts. */
+    dmVariantsWrite: 'dm.variants_write',
 } as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[keyof typeof AUDIT_ACTIONS];

@@ -783,6 +783,32 @@ words as an `operator` row keyed on Meta's message id, and sends nothing.
 **Checking it:** `dmFunnel.test.ts` counts from fact rows worked out by hand (`dmFunnelTestFixtures.ts`); `dmFunnel.sql.test.ts` runs the real
 statements against a local migrated Postgres on the same world (`DM_FUNNEL_TEST_DATABASE_URL`, every row rolled back).
 
+### 2.6f — A/B wording variants (v42, DM plan S14)
+
+**Only inside the sales turn: `sales_mode = 'off'` (and a test sender who is not listed) never reads any of this.** The owner writes two or three
+variants (how to open the first reply, how to word the offer of the link) in AI settings, saved per tenant as `app_settings` `dm.variants.<creator id>`
+(`POST /api/settings/sales-variants`, **`routes/api.ts:4096`**, operator; `parseVariantConfig`, **`dmSales/variants.ts:78`**, refuses a link or a number
+in the wording and a running experiment with fewer than two variants that have a share).
+
+1. **Read** with the history, in `runSalesTurn` (**`dmSales/turn.ts:333`**): `readVariantConfig` never throws, and an unreadable value, a version it does
+   not know or a database error is "no experiment" (`dm.variants_unreadable`, `dm.variant_config_read_failed`). A tenant with no experiment goes no
+   further, and its recording statement is byte for byte the old one.
+2. **Assigned** only when an experiment is RUNNING (`activeVariants`: enabled, two arms with a share) and the conversation has no bot reply yet
+   (`firstReply`, **:338**): `chooseVariant` (**`variants.ts:205`**) keeps the arm already on `conversations.sales_variant` (read in its own statement,
+   **:341**: a database without v42 logs `dm.variant_unavailable` and the turn has no arm), else hashes the conversation id onto the weights
+   (`assignVariant`, **:175**: SHA-256, so the same id is the same arm on every server). **A conversation already under way is left out of the
+   experiment** (no arm, the prompt it had), and an arm deleted from the editor is the prompt as it was.
+3. **Told to the model in the conversation's facts**, never in the cached system text (`salesFactsBlock`): the opening only for the first reply, the link
+   wording for every reply. The rules above it still hold: the model writes no link and no number the data does not hold.
+4. **Written once**, in the statement that records the reply (`setState`, **`dmSales/store.ts:184`**: `sales_variant = COALESCE(sales_variant, $n)`), so an
+   arm is never moved, and `ai_meta.variant` says which arm a reply came from. A turn that never reaches the model (refund, opt-out, insult) assigns none.
+5. **Counted** by `GET /api/dm/funnel`'s `variants` section (**`dmFunnel.ts:122`** reads the arm in a statement of its own, **`dmVariantFunnel.ts:75`**
+   counts it with the funnel's own `reachedOf`): per arm, conversations, recommended, linked, clicked and the two rates. **Below 30 conversations an arm
+   shows its counts and no percentage**, and nothing in it names a better arm: no significance test is run.
+
+**Checking it:** `variants.test.ts` (parsing, the hash and its spread over the weights, stickiness), the A/B block of `turn.test.ts` (including that
+`off` never reads it), `dmVariantFunnel.test.ts` (a fixture world counted by hand, and the gate at 29 and 30).
+
 ### 2.7 — Gemini
 
 **`src/webhook/messaging.ts:377`** — `generateAiResponse(conversationId, dmPromptText(dm),

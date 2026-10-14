@@ -37,6 +37,7 @@ import { claimCorrection, composeText, META_TEXT_BYTES, salesPayload, salesTurns
 import { utf8Bytes } from './text.js';
 import { MAX_REPLY_BYTES } from './types.js';
 import { withSales } from './testFixtures.js';
+import { assignVariant } from './variants.js';
 
 type Row = Record<string, unknown>;
 
@@ -93,6 +94,13 @@ interface World {
      * belongs to. Absent, the sender was never replied to and the conversation has no source. `'down'` is a database the lookup cannot read (v41 not applied).
      */
     bridge?: Row | 'down';
+    /**
+     * The tenant's A/B experiment as `app_settings` holds it (`dm.variants.creator-1`, S14). Absent, nothing is saved: no experiment. `'down'` is a settings
+     * table that cannot be read.
+     */
+    variants?: string | 'down';
+    /** `conversations.sales_variant` as the sales turn reads it: an arm, or null for none. `'down'` is a database without v42. Absent: none. */
+    conversationVariant?: string | null | 'down';
 }
 
 /** When the link of a recorded reply went, and the id of the row that carried it: what `recordTurn` reads back from its statement. */
@@ -211,6 +219,14 @@ async function run(world: World = {}): Promise<Run> {
         if (world.bridge === 'down' && /LEFT JOIN LATERAL/.test(sql)) throw new Error('column i.recipient_id does not exist');
         if (/FROM app_settings WHERE key/.test(sql) && params[0] === 'dm.sales.followup_minutes' && world.followupMinutes !== undefined) {
             return { rows: [{ value: world.followupMinutes, is_secret: false }], rowCount: 1 };
+        }
+        if (/FROM app_settings WHERE key/.test(sql) && params[0] === 'dm.variants.creator-1') {
+            if (world.variants === 'down') throw new Error('app_settings is unavailable');
+            if (world.variants !== undefined) return { rows: [{ value: world.variants, is_secret: false }], rowCount: 1 };
+        }
+        if (/SELECT sales_variant FROM conversations/.test(sql)) {
+            if (world.conversationVariant === 'down') throw new Error('column "sales_variant" does not exist');
+            return { rows: [{ sales_variant: world.conversationVariant ?? null }], rowCount: 1 };
         }
         const route = routes.find(([pattern]) => pattern.test(sql));
         if (!route) throw new Error(`no result arranged for SQL:\n${sql}`);
@@ -1303,5 +1319,200 @@ describe('the sales turn: an ice breaker or a menu item that was tapped', () => 
         assert.equal(r.geminiCalls, 1, 'the old path answered');
         assert.equal(messages(r).length, 1);
         assert.ok(r.executed.some((e) => /INSERT INTO messages/.test(e.sql) && e.params.includes('How much is it?') && e.params.includes('TAP_PRICE')), 'the inbound row stores the title as its text and the code as its payload');
+    });
+});
+
+// ─── The owner's A/B wording experiment (DM plan S14) ───────────────────────────────────────
+
+/**
+ * An experiment is running: a NEW conversation is given an arm by a hash of its id, the arm's wording rides in the conversation's facts, the arm is
+ * written with the reply, and `ai_meta.variant` says where a reply came from. What is pinned: the arm is the id's and stays the conversation's (never
+ * re-rolled per message, whatever the weights become); a conversation that began before the experiment is not in it; the cacheable system text does not
+ * move; every failure to learn the arm is "no arm" and never a lost reply; and with `sales_mode` off the experiment is not so much as read.
+ */
+describe('the sales turn: the owner\'s A/B wording experiment (S14)', () => {
+    const OPEN_A = 'Open with one short question about their goal.';
+    const OPEN_B = 'Open by naming the plan in one line.';
+    const CTA_B = 'Offer the link in one plain sentence.';
+    const CONFIG = (enabled = true) => JSON.stringify({
+        v: 1,
+        config: {
+            enabled,
+            variants: [
+                { id: 'A', label: 'Warm', weight: 50, opening: OPEN_A, cta: '' },
+                { id: 'B', label: 'Direct', weight: 50, opening: OPEN_B, cta: CTA_B },
+            ],
+        },
+    });
+    const ARMS = [{ id: 'A' as const, weight: 50 }, { id: 'B' as const, weight: 50 }];
+    /** A conversation id that hashes to `arm` under the arms above. */
+    const idFor = (arm: 'A' | 'B'): string => {
+        for (let i = 0; ; i++) if (assignVariant(`conv-${arm}-${i}`, ARMS) === arm) return `conv-${arm}-${i}`;
+    };
+    const conv = (id: string): Row => ({ id, is_bot_active: true, ai_disclosed_at: null });
+    const lastTurn = (r: Run): string => {
+        const turns = r.layerCalls[0]!.user as { role: string; text: string }[];
+        return turns[turns.length - 1]!.text;
+    };
+    /** The statements that touch the experiment: the settings row, the arm column, or the arm in a recording. */
+    const touches = (r: Run) => r.executed.filter((e) => /sales_variant/.test(e.sql) || e.params.some((p) => typeof p === 'string' && p.startsWith('dm.variants.')));
+    /** The arm the recording wrote: the last parameter of the statement that records the turn, when it has the assignment. */
+    const written = (r: Run): unknown => {
+        const e = recorded(r)!;
+        return /sales_variant = COALESCE/.test(e.sql) ? e.params[e.params.length - 1] : undefined;
+    };
+    const AI_REPLY = { direction: 'outbound' as const, text: 'Happy to help!', sender: 'ai' };
+
+    it('gives a new conversation the arm its id hashes to: its opening and link wording are in the facts, the arm is written WITH the reply, and ai_meta names it', async () => {
+        for (const arm of ['A', 'B'] as const) {
+            const id = idFor(arm);
+            const r = await run({ variants: CONFIG(), conversation: conv(id) });
+            assert.equal(r.error, null);
+            assert.equal(r.layerCalls.length, 1);
+            const facts = lastTurn(r);
+            const guidance = arm === 'A' ? [OPEN_A] : [OPEN_B, CTA_B];
+            for (const text of guidance) assert.ok(facts.includes(text), `${arm}: ${text}`);
+            for (const text of arm === 'A' ? [OPEN_B, CTA_B] : [OPEN_A]) assert.ok(!facts.includes(text), `${arm} does not carry the other arm's wording: ${text}`);
+            assert.match(facts, /How to open your first reply, from the account owner: /);
+            assert.equal(written(r), arm, 'the arm is assigned in the recording statement');
+            assert.equal(recorded(r)!.params.length, 17, 'one statement, with the reply and the arm');
+            assert.equal(record(r).aiMeta.variant, arm);
+            assert.equal(messages(r).length, 1, 'and it is answered');
+        }
+    });
+
+    it('does not move the cacheable system text: it is byte for byte what a tenant with no experiment sends', async () => {
+        const plain = await run({ conversation: conv(idFor('B')) });
+        const arm = await run({ variants: CONFIG(), conversation: conv(idFor('B')) });
+        assert.equal(String(arm.layerCalls[0]!.system), String(plain.layerCalls[0]!.system));
+        assert.ok(!String(arm.layerCalls[0]!.system).includes(OPEN_B), 'the wording is not in the system text');
+        assert.ok(lastTurn(arm).startsWith(lastTurn(plain).split('\n')[0]!), 'the facts still open the last turn');
+    });
+
+    it('keeps the arm it has on a later turn, whatever the hash says now: the stored arm\'s wording, nothing assigned, and the opening gone once the bot has spoken', async () => {
+        const id = idFor('A');
+        const r = await run({
+            variants: CONFIG(), conversation: conv(id), conversationVariant: 'B',   // the hash says A; the conversation was given B
+            history: [{ direction: 'inbound', text: 'Hi' }, AI_REPLY, { direction: 'inbound', text: 'How much is the plan?' }],
+        });
+        const facts = lastTurn(r);
+        assert.ok(facts.includes(CTA_B), 'B\'s link wording');
+        assert.ok(!facts.includes(OPEN_B) && !facts.includes(OPEN_A), 'the opening is for the first reply only');
+        assert.equal(written(r), undefined, 'nothing is assigned: the statement has no arm in it');
+        assert.equal(recorded(r)!.params.length, 16);
+        assert.equal(record(r).aiMeta.variant, 'B', 'ai_meta still says which arm the reply came from');
+    });
+
+    it('does NOT re-roll per message: the same conversation, answered again and again with its arm stored, is never given another', async () => {
+        const id = idFor('A');
+        for (let i = 0; i < 4; i++) {
+            const r = await run({ variants: CONFIG(), conversation: conv(id), conversationVariant: 'B', history: [{ direction: 'inbound', text: `Message ${i}` }] });
+            assert.equal(record(r).aiMeta.variant, 'B', `message ${i}`);
+            assert.equal(written(r), undefined, `message ${i}`);
+            assert.ok(lastTurn(r).includes(OPEN_B), `message ${i}: B's opening, since no bot reply has gone out yet`);
+            assert.ok(!lastTurn(r).includes(OPEN_A), `message ${i}: and never A's`);
+        }
+    });
+
+    it('leaves a conversation that began before the experiment out of it: a bot reply already went out and it has no arm, so no arm, no wording, nothing written', async () => {
+        const r = await run({
+            variants: CONFIG(), conversation: conv(idFor('B')), conversationVariant: null,
+            history: [{ direction: 'inbound', text: 'Hi' }, AI_REPLY, { direction: 'inbound', text: 'How much is the plan?' }],
+        });
+        assert.ok(!lastTurn(r).includes(OPEN_A) && !lastTurn(r).includes(OPEN_B) && !lastTurn(r).includes(CTA_B));
+        assert.equal(written(r), undefined);
+        assert.equal(record(r).aiMeta.variant, undefined);
+        assert.equal(messages(r).length, 1);
+    });
+
+    it('treats the private reply\'s earlier message as not a bot reply: a conversation that began with a comment is still new', async () => {
+        const r = await run({
+            variants: CONFIG(), conversation: conv(idFor('A')),
+            history: [{ direction: 'outbound', text: 'Here is the link', sender: 'automation' }, { direction: 'inbound', text: 'Thanks' }],
+        });
+        assert.equal(written(r), 'A');
+    });
+
+    it('does nothing when the experiment is switched off, even for a conversation that holds an arm: no wording, no read of the column, nothing written, nothing in ai_meta', async () => {
+        const r = await run({ variants: CONFIG(false), conversation: conv(idFor('A')), conversationVariant: 'B' });
+        assert.ok(!lastTurn(r).includes(OPEN_B) && !lastTurn(r).includes(CTA_B));
+        assert.ok(!r.executed.some((e) => /SELECT sales_variant/.test(e.sql)), 'the arm is not even read');
+        assert.equal(written(r), undefined);
+        assert.equal(record(r).aiMeta.variant, undefined);
+    });
+
+    it('is the turn it always was for a tenant with no experiment: one read of its settings row, no statement about arms, a recording of sixteen parameters', async () => {
+        const r = await run();
+        assert.deepEqual(touches(r).map((e) => e.params), [['dm.variants.creator-1']]);
+        assert.ok(!touches(r).some((e) => /sales_variant/.test(e.sql)), 'the column is not named');
+        assert.equal(recorded(r)!.params.length, 16);
+        assert.ok(!/How to (open|word)/.test(lastTurn(r)));
+        assert.equal(record(r).aiMeta.variant, undefined);
+    });
+
+    it('treats an arm that has since been deleted as the prompt it always had, and still says in ai_meta which arm the conversation belongs to', async () => {
+        const r = await run({ variants: CONFIG(), conversationVariant: 'C', history: [{ direction: 'inbound', text: 'Hi' }, AI_REPLY, { direction: 'inbound', text: 'Price?' }] });
+        assert.ok(!lastTurn(r).includes(CTA_B));
+        assert.equal(written(r), undefined);
+        assert.equal(record(r).aiMeta.variant, 'C');
+    });
+
+    it('is never a lost reply: a settings table that cannot be read, a value that is not an experiment, or a database without v42 each answer with no arm', async () => {
+        const down = await run({ variants: 'down' });
+        assert.equal(messages(down).length, 1);
+        assert.ok(!/How to (open|word)/.test(lastTurn(down)));
+        assert.equal(written(down), undefined);
+
+        const garbage = await run({ variants: '{not json' });
+        assert.equal(messages(garbage).length, 1);
+        assert.equal(logs(garbage, 'dm.variants_unreadable').length, 1);
+        const newer = await run({ variants: JSON.stringify({ v: 2, config: { enabled: true, variants: [] } }) });
+        assert.equal(messages(newer).length, 1);
+        assert.equal(logs(newer, 'dm.variants_unreadable').length, 1);
+        const oneArm = await run({ variants: JSON.stringify({ v: 1, config: { enabled: true, variants: [{ id: 'A', label: 'Only', weight: 5, opening: 'x', cta: '' }] } }) });
+        assert.equal(messages(oneArm).length, 1, 'a stored value that could not run is refused on the way out');
+        assert.equal(logs(oneArm, 'dm.variants_unreadable').length, 1);
+
+        const behind = await run({ variants: CONFIG(), conversationVariant: 'down' });
+        assert.equal(behind.error, null);
+        assert.equal(messages(behind).length, 1, 'still answered');
+        assert.equal(logs(behind, 'dm.variant_unavailable').length, 1);
+        assert.ok(!lastTurn(behind).includes(OPEN_A) && !lastTurn(behind).includes(OPEN_B));
+        assert.equal(recorded(behind)!.params.length, 16, 'and recorded without touching the column that is not there');
+        assert.equal(record(behind).aiMeta.variant, undefined);
+    });
+
+    it('does not give a message the prefilter answers an arm: a refund is handed over with no model and the conversation\'s arm is never read', async () => {
+        const r = await run({ variants: CONFIG(), text: 'I want a refund, give me my money back' });
+        assert.equal(r.layerCalls.length, 0);
+        assert.equal(written(r), undefined);
+        assert.ok(!r.executed.some((e) => /SELECT sales_variant/.test(e.sql)));
+    });
+
+    it('with sales_mode off the experiment is not so much as read: the old path answers, and no statement names the settings row or the column', async () => {
+        const r = await run({ agent: { ...AGENT, sales_mode: 'off' }, variants: CONFIG(), conversationVariant: 'B' });
+        assert.equal(r.layerCalls.length, 0, 'no sales turn');
+        assert.equal(r.geminiCalls, 1, 'the old path answered');
+        assert.equal(messages(r).length, 1);
+        assert.deepEqual(touches(r), []);
+        assert.ok(!r.executed.some((e) => /dm\.variants|sales_variant/.test(`${e.sql} ${JSON.stringify(e.params)}`)));
+    });
+
+    it('with sales_mode test the experiment is for the listed senders only: anyone else gets the old path and no experiment read', async () => {
+        const other = await run({ agent: { ...AGENT, sales_mode: 'test', sales_test_senders: ['99999'] }, variants: CONFIG() });
+        assert.equal(other.layerCalls.length, 0);
+        assert.equal(other.geminiCalls, 1);
+        assert.deepEqual(touches(other), []);
+
+        const listed = await run({ agent: { ...AGENT, sales_mode: 'test', sales_test_senders: ['user-1'] }, variants: CONFIG(), conversation: conv(idFor('B')) });
+        assert.equal(listed.layerCalls.length, 1, 'the listed sender is answered by the sales turn');
+        assert.equal(written(listed), 'B');
+    });
+
+    it('says the wording in the kit\'s own words, in each language', () => {
+        const ar = kitFor({ code: 'ar', register: 'gulf' }).sales.conversation;
+        assert.match(ar.variantOpening('x'), /^أسلوب افتتاح أول ردّ/);
+        assert.match(ar.variantCta('x'), /^صياغة عرض الرابط/);
+        assert.match(kitFor({ code: 'en', register: null }).sales.conversation.variantCta('x'), /^How to word the offer of the link/);
     });
 });

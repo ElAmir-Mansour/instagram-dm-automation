@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { pool } from '../config/db.js';
-import { DM_FUNNEL_CLICKS_SQL, DM_FUNNEL_CONVERSATIONS_SQL, DM_FUNNEL_REPLY_SQL } from '../services/dmFunnel.js';
+import { DM_FUNNEL_CLICKS_SQL, DM_FUNNEL_CONVERSATIONS_SQL, DM_FUNNEL_REPLY_SQL, DM_FUNNEL_VARIANTS_SQL } from '../services/dmFunnel.js';
 import { LINK_CLICKS_SQL } from '../services/inboxDetail.js';
 import { setLogSink } from '../utils/log.js';
 import apiRouter from './api.js';
@@ -90,13 +90,17 @@ function funnelRows(sql: string): { rows: unknown[] } {
 }
 
 describe('GET /dm/funnel', () => {
-    it('answers the last 30 days by default: three statements, each bound to the session\'s tenant and a window start', async () => {
+    it('answers the last 30 days by default: three statements, each bound to the session\'s tenant and a window start, and one read of the tenant\'s A/B experiment', async () => {
         const before = Date.now();
-        const { res, sent, headers } = await call('/dm/funnel', {}, funnelRows);
+        const { res, sent: all, headers } = await call('/dm/funnel', {}, funnelRows);
         assert.equal(res.statusCode, 200);
         assert.equal(res.body.days, 30);
         assert.equal(headers['cache-control'], 'no-store');
+        const sent = all.filter((s) => !s.sql.includes('FROM app_settings'));
         assert.deepEqual(sent.map((s) => s.sql).sort(), [...FUNNEL_STATEMENTS].sort());
+        const experiment = all.filter((s) => s.sql.includes('FROM app_settings'));
+        assert.deepEqual(experiment.map((s) => s.params), [[`dm.variants.${TENANT}`]], 'the tenant\'s own row of the A/B experiment, and nothing else is read for it');
+        assert.equal(res.body.variants, undefined, 'a tenant with no saved experiment has no A/B section, and no statement about arms is sent');
         for (const s of sent) {
             assert.equal(s.params.length, 2);
             assert.equal(s.params[0], TENANT, 'the tenant is the session\'s');
@@ -119,6 +123,47 @@ describe('GET /dm/funnel', () => {
         assert.deepEqual(body.reply, { sample: 1, median_ms: 4000, p90_ms: 4000 });
     });
 
+    const SAVED = JSON.stringify({
+        v: 1,
+        config: {
+            enabled: true,
+            variants: [
+                { id: 'A', label: 'Warm', weight: 50, opening: '', cta: '' },
+                { id: 'B', label: 'Direct', weight: 50, opening: 'Open with one short question.', cta: '' },
+            ],
+        },
+    });
+    const withExperiment = (arms: (sql: string) => { rows: unknown[] } | Error) => (sql: string): { rows: unknown[] } | Error => {
+        if (sql.includes('FROM app_settings')) return { rows: [{ value: SAVED, is_secret: false }] };
+        if (same(sql) === same(DM_FUNNEL_VARIANTS_SQL)) return arms(sql);
+        return funnelRows(sql);
+    };
+
+    it('with a saved experiment, asks which arm each conversation was given (one more statement, the tenant and the window) and answers the A/B section', async () => {
+        const { res, sent } = await call('/dm/funnel', {}, withExperiment(() => ({ rows: [{ id: CONV_A, sales_variant: 'B' }] })));
+        assert.equal(res.statusCode, 200);
+        const arms = sent.filter((s) => s.sql === same(DM_FUNNEL_VARIANTS_SQL));
+        assert.equal(arms.length, 1);
+        assert.equal(arms[0]!.params[0], TENANT);
+        assert.ok(arms[0]!.params[1] instanceof Date);
+        const v = res.body.variants;
+        assert.equal(v.running, true);
+        assert.equal(v.min_sample, 30);
+        assert.deepEqual(v.arms.map((a: { id: string; label: string; conversations: number; link_sent: number; clicked: number; enough: boolean }) => [a.id, a.label, a.conversations, a.link_sent, a.clicked, a.enough]),
+            [['A', 'Warm', 0, 0, 0, false], ['B', 'Direct', 1, 1, 1, false]]);
+        assert.equal(v.arms[1].link.pct, null, 'one conversation is not a rate');
+        assert.equal(JSON.stringify(res.body).includes(CONV_A), false, 'no conversation id');
+    });
+
+    it('answers the funnel without the A/B section when the arm column is not there (v42 not applied): a warning, never a failed funnel', async () => {
+        logs = [];
+        const { res } = await call('/dm/funnel', {}, withExperiment(() => Object.assign(new Error('column c.sales_variant does not exist'), { code: '42703' })));
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.body.conversations, 1);
+        assert.equal(res.body.variants, undefined);
+        assert.ok(logs.some((l) => l.event === 'dm.funnel_variants_unavailable'));
+    });
+
     it('refuses any other window, and a list or an object where one number belongs, without touching the database', async () => {
         for (const days of ['1', '0', '14', '365', 'abc', ['7', '30'], { a: '7' }]) {
             const { res, sent } = await call('/dm/funnel', { query: { days } }, funnelRows);
@@ -129,14 +174,16 @@ describe('GET /dm/funnel', () => {
     });
 
     it('is the tenant\'s own: another session binds its own tenant, and nothing in the request can name a different one', async () => {
+        // The experiment row is keyed by the tenant too (`dm.variants.<tenant>`): the id in the key is the session's.
+        const own = (id: string) => (p: unknown) => p === id || p === `dm.variants.${id}`;
         const mine = await call('/dm/funnel', { tenant: OTHER_TENANT, query: { tenant: TENANT, creator_id: TENANT, tenantId: TENANT } }, funnelRows);
         assert.equal(mine.res.statusCode, 200);
         for (const s of mine.sent) {
-            assert.equal(s.params[0], OTHER_TENANT);
-            assert.ok(!s.params.includes(TENANT), 'a tenant id from the query string never reaches SQL');
+            assert.ok(own(OTHER_TENANT)(s.params[0]), String(s.params[0]));
+            assert.ok(!s.params.some((p) => String(p).includes(TENANT)), 'a tenant id from the query string never reaches SQL');
         }
         const first = await call('/dm/funnel', { tenant: TENANT }, funnelRows);
-        for (const s of first.sent) assert.equal(s.params[0], TENANT);
+        for (const s of first.sent) assert.ok(own(TENANT)(s.params[0]), String(s.params[0]));
     });
 
     it('holds no conversation id in its answer', async () => {

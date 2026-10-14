@@ -22,6 +22,11 @@ import { DEFAULT_DM_ENGINE, DEFAULT_GEMINI_FALLBACK, DM_ENGINES, generateDmReply
 import { DEFAULT_SALES_MODE, isSalesMode, parseTestSenders, SALES_MODES, type SalesMode } from '../services/dmSales/mode.js';
 import { FOLLOWUP_MINUTES_DEFAULT, FOLLOWUP_MINUTES_MAX, FOLLOWUP_MINUTES_MIN, followupMinutesInput } from '../services/dmSales/followup.js';
 import { getFollowupMinutes } from '../services/dmSales/followupJob.js';
+import { readVariantState, saveVariantConfig } from '../services/dmSales/variantStore.js';
+import {
+    activeVariants, MAX_VARIANTS, MIN_VARIANTS, parseVariantConfig, VARIANT_IDS, VARIANT_LABEL_MAX, VARIANT_TEXT_MAX, VARIANT_WEIGHT_MAX,
+} from '../services/dmSales/variants.js';
+import { MIN_VARIANT_SAMPLE } from '../services/dmVariantFunnel.js';
 import { profileContextOrLegacy } from '../services/profile/context.js';
 import { assertDmSwitchOn, ProfileIncomplete, profileIncompleteBody } from '../services/profile/agentGate.js';
 import {
@@ -4058,6 +4063,57 @@ router.post('/settings/sales-followup', requirePlatformAdmin, canAdminister, asy
     } catch (err) {
         log('error', 'api.sales_followup_write_failed', describeError(err));
         res.status(500).json({ error: 'Failed to save the follow-up delay.' });
+    }
+});
+
+// ─── DM sales A/B wording ─────────────────────────────────────────────────────────────────────
+// The owner's wording experiment for the sales turn (DM plan S14, `src/services/dmSales/variants.ts`): two or three variants of how to open the first
+// reply and how to word the offer of the link, their shares of NEW conversations, and a switch. One row per TENANT in `app_settings`
+// (`dm.variants.<creator id>`, keyed by the session's tenant and never by anything the client sent), so anyone who may read the AI settings may read it
+// and an operator may write it, like the settings it sits under. Saving sends nothing to anyone; what it changes is the next sales turn.
+
+async function salesVariantsPayload(creatorId: string) {
+    const { config, saved } = await readVariantState(creatorId);
+    return {
+        config,
+        saved,
+        /** The experiment would assign a new conversation right now. */
+        running: activeVariants(config) !== null,
+        slots: VARIANT_IDS,
+        limits: { min: MIN_VARIANTS, max: MAX_VARIANTS, label: VARIANT_LABEL_MAX, text: VARIANT_TEXT_MAX, weight: VARIANT_WEIGHT_MAX, minSample: MIN_VARIANT_SAMPLE },
+    };
+}
+
+router.get('/settings/sales-variants', async (req, res) => {
+    try {
+        res.set('Cache-Control', 'no-store').json(await salesVariantsPayload(getTenantId(req)));
+    } catch (err) {
+        log('error', 'api.sales_variants_read_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to read the wording experiment.' });
+    }
+});
+
+router.post('/settings/sales-variants', canOperate, async (req, res) => {
+    try {
+        const creatorId = getTenantId(req);
+        const parsed = parseVariantConfig(req.body);
+        if (!parsed.ok) {
+            res.status(400).json({ error: parsed.problems[0]!.message, code: 'VARIANTS_INVALID', problems: parsed.problems });
+            return;
+        }
+        await saveVariantConfig(creatorId, parsed.config, req.session?.userId ?? null);
+        await writeAudit(await actorFromSession(req.session), {
+            action: AUDIT_ACTIONS.dmVariantsWrite, targetType: 'tenant', targetId: creatorId,
+            detail: {
+                enabled: parsed.config.enabled,
+                variants: parsed.config.variants.map((v) => ({ id: v.id, weight: v.weight, opening_chars: v.opening.length, cta_chars: v.cta.length })),
+            },
+        });
+        log('info', 'dm.variants_set', { creator_id: creatorId, enabled: parsed.config.enabled, variants: parsed.config.variants.length });
+        res.json(await salesVariantsPayload(creatorId));
+    } catch (err) {
+        log('error', 'api.sales_variants_write_failed', describeError(err));
+        res.status(500).json({ error: 'Failed to save the wording experiment.' });
     }
 });
 

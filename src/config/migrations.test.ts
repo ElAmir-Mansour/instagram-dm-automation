@@ -15,6 +15,7 @@ import { describe, it } from 'node:test';
 import { DEFAULT_DM_ENGINE, DEFAULT_GEMINI_FALLBACK, DM_ENGINES } from '../services/dmEngine.js';
 import { DEFAULT_SALES_MODE, SALES_MODES } from '../services/dmSales/mode.js';
 import { HANDOFF_REASONS, INTENTS, STAGES } from '../services/dmSales/types.js';
+import { VARIANT_IDS } from '../services/dmSales/variants.js';
 import { PROFILE_LIMITS } from '../services/profile/validate.js';
 import { compareSchema, EXPECTED_MIGRATIONS } from './migrations.js';
 
@@ -777,6 +778,55 @@ describe('migration v41: interactions.recipient_id (the comment -> DM bridge)', 
         const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
         assert.deepEqual([...new Set([...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!))], ['interactions']);
         assert.ok(existing.has('interactions'));
+    });
+
+    it('does not change a row: no UPDATE, no DELETE, no INSERT', () => {
+        assert.doesNotMatch(sql, /\b(UPDATE|INSERT|TRUNCATE)\b|\bDELETE FROM\b|\bDROP TABLE\b/i);
+    });
+});
+
+// ─── v42: the A/B arm a DM conversation was given ──────────────────────────────────────────────
+
+describe('migration v42: conversations.sales_variant (the DM sales turn\'s A/B arm)', () => {
+    const FILE = 'migration_v42_dm_variant.sql';
+    const raw = readFileSync(path.join(CONFIG_DIR, FILE), 'utf8');
+    const sql = withoutComments(raw).replace(/\s+/g, ' ');
+
+    it('is registered right after v41, and a database without it reports it as pending', () => {
+        const i = EXPECTED_MIGRATIONS.indexOf(FILE);
+        assert.ok(i >= 0, 'it is in EXPECTED_MIGRATIONS');
+        assert.equal(EXPECTED_MIGRATIONS[i - 1], 'migration_v41_interaction_recipient.sql');
+        assert.equal(i, EXPECTED_MIGRATIONS.length - 1, 'the newest');
+        assert.equal(compareSchema(EXPECTED_MIGRATIONS.filter((m) => m !== FILE)).pending[0], FILE);
+    });
+
+    it('gives up on a lock after 5 s, LOCAL to the runner\'s transaction, and that is its first line and first statement (it locks conversations, the DM path\'s table)', () => {
+        assert.match(raw, /^SET LOCAL lock_timeout = '5s';/);
+        assert.equal(sql.split(';')[0]!.trim(), "SET LOCAL lock_timeout = '5s'");
+        assert.doesNotMatch(sql, /\bSET\s+(SESSION\s+)?lock_timeout/i, 'no session-level setting');
+    });
+
+    it('adds exactly one column to conversations: nullable, no default, only if absent, wide enough for a slot id', () => {
+        const added = [...sql.matchAll(/ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([A-Z]+(?:\(\d+\))?)([^;]*);/g)];
+        assert.equal(added.length, 1);
+        assert.deepEqual([added[0]![1], added[0]![2], added[0]![3]], ['conversations', 'sales_variant', 'VARCHAR(8)']);
+        assert.equal(added[0]![4]!.trim(), '', 'nothing after the type: no NOT NULL, no DEFAULT, so no row is rewritten');
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, 1);
+        for (const id of VARIANT_IDS) assert.ok(id.length <= 8, id);
+    });
+
+    it('is idempotent, creates no table and no index, and so has nothing to enable row level security on (conversations has it since v11)', () => {
+        assert.equal((sql.match(/ADD COLUMN/g) ?? []).length, (sql.match(/ADD COLUMN IF NOT EXISTS/g) ?? []).length);
+        assert.deepEqual(createdTables(sql), []);
+        assert.doesNotMatch(sql, /CREATE (UNIQUE )?INDEX/);
+        assert.match(readFileSync(path.join(CONFIG_DIR, 'migration_v11_rls.sql'), 'utf8'), /ALTER TABLE IF EXISTS conversations\s+ENABLE ROW LEVEL SECURITY/);
+    });
+
+    it('alters a table that exists by the time it runs, and touches no other', () => {
+        const before = EXPECTED_MIGRATIONS.slice(0, EXPECTED_MIGRATIONS.indexOf(FILE));
+        const existing = new Set(allMigrationFiles().filter((f) => before.includes(f.name)).flatMap((f) => createdTables(f.sql)));
+        assert.deepEqual([...new Set([...sql.matchAll(/ALTER TABLE (\w+) /g)].map((m) => m[1]!))], ['conversations']);
+        assert.ok(existing.has('conversations'));
     });
 
     it('does not change a row: no UPDATE, no DELETE, no INSERT', () => {

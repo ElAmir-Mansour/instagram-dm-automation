@@ -107,6 +107,8 @@ const InboxPage = {
     FUNNEL_STEPS: Object.freeze(['conversations', 'qualified', 'recommended', 'link_sent', 'clicked']),
     /** An open card older than this asks again when it is reopened. */
     FUNNEL_STALE_MS: 60 * 1000,
+    /** The A/B wording slots (DM plan S14), in the order they are drawn: a letter from this table, never one from the response. */
+    FUNNEL_VARIANT_SLOTS: Object.freeze(['A', 'B', 'C']),
 
     // ─── What the stored rows say, so a placeholder is never mistaken for words ──
     /** The text the pipeline stores for a carousel (which has none) and for a story mention. */
@@ -2173,7 +2175,12 @@ const InboxPage = {
     renderFunnelBody(data) {
         const total = this.funnelCount(data.conversations);
         const days = this.funnelCount(data.days) || this.funnel.days;
-        if (total === 0) return html`<p class="form-hint">${t('inbox.funnel.empty', { count: days, n: UI.formatNumber(days) })}</p>`;
+        if (total === 0) {
+            return html`
+                <p class="form-hint">${t('inbox.funnel.empty', { count: days, n: UI.formatNumber(days) })}</p>
+                ${this.renderFunnelVariants(data.variants)}
+            `;
+        }
 
         // The ids are the server's, but only the five this page knows are drawn, in its order: a word from a fixed table, never one from the response.
         const byId = new Map((Array.isArray(data.steps) ? data.steps : []).filter((x) => x && typeof x.id === 'string').map((x) => [x.id, x]));
@@ -2222,6 +2229,74 @@ const InboxPage = {
             </ul>
 
             <p class="form-hint">${t('inbox.funnel.previews', { count: previews, n: UI.formatNumber(previews) })}</p>
+
+            ${this.renderFunnelVariants(data.variants)}
+        `;
+    },
+
+    /**
+     * One variant's rate: its name and, only when the arm has enough conversations (the SERVER's `enough`, which is its minimum-sample gate), its
+     * percentage; with the numbers it is made of either way. Below the floor the percentage is a dash and the counts stand alone.
+     */
+    variantRate(labelKey, rate, ofKey, enough) {
+        const r = rate && typeof rate === 'object' ? rate : {};
+        const shown = enough && r.pct !== null && r.pct !== undefined && Number.isFinite(Number(r.pct));
+        return html`
+            <div class="dm-funnel-rate">
+                <dt>${t(labelKey)}</dt>
+                <dd><strong>${UI.ltr(shown ? this.funnelPercent(r.pct) : '—')}</strong>
+                    <span class="dm-funnel-of">${t('inbox.funnel.of', { count: UI.formatNumber(this.funnelCount(r.count)), total: UI.formatNumber(this.funnelCount(r.of)), what: t(ofKey) })}</span></dd>
+            </div>
+        `;
+    },
+
+    /** One A/B arm: its letter and the owner's name for it, how many conversations it was given, and its two rates (or why it shows none yet). */
+    renderFunnelArm(arm, need) {
+        const slot = this.FUNNEL_VARIANT_SLOTS.includes(arm.id) ? arm.id : '';
+        if (!slot) return '';
+        const enough = arm.enough === true;
+        const conversations = this.funnelCount(arm.conversations);
+        const label = typeof arm.label === 'string' ? arm.label.trim() : '';
+        const retired = arm.weight === 0;
+        return html`
+            <li class="dm-funnel-arm" data-arm="${slot}">
+                <div class="dm-funnel-arm-head">
+                    <strong class="dm-funnel-arm-name">
+                        <span class="badge badge-accent">${UI.ltr(slot)}</span>
+                        ${label ? html`<bdi dir="auto">${label}</bdi>` : html`<span>${t('inbox.funnel.variants.arm', { slot })}</span> <span class="dm-funnel-of">(${t('inbox.funnel.variants.removed')})</span>`}
+                    </strong>
+                    <span class="dm-funnel-of">${t('inbox.funnel.variants.conversations', { count: conversations, n: UI.formatNumber(conversations) })}${retired ? html` · ${t('inbox.funnel.variants.retired')}` : ''}</span>
+                </div>
+                <dl class="dm-funnel-rates">
+                    ${this.variantRate('inbox.funnel.rate.link', arm.link, 'inbox.funnel.of.recommended', enough)}
+                    ${this.variantRate('inbox.funnel.rate.click', arm.click, 'inbox.funnel.of.linked', enough)}
+                </dl>
+                ${enough ? '' : html`<p class="form-hint text-warning">${t('inbox.funnel.variants.notEnough', { have: UI.formatNumber(conversations), need: UI.formatNumber(need) })}</p>`}
+            </li>
+        `;
+    },
+
+    /**
+     * The A/B comparison of the owner's wording variants (S14): present only when the server sent one (an experiment is saved, or a conversation was
+     * given an arm). Counts and rates, the minimum-sample gate the server applied, and no word about which arm is better: nothing here claims more
+     * than a count. The slots are a fixed table, the arms' names are the owner's text and go through the `html` tag.
+     */
+    renderFunnelVariants(variants) {
+        if (!variants || typeof variants !== 'object' || !Array.isArray(variants.arms)) return '';
+        const arms = variants.arms.filter((a) => a && typeof a === 'object' && this.FUNNEL_VARIANT_SLOTS.includes(a.id));
+        if (arms.length === 0) return '';
+        const need = this.funnelCount(variants.min_sample);
+        return html`
+            <section class="dm-funnel-variants" id="dm-funnel-variants" aria-labelledby="dm-funnel-variants-title">
+                <div class="dm-funnel-variants-head">
+                    <h4 id="dm-funnel-variants-title" aria-level="3" class="dm-funnel-variants-title">${t('inbox.funnel.variants.title')}</h4>
+                    <span class="badge ${variants.running === true ? 'badge-success' : 'badge-neutral'}">${t(variants.running === true ? 'inbox.funnel.variants.running' : 'inbox.funnel.variants.stopped')}</span>
+                </div>
+                <p class="form-hint">${t('inbox.funnel.variants.intro')}</p>
+                <ul class="dm-funnel-arms">${arms.map((arm) => this.renderFunnelArm(arm, need))}</ul>
+                ${variants.comparable === true ? '' : html`<p class="form-hint">${t('inbox.funnel.variants.waiting', { need: UI.formatNumber(need) })}</p>`}
+                <p class="form-hint">${t('inbox.funnel.variants.note')}</p>
+            </section>
         `;
     },
 

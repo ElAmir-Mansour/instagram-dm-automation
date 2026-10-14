@@ -159,11 +159,17 @@ export interface TurnRecord {
     stampHandoff: boolean;
     /** They asked to be left alone: stamp `opted_out_at`. */
     optOut: boolean;
+    /**
+     * The A/B arm this turn ASSIGNS the conversation (S14, `variants.ts`): written only while the column is still NULL, in the same statement as the
+     * reply, so an arm is never moved once given. Absent or null (every turn but the one that assigns, and every tenant with no experiment): the
+     * statement is exactly what it was before the column existed, so a database that has not had v42 applied still records the turn.
+     */
+    variant?: string | null;
     /** The reply that went out. Null when nothing was sent (a pause, a stood-down message). */
     message: { type: string; text: string; payload: unknown; aiMeta: Record<string, unknown> } | null;
 }
 
-/** The state assignments, $1 the conversation and $2 its tenant, then these ten in this order. */
+/** The state assignments, $1 the conversation and $2 its tenant, then these ten in this order. The arm (S14) comes after them: `setState`. */
 const SET_STATE = `stage = $3, qualifier_turns = $4, abuse_strikes = $5,
                last_intent = COALESCE($6::text, last_intent),
                offer_id = COALESCE($7::text, offer_id),
@@ -173,6 +179,10 @@ const SET_STATE = `stage = $3, qualifier_turns = $4, abuse_strikes = $5,
                handoff_reason = COALESCE($10::text, handoff_reason),
                handoff_at = CASE WHEN $11::boolean THEN NOW() ELSE handoff_at END,
                opted_out_at = CASE WHEN $12::boolean THEN NOW() ELSE opted_out_at END`;
+
+/** `SET_STATE` plus the arm, at parameter `$n`, only when there is one to write: `COALESCE` keeps an arm the conversation already has. */
+const setState = (variantParam: number | null): string => (variantParam === null ? SET_STATE : `${SET_STATE},
+               sales_variant = COALESCE(sales_variant, $${variantParam}::text)`);
 
 /**
  * What the recording statement hands back, for the one thing that happens after a turn is recorded: a link was just sent, so the follow-up is
@@ -191,10 +201,11 @@ export async function recordTurn(record: TurnRecord): Promise<RecordedTurn> {
         record.pauseBot, record.handoffReason, record.stampHandoff, record.optOut,
     ];
     const { message } = record;
+    const variant = record.variant ?? null;
     if (!message) {
         await queryRows(
-            `UPDATE conversations SET ${SET_STATE} WHERE id = $1 AND creator_id = $2`,
-            [record.conversationId, record.creatorId, ...state]
+            `UPDATE conversations SET ${setState(variant === null ? null : state.length + 3)} WHERE id = $1 AND creator_id = $2`,
+            [record.conversationId, record.creatorId, ...state, ...(variant === null ? [] : [variant])]
         );
         return { linkAt: null, replyId: null };
     }
@@ -205,9 +216,12 @@ export async function recordTurn(record: TurnRecord): Promise<RecordedTurn> {
              VALUES ($1, $2, 'outbound', $13, $14, $15::jsonb, 'ai', $16::jsonb)
              RETURNING id
          )
-         UPDATE conversations SET ${SET_STATE} WHERE id = $1 AND creator_id = $2
+         UPDATE conversations SET ${setState(variant === null ? null : state.length + 7)} WHERE id = $1 AND creator_id = $2
          RETURNING last_link_at, (SELECT id FROM reply) AS reply_id`,
-        [record.conversationId, record.creatorId, ...state, message.type, message.text, JSON.stringify(message.payload), JSON.stringify(message.aiMeta)]
+        [
+            record.conversationId, record.creatorId, ...state, message.type, message.text, JSON.stringify(message.payload), JSON.stringify(message.aiMeta),
+            ...(variant === null ? [] : [variant]),
+        ]
     );
     return recordedOf(rows[0]);
 }

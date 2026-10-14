@@ -29,6 +29,10 @@
  * and "they commented «keyword» and were sent the link to <offer>" is among the facts. Read beside the history, and never able to fail the turn:
  * no source is the turn it would have been.
  *
+ * **The owner's A/B wording experiment** (S14, `variants.ts`): when one is running, a NEW conversation is given an arm by a hash of its id, the arm's
+ * guidance (how to open the first reply, how to word the offer of the link) rides in the conversation's facts, the arm is written with the turn's own
+ * record, and `ai_meta.variant` says which arm a reply came from. Read beside the history; it can only ever mean "no arm", never a failed turn.
+ *
  * Once a turn is recorded, `handoff.ts` tells the owner when it handed the conversation over (or sent a hot lead its link): best effort,
  * after the customer has been answered, and never able to change the reply or the state. What this module does not do: send the
  * follow-up itself (S9's job does, `followupJob.ts`).
@@ -56,6 +60,8 @@ import { intentForPayload } from './iceBreakers.js';
 import { linkFor } from './link.js';
 import { prefilter, type PrefilterDecision } from './prefilter.js';
 import { buildSalesPrompt, creatorName, salesFactsBlock } from './prompt.js';
+import { readConversationVariant, readVariantConfig } from './variantStore.js';
+import { activeVariants, chooseVariant, variantGuidance, type VariantChoice } from './variants.js';
 import { salesReplySchema } from './schema.js';
 import { salesTurns, STRUCTURED_TEMPLATE_TEXT } from './history.js';
 import { loadAgent, loadHistory, loadSalesState, recordTurn, supersession, type SalesState, type TurnRecord } from './store.js';
@@ -191,6 +197,10 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
 
     const state = await loadSalesState(conversation.id);
 
+    /** The A/B arm this conversation is in, once the turn knows it (S14): what `ai_meta.variant` records, and what the record assigns when it is new. */
+    let variantId: string | null = null;
+    let variantAssign: string | null = null;
+
     /** What every ending shares: the quota, the disclosure, the send, and the one statement that records the reply with the new state. */
     const conclude = async (decision: TurnDecision, o: Ending): Promise<SalesTurnResult> => {
         const record: TurnRecord = {
@@ -203,6 +213,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
             handoffReason: decision.effect === 'handoff' || decision.effect === 'pause' ? decision.handoffReason : null,
             stampHandoff: decision.stage === 'handoff',
             optOut: decision.optOut,
+            variant: variantAssign,
             message: null,
         };
         const outcome: SalesTurnOutcome = decision.effect === 'handoff' ? 'handoff' : decision.optOut ? 'opt_out'
@@ -262,6 +273,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
             aiMeta: {
                 ...o.meta, intent: o.intent, offer_id: o.offerId ?? NO_OFFER, stage: decision.stage, next_action: decision.action,
                 handoff_reason: decision.handoffReason, latency_ms: Date.now() - startedAt,
+                ...(variantId ? { variant: variantId } : {}),
             },
         };
         const recorded = await recordTurn(record);
@@ -315,10 +327,25 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
     const prompt = buildSalesPrompt({ persona: agent.system_prompt, knowledge: agent.knowledge_base, ctx, timezone: ctx.timezone, now: new Date() });
     // Where the conversation began (S10), read beside the history: one statement that never throws (`commentSource`). A source is a conversation that
     // began with a comment and the link in its private reply, which moves where a fresh one starts and what the model is told, and nothing else.
-    const [source, history] = await Promise.all([
+    const [source, history, experiment] = await Promise.all([
         commentSource({ conversationId: conversation.id, creatorId: creator.id, senderId: inbound.senderId, platform: input.pageId ? 'facebook' : 'instagram' }),
         loadHistory(conversation.id, SALES_HISTORY_WINDOW),
+        readVariantConfig(creator.id),
     ]);
+
+    // S14: the owner's wording experiment, when one is RUNNING. Only a conversation with no bot reply yet is new; the arm is the one it already has, or
+    // the one its id hashes to. A tenant with no experiment goes no further than the read above, and every failure here is "no arm".
+    const firstReply = !history.some((h) => h.direction === 'outbound' && h.sender === 'ai');
+    let chosenVariant: VariantChoice = { variant: null, assign: null };
+    if (activeVariants(experiment)) {
+        const stored = await readConversationVariant(conversation.id, creator.id);
+        if (stored.ok) {
+            chosenVariant = chooseVariant({ config: experiment, stored: stored.variant, conversationId: conversation.id, isNew: firstReply });
+            variantAssign = chosenVariant.assign;
+            variantId = stored.variant ?? chosenVariant.assign;
+        }
+    }
+    const guidance = variantGuidance(chosenVariant.variant, firstReply);
     const bridged = source ? bridgeFacts(source, ctx.offers) : null;
     const stage = openingStage(state, source);
     // A tap on one of the owner's own buttons (an ice breaker or a menu item, S13) says what it asks by its code: the model is told that, in the
@@ -329,6 +356,7 @@ export async function runSalesTurn(input: SalesTurnInput): Promise<SalesTurnResu
         linkSentFor: [...new Set([...state.offersLinked, ...(bridged?.linkSentFor ?? [])])],
         ...(bridged ? { comment: bridged.comment } : {}),
         ...(tappedIntent ? { tapped: { intent: tappedIntent } } : {}),
+        ...(guidance ? { variant: guidance } : {}),
     });
     const schema = salesReplySchema(prompt.offers.map((o) => o.id));
     const baseTurns = salesTurns(history, inbound.text, owner, factsBlock, inbound.payload);
